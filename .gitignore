@@ -224,6 +224,7 @@ __pycache__
 !eqidv1/outputs/
 eqidv1/outputs/**
 !eqidv1/outputs/**/*.csv
+!eqidv1/outputs/**/*.txt
 
 # Include backtesting directory but only CSV and py files inside it
 !eqidv1/
