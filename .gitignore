@@ -220,13 +220,13 @@ data_cache
 __pycache__
 
 
-# Include outputs directory but only CSV files inside it
-!eqidv1/outputs/
-eqidv1/outputs/**
-!eqidv1/outputs/**/*.csv
-!eqidv1/outputs/**/*.txt
-
 # Include backtesting directory but only CSV and py files inside it
 !eqidv1/
 eqidv1/**
 !eqidv1/**/*.py
+
+# Allow ALL outputs artifacts inside eqidv1/outputs
+# (png, csv, txt, parquet, anything)
+# -----------------------------
+!eqidv1/outputs/
+!eqidv1/outputs/**
