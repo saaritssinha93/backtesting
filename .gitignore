@@ -228,5 +228,4 @@ eqidv1/outputs/**
 # Include backtesting directory but only CSV and py files inside it
 !eqidv1/
 eqidv1/**
-!eqidv1/**/*.csv
 !eqidv1/**/*.py
