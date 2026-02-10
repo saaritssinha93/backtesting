@@ -1,27 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-Unified Zerodha (KiteConnect) ETF data fetch + indicator generator for multiple timeframes (Parquet storage).
+Unified Zerodha (KiteConnect) data fetch + indicator generator
+**ONLY for intraday 5-minute and 15-minute timeframes** (Parquet storage).
 
-CHANGES DONE (as requested):
-0) CSV -> PARQUET storage for indicator outputs (and missing-rows reports).
-1) STOCK -> ETF universe loader:
-   - Tries to import: et4_filtered_stocks_MIS.py
-     Supports:
-       - stocks_tokens = {ETFSYMBOL: TOKEN, ...}   OR
-       - selected_stocks = [ETFSYMBOL, ...] / {ETFSYMBOL, ...} / {ETFSYMBOL: TOKEN, ...}
-   - Fallback file: stocks_tickers.txt
+This is a trimmed / rewritten version of:
+  trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
 
-2) Directories renamed to ETF-specific:
-   - Cache dirs: stocks_cache_<tf>
-   - Output dirs: stocks_indicators_<tf>
-   - Reports default: stocks_missing_reports
-   - Token cache file: stocks_tokens_cache.json
-   - Log file: stocks_fetcher_run.log
+What was removed:
+- daily / weekly / 1h / 3h modes
+- 3h resampling pipeline
+- daily/weekly cutoff logic
+- all mode names except: 5min, 15min
+- related directories and warmup settings
 
-Behavior remains the same:
-- Fetch & print ONLY missing files and missing evaluation rows.
-- Per-ticker freshness skip is retained.
-- Indicators and fetching logic unchanged.
+What remains:
+- ETF universe loader (et4_filtered_stocks_MIS.py or stocks_tickers.txt)
+- Kite session setup (api_key.txt + access_token.txt)
+- Trading calendar helpers (weekends + optional holidays file)
+- Robust missing/freshness detection for intraday candles
+- Incremental fetching with warmup re-stabilization
+- Indicator computation (RSI/ATR/MACD/BB/ADX/VWAP/EMA/CCI/MFI/OBV, etc.)
+- Parquet outputs + optional legacy CSV migration (read-only or delete after write)
+- Reports for missing files / newly appended rows
+
+Outputs (Parquet):
+- stocks_indicators_5min_eq / <TICKER>_stocks_indicators_5min.parquet
+- stocks_indicators_15min_eq / <TICKER>_stocks_indicators_15min.parquet
+
+Usage examples:
+- Fetch only 5-min:
+    python trading_data_continous_run_historical_5m_15m_parquet.py 5min
+- Fetch only 15-min:
+    python trading_data_continous_run_historical_5m_15m_parquet.py 15min
+- Fetch both:
+    python trading_data_continous_run_historical_5m_15m_parquet.py all
+
+Notes:
+- Intraday timestamps can be stored as candle "end" (recommended) or "start".
+- By default, the script skips tickers that are already "fresh".
 """
 
 import os
@@ -45,12 +61,8 @@ from kiteconnect import KiteConnect, exceptions as kexc
 
 IST_TZ = pytz.timezone("Asia/Kolkata")
 
-# ETF-specific directories
+# Directories (only intraday)
 DIRS = {
-    "daily":  {"cache": "stocks_cache_daily_eq",  "out": "stocks_indicators_daily_eq"},
-    "weekly": {"cache": "stocks_cache_weekly_eq", "out": "stocks_indicators_weekly_eq"},
-    "1h":     {"cache": "stocks_cache_1h_eq",     "out": "stocks_indicators_1h_eq"},
-    "3h":     {"cache": "stocks_cache_3h_eq",     "out": "stocks_indicators_3h_eq"},
     "5min":   {"cache": "stocks_cache_5min_eq",   "out": "stocks_indicators_5min_eq"},
     "15min":  {"cache": "stocks_cache_15min_eq",  "out": "stocks_indicators_15min_eq"},
 }
@@ -58,13 +70,12 @@ for cfg in DIRS.values():
     os.makedirs(cfg["cache"], exist_ok=True)
     os.makedirs(cfg["out"], exist_ok=True)
 
-VALID_MODES = ("daily", "weekly", "1h", "3h", "5min", "15min")
+VALID_MODES = ("5min", "15min")
 DEFAULT_MAX_WORKERS = 6
 
 # Market timing (IST)
 MARKET_OPEN_TIME = time(9, 15)
 MARKET_CLOSE_TIME_INTRADAY = time(15, 30)      # last intraday candle end (5m/15m)
-MARKET_CLOSE_TIME_DAILY_READY = time(15, 35)   # daily bar safely "final"
 
 # Candle-end timestamps for intraday
 DEFAULT_INTRADAY_TIMESTAMP = "end"  # "end" or "start"
@@ -73,13 +84,9 @@ DEFAULT_INTRADAY_TIMESTAMP = "end"  # "end" or "start"
 WARMUP_BARS = {
     "5min":  600,
     "15min": 400,
-    "1h":    300,
-    "3h":    300,
-    "daily": 260,
-    "weekly": 120,
 }
 
-# Token cache (ETF-specific)
+# Token cache
 TOKENS_CACHE_FILE = "stocks_tokens_cache.json"
 TOKENS_CACHE_MAX_AGE_DAYS = 7
 
@@ -87,15 +94,8 @@ TOKENS_CACHE_MAX_AGE_DAYS = 7
 HOLIDAYS_FILE_DEFAULT = "nse_holidays.csv"
 
 # ========= STORAGE (PARQUET) =========
-# Main indicator outputs are stored as Parquet:
-#   stocks_indicators_<tf> / <TICKER>_stocks_indicators_<tf>.parquet
-#
-# For smooth migration, the script can read legacy CSV outputs (if present) and will
-# start writing Parquet going forward.
-MIGRATE_LEGACY_CSV = True        # can be disabled via CLI: --no-migrate-csv
-DELETE_LEGACY_CSV = False        # can be enabled via CLI: --delete-legacy-csv
-
-
+MIGRATE_LEGACY_CSV = True
+DELETE_LEGACY_CSV = False
 
 
 # ========= LOGGING =========
@@ -151,10 +151,11 @@ def _normalize_ticker_list(obj) -> list[str]:
 
 def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, int]]:
     """
-    ETF universe loader:
-    - Preferred: et4_filtered_stocks_MIS.py with:
-        stocks_tokens OR selected_stocks
-    - Fallback: stocks_tickers.txt (one ETF symbol per line)
+    Universe loader (ETF-ready):
+    - Preferred: et4_filtered_stocks_MIS.py with either:
+        - stocks_tokens = {SYMBOL: TOKEN, ...}
+        - selected_stocks = [...]
+    - Fallback: stocks_tickers.txt (one symbol per line)
     """
     cwd = Path.cwd().resolve()
     script_dir = Path(__file__).resolve().parent
@@ -167,26 +168,23 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
     token_map: dict[str, int] = {}
     mod: Optional[ModuleType] = None
 
-    # Primary ETF module
     try:
         mod = importlib.import_module("et4_filtered_stocks_MIS")
     except Exception:
         mod = None
 
     if mod is not None:
-        # Option A: stocks_tokens
         if hasattr(mod, "stocks_tokens") and isinstance(getattr(mod, "stocks_tokens"), dict):
             raw = getattr(mod, "stocks_tokens")
             try:
                 token_map = {str(k).strip().upper(): int(v) for k, v in raw.items() if str(k).strip()}
                 tickers = sorted(token_map.keys())
                 if tickers:
-                    logger.info("Loaded %d ETFs from stocks_filtered_etfs.stocks_tokens", len(tickers))
+                    logger.info("Loaded %d symbols from et4_filtered_stocks_MIS.stocks_tokens", len(tickers))
                     return tickers, token_map
             except Exception:
                 pass
 
-        # Option B: selected_stocks
         if hasattr(mod, "selected_stocks"):
             ss = getattr(mod, "selected_stocks")
             if isinstance(ss, dict):
@@ -198,31 +196,30 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                 except Exception:
                     pass
                 if tickers:
-                    logger.info("Loaded %d ETFs from et4_filtered_stocks_MIS.selected_stocks (dict/set-like)", len(tickers))
+                    logger.info("Loaded %d symbols from et4_filtered_stocks_MIS.selected_stocks", len(tickers))
                     return tickers, token_map
 
             tickers = _normalize_ticker_list(ss)
             if tickers:
-                logger.info("Loaded %d ETFs from et4_filtered_stocks_MIS.selected_stocks", len(tickers))
+                logger.info("Loaded %d symbols from et4_filtered_stocks_MIS.selected_stocks", len(tickers))
                 return tickers, token_map
 
-    # Fallback file: stocks_tickers.txt
     for base in (cwd, script_dir, parent_dir):
         f = base / "stocks_tickers.txt"
         if f.exists():
             arr = [x.strip().upper() for x in f.read_text(encoding="utf-8", errors="ignore").splitlines() if x.strip()]
             tickers = _normalize_ticker_list(arr)
             if tickers:
-                logger.info("Loaded %d ETFs from %s", len(tickers), str(f))
+                logger.info("Loaded %d symbols from %s", len(tickers), str(f))
                 return tickers, token_map
 
     raise RuntimeError(
-        "Could not load ETF symbols.\n"
+        "Could not load symbols.\n"
         "Fix options:\n"
         "  1) Ensure et4_filtered_stocks_MIS.py is importable and define either:\n"
-        "       - stocks_tokens = {ETFSYMBOL: TOKEN, ...}   OR\n"
-        "       - selected_stocks = [ETFSYMBOL, ...] / {ETFSYMBOL, ...} / {ETFSYMBOL: TOKEN, ...}\n"
-        "  2) Or create stocks_tickers.txt (one ETF symbol per line) in cwd / script dir / parent dir.\n\n"
+        "       - stocks_tokens = {SYMBOL: TOKEN, ...}   OR\n"
+        "       - selected_stocks = [SYMBOL, ...] / {SYMBOL, ...} / {SYMBOL: TOKEN, ...}\n"
+        "  2) Or create stocks_tickers.txt (one symbol per line) in cwd / script dir / parent dir.\n\n"
         f"Diagnostics:\n  cwd={cwd}\n  script_dir={script_dir}\n  parent_dir={parent_dir}"
     )
 
@@ -285,15 +282,6 @@ def _prev_trading_day(d: date, holidays: set[date]) -> date:
         x -= timedelta(days=1)
     return x
 
-def last_friday_strictly_before(d: date) -> date:
-    dd = d - timedelta(days=1)
-    while dd.weekday() != 4:
-        dd -= timedelta(days=1)
-    return dd
-
-def monday_of_week(d: date) -> date:
-    return d - timedelta(days=d.weekday())
-
 def _round_down_session_anchored(ts: datetime, step_min: int) -> datetime:
     if ts.tzinfo is None:
         ts = IST_TZ.localize(ts)
@@ -329,62 +317,6 @@ def last_completed_intraday_end(now_ist: datetime, step_min: int, holidays: set[
 
     return _round_down_session_anchored(now_ist, step_min)
 
-def daily_cutoff_date_live(now_ist: datetime, holidays: set[date], force_today: bool) -> date:
-    if now_ist.tzinfo is None:
-        now_ist = IST_TZ.localize(now_ist)
-
-    d = now_ist.date()
-    if not _is_trading_day(d, holidays):
-        return _prev_trading_day(d, holidays)
-
-    if force_today:
-        return d
-
-    if now_ist.time() >= MARKET_CLOSE_TIME_DAILY_READY:
-        return d
-    return _prev_trading_day(d, holidays)
-
-def daily_cutoff_date_previous(now_ist: datetime, holidays: set[date]) -> date:
-    if now_ist.tzinfo is None:
-        now_ist = IST_TZ.localize(now_ist)
-    return _prev_trading_day(now_ist.date(), holidays)
-
-def weekly_cutoff_date_previous(now_ist: datetime) -> date:
-    if now_ist.tzinfo is None:
-        now_ist = IST_TZ.localize(now_ist)
-    return last_friday_strictly_before(now_ist.date())
-
-def get_end_dt_for_mode(mode: str, now_ist: datetime, context: str, holidays: set[date], force_today_daily: bool) -> datetime:
-    context = context.lower().strip()
-    mode = mode.lower().strip()
-
-    if now_ist.tzinfo is None:
-        now_ist = IST_TZ.localize(now_ist)
-
-    if context == "previous":
-        if mode == "weekly":
-            d = weekly_cutoff_date_previous(now_ist)
-            return IST_TZ.localize(datetime(d.year, d.month, d.day, 23, 59, 59))
-        else:
-            d = daily_cutoff_date_previous(now_ist, holidays)
-            return IST_TZ.localize(datetime(d.year, d.month, d.day, 23, 59, 59))
-
-    if mode == "5min":
-        return last_completed_intraday_end(now_ist, 5, holidays)
-    if mode == "15min":
-        return last_completed_intraday_end(now_ist, 15, holidays)
-    if mode == "1h":
-        return last_completed_intraday_end(now_ist, 60, holidays)
-    if mode == "3h":
-        return last_completed_intraday_end(now_ist, 60, holidays)
-    if mode == "daily":
-        d = daily_cutoff_date_live(now_ist, holidays, force_today_daily)
-        return IST_TZ.localize(datetime(d.year, d.month, d.day, 23, 59, 59))
-    if mode == "weekly":
-        return now_ist
-
-    return now_ist
-
 
 # ========= START DATE PER MODE =========
 
@@ -392,14 +324,8 @@ def get_start_date(mode: str, now_ist: datetime) -> datetime:
     if now_ist.tzinfo is None:
         now_ist = IST_TZ.localize(now_ist)
 
-    # Keep your original behaviour for intraday start anchor
-    if mode in ("5min", "15min"):
-        return IST_TZ.localize(datetime(2025, 8, 25, 0, 0, 0))
-
-    base = now_ist - timedelta(days=365)
-    if mode in ("1h", "3h"):
-        return base.replace(minute=0, second=0, microsecond=0)
-    return base.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Keep your original intraday start anchor behaviour
+    return IST_TZ.localize(datetime(2025, 8, 25, 0, 0, 0))
 
 
 # ========= DATA HELPERS =========
@@ -409,6 +335,48 @@ def _to_ist(series_dt: pd.Series) -> pd.Series:
     if getattr(dt.dt, "tz", None) is None:
         return dt.dt.tz_localize(IST_TZ)
     return dt.dt.tz_convert(IST_TZ)
+
+def _ensure_parquet_engine():
+    try:
+        import pyarrow  # noqa: F401
+    except Exception as e:
+        raise RuntimeError(
+            "Parquet storage requires 'pyarrow'.\n"
+            "Install it once:  pip install pyarrow\n"
+            f"Original import error: {e}"
+        ) from e
+
+def _read_last_ts_fast_parquet(path: str):
+    try:
+        _ensure_parquet_engine()
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(path)
+        md = pf.metadata
+        if md is None or md.num_rows <= 0:
+            return None
+
+        last_rg = md.num_row_groups - 1
+        if last_rg < 0:
+            return None
+
+        table = pf.read_row_group(last_rg, columns=["date"])
+        if table.num_rows <= 0:
+            return None
+
+        col = table.column(0)
+        val = col[col.length() - 1].as_py()
+        ts = pd.to_datetime(val, errors="coerce")
+        if pd.isna(ts):
+            return None
+
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(IST_TZ)
+        else:
+            ts = ts.tz_convert(IST_TZ)
+        return ts
+    except Exception:
+        return None
 
 def _read_last_ts_fast_csv(path: str):
     """Legacy CSV tail reader (kept only for migration)."""
@@ -461,73 +429,19 @@ def _read_last_ts_fast_csv(path: str):
         return None
     return None
 
-
-def _ensure_parquet_engine():
-    """Parquet I/O requires an engine. We use pyarrow."""
-    try:
-        import pyarrow  # noqa: F401
-    except Exception as e:
-        raise RuntimeError(
-            "Parquet storage requires 'pyarrow'.\n"
-            "Install it once:  pip install pyarrow\n"
-            f"Original import error: {e}"
-        ) from e
-
-
-def _read_last_ts_fast_parquet(path: str):
-    """
-    Read the last 'date' value efficiently from a Parquet file using pyarrow metadata/row-groups.
-    Returns pd.Timestamp localized/converted to IST, or None.
-    """
-    try:
-        _ensure_parquet_engine()
-        import pyarrow.parquet as pq
-
-        pf = pq.ParquetFile(path)
-        md = pf.metadata
-        if md is None or md.num_rows <= 0:
-            return None
-
-        # Read only the last row-group's 'date' column.
-        last_rg = md.num_row_groups - 1
-        if last_rg < 0:
-            return None
-
-        table = pf.read_row_group(last_rg, columns=["date"])
-        if table.num_rows <= 0:
-            return None
-
-        # Convert the last value to pandas Timestamp
-        col = table.column(0)
-        # pyarrow scalar -> python datetime / pandas Timestamp
-        val = col[col.length() - 1].as_py()
-        ts = pd.to_datetime(val, errors="coerce")
-        if pd.isna(ts):
-            return None
-
-        if ts.tzinfo is None:
-            ts = ts.tz_localize(IST_TZ)
-        else:
-            ts = ts.tz_convert(IST_TZ)
-        return ts
-    except Exception:
-        return None
-
-
 def _read_last_ts_from_store(path: str):
-    """Read last timestamp from either parquet (preferred) or legacy csv."""
     ext = str(Path(path).suffix).lower()
     if ext == ".parquet":
         return _read_last_ts_fast_parquet(path)
     if ext == ".csv":
         return _read_last_ts_fast_csv(path)
-    # Fallback: try parquet first, then csv
     ts = _read_last_ts_fast_parquet(path)
     if ts is not None:
         return ts
     return _read_last_ts_fast_csv(path)
+
 def _intraday_end_shift_minutes(interval: str) -> int:
-    return {"5minute": 5, "15minute": 15, "60minute": 60}.get(interval, 0)
+    return {"5minute": 5, "15minute": 15}.get(interval, 0)
 
 def _maybe_convert_existing_intraday_to_end(df: pd.DataFrame, step_min: int) -> pd.DataFrame:
     if df.empty or "date" not in df.columns:
@@ -546,50 +460,35 @@ def _maybe_convert_existing_intraday_to_end(df: pd.DataFrame, step_min: int) -> 
 
 # ========= PER-TICKER FRESHNESS (FAST SKIP) =========
 
-def expected_last_stamp(mode: str, now_ist: datetime, context: str, holidays: set[date],
-                        force_today_daily: bool, intraday_ts: str) -> dict:
+def expected_last_stamp(mode: str, now_ist: datetime, holidays: set[date], intraday_ts: str) -> dict:
     mode = mode.lower().strip()
-    context = context.lower().strip()
 
     if now_ist.tzinfo is None:
         now_ist = IST_TZ.localize(now_ist)
 
-    if mode == "daily":
-        cutoff = daily_cutoff_date_previous(now_ist, holidays) if context == "previous" else \
-                 daily_cutoff_date_live(now_ist, holidays, force_today_daily)
-        return {"kind": "date", "value": cutoff}
-
-    if mode == "weekly":
-        if context == "previous":
-            cutoff_friday = weekly_cutoff_date_previous(now_ist)
-            wk_start = monday_of_week(cutoff_friday)
-        else:
-            wk_start = monday_of_week(now_ist.date())
-        return {"kind": "date", "value": wk_start}
-
-    step_map = {"5min": 5, "15min": 15, "1h": 60, "3h": 60}
+    step_map = {"5min": 5, "15min": 15}
     step = step_map.get(mode, 0)
 
-    if step <= 0:
-        return {"kind": "ts", "value": now_ist}
+    exp_end = last_completed_intraday_end(now_ist, step, holidays)
 
-    if context == "previous":
-        prev_d = daily_cutoff_date_previous(now_ist, holidays)
-        ref = IST_TZ.localize(datetime(prev_d.year, prev_d.month, prev_d.day, 15, 30, 0))
-        exp_end = last_completed_intraday_end(ref, step, holidays)
-    else:
-        exp_end = last_completed_intraday_end(now_ist, step, holidays)
-
-    if mode in ("5min", "15min", "1h"):
-        if intraday_ts.lower() == "start":
-            exp_end = exp_end - timedelta(minutes=step)
-        return {"kind": "ts", "value": exp_end, "step_min": step}
+    if intraday_ts.lower() == "start":
+        exp_end = exp_end - timedelta(minutes=step)
 
     return {"kind": "ts", "value": exp_end, "step_min": step}
 
-def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, context: str,
-                    holidays: set[date], force_today_daily: bool, intraday_ts: str) -> bool:
-    # out_path is the TARGET parquet path; we may read legacy CSV if enabled.
+def _legacy_csv_path_for(parquet_path: str) -> str:
+    return str(Path(parquet_path).with_suffix(".csv"))
+
+def _resolve_existing_store_path(target_parquet_path: str) -> str:
+    if os.path.exists(target_parquet_path):
+        return target_parquet_path
+    if MIGRATE_LEGACY_CSV:
+        legacy = _legacy_csv_path_for(target_parquet_path)
+        if os.path.exists(legacy):
+            return legacy
+    return target_parquet_path
+
+def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, holidays: set[date], intraday_ts: str) -> bool:
     existing_path = _resolve_existing_store_path(out_path)
     if not os.path.exists(existing_path):
         return False
@@ -603,12 +502,7 @@ def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, context: str,
     else:
         last_ts = last_ts.tz_convert(IST_TZ)
 
-    spec = expected_last_stamp(mode, now_ist, context, holidays, force_today_daily, intraday_ts)
-
-    if spec.get("kind") == "date":
-        exp_d: date = spec["value"]
-        return last_ts.date() >= exp_d
-
+    spec = expected_last_stamp(mode, now_ist, holidays, intraday_ts)
     exp_ts: datetime = spec["value"]
     if exp_ts.tzinfo is None:
         exp_ts = IST_TZ.localize(exp_ts)
@@ -627,19 +521,16 @@ def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, context: str,
 
     return False
 
-
-def missing_spec(mode: str, out_path: str, now_ist: datetime, context: str,
-                 holidays: set[date], force_today_daily: bool, intraday_ts: str) -> dict:
-    # out_path is the TARGET parquet path; we may read legacy CSV if enabled.
+def missing_spec(mode: str, out_path: str, now_ist: datetime, holidays: set[date], intraday_ts: str) -> dict:
     existing_path = _resolve_existing_store_path(out_path)
 
+    spec = expected_last_stamp(mode, now_ist, holidays, intraday_ts)
+
     if not os.path.exists(existing_path):
-        spec = expected_last_stamp(mode, now_ist, context, holidays, force_today_daily, intraday_ts)
         return {"kind": "file_missing", "last_ts": None, "expected": spec}
 
     last_ts = _read_last_ts_from_store(existing_path)
     if last_ts is None:
-        spec = expected_last_stamp(mode, now_ist, context, holidays, force_today_daily, intraday_ts)
         return {"kind": "rows_missing", "last_ts": None, "expected": spec}
 
     if last_ts.tzinfo is None:
@@ -647,21 +538,25 @@ def missing_spec(mode: str, out_path: str, now_ist: datetime, context: str,
     else:
         last_ts = last_ts.tz_convert(IST_TZ)
 
-    spec = expected_last_stamp(mode, now_ist, context, holidays, force_today_daily, intraday_ts)
-
-    if ticker_is_fresh(mode, out_path, now_ist, context, holidays, force_today_daily, intraday_ts):
+    if ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
         return {"kind": "fresh", "last_ts": last_ts, "expected": spec}
 
     return {"kind": "rows_missing", "last_ts": last_ts, "expected": spec}
 
 
-
-
 # ========= FETCHERS =========
 
-def fetch_historical_generic(kite: KiteConnect, token: int, start_dt_ist: datetime, end_dt_ist: datetime, interval: str,
-                            chunk_days: int, step_td: timedelta, logger: logging.Logger,
-                            intraday_ts: str) -> pd.DataFrame:
+def fetch_historical_generic(
+    kite: KiteConnect,
+    token: int,
+    start_dt_ist: datetime,
+    end_dt_ist: datetime,
+    interval: str,
+    chunk_days: int,
+    step_td: timedelta,
+    logger: logging.Logger,
+    intraday_ts: str
+) -> pd.DataFrame:
     end = end_dt_ist if end_dt_ist.tzinfo else IST_TZ.localize(end_dt_ist)
     s = start_dt_ist if start_dt_ist.tzinfo else IST_TZ.localize(start_dt_ist)
 
@@ -712,15 +607,6 @@ def fetch_historical_generic(kite: KiteConnect, token: int, start_dt_ist: dateti
     out = out[out["date"] <= end_dt_ist].reset_index(drop=True)
     return out
 
-def fetch_historical_daily_df(kite, token, start_dt_ist, end_dt_ist, logger, intraday_ts):
-    return fetch_historical_generic(kite, token, start_dt_ist, end_dt_ist, "day", 180, timedelta(days=1), logger, intraday_ts)
-
-def fetch_historical_weekly_df(kite, token, start_dt_ist, end_dt_ist, logger, intraday_ts):
-    return fetch_historical_generic(kite, token, start_dt_ist, end_dt_ist, "week", 365, timedelta(days=7), logger, intraday_ts)
-
-def fetch_historical_1h_df(kite, token, start_dt_ist, end_dt_ist, logger, intraday_ts):
-    return fetch_historical_generic(kite, token, start_dt_ist, end_dt_ist, "60minute", 60, timedelta(hours=1), logger, intraday_ts)
-
 def fetch_historical_5min_df(kite, token, start_dt_ist, end_dt_ist, logger, intraday_ts):
     return fetch_historical_generic(kite, token, start_dt_ist, end_dt_ist, "5minute", 60, timedelta(minutes=5), logger, intraday_ts)
 
@@ -728,10 +614,10 @@ def fetch_historical_15min_df(kite, token, start_dt_ist, end_dt_ist, logger, int
     return fetch_historical_generic(kite, token, start_dt_ist, end_dt_ist, "15minute", 120, timedelta(minutes=15), logger, intraday_ts)
 
 
-# ========= INDICATORS (unchanged) =========
+# ========= INDICATORS =========
+# (Copied as-is from your original script to preserve feature parity.)
 
 def calculate_rsi(close, period=14):
-    """Wilder's RSI using EMA smoothing (industry standard, matches strategy code)."""
     delta = close.diff()
     gain = delta.clip(lower=0.0)
     loss = (-delta).clip(lower=0.0)
@@ -840,11 +726,10 @@ def calculate_mfi(df, period=14):
     return 100 - (100 / (1 + pos_sum / (neg_sum + 1e-10)))
 
 def calculate_obv(df):
-    """Vectorized OBV for significantly faster computation on large datasets."""
     close = df["close"].values
     volume = df["volume"].values
     direction = np.sign(np.diff(close, prepend=close[0]))
-    direction[0] = 0  # first bar has no direction
+    direction[0] = 0
     return pd.Series(np.cumsum(direction * volume), index=df.index)
 
 def add_standard_indicators(df):
@@ -868,31 +753,7 @@ def add_standard_indicators(df):
     return df
 
 
-# ========= 3H RESAMPLE =========
-
-def resample_to_3h(df_60m: pd.DataFrame) -> pd.DataFrame:
-    if df_60m.empty:
-        return df_60m
-
-    df = df_60m.set_index("date").sort_index()
-
-    df_shift = df.copy()
-    df_shift.index = df_shift.index - pd.Timedelta(minutes=15)
-
-    agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-    df_3h = df_shift.resample("3h", label="right", closed="right").agg(agg)
-
-    df_3h.index = df_3h.index + pd.Timedelta(minutes=15)
-    df_3h = df_3h.dropna(subset=["open", "high", "low", "close"])
-
-    keep_times = {(9, 15), (12, 15), (15, 15)}
-    mask = df_3h.index.map(lambda ts: (ts.hour, ts.minute) in keep_times)
-    df_3h = df_3h[mask]
-
-    return df_3h.reset_index().rename(columns={"index": "date"})
-
-
-# ========= CHANGE FEATURES =========
+# ========= CHANGE FEATURES (intraday only) =========
 
 def add_change_features_intraday(df: pd.DataFrame) -> pd.DataFrame:
     df["date_only"] = df["date"].dt.tz_convert(IST_TZ).dt.date
@@ -905,17 +766,11 @@ def add_change_features_intraday(df: pd.DataFrame) -> pd.DataFrame:
     df["Daily_Change"] = (df["close"] - df["Prev_Day_Close"]) / (df["Prev_Day_Close"] + 1e-10) * 100.0
     return df
 
-def add_change_features_daily_weekly(df: pd.DataFrame) -> pd.DataFrame:
-    df["Intra_Change"] = df["close"].pct_change().mul(100.0)
-    df["Prev_Day_Close"] = df["close"].shift(1)
-    df["Daily_Change"] = (df["close"] - df["Prev_Day_Close"]) / (df["Prev_Day_Close"] + 1e-10) * 100.0
-    return df
-
 
 # ========= TOKEN CACHE =========
 
-def load_or_fetch_tokens(kite: KiteConnect, etfs: list[str], logger: logging.Logger, refresh: bool = False) -> dict[str, int]:
-    etfs_u = sorted({t.upper().strip() for t in etfs if t.strip()})
+def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.Logger, refresh: bool = False) -> dict[str, int]:
+    syms_u = sorted({t.upper().strip() for t in symbols if t.strip()})
 
     if (not refresh) and os.path.exists(TOKENS_CACHE_FILE):
         try:
@@ -923,14 +778,14 @@ def load_or_fetch_tokens(kite: KiteConnect, etfs: list[str], logger: logging.Log
             age_days = (datetime.now() - datetime.fromtimestamp(st.st_mtime)).days
             if age_days <= TOKENS_CACHE_MAX_AGE_DAYS:
                 cache = json.loads(Path(TOKENS_CACHE_FILE).read_text(encoding="utf-8"))
-                if isinstance(cache, dict) and all(t in cache for t in etfs_u):
-                    return {t: int(cache[t]) for t in etfs_u}
+                if isinstance(cache, dict) and all(t in cache for t in syms_u):
+                    return {t: int(cache[t]) for t in syms_u}
         except Exception:
             pass
 
-    logger.info("Fetching NSE instruments for ETF token map (this can take time)...")
+    logger.info("Fetching NSE instruments for token map (this can take time)...")
     ins = pd.DataFrame(kite.instruments("NSE"))
-    tokens = ins[ins["tradingsymbol"].isin(etfs_u)][["tradingsymbol", "instrument_token"]]
+    tokens = ins[ins["tradingsymbol"].isin(syms_u)][["tradingsymbol", "instrument_token"]]
     mp = dict(zip(tokens["tradingsymbol"], tokens["instrument_token"]))
 
     try:
@@ -944,50 +799,26 @@ def load_or_fetch_tokens(kite: KiteConnect, etfs: list[str], logger: logging.Log
     except Exception:
         pass
 
-    return {t: int(mp[t]) for t in etfs_u if t in mp}
+    return {t: int(mp[t]) for t in syms_u if t in mp}
 
 
 # ========= SAVE =========
 
 def _finalize_and_save(df: pd.DataFrame, out_path: str):
-    """Write dataframe to Parquet (preferred) or CSV (legacy / reports, if any)."""
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     ext = str(Path(out_path).suffix).lower()
 
     if ext == ".parquet":
         _ensure_parquet_engine()
-        # Use snappy for good speed/size tradeoff
         df.to_parquet(out_path, engine="pyarrow", index=False, compression="snappy")
         return
 
-    # Fallback/legacy
     df.to_csv(out_path, index=False)
+
 
 # ========= INCREMENTAL LOAD + MERGE =========
 
-def _legacy_csv_path_for(parquet_path: str) -> str:
-    return str(Path(parquet_path).with_suffix(".csv"))
-
-def _resolve_existing_store_path(target_parquet_path: str) -> str:
-    """
-    If parquet exists -> return parquet.
-    Else if legacy CSV exists and migration enabled -> return CSV.
-    Else return parquet (even if missing).
-    """
-    if os.path.exists(target_parquet_path):
-        return target_parquet_path
-    if MIGRATE_LEGACY_CSV:
-        legacy = _legacy_csv_path_for(target_parquet_path)
-        if os.path.exists(legacy):
-            return legacy
-    return target_parquet_path
-
-
 def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFrame:
-    """
-    Load existing OHLCV for incremental merge.
-    'out_path' is expected to be the TARGET parquet path; we may read a legacy CSV if present.
-    """
     existing_path = _resolve_existing_store_path(out_path)
     if not os.path.exists(existing_path):
         return pd.DataFrame()
@@ -1007,9 +838,8 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
 
         df["date"] = _to_ist(df["date"])
 
-        # If legacy file stored intraday as candle-start, convert to candle-end for consistency
-        if mode in ("5min", "15min", "1h") and intraday_ts.lower() == "end":
-            step = {"5min": 5, "15min": 15, "1h": 60}[mode]
+        if intraday_ts.lower() == "end":
+            step = {"5min": 5, "15min": 15}[mode]
             df = _maybe_convert_existing_intraday_to_end(df, step)
 
         keep = [c for c in keep_cols if c in df.columns]
@@ -1034,14 +864,6 @@ def _incremental_start_from_existing(mode: str, out_path: str, default_start: da
         back = timedelta(minutes=5 * warm)
     elif mode == "15min":
         back = timedelta(minutes=15 * warm)
-    elif mode == "1h":
-        back = timedelta(hours=1 * warm)
-    elif mode == "3h":
-        back = timedelta(hours=1 * warm)
-    elif mode == "daily":
-        back = timedelta(days=warm)
-    elif mode == "weekly":
-        back = timedelta(days=7 * warm)
     else:
         back = timedelta(days=30)
 
@@ -1052,31 +874,23 @@ def _incremental_start_from_existing(mode: str, out_path: str, default_start: da
     return max(default_start, s)
 
 
-# ========= PER-ETF PIPELINES =========
+# ========= PER-SYMBOL PIPELINE =========
 
 def _compute_common_features(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     df = add_standard_indicators(df)
 
-    if mode in ("daily", "weekly"):
-        df["Recent_High"] = df["high"].rolling(20, min_periods=20).max()
-        df["Recent_Low"] = df["low"].rolling(20, min_periods=20).min()
-    else:
-        df["Recent_High"] = df["high"].rolling(5, min_periods=5).max()
-        df["Recent_Low"] = df["low"].rolling(5, min_periods=5).min()
+    # Intraday recent high/low (shorter window)
+    df["Recent_High"] = df["high"].rolling(5, min_periods=5).max()
+    df["Recent_Low"] = df["low"].rolling(5, min_periods=5).min()
 
     stoch_k, stoch_d = calculate_stochastic_slow(df, 14, 3, 3, "sma")
     df["Stoch_%K"], df["Stoch_%D"] = stoch_k, stoch_d
     df["ADX"] = calculate_adx(df)
 
-    if mode in ("daily", "weekly"):
-        df = add_change_features_daily_weekly(df)
-    else:
-        df = add_change_features_intraday(df)
-
+    df = add_change_features_intraday(df)
     return df
 
 def _downcast_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Reduce memory + parquet size by downcasting float/int columns where safe."""
     out = df.copy()
     for col in out.columns:
         if col == "date":
@@ -1087,9 +901,7 @@ def _downcast_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = pd.to_numeric(out[col], downcast="integer")
     return out
 
-
 def _indicator_quality_snapshot(df: pd.DataFrame) -> dict[str, float]:
-    """Simple health checks for core indicators consumed by AVWAP strategy."""
     checks: dict[str, float] = {}
     total = max(len(df), 1)
 
@@ -1107,24 +919,19 @@ def _indicator_quality_snapshot(df: pd.DataFrame) -> dict[str, float]:
 
     return checks
 
-
 def _log_indicator_quality(logger: logging.Logger, ticker: str, mode: str, df: pd.DataFrame) -> None:
     q = _indicator_quality_snapshot(df)
     if not q:
         return
-
     severe = [k for k, v in q.items() if v > 15.0]
     if severe:
         logger.warning("[%s] %s indicator quality warning: %s", mode.upper(), ticker, q)
-
 
 def _safe_mkdir(p: str):
     os.makedirs(p, exist_ok=True)
 
 def _fmt_expected(spec: dict) -> str:
     try:
-        if spec.get("kind") == "date":
-            return f"date>={spec['value']}"
         if spec.get("kind") == "ts":
             v = spec["value"]
             if isinstance(v, datetime):
@@ -1148,11 +955,21 @@ class UpdateReport:
     new_last: str | None
     new_rows_path: str | None
 
-def process_ticker(mode: str, ticker: str, token: int, kite: KiteConnect,
-                   start_dt_ist: datetime, end_dt_ist: datetime,
-                   logger: logging.Logger, context: str, holidays: set[date],
-                   force_today_daily: bool, skip_if_fresh: bool, intraday_ts: str,
-                   report_dir: str, print_missing_rows: bool, print_missing_rows_max: int) -> UpdateReport:
+def process_ticker(
+    mode: str,
+    ticker: str,
+    token: int,
+    kite: KiteConnect,
+    start_dt_ist: datetime,
+    end_dt_ist: datetime,
+    logger: logging.Logger,
+    holidays: set[date],
+    skip_if_fresh: bool,
+    intraday_ts: str,
+    report_dir: str,
+    print_missing_rows: bool,
+    print_missing_rows_max: int
+) -> UpdateReport:
     out_path = os.path.join(DIRS[mode]["out"], f"{ticker}_stocks_indicators_{mode}.parquet")
     now_ist = datetime.now(IST_TZ)
 
@@ -1165,10 +982,10 @@ def process_ticker(mode: str, ticker: str, token: int, kite: KiteConnect,
         else:
             last_before_ts = last_before_ts.tz_convert(IST_TZ)
 
-    exp = expected_last_stamp(mode, now_ist, context, holidays, force_today_daily, intraday_ts)
+    exp = expected_last_stamp(mode, now_ist, holidays, intraday_ts)
     exp_str = _fmt_expected(exp)
 
-    if skip_if_fresh and ticker_is_fresh(mode, out_path, now_ist, context, holidays, force_today_daily, intraday_ts):
+    if skip_if_fresh and ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                             exp_str, 0, None, None, None)
@@ -1182,23 +999,10 @@ def process_ticker(mode: str, ticker: str, token: int, kite: KiteConnect,
     existing = _load_existing_ohlc(out_path, intraday_ts, mode)
 
     try:
-        if mode == "daily":
-            fetched = fetch_historical_daily_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
-        elif mode == "weekly":
-            fetched = fetch_historical_weekly_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
-        elif mode == "1h":
-            fetched = fetch_historical_1h_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
-        elif mode == "5min":
+        if mode == "5min":
             fetched = fetch_historical_5min_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
         elif mode == "15min":
             fetched = fetch_historical_15min_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
-        elif mode == "3h":
-            df_60m = fetch_historical_1h_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
-            if df_60m.empty:
-                return UpdateReport(mode, ticker, "noop", out_path, existed_before,
-                                    last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
-                                    exp_str, 0, None, None, None)
-            fetched = resample_to_3h(df_60m)
         else:
             return UpdateReport(mode, ticker, "failed", out_path, existed_before,
                                 last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
@@ -1228,13 +1032,7 @@ def process_ticker(mode: str, ticker: str, token: int, kite: KiteConnect,
         merged = _downcast_numeric_columns(merged)
         _log_indicator_quality(logger, ticker, mode, merged)
 
-        if mode == "daily":
-            cutoff_d = daily_cutoff_date_previous(now_ist, holidays) if context.lower() == "previous" \
-                       else daily_cutoff_date_live(now_ist, holidays, force_today_daily)
-            merged = merged[merged["date"].dt.date <= cutoff_d].reset_index(drop=True)
-
         _finalize_and_save(merged, out_path)
-
 
         # Optional: if we migrated from a legacy CSV, delete it after successful parquet write
         if DELETE_LEGACY_CSV and existed_before and str(existing_path).lower().endswith(".csv"):
@@ -1295,10 +1093,17 @@ def process_ticker(mode: str, ticker: str, token: int, kite: KiteConnect,
 
 # ========= DRIVER =========
 
-def run_mode(mode: str, context: str, max_workers: int, force_today_daily: bool,
-             skip_if_fresh: bool, intraday_ts: str, holidays: set[date],
-             refresh_tokens: bool, report_dir: str,
-             print_missing_rows: bool, print_missing_rows_max: int):
+def run_mode(
+    mode: str,
+    max_workers: int,
+    skip_if_fresh: bool,
+    intraday_ts: str,
+    holidays: set[date],
+    refresh_tokens: bool,
+    report_dir: str,
+    print_missing_rows: bool,
+    print_missing_rows_max: int
+):
     logger = logging.getLogger("stocks_fetcher")
     mode = mode.lower().strip()
     if mode not in VALID_MODES:
@@ -1306,26 +1111,28 @@ def run_mode(mode: str, context: str, max_workers: int, force_today_daily: bool,
 
     now_ist = datetime.now(IST_TZ)
     start_dt = get_start_date(mode, now_ist)
-    end_dt = get_end_dt_for_mode(mode, now_ist, context=context, holidays=holidays, force_today_daily=force_today_daily)
 
-    logger.info("=== MODE=%s | CONTEXT=%s | intraday_ts=%s | Window: %s → %s (IST) ===",
-                mode, context, intraday_ts, start_dt.strftime("%Y-%m-%d %H:%M"), end_dt.strftime("%Y-%m-%d %H:%M"))
+    step = 5 if mode == "5min" else 15
+    end_dt = last_completed_intraday_end(now_ist, step, holidays)
+
+    logger.info("=== MODE=%s | intraday_ts=%s | Window: %s → %s (IST) ===",
+                mode, intraday_ts, start_dt.strftime("%Y-%m-%d %H:%M"), end_dt.strftime("%Y-%m-%d %H:%M"))
 
     if end_dt <= start_dt:
         logger.info("End cutoff <= start. Nothing to fetch for %s.", mode)
         return
 
-    etfs, pre_token_map = load_stocks_universe(logger)
+    syms, pre_token_map = load_stocks_universe(logger)
 
     missing_files: list[str] = []
     missing_rows: list[str] = []
     fresh: list[str] = []
 
     if skip_if_fresh:
-        for t in etfs:
+        for t in syms:
             t = t.upper()
             out_path = os.path.join(DIRS[mode]["out"], f"{t}_stocks_indicators_{mode}.parquet")
-            ms = missing_spec(mode, out_path, now_ist, context, holidays, force_today_daily, intraday_ts)
+            ms = missing_spec(mode, out_path, now_ist, holidays, intraday_ts)
             if ms["kind"] == "fresh":
                 fresh.append(t)
             elif ms["kind"] == "file_missing":
@@ -1334,7 +1141,7 @@ def run_mode(mode: str, context: str, max_workers: int, force_today_daily: bool,
             else:
                 missing_rows.append(t)
     else:
-        missing_rows = [t.upper() for t in etfs]
+        missing_rows = [t.upper() for t in syms]
 
     if skip_if_fresh:
         logger.info("[%s] Missing files: %d", mode.upper(), len(missing_files))
@@ -1346,12 +1153,12 @@ def run_mode(mode: str, context: str, max_workers: int, force_today_daily: bool,
             logger.info("[%s] Missing files list saved: %s", mode.upper(), miss_file_path)
             logger.info("[%s] Missing files sample: %s", mode.upper(), ", ".join(missing_files[:50]))
 
-        logger.info("[%s] Missing evaluation rows (stale ETFs): %d", mode.upper(), len(missing_rows))
+        logger.info("[%s] Missing evaluation rows (stale symbols): %d", mode.upper(), len(missing_rows))
     else:
-        logger.info("[%s] no-skip enabled => processing all ETFs: %d", mode.upper(), len(missing_rows))
+        logger.info("[%s] no-skip enabled => processing all symbols: %d", mode.upper(), len(missing_rows))
 
     if not missing_rows:
-        logger.info("[%s] Nothing missing — all ETFs fresh.", mode.upper())
+        logger.info("[%s] Nothing missing — all symbols fresh.", mode.upper())
         return
 
     kite = setup_kite_session()
@@ -1372,10 +1179,10 @@ def run_mode(mode: str, context: str, max_workers: int, force_today_daily: bool,
         work_items.append((t.upper(), int(tok)))
 
     if not work_items:
-        logger.info("No valid ETFs with tokens.")
+        logger.info("No valid symbols with tokens.")
         return
 
-    logger.info("[%s] Processing ONLY missing ETFs=%d with max_workers=%d ...", mode.upper(), len(work_items), max_workers)
+    logger.info("[%s] Processing ONLY missing symbols=%d with max_workers=%d ...", mode.upper(), len(work_items), max_workers)
 
     updated_reports: list[UpdateReport] = []
     failed = 0
@@ -1385,7 +1192,7 @@ def run_mode(mode: str, context: str, max_workers: int, force_today_daily: bool,
             executor.submit(
                 process_ticker,
                 mode, tkr, tok, kite, start_dt, end_dt,
-                logger, context, holidays, force_today_daily,
+                logger, holidays,
                 skip_if_fresh, intraday_ts,
                 report_dir, print_missing_rows, print_missing_rows_max
             ): tkr
@@ -1404,7 +1211,7 @@ def run_mode(mode: str, context: str, max_workers: int, force_today_daily: bool,
                 logger.exception("Worker crashed for %s (%s): %s", tkr, mode, e)
 
     if updated_reports:
-        logger.info("[%s] Updated ETFs: %d", mode.upper(), len(updated_reports))
+        logger.info("[%s] Updated symbols: %d", mode.upper(), len(updated_reports))
         for r in sorted(updated_reports, key=lambda x: x.ticker):
             logger.info(
                 "[%s] %s %s | last_before=%s | expected=%s | new_rows=%d | new_range=%s → %s | new_rows_store=%s",
@@ -1422,17 +1229,13 @@ def run_mode(mode: str, context: str, max_workers: int, force_today_daily: bool,
         logger.info("[%s] No new rows were appended (everything ended up noop).", mode.upper())
 
     if failed:
-        logger.warning("[%s] Failed ETFs: %d (see stocks_fetcher_run.log)", mode.upper(), failed)
+        logger.warning("[%s] Failed symbols: %d (see stocks_fetcher_run.log)", mode.upper(), failed)
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("mode", nargs="?", default="all", help="daily|weekly|1h|3h|5min|15min|all")
-    p.add_argument("--context", default="live", choices=["live", "previous"],
-                   help="live fetches up to last completed candle; previous caps to prev trading day / prev week")
+    p.add_argument("mode", nargs="?", default="all", help="5min|15min|all")
     p.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
-    p.add_argument("--force-today-daily", action="store_true",
-                   help="Include today's daily candle even before market close (NOT recommended)")
     p.add_argument("--no-skip", action="store_true",
                    help="Disable freshness skip (will refetch/recompute even if fresh)")
     p.add_argument("--intraday-ts", default=DEFAULT_INTRADAY_TIMESTAMP, choices=["start", "end"],
@@ -1442,19 +1245,17 @@ def parse_args():
     p.add_argument("--refresh-tokens", action="store_true",
                    help="Force refresh token cache (kite.instruments NSE)")
 
-
     p.add_argument("--no-migrate-csv", action="store_true",
                    help="Do NOT read legacy CSV outputs (Parquet-only).")
     p.add_argument("--delete-legacy-csv", action="store_true",
                    help="After successful Parquet write, delete legacy CSV outputs (if they exist).")
 
-    # ETF-specific reporting default
     p.add_argument("--report-dir", default="reports/stocks_missing_reports",
                    help="Directory to write missing-files and missing-rows reports")
     p.add_argument("--print-missing-rows", action="store_true",
-                   help="Print a small preview of newly appended rows per ETF")
+                   help="Print a small preview of newly appended rows per symbol")
     p.add_argument("--print-missing-rows-max", type=int, default=5,
-                   help="Max rows to print per ETF when --print-missing-rows is enabled")
+                   help="Max rows to print per symbol when --print-missing-rows is enabled")
 
     return p.parse_args()
 
@@ -1488,9 +1289,7 @@ def main():
         for m in VALID_MODES:
             run_mode(
                 m,
-                context=args.context,
                 max_workers=args.max_workers,
-                force_today_daily=args.force_today_daily,
                 skip_if_fresh=skip_if_fresh,
                 intraday_ts=args.intraday_ts,
                 holidays=holidays,
@@ -1502,9 +1301,7 @@ def main():
     else:
         run_mode(
             mode,
-            context=args.context,
             max_workers=args.max_workers,
-            force_today_daily=args.force_today_daily,
             skip_if_fresh=skip_if_fresh,
             intraday_ts=args.intraday_ts,
             holidays=holidays,
