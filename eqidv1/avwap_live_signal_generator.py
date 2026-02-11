@@ -625,7 +625,8 @@ def next_scan_time(now: datetime) -> datetime:
     """
     Compute the next 15-minute aligned scan time after `now`.
     Candles close at: 9:30, 9:45, 10:00, ..., 15:15, 15:30
-    We scan 30 seconds after candle close to allow data to settle.
+    We scan 75 seconds after candle close to allow the data fetcher
+    (~1 min per cycle) to finish writing updated parquets.
     """
     # Market candle anchored at 9:15
     anchor = now.replace(hour=9, minute=15, second=0, microsecond=0)
@@ -636,12 +637,12 @@ def next_scan_time(now: datetime) -> datetime:
 
     minutes_since_anchor = (now - anchor).total_seconds() / 60.0
     if minutes_since_anchor < 0:
-        return anchor + timedelta(minutes=SCAN_INTERVAL_MINUTES, seconds=30)
+        return anchor + timedelta(minutes=SCAN_INTERVAL_MINUTES, seconds=75)
 
     intervals_elapsed = int(minutes_since_anchor // SCAN_INTERVAL_MINUTES)
     next_interval = anchor + timedelta(
         minutes=(intervals_elapsed + 1) * SCAN_INTERVAL_MINUTES,
-        seconds=30,  # 30s buffer for data to be written
+        seconds=75,  # 75s buffer for data fetcher to complete (~1 min)
     )
     return next_interval
 

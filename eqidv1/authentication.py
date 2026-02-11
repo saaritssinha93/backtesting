@@ -17,13 +17,11 @@ import os
 from pyotp import TOTP
 import pandas as pd
 
-# Define the correct path
-cwd = r"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv1\\backtesting\\eqidv1"
-
 
 def autologin():
     token_path = "api_key.txt"
-    key_secret = open(token_path, 'r').read().split()
+    with open(token_path, 'r') as f:
+        key_secret = f.read().split()
     kite = KiteConnect(api_key=key_secret[0])
 
     # Setup Chrome WebDriver
@@ -92,9 +90,11 @@ def autologin():
 
 autologin()
 
- # Generate and store access token - valid till 6 AM the next day
-request_token = open("request_token.txt", 'r').read()
-key_secret = open("api_key.txt", 'r').read().split()
+# Generate and store access token - valid till 6 AM the next day
+with open("request_token.txt", 'r') as f:
+    request_token = f.read()
+with open("api_key.txt", 'r') as f:
+    key_secret = f.read().split()
 kite = KiteConnect(api_key=key_secret[0])
 data = kite.generate_session(request_token, api_secret=key_secret[1])
 
