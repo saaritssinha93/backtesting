@@ -37,9 +37,8 @@ from kiteconnect import KiteConnect
 # Wire eqidv1 core into sys.path
 # =============================================================================
 _ROOT = Path(__file__).resolve().parent
-_EQIDV1 = _ROOT / "backtesting" / "eqidv1"
-if str(_EQIDV1) not in sys.path:
-    sys.path.insert(0, str(_EQIDV1))
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
 
@@ -210,9 +209,11 @@ def main() -> None:
             print(f"[EXIT] Session end reached ({session_end.strftime('%Y-%m-%d %H:%M:%S%z')}).")
             return
 
-        # If we're exactly on a boundary (+-2s), run now; else wait for next boundary.
+        # If we're on a boundary (within 30s tolerance), run now; else wait.
+        # The tolerance is generous because sleep_until can overshoot by several
+        # seconds and a tight window (e.g. 2s) causes missed cycles.
         boundary = n.replace(second=0, microsecond=0)
-        on_boundary = (boundary.minute % STEP_MIN == 0) and (abs(n.second) <= 2)
+        on_boundary = (boundary.minute % STEP_MIN == 0) and (n.second <= 30)
 
         if not on_boundary:
             nb = next_boundary(n)
@@ -220,7 +221,7 @@ def main() -> None:
                 nb = end
             print(f"[INFO] Next run at {nb.strftime('%Y-%m-%d %H:%M:%S%z')}")
             # Sleep slightly past boundary to ensure the new candle has closed
-            sleep_until(min(nb + timedelta(seconds=2), session_end))
+            sleep_until(min(nb + timedelta(seconds=3), session_end))
             continue
 
         try:

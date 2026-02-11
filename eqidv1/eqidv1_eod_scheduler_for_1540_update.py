@@ -31,9 +31,8 @@ from kiteconnect import KiteConnect
 # Wire eqidv1 core into sys.path
 # =============================================================================
 _ROOT = Path(__file__).resolve().parent
-_EQIDV1 = _ROOT / "backtesting" / "eqidv1"
-if str(_EQIDV1) not in sys.path:
-    sys.path.insert(0, str(_EQIDV1))
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
 

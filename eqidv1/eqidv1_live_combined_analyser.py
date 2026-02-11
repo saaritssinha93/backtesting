@@ -41,9 +41,8 @@ import pytz
 # Wire eqidv1 core into sys.path
 # =============================================================================
 _ROOT = Path(__file__).resolve().parent
-_EQIDV1 = _ROOT / "backtesting" / "eqidv1"
-if str(_EQIDV1) not in sys.path:
-    sys.path.insert(0, str(_EQIDV1))
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
 
@@ -76,9 +75,14 @@ PARQUET_ENGINE = "pyarrow"
 # =============================================================================
 START_TIME = dtime(9, 15)
 END_TIME = dtime(15, 30)
-SECOND_RUN_GAP_SECONDS = 18
-ENABLE_SECOND_RUN = True
 HARD_STOP_TIME = dtime(15, 40)
+
+# Timing: data fetcher (eqidv1_eod_15min_data_stocks) takes ~1 minute after each
+# 15-min boundary.  We delay the first scan and run multiple attempts so at least
+# one scan sees fully-updated data.
+INITIAL_DELAY_SECONDS = 60      # wait 60s after slot for data to settle
+NUM_SCANS_PER_SLOT = 3          # run 3 scans per 15-min window
+SCAN_INTERVAL_SECONDS = 60      # 60s gap between consecutive scans
 
 # Update flag: set True to call eqidv1 core.run_mode("15min") before each scan
 UPDATE_15M_BEFORE_CHECK = False
@@ -1311,7 +1315,8 @@ def main() -> None:
     print(f"[INFO] Volume filter: {USE_VOLUME_FILTER} (ratio>={VOLUME_MIN_RATIO}, SMA={VOLUME_SMA_PERIOD})")
     print(f"[INFO] ATR% filter: {USE_ATR_PCT_FILTER} (min={ATR_PCT_MIN*100:.2f}%)")
     print(f"[INFO] Close-confirm: {REQUIRE_CLOSE_CONFIRM}")
-    print(f"[INFO] UPDATE_15M_BEFORE_CHECK={UPDATE_15M_BEFORE_CHECK} | ENABLE_SECOND_RUN={ENABLE_SECOND_RUN} (gap={SECOND_RUN_GAP_SECONDS}s)")
+    print(f"[INFO] UPDATE_15M_BEFORE_CHECK={UPDATE_15M_BEFORE_CHECK}")
+    print(f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s")
 
     holidays = _read_holidays_safe()
 
@@ -1351,13 +1356,28 @@ def main() -> None:
             except Exception as e:
                 print(f"[WARN] Update failed: {e!r}")
 
-        print(f"[RUN ] Slot {slot.strftime('%H:%M')} | scan A")
-        run_one_scan(run_tag="A")
+        # --- Wait for data fetcher to finish (~1 min after slot boundary) ---
+        delay_target = slot + timedelta(seconds=INITIAL_DELAY_SECONDS)
+        now = now_ist()
+        if now < delay_target:
+            wait_secs = (delay_target - now).total_seconds()
+            print(f"[WAIT] Delaying {wait_secs:.0f}s for data fetch to complete (until {delay_target.strftime('%H:%M:%S')})")
+            time.sleep(max(0, wait_secs))
 
-        if ENABLE_SECOND_RUN:
-            time.sleep(float(SECOND_RUN_GAP_SECONDS))
-            print(f"[RUN ] Slot {slot.strftime('%H:%M')} | scan B")
-            run_one_scan(run_tag="B")
+        # --- Run multiple scans per slot to catch freshly-updated data ---
+        scan_labels = [chr(ord("A") + i) for i in range(NUM_SCANS_PER_SLOT)]
+        for scan_idx, label in enumerate(scan_labels):
+            now = now_ist()
+            if now.time() >= HARD_STOP_TIME:
+                print("[STOP] Hard-stop reached mid-slot. Exiting.")
+                return
+
+            print(f"[RUN ] Slot {slot.strftime('%H:%M')} | scan {label} ({scan_idx+1}/{NUM_SCANS_PER_SLOT}) at {now.strftime('%H:%M:%S')}")
+            run_one_scan(run_tag=label)
+
+            # Sleep between scans (skip after the last one)
+            if scan_idx < len(scan_labels) - 1:
+                time.sleep(float(SCAN_INTERVAL_SECONDS))
 
         time.sleep(1.0)
 
