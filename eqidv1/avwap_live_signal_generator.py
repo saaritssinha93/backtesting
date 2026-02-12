@@ -54,8 +54,15 @@ MARKET_CLOSE = dt_time(15, 30)
 SCAN_INTERVAL_MINUTES = 15
 
 # Default position sizing
-DEFAULT_POSITION_SIZE_RS = 50_000
-DEFAULT_INTRADAY_LEVERAGE = 5.0
+# position_size = capital/margin per trade; notional = position_size * leverage
+DEFAULT_POSITION_SIZE_RS = 50_000       # Rs. margin per trade
+DEFAULT_INTRADAY_LEVERAGE = 5.0         # MIS leverage on Zerodha
+
+# SL / Target — percentage-based (unified with combined analyser)
+SHORT_STOP_PCT = 0.0075     # 0.75%
+SHORT_TARGET_PCT = 0.0120   # 1.2%
+LONG_STOP_PCT = 0.0075      # 0.75%
+LONG_TARGET_PCT = 0.0150    # 1.5%
 
 # Signal output
 SIGNAL_DIR = "live_signals"
@@ -336,14 +343,12 @@ def detect_signals_for_ticker(
         else:
             setup = "A_PULLBACK_C2_THEN_BREAK_C2_LOW"
 
-        # Stop loss: entry + ATR * factor (above entry for short)
-        sl_factor = 0.75
-        stop = round(c + atr_val * sl_factor, 2)
-        # Target: entry - ATR * factor (below entry for short)
-        tgt_factor = 1.2
-        target = round(c - atr_val * tgt_factor, 2)
-        # Quantity from position size
-        qty = max(1, int(position_size_rs / c)) if c > 0 else 1
+        # Percentage-based SL/Target (unified with combined analyser)
+        stop = round(c * (1.0 + SHORT_STOP_PCT), 2)
+        target = round(c * (1.0 - SHORT_TARGET_PCT), 2)
+        # Quantity: notional = margin * leverage, qty = notional / price
+        notional = position_size_rs * DEFAULT_INTRADAY_LEVERAGE
+        qty = max(1, int(notional / c)) if c > 0 else 1
 
         sig_dt_str = candle_dt.strftime("%Y-%m-%d %H:%M:%S%z")
         sig_id = generate_signal_id(ticker, "SHORT", sig_dt_str)
@@ -385,11 +390,12 @@ def detect_signals_for_ticker(
         else:
             setup = "A_PULLBACK_C2_THEN_BREAK_C2_HIGH"
 
-        sl_factor = 0.75
-        stop = round(c - atr_val * sl_factor, 2)
-        tgt_factor = 1.2
-        target = round(c + atr_val * tgt_factor, 2)
-        qty = max(1, int(position_size_rs / c)) if c > 0 else 1
+        # Percentage-based SL/Target (unified with combined analyser)
+        stop = round(c * (1.0 - LONG_STOP_PCT), 2)
+        target = round(c * (1.0 + LONG_TARGET_PCT), 2)
+        # Quantity: notional = margin * leverage, qty = notional / price
+        notional = position_size_rs * DEFAULT_INTRADAY_LEVERAGE
+        qty = max(1, int(notional / c)) if c > 0 else 1
 
         sig_dt_str = candle_dt.strftime("%Y-%m-%d %H:%M:%S%z")
         sig_id = generate_signal_id(ticker, "LONG", sig_dt_str)
@@ -519,7 +525,8 @@ def scan_all_tickers(
 
                         sig_id = generate_signal_id(ticker, side, sig_dt)
                         entry_price = float(td.get("entry_price", 0))
-                        qty = max(1, int(position_size_rs / entry_price)) if entry_price > 0 else 1
+                        notional = position_size_rs * DEFAULT_INTRADAY_LEVERAGE
+                        qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
 
                         all_signals.append(LiveSignal(
                             signal_id=sig_id,
