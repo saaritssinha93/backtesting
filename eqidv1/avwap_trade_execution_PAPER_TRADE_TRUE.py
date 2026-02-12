@@ -69,15 +69,22 @@ SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary.json")
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
 MARKET_CLOSE = dt_time(15, 30)
-FORCED_CLOSE_TIME = dt_time(15, 15)
+FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe before broker auto-square-off
 
 # Simulation
 POLL_INTERVAL_SEC = 5
 MAX_CONCURRENT_TRADES = 30
+SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 
 # Default capital
 DEFAULT_START_CAPITAL = 1_000_000
 DEFAULT_POSITION_SIZE = 50_000
+INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
+
+# Risk limits
+MAX_DAILY_LOSS_RS = 5_000           # stop taking new trades if daily loss exceeds this
+MAX_OPEN_POSITIONS = 10             # max simultaneous open positions
+MAX_CAPITAL_DEPLOYED_RS = 500_000   # max total margin that can be deployed
 
 # Paper trade log columns
 TRADE_LOG_COLUMNS = [
@@ -231,6 +238,38 @@ active_trades_lock = threading.Lock()
 daily_pnl: Dict[str, float] = {"total": 0.0, "wins": 0, "losses": 0, "trades": 0}
 daily_pnl_lock = threading.Lock()
 
+# Capital / position tracking (margin, not notional — accounts for MIS leverage)
+capital_deployed: Dict[str, float] = {}   # signal_id → margin blocked
+capital_lock = threading.Lock()
+
+
+def _check_risk_limits(signal: dict) -> Optional[str]:
+    """
+    Check daily loss limit, open positions, and capital deployed.
+    Returns a rejection reason string, or None if the trade is allowed.
+    """
+    with daily_pnl_lock:
+        if daily_pnl["total"] <= -MAX_DAILY_LOSS_RS:
+            return f"daily loss limit hit (Rs.{daily_pnl['total']:+,.2f} <= -{MAX_DAILY_LOSS_RS:,})"
+
+    with capital_lock:
+        open_count = len(capital_deployed)
+        total_deployed = sum(capital_deployed.values())
+
+    if open_count >= MAX_OPEN_POSITIONS:
+        return f"max open positions reached ({open_count}/{MAX_OPEN_POSITIONS})"
+
+    entry_price = float(signal.get("entry_price", 0))
+    quantity = int(signal.get("quantity", 1))
+    margin = (entry_price * quantity) / INTRADAY_LEVERAGE
+    if (total_deployed + margin) > MAX_CAPITAL_DEPLOYED_RS:
+        return (
+            f"margin limit exceeded (deployed Rs.{total_deployed:,.0f} + "
+            f"Rs.{margin:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})"
+        )
+
+    return None
+
 
 def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
     """
@@ -240,11 +279,17 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
     """
     ticker = signal["ticker"]
     side = signal["side"].upper()
-    entry_price = float(signal["entry_price"])
+    raw_entry = float(signal["entry_price"])
     stop_price = float(signal["stop_price"])
     target_price = float(signal["target_price"])
     quantity = int(signal.get("quantity", 1))
     signal_id = signal["signal_id"]
+
+    # Apply realistic slippage: worsen entry in the unfavourable direction
+    if side == "LONG":
+        entry_price = round(raw_entry * (1 + SLIPPAGE_PCT), 2)
+    else:
+        entry_price = round(raw_entry * (1 - SLIPPAGE_PCT), 2)
 
     now_ist = datetime.now(IST)
     trade_id = f"PT-{signal_id[:8]}-{now_ist.strftime('%H%M%S')}"
@@ -257,6 +302,11 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
         f"[SIM] ENTRY {side} {ticker} @ {entry_price} | "
         f"SL={stop_price} TGT={target_price} qty={quantity} | ID={trade_id}"
     )
+
+    # Register margin deployment (notional / leverage)
+    margin = (entry_price * quantity) / INTRADAY_LEVERAGE
+    with capital_lock:
+        capital_deployed[signal_id] = margin
 
     # Monitor loop
     exit_price = entry_price
@@ -272,7 +322,7 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
             outcome = "EOD_CLOSE"
             log.info(
                 f"[SIM] FORCED CLOSE {side} {ticker} @ {exit_price} "
-                f"(15:15 IST) | ID={trade_id}"
+                f"(EOD forced close) | ID={trade_id}"
             )
             break
 
@@ -381,6 +431,10 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
         f"({daily_pnl['wins']}W/{daily_pnl['losses']}L)"
     )
 
+    # Release capital
+    with capital_lock:
+        capital_deployed.pop(signal_id, None)
+
     # Remove from active trades
     with active_trades_lock:
         active_trades.pop(signal_id, None)
@@ -483,6 +537,16 @@ def process_new_signals(
     for signal in signals:
         signal_id = str(signal.get("signal_id", ""))
         if not signal_id or signal_id in executed:
+            continue
+
+        # Risk checks: daily loss, open positions, capital deployed
+        reject_reason = _check_risk_limits(signal)
+        if reject_reason:
+            log.warning(
+                f"[RISK] Rejecting {signal.get('side', '?')} "
+                f"{signal.get('ticker', '?')}: {reject_reason}"
+            )
+            executed.add(signal_id)  # don't re-process
             continue
 
         # Mark as executed immediately to prevent duplicates
