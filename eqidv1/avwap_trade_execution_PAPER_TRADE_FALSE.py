@@ -80,13 +80,18 @@ SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary.json")
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
 MARKET_CLOSE = dt_time(15, 30)
-FORCED_CLOSE_TIME = dt_time(15, 15)
+FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe before broker auto-square-off
 
 # Order monitoring
 ORDER_POLL_SEC = 3
 FILL_WAIT_TIMEOUT_SEC = 60
 MAX_CANCEL_RETRIES = 3
 CANCEL_RETRY_WAIT_SEC = 2
+
+# Risk limits
+MAX_DAILY_LOSS_RS = 5_000           # stop taking new trades if daily loss exceeds this
+MAX_OPEN_POSITIONS = 10             # max simultaneous open positions
+MAX_CAPITAL_DEPLOYED_RS = 500_000   # max total notional exposure at any time
 
 # Concurrency
 MAX_CONCURRENT_TRADES = 20
@@ -305,6 +310,38 @@ active_trades_lock = threading.Lock()
 daily_pnl: Dict[str, Any] = {"total": 0.0, "wins": 0, "losses": 0, "trades": 0}
 daily_pnl_lock = threading.Lock()
 
+# Capital / position tracking
+capital_deployed: Dict[str, float] = {}   # signal_id → notional exposure
+capital_lock = threading.Lock()
+
+
+def _check_risk_limits(signal: dict) -> Optional[str]:
+    """
+    Check daily loss limit, open positions, and capital deployed.
+    Returns a rejection reason string, or None if the trade is allowed.
+    """
+    with daily_pnl_lock:
+        if daily_pnl["total"] <= -MAX_DAILY_LOSS_RS:
+            return f"daily loss limit hit (Rs.{daily_pnl['total']:+,.2f} <= -{MAX_DAILY_LOSS_RS:,})"
+
+    with capital_lock:
+        open_count = len(capital_deployed)
+        total_deployed = sum(capital_deployed.values())
+
+    if open_count >= MAX_OPEN_POSITIONS:
+        return f"max open positions reached ({open_count}/{MAX_OPEN_POSITIONS})"
+
+    entry_price = float(signal.get("entry_price", 0))
+    quantity = int(signal.get("quantity", 1))
+    notional = entry_price * quantity
+    if (total_deployed + notional) > MAX_CAPITAL_DEPLOYED_RS:
+        return (
+            f"capital limit exceeded (deployed Rs.{total_deployed:,.0f} + "
+            f"Rs.{notional:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})"
+        )
+
+    return None
+
 
 def execute_live_trade(signal: dict) -> None:
     """
@@ -382,6 +419,11 @@ def execute_live_trade(signal: dict) -> None:
         result.filled_price = filled_price
         log.info(f"[LIVE] Entry filled: {ticker} @ {filled_price}")
 
+        # Register capital deployment
+        notional = filled_price * quantity
+        with capital_lock:
+            capital_deployed[signal_id] = notional
+
         # Recalculate SL/target based on actual fill price
         if side == "SHORT":
             # SL above entry, target below
@@ -437,7 +479,7 @@ def execute_live_trade(signal: dict) -> None:
 
             # Force close at 15:15
             if now_ist >= forced_close_dt:
-                log.info(f"[LIVE] 15:15 forced close for {ticker}")
+                log.info(f"[LIVE] EOD forced close for {ticker}")
 
                 cancel_order_safe(kite.VARIETY_REGULAR, target_order_id)
                 cancel_order_safe(kite.VARIETY_REGULAR, sl_order_id)
@@ -550,6 +592,10 @@ def execute_live_trade(signal: dict) -> None:
         f"P&L: Rs.{result.pnl_rs:+,.2f} ({result.pnl_pct:+.2f}%) | "
         f"Day total: Rs.{daily_pnl['total']:+,.2f}"
     )
+
+    # Release capital
+    with capital_lock:
+        capital_deployed.pop(signal_id, None)
 
     # Remove from active trades
     with active_trades_lock:
@@ -666,6 +712,16 @@ def process_new_signals(
         missing = [k for k in required if not signal.get(k)]
         if missing:
             log.warning(f"Signal {signal_id[:12]} missing fields: {missing}. Skipping.")
+            continue
+
+        # Risk checks: daily loss, open positions, capital deployed
+        reject_reason = _check_risk_limits(signal)
+        if reject_reason:
+            log.warning(
+                f"[RISK] Rejecting {signal.get('side', '?')} "
+                f"{signal.get('ticker', '?')}: {reject_reason}"
+            )
+            executed.add(signal_id)  # don't re-process
             continue
 
         # Mark as executed immediately

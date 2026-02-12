@@ -23,6 +23,8 @@ Core: backtesting/eqidv1/trading_data_continous_run_historical_alltf_v3_parquet_
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import os
 import sys
 import glob
@@ -69,6 +71,22 @@ STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = STATE_DIR / "eqidv1_avwap_live_state_v11.json"
 
 PARQUET_ENGINE = "pyarrow"
+
+# =============================================================================
+# CSV BRIDGE: Write signals in the format the trade executors expect
+# =============================================================================
+LIVE_SIGNAL_DIR = ROOT / "live_signals"
+LIVE_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
+SIGNAL_CSV_PATTERN = "signals_{}.csv"
+
+# Position sizing for CSV output
+DEFAULT_POSITION_SIZE_RS = 50_000
+
+SIGNAL_CSV_COLUMNS = [
+    "signal_id", "signal_datetime", "received_time", "ticker", "side",
+    "setup", "impulse_type", "entry_price", "stop_price", "target_price",
+    "quality_score", "atr_pct", "rsi", "adx", "quantity",
+]
 
 # =============================================================================
 # SCHEDULER CONFIG
@@ -1229,6 +1247,111 @@ def _sleep_until(dt: datetime) -> None:
 
 
 # =============================================================================
+# CSV BRIDGE: write signals to live_signals/ for trade executors
+# =============================================================================
+def _generate_signal_id(ticker: str, side: str, signal_dt: str) -> str:
+    """Deterministic signal ID from ticker + side + signal_datetime."""
+    raw = f"{ticker}|{side}|{signal_dt}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _write_signals_csv(signals_df: pd.DataFrame) -> int:
+    """
+    Convert analyser signals_df to the CSV format expected by trade executors
+    and append new signals to live_signals/signals_YYYY-MM-DD.csv.
+    Returns count of new signals written.
+    """
+    if signals_df.empty:
+        return 0
+
+    today_str = now_ist().strftime("%Y-%m-%d")
+    csv_path = str(LIVE_SIGNAL_DIR / SIGNAL_CSV_PATTERN.format(today_str))
+    received_time = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+
+    # Read existing signal IDs from today's CSV to avoid duplicates
+    existing_ids: set = set()
+    if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+        try:
+            df_existing = pd.read_csv(csv_path, usecols=["signal_id"], engine="python",
+                                      quotechar='"', quoting=csv.QUOTE_ALL,
+                                      on_bad_lines="warn")
+            existing_ids = set(df_existing["signal_id"].astype(str))
+        except Exception:
+            existing_ids = set()
+
+    file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
+    written = 0
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=SIGNAL_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
+        if not file_exists:
+            writer.writeheader()
+
+        for _, row in signals_df.iterrows():
+            ticker = str(row.get("ticker", ""))
+            side = str(row.get("side", ""))
+            bar_time = str(row.get("bar_time_ist", ""))
+            signal_id = _generate_signal_id(ticker, side, bar_time)
+
+            if signal_id in existing_ids:
+                continue
+
+            entry_price = float(row.get("entry_price", 0))
+            qty = max(1, int(DEFAULT_POSITION_SIZE_RS / entry_price)) if entry_price > 0 else 1
+
+            # Extract indicator values from diagnostics JSON if available
+            atr_pct = 0.0
+            rsi_val = 0.0
+            adx_val = 0.0
+            diag_str = row.get("diagnostics_json", "")
+            if diag_str:
+                try:
+                    diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
+                    atr_val = _safe_float(diag.get("atr", 0))
+                    close_val = _safe_float(diag.get("close", entry_price))
+                    if np.isfinite(atr_val) and np.isfinite(close_val) and close_val > 0:
+                        atr_pct = atr_val / close_val
+                    rsi_val = _safe_float(diag.get("rsi", 0))
+                    adx_val = _safe_float(diag.get("adx", 0))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Determine impulse_type from diagnostics
+            impulse_type = ""
+            if diag_str:
+                try:
+                    diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
+                    impulse_type = str(diag.get("impulse_type", ""))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            writer.writerow({
+                "signal_id": signal_id,
+                "signal_datetime": bar_time,
+                "received_time": received_time,
+                "ticker": ticker,
+                "side": side,
+                "setup": str(row.get("setup", "")),
+                "impulse_type": impulse_type,
+                "entry_price": round(entry_price, 2),
+                "stop_price": round(float(row.get("sl_price", 0)), 2),
+                "target_price": round(float(row.get("target_price", 0)), 2),
+                "quality_score": round(float(row.get("score", 0)), 4),
+                "atr_pct": round(atr_pct, 6),
+                "rsi": round(rsi_val, 2),
+                "adx": round(adx_val, 2),
+                "quantity": qty,
+            })
+            existing_ids.add(signal_id)
+            written += 1
+
+    if written > 0:
+        print(f"[CSV ] Wrote {written} new signal(s) to {csv_path}")
+
+    return written
+
+
+# =============================================================================
 # RUN ONE SCAN
 # =============================================================================
 def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -1299,6 +1422,10 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     print(f"[SAVED] {checks_path}")
     print(f"[SAVED] {signals_path}")
+
+    # Bridge: write signals to CSV for trade executors
+    _write_signals_csv(signals_df)
+
     print(f"[RUN ] done | checks={len(checks_df)} rows | signals={len(signals_df)} rows")
 
     return checks_df, signals_df
