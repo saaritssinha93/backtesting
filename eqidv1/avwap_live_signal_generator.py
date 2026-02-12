@@ -57,6 +57,12 @@ SCAN_INTERVAL_MINUTES = 15
 DEFAULT_POSITION_SIZE_RS = 50_000
 DEFAULT_INTRADAY_LEVERAGE = 5.0
 
+# SL / Target — percentage-based (unified with combined analyser)
+SHORT_STOP_PCT = 0.0075     # 0.75%
+SHORT_TARGET_PCT = 0.0120   # 1.2%
+LONG_STOP_PCT = 0.0075      # 0.75%
+LONG_TARGET_PCT = 0.0150    # 1.5%
+
 # Signal output
 SIGNAL_DIR = "live_signals"
 SIGNAL_CSV_PATTERN = "signals_{}.csv"
@@ -336,12 +342,9 @@ def detect_signals_for_ticker(
         else:
             setup = "A_PULLBACK_C2_THEN_BREAK_C2_LOW"
 
-        # Stop loss: entry + ATR * factor (above entry for short)
-        sl_factor = 0.75
-        stop = round(c + atr_val * sl_factor, 2)
-        # Target: entry - ATR * factor (below entry for short)
-        tgt_factor = 1.2
-        target = round(c - atr_val * tgt_factor, 2)
+        # Percentage-based SL/Target (unified with combined analyser)
+        stop = round(c * (1.0 + SHORT_STOP_PCT), 2)
+        target = round(c * (1.0 - SHORT_TARGET_PCT), 2)
         # Quantity from position size
         qty = max(1, int(position_size_rs / c)) if c > 0 else 1
 
@@ -385,10 +388,9 @@ def detect_signals_for_ticker(
         else:
             setup = "A_PULLBACK_C2_THEN_BREAK_C2_HIGH"
 
-        sl_factor = 0.75
-        stop = round(c - atr_val * sl_factor, 2)
-        tgt_factor = 1.2
-        target = round(c + atr_val * tgt_factor, 2)
+        # Percentage-based SL/Target (unified with combined analyser)
+        stop = round(c * (1.0 - LONG_STOP_PCT), 2)
+        target = round(c * (1.0 + LONG_TARGET_PCT), 2)
         qty = max(1, int(position_size_rs / c)) if c > 0 else 1
 
         sig_dt_str = candle_dt.strftime("%Y-%m-%d %H:%M:%S%z")
