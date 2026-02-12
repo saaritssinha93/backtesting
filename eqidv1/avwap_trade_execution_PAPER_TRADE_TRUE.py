@@ -79,11 +79,12 @@ SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 # Default capital
 DEFAULT_START_CAPITAL = 1_000_000
 DEFAULT_POSITION_SIZE = 50_000
+INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
 # Risk limits
 MAX_DAILY_LOSS_RS = 5_000           # stop taking new trades if daily loss exceeds this
 MAX_OPEN_POSITIONS = 10             # max simultaneous open positions
-MAX_CAPITAL_DEPLOYED_RS = 500_000   # max total notional exposure at any time
+MAX_CAPITAL_DEPLOYED_RS = 500_000   # max total margin that can be deployed
 
 # Paper trade log columns
 TRADE_LOG_COLUMNS = [
@@ -237,8 +238,8 @@ active_trades_lock = threading.Lock()
 daily_pnl: Dict[str, float] = {"total": 0.0, "wins": 0, "losses": 0, "trades": 0}
 daily_pnl_lock = threading.Lock()
 
-# Capital / position tracking
-capital_deployed: Dict[str, float] = {}   # signal_id → notional exposure
+# Capital / position tracking (margin, not notional — accounts for MIS leverage)
+capital_deployed: Dict[str, float] = {}   # signal_id → margin blocked
 capital_lock = threading.Lock()
 
 
@@ -260,11 +261,11 @@ def _check_risk_limits(signal: dict) -> Optional[str]:
 
     entry_price = float(signal.get("entry_price", 0))
     quantity = int(signal.get("quantity", 1))
-    notional = entry_price * quantity
-    if (total_deployed + notional) > MAX_CAPITAL_DEPLOYED_RS:
+    margin = (entry_price * quantity) / INTRADAY_LEVERAGE
+    if (total_deployed + margin) > MAX_CAPITAL_DEPLOYED_RS:
         return (
-            f"capital limit exceeded (deployed Rs.{total_deployed:,.0f} + "
-            f"Rs.{notional:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})"
+            f"margin limit exceeded (deployed Rs.{total_deployed:,.0f} + "
+            f"Rs.{margin:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})"
         )
 
     return None
@@ -302,10 +303,10 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
         f"SL={stop_price} TGT={target_price} qty={quantity} | ID={trade_id}"
     )
 
-    # Register capital deployment
-    notional = entry_price * quantity
+    # Register margin deployment (notional / leverage)
+    margin = (entry_price * quantity) / INTRADAY_LEVERAGE
     with capital_lock:
-        capital_deployed[signal_id] = notional
+        capital_deployed[signal_id] = margin
 
     # Monitor loop
     exit_price = entry_price
