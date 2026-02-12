@@ -80,7 +80,9 @@ LIVE_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
 SIGNAL_CSV_PATTERN = "signals_{}.csv"
 
 # Position sizing for CSV output
-DEFAULT_POSITION_SIZE_RS = 50_000
+# position_size = capital/margin per trade; notional = position_size * leverage
+DEFAULT_POSITION_SIZE_RS = 50_000       # Rs. margin per trade
+INTRADAY_LEVERAGE = 5.0                 # MIS leverage on Zerodha
 
 SIGNAL_CSV_COLUMNS = [
     "signal_id", "signal_datetime", "received_time", "ticker", "side",
@@ -1297,7 +1299,8 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
                 continue
 
             entry_price = float(row.get("entry_price", 0))
-            qty = max(1, int(DEFAULT_POSITION_SIZE_RS / entry_price)) if entry_price > 0 else 1
+            notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
+            qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
 
             # Extract indicator values from diagnostics JSON if available
             atr_pct = 0.0
