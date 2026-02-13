@@ -1,0 +1,43 @@
+{
+  "dataset_csv": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\meta_dataset.csv",
+  "rows": 590,
+  "pos_rate": 0.25254237288135595,
+  "splits": 2,
+  "train_days": 60,
+  "test_days": 10,
+  "embargo_minutes": 30,
+  "calibration": "isotonic",
+  "folds": [
+    {
+      "fold": 3,
+      "train_start": "2025-09-24 00:00:00+05:30",
+      "train_end": "2025-12-26 23:59:59+05:30",
+      "test_start": "2025-12-29 00:00:00+05:30",
+      "test_end": "2026-01-13 23:59:59+05:30",
+      "rows_train": 303,
+      "rows_test": 68,
+      "auc": 0.6366666666666667,
+      "logloss": 0.6635761173572908,
+      "brier": 0.19099625367962125,
+      "pos_rate_test": 0.2647058823529412
+    },
+    {
+      "fold": 4,
+      "train_start": "2025-10-09 00:00:00+05:30",
+      "train_end": "2026-01-13 23:59:59+05:30",
+      "test_start": "2026-01-14 00:00:00+05:30",
+      "test_end": "2026-01-29 23:59:59+05:30",
+      "rows_train": 317,
+      "rows_test": 66,
+      "auc": 0.5481481481481482,
+      "logloss": 0.6613978756415878,
+      "brier": 0.23051209092548292,
+      "pos_rate_test": 0.3181818181818182
+    }
+  ],
+  "export": {
+    "model_path": "models\\meta_model.pkl",
+    "features_path": "models\\meta_features.json"
+  },
+  "oof_coverage": 0.2271186440677966
+}
