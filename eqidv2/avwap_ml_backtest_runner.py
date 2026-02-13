@@ -309,8 +309,8 @@ def apply_ml_filter_and_size(
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ml-threshold", type=float, default=0.60, help="p_win threshold for taking trades")
-    ap.add_argument("--model-path", type=str, default="eqidv2/models/meta_model.pkl", help="Path to exported meta model")
-    ap.add_argument("--features-path", type=str, default="eqidv2/models/meta_features.json", help="Path to exported feature list")
+    ap.add_argument("--model-path", type=str, default="models/meta_model.pkl", help="Path to exported meta model")
+    ap.add_argument("--features-path", type=str, default="models/meta_features.json", help="Path to exported feature list")
     ap.add_argument("--outputs-dir", type=str, default="", help="Optional override outputs directory")
     ap.add_argument("--save-csv", action="store_true", help="Save RAW and ML trade CSVs to outputs")
     args = ap.parse_args()
