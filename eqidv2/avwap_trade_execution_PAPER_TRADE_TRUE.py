@@ -106,6 +106,8 @@ TRADE_LOG_COLUMNS = [
     "pnl_rs",
     "pnl_pct",
     "quality_score",
+    "p_win",
+    "confidence_multiplier",
 ]
 
 # Signal CSV columns (must match signal generator output)
@@ -230,6 +232,8 @@ class PaperTrade:
     pnl_rs: float = 0.0
     pnl_pct: float = 0.0
     quality_score: float = 0.0
+    p_win: float = 0.0
+    confidence_multiplier: float = 1.0
 
 
 # Shared state
@@ -409,6 +413,8 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
         pnl_rs=round(pnl_rs, 2),
         pnl_pct=round(pnl_pct, 4),
         quality_score=float(signal.get("quality_score", 0)),
+        p_win=float(signal.get("p_win", 0.0) or 0.0),
+        confidence_multiplier=float(signal.get("confidence_multiplier", 1.0) or 1.0),
     )
 
     # Log to daily CSV
@@ -471,6 +477,8 @@ def _log_trade(trade: PaperTrade) -> None:
             "pnl_rs": trade.pnl_rs,
             "pnl_pct": trade.pnl_pct,
             "quality_score": trade.quality_score,
+            "p_win": trade.p_win,
+            "confidence_multiplier": trade.confidence_multiplier,
         })
 
 
@@ -572,7 +580,7 @@ def process_new_signals(
         log.info(
             f"[DISPATCH] Launched simulation for "
             f"{signal.get('side', '?')} {signal.get('ticker', '?')} "
-            f"@ {signal.get('entry_price', '?')} | ID={signal_id[:12]}"
+            f"@ {signal.get('entry_price', '?')} | p_win={signal.get('p_win', '?')} | ID={signal_id[:12]}"
         )
 
     if new_count > 0:

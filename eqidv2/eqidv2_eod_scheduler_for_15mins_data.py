@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-eqidv1_eod_scheduler_for_15mins_data.py
+eqidv2_eod_scheduler_for_15mins_data.py
 ========================================
 
 Runs the **EQIDV1** 15-minute parquet updater every 15 minutes during
 market hours (IST), then exits after session close.
 
 This is adapted from stocks_eod_daily_weekly_scheduler_for_15mins_data.py
-but wired to the eqidv1 backtesting core:
-    backtesting/eqidv1/trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
+but wired to the eqidv2 backtesting core:
+    backtesting/eqidv2/trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
 
 Typical usage:
 - Run once per day via Windows Task Scheduler / batch file at ~09:10 IST.
@@ -19,7 +19,7 @@ Typical usage:
     * Stop and exit at 15:50 IST
 
 Notes:
-- Only 15-min data is updated (the eqidv1 core supports 5min & 15min only).
+- Only 15-min data is updated (the eqidv2 core supports 5min & 15min only).
 - Includes the KiteConnect auth-file "first non-empty line" fix.
 """
 
@@ -34,11 +34,12 @@ import pytz
 from kiteconnect import KiteConnect
 
 # =============================================================================
-# Wire eqidv1 core into sys.path
+# Wire eqidv2 core into sys.path
 # =============================================================================
 _ROOT = Path(__file__).resolve().parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_EQIDV1 = _ROOT / "backtesting" / "eqidv2"
+if str(_EQIDV1) not in sys.path:
+    sys.path.insert(0, str(_EQIDV1))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
 
@@ -62,7 +63,7 @@ EXTRA_TRADING_DAYS: set[ddate] = set()
 API_KEY_FILE = _ROOT / "api_key.txt"
 ACCESS_TOKEN_FILE = _ROOT / "access_token.txt"
 
-REPORT_DIR = _ROOT / "reports" / "eqidv1_reports"
+REPORT_DIR = _ROOT / "reports" / "eqidv2_reports"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -146,7 +147,7 @@ def is_trading_day(d: ddate, holidays: set[ddate]) -> bool:
 # =============================================================================
 def run_update_15m(holidays: set[ddate]) -> None:
     """
-    Calls the eqidv1 updater for 15-min parquet data.
+    Calls the eqidv2 updater for 15-min parquet data.
     """
     core.run_mode(
         mode="15min",
@@ -209,11 +210,9 @@ def main() -> None:
             print(f"[EXIT] Session end reached ({session_end.strftime('%Y-%m-%d %H:%M:%S%z')}).")
             return
 
-        # If we're on a boundary (within 30s tolerance), run now; else wait.
-        # The tolerance is generous because sleep_until can overshoot by several
-        # seconds and a tight window (e.g. 2s) causes missed cycles.
+        # If we're exactly on a boundary (+-2s), run now; else wait for next boundary.
         boundary = n.replace(second=0, microsecond=0)
-        on_boundary = (boundary.minute % STEP_MIN == 0) and (n.second <= 30)
+        on_boundary = (boundary.minute % STEP_MIN == 0) and (abs(n.second) <= 2)
 
         if not on_boundary:
             nb = next_boundary(n)
@@ -221,7 +220,7 @@ def main() -> None:
                 nb = end
             print(f"[INFO] Next run at {nb.strftime('%Y-%m-%d %H:%M:%S%z')}")
             # Sleep slightly past boundary to ensure the new candle has closed
-            sleep_until(min(nb + timedelta(seconds=3), session_end))
+            sleep_until(min(nb + timedelta(seconds=2), session_end))
             continue
 
         try:

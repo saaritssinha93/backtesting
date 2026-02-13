@@ -44,6 +44,8 @@ import numpy as np
 import pandas as pd
 import pytz
 
+from ml_meta_filter import MetaFilterConfig, MetaLabelFilter
+
 # ============================================================================
 # CONSTANTS & CONFIG
 # ============================================================================
@@ -89,6 +91,9 @@ SIGNAL_COLUMNS = [
     "atr_pct",
     "rsi",
     "adx",
+    "p_win",
+    "ml_threshold",
+    "confidence_multiplier",
     "quantity",
 ]
 
@@ -140,6 +145,9 @@ class LiveSignal:
     atr_pct: float = 0.0
     rsi: float = 0.0
     adx: float = 0.0
+    p_win: float = 0.0
+    ml_threshold: float = 0.0
+    confidence_multiplier: float = 1.0
     quantity: int = 1
 
 
@@ -525,7 +533,18 @@ def scan_all_tickers(
 
                         sig_id = generate_signal_id(ticker, side, sig_dt)
                         entry_price = float(td.get("entry_price", 0))
-                        notional = position_size_rs * DEFAULT_INTRADAY_LEVERAGE
+                        signal_row = {
+                            "quality_score": float(td.get("quality_score", 0)),
+                            "atr_pct": float(td.get("atr_pct_signal", 0)),
+                            "rsi": float(td.get("rsi_signal", 50)),
+                            "adx": float(td.get("adx_signal", 20)),
+                            "side": side,
+                        }
+                        p_win = meta_filter.predict_pwin(signal_row)
+                        conf_mult = meta_filter.confidence_multiplier(p_win)
+                        if conf_mult <= 0:
+                            continue
+                        notional = position_size_rs * DEFAULT_INTRADAY_LEVERAGE * conf_mult
                         qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
 
                         all_signals.append(LiveSignal(
@@ -543,6 +562,9 @@ def scan_all_tickers(
                             atr_pct=round(float(td.get("atr_pct_signal", 0)), 6),
                             rsi=round(float(td.get("rsi_signal", 0)), 2),
                             adx=round(float(td.get("adx_signal", 0)), 2),
+                            p_win=round(float(p_win), 4),
+                            ml_threshold=meta_filter.cfg.pwin_threshold,
+                            confidence_multiplier=round(float(conf_mult), 4),
                             quantity=qty,
                         ))
                 except Exception as e:
@@ -570,7 +592,17 @@ def scan_all_tickers(
 
             try:
                 sigs = detect_signals_for_ticker(ticker, df, today, position_size_rs)
-                all_signals.extend(sigs)
+                for s in sigs:
+                    signal_row = {"quality_score": s.quality_score, "atr_pct": s.atr_pct, "rsi": s.rsi, "adx": s.adx, "side": s.side}
+                    p_win = meta_filter.predict_pwin(signal_row)
+                    conf_mult = meta_filter.confidence_multiplier(p_win)
+                    if conf_mult <= 0:
+                        continue
+                    s.p_win = round(float(p_win), 4)
+                    s.ml_threshold = meta_filter.cfg.pwin_threshold
+                    s.confidence_multiplier = round(float(conf_mult), 4)
+                    s.quantity = max(1, int(s.quantity * conf_mult))
+                    all_signals.append(s)
             except Exception as e:
                 log.debug(f"Signal detection error for {ticker}: {e}")
 
@@ -618,6 +650,9 @@ def append_signals_to_csv(signals: List[LiveSignal], csv_path: str) -> int:
                 "atr_pct": sig.atr_pct,
                 "rsi": sig.rsi,
                 "adx": sig.adx,
+                "p_win": sig.p_win,
+                "ml_threshold": sig.ml_threshold,
+                "confidence_multiplier": sig.confidence_multiplier,
                 "quantity": sig.quantity,
             })
             written += 1
@@ -667,6 +702,7 @@ def run_single_scan(
     position_size_rs: float,
     strategy_modules: Optional[dict],
     seen_signals: Set[str],
+    meta_filter: MetaLabelFilter,
 ) -> Tuple[int, Set[str]]:
     """
     Run a single scan cycle. Returns (num_new_signals, updated_seen_signals).
@@ -679,7 +715,7 @@ def run_single_scan(
     log.info(f"=== Scan cycle at {now.strftime('%H:%M:%S')} IST ===")
 
     # Scan for signals
-    all_signals = scan_all_tickers(data_dir, today, position_size_rs, strategy_modules)
+    all_signals = scan_all_tickers(data_dir, today, position_size_rs, strategy_modules, meta_filter)
 
     # Filter out already-seen signals
     new_signals = [s for s in all_signals if s.signal_id not in seen_signals]
@@ -691,7 +727,7 @@ def run_single_scan(
             log.info(
                 f"  NEW SIGNAL: {s.side} {s.ticker} @ {s.entry_price} "
                 f"| SL={s.stop_price} TGT={s.target_price} "
-                f"| Setup={s.setup} Q={s.quality_score}"
+                f"| Setup={s.setup} Q={s.quality_score} p_win={s.p_win:.3f}"
             )
         save_seen_signals(seen_signals)
         log.info(f"Wrote {written} new signals to {csv_path}")
@@ -714,6 +750,10 @@ def main():
     parser.add_argument(
         "--position-size", type=float, default=DEFAULT_POSITION_SIZE_RS,
         help=f"Position size in Rs per trade (default: {DEFAULT_POSITION_SIZE_RS})",
+    )
+    parser.add_argument(
+        "--ml-threshold", type=float, default=0.60,
+        help="Minimum p_win to allow trade (default: 0.60)",
     )
     args = parser.parse_args()
 
@@ -739,6 +779,7 @@ def main():
 
     # Try to load strategy modules
     strategy_modules = _try_import_strategy()
+    meta_filter = MetaLabelFilter(MetaFilterConfig(pwin_threshold=float(args.ml_threshold)))
 
     # Load previously seen signals (reset if from a different day)
     seen_signals = load_seen_signals()
@@ -754,7 +795,7 @@ def main():
     if args.once:
         # Single scan mode
         count, seen_signals = run_single_scan(
-            data_dir, args.position_size, strategy_modules, seen_signals,
+            data_dir, args.position_size, strategy_modules, seen_signals, meta_filter,
         )
         log.info(f"Single scan complete. {count} new signals found.")
         return
@@ -768,7 +809,7 @@ def main():
 
             if is_market_hours(now):
                 count, seen_signals = run_single_scan(
-                    data_dir, args.position_size, strategy_modules, seen_signals,
+                    data_dir, args.position_size, strategy_modules, seen_signals, meta_filter,
                 )
 
                 # Wait until next scan time
