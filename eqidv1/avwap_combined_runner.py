@@ -1162,7 +1162,7 @@ def generate_enhanced_charts(
         risk = pd.to_numeric(risk, errors="coerce")
         reward = pd.to_numeric(reward, errors="coerce")
 
-        valid_rr = (risk > 0) & risk.notna() & reward.notna()
+        valid_rr = (risk > 0) & pd.notna(risk) & pd.notna(reward)
         if valid_rr.sum() > 5:
             rr_ratio = reward[valid_rr] / risk[valid_rr]
             fig, ax = plt.subplots(figsize=(10, 8))
