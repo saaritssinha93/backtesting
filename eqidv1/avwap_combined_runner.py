@@ -96,7 +96,7 @@ from avwap_v11_refactored.avwap_long_strategy import (
 # RUNNER CONFIG (top-level orchestration settings)
 # ===========================================================================
 POSITION_SIZE_RS_SHORT = 50_000
-POSITION_SIZE_RS_LONG = 50_000
+POSITION_SIZE_RS_LONG = 100_000
 
 # Intraday leverage (margin). Position sizes above are *capital/margin per trade*.
 # Notional exposure = capital * leverage. Set leverage=1.0 to disable leverage effects.
