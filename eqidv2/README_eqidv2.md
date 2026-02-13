@@ -8,6 +8,27 @@ This folder is the `eqidv2` upgrade of `eqidv1` with deployable ML gating and co
 - `avwap_trade_execution_PAPER_TRADE_TRUE.py`: records ML fields in paper-trade logs.
 - `eqidv2_ml_backtest.py`: filters historical trade CSVs using the same ML decision logic.
 
+## How to use ML files for backtest + scanned stocks
+1. Run your normal AVWAP backtest and export trades to CSV. Required columns:
+   - `quality_score`, `atr_pct_signal`, `rsi_signal`, `adx_signal`, `side`, `pnl_rs`
+   - Optional but recommended: `ticker` (or `symbol`) so top scanned stocks can be generated.
+2. Run ML overlay backtest:
+
+```bash
+python eqidv2/eqidv2_ml_backtest.py \
+  --input-csv eqidv2/outputs/your_base_backtest_trades.csv \
+  --output-csv eqidv2/outputs/ml_filtered_trades.csv \
+  --summary-json eqidv2/outputs/ml_backtest_summary.json \
+  --top-stocks-csv eqidv2/outputs/ml_top_scanned_stocks.csv \
+  --threshold 0.60 \
+  --top-n 20
+```
+
+3. Read the outputs:
+   - `ml_filtered_trades.csv`: only trades kept by ML gate, with `p_win`, `confidence_multiplier`, `pnl_rs_ml`.
+   - `ml_backtest_summary.json`: base-vs-ML totals (rows kept, pnl delta, win-rate delta).
+   - `ml_top_scanned_stocks.csv`: ranked scanned stocks from kept trades using avg `p_win` and ML PnL.
+
 ## Example commands
 ```bash
 python eqidv2/avwap_live_signal_generator.py --ml-threshold 0.62
