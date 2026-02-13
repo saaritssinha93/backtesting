@@ -202,6 +202,11 @@ def _resolve_exits_5min(
 
     df = trades_df.copy()
 
+    # Backward-compat: unified Trade dataclass uses `sl_price`.
+    # Keep `stop_price` as canonical within this function for downstream logic.
+    if "stop_price" not in df.columns and "sl_price" in df.columns:
+        df["stop_price"] = df["sl_price"]
+
     # Ensure required columns exist
     required = {"ticker", "side", "entry_price", "entry_time_ist", "stop_price", "target_price"}
     if not required.issubset(set(df.columns)):
@@ -1144,10 +1149,11 @@ def generate_enhanced_charts(
         combined_sorted.drop(columns=["_entry_hour"], inplace=True, errors="ignore")
 
     # ========== CHART 20: Realized Risk-Reward Scatter ==========
-    if {"entry_price", "exit_price", "stop_price", "side"}.issubset(combined_sorted.columns):
+    stop_col = "stop_price" if "stop_price" in combined_sorted.columns else "sl_price"
+    if {"entry_price", "exit_price", stop_col, "side"}.issubset(combined_sorted.columns):
         ep = pd.to_numeric(combined_sorted["entry_price"], errors="coerce")
         xp = pd.to_numeric(combined_sorted["exit_price"], errors="coerce")
-        sp = pd.to_numeric(combined_sorted["stop_price"], errors="coerce")
+        sp = pd.to_numeric(combined_sorted[stop_col], errors="coerce")
         side_col = combined_sorted["side"].astype(str).str.upper()
 
         # Risk = distance from entry to stop, Reward = distance from entry to exit
@@ -1156,7 +1162,7 @@ def generate_enhanced_charts(
         risk = pd.to_numeric(risk, errors="coerce")
         reward = pd.to_numeric(reward, errors="coerce")
 
-        valid_rr = (risk > 0) & risk.notna() & reward.notna()
+        valid_rr = (risk > 0) & pd.notna(risk) & pd.notna(reward)
         if valid_rr.sum() > 5:
             rr_ratio = reward[valid_rr] / risk[valid_rr]
             fig, ax = plt.subplots(figsize=(10, 8))
