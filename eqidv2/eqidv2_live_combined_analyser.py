@@ -4,8 +4,8 @@ EQIDV1 — LIVE 15m Signal Scanner (AVWAP v11 combined: LONG + SHORT)
 ====================================================================
 
 Adapted from stocks_live_trading_signal_15m_v11_combined_parquet.py, but wired
-to the eqidv1 backtesting ecosystem with **refined parameters** from:
-    backtesting/eqidv1/avwap_v11_refactored/avwap_common.py
+to the eqidv2 backtesting ecosystem with **refined parameters** from:
+    backtesting/eqidv2/avwap_v11_refactored/avwap_common.py
 
 Key refinements vs the original live scanner:
 - Tighter SL: 0.75% (was 1.0%)
@@ -18,7 +18,7 @@ Key refinements vs the original live scanner:
 - Close-confirm required on entry candle by default
 
 Data: reads from stocks_indicators_15min_eq/ (same parquet directory).
-Core: backtesting/eqidv1/trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
+Core: backtesting/eqidv2/trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ import pandas as pd
 import pytz
 
 # =============================================================================
-# Wire eqidv1 core into sys.path
+# Wire eqidv2 core into sys.path
 # =============================================================================
 _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
@@ -58,17 +58,17 @@ DIR_15M = "stocks_indicators_15min_eq"
 END_15M = "_stocks_indicators_15min.parquet"
 
 ROOT = Path(__file__).resolve().parent
-REPORTS_DIR = ROOT / "reports" / "eqidv1_reports"
+REPORTS_DIR = ROOT / "reports" / "eqidv2_reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_CHECKS_DIR = ROOT / "out_eqidv1_live_checks_15m"
-OUT_SIGNALS_DIR = ROOT / "out_eqidv1_live_signals_15m"
+OUT_CHECKS_DIR = ROOT / "out_eqidv2_live_checks_15m"
+OUT_SIGNALS_DIR = ROOT / "out_eqidv2_live_signals_15m"
 OUT_CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 OUT_SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 
 STATE_DIR = ROOT / "logs"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
-STATE_FILE = STATE_DIR / "eqidv1_avwap_live_state_v11.json"
+STATE_FILE = STATE_DIR / "eqidv2_avwap_live_state_v11.json"
 
 PARQUET_ENGINE = "pyarrow"
 
@@ -97,14 +97,14 @@ START_TIME = dtime(9, 15)
 END_TIME = dtime(15, 30)
 HARD_STOP_TIME = dtime(15, 40)
 
-# Timing: data fetcher (eqidv1_eod_15min_data_stocks) takes ~1 minute after each
+# Timing: data fetcher (eqidv2_eod_15min_data_stocks) takes ~1 minute after each
 # 15-min boundary.  We delay the first scan and run multiple attempts so at least
 # one scan sees fully-updated data.
 INITIAL_DELAY_SECONDS = 60      # wait 60s after slot for data to settle
 NUM_SCANS_PER_SLOT = 3          # run 3 scans per 15-min window
 SCAN_INTERVAL_SECONDS = 60      # 60s gap between consecutive scans
 
-# Update flag: set True to call eqidv1 core.run_mode("15min") before each scan
+# Update flag: set True to call eqidv2 core.run_mode("15min") before each scan
 UPDATE_15M_BEFORE_CHECK = False
 
 # How many tail rows to load per ticker parquet
@@ -1481,7 +1481,7 @@ def main() -> None:
 
         if UPDATE_15M_BEFORE_CHECK:
             try:
-                print(f"[UPD ] Running eqidv1 core 15m update at {now_ist().strftime('%Y-%m-%d %H:%M:%S%z')}")
+                print(f"[UPD ] Running eqidv2 core 15m update at {now_ist().strftime('%Y-%m-%d %H:%M:%S%z')}")
                 run_update_15m_once(holidays)
             except Exception as e:
                 print(f"[WARN] Update failed: {e!r}")

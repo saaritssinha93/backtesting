@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-eqidv1_eod_scheduler_for_1540_update.py
+eqidv2_eod_scheduler_for_1540_update.py
 ========================================
 
 Runs once per trading day at 15:40 IST to perform a final flush of
@@ -8,7 +8,7 @@ EQIDV1 intraday parquet data (15-minute and 5-minute) with all of
 today's candles, ensuring nothing is stale heading into the next session.
 
 Adapted from stocks_eod_daily_weekly_scheduler_for_daily_1540_update.py.
-Since the eqidv1 core only supports intraday modes (5min, 15min), this
+Since the eqidv2 core only supports intraday modes (5min, 15min), this
 replaces the daily+weekly update with a final intraday catch-up.
 
 Usage:
@@ -28,7 +28,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 # =============================================================================
-# Wire eqidv1 core into sys.path
+# Wire eqidv2 core into sys.path
 # =============================================================================
 _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
@@ -48,7 +48,7 @@ SESSION_END = dtime(16, 0)     # hard stop
 API_KEY_FILE = _ROOT / "api_key.txt"
 ACCESS_TOKEN_FILE = _ROOT / "access_token.txt"
 
-REPORT_DIR = _ROOT / "reports" / "eqidv1_reports"
+REPORT_DIR = _ROOT / "reports" / "eqidv2_reports"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
