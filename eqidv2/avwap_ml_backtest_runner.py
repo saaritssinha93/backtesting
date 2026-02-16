@@ -32,7 +32,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-import avwap_combined_runner as base_runner
+try:
+    from avwap_v11_refactored import avwap_combined_runner as base_runner
+except Exception:  # pragma: no cover
+    import avwap_combined_runner as base_runner
 from ml_meta_filter import MetaFilterConfig, MetaLabelFilter
 
 
