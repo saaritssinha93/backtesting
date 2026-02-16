@@ -1,565 +1,1097 @@
 # -*- coding: utf-8 -*-
 """
-avwap_live_signal_generator.py — Live AVWAP Signal Scanner & CSV Writer
-========================================================================
+AVWAP V11 Live Signal Generator (15m)
 
-Runs continuously during market hours (9:15 AM – 3:30 PM IST).
-Every 15 minutes (aligned to candle closes), scans the latest parquet data
-for AVWAP entry signals and appends them to a daily CSV file.
+Scans the *latest completed* 15-minute candle for all tickers and emits
+entry signals for AVWAP V11 (combined LONG + SHORT) using the **same
+signal-selection logic** as:
 
-Output CSV: live_signals/signals_YYYY-MM-DD.csv
-Each row contains:
-  - signal_id          : unique identifier for deduplication
-  - logtime_ist        : time when signal was generated
-  - ticker, side       : LONG/SHORT
-  - entry_price, sl_price, target_price
-  - quality_score, atr_pct_signal, rsi_signal, adx_signal (if available)
-  - p_win, ml_threshold, confidence_multiplier
-  - quantity           : position size in shares (scaled by confidence multiplier)
-  - notes              : small debugging text (e.g., model/heuristic)
+- avwap_common.py (configs, helpers, indicators)
+- avwap_long_strategy.py (LONG setup rules)
+- avwap_short_strategy.py (SHORT setup rules)
+- avwap_combined_runner.py (overall orchestration concepts)
 
-ML usage
---------
-This script uses ml_meta_filter.MetaLabelFilter:
-- If eqidv2/models/meta_model.pkl + eqidv2/models/meta_features.json exist:
-    -> real model is used (predict_proba)
-- Else:
-    -> heuristic fallback is used
-Then:
-- If p_win < threshold -> confidence_multiplier = 0 -> signal is skipped
-- Else quantity is scaled by confidence_multiplier
+ML meta-label gating (ml_meta_filter.py) is kept intact:
+- ML is used only to FILTER + SIZE trades (take/skip + conf multiplier).
 
-IMPORTANT
----------
-This file fixes a common bug:
-- run_single_scan passed meta_filter to scan_all_tickers,
-  but scan_all_tickers did not accept meta_filter.
-This rewrite makes meta_filter explicit and always available.
+Output:
+- Appends to: live_signals/signals_YYYY-MM-DD.csv (same style as avwap_live*.py)
+- Logs to console every run.
 
+Notes:
+- This is "live entry" mode: it only evaluates whether an entry triggers on the
+  latest completed candle; it does NOT simulate exits.
+- The backtest runner (avwap_ml_backtest_runner.py) still does full exit resolution.
+
+Author: ChatGPT rewrite (Feb 2026)
 """
-
 from __future__ import annotations
 
 import argparse
-import csv
+import hashlib
+import json
 import os
-import sys
 import time
-import uuid
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
-import pytz
 
-# ML meta filter (must exist in your repo)
-from ml_meta_filter import MetaFilterConfig, MetaLabelFilter
+# -----------------------------
+# Imports (prefer package layout)
+# -----------------------------
+try:
+    from avwap_v11_refactored.avwap_common import (
+        IST,
+        StrategyConfig,
+        compute_quality_score_long,
+        compute_quality_score_short,
+        compute_day_avwap,
+        default_long_config,
+        default_short_config,
+        entry_buffer,
+        in_signal_window,
+        prepare_indicators,
+        volume_filter_pass,
+        list_tickers_15m,
+    )
+    from avwap_v11_refactored import avwap_long_strategy as long_mod
+    from avwap_v11_refactored import avwap_short_strategy as short_mod
+except Exception:  # pragma: no cover
+    # Fallback: same-folder modules
+    from avwap_common import (  # type: ignore
+        IST,
+        StrategyConfig,
+        compute_quality_score_long,
+        compute_quality_score_short,
+        compute_day_avwap,
+        default_long_config,
+        default_short_config,
+        entry_buffer,
+        in_signal_window,
+        prepare_indicators,
+        volume_filter_pass,
+        list_tickers_15m,
+    )
+    import avwap_long_strategy as long_mod  # type: ignore
+    import avwap_short_strategy as short_mod  # type: ignore
 
-# ----------------------------
-# Constants / Defaults
-# ----------------------------
-IST = pytz.timezone("Asia/Kolkata")
-
-DEFAULT_15M_DATA_DIR = "stocks_indicators_15min_eq"
-DEFAULT_SIGNALS_DIR = "live_signals"
-
-DEFAULT_POSITION_SIZE_RS = 50_000.0   # base margin/capital per trade (notional = * leverage)
-DEFAULT_LEVERAGE = 5.0               # intraday leverage multiplier (used for quantity sizing)
-DEFAULT_ML_THRESHOLD = 0.60
-
-# market times
-MARKET_OPEN = (9, 15)
-MARKET_CLOSE = (15, 30)
-CUTOFF_NEW_TRADES = (15, 10)  # stop generating new signals after this (safety)
-
-# scanning cadence
-SCAN_EVERY_MINUTES = 15
-
-# columns to write (stable schema)
-SIGNAL_COLUMNS = [
-    "signal_id",
-    "logtime_ist",
-    "ticker",
-    "side",
-    "entry_price",
-    "sl_price",
-    "target_price",
-    "quality_score",
-    "atr_pct_signal",
-    "rsi_signal",
-    "adx_signal",
-    "p_win",
-    "ml_threshold",
-    "confidence_multiplier",
-    "quantity",
-    "notes",
-]
+try:
+    from ml_meta_filter import MetaLabelFilter
+except Exception:  # pragma: no cover
+    MetaLabelFilter = None  # type: ignore
 
 
-# ----------------------------
+# -----------------------------
+# Constants / paths
+# -----------------------------
+DEFAULT_OUT_DIR = "live_signals"
+DEFAULT_STATE_DIR = "logs"
+DEFAULT_STATE_FILE = "eqidv2_avwap_live_state_v11.json"
+
+# NSE cash market close (15m candles end at 15:30)
+MARKET_OPEN = dtime(9, 15)
+MARKET_CLOSE = dtime(15, 30)
+BARS_PER_DAY_15M = int(((MARKET_CLOSE.hour * 60 + MARKET_CLOSE.minute) - (MARKET_OPEN.hour * 60 + MARKET_OPEN.minute)) / 15) + 1  # 26
+
+
+# -----------------------------
 # Data structures
-# ----------------------------
+# -----------------------------
 @dataclass
 class LiveSignal:
-    signal_id: str
-    logtime_ist: str
     ticker: str
-    side: str
-    entry_price: float
-    sl_price: float
-    target_price: float
+    side: str  # "LONG" or "SHORT"
+    day: str   # YYYY-MM-DD (IST)
+    bar_time_ist: str  # candle end timestamp in IST (ISO-ish)
+    setup: str
+    impulse: str
+    entry: float
+    sl: float
+    target: float
     quality_score: float
-    atr_pct_signal: float
-    rsi_signal: float
-    adx_signal: float
-    p_win: float
-    ml_threshold: float
-    confidence_multiplier: float
-    quantity: int
-    notes: str
+
+    # diagnostics for ML / reporting
+    adx: float = float("nan")
+    rsi: float = float("nan")
+    k: float = float("nan")
+    avwap_dist_atr: float = float("nan")
+    ema_gap_atr: float = float("nan")
+    atr_pct: float = float("nan")
 
 
-# ----------------------------
-# Helpers
-# ----------------------------
+# -----------------------------
+# Utilities
+# -----------------------------
 def now_ist() -> datetime:
     return datetime.now(IST)
 
 
-def is_market_time(dt: datetime) -> bool:
-    """Return True if dt is within market hours (inclusive)."""
-    h, m = dt.hour, dt.minute
-    open_h, open_m = MARKET_OPEN
-    close_h, close_m = MARKET_CLOSE
-    if (h, m) < (open_h, open_m):
-        return False
-    if (h, m) > (close_h, close_m):
-        return False
-    return True
-
-
-def is_after_cutoff(dt: datetime) -> bool:
-    """No new trades after cutoff time."""
-    ch, cm = CUTOFF_NEW_TRADES
-    return (dt.hour, dt.minute) >= (ch, cm)
-
-
-def align_to_next_15m(dt: datetime) -> datetime:
-    """Sleep until the next 15m boundary (approx)."""
-    minute = (dt.minute // SCAN_EVERY_MINUTES + 1) * SCAN_EVERY_MINUTES
-    nxt = dt.replace(second=5, microsecond=0)  # small delay to allow file writes
-    if minute >= 60:
-        nxt = (nxt + timedelta(hours=1)).replace(minute=0)
-    else:
-        nxt = nxt.replace(minute=minute)
-    return nxt
-
-
-def ensure_dir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
-
-
-def list_tickers(data_dir: str) -> List[str]:
-    """Tickers inferred from parquet files in data_dir."""
-    d = Path(data_dir)
-    if not d.exists():
-        return []
-    tickers = []
-    for fp in d.glob("*.parquet"):
-        tickers.append(fp.stem)
-    tickers = sorted(set(tickers))
-    return tickers
-
-
-def read_latest_row_for_date(parquet_path: Path, today: date) -> Optional[pd.Series]:
-    """
-    Read parquet and pick the latest row for 'today' (IST).
-    Supports 'datetime' or 'date' column, or datetime index.
-    """
+def _safe_float(x, default=np.nan) -> float:
     try:
-        df = pd.read_parquet(parquet_path)
+        v = float(x)
+        if np.isfinite(v):
+            return v
     except Exception:
-        return None
-    if df is None or df.empty:
-        return None
+        pass
+    return float(default)
 
-    # normalize datetime column
-    cols_lower = {c.lower(): c for c in df.columns}
-    if "datetime" in cols_lower:
-        dtc = cols_lower["datetime"]
-        ts = pd.to_datetime(df[dtc], errors="coerce")
-    elif "date" in cols_lower:
-        dc = cols_lower["date"]
-        ts = pd.to_datetime(df[dc], errors="coerce")
-    elif isinstance(df.index, pd.DatetimeIndex):
-        ts = pd.to_datetime(df.index, errors="coerce")
+
+def _normalize_date_col(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if "date" not in df.columns:
+        # try common alternatives
+        for alt in ["Date", "datetime", "timestamp", "time"]:
+            if alt in df.columns:
+                df = df.rename(columns={alt: "date"})
+                break
+    if "date" not in df.columns:
+        return df
+
+    s = pd.to_datetime(df["date"], errors="coerce")
+    if getattr(s.dt, "tz", None) is None:
+        # assume IST if naive (your pipelines usually store IST end timestamps)
+        s = s.dt.tz_localize(IST)
     else:
-        return None
-
-    # convert/localize to IST
-    try:
-        if getattr(ts.dt, "tz", None) is None:
-            ts = ts.dt.tz_localize(IST)
-        else:
-            ts = ts.dt.tz_convert(IST)
-    except Exception:
-        # per-row fallback
-        ts = ts.apply(lambda x: x.tz_localize(IST) if x.tzinfo is None else x.tz_convert(IST))
-
+        s = s.dt.tz_convert(IST)
     df = df.copy()
-    df["_dt"] = ts
-    df = df.dropna(subset=["_dt"]).sort_values("_dt")
-
-    day_mask = df["_dt"].dt.date == today
-    ddf = df[day_mask]
-    if ddf.empty:
-        return None
-
-    return ddf.iloc[-1]
+    df["date"] = s
+    return df
 
 
-def safe_float(x: Any, default: float = 0.0) -> float:
+def read_parquet_tail(path: str, tail_rows: int = 220, engine: str = "pyarrow") -> pd.DataFrame:
+    """Read only the tail rows from a parquet file (fast enough for live scanning)."""
+    p = Path(path)
+    if not p.exists():
+        return pd.DataFrame()
     try:
-        if x is None:
-            return float(default)
-        if isinstance(x, str) and x.strip() == "":
-            return float(default)
-        return float(x)
+        import pyarrow.parquet as pq  # type: ignore
     except Exception:
-        return float(default)
+        # fallback to full read
+        df = pd.read_parquet(p, engine=engine)
+        return df.tail(tail_rows).reset_index(drop=True)
+
+    pf = pq.ParquetFile(str(p))
+    rg = pf.num_row_groups
+    if rg == 0:
+        return pd.DataFrame()
+
+    dfs: List[pd.DataFrame] = []
+    got = 0
+    for i in range(rg - 1, -1, -1):
+        t = pf.read_row_group(i)
+        dfi = t.to_pandas()
+        dfs.append(dfi)
+        got += len(dfi)
+        if got >= tail_rows:
+            break
+
+    df = pd.concat(reversed(dfs), ignore_index=True)
+    if len(df) > tail_rows:
+        df = df.tail(tail_rows).reset_index(drop=True)
+    return df
 
 
-def build_signal_features(row: pd.Series, side: str) -> Dict[str, Any]:
+def last_completed_15m_slot(now: datetime, buffer_seconds: int) -> datetime:
     """
-    Build the minimal feature dict expected by MetaLabelFilter.
-    It can accept keys:
-      quality_score, atr_pct/atr_pct_signal, rsi/rsi_signal, adx/adx_signal, side
+    Latest candle END timestamp considered "complete".
+    Example: at 12:15:07 with buffer=7 => slot is 12:15:00.
+             at 12:15:03 with buffer=7 => slot is 12:00:00 (not complete yet).
     """
-    return {
-        "quality_score": safe_float(row.get("quality_score", 0.0), 0.0),
-        "atr_pct_signal": safe_float(row.get("atr_pct_signal", row.get("atr_pct", 0.0)), 0.0),
-        "rsi_signal": safe_float(row.get("rsi_signal", row.get("rsi", 50.0)), 50.0),
-        "adx_signal": safe_float(row.get("adx_signal", row.get("adx", 20.0)), 20.0),
-        "side": side,
-    }
+    n = now.astimezone(IST)
+    # If within buffer seconds of boundary, treat boundary as not complete.
+    if n.second < buffer_seconds:
+        n = n - timedelta(minutes=1)
+    floormin = (n.minute // 15) * 15
+    slot = n.replace(minute=floormin, second=0, microsecond=0)
+    return slot
 
 
-def compute_qty(
-    entry_price: float,
-    position_size_rs: float,
-    leverage: float,
-    confidence_multiplier: float,
-) -> int:
-    """
-    Notional sizing:
-      notional = position_size_rs * leverage * confidence_multiplier
-      qty = floor(notional / entry_price)
+def next_15m_boundary(now: datetime, buffer_seconds: int) -> datetime:
+    """Next time the scheduler should wake up: next 15m boundary + buffer."""
+    n = now.astimezone(IST)
+    # next boundary
+    minute = ((n.minute // 15) + 1) * 15
+    hour = n.hour
+    day = n.date()
+    if minute >= 60:
+        minute -= 60
+        hour += 1
+        if hour >= 24:
+            hour = 0
+            day = (n + timedelta(days=1)).date()
+    nxt = datetime(day.year, day.month, day.day, hour, minute, 0, tzinfo=IST)
+    return nxt + timedelta(seconds=buffer_seconds)
 
-    (If you later want risk-based sizing using stop_distance, change here.)
-    """
-    if entry_price <= 0:
+
+def _bars_left_after_entry(entry_ts: datetime) -> int:
+    """Bars remaining after the entry candle until MARKET_CLOSE (15m)."""
+    t = entry_ts.astimezone(IST).time()
+    mins = (t.hour * 60 + t.minute) - (MARKET_OPEN.hour * 60 + MARKET_OPEN.minute)
+    if mins < 0:
         return 0
-    notional = float(position_size_rs) * float(leverage) * float(confidence_multiplier)
-    qty = int(max(0, np.floor(notional / float(entry_price))))
-    return qty
+    pos = mins // 15  # 0-index bar number
+    total_minus1 = BARS_PER_DAY_15M - 1
+    return max(0, total_minus1 - pos)
 
 
-def write_signals_csv(csv_path: Path, signals: List[LiveSignal]) -> None:
-    ensure_dir(csv_path.parent)
-
-    file_exists = csv_path.exists()
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=SIGNAL_COLUMNS)
-        if not file_exists:
-            w.writeheader()
-        for s in signals:
-            row = asdict(s)
-            # ensure all columns exist
-            out = {k: row.get(k, "") for k in SIGNAL_COLUMNS}
-            w.writerow(out)
+def _close_confirm_ok(side: str, close_val: float, trigger: float, cfg: StrategyConfig) -> bool:
+    if not getattr(cfg, "require_entry_close_confirm", True):
+        return True
+    if side.upper() == "LONG":
+        return close_val > trigger
+    return close_val < trigger
 
 
-def load_strategy_modules(paths: Optional[List[str]]) -> Optional[dict]:
+# -----------------------------
+# Persistent state (caps + de-dup)
+# -----------------------------
+def _state_path(state_dir: str) -> Path:
+    Path(state_dir).mkdir(parents=True, exist_ok=True)
+    return Path(state_dir) / DEFAULT_STATE_FILE
+
+
+def _load_state(state_dir: str) -> Dict:
+    p = _state_path(state_dir)
+    if not p.exists():
+        return {"signals": {}}  # signals[day][ticker][side] = count
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {"signals": {}}
+
+
+def _save_state(state_dir: str, st: Dict) -> None:
+    p = _state_path(state_dir)
+    p.write_text(json.dumps(st, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _count_today(st: Dict, day: str, ticker: str, side: str) -> int:
+    return int(st.get("signals", {}).get(day, {}).get(ticker, {}).get(side, 0))
+
+
+def _inc_today(st: Dict, day: str, ticker: str, side: str) -> None:
+    st.setdefault("signals", {}).setdefault(day, {}).setdefault(ticker, {})[side] = _count_today(st, day, ticker, side) + 1
+
+
+def _stable_signal_id(ticker: str, side: str, bar_ts: str, setup: str) -> str:
+    raw = f"{ticker}|{side}|{bar_ts}|{setup}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _read_seen_signal_ids(csv_path: Path) -> Set[str]:
+    if not csv_path.exists():
+        return set()
+    try:
+        df = pd.read_csv(csv_path)
+        if "signal_id" in df.columns:
+            return set(df["signal_id"].astype(str).tolist())
+    except Exception:
+        pass
+    return set()
+
+
+def _append_signals_to_csv(csv_path: Path, rows: List[Dict]) -> None:
+    if not rows:
+        return
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df_new = pd.DataFrame(rows)
+    if csv_path.exists():
+        try:
+            df_old = pd.read_csv(csv_path)
+            df_all = pd.concat([df_old, df_new], ignore_index=True)
+        except Exception:
+            df_all = df_new
+    else:
+        df_all = df_new
+    df_all.to_csv(csv_path, index=False)
+
+
+# -----------------------------
+# V11 live entry detection (selection logic from strategies)
+# -----------------------------
+def _prepare_today_df(df_tail: pd.DataFrame, cfg_any: StrategyConfig) -> Tuple[pd.DataFrame, str]:
     """
-    Optional: dynamic import of strategy modules, if you keep AVWAP detection logic in separate files.
-    If not needed, returns None.
+    Build a clean df_day with indicator columns and AVWAP for the most recent day in df_tail.
+    Returns (df_day, day_str).
     """
-    if not paths:
+    if df_tail.empty:
+        return pd.DataFrame(), ""
+
+    df = _normalize_date_col(df_tail)
+    df = df.dropna(subset=["date"]).copy()
+    if df.empty:
+        return pd.DataFrame(), ""
+
+    df = df.sort_values("date").reset_index(drop=True)
+
+    # Restrict to market hours broadly (09:15 to 15:30). Strategy windows further filter signals.
+    def _in_mkt(ts: pd.Timestamp) -> bool:
+        t = ts.astimezone(IST).time()
+        return (t >= MARKET_OPEN) and (t <= MARKET_CLOSE)
+
+    df = df[df["date"].apply(_in_mkt)].copy()
+    if df.empty:
+        return pd.DataFrame(), ""
+
+    # Ensure core OHLC columns exist
+    for c in ["open", "high", "low", "close"]:
+        if c not in df.columns:
+            # try uppercase variants
+            if c.upper() in df.columns:
+                df = df.rename(columns={c.upper(): c})
+    for c in ["open", "high", "low", "close"]:
+        if c not in df.columns:
+            return pd.DataFrame(), ""
+
+    # Indicators: compute if missing (safe even if they already exist)
+    df = prepare_indicators(df, cfg_any)
+
+    # most recent day in this tail window
+    last_day = str(df["day"].iloc[-1])
+    df_day = df[df["day"] == last_day].copy().reset_index(drop=True)
+    if df_day.empty:
+        return pd.DataFrame(), ""
+
+    if "AVWAP" not in df_day.columns:
+        df_day["AVWAP"] = compute_day_avwap(df_day)
+
+    return df_day, last_day
+
+
+def _find_entry_idx_for_slot(df_day: pd.DataFrame, slot_ts: datetime) -> Optional[int]:
+    if df_day.empty:
         return None
-    mods = {}
-    for p in paths:
-        pth = Path(p)
-        if not pth.exists():
-            continue
-        # dynamic import
-        name = pth.stem + "_" + uuid.uuid4().hex[:6]
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(name, str(pth))
-        if spec and spec.loader:
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            mods[pth.stem] = mod
-    return mods or None
-
-
-# ----------------------------
-# Rule-based detection
-# ----------------------------
-def detect_avwap_signal_builtin(row: pd.Series) -> Optional[Tuple[str, float, float, float, float]]:
-    """
-    Minimal built-in AVWAP-style detector, used if no external strategy module is supplied.
-    Returns:
-      (side, entry_price, sl_price, target_price, quality_score)
-    or None if no signal.
-
-    NOTE:
-    If you already have your own detection in imported modules, that should be preferred.
-    This built-in is intentionally conservative and simple.
-    """
-    close = safe_float(row.get("close", np.nan), np.nan)
-    vwap = safe_float(row.get("VWAP", row.get("vwap", np.nan)), np.nan)
-    avwap = safe_float(row.get("AVWAP", row.get("avwap", np.nan)), np.nan)
-
-    if not np.isfinite(close) or not np.isfinite(avwap):
-        return None
-
-    # simple directional bias
-    # LONG: price above AVWAP and recent RSI/ADX suggest trend
-    rsi = safe_float(row.get("RSI", row.get("rsi_signal", 50.0)), 50.0)
-    adx = safe_float(row.get("ADX", row.get("adx_signal", 20.0)), 20.0)
-
-    atr = safe_float(row.get("ATR", np.nan), np.nan)
-    if not np.isfinite(atr) or atr <= 0:
-        return None
-
-    # simplistic rejection proxy: distance from AVWAP
-    dist_atr = (close - avwap) / atr
-
-    if dist_atr >= 0.25 and rsi >= 52 and adx >= 18:
-        side = "LONG"
-        entry = close
-        sl = close - 0.6 * atr
-        tgt = close + 1.0 * atr
-        q = float(min(1.0, max(0.0, 0.4 + 0.2 * dist_atr + 0.01 * (adx - 18))))
-        return side, entry, sl, tgt, q
-
-    if dist_atr <= -0.25 and rsi <= 48 and adx >= 18:
-        side = "SHORT"
-        entry = close
-        sl = close + 0.6 * atr
-        tgt = close - 1.0 * atr
-        q = float(min(1.0, max(0.0, 0.4 + 0.2 * abs(dist_atr) + 0.01 * (adx - 18))))
-        return side, entry, sl, tgt, q
-
+    slot_ts = slot_ts.astimezone(IST)
+    # exact match on end timestamp is preferred
+    m = (df_day["date"] == slot_ts)
+    if bool(m.any()):
+        return int(np.where(m.to_numpy())[0][-1])
     return None
 
 
-def detect_signal(row: pd.Series, strategy_modules: Optional[dict]) -> Optional[Tuple[str, float, float, float, float, str]]:
-    """
-    Attempt to detect signal using an external strategy module first,
-    otherwise fallback to builtin detector.
-
-    Returns (side, entry, sl, tgt, quality_score, notes)
-    """
-    # If you have a module with a function like: detect_live_signal(row_dict) -> dict
-    if strategy_modules:
-        for name, mod in strategy_modules.items():
-            fn = getattr(mod, "detect_live_signal", None)
-            if callable(fn):
-                try:
-                    out = fn(row.to_dict())
-                    if out and out.get("side") in ("LONG", "SHORT"):
-                        side = str(out["side"]).upper()
-                        entry = safe_float(out.get("entry_price"), np.nan)
-                        sl = safe_float(out.get("sl_price"), np.nan)
-                        tgt = safe_float(out.get("target_price"), np.nan)
-                        q = safe_float(out.get("quality_score", row.get("quality_score", 0.0)), 0.0)
-                        if np.isfinite(entry) and np.isfinite(sl) and np.isfinite(tgt):
-                            return side, float(entry), float(sl), float(tgt), float(q), f"module:{name}"
-                except Exception:
-                    # ignore module errors; continue to next
-                    pass
-
-    # fallback
-    out = detect_avwap_signal_builtin(row)
-    if out is None:
-        return None
-    side, entry, sl, tgt, q = out
-    return side, entry, sl, tgt, q, "builtin"
-
-
-# ----------------------------
-# Scanner
-# ----------------------------
-def scan_all_tickers(
-    data_dir: str,
-    today: date,
-    position_size_rs: float,
-    leverage: float,
-    ml_threshold: float,
-    signals_dir: str,
-    strategy_modules: Optional[dict] = None,
-    meta_filter: Optional[MetaLabelFilter] = None,
-) -> List[LiveSignal]:
-    """
-    Scan all tickers in data_dir for today's signals.
-    Uses external module detection if available, else built-in detection.
-    Applies ML meta-filter (threshold gating + sizing).
-    """
-    tickers = list_tickers(data_dir)
-    if not tickers:
-        return []
-
-    # Ensure meta_filter exists
-    if meta_filter is None:
-        meta_filter = MetaLabelFilter(MetaFilterConfig(pwin_threshold=ml_threshold))
-    else:
-        # respect CLI override threshold
-        meta_filter.cfg.pwin_threshold = float(ml_threshold)
-
-    signals: List[LiveSignal] = []
-    ts = now_ist()
-
-    for tkr in tickers:
-        row = read_latest_row_for_date(Path(data_dir) / f"{tkr}.parquet", today)
-        if row is None:
-            continue
-
-        sig = detect_signal(row, strategy_modules=strategy_modules)
-        if sig is None:
-            continue
-
-        side, entry, sl, tgt, qscore, notes0 = sig
-
-        # build features for ML p_win
-        feat = build_signal_features(row, side=side)
-        # keep quality_score from detector if it was computed there
-        feat["quality_score"] = float(qscore)
-
-        # Predict p_win and decide multiplier
-        p_win = float(meta_filter.predict_pwin(feat))
-        conf_mult = float(meta_filter.confidence_multiplier(p_win))
-
-        # Gate: skip if multiplier <= 0
-        if conf_mult <= 0.0:
-            continue
-
-        qty = compute_qty(entry_price=entry, position_size_rs=position_size_rs, leverage=leverage, confidence_multiplier=conf_mult)
-        if qty <= 0:
-            continue
-
-        signals.append(LiveSignal(
-            signal_id=f"{today.isoformat()}_{tkr}_{side}_{uuid.uuid4().hex[:8]}",
-            logtime_ist=ts.strftime("%Y-%m-%d %H:%M:%S"),
-            ticker=tkr,
-            side=side,
-            entry_price=float(entry),
-            sl_price=float(sl),
-            target_price=float(tgt),
-            quality_score=float(qscore),
-            atr_pct_signal=safe_float(row.get("atr_pct_signal", row.get("atr_pct", 0.0)), 0.0),
-            rsi_signal=safe_float(row.get("rsi_signal", row.get("RSI", row.get("rsi", 50.0))), 50.0),
-            adx_signal=safe_float(row.get("adx_signal", row.get("ADX", row.get("adx", 20.0))), 20.0),
-            p_win=p_win,
-            ml_threshold=float(ml_threshold),
-            confidence_multiplier=conf_mult,
-            quantity=int(qty),
-            notes=f"{notes0}|ml:{'model' if meta_filter.model is not None else 'heur'}",
-        ))
-
-    # Write to CSV (daily)
-    out_csv = Path(signals_dir) / f"signals_{today.isoformat()}.csv"
-    if signals:
-        write_signals_csv(out_csv, signals)
-
-    return signals
-
-
-def run_single_scan(args: argparse.Namespace, meta_filter: MetaLabelFilter, strategy_modules: Optional[dict]) -> None:
-    dt = now_ist()
-    today = dt.date()
-
-    if not is_market_time(dt):
-        return
-    if is_after_cutoff(dt):
-        return
-
-    sigs = scan_all_tickers(
-        data_dir=args.data_dir,
-        today=today,
-        position_size_rs=float(args.position_size),
-        leverage=float(args.leverage),
-        ml_threshold=float(args.ml_threshold),
-        signals_dir=args.signals_dir,
-        strategy_modules=strategy_modules,
-        meta_filter=meta_filter,
+def _make_long_signal(
+    ticker: str,
+    day: str,
+    entry_ts: datetime,
+    entry_price: float,
+    setup: str,
+    impulse: str,
+    quality: float,
+    diag: Dict[str, float],
+    cfg: StrategyConfig,
+) -> LiveSignal:
+    return LiveSignal(
+        ticker=ticker,
+        side="LONG",
+        day=day,
+        bar_time_ist=entry_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
+        setup=setup,
+        impulse=impulse,
+        entry=float(entry_price),
+        sl=float(entry_price * (1.0 - cfg.stop_pct)),
+        target=float(entry_price * (1.0 + cfg.target_pct)),
+        quality_score=float(quality),
+        adx=float(diag.get("adx", np.nan)),
+        rsi=float(diag.get("rsi", np.nan)),
+        k=float(diag.get("k", np.nan)),
+        avwap_dist_atr=float(diag.get("avwap_dist_atr", np.nan)),
+        ema_gap_atr=float(diag.get("ema_gap_atr", np.nan)),
+        atr_pct=float(diag.get("atr_pct", np.nan)),
     )
 
-    if args.verbose:
-        print(f"[{dt.strftime('%H:%M:%S')}] signals={len(sigs)}  (model={'YES' if meta_filter.model is not None else 'NO'})")
+
+def _make_short_signal(
+    ticker: str,
+    day: str,
+    entry_ts: datetime,
+    entry_price: float,
+    setup: str,
+    impulse: str,
+    quality: float,
+    diag: Dict[str, float],
+    cfg: StrategyConfig,
+) -> LiveSignal:
+    return LiveSignal(
+        ticker=ticker,
+        side="SHORT",
+        day=day,
+        bar_time_ist=entry_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
+        setup=setup,
+        impulse=impulse,
+        entry=float(entry_price),
+        sl=float(entry_price * (1.0 + cfg.stop_pct)),
+        target=float(entry_price * (1.0 - cfg.target_pct)),
+        quality_score=float(quality),
+        adx=float(diag.get("adx", np.nan)),
+        rsi=float(diag.get("rsi", np.nan)),
+        k=float(diag.get("k", np.nan)),
+        avwap_dist_atr=float(diag.get("avwap_dist_atr", np.nan)),
+        ema_gap_atr=float(diag.get("ema_gap_atr", np.nan)),
+        atr_pct=float(diag.get("atr_pct", np.nan)),
+    )
+
+
+def _latest_long_signal_for_ticker(
+    ticker: str,
+    df_day: pd.DataFrame,
+    day: str,
+    entry_idx: int,
+    cfg: StrategyConfig,
+    st: Dict,
+) -> Optional[LiveSignal]:
+    if entry_idx < 4:
+        return None
+    entry_ts = df_day.at[entry_idx, "date"]
+    if not in_signal_window(entry_ts, cfg):
+        return None
+
+    # cap per ticker/day for LONG
+    if _count_today(st, day, ticker, "LONG") >= cfg.max_trades_per_ticker_per_day:
+        return None
+
+    bars_left = _bars_left_after_entry(entry_ts)
+    if bars_left < cfg.min_bars_left_after_entry:
+        return None
+
+    best: Optional[LiveSignal] = None
+    best_q = -1e9
+
+    # Candidate impulse indices near the entry (for MOD setups) and farther (for HUGE setups).
+    # We'll loop a small recent window to keep runtime bounded.
+    start_i = max(2, entry_idx - 12)
+    for i in range(start_i, entry_idx):
+        c1 = df_day.iloc[i]
+        signal_ts = c1["date"]
+        if not in_signal_window(signal_ts, cfg):
+            continue
+
+        impulse = long_mod.classify_green_impulse(c1, cfg)
+        if impulse not in ("MODERATE", "HUGE"):
+            continue
+
+        # Basic impulse stats
+        atr1 = _safe_float(c1.get("ATR15", np.nan))
+        if not np.isfinite(atr1) or atr1 <= 0:
+            continue
+        if not volume_filter_pass(c1, cfg):
+            continue
+        if not long_mod._trend_filter_long(df_day, i, cfg):
+            continue
+
+        adx1 = _safe_float(df_day.at[i, "ADX15"])
+        rsi1 = _safe_float(df_day.at[i, "RSI15"])
+        k1 = _safe_float(df_day.at[i, "K15"])
+        atr_pct = _safe_float(df_day.at[i, "ATR_PCT"])
+
+        adx_prev2 = _safe_float(df_day.at[i - 2, "ADX15"])
+        adx_slope2 = adx1 - adx_prev2
+
+        close1 = _safe_float(df_day.at[i, "close"])
+        ema20 = _safe_float(df_day.at[i, "EMA20"])
+        ema_gap_atr = (close1 - ema20) / atr1 if np.isfinite(ema20) and atr1 > 0 else 0.0
+
+        # -------------
+        # SETUP A (MODERATE): break C1 high on the entry candle
+        # -------------
+        if impulse == "MODERATE":
+            if i + 1 == entry_idx:
+                high1 = _safe_float(c1["high"])
+                trigger = high1 + entry_buffer(high1, cfg)
+                high_e = _safe_float(df_day.at[entry_idx, "high"])
+                close_e = _safe_float(df_day.at[entry_idx, "close"])
+                if high_e > trigger and _close_confirm_ok("LONG", close_e, trigger, cfg):
+                    atr_entry = _safe_float(df_day.at[entry_idx, "ATR15"])
+                    ok_support, avwap_dist_atr = long_mod.avwap_support_pass(
+                        df_day, i, entry_idx, atr_entry, cfg
+                    )
+                    if ok_support:
+                        q = compute_quality_score_long(
+                            adx1, adx_slope2, avwap_dist_atr, ema_gap_atr, impulse
+                        )
+                        diag = {
+                            "adx": adx1,
+                            "rsi": rsi1,
+                            "k": k1,
+                            "atr_pct": atr_pct,
+                            "ema_gap_atr": ema_gap_atr,
+                            "avwap_dist_atr": avwap_dist_atr,
+                        }
+                        sig = _make_long_signal(
+                            ticker, day, entry_ts, trigger, "A_MOD_BREAK_C1_HIGH", impulse, q, diag, cfg
+                        )
+                        if q > best_q:
+                            best, best_q = sig, q
+
+            # Option 2: small red pullback then break C2 high on entry candle
+            if cfg.enable_setup_a_pullback_c2_break and i + 2 == entry_idx and (i + 1 < len(df_day)):
+                c2 = df_day.iloc[i + 1]
+                c2o, c2c = _safe_float(c2["open"]), _safe_float(c2["close"])
+                c2_body = abs(c2c - c2o)
+                c2_atr = _safe_float(c2.get("ATR15", atr1))
+                c2_avwap = _safe_float(c2.get("AVWAP", np.nan))
+
+                c2_small_red = (c2c < c2o) and np.isfinite(c2_atr) and (c2_body <= cfg.small_counter_max_atr * c2_atr)
+                c2_above_avwap = np.isfinite(c2_avwap) and (c2c > c2_avwap)
+                if c2_small_red and c2_above_avwap:
+                    high2 = _safe_float(c2["high"])
+                    trigger2 = high2 + entry_buffer(high2, cfg)
+                    high_e = _safe_float(df_day.at[entry_idx, "high"])
+                    close_e = _safe_float(df_day.at[entry_idx, "close"])
+                    if high_e > trigger2 and _close_confirm_ok("LONG", close_e, trigger2, cfg):
+                        atr_entry = _safe_float(df_day.at[entry_idx, "ATR15"])
+                        ok_support, avwap_dist_atr = long_mod.avwap_support_pass(
+                            df_day, i, entry_idx, atr_entry, cfg
+                        )
+                        if ok_support:
+                            q = compute_quality_score_long(
+                                adx1, adx_slope2, avwap_dist_atr, ema_gap_atr, impulse
+                            )
+                            diag = {
+                                "adx": adx1,
+                                "rsi": rsi1,
+                                "k": k1,
+                                "atr_pct": atr_pct,
+                                "ema_gap_atr": ema_gap_atr,
+                                "avwap_dist_atr": avwap_dist_atr,
+                            }
+                            sig = _make_long_signal(
+                                ticker, day, entry_ts, trigger2, "A_PULLBACK_C2_THEN_BREAK_C2_HIGH", impulse, q, diag, cfg
+                            )
+                            if q > best_q:
+                                best, best_q = sig, q
+
+        # -------------
+        # SETUP B (HUGE): pullback holds, then break pullback high on entry candle
+        # -------------
+        if impulse == "HUGE":
+            pull_end = min(i + 3, entry_idx)  # entry_idx is last
+            if pull_end <= i:
+                continue
+            pull = df_day.iloc[i + 1 : pull_end + 1].copy()
+            if pull.empty:
+                continue
+
+            open1 = _safe_float(c1["open"])
+            mid_body = (open1 + close1) / 2.0
+
+            pull_atr = pd.to_numeric(pull["ATR15"], errors="coerce").fillna(atr1)
+            pull_body = (pd.to_numeric(pull["close"], errors="coerce") - pd.to_numeric(pull["open"], errors="coerce")).abs()
+            pull_red = pd.to_numeric(pull["close"], errors="coerce") < pd.to_numeric(pull["open"], errors="coerce")
+            pull_small = pull_body <= (cfg.small_counter_max_atr * pull_atr)
+
+            if not bool((pull_red & pull_small).any()):
+                continue
+
+            lows = pd.to_numeric(pull["low"], errors="coerce")
+            closes = pd.to_numeric(pull["close"], errors="coerce")
+            avwaps = pd.to_numeric(pull["AVWAP"], errors="coerce")
+
+            hold_mid = bool((lows > mid_body).fillna(False).all())
+            hold_avwap = bool((closes > avwaps).fillna(False).all())
+            if not (hold_mid or hold_avwap):
+                continue
+
+            pull_high = float(pd.to_numeric(pull["high"], errors="coerce").max())
+            if not np.isfinite(pull_high):
+                continue
+
+            trigger = pull_high + entry_buffer(pull_high, cfg)
+
+            # in scan_one_day, it breaks out of the entry loop when close <= avwap.
+            # Here, enforce: no close <= avwap from (pull_end+1 .. entry_idx) inclusive.
+            if pull_end + 1 <= entry_idx:
+                seg = df_day.iloc[pull_end + 1 : entry_idx + 1]
+                if not seg.empty and ("AVWAP" in seg.columns):
+                    closes_seg = pd.to_numeric(seg["close"], errors="coerce")
+                    avwap_seg = pd.to_numeric(seg["AVWAP"], errors="coerce")
+                    if bool((closes_seg <= avwap_seg).fillna(False).any()):
+                        continue
+
+            high_e = _safe_float(df_day.at[entry_idx, "high"])
+            close_e = _safe_float(df_day.at[entry_idx, "close"])
+            if high_e > trigger and _close_confirm_ok("LONG", close_e, trigger, cfg):
+                atr_entry = _safe_float(df_day.at[entry_idx, "ATR15"])
+                ok_support, avwap_dist_atr = long_mod.avwap_support_pass(df_day, i, entry_idx, atr_entry, cfg)
+                if ok_support:
+                    q = compute_quality_score_long(adx1, adx_slope2, avwap_dist_atr, ema_gap_atr, impulse)
+                    diag = {
+                        "adx": adx1,
+                        "rsi": rsi1,
+                        "k": k1,
+                        "atr_pct": atr_pct,
+                        "ema_gap_atr": ema_gap_atr,
+                        "avwap_dist_atr": avwap_dist_atr,
+                    }
+                    sig = _make_long_signal(
+                        ticker, day, entry_ts, trigger, "B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK", impulse, q, diag, cfg
+                    )
+                    if q > best_q:
+                        best, best_q = sig, q
+
+    return best
+
+
+def _latest_short_signal_for_ticker(
+    ticker: str,
+    df_day: pd.DataFrame,
+    day: str,
+    entry_idx: int,
+    cfg: StrategyConfig,
+    st: Dict,
+) -> Optional[LiveSignal]:
+    if entry_idx < 4:
+        return None
+    entry_ts = df_day.at[entry_idx, "date"]
+    if not in_signal_window(entry_ts, cfg):
+        return None
+
+    if _count_today(st, day, ticker, "SHORT") >= cfg.max_trades_per_ticker_per_day:
+        return None
+
+    bars_left = _bars_left_after_entry(entry_ts)
+    if bars_left < cfg.min_bars_left_after_entry:
+        return None
+
+    best: Optional[LiveSignal] = None
+    best_q = -1e9
+
+    start_i = max(2, entry_idx - 12)
+    for i in range(start_i, entry_idx):
+        c1 = df_day.iloc[i]
+        signal_ts = c1["date"]
+        if not in_signal_window(signal_ts, cfg):
+            continue
+
+        impulse = short_mod.classify_red_impulse(c1, cfg)
+        if impulse not in ("MODERATE", "HUGE"):
+            continue
+
+        atr1 = _safe_float(c1.get("ATR15", np.nan))
+        if not np.isfinite(atr1) or atr1 <= 0:
+            continue
+        if not volume_filter_pass(c1, cfg):
+            continue
+        if not short_mod._trend_filter_short(df_day, i, cfg):
+            continue
+
+        adx1 = _safe_float(df_day.at[i, "ADX15"])
+        rsi1 = _safe_float(df_day.at[i, "RSI15"])
+        k1 = _safe_float(df_day.at[i, "K15"])
+        atr_pct = _safe_float(df_day.at[i, "ATR_PCT"])
+
+        close1 = _safe_float(df_day.at[i, "close"])
+        ema20 = _safe_float(df_day.at[i, "EMA20"])
+        ema_gap_atr = (ema20 - close1) / atr1 if np.isfinite(ema20) and atr1 > 0 else 0.0
+        avwap1 = _safe_float(df_day.at[i, "AVWAP"])
+        avwap_dist_atr_imp = (avwap1 - close1) / atr1 if np.isfinite(avwap1) and atr1 > 0 else np.nan
+
+        # Quality score for short doesn't include slope term
+        q_base = compute_quality_score_short(adx1, avwap_dist_atr_imp, ema_gap_atr, impulse)
+
+        # -------------
+        # SETUP A (MODERATE): break C1 low on entry candle
+        # -------------
+        if impulse == "MODERATE":
+            # Option 1: break C1 low on C2 (entry_idx = i+1)
+            if i + 1 == entry_idx:
+                low1 = _safe_float(c1["low"])
+                trigger1 = low1 - entry_buffer(low1, cfg)
+                low_e = _safe_float(df_day.at[entry_idx, "low"])
+                close_e = _safe_float(df_day.at[entry_idx, "close"])
+                if low_e < trigger1 and _close_confirm_ok("SHORT", close_e, trigger1, cfg):
+                    if short_mod.avwap_rejection_pass(df_day, i, entry_idx, cfg) and short_mod.avwap_distance_pass(df_day, entry_idx, cfg):
+                        diag = {
+                            "adx": adx1,
+                            "rsi": rsi1,
+                            "k": k1,
+                            "atr_pct": atr_pct,
+                            "ema_gap_atr": ema_gap_atr,
+                            "avwap_dist_atr": avwap_dist_atr_imp,
+                        }
+                        sig = _make_short_signal(
+                            ticker, day, entry_ts, trigger1, "A_MOD_BREAK_C1_LOW", impulse, q_base, diag, cfg
+                        )
+                        if q_base > best_q:
+                            best, best_q = sig, q_base
+
+            # Option 2: small green pullback C2, then break C2 low on C3 (entry_idx = i+2)
+            if i + 2 == entry_idx and (i + 1 < len(df_day)):
+                c2 = df_day.iloc[i + 1]
+                c2o, c2c = _safe_float(c2["open"]), _safe_float(c2["close"])
+                c2_body = abs(c2c - c2o)
+                c2_atr = _safe_float(c2.get("ATR15", atr1))
+                c2_avwap = _safe_float(c2.get("AVWAP", np.nan))
+
+                c2_small_green = (c2c > c2o) and np.isfinite(c2_atr) and (c2_body <= cfg.small_counter_max_atr * c2_atr)
+                c2_below_avwap = np.isfinite(c2_avwap) and (c2c < c2_avwap)
+                if c2_small_green and c2_below_avwap:
+                    low2 = _safe_float(c2["low"])
+                    trigger2 = low2 - entry_buffer(low2, cfg)
+                    low_e = _safe_float(df_day.at[entry_idx, "low"])
+                    close_e = _safe_float(df_day.at[entry_idx, "close"])
+                    if low_e < trigger2 and _close_confirm_ok("SHORT", close_e, trigger2, cfg):
+                        if short_mod.avwap_rejection_pass(df_day, i, entry_idx, cfg) and short_mod.avwap_distance_pass(df_day, entry_idx, cfg):
+                            diag = {
+                                "adx": adx1,
+                                "rsi": rsi1,
+                                "k": k1,
+                                "atr_pct": atr_pct,
+                                "ema_gap_atr": ema_gap_atr,
+                                "avwap_dist_atr": avwap_dist_atr_imp,
+                            }
+                            sig = _make_short_signal(
+                                ticker, day, entry_ts, trigger2, "A_PULLBACK_C2_THEN_BREAK_C2_LOW", impulse, q_base, diag, cfg
+                            )
+                            if q_base > best_q:
+                                best, best_q = sig, q_base
+
+        # -------------
+        # SETUP B (HUGE): bounce fails, break bounce low on entry candle
+        # -------------
+        if impulse == "HUGE":
+            bounce_end = min(i + 3, entry_idx)
+            if bounce_end <= i:
+                continue
+            bounce = df_day.iloc[i + 1 : bounce_end + 1].copy()
+            if bounce.empty:
+                continue
+
+            closes = pd.to_numeric(bounce["close"], errors="coerce")
+            opens = pd.to_numeric(bounce["open"], errors="coerce")
+            bounce_atr = pd.to_numeric(bounce.get("ATR15", atr1), errors="coerce").fillna(atr1)
+            bounce_body = (closes - opens).abs()
+            bounce_green = closes > opens
+            bounce_small = bounce_body <= (cfg.small_counter_max_atr * bounce_atr)
+
+            if not bool((bounce_green & bounce_small).any()):
+                continue
+
+            if cfg.require_avwap_rule and cfg.avwap_touch:
+                avwaps = pd.to_numeric(bounce["AVWAP"], errors="coerce")
+                highs = pd.to_numeric(bounce["high"], errors="coerce")
+                touch_fail = bool(((highs >= avwaps) & (closes < avwaps)).fillna(False).any())
+                if not touch_fail:
+                    continue
+
+            bounce_low = float(pd.to_numeric(bounce["low"], errors="coerce").min())
+            if not np.isfinite(bounce_low):
+                continue
+            trigger_b = bounce_low - entry_buffer(bounce_low, cfg)
+
+            # Similar to scan_one_day: break if close >= avwap (invalidate)
+            if bounce_end + 1 <= entry_idx:
+                seg = df_day.iloc[bounce_end + 1 : entry_idx + 1]
+                if not seg.empty and ("AVWAP" in seg.columns):
+                    closes_seg = pd.to_numeric(seg["close"], errors="coerce")
+                    avwap_seg = pd.to_numeric(seg["AVWAP"], errors="coerce")
+                    if bool((closes_seg >= avwap_seg).fillna(False).any()):
+                        continue
+
+            low_e = _safe_float(df_day.at[entry_idx, "low"])
+            close_e = _safe_float(df_day.at[entry_idx, "close"])
+            if low_e < trigger_b and _close_confirm_ok("SHORT", close_e, trigger_b, cfg):
+                if short_mod.avwap_distance_pass(df_day, entry_idx, cfg) and short_mod.avwap_rejection_pass(df_day, i, entry_idx, cfg):
+                    diag = {
+                        "adx": adx1,
+                        "rsi": rsi1,
+                        "k": k1,
+                        "atr_pct": atr_pct,
+                        "ema_gap_atr": ema_gap_atr,
+                        "avwap_dist_atr": avwap_dist_atr_imp,
+                    }
+                    sig = _make_short_signal(
+                        ticker, day, entry_ts, trigger_b, "B_HUGE_RED_FAILED_BOUNCE", impulse, q_base, diag, cfg
+                    )
+                    if q_base > best_q:
+                        best, best_q = sig, q_base
+
+    return best
+
+
+def detect_latest_signals_for_ticker(
+    ticker: str,
+    parquet_path: str,
+    tail_rows: int,
+    cfg_long: StrategyConfig,
+    cfg_short: StrategyConfig,
+    st: Dict,
+) -> List[LiveSignal]:
+    df_tail = read_parquet_tail(parquet_path, tail_rows=tail_rows, engine=cfg_long.parquet_engine)
+    if df_tail.empty:
+        return []
+    # prepare df_day using long cfg (indicators same)
+    df_day, day = _prepare_today_df(df_tail, cfg_long)
+    if df_day.empty or not day:
+        return []
+
+    slot_ts = last_completed_15m_slot(now_ist(), buffer_seconds=0)  # buffer is handled by scheduler loop
+    entry_idx = _find_entry_idx_for_slot(df_day, slot_ts)
+    if entry_idx is None:
+        return []
+
+    out: List[LiveSignal] = []
+    s_long = _latest_long_signal_for_ticker(ticker, df_day, day, entry_idx, cfg_long, st)
+    if s_long is not None:
+        out.append(s_long)
+    s_short = _latest_short_signal_for_ticker(ticker, df_day, day, entry_idx, cfg_short, st)
+    if s_short is not None:
+        out.append(s_short)
+    return out
+
+
+# -----------------------------
+# ML gate + scan loop
+# -----------------------------
+def _apply_ml_gate(
+    signals: List[LiveSignal],
+    ml_filter: Optional["MetaLabelFilter"],
+    ml_threshold: float,
+    disable_ml: bool,
+) -> List[Tuple[LiveSignal, Dict]]:
+    """
+    Returns list of (signal, ml_info_dict) where ml_info includes p_win and conf_mult.
+    If ML disabled or missing model, p_win will be NaN and conf_mult=1.0.
+    """
+    out: List[Tuple[LiveSignal, Dict]] = []
+    for sig in signals:
+        info = {"p_win": np.nan, "conf_mult": 1.0, "ml_taken": True}
+        if disable_ml or ml_filter is None:
+            out.append((sig, info))
+            continue
+
+        try:
+            x = {
+                "quality_score": sig.quality_score,
+                "atr_pct": sig.atr_pct,
+                "rsi": sig.rsi,
+                "adx": sig.adx,
+                "side": sig.side,
+            }
+            p = float(ml_filter.predict_pwin(x))
+            cm = float(ml_filter.confidence_multiplier(p))
+            take = bool(cm > 0.0) if ml_threshold is None else bool(p >= ml_threshold)
+            # If you want ML gate to be exactly args.ml_threshold, we set it on ml_filter.cfg too.
+            info = {"p_win": p, "conf_mult": cm, "ml_taken": take}
+        except Exception:
+            # keep defaults
+            pass
+        if info.get("ml_taken", True):
+            out.append((sig, info))
+    return out
+
+
+def scan_latest_slot_all_tickers(
+    cfg_long: StrategyConfig,
+    cfg_short: StrategyConfig,
+    args: argparse.Namespace,
+) -> List[Dict]:
+    """
+    Scans ALL tickers once for the latest completed slot and returns row dicts to append to CSV.
+    """
+    st = _load_state(args.state_dir)
+    out_rows: List[Dict] = []
+
+    # Determine slot we are scanning (using buffer to ensure candle complete)
+    slot_ts = last_completed_15m_slot(now_ist(), buffer_seconds=args.buffer_seconds)
+    day_str = slot_ts.astimezone(IST).strftime("%Y-%m-%d")
+    slot_str = slot_ts.astimezone(IST).strftime("%H:%M")
+
+    print(f"[RUN ] slot={slot_str}  ts={slot_ts.strftime('%Y-%m-%d %H:%M:%S%z')}")
+
+    # List tickers from files
+    tickers = list_tickers_15m(args.dir_15m, args.suffix)
+    if not tickers:
+        print(f"[WARN] No tickers found in dir={args.dir_15m} suffix={args.suffix}")
+        return []
+
+    # Optional side filter
+    side_filter = (args.side or "BOTH").upper()
+
+    # ML filter
+    ml_filter = None
+    if (not args.no_ml) and (MetaLabelFilter is not None):
+        try:
+            ml_filter = MetaLabelFilter(model_path=args.model_path, features_path=args.features_path)
+            # keep threshold consistent with CLI
+            try:
+                ml_filter.cfg.pwin_threshold = float(args.ml_threshold)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[WARN] ML filter unavailable: {e}")
+            ml_filter = None
+
+    # Per-run candidate collection (to apply topN per run)
+    candidates: List[LiveSignal] = []
+    for t in tickers:
+        path = os.path.join(args.dir_15m, f"{t}{args.suffix}")
+        try:
+            # use slot_ts inside (buffer handled by loop); we also need exact slot in df
+            df_tail = read_parquet_tail(path, tail_rows=args.tail_rows, engine=cfg_long.parquet_engine)
+            if df_tail.empty:
+                continue
+            df_day, day = _prepare_today_df(df_tail, cfg_long)
+            if df_day.empty:
+                continue
+            entry_idx = _find_entry_idx_for_slot(df_day, slot_ts)
+            if entry_idx is None:
+                continue
+
+            # LONG
+            if side_filter in ("BOTH", "LONG"):
+                sL = _latest_long_signal_for_ticker(t, df_day, day, entry_idx, cfg_long, st)
+                if sL is not None:
+                    candidates.append(sL)
+            # SHORT
+            if side_filter in ("BOTH", "SHORT"):
+                sS = _latest_short_signal_for_ticker(t, df_day, day, entry_idx, cfg_short, st)
+                if sS is not None:
+                    candidates.append(sS)
+        except Exception as e:
+            print(f"[WARN] {t}: scan error: {e}")
+            continue
+
+    if not candidates:
+        print("[INFO] No entry signals on this slot.")
+        return []
+
+    # TopN per run (not per day). Keeps behavior practical for live.
+    if args.topn_per_run and args.topn_per_run > 0:
+        if side_filter == "BOTH":
+            longs = [s for s in candidates if s.side == "LONG"]
+            shorts = [s for s in candidates if s.side == "SHORT"]
+            longs.sort(key=lambda s: s.quality_score, reverse=True)
+            shorts.sort(key=lambda s: s.quality_score, reverse=True)
+            candidates = longs[: args.topn_per_run] + shorts[: args.topn_per_run]
+        else:
+            candidates.sort(key=lambda s: s.quality_score, reverse=True)
+            candidates = candidates[: args.topn_per_run]
+
+    # Apply ML gate (take/skip + conf multiplier)
+    gated = _apply_ml_gate(candidates, ml_filter, args.ml_threshold, args.no_ml)
+
+    # Build CSV rows (dedup by signal_id)
+    out_csv = Path(args.out_dir) / f"signals_{day_str}.csv"
+    seen_ids = _read_seen_signal_ids(out_csv)
+
+    created_ts = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    accepted = 0
+    for sig, ml in gated:
+        signal_id = _stable_signal_id(sig.ticker, sig.side, sig.bar_time_ist, sig.setup)
+        if signal_id in seen_ids:
+            continue
+
+        row = {
+            "date": day_str,
+            "ticker": sig.ticker,
+            "side": sig.side,
+            "bar_time_ist": sig.bar_time_ist,
+            "entry": sig.entry,
+            "sl": sig.sl,
+            "target": sig.target,
+            "setup": sig.setup,
+            "impulse": sig.impulse,
+            "quality_score": sig.quality_score,
+            "adx": sig.adx,
+            "rsi": sig.rsi,
+            "k": sig.k,
+            "avwap_dist_atr": sig.avwap_dist_atr,
+            "ema_gap_atr": sig.ema_gap_atr,
+            "atr_pct": sig.atr_pct,
+            "p_win": ml.get("p_win", np.nan),
+            "conf_mult": ml.get("conf_mult", 1.0),
+            "signal_id": signal_id,
+            "created_ts_ist": created_ts,
+        }
+        out_rows.append(row)
+        seen_ids.add(signal_id)
+        accepted += 1
+
+        # Mark in state (per ticker/day cap)
+        _inc_today(st, day_str, sig.ticker, sig.side)
+
+    _save_state(args.state_dir, st)
+
+    if accepted == 0:
+        print("[INFO] All candidate signals were duplicates (already written).")
+    else:
+        print(f"[OK  ] Signals emitted: {accepted} -> {out_csv.as_posix()}")
+
+    return out_rows
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser()
+    p.add_argument("--dir-15m", dest="dir_15m", default="stocks_indicators_15min_eq", help="Directory with per-ticker 15m parquet")
+    p.add_argument("--suffix", default="_stocks_indicators_15min.parquet", help="Parquet suffix (e.g. _stocks_indicators_15min.parquet)")
+    p.add_argument("--out-dir", dest="out_dir", default=DEFAULT_OUT_DIR, help="Output dir for live_signals CSVs")
+    p.add_argument("--state-dir", dest="state_dir", default=DEFAULT_STATE_DIR, help="Directory for state json (caps/dedup)")
+    p.add_argument("--tail-rows", dest="tail_rows", type=int, default=260, help="Tail rows per ticker to load (speed/accuracy tradeoff)")
+    p.add_argument("--buffer-seconds", dest="buffer_seconds", type=int, default=7, help="Seconds after boundary to consider candle 'complete'")
+    p.add_argument("--sleep-seconds", dest="sleep_seconds", type=int, default=1, help="Loop idle sleep granularity")
+    p.add_argument("--run-once", action="store_true", help="Run once and exit")
+    p.add_argument("--dry-run", action="store_true", help="Do not write CSV (only print)")
+    p.add_argument("--side", default="BOTH", choices=["BOTH", "LONG", "SHORT"], help="Which side(s) to scan")
+
+    # ML gate
+    p.add_argument("--no-ml", action="store_true", help="Disable ML gate")
+    p.add_argument("--ml-threshold", dest="ml_threshold", type=float, default=0.60, help="Min p_win to accept a trade")
+    p.add_argument("--model-path", dest="model_path", default="models/meta_label_model.pkl", help="Path to trained ML model (if used)")
+    p.add_argument("--features-path", dest="features_path", default="models/meta_label_features.json", help="Feature spec json (if used)")
+    p.add_argument("--topn-per-run", dest="topn_per_run", type=int, default=30, help="Keep top-N signals per run (per side if BOTH)")
+    return p
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default=DEFAULT_15M_DATA_DIR, help="15m indicator parquet folder")
-    ap.add_argument("--signals-dir", default=DEFAULT_SIGNALS_DIR, help="Output folder for live signals CSV")
-    ap.add_argument("--position-size", type=float, default=DEFAULT_POSITION_SIZE_RS, help="Base margin/capital per trade (Rs)")
-    ap.add_argument("--leverage", type=float, default=DEFAULT_LEVERAGE, help="Intraday leverage multiplier")
-    ap.add_argument("--ml-threshold", type=float, default=DEFAULT_ML_THRESHOLD, help="p_win threshold for ML gating")
-    ap.add_argument("--strategy-module", action="append", default=[], help="Optional: path(s) to strategy module(s) with detect_live_signal()")
-    ap.add_argument("--once", action="store_true", help="Run a single scan and exit")
-    ap.add_argument("--verbose", action="store_true", help="Print scan summary every run")
-    args = ap.parse_args()
+    args = build_arg_parser().parse_args()
 
-    ensure_dir(Path(args.signals_dir))
+    # Build configs (selection logic lives in these configs)
+    cfg_long = default_long_config()
+    cfg_short = default_short_config()
 
-    # Load ML filter
-    cfg = MetaFilterConfig(pwin_threshold=float(args.ml_threshold))
-    meta_filter = MetaLabelFilter(cfg)
+    # Ensure dir exists
+    Path(args.out_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.state_dir).mkdir(parents=True, exist_ok=True)
 
-    if args.verbose:
-        mp = Path(cfg.model_path)
-        fp = Path(cfg.feature_path)
-        print(f"ML threshold: {cfg.pwin_threshold}")
-        print(f"Model files: {mp} ({'FOUND' if mp.exists() else 'MISSING'}), {fp} ({'FOUND' if fp.exists() else 'MISSING'})")
-        print(f"Using real model: {'YES' if meta_filter.model is not None else 'NO (heuristic fallback)'}")
+    print("[LIVE] AVWAP V11 Live Signal Generator (15m)")
+    print(f"       dir_15m={args.dir_15m}  suffix={args.suffix}")
+    print(f"       out_dir={args.out_dir}  state_dir={args.state_dir}")
+    print(f"       ML={'OFF' if args.no_ml else 'ON'}  threshold={args.ml_threshold}")
+    print(f"       TopN/run={args.topn_per_run}  side={args.side}")
+    print(f"       Buffer={args.buffer_seconds}s  tail_rows={args.tail_rows}")
 
-    # Optional strategy modules
-    strategy_modules = load_strategy_modules(args.strategy_module)
-
-    if args.once:
-        run_single_scan(args, meta_filter, strategy_modules)
+    if args.run_once:
+        rows = scan_latest_slot_all_tickers(cfg_long, cfg_short, args)
+        if rows and (not args.dry_run):
+            out_csv = Path(args.out_dir) / f"signals_{now_ist().strftime('%Y-%m-%d')}.csv"
+            _append_signals_to_csv(out_csv, rows)
         return
 
-    # Continuous loop during market time
+    # Loop mode
     while True:
-        dt = now_ist()
+        now = now_ist()
+        nxt = next_15m_boundary(now, args.buffer_seconds)
+        # Sleep until next boundary
+        while now_ist() < nxt:
+            time.sleep(args.sleep_seconds)
 
-        if not is_market_time(dt):
-            # Sleep until near market open
-            tomorrow = dt.date() if (dt.hour, dt.minute) < MARKET_OPEN else (dt.date() + timedelta(days=1))
-            next_open = IST.localize(datetime(tomorrow.year, tomorrow.month, tomorrow.day, MARKET_OPEN[0], MARKET_OPEN[1], 0))
-            sleep_s = max(30.0, (next_open - dt).total_seconds())
-            if args.verbose:
-                print(f"Outside market hours. Sleeping {int(sleep_s)}s until open...")
-            time.sleep(min(sleep_s, 300))  # wake periodically
-            continue
-
-        # In market time
+        # Scan once after boundary+buffer
         try:
-            run_single_scan(args, meta_filter, strategy_modules)
+            rows = scan_latest_slot_all_tickers(cfg_long, cfg_short, args)
+            if rows and (not args.dry_run):
+                day_str = now_ist().strftime("%Y-%m-%d")
+                out_csv = Path(args.out_dir) / f"signals_{day_str}.csv"
+                _append_signals_to_csv(out_csv, rows)
         except KeyboardInterrupt:
-            raise
+            print("\n[STOP] user interrupt")
+            break
         except Exception as e:
-            print(f"[ERROR] scan failed: {e}", file=sys.stderr)
-
-        # sleep until next boundary
-        nxt = align_to_next_15m(dt)
-        sleep_s = max(5.0, (nxt - now_ist()).total_seconds())
-        time.sleep(sleep_s)
+            print(f"[ERROR] scan failed: {e}")
 
 
 if __name__ == "__main__":
