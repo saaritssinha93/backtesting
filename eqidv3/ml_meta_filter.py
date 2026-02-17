@@ -27,7 +27,7 @@ import pandas as pd
 class MetaFilterConfig:
     model_path: str = "eqidv3/models/meta_model.pkl"
     feature_path: str = "eqidv3/models/meta_features.json"
-    pwin_threshold: float = 0.62
+    pwin_threshold: float = 0.50
 
     # Position sizing (Section 10)
     risk_per_trade_pct: float = 0.20       # % of capital risked per trade
@@ -423,6 +423,55 @@ class MetaLabelFilter:
         self.model = None
         self.features: Optional[List[str]] = None
         self._load_model_if_present()
+
+    # ------------------------------------------------------------------
+    # Training report helpers
+    # ------------------------------------------------------------------
+    def load_optimal_threshold(self, report_path: Optional[str] = None) -> Optional[float]:
+        """
+        Read the optimal_threshold from the meta_train_report.json.
+        Returns None if the report is missing or unreadable.
+        """
+        if report_path is None:
+            # Derive from model_path: models/meta_model.pkl -> outputs/meta_train_report.json
+            model_dir = Path(self.cfg.model_path).resolve().parent
+            candidates = [
+                model_dir.parent / "outputs" / "meta_train_report.json",
+                model_dir / "meta_train_report.json",
+                Path(self.cfg.model_path).parent / "meta_train_report.json",
+            ]
+        else:
+            candidates = [Path(report_path)]
+
+        for p in candidates:
+            if p.exists():
+                try:
+                    report = json.loads(p.read_text(encoding="utf-8"))
+                    val = report.get("optimal_threshold")
+                    if val is not None:
+                        return float(val)
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def pwin_distribution_summary(p_wins: List[float]) -> Dict[str, Any]:
+        """Return a dict summarising the p_win distribution for diagnostics."""
+        if not p_wins:
+            return {"count": 0}
+        arr = np.array(p_wins, dtype=float)
+        return {
+            "count": int(len(arr)),
+            "min": float(np.min(arr)),
+            "p10": float(np.percentile(arr, 10)),
+            "p25": float(np.percentile(arr, 25)),
+            "median": float(np.median(arr)),
+            "p75": float(np.percentile(arr, 75)),
+            "p90": float(np.percentile(arr, 90)),
+            "max": float(np.max(arr)),
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr)),
+        }
 
     def _load_model_if_present(self) -> None:
         mp = Path(self.cfg.model_path)

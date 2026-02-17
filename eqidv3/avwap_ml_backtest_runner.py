@@ -320,12 +320,94 @@ def apply_ml_filter_and_size(
     return df
 
 
+def _print_pwin_diagnostics(
+    trades_with_pwin: pd.DataFrame,
+    threshold: float,
+) -> None:
+    """Print p_win distribution diagnostics when trades are gated out."""
+    if trades_with_pwin.empty or "p_win" not in trades_with_pwin.columns:
+        return
+    p = trades_with_pwin["p_win"].astype(float)
+    dist = MetaLabelFilter.pwin_distribution_summary(p.tolist())
+    above = int((p >= threshold).sum())
+    print(f"\n    p_win distribution across {dist['count']} RAW trades:")
+    print(f"      min={dist['min']:.4f}  p10={dist['p10']:.4f}  p25={dist['p25']:.4f}  "
+          f"median={dist['median']:.4f}  p75={dist['p75']:.4f}  p90={dist['p90']:.4f}  "
+          f"max={dist['max']:.4f}")
+    print(f"      mean={dist['mean']:.4f}  std={dist['std']:.4f}")
+    print(f"      Trades with p_win >= {threshold:.3f}: {above}/{dist['count']}")
+
+
+def apply_ml_filter_adaptive(
+    trades: pd.DataFrame,
+    meta_filter: MetaLabelFilter,
+    ml_threshold: float,
+    report_path: Optional[str] = None,
+) -> Tuple[pd.DataFrame, float]:
+    """
+    Wrapper around apply_ml_filter_and_size that implements adaptive threshold
+    fallback when the initial threshold gates out all trades.
+
+    Returns (filtered_df, effective_threshold).
+    """
+    # First attempt at the requested threshold
+    result = apply_ml_filter_and_size(trades, meta_filter, ml_threshold)
+
+    if not result.empty:
+        return result, ml_threshold
+
+    if trades.empty:
+        return result, ml_threshold
+
+    # --- All trades gated out: attempt adaptive relaxation ---
+
+    # Re-compute p_win column for diagnostics (it was on the unfiltered df inside
+    # apply_ml_filter_and_size but that df is local; recompute cheaply from trades)
+    using_model = meta_filter.model is not None and bool(meta_filter.features)
+    p_list: List[float] = []
+    for _, r in trades.iterrows():
+        sig = _build_signal_dict_from_trade_row(r)
+        p_list.append(float(meta_filter.predict_pwin(sig)))
+    diag_df = trades.copy()
+    diag_df["p_win"] = p_list
+
+    print(f"\n[ML] All {len(trades)} trades gated out at threshold {ml_threshold:.3f}.")
+    _print_pwin_diagnostics(diag_df, ml_threshold)
+
+    # Try the training report's optimal threshold
+    optimal_t = meta_filter.load_optimal_threshold(report_path)
+    if optimal_t is not None and optimal_t < ml_threshold:
+        print(f"\n[ML] Adaptive fallback: retrying with training-optimal threshold {optimal_t:.3f} "
+              f"(from meta_train_report.json)...")
+        result = apply_ml_filter_and_size(trades, meta_filter, optimal_t)
+        if not result.empty:
+            print(f"[ML] Adaptive threshold {optimal_t:.3f} recovered {len(result)} trades "
+                  f"(take rate {len(result)/len(trades)*100:.1f}%).")
+            return result, optimal_t
+        print(f"[ML] Adaptive threshold {optimal_t:.3f} still gates out all trades.")
+
+    # Last resort: use p75 of p_win distribution as threshold
+    p_arr = np.array(p_list, dtype=float)
+    p75 = float(np.percentile(p_arr, 75))
+    if p75 > 0.01 and p75 < ml_threshold:
+        fallback_t = round(p75, 4)
+        print(f"\n[ML] Last-resort fallback: retrying with p75-based threshold {fallback_t:.4f}...")
+        result = apply_ml_filter_and_size(trades, meta_filter, fallback_t)
+        if not result.empty:
+            print(f"[ML] p75 threshold {fallback_t:.4f} recovered {len(result)} trades "
+                  f"(take rate {len(result)/len(trades)*100:.1f}%).")
+            return result, fallback_t
+
+    # Nothing worked
+    return pd.DataFrame(), ml_threshold
+
+
 # -----------------------------
 # Main
 # -----------------------------
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ml-threshold", type=float, default=0.62, help="p_win threshold for taking trades (v1 default: 0.62)")
+    ap.add_argument("--ml-threshold", type=float, default=0.50, help="p_win threshold for taking trades (default: 0.50, matches training-optimal)")
     ap.add_argument("--model-path", type=str, default="models/meta_model.pkl", help="Path to exported meta model")
     ap.add_argument("--features-path", type=str, default="models/meta_features.json", help="Path to exported feature list")
     ap.add_argument("--outputs-dir", type=str, default="", help="Optional override outputs directory")
@@ -420,15 +502,26 @@ def main() -> None:
             except Exception as e:
                 print(f"[WARN] Chart generation (RAW) failed: {e}")
 
-            # ---- PHASE 4: Apply ML filter + sizing ----
+            # ---- PHASE 4: Apply ML filter + sizing (with adaptive fallback) ----
             print("\n[PHASE 4] Applying ML meta-filter (p_win gating) + confidence sizing...")
 
-            combined_ml = apply_ml_filter_and_size(combined_raw, meta_filter, float(args.ml_threshold))
-            short_df_ml = combined_ml[combined_ml["side"].astype(str).str.upper().eq("SHORT")].copy()
-            long_df_ml = combined_ml[~combined_ml["side"].astype(str).str.upper().eq("SHORT")].copy()
+            combined_ml, effective_threshold = apply_ml_filter_adaptive(
+                combined_raw, meta_filter, float(args.ml_threshold),
+            )
+            short_df_ml = combined_ml[combined_ml["side"].astype(str).str.upper().eq("SHORT")].copy() if not combined_ml.empty else pd.DataFrame()
+            long_df_ml = combined_ml[~combined_ml["side"].astype(str).str.upper().eq("SHORT")].copy() if not combined_ml.empty else pd.DataFrame()
+
+            if effective_threshold != float(args.ml_threshold):
+                print(f"[ML] NOTE: Effective threshold was relaxed from "
+                      f"{float(args.ml_threshold):.3f} → {effective_threshold:.3f}")
 
             if combined_ml.empty:
-                print("\n[ML] After ML gating, no trades remain (threshold too strict or model too pessimistic).")
+                print("\n[ML] After ML gating (including adaptive fallback), no trades remain.")
+                print("[ML] Possible causes:")
+                print("       - Model is too pessimistic on this data period")
+                print("       - Feature distribution shifted significantly from training data")
+                print("       - Consider retraining the model with more recent data")
+                print(f"\n[LOG] Full console saved to: {log_path}")
                 return
 
             # Save ML CSV always
@@ -460,6 +553,8 @@ def main() -> None:
             print(f"Trades RAW                 : {len(combined_raw)}")
             print(f"Trades after ML gate       : {len(combined_ml)}")
             print(f"Take rate                  : {len(combined_ml)/max(1,len(combined_raw))*100:.1f}%")
+            print(f"Requested threshold        : {float(args.ml_threshold):.3f}")
+            print(f"Effective threshold         : {effective_threshold:.3f}")
             if "p_win" in combined_ml.columns:
                 print(f"Mean p_win (taken trades)  : {combined_ml['p_win'].mean():.4f}")
                 print(f"Median p_win               : {combined_ml['p_win'].median():.4f}")
