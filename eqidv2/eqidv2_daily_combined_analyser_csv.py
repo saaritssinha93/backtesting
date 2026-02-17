@@ -125,14 +125,7 @@ def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
         path = os.path.join(live.DIR_15M, f"{t}{live.END_15M}")
         try:
             df_raw = live.read_parquet_tail(path, n=live.TAIL_ROWS)
-            df_day = live._prepare_today_df(df_raw)
-            if df_day.empty or len(df_day) < 7:
-                continue
-
-            if live.MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(live.MAX_BARS_PER_TICKER_TODAY):
-                df_day = df_day.iloc[-int(live.MAX_BARS_PER_TICKER_TODAY):].reset_index(drop=True)
-
-            sigs = live._all_day_runner_parity_signals_for_ticker(t, df_day)
+            sigs = live._all_day_runner_parity_signals_for_ticker(t, df_raw)
             for s in sigs:
                 today_str = str(pd.Timestamp(s.bar_time_ist).tz_convert(live.IST).date())
                 cap = live.SHORT_CAP_PER_TICKER_PER_DAY if s.side == "SHORT" else live.LONG_CAP_PER_TICKER_PER_DAY

@@ -881,12 +881,9 @@ def detect_latest_signals_for_ticker(
 
     # Source-of-truth static logic parity with avwap_combined_runner / eqidv2 live analyser.
     if eq_live_parity is not None and hasattr(eq_live_parity, "_all_day_runner_parity_signals_for_ticker"):
-        df_day, day = _prepare_today_df(df_tail, cfg_long)
-        if df_day.empty or not day:
-            return []
-
         slot_ts = last_completed_15m_slot(now_ist(), buffer_seconds=0)
-        all_sigs = eq_live_parity._all_day_runner_parity_signals_for_ticker(ticker, df_day)
+        day = slot_ts.astimezone(IST).strftime("%Y-%m-%d")
+        all_sigs = eq_live_parity._all_day_runner_parity_signals_for_ticker(ticker, df_tail)
         out: List[LiveSignal] = []
         for s in all_sigs:
             ts = pd.Timestamp(s.bar_time_ist)

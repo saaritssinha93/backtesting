@@ -933,18 +933,45 @@ def _check_common_filters_long(df_day: pd.DataFrame, i: int) -> Tuple[bool, Dict
 # =============================================================================
 # MAIN SIGNAL DETECTION (per-ticker, both sides)
 # =============================================================================
-def _all_day_runner_parity_signals_for_ticker(ticker: str, df_day: pd.DataFrame) -> List[LiveSignal]:
-    """Generate today signals using exact avwap_v11_refactored scan logic."""
+def _all_day_runner_parity_signals_for_ticker(ticker: str, df_raw: pd.DataFrame) -> List[LiveSignal]:
+    """Generate *today* signals using exact avwap_v11_refactored scan flow.
+
+    Important parity detail:
+    indicators are prepared on multi-day session-filtered data first,
+    then today's slice is scanned (same pattern as scan_all_days_for_ticker).
+    """
+    if df_raw is None or df_raw.empty:
+        return []
+
+    df = normalize_dates(df_raw)
+    if df.empty:
+        return []
+
+    for c in ["open", "high", "low", "close"]:
+        if c not in df.columns:
+            return []
+
+    # Keep all available days in session for indicator warmup parity.
+    df = df[df["date"].apply(in_session)].copy()
+    if df.empty:
+        return []
+
+    df = df.sort_values("date").reset_index(drop=True)
+    df = ref_prepare_indicators(df, default_short_config())
+
+    today = now_ist().date()
+    df_day = df[df["day"] == today].copy().reset_index(drop=True)
     if df_day.empty or len(df_day) < 7:
         return []
 
-    work = df_day.copy().sort_values("date").reset_index(drop=True)
-    work = ref_prepare_indicators(work, default_short_config())
-    work["AVWAP"] = ref_compute_day_avwap(work)
+    if MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(MAX_BARS_PER_TICKER_TODAY):
+        df_day = df_day.iloc[-int(MAX_BARS_PER_TICKER_TODAY):].reset_index(drop=True)
 
-    day_str = str(pd.Timestamp(work["date"].iloc[-1]).tz_convert(IST).date())
-    short_trades = scan_short_one_day(ticker, work.copy(), day_str, default_short_config())
-    long_trades = scan_long_one_day(ticker, work.copy(), day_str, default_long_config())
+    df_day["AVWAP"] = ref_compute_day_avwap(df_day)
+
+    day_str = str(today)
+    short_trades = scan_short_one_day(ticker, df_day.copy(), day_str, default_short_config())
+    long_trades = scan_long_one_day(ticker, df_day.copy(), day_str, default_long_config())
 
     signals: List[LiveSignal] = []
     for tr in (short_trades + long_trades):
@@ -974,20 +1001,25 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_day: pd.DataFrame)
 
 
 def _latest_entry_signals_for_ticker(
-    ticker: str, df_day: pd.DataFrame, state: Dict[str, Any]
+    ticker: str, df_raw: pd.DataFrame, state: Dict[str, Any]
 ) -> Tuple[List[LiveSignal], List[Dict[str, Any]]]:
     """Latest-candle signals, selected from runner-parity day scan."""
     signals: List[LiveSignal] = []
     checks: List[Dict[str, Any]] = []
 
-    if df_day.empty or len(df_day) < 7:
+    df_day_for_ts = _prepare_today_df(normalize_dates(df_raw))
+    if df_day_for_ts.empty:
         return signals, checks
 
-    latest_ts = pd.Timestamp(df_day.iloc[-1]["date"])
+    latest_ts = pd.Timestamp(df_day_for_ts.iloc[-1]["date"])
     latest_ts = latest_ts.tz_localize(IST) if latest_ts.tzinfo is None else latest_ts.tz_convert(IST)
     today_str = str(latest_ts.date())
 
-    all_day = _all_day_runner_parity_signals_for_ticker(ticker, df_day)
+    all_day = _all_day_runner_parity_signals_for_ticker(ticker, df_raw)
+    if not all_day:
+        checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": False})
+        checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": False})
+        return signals, checks
     found = {"SHORT": False, "LONG": False}
 
     for s in all_day:
@@ -1218,14 +1250,10 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
         path = os.path.join(DIR_15M, f"{t}{END_15M}")
         try:
             df_raw = read_parquet_tail(path, n=TAIL_ROWS)
-            df_raw = normalize_dates(df_raw)
-            df_day = _prepare_today_df(df_raw)
-            if df_day.empty:
+            signals, checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state)
+            if not checks_rows and not signals:
                 all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": pd.NaT, "no_data": True})
                 all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": pd.NaT, "no_data": True})
-                continue
-
-            signals, checks_rows = _latest_entry_signals_for_ticker(t, df_day, state)
             all_checks.extend(checks_rows)
 
             for s in signals:
@@ -1346,12 +1374,9 @@ def _scan_latest_slot(
         path = os.path.join(DIR_15M, f"{t}{END_15M}")
         try:
             df_raw = read_parquet_tail(path, n=TAIL_ROWS)
-            df_raw = normalize_dates(df_raw)
-            df_day = _prepare_today_df(df_raw)
+            df_day = _prepare_today_df(normalize_dates(df_raw))
             if df_day.empty:
                 continue
-            if MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(MAX_BARS_PER_TICKER_TODAY):
-                df_day = df_day.iloc[-int(MAX_BARS_PER_TICKER_TODAY):].reset_index(drop=True)
 
             last_ts = pd.Timestamp(df_day["date"].iloc[-1])
             last_ts = last_ts.tz_convert(IST) if last_ts.tzinfo else last_ts.tz_localize(IST)
@@ -1363,7 +1388,7 @@ def _scan_latest_slot(
                     print(f"  [LAG] {t} last={last_ts.strftime('%H:%M')} expected={target_slot_end.strftime('%H:%M')}", flush=True)
                 continue
 
-            sigs, _checks = _latest_entry_signals_for_ticker(t, df_day, tmp_state)
+            sigs, _checks = _latest_entry_signals_for_ticker(t, df_raw, tmp_state)
             scanned += 1
             for s in sigs:
                 all_signals.append({
