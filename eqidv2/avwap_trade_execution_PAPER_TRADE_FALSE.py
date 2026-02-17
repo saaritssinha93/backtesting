@@ -131,6 +131,19 @@ SIGNAL_COLUMNS = [
     "quality_score", "atr_pct", "rsi", "adx", "quantity",
 ]
 
+# Column name mapping: signal generator CSV name → executor expected name
+_SIGNAL_COL_MAP = {
+    "entry":          "entry_price",
+    "sl":             "stop_price",
+    "target":         "target_price",
+    "impulse":        "impulse_type",
+    "created_ts_ist": "signal_datetime",
+    "conf_mult":      "confidence_multiplier",
+}
+
+# Default position size for quantity calculation
+DEFAULT_POSITION_SIZE = 50_000
+
 # ============================================================================
 # LOGGING
 # ============================================================================
@@ -663,6 +676,30 @@ def _save_summary() -> None:
 
 
 # ============================================================================
+# SIGNAL NORMALISATION
+# ============================================================================
+def _normalize_signal(raw: dict) -> dict:
+    """
+    Map signal-generator CSV column names to the names the executor expects.
+    Also computes a quantity from DEFAULT_POSITION_SIZE when the CSV has none.
+    """
+    sig = {}
+    for k, v in raw.items():
+        mapped = _SIGNAL_COL_MAP.get(k, k)
+        sig[mapped] = v
+
+    # Compute quantity if missing (generator does not emit one)
+    if "quantity" not in sig or pd.isna(sig.get("quantity")):
+        entry = float(sig.get("entry_price", 0) or 0)
+        if entry > 0:
+            sig["quantity"] = max(1, int(DEFAULT_POSITION_SIZE / entry))
+        else:
+            sig["quantity"] = 1
+
+    return sig
+
+
+# ============================================================================
 # CSV SIGNAL READER
 # ============================================================================
 def read_signals_csv(csv_path: str) -> List[dict]:
@@ -679,7 +716,7 @@ def read_signals_csv(csv_path: str) -> List[dict]:
         )
         if df.empty:
             return []
-        return df.to_dict("records")
+        return [_normalize_signal(row) for row in df.to_dict("records")]
     except Exception as e:
         log.error(f"Error reading signals CSV: {e}")
         return []
