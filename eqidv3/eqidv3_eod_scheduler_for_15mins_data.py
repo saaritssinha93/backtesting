@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-eqidv2_eod_scheduler_for_15mins_data.py  (FIXED)
+eqidv3_eod_scheduler_for_15mins_data.py  (FIXED)
 ================================================
 Why your 15m parquet was not updating regularly:
 
@@ -16,10 +16,10 @@ Why your 15m parquet was not updating regularly:
 3) The old scheduler referenced core.HOLIDAYS_FILE (not present). Core exposes HOLIDAYS_FILE_DEFAULT.
 
 Run:
-    python eqidv2_eod_scheduler_for_15mins_data.py
+    python eqidv3_eod_scheduler_for_15mins_data.py
 
 Optional:
-    python eqidv2_eod_scheduler_for_15mins_data.py --buffer-sec 75 --max-workers 24
+    python eqidv3_eod_scheduler_for_15mins_data.py --buffer-sec 75 --max-workers 24
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ import pytz
 IST = pytz.timezone("Asia/Kolkata")
 
 # ---------------------------------------------------------------------
-# Locate eqidv2 folder (robust even if your repo is nested oddly)
+# Locate eqidv3 folder (robust even if your repo is nested oddly)
 # ---------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 CORE_FILENAME = "trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py"
@@ -65,7 +65,7 @@ import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core
 def _read_first_line(p: Path) -> str:
     return p.read_text(encoding="utf-8").strip().splitlines()[0].strip()
 
-def setup_kite_session_from_eqidv2_dir():
+def setup_kite_session_from_eqidv3_dir():
     from kiteconnect import KiteConnect  # imported here to avoid import costs on module import
     api_key = _read_first_line(EQIDV2_DIR / "api_key.txt")
     access_token = _read_first_line(EQIDV2_DIR / "access_token.txt")
@@ -73,7 +73,7 @@ def setup_kite_session_from_eqidv2_dir():
     kc.set_access_token(access_token)
     return kc
 
-core.setup_kite_session = setup_kite_session_from_eqidv2_dir
+core.setup_kite_session = setup_kite_session_from_eqidv3_dir
 
 
 # ---------------------------------------------------------------------

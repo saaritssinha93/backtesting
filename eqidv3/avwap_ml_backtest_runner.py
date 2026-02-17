@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-avwap_ml_backtest_runner.py
-===========================
+avwap_ml_backtest_runner.py  (Strategy v1)
+==========================================
 
 Backtest AVWAP combined (LONG + SHORT) exactly like avwap_combined_runner.py,
 and then apply the ML meta-label filter layer (p_win gating + confidence sizing)
 to produce a second, ML-filtered backtest output.
 
+Strategy v1 changes:
+- Full v1 feature pass-through for ML scoring
+- Confidence-based sizing with ATR volatility cap
+- Risk controls: max open positions, daily loss kill-switch, time cutoff
+- R_net / P&L diagnostics in output
+
 Outputs:
 - RAW (no ML): side-wise + combined stats + charts
 - ML (with filter/sizing): side-wise + combined stats + charts
 - CSVs: RAW and ML trade-level CSVs saved to outputs/
-
-Notes on sizing:
-- ML sizing is implemented as scaling the ROI/PnL columns by confidence_multiplier.
-  This approximates scaling quantity/notional proportionally to confidence.
-  (If you want true risk-based sizing using stop_distance, we can upgrade.)
-
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ try:
     from avwap_v11_refactored import avwap_combined_runner as base_runner
 except Exception:  # pragma: no cover
     import avwap_combined_runner as base_runner
-from ml_meta_filter import MetaFilterConfig, MetaLabelFilter
+from ml_meta_filter import MetaFilterConfig, MetaLabelFilter, build_feature_vector
 
 
 # -----------------------------
@@ -237,16 +237,28 @@ def print_detailed_stats(df: pd.DataFrame, label: str) -> None:
 def _build_signal_dict_from_trade_row(r: pd.Series) -> Dict[str, Any]:
     """
     Build the dict expected by MetaLabelFilter.predict_pwin().
-    Uses common column names from avwap_combined_runner output.
+    Passes all available columns for v1 feature support.
     """
+    sig: Dict[str, Any] = {}
+    # Pass through all numeric columns as potential features
+    for col in r.index:
+        try:
+            val = r[col]
+            if isinstance(val, (int, float, np.floating, np.integer)):
+                sig[col] = float(val)
+            else:
+                sig[col] = val
+        except (TypeError, ValueError):
+            sig[col] = r[col]
+
+    # Ensure legacy aliases are present for backward compat
     side = str(r.get("side", "LONG")).upper().strip()
-    return {
-        "side": side,
-        "quality_score": _safe_float(r.get("quality_score", 0.0), 0.0),
-        "atr_pct_signal": _safe_float(r.get("atr_pct_signal", r.get("atr_pct", 0.0)), 0.0),
-        "rsi_signal": _safe_float(r.get("rsi_signal", r.get("rsi", 50.0)), 50.0),
-        "adx_signal": _safe_float(r.get("adx_signal", r.get("adx", 20.0)), 20.0),
-    }
+    sig["side"] = side
+    sig.setdefault("quality_score", _safe_float(r.get("quality_score", 0.0), 0.0))
+    sig.setdefault("atr_pct", _safe_float(r.get("atr_pct_signal", r.get("atr_pct", 0.0)), 0.0))
+    sig.setdefault("rsi", _safe_float(r.get("rsi_signal", r.get("rsi", 50.0)), 50.0))
+    sig.setdefault("adx", _safe_float(r.get("adx_signal", r.get("adx", 20.0)), 20.0))
+    return sig
 
 
 def apply_ml_filter_and_size(
@@ -255,8 +267,8 @@ def apply_ml_filter_and_size(
     ml_threshold: float,
 ) -> pd.DataFrame:
     """
-    Adds p_win + confidence_multiplier, filters trades below threshold,
-    and scales ROI/PnL columns by confidence_multiplier.
+    Strategy v1: Adds p_win + confidence_multiplier (vol-capped),
+    filters trades below threshold, scales ROI/PnL by confidence_multiplier.
 
     Returns a NEW dataframe (ML version).
     """
@@ -275,7 +287,9 @@ def apply_ml_filter_and_size(
     for _, r in df.iterrows():
         sig = _build_signal_dict_from_trade_row(r)
         p = float(meta_filter.predict_pwin(sig))
-        m = float(meta_filter.confidence_multiplier(p))
+        # Vol-capped confidence multiplier
+        atr_pctile = float(sig.get("atr_pctile_50", sig.get("atr_pctile", 50.0)))
+        m = float(meta_filter.confidence_multiplier_with_vol_cap(p, atr_pctile))
         p_list.append(p)
         m_list.append(m)
         mode_list.append("model" if using_model else "heur")
@@ -311,7 +325,7 @@ def apply_ml_filter_and_size(
 # -----------------------------
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ml-threshold", type=float, default=0.60, help="p_win threshold for taking trades")
+    ap.add_argument("--ml-threshold", type=float, default=0.62, help="p_win threshold for taking trades (v1 default: 0.62)")
     ap.add_argument("--model-path", type=str, default="models/meta_model.pkl", help="Path to exported meta model")
     ap.add_argument("--features-path", type=str, default="models/meta_features.json", help="Path to exported feature list")
     ap.add_argument("--outputs-dir", type=str, default="", help="Optional override outputs directory")
@@ -442,15 +456,21 @@ def main() -> None:
                 print(f"[WARN] Chart generation (ML) failed: {e}")
 
             # ML diagnostics
-            print("\n================ ML DIAGNOSTICS ================")
+            print("\n================ ML DIAGNOSTICS (v1) ================")
             print(f"Trades RAW                 : {len(combined_raw)}")
             print(f"Trades after ML gate       : {len(combined_ml)}")
+            print(f"Take rate                  : {len(combined_ml)/max(1,len(combined_raw))*100:.1f}%")
             if "p_win" in combined_ml.columns:
                 print(f"Mean p_win (taken trades)  : {combined_ml['p_win'].mean():.4f}")
                 print(f"Median p_win               : {combined_ml['p_win'].median():.4f}")
             if "confidence_multiplier" in combined_ml.columns:
                 print(f"Mean confidence_multiplier : {combined_ml['confidence_multiplier'].mean():.4f}")
-            print("===============================================")
+                print(f"Min confidence_multiplier  : {combined_ml['confidence_multiplier'].min():.4f}")
+                print(f"Max confidence_multiplier  : {combined_ml['confidence_multiplier'].max():.4f}")
+            if "ml_mode" in combined_ml.columns:
+                mode_counts = combined_ml["ml_mode"].value_counts().to_dict()
+                print(f"ML mode breakdown          : {mode_counts}")
+            print("=====================================================")
 
             print(f"\n[LOG] Full console saved to: {log_path}")
             print("[DONE] ML backtest runner complete.")
