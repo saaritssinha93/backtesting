@@ -236,85 +236,85 @@ I can tailor the README to your exact setup.
 
 ## EQIDV1 intraday system: file-by-file analysis (backtesting + live strategy)
 
-This section maps the `eqidv1/` folder into a practical workflow for **intraday AVWAP long/short strategy research and live deployment**.
+This section maps the `eqidv3/` folder into a practical workflow for **intraday AVWAP long/short strategy research and live deployment**.
 
 ## 1) Core strategy + backtesting engine
 
-- `eqidv1/avwap_v11_refactored/avwap_common.py`  
+- `eqidv3/avwap_v11_refactored/avwap_common.py`  
   Shared backbone: strategy configuration (`StrategyConfig`), indicator calculations (ATR/RSI/Stoch/ADX/EMA/AVWAP), slippage + commission handling, trade schema, and portfolio metrics.
 
-- `eqidv1/avwap_v11_refactored/avwap_short_strategy.py`  
+- `eqidv3/avwap_v11_refactored/avwap_short_strategy.py`  
   Short-only rule engine: red-impulse detection, AVWAP rejection validation, trend filters, short entry/exit simulation, per-day and per-ticker scanning.
 
-- `eqidv1/avwap_v11_refactored/avwap_long_strategy.py`  
+- `eqidv3/avwap_v11_refactored/avwap_long_strategy.py`  
   Long-only rule engine: green-impulse detection, AVWAP support validation, trend filters, long entry/exit simulation, per-day and per-ticker scanning.
 
-- `eqidv1/avwap_v11_refactored/avwap_combined_runner.py`  
+- `eqidv3/avwap_v11_refactored/avwap_combined_runner.py`  
   Combined long+short backtest orchestration: parallel ticker scans, 15m entries with optional 5m exit refinement, cash-constrained portfolio simulation, full analytics, CSV/TXT/PNG output generation.
 
-- `eqidv1/avwap_combined_runner.py`  
-  Wrapper/entry runner in the root `eqidv1` path that mirrors the combined backtest flow and imports the refactored v11 modules.
+- `eqidv3/avwap_combined_runner.py`  
+  Wrapper/entry runner in the root `eqidv3` path that mirrors the combined backtest flow and imports the refactored v11 modules.
 
-- `eqidv1/avwap_v11_refactored/__init__.py`  
+- `eqidv3/avwap_v11_refactored/__init__.py`  
   Package initializer for module-based imports.
 
 ## 2) Live signal generation and trade execution
 
-- `eqidv1/avwap_live_signal_generator.py`  
+- `eqidv3/avwap_live_signal_generator.py`  
   Live scanning service that reads latest intraday parquet candles, evaluates AVWAP v11 conditions, deduplicates signals, and appends signals to CSV for downstream execution.
 
-- `eqidv1/eqidv1_live_trading_signal_15m_v11_combined_parquet.py`  
+- `eqidv3/eqidv3_live_trading_signal_15m_v11_combined_parquet.py`  
   Stateful 15m live signal pipeline with stricter intraday controls, tuned long/short parameters, scheduler windows, and optional pre-scan data refresh hooks.
 
-- `eqidv1/avwap_trade_execution_PAPER_TRADE_TRUE.py`  
+- `eqidv3/avwap_trade_execution_PAPER_TRADE_TRUE.py`  
   Paper-trade executor: watches generated signal CSV, applies risk checks, simulates fills/P&L, and writes execution logs/summary.
 
-- `eqidv1/avwap_trade_execution_PAPER_TRADE_FALSE.py`  
+- `eqidv3/avwap_trade_execution_PAPER_TRADE_FALSE.py`  
   Live-order executor: connects to broker session, validates risk limits, places/cancels orders, tracks fills, and records execution outcomes.
 
-- `eqidv1/eqidv1_live_combined_analyser.py`  
+- `eqidv3/eqidv3_live_combined_analyser.py`  
   Live monitoring/analysis utility for combined long+short intraday signal quality and run-level diagnostics.
 
 ## 3) Market data ingestion + maintenance (intraday parquet)
 
-- `eqidv1/trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py`  
+- `eqidv3/trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py`  
   Main historical + incremental data fetcher for **5m and 15m** candles; includes token caching, holiday awareness, freshness checks, indicator generation, and parquet persistence.
 
-- `eqidv1/trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py`  
+- `eqidv3/trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py`  
   Optimized 15m-only variant for lighter live setups or research runs that do not need 5m data.
 
-- `eqidv1/eqidv1_eod_15min_data_stocks.py`  
+- `eqidv3/eqidv3_eod_15min_data_stocks.py`  
   Session-time scheduler that repeatedly triggers 15m updater during market hours and exits after the intraday close window.
 
-- `eqidv1/eqidv1_eod_scheduler_for_15mins_data.py`  
+- `eqidv3/eqidv3_eod_scheduler_for_15mins_data.py`  
   EOD/interval scheduler variant to keep 15m datasets fresh via timed runs and session-aware stopping.
 
-- `eqidv1/eqidv1_eod_scheduler_for_1540_update.py`  
+- `eqidv3/eqidv3_eod_scheduler_for_1540_update.py`  
   Final 15:40 IST end-of-day flush to capture last candles and minimize stale data risk before next session.
 
 ## 4) Universe selection and authentication
 
-- `eqidv1/filtered_stocks.py`  
+- `eqidv3/filtered_stocks.py`  
   Auto-generated curated stock universe list used by the pipeline.
 
-- `eqidv1/filtered_stocks_MIS.py`  
+- `eqidv3/filtered_stocks_MIS.py`  
   Alternate MIS-focused stock universe container (large set form).
 
-- `eqidv1/authentication.py`  
+- `eqidv3/authentication.py`  
   Browser-assisted broker login automation (Kite), TOTP handling, token file generation, and instrument dump export.
 
-## 5) Outputs/artifacts currently tracked in `eqidv1/outputs/`
+## 5) Outputs/artifacts currently tracked in `eqidv3/outputs/`
 
-- `eqidv1/outputs/avwap_combined_runner_*.txt`  
+- `eqidv3/outputs/avwap_combined_runner_*.txt`  
   Backtest run logs and printed summary snapshots.
 
-- `eqidv1/outputs/avwap_longshort_trades_ALL_DAYS_*.csv`  
+- `eqidv3/outputs/avwap_longshort_trades_ALL_DAYS_*.csv`  
   Trade-by-trade export for all simulated long/short entries and exits.
 
-- `eqidv1/outputs/charts/enhanced/*.png`  
+- `eqidv3/outputs/charts/enhanced/*.png`  
   Expanded analytics visuals (equity, drawdown, win-rate slices, hourly/monthly diagnostics, setup/impulse breakdowns).
 
-- `eqidv1/outputs/charts/legacy/*.png`  
+- `eqidv3/outputs/charts/legacy/*.png`  
   Earlier chart suite retained for compatibility and historical comparison.
 
 ## 6) Recommended intraday operating flow
@@ -322,6 +322,6 @@ This section maps the `eqidv1/` folder into a practical workflow for **intraday 
 1. Refresh auth tokens (`authentication.py`) when required.  
 2. Keep 15m/5m parquet data updated (`trading_data...py` + schedulers).  
 3. Run backtests (`avwap_combined_runner.py`) to validate parameter stability.  
-4. Generate live signals (`avwap_live_signal_generator.py` or `eqidv1_live_trading_signal_15m_v11_combined_parquet.py`).  
+4. Generate live signals (`avwap_live_signal_generator.py` or `eqidv3_live_trading_signal_15m_v11_combined_parquet.py`).  
 5. Execute in paper mode first, then live mode after stable behavior is confirmed.  
 6. Review outputs (`outputs/*.csv`, `outputs/*.txt`, chart folders) for risk and consistency before scaling capital.
