@@ -146,7 +146,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input-csv", required=True)
     ap.add_argument("--output-csv", default="eqidv3/outputs/ml_filtered_trades.csv")
-    ap.add_argument("--threshold", type=float, default=0.62)
+    ap.add_argument("--threshold", type=float, default=0.50)
     ap.add_argument("--summary-json", default="eqidv3/outputs/ml_backtest_summary.json")
     ap.add_argument("--top-stocks-csv", default="eqidv3/outputs/ml_top_scanned_stocks.csv")
     ap.add_argument("--top-n", type=int, default=20)
