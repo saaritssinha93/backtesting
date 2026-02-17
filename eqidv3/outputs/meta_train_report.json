@@ -33,24 +33,24 @@
       "take_rate": 0.3946
     },
     "0.54": {
-      "metric": 0.2755,
+      "metric": 0.271,
+      "trades_taken": 103,
+      "take_rate": 0.3946
+    },
+    "0.55": {
+      "metric": 0.2726,
       "trades_taken": 102,
       "take_rate": 0.3908
     },
-    "0.55": {
-      "metric": 0.2773,
+    "0.56": {
+      "metric": 0.2777,
       "trades_taken": 101,
       "take_rate": 0.387
     },
-    "0.56": {
-      "metric": 0.2824,
-      "trades_taken": 100,
-      "take_rate": 0.3831
-    },
     "0.57": {
-      "metric": 0.2824,
-      "trades_taken": 100,
-      "take_rate": 0.3831
+      "metric": 0.2777,
+      "trades_taken": 101,
+      "take_rate": 0.387
     },
     "0.58": {
       "metric": 0.3126,
@@ -58,29 +58,29 @@
       "take_rate": 0.3372
     },
     "0.59": {
-      "metric": 0.3096,
-      "trades_taken": 87,
-      "take_rate": 0.3333
+      "metric": 0.3126,
+      "trades_taken": 88,
+      "take_rate": 0.3372
     },
     "0.60": {
-      "metric": 0.3096,
-      "trades_taken": 87,
-      "take_rate": 0.3333
+      "metric": 0.3129,
+      "trades_taken": 82,
+      "take_rate": 0.3142
     },
     "0.61": {
-      "metric": 0.3096,
-      "trades_taken": 87,
-      "take_rate": 0.3333
+      "metric": 0.3129,
+      "trades_taken": 82,
+      "take_rate": 0.3142
     },
     "0.62": {
-      "metric": 0.284,
-      "trades_taken": 62,
-      "take_rate": 0.2375
+      "metric": 0.3129,
+      "trades_taken": 82,
+      "take_rate": 0.3142
     },
     "0.63": {
-      "metric": 0.2844,
-      "trades_taken": 61,
-      "take_rate": 0.2337
+      "metric": 0.3136,
+      "trades_taken": 81,
+      "take_rate": 0.3103
     },
     "0.64": {
       "metric": 0.2844,
@@ -118,8 +118,8 @@
       "rows_train": 320,
       "rows_test": 40,
       "auc": 0.6477272727272727,
-      "logloss": 0.6412162782418751,
-      "brier": 0.22479846950461496,
+      "logloss": 0.6439558124981296,
+      "brier": 0.22615341786808535,
       "pos_rate_test": 0.55,
       "model_type": "logistic"
     },
@@ -145,9 +145,9 @@
       "test_end": "2026-01-13 23:59:59+05:30",
       "rows_train": 304,
       "rows_test": 69,
-      "auc": 0.5474358974358975,
-      "logloss": 0.7050316351841972,
-      "brier": 0.25571287803770654,
+      "auc": 0.5431623931623932,
+      "logloss": 0.7061396974687294,
+      "brier": 0.25627066997142617,
       "pos_rate_test": 0.5652173913043478,
       "model_type": "logistic"
     },
@@ -160,8 +160,8 @@
       "rows_train": 319,
       "rows_test": 68,
       "auc": 0.48070175438596485,
-      "logloss": 0.8463141315298714,
-      "brier": 0.2753846290081702,
+      "logloss": 0.8463141315373948,
+      "brier": 0.27538462901008015,
       "pos_rate_test": 0.5588235294117647,
       "model_type": "logistic"
     },
@@ -173,9 +173,9 @@
       "test_end": "2026-02-11 23:59:59+05:30",
       "rows_train": 344,
       "rows_test": 43,
-      "auc": 0.36956521739130443,
-      "logloss": 0.8944714275410847,
-      "brier": 0.3026646972831802,
+      "auc": 0.3641304347826087,
+      "logloss": 0.9014423357952707,
+      "brier": 0.3049962056385519,
       "pos_rate_test": 0.5348837209302325,
       "model_type": "logistic"
     }
