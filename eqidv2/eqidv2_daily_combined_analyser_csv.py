@@ -110,7 +110,7 @@ def _write_daily_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV
 
 
 def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
-    tickers = live.list_tickers()
+    tickers = live.list_tickers_15m()
     if not tickers:
         print("[WARN] No tickers found.", flush=True)
         return pd.DataFrame()
