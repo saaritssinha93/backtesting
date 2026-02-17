@@ -115,9 +115,6 @@ def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
         print("[WARN] No tickers found.", flush=True)
         return pd.DataFrame()
 
-    state_real = live._load_state()
-    tmp_state = deepcopy(state_real)
-
     all_signals: List[Dict[str, Any]] = []
     scanned = 0
 
@@ -127,11 +124,6 @@ def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
             df_raw = live.read_parquet_tail(path, n=live.TAIL_ROWS)
             sigs = live._all_day_runner_parity_signals_for_ticker(t, df_raw)
             for s in sigs:
-                today_str = str(pd.Timestamp(s.bar_time_ist).tz_convert(live.IST).date())
-                cap = live.SHORT_CAP_PER_TICKER_PER_DAY if s.side == "SHORT" else live.LONG_CAP_PER_TICKER_PER_DAY
-                if not live.allow_signal_today(tmp_state, s.ticker, s.side, today_str, cap):
-                    continue
-
                 all_signals.append({
                     "ticker": s.ticker,
                     "side": s.side,
@@ -143,7 +135,6 @@ def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
                     "score": s.score,
                     "diagnostics_json": json.dumps(s.diagnostics, default=str),
                 })
-                live.mark_signal(tmp_state, s.ticker, s.side, today_str)
 
             scanned += 1
             if verbose and scanned % 25 == 0:
@@ -156,15 +147,6 @@ def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
 
     signals_df = pd.DataFrame(all_signals)
     written = _write_daily_signals_csv(signals_df, strategy="EQIDV2_DAILY")
-
-    # Commit cap consumption only when something was written.
-    if written > 0 and (not signals_df.empty):
-        today_str = live.now_ist().strftime("%Y-%m-%d")
-        for _, row in signals_df.iterrows():
-            ticker = str(row.get("ticker", "")).upper()
-            side = str(row.get("side", "")).upper()
-            live.mark_signal(state_real, ticker, side, today_str)
-        live._save_state(state_real)
 
     print(f"[DONE][DAILY] scanned={scanned} signals={len(signals_df)} written={written}", flush=True)
     return signals_df
