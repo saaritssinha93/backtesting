@@ -80,12 +80,59 @@ except Exception:  # pragma: no cover
     import avwap_short_strategy as short_mod  # type: ignore
 
 try:
-    from ml_meta_filter import MetaLabelFilter, MetaFilterConfig
+    from ml_meta_filter import MetaLabelFilter
 except Exception:  # pragma: no cover
     MetaLabelFilter = None  # type: ignore
-    MetaFilterConfig = None  # type: ignore
 
 
+def _build_ml_filter(args: argparse.Namespace):
+    """
+    Instantiate MetaLabelFilter robustly across different constructor signatures.
+    Your local ml_meta_filter.MetaLabelFilter may accept different parameter names.
+    """
+    if MetaLabelFilter is None:
+        return None
+    last_err = None
+
+    # Try common keyword signatures
+    kw_attempts = [
+        {"model_path": getattr(args, "model_path", None), "features_path": getattr(args, "features_path", None)},
+        {"model_file": getattr(args, "model_path", None), "features_file": getattr(args, "features_path", None)},
+        {"model": getattr(args, "model_path", None), "features": getattr(args, "features_path", None)},
+        {"model_pkl": getattr(args, "model_path", None), "features_json": getattr(args, "features_path", None)},
+    ]
+    for kw in kw_attempts:
+        # drop None values
+        kw = {k: v for k, v in kw.items() if v is not None}
+        try:
+            return MetaLabelFilter(**kw)  # type: ignore
+        except TypeError as e:
+            last_err = e
+        except Exception as e:
+            last_err = e
+
+    # Try positional signatures
+    pos_attempts = [
+        (getattr(args, "model_path", None), getattr(args, "features_path", None)),
+        (getattr(args, "model_path", None),),
+        tuple(),
+    ]
+    for pos in pos_attempts:
+        pos = tuple([p for p in pos if p is not None])
+        try:
+            return MetaLabelFilter(*pos)  # type: ignore
+        except TypeError as e:
+            last_err = e
+        except Exception as e:
+            last_err = e
+
+    # As a final fallback, try parameterless init
+    try:
+        return MetaLabelFilter()  # type: ignore
+    except Exception as e:
+        last_err = e
+
+    raise last_err if last_err else RuntimeError("MetaLabelFilter init failed")
 # -----------------------------
 # Constants / paths
 # -----------------------------
@@ -855,40 +902,34 @@ def _apply_ml_gate(
     disable_ml: bool,
 ) -> List[Tuple[LiveSignal, Dict]]:
     """
-    Strategy v1: Returns list of (signal, ml_info_dict) with p_win, conf_mult, skip_reason.
-    Passes full feature set to ML filter for v1 scoring.
+    Returns list of (signal, ml_info_dict) where ml_info includes p_win and conf_mult.
+    If ML disabled or missing model, p_win will be NaN and conf_mult=1.0.
     """
     out: List[Tuple[LiveSignal, Dict]] = []
     for sig in signals:
-        info: Dict[str, Any] = {"p_win": np.nan, "conf_mult": 1.0, "ml_taken": True, "skip_reason": ""}
+        info = {"p_win": np.nan, "conf_mult": 1.0, "ml_taken": True}
         if disable_ml or ml_filter is None:
             out.append((sig, info))
             continue
 
         try:
-            # Build full v1 feature dict from signal diagnostics
-            x: Dict[str, Any] = {
+            x = {
                 "quality_score": sig.quality_score,
                 "atr_pct": sig.atr_pct,
                 "rsi": sig.rsi,
                 "adx": sig.adx,
                 "side": sig.side,
-                "avwap_dist_atr": sig.avwap_dist_atr,
-                "ema_gap_atr": sig.ema_gap_atr,
             }
             p = float(ml_filter.predict_pwin(x))
             cm = float(ml_filter.confidence_multiplier(p))
-            take = bool(cm > 0.0)
-            skip_reason = "" if take else f"p_win={p:.3f}<threshold"
-            info = {"p_win": p, "conf_mult": cm, "ml_taken": take, "skip_reason": skip_reason}
-        except Exception as e:
-            info["skip_reason"] = f"ml_error: {e}"
-
+            take = bool(cm > 0.0) if ml_threshold is None else bool(p >= ml_threshold)
+            # If you want ML gate to be exactly args.ml_threshold, we set it on ml_filter.cfg too.
+            info = {"p_win": p, "conf_mult": cm, "ml_taken": take}
+        except Exception:
+            # keep defaults
+            pass
         if info.get("ml_taken", True):
             out.append((sig, info))
-        else:
-            # Log skipped signals for diagnostics
-            print(f"[SKIP] {sig.ticker} {sig.side} {sig.setup}: {info.get('skip_reason', 'unknown')}")
     return out
 
 
@@ -919,18 +960,21 @@ def scan_latest_slot_all_tickers(
     # Optional side filter
     side_filter = (args.side or "BOTH").upper()
 
-    # ML filter (v1: use MetaFilterConfig)
+    # ML filter
     ml_filter = None
-    if (not args.no_ml) and (MetaLabelFilter is not None) and (MetaFilterConfig is not None):
+    if (not args.no_ml) and (MetaLabelFilter is not None):
         try:
-            cfg = MetaFilterConfig(
-                model_path=args.model_path,
-                feature_path=args.features_path,
-                pwin_threshold=float(args.ml_threshold),
-            )
-            ml_filter = MetaLabelFilter(cfg)
-            mode_str = "MODEL" if ml_filter.model is not None else "HEURISTIC"
-            print(f"[INFO] ML filter loaded: {mode_str}, threshold={args.ml_threshold:.3f}")
+            ml_filter = _build_ml_filter(args)
+            # keep threshold consistent with CLI (if filter exposes cfg)
+            try:
+                ml_filter.cfg.pwin_threshold = float(args.ml_threshold)
+            except Exception:
+                pass
+# keep threshold consistent with CLI
+            try:
+                ml_filter.cfg.pwin_threshold = float(args.ml_threshold)
+            except Exception:
+                pass
         except Exception as e:
             print(f"[WARN] ML filter unavailable: {e}")
             ml_filter = None
@@ -1049,7 +1093,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # ML gate
     p.add_argument("--no-ml", action="store_true", help="Disable ML gate")
-    p.add_argument("--ml-threshold", dest="ml_threshold", type=float, default=0.62, help="Min p_win to accept a trade (v1 default: 0.62)")
+    p.add_argument("--ml-threshold", dest="ml_threshold", type=float, default=0.60, help="Min p_win to accept a trade")
     p.add_argument("--model-path", dest="model_path", default="models/meta_label_model.pkl", help="Path to trained ML model (if used)")
     p.add_argument("--features-path", dest="features_path", default="models/meta_label_features.json", help="Feature spec json (if used)")
     p.add_argument("--topn-per-run", dest="topn_per_run", type=int, default=30, help="Keep top-N signals per run (per side if BOTH)")

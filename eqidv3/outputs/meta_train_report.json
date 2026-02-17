@@ -1,13 +1,142 @@
 {
   "dataset_csv": "meta_dataset.csv",
-  "rows": 591,
-  "pos_rate": 0.2521150592216582,
-  "splits": 2,
+  "rows": 601,
+  "pos_rate": 0.5707154742096506,
+  "feature_mode": "v1",
+  "feature_count": 29,
+  "model_type": "logistic",
+  "splits": 5,
   "train_days": 60,
   "test_days": 10,
   "embargo_minutes": 30,
   "calibration": "isotonic",
+  "optimal_threshold": 0.5,
+  "threshold_analysis": {
+    "0.50": {
+      "metric": 0.3638,
+      "trades_taken": 173,
+      "take_rate": 0.6628
+    },
+    "0.51": {
+      "metric": 0.3416,
+      "trades_taken": 162,
+      "take_rate": 0.6207
+    },
+    "0.52": {
+      "metric": 0.3184,
+      "trades_taken": 143,
+      "take_rate": 0.5479
+    },
+    "0.53": {
+      "metric": 0.271,
+      "trades_taken": 103,
+      "take_rate": 0.3946
+    },
+    "0.54": {
+      "metric": 0.2755,
+      "trades_taken": 102,
+      "take_rate": 0.3908
+    },
+    "0.55": {
+      "metric": 0.2773,
+      "trades_taken": 101,
+      "take_rate": 0.387
+    },
+    "0.56": {
+      "metric": 0.2824,
+      "trades_taken": 100,
+      "take_rate": 0.3831
+    },
+    "0.57": {
+      "metric": 0.2824,
+      "trades_taken": 100,
+      "take_rate": 0.3831
+    },
+    "0.58": {
+      "metric": 0.3126,
+      "trades_taken": 88,
+      "take_rate": 0.3372
+    },
+    "0.59": {
+      "metric": 0.3096,
+      "trades_taken": 87,
+      "take_rate": 0.3333
+    },
+    "0.60": {
+      "metric": 0.3096,
+      "trades_taken": 87,
+      "take_rate": 0.3333
+    },
+    "0.61": {
+      "metric": 0.3096,
+      "trades_taken": 87,
+      "take_rate": 0.3333
+    },
+    "0.62": {
+      "metric": 0.284,
+      "trades_taken": 62,
+      "take_rate": 0.2375
+    },
+    "0.63": {
+      "metric": 0.2844,
+      "trades_taken": 61,
+      "take_rate": 0.2337
+    },
+    "0.64": {
+      "metric": 0.2844,
+      "trades_taken": 61,
+      "take_rate": 0.2337
+    },
+    "0.65": {
+      "metric": 0.2844,
+      "trades_taken": 61,
+      "take_rate": 0.2337
+    },
+    "0.66": {
+      "metric": 0.2844,
+      "trades_taken": 61,
+      "take_rate": 0.2337
+    },
+    "0.67": {
+      "metric": 0.3134,
+      "trades_taken": 24,
+      "take_rate": 0.092
+    },
+    "0.68": {
+      "metric": 0.3134,
+      "trades_taken": 24,
+      "take_rate": 0.092
+    }
+  },
   "folds": [
+    {
+      "fold": 1,
+      "train_start": "2025-08-26 00:00:00+05:30",
+      "train_end": "2025-11-25 23:59:59+05:30",
+      "test_start": "2025-11-26 00:00:00+05:30",
+      "test_end": "2025-12-10 23:59:59+05:30",
+      "rows_train": 320,
+      "rows_test": 40,
+      "auc": 0.6477272727272727,
+      "logloss": 0.6412162782418751,
+      "brier": 0.22479846950461496,
+      "pos_rate_test": 0.55,
+      "model_type": "logistic"
+    },
+    {
+      "fold": 2,
+      "train_start": "2025-09-10 00:00:00+05:30",
+      "train_end": "2025-12-10 23:59:59+05:30",
+      "test_start": "2025-12-12 00:00:00+05:30",
+      "test_end": "2025-12-26 23:59:59+05:30",
+      "rows_train": 314,
+      "rows_test": 41,
+      "auc": 0.4117647058823529,
+      "logloss": 0.972934188216201,
+      "brier": 0.3038115862022818,
+      "pos_rate_test": 0.5853658536585366,
+      "model_type": "logistic"
+    },
     {
       "fold": 3,
       "train_start": "2025-09-24 00:00:00+05:30",
@@ -15,11 +144,12 @@
       "test_start": "2025-12-29 00:00:00+05:30",
       "test_end": "2026-01-13 23:59:59+05:30",
       "rows_train": 304,
-      "rows_test": 67,
-      "auc": 0.6182352941176471,
-      "logloss": 0.6478705177754611,
-      "brier": 0.1841769517077806,
-      "pos_rate_test": 0.2537313432835821
+      "rows_test": 69,
+      "auc": 0.5474358974358975,
+      "logloss": 0.7050316351841972,
+      "brier": 0.25571287803770654,
+      "pos_rate_test": 0.5652173913043478,
+      "model_type": "logistic"
     },
     {
       "fold": 4,
@@ -27,17 +157,63 @@
       "train_end": "2026-01-13 23:59:59+05:30",
       "test_start": "2026-01-14 00:00:00+05:30",
       "test_end": "2026-01-29 23:59:59+05:30",
-      "rows_train": 317,
-      "rows_test": 66,
-      "auc": 0.5391534391534392,
-      "logloss": 0.6688032710848021,
-      "brier": 0.23327811165660586,
-      "pos_rate_test": 0.3181818181818182
+      "rows_train": 319,
+      "rows_test": 68,
+      "auc": 0.48070175438596485,
+      "logloss": 0.8463141315298714,
+      "brier": 0.2753846290081702,
+      "pos_rate_test": 0.5588235294117647,
+      "model_type": "logistic"
+    },
+    {
+      "fold": 5,
+      "train_start": "2025-10-27 00:00:00+05:30",
+      "train_end": "2026-01-29 23:59:59+05:30",
+      "test_start": "2026-01-30 00:00:00+05:30",
+      "test_end": "2026-02-11 23:59:59+05:30",
+      "rows_train": 344,
+      "rows_test": 43,
+      "auc": 0.36956521739130443,
+      "logloss": 0.8944714275410847,
+      "brier": 0.3026646972831802,
+      "pos_rate_test": 0.5348837209302325,
+      "model_type": "logistic"
     }
   ],
   "export": {
     "model_path": "models\\meta_model.pkl",
-    "features_path": "models\\meta_features.json"
+    "features_path": "models\\meta_features.json",
+    "features": [
+      "ret_1",
+      "ret_2",
+      "ret_3",
+      "atr_val",
+      "tr_val",
+      "atr_pctile_50",
+      "bb_width",
+      "bb_position",
+      "range_to_atr",
+      "ema20_slope",
+      "ema50_slope",
+      "adx_val",
+      "di_plus",
+      "di_minus",
+      "di_diff",
+      "vwap_dist_atr",
+      "avwap_dist_atr",
+      "vol_zscore_20",
+      "dollar_vol",
+      "illiquidity_proxy",
+      "minute_bucket",
+      "bars_left_in_day",
+      "gap_pct",
+      "touch_depth",
+      "rejection_body_ratio",
+      "upper_wick_ratio",
+      "consec_below_avwap",
+      "pullback_from_low20_atr",
+      "side"
+    ]
   },
-  "oof_coverage": 0.22504230118443316
+  "oof_coverage": 0.43427620632279534
 }

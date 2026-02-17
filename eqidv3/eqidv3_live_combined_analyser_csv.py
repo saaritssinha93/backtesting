@@ -1295,7 +1295,7 @@ def _load_existing_ids(csv_path: str) -> set:
         return set()
 
 
-def _write_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV2") -> int:
+def _write_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "eqidv3") -> int:
     """
     Append live signals to: live_signals/signals_YYYY-MM-DD.csv
 
@@ -1354,7 +1354,7 @@ def _write_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV2") ->
                     except Exception:
                         pass
 
-                # EQIDV2 scanner is rule-based; ML fields are neutral
+                # eqidv3 scanner is rule-based; ML fields are neutral
                 p_win = 1.0
                 ml_thr = 0.0
                 conf_mult = 1.0
@@ -1513,7 +1513,8 @@ def _scan_latest_slot(
         return
 
     slot_end = _last_completed_slot(dt, buffer_sec)
-    target_slot_end = pd.Timestamp(slot_end).tz_localize(IST)
+    target_slot_end = pd.Timestamp(slot_end)
+    target_slot_end = target_slot_end.tz_localize(IST) if target_slot_end.tzinfo is None else target_slot_end.tz_convert(IST)
 
     tickers = list_tickers_15m()
     if not tickers:
@@ -1572,7 +1573,7 @@ def _scan_latest_slot(
     signals_df = pd.DataFrame(all_signals)
 
     # Write CSV (always prints its own log)
-    written = _write_signals_csv(signals_df, strategy="EQIDV2")
+    written = _write_signals_csv(signals_df, strategy="eqidv3")
 
     # Commit cap consumption only for signals we actually wrote
     if written > 0 and (not signals_df.empty):
@@ -1582,7 +1583,7 @@ def _scan_latest_slot(
             side = str(row.get("side", "")).upper()
             bar_time = str(row.get("bar_time_ist", ""))
             setup = str(row.get("setup", ""))
-            sid = _generate_signal_id("EQIDV2", ticker, side, bar_time, setup)
+            sid = _generate_signal_id("eqidv3", ticker, side, bar_time, setup)
             # Only mark those which were newly written (exists now in csv)
             # We approximate by marking all generated this run when written>0.
             mark_signal(state_real, ticker, side, today_str)
@@ -1609,7 +1610,7 @@ def main() -> None:
     LIVE_SIGNAL_DIR = Path(args.signals_dir)
     LIVE_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"[START] EQIDV2 live (avwap_live style) | data_dir={DIR_15M} | out={LIVE_SIGNAL_DIR}", flush=True)
+    print(f"[START] eqidv3 live (avwap_live style) | data_dir={DIR_15M} | out={LIVE_SIGNAL_DIR}", flush=True)
     print(f"        buffer={args.buffer_sec}s tolerance={args.tolerance_sec}s | window={START_TIME.strftime('%H:%M')}–{END_TIME.strftime('%H:%M')}", flush=True)
 
     if args.once:
@@ -1637,13 +1638,25 @@ def main() -> None:
             time.sleep(1.0)
             continue
 
-        _scan_latest_slot(buffer_sec=int(args.buffer_sec), tolerance_sec=int(args.tolerance_sec), verbose=bool(args.verbose))
+                # --- Run multiple scans per slot to catch freshly-updated data ---
+        scan_labels = [chr(ord("A") + i) for i in range(int(NUM_SCANS_PER_SLOT))]
+        for scan_idx, label in enumerate(scan_labels):
+            now = now_ist()
+            if now.time() >= HARD_STOP_TIME:
+                print("[STOP] hard stop reached mid-slot", flush=True)
+                return
+
+            print(f"[RUN ] slot={slot_end.strftime('%H:%M')} | scan {label} ({scan_idx+1}/{len(scan_labels)}) at {now.strftime('%H:%M:%S')}", flush=True)
+            _scan_latest_slot(buffer_sec=int(args.buffer_sec), tolerance_sec=int(args.tolerance_sec), verbose=bool(args.verbose))
+
+            if scan_idx < len(scan_labels) - 1:
+                time.sleep(float(SCAN_INTERVAL_SECONDS))
+
         last_slot_done = slot_end
 
-        nxt = _next_slot_after(dt) + timedelta(seconds=int(args.buffer_sec))
-        print(f"[NEXT] next_run_at={nxt.strftime('%H:%M:%S')}\n", flush=True)
+        # Sleep until the next slot + buffer (use slot_end, not dt, to avoid drift)
+        nxt = slot_end + timedelta(minutes=15) + timedelta(seconds=int(args.buffer_sec))
+        print(f"[NEXT] next_run_at={nxt.strftime('%H:%M:%S')}", flush=True)
         _sleep_until(nxt)
-
-
 if __name__ == "__main__":
     main()
