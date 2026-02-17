@@ -24,7 +24,6 @@ Core: backtesting/eqidv2/trading_data_continous_run_historical_alltf_v3_parquet_
 from __future__ import annotations
 
 import argparse
-from copy import deepcopy
 import csv
 import hashlib
 import os
@@ -959,6 +958,90 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_raw: pd.DataFrame)
     df = df.sort_values("date").reset_index(drop=True)
     df = ref_prepare_indicators(df, default_short_config())
 
+    target_day = df["day"].max()
+    df_day = df[df["day"] == target_day].copy().reset_index(drop=True)
+    if df_day.empty or len(df_day) < 7:
+        return []
+
+    if MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(MAX_BARS_PER_TICKER_TODAY):
+        df_day = df_day.iloc[-int(MAX_BARS_PER_TICKER_TODAY):].reset_index(drop=True)
+
+    df_day["AVWAP"] = ref_compute_day_avwap(df_day)
+
+    day_str = str(target_day)
+    short_trades = scan_short_one_day(ticker, df_day.copy(), day_str, default_short_config())
+    long_trades = scan_long_one_day(ticker, df_day.copy(), day_str, default_long_config())
+
+    signals: List[LiveSignal] = []
+    for tr in (short_trades + long_trades):
+        diag = {
+            "impulse_type": tr.impulse_type,
+            "adx": tr.adx_signal,
+            "rsi": tr.rsi_signal,
+            "stochk": tr.stochk_signal,
+            "atr_pct": tr.atr_pct_signal,
+        }
+        signals.append(
+            LiveSignal(
+                ticker=tr.ticker,
+                side=tr.side,
+                bar_time_ist=pd.Timestamp(tr.entry_time_ist),
+                setup=tr.setup,
+                entry_price=float(tr.entry_price),
+                sl_price=float(tr.sl_price),
+                target_price=float(tr.target_price),
+                score=float(tr.quality_score),
+                diagnostics=diag,
+            )
+        )
+
+    signals.sort(key=lambda x: (pd.Timestamp(x.bar_time_ist), x.side, x.setup))
+    return signals
+
+
+def _latest_entry_signals_for_ticker(
+    ticker: str, df_raw: pd.DataFrame, state: Dict[str, Any]
+) -> Tuple[List[LiveSignal], List[Dict[str, Any]]]:
+    """Latest-candle signals, selected from runner-parity day scan."""
+    signals: List[LiveSignal] = []
+    checks: List[Dict[str, Any]] = []
+
+    df_day_for_ts = _prepare_today_df(normalize_dates(df_raw))
+    if df_day_for_ts.empty:
+        return signals, checks
+
+    latest_ts = pd.Timestamp(df_day_for_ts.iloc[-1]["date"])
+    latest_ts = latest_ts.tz_localize(IST) if latest_ts.tzinfo is None else latest_ts.tz_convert(IST)
+    today_str = str(latest_ts.date())
+
+    all_day = _all_day_runner_parity_signals_for_ticker(ticker, df_raw)
+    if not all_day:
+        checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": False})
+        checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": False})
+        return signals, checks
+    found = {"SHORT": False, "LONG": False}
+
+    for s in all_day:
+        ts = pd.Timestamp(s.bar_time_ist)
+        ts = ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST)
+        if ts != latest_ts:
+
+    df = normalize_dates(df_raw)
+    if df.empty:
+        return []
+
+    for c in ["open", "high", "low", "close"]:
+        if c not in df.columns:
+            return []
+
+    # Keep all available days in session for indicator warmup parity.
+    df = df[df["date"].apply(in_session)].copy()
+    if df.empty:
+        return []
+
+    df = df.sort_values("date").reset_index(drop=True)
+    df = ref_prepare_indicators(df, default_short_config())
+
     today = now_ist().date()
     df_day = df[df["day"] == today].copy().reset_index(drop=True)
     if df_day.empty or len(df_day) < 7:
@@ -1242,7 +1325,7 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
     if not tickers:
         return pd.DataFrame(), pd.DataFrame()
 
-    state = _load_state()
+    state: Dict[str, Any] = {}
     all_checks: List[Dict[str, Any]] = []
     all_signals: List[Dict[str, Any]] = []
 
@@ -1270,8 +1353,6 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         if idx % 100 == 0:
             print(f"  scanned {idx}/{len(tickers)} | signals_so_far={len(all_signals)}")
-
-    _save_state(state)
 
     checks_df = pd.DataFrame(all_checks)
     signals_df = pd.DataFrame(all_signals)
@@ -1364,8 +1445,7 @@ def _scan_latest_slot(
 
     print(f"[SCAN] now={dt.strftime('%H:%M:%S')} slot_end={slot_end.strftime('%H:%M')} tickers={len(tickers)}", flush=True)
 
-    state_real = _load_state()
-    tmp_state = deepcopy(state_real)  # avoid consuming caps unless we write
+    tmp_state: Dict[str, Any] = {}
     all_signals: List[Dict[str, Any]] = []
     stale = 0
     scanned = 0
@@ -1412,21 +1492,6 @@ def _scan_latest_slot(
 
     # Write CSV (always prints its own log)
     written = _write_signals_csv(signals_df, strategy="EQIDV2")
-
-    # Commit cap consumption only for signals we actually wrote
-    if written > 0 and (not signals_df.empty):
-        today_str = now_ist().strftime("%Y-%m-%d")
-        for _, row in signals_df.iterrows():
-            ticker = str(row.get("ticker", "")).upper()
-            side = str(row.get("side", "")).upper()
-            bar_time = str(row.get("bar_time_ist", ""))
-            setup = str(row.get("setup", ""))
-            sid = _generate_signal_id("EQIDV2", ticker, side, bar_time, setup)
-            # Only mark those which were newly written (exists now in csv)
-            # We approximate by marking all generated this run when written>0.
-            mark_signal(state_real, ticker, side, today_str)
-
-        _save_state(state_real)
 
     print(f"[DONE] slot_end={slot_end.strftime('%H:%M')} scanned={scanned} stale={stale} signals={len(signals_df)} written={written}", flush=True)
 
