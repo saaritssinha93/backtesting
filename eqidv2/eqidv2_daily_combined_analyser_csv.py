@@ -15,6 +15,7 @@ import argparse
 import csv
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List
 
