@@ -1513,7 +1513,8 @@ def _scan_latest_slot(
         return
 
     slot_end = _last_completed_slot(dt, buffer_sec)
-    target_slot_end = pd.Timestamp(slot_end).tz_localize(IST)
+    target_slot_end = pd.Timestamp(slot_end)
+    target_slot_end = target_slot_end.tz_localize(IST) if target_slot_end.tzinfo is None else target_slot_end.tz_convert(IST)
 
     tickers = list_tickers_15m()
     if not tickers:
@@ -1637,13 +1638,25 @@ def main() -> None:
             time.sleep(1.0)
             continue
 
-        _scan_latest_slot(buffer_sec=int(args.buffer_sec), tolerance_sec=int(args.tolerance_sec), verbose=bool(args.verbose))
+                # --- Run multiple scans per slot to catch freshly-updated data ---
+        scan_labels = [chr(ord("A") + i) for i in range(int(NUM_SCANS_PER_SLOT))]
+        for scan_idx, label in enumerate(scan_labels):
+            now = now_ist()
+            if now.time() >= HARD_STOP_TIME:
+                print("[STOP] hard stop reached mid-slot", flush=True)
+                return
+
+            print(f"[RUN ] slot={slot_end.strftime('%H:%M')} | scan {label} ({scan_idx+1}/{len(scan_labels)}) at {now.strftime('%H:%M:%S')}", flush=True)
+            _scan_latest_slot(buffer_sec=int(args.buffer_sec), tolerance_sec=int(args.tolerance_sec), verbose=bool(args.verbose))
+
+            if scan_idx < len(scan_labels) - 1:
+                time.sleep(float(SCAN_INTERVAL_SECONDS))
+
         last_slot_done = slot_end
 
-        nxt = _next_slot_after(dt) + timedelta(seconds=int(args.buffer_sec))
-        print(f"[NEXT] next_run_at={nxt.strftime('%H:%M:%S')}\n", flush=True)
+        # Sleep until the next slot + buffer (use slot_end, not dt, to avoid drift)
+        nxt = slot_end + timedelta(minutes=15) + timedelta(seconds=int(args.buffer_sec))
+        print(f"[NEXT] next_run_at={nxt.strftime('%H:%M:%S')}", flush=True)
         _sleep_until(nxt)
-
-
 if __name__ == "__main__":
     main()

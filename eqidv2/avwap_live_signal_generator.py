@@ -85,6 +85,54 @@ except Exception:  # pragma: no cover
     MetaLabelFilter = None  # type: ignore
 
 
+def _build_ml_filter(args: argparse.Namespace):
+    """
+    Instantiate MetaLabelFilter robustly across different constructor signatures.
+    Your local ml_meta_filter.MetaLabelFilter may accept different parameter names.
+    """
+    if MetaLabelFilter is None:
+        return None
+    last_err = None
+
+    # Try common keyword signatures
+    kw_attempts = [
+        {"model_path": getattr(args, "model_path", None), "features_path": getattr(args, "features_path", None)},
+        {"model_file": getattr(args, "model_path", None), "features_file": getattr(args, "features_path", None)},
+        {"model": getattr(args, "model_path", None), "features": getattr(args, "features_path", None)},
+        {"model_pkl": getattr(args, "model_path", None), "features_json": getattr(args, "features_path", None)},
+    ]
+    for kw in kw_attempts:
+        # drop None values
+        kw = {k: v for k, v in kw.items() if v is not None}
+        try:
+            return MetaLabelFilter(**kw)  # type: ignore
+        except TypeError as e:
+            last_err = e
+        except Exception as e:
+            last_err = e
+
+    # Try positional signatures
+    pos_attempts = [
+        (getattr(args, "model_path", None), getattr(args, "features_path", None)),
+        (getattr(args, "model_path", None),),
+        tuple(),
+    ]
+    for pos in pos_attempts:
+        pos = tuple([p for p in pos if p is not None])
+        try:
+            return MetaLabelFilter(*pos)  # type: ignore
+        except TypeError as e:
+            last_err = e
+        except Exception as e:
+            last_err = e
+
+    # As a final fallback, try parameterless init
+    try:
+        return MetaLabelFilter()  # type: ignore
+    except Exception as e:
+        last_err = e
+
+    raise last_err if last_err else RuntimeError("MetaLabelFilter init failed")
 # -----------------------------
 # Constants / paths
 # -----------------------------
@@ -916,8 +964,13 @@ def scan_latest_slot_all_tickers(
     ml_filter = None
     if (not args.no_ml) and (MetaLabelFilter is not None):
         try:
-            ml_filter = MetaLabelFilter(model_path=args.model_path, features_path=args.features_path)
-            # keep threshold consistent with CLI
+            ml_filter = _build_ml_filter(args)
+            # keep threshold consistent with CLI (if filter exposes cfg)
+            try:
+                ml_filter.cfg.pwin_threshold = float(args.ml_threshold)
+            except Exception:
+                pass
+# keep threshold consistent with CLI
             try:
                 ml_filter.cfg.pwin_threshold = float(args.ml_threshold)
             except Exception:
