@@ -1,0 +1,217 @@
+
+======================================================================
+AVWAP COMBINED backtest + ML meta filter (runner)
+======================================================================
+[INFO] 5-min data directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv3\backtesting\eqidv3\stocks_indicators_5min_eq
+[INFO] ML threshold: 0.500
+[INFO] Model path: models/meta_model.pkl
+[INFO] Features path: models/meta_features.json
+[INFO] ML mode: MODEL
+
+[PHASE 1] Scanning for entry signals using 15-min data...
+[SHORT] Tickers found: 1033
+  [SHORT] scanned 100/1033 | trades=62
+  [SHORT] scanned 200/1033 | trades=130
+  [SHORT] scanned 300/1033 | trades=197
+  [SHORT] scanned 400/1033 | trades=254
+  [SHORT] scanned 500/1033 | trades=321
+  [SHORT] scanned 600/1033 | trades=386
+  [SHORT] scanned 700/1033 | trades=455
+  [SHORT] scanned 800/1033 | trades=516
+  [SHORT] scanned 900/1033 | trades=579
+  [SHORT] scanned 1000/1033 | trades=640
+[LONG] Tickers found: 1033
+  [LONG] scanned 100/1033 | trades=27
+  [LONG] scanned 200/1033 | trades=39
+  [LONG] scanned 300/1033 | trades=58
+  [LONG] scanned 400/1033 | trades=77
+  [LONG] scanned 500/1033 | trades=90
+  [LONG] scanned 600/1033 | trades=99
+  [LONG] scanned 700/1033 | trades=112
+  [LONG] scanned 800/1033 | trades=118
+  [LONG] scanned 900/1033 | trades=136
+  [LONG] scanned 1000/1033 | trades=150
+
+[PHASE 2] Re-resolving exits using 5-min data...
+[5MIN] Re-resolved exits for 0/445 trades using 5-min data.
+[5MIN] Re-resolved exits for 0/156 trades using 5-min data.
+
+[PHASE 3] Computing notional/ROI P&L columns...
+[SAVE] RAW trades CSV: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv3\backtesting\eqidv3\outputs\avwap_trades_RAW_20260217_140703.csv
+
+==================== SHORT (net of slippage+comm, 5-min exits) ====================
+Total trades                  : 445
+Unique trade days             : 97
+TARGET hits                   : 0  | hit-rate  = 0.00%
+SL hits                       : 65  | sl-rate   = 14.61%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 68  | eod-rate  = 15.28%
+Avg PnL % (net, per trade)    : 0.8821%
+Sum PnL % (net, all trades)   : 392.5560%
+Avg PnL % (gross, per trade)  : 1.5305%
+Sum PnL % (gross, all trades) : 681.0649%
+Profit factor                 : 2.079
+Avg winning trade             : 2.2785%
+Avg losing trade              : -3.2204%
+Max drawdown (cumul PnL %)    : 24.7415%
+Sharpe ratio (annualized)     : 7.201
+Sortino ratio (annualized)    : 19.264
+Calmar ratio                  : 41.220
+Max consecutive wins          : 22
+Max consecutive losses        : 5
+===================================================================================
+
+==================== LONG (net of slippage+comm, 5-min exits) ====================
+Total trades                  : 156
+Unique trade days             : 76
+TARGET hits                   : 0  | hit-rate  = 0.00%
+SL hits                       : 6  | sl-rate   = 3.85%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 19  | eod-rate  = 12.18%
+Avg PnL % (net, per trade)    : 5.0048%
+Sum PnL % (net, all trades)   : 780.7421%
+Avg PnL % (gross, per trade)  : 5.6618%
+Sum PnL % (gross, all trades) : 883.2391%
+Profit factor                 : 21.257
+Avg winning trade             : 5.8941%
+Avg losing trade              : -2.2672%
+Max drawdown (cumul PnL %)    : 4.3948%
+Sharpe ratio (annualized)     : 14.835
+Sortino ratio (annualized)    : 98.562
+Calmar ratio                  : 589.054
+Max consecutive wins          : 24
+Max consecutive losses        : 2
+===================================================================================
+
+==================== COMBINED (net of slippage+comm, 5-min exits) ====================
+Total trades                  : 601
+Unique trade days             : 113
+TARGET hits                   : 0  | hit-rate  = 0.00%
+SL hits                       : 71  | sl-rate   = 11.81%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 87  | eod-rate  = 14.48%
+Avg PnL % (net, per trade)    : 1.9522%
+Sum PnL % (net, all trades)   : 1173.2981%
+Avg PnL % (gross, per trade)  : 2.6028%
+Sum PnL % (gross, all trades) : 1564.3039%
+Profit factor                 : 3.915
+Avg winning trade             : 3.3455%
+Avg losing trade              : -3.0958%
+Max drawdown (cumul PnL %)    : 12.1754%
+Sharpe ratio (annualized)     : 13.278
+Sortino ratio (annualized)    : 55.418
+Calmar ratio                  : 214.906
+Max consecutive wins          : 26
+Max consecutive losses        : 6
+===================================================================================
+
+==================== NOTIONAL P&L SUMMARY (Rs.) ====================
+SHORT notional P&L            : Rs.196,277.99
+LONG  notional P&L            : Rs.780,742.11
+TOTAL notional P&L            : Rs.977,020.11
+=============================================================
+[CHARTS] Generated 21 charts in C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv3\backtesting\eqidv3\outputs\charts\RAW/
+
+[PHASE 4] Applying ML meta-filter (p_win gating) + confidence sizing...
+
+[ML] All 601 trades gated out at threshold 0.500.
+
+    p_win distribution across 601 RAW trades:
+      min=0.2500  p10=0.2500  p25=0.2500  median=0.2500  p75=0.2500  p90=0.2500  max=0.2500
+      mean=0.2500  std=0.0000
+      Trades with p_win >= 0.500: 0/601
+
+[ML] Last-resort fallback: retrying with p75-based threshold 0.2500...
+[ML] p75 threshold 0.2500 recovered 601 trades (take rate 100.0%).
+[ML] NOTE: Effective threshold was relaxed from 0.500 → 0.250
+[SAVE] ML trades CSV: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv3\backtesting\eqidv3\outputs\avwap_trades_ML_20260217_140703.csv
+
+==================== SHORT (ML filtered, net of slippage+comm, 5-min exits) ====================
+Total trades                  : 445
+Unique trade days             : 97
+TARGET hits                   : 0  | hit-rate  = 0.00%
+SL hits                       : 65  | sl-rate   = 14.61%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 68  | eod-rate  = 15.28%
+Avg PnL % (net, per trade)    : 0.6175%
+Sum PnL % (net, all trades)   : 274.7892%
+Avg PnL % (gross, per trade)  : 1.0713%
+Sum PnL % (gross, all trades) : 476.7454%
+Profit factor                 : 2.079
+Avg winning trade             : 1.5950%
+Avg losing trade              : -2.2543%
+Max drawdown (cumul PnL %)    : 17.3191%
+Sharpe ratio (annualized)     : 7.201
+Sortino ratio (annualized)    : 19.264
+Calmar ratio                  : 41.220
+Max consecutive wins          : 21
+Max consecutive losses        : 5
+===================================================================================
+
+==================== LONG (ML filtered, net of slippage+comm, 5-min exits) ====================
+Total trades                  : 156
+Unique trade days             : 76
+TARGET hits                   : 0  | hit-rate  = 0.00%
+SL hits                       : 6  | sl-rate   = 3.85%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 19  | eod-rate  = 12.18%
+Avg PnL % (net, per trade)    : 3.5033%
+Sum PnL % (net, all trades)   : 546.5195%
+Avg PnL % (gross, per trade)  : 3.9633%
+Sum PnL % (gross, all trades) : 618.2674%
+Profit factor                 : 21.257
+Avg winning trade             : 4.1259%
+Avg losing trade              : -1.5870%
+Max drawdown (cumul PnL %)    : 3.0764%
+Sharpe ratio (annualized)     : 14.835
+Sortino ratio (annualized)    : 98.562
+Calmar ratio                  : 589.054
+Max consecutive wins          : 24
+Max consecutive losses        : 2
+===================================================================================
+
+==================== COMBINED (ML filtered, net of slippage+comm, 5-min exits) ====================
+Total trades                  : 601
+Unique trade days             : 113
+TARGET hits                   : 0  | hit-rate  = 0.00%
+SL hits                       : 71  | sl-rate   = 11.81%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 87  | eod-rate  = 14.48%
+Avg PnL % (net, per trade)    : 1.3666%
+Sum PnL % (net, all trades)   : 821.3087%
+Avg PnL % (gross, per trade)  : 1.8220%
+Sum PnL % (gross, all trades) : 1095.0128%
+Profit factor                 : 3.915
+Avg winning trade             : 2.3419%
+Avg losing trade              : -2.1670%
+Max drawdown (cumul PnL %)    : 8.5228%
+Sharpe ratio (annualized)     : 13.278
+Sortino ratio (annualized)    : 55.418
+Calmar ratio                  : 214.906
+Max consecutive wins          : 26
+Max consecutive losses        : 6
+===================================================================================
+
+==================== NOTIONAL P&L SUMMARY (Rs.) ====================
+SHORT notional P&L            : Rs.137,394.59
+LONG  notional P&L            : Rs.546,519.48
+TOTAL notional P&L            : Rs.683,914.07
+=============================================================
+[CHARTS] Generated 21 charts in C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv3\backtesting\eqidv3\outputs\charts\ML/
+
+================ ML DIAGNOSTICS (v1) ================
+Trades RAW                 : 601
+Trades after ML gate       : 601
+Take rate                  : 100.0%
+Requested threshold        : 0.500
+Effective threshold         : 0.250
+Mean p_win (taken trades)  : 0.2500
+Median p_win               : 0.2500
+Mean confidence_multiplier : 0.7000
+Min confidence_multiplier  : 0.7000
+Max confidence_multiplier  : 0.7000
+ML mode breakdown          : {'model': 601}
+=====================================================
+
+[LOG] Full console saved to: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv3\backtesting\eqidv3\outputs\avwap_ml_backtest_runner_20260217_140703.txt
+[DONE] ML backtest runner complete.
