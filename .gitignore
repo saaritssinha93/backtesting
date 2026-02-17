@@ -231,3 +231,29 @@ eqidv3/**
 # -----------------------------
 !eqidv3/outputs/
 !eqidv3/outputs/**
+
+
+# Include backtesting directory but only CSV and py files inside it
+!eqidv2/
+eqidv2/**
+!eqidv2/**/
+!eqidv2/**/*.py
+
+# Allow ALL outputs artifacts inside eqidv3/outputs
+# (png, csv, txt, parquet, anything)
+# -----------------------------
+!eqidv2/outputs/
+!eqidv2/outputs/**
+
+
+# Include backtesting directory but only CSV and py files inside it
+!eqidv1/
+eqidv1/**
+!eqidv1/**/
+!eqidv1/**/*.py
+
+# Allow ALL outputs artifacts inside eqidv3/outputs
+# (png, csv, txt, parquet, anything)
+# -----------------------------
+!eqidv1/outputs/
+!eqidv1/outputs/**
