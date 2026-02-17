@@ -22,6 +22,7 @@ Outputs:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from dataclasses import dataclass
@@ -36,7 +37,31 @@ try:
     from avwap_v11_refactored import avwap_combined_runner as base_runner
 except Exception:  # pragma: no cover
     import avwap_combined_runner as base_runner
-from ml_meta_filter import MetaFilterConfig, MetaLabelFilter, build_feature_vector
+
+
+def _import_local_ml_meta_filter() -> Tuple[Any, Any, Any]:
+    """
+    Import ml_meta_filter from the same directory as this file.
+
+    Spyder/IDE workflows can leak an older sibling project into sys.path,
+    which causes `from ml_meta_filter import ...` to resolve to the wrong file.
+    """
+    try:
+        from ml_meta_filter import MetaFilterConfig, MetaLabelFilter, build_feature_vector
+
+        return MetaFilterConfig, MetaLabelFilter, build_feature_vector
+    except ImportError:
+        here = Path(__file__).resolve().parent
+        module_path = here / "ml_meta_filter.py"
+        spec = importlib.util.spec_from_file_location("ml_meta_filter", module_path)
+        if spec is None or spec.loader is None:
+            raise
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.MetaFilterConfig, module.MetaLabelFilter, module.build_feature_vector
+
+
+MetaFilterConfig, MetaLabelFilter, build_feature_vector = _import_local_ml_meta_filter()
 
 
 # -----------------------------
