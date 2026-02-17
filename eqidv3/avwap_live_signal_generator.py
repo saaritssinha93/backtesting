@@ -84,6 +84,11 @@ try:
 except Exception:  # pragma: no cover
     MetaLabelFilter = None  # type: ignore
 
+try:
+    import eqidv3_live_combined_analyser_csv as eq_live_parity
+except Exception:  # pragma: no cover
+    eq_live_parity = None
+
 
 def _build_ml_filter(args: argparse.Namespace):
     """
@@ -869,15 +874,56 @@ def detect_latest_signals_for_ticker(
     cfg_short: StrategyConfig,
     st: Dict,
 ) -> List[LiveSignal]:
+    """Detect latest-slot signals using runner-parity static logic when available."""
     df_tail = read_parquet_tail(parquet_path, tail_rows=tail_rows, engine=cfg_long.parquet_engine)
     if df_tail.empty:
         return []
-    # prepare df_day using long cfg (indicators same)
+
+    # Source-of-truth static logic parity with avwap_combined_runner / eqidv3 live analyser.
+    if eq_live_parity is not None and hasattr(eq_live_parity, "_all_day_runner_parity_signals_for_ticker"):
+        slot_ts = last_completed_15m_slot(now_ist(), buffer_seconds=0)
+        day = slot_ts.astimezone(IST).strftime("%Y-%m-%d")
+        all_sigs = eq_live_parity._all_day_runner_parity_signals_for_ticker(ticker, df_tail)
+        out: List[LiveSignal] = []
+        for s in all_sigs:
+            ts = pd.Timestamp(s.bar_time_ist)
+            ts = ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST)
+            if ts != slot_ts:
+                continue
+
+            side = str(s.side).upper()
+            if _count_today(st, day, ticker, side) >= cfg_long.max_trades_per_ticker_per_day:
+                continue
+
+            d = dict(getattr(s, "diagnostics", {}) or {})
+            out.append(
+                LiveSignal(
+                    ticker=ticker,
+                    side=side,
+                    day=day,
+                    bar_time_ist=ts.strftime("%Y-%m-%d %H:%M:%S%z"),
+                    setup=str(s.setup),
+                    impulse=str(d.get("impulse_type", "")),
+                    entry=float(s.entry_price),
+                    sl=float(s.sl_price),
+                    target=float(s.target_price),
+                    quality_score=float(s.score),
+                    adx=_safe_float(d.get("adx", np.nan)),
+                    rsi=_safe_float(d.get("rsi", np.nan)),
+                    k=_safe_float(d.get("stochk", np.nan)),
+                    avwap_dist_atr=_safe_float(d.get("avwap_dist_atr", np.nan)),
+                    ema_gap_atr=_safe_float(d.get("ema_gap_atr", np.nan)),
+                    atr_pct=_safe_float(d.get("atr_pct", np.nan)),
+                )
+            )
+        return out
+
+    # Fallback: legacy local static implementation.
     df_day, day = _prepare_today_df(df_tail, cfg_long)
     if df_day.empty or not day:
         return []
 
-    slot_ts = last_completed_15m_slot(now_ist(), buffer_seconds=0)  # buffer is handled by scheduler loop
+    slot_ts = last_completed_15m_slot(now_ist(), buffer_seconds=0)
     entry_idx = _find_entry_idx_for_slot(df_day, slot_ts)
     if entry_idx is None:
         return []

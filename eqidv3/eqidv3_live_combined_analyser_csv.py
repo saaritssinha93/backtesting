@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+ # -*- coding: utf-8 -*-
 """
 EQIDV1 — LIVE 15m Signal Scanner (AVWAP v11 combined: LONG + SHORT)
 ====================================================================
@@ -24,7 +24,6 @@ Core: backtesting/eqidv3/trading_data_continous_run_historical_alltf_v3_parquet_
 from __future__ import annotations
 
 import argparse
-from copy import deepcopy
 import csv
 import hashlib
 import os
@@ -49,6 +48,14 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
+from avwap_v11_refactored.avwap_common import (
+    default_short_config,
+    default_long_config,
+    prepare_indicators as ref_prepare_indicators,
+    compute_day_avwap as ref_compute_day_avwap,
+)
+from avwap_v11_refactored.avwap_short_strategy import scan_one_day as scan_short_one_day
+from avwap_v11_refactored.avwap_long_strategy import scan_one_day as scan_long_one_day
 
 
 # =============================================================================
@@ -124,6 +131,9 @@ UPDATE_15M_BEFORE_CHECK = False
 
 # How many tail rows to load per ticker parquet
 TAIL_ROWS = 260
+
+# Keep parity with avwap_v11_refactored StrategyConfig defaults.
+MIN_BARS_LEFT_AFTER_ENTRY = 4
 
 # =============================================================================
 # LATEST SLOT (15m) SCAN BEHAVIOR
@@ -219,6 +229,9 @@ LONG_AVWAP_REJ_CONSEC_CLOSES = 2
 LONG_AVWAP_REJ_DIST_ATR_MULT = 0.25
 LONG_AVWAP_REJ_MODE = "any"
 
+# Keep parity with avwap_v11_refactored default_long_config().
+LONG_ENABLE_SETUP_A_PULLBACK_C2_BREAK = False
+
 LONG_CAP_PER_TICKER_PER_DAY = 1
 
 # =============================================================================
@@ -265,6 +278,28 @@ def _buffer(price: float) -> float:
 def in_session(ts: pd.Timestamp) -> bool:
     t = ts.tz_convert(IST).time()
     return (t >= SESSION_START) and (t <= SESSION_END)
+
+
+def _has_min_bars_left_in_session(entry_ts: pd.Timestamp, min_bars_left: int = MIN_BARS_LEFT_AFTER_ENTRY) -> bool:
+    """Mirror backtest guard: require minimum future 15m bars after entry candle."""
+    if min_bars_left <= 0:
+        return True
+
+    ts = pd.Timestamp(entry_ts)
+    ts = ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST)
+
+    session_end_dt = ts.replace(
+        hour=SESSION_END.hour,
+        minute=SESSION_END.minute,
+        second=SESSION_END.second,
+        microsecond=0,
+    )
+    if ts >= session_end_dt:
+        return False
+
+    mins_left = (session_end_dt - ts).total_seconds() / 60.0
+    bars_left = int(mins_left // 15)
+    return bars_left >= int(min_bars_left)
 
 
 def _in_windows(ts: pd.Timestamp, windows: List[Tuple[dtime, dtime]], enabled: bool) -> bool:
@@ -897,301 +932,106 @@ def _check_common_filters_long(df_day: pd.DataFrame, i: int) -> Tuple[bool, Dict
 # =============================================================================
 # MAIN SIGNAL DETECTION (per-ticker, both sides)
 # =============================================================================
+def _all_day_runner_parity_signals_for_ticker(ticker: str, df_raw: pd.DataFrame) -> List[LiveSignal]:
+    """Generate *today* signals using exact avwap_v11_refactored scan flow.
+
+    Important parity detail:
+    indicators are prepared on multi-day session-filtered data first,
+    then today's slice is scanned (same pattern as scan_all_days_for_ticker).
+    """
+    if df_raw is None or df_raw.empty:
+        return []
+
+    df = normalize_dates(df_raw)
+    if df.empty:
+        return []
+
+    for c in ["open", "high", "low", "close"]:
+        if c not in df.columns:
+            return []
+
+    # Keep all available days in session for indicator warmup parity.
+    df = df[df["date"].apply(in_session)].copy()
+    if df.empty:
+        return []
+
+    df = df.sort_values("date").reset_index(drop=True)
+    df = ref_prepare_indicators(df, default_short_config())
+
+    target_day = df["day"].max()
+    df_day = df[df["day"] == target_day].copy().reset_index(drop=True)
+    if df_day.empty or len(df_day) < 7:
+        return []
+
+    if MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(MAX_BARS_PER_TICKER_TODAY):
+        df_day = df_day.iloc[-int(MAX_BARS_PER_TICKER_TODAY):].reset_index(drop=True)
+
+    df_day["AVWAP"] = ref_compute_day_avwap(df_day)
+
+    day_str = str(target_day)
+    short_trades = scan_short_one_day(ticker, df_day.copy(), day_str, default_short_config())
+    long_trades = scan_long_one_day(ticker, df_day.copy(), day_str, default_long_config())
+
+    signals: List[LiveSignal] = []
+    for tr in (short_trades + long_trades):
+        diag = {
+            "impulse_type": tr.impulse_type,
+            "adx": tr.adx_signal,
+            "rsi": tr.rsi_signal,
+            "stochk": tr.stochk_signal,
+            "atr_pct": tr.atr_pct_signal,
+        }
+        signals.append(
+            LiveSignal(
+                ticker=tr.ticker,
+                side=tr.side,
+                bar_time_ist=pd.Timestamp(tr.entry_time_ist),
+                setup=tr.setup,
+                entry_price=float(tr.entry_price),
+                sl_price=float(tr.sl_price),
+                target_price=float(tr.target_price),
+                score=float(tr.quality_score),
+                diagnostics=diag,
+            )
+        )
+
+    signals.sort(key=lambda x: (pd.Timestamp(x.bar_time_ist), x.side, x.setup))
+    return signals
+
+
 def _latest_entry_signals_for_ticker(
-    ticker: str, df_day: pd.DataFrame, state: Dict[str, Any]
+    ticker: str, df_raw: pd.DataFrame, state: Dict[str, Any]
 ) -> Tuple[List[LiveSignal], List[Dict[str, Any]]]:
+    """Latest-candle signals selected from the runner-parity day scan."""
+    _ = state  # retained for backward-compatible call signature
+
     signals: List[LiveSignal] = []
     checks: List[Dict[str, Any]] = []
 
-    if df_day.empty or len(df_day) < 7:
+    df_day_for_ts = _prepare_today_df(normalize_dates(df_raw))
+    if df_day_for_ts.empty:
         return signals, checks
 
-    entry_idx = len(df_day) - 1
-    entry_ts = df_day.at[entry_idx, "date"]
-    today_str = str(entry_ts.tz_convert(IST).date())
+    latest_ts = pd.Timestamp(df_day_for_ts.iloc[-1]["date"])
+    latest_ts = latest_ts.tz_localize(IST) if latest_ts.tzinfo is None else latest_ts.tz_convert(IST)
 
-    # ---- SHORT side ----
-    short_window_ok = _in_windows(entry_ts, SHORT_SIGNAL_WINDOWS, SHORT_USE_TIME_WINDOWS)
-    short_allowed = allow_signal_today(state, ticker, "SHORT", today_str, SHORT_CAP_PER_TICKER_PER_DAY)
-    short_triggered = False
-    short_setup = ""
-    short_entry_price = np.nan
-    short_diag: Dict[str, Any] = {"side": "SHORT", "window_ok": short_window_ok, "cap_ok": short_allowed}
+    all_day = _all_day_runner_parity_signals_for_ticker(ticker, df_raw)
+    if not all_day:
+        checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": False})
+        checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": False})
+        return signals, checks
 
-    if short_window_ok and short_allowed:
-        candidates_i = list(range(max(2, entry_idx - 6), entry_idx))
-        for i in candidates_i:
-            impulse_type = classify_red_impulse(df_day.iloc[i])
-            if impulse_type == "":
-                continue
-            if not _in_windows(df_day.at[i, "date"], SHORT_SIGNAL_WINDOWS, SHORT_USE_TIME_WINDOWS):
-                continue
+    found = {"SHORT": False, "LONG": False}
+    for sig in all_day:
+        sig_ts = pd.Timestamp(sig.bar_time_ist)
+        sig_ts = sig_ts.tz_localize(IST) if sig_ts.tzinfo is None else sig_ts.tz_convert(IST)
+        if sig_ts != latest_ts:
+            continue
+        found[sig.side] = True
+        signals.append(sig)
 
-            common_ok, common_dbg = _check_common_filters_short(df_day, i)
-            if not common_ok:
-                continue
-
-            # MODERATE: break impulse low on next candle
-            if impulse_type == "MODERATE" and i + 1 == entry_idx:
-                low1 = _safe_float(df_day.at[i, "low"])
-                buf = _buffer(low1)
-                trigger = low1 - buf
-                low_entry = _safe_float(df_day.at[entry_idx, "low"])
-                close_entry = _safe_float(df_day.at[entry_idx, "close"])
-
-                close_confirm_ok = (not REQUIRE_CLOSE_CONFIRM) or (np.isfinite(close_entry) and np.isfinite(trigger) and close_entry < trigger)
-
-                if np.isfinite(low_entry) and np.isfinite(trigger) and (low_entry < trigger) and close_confirm_ok:
-                    rej_ok, rej_dbg = _avwap_rejection_short(df_day, i, entry_idx)
-                    if not rej_ok:
-                        continue
-
-                    short_triggered = True
-                    short_setup = "A_MOD_BREAK_C1_LOW"
-                    short_entry_price = float(trigger)
-                    score = _score_signal_short(df_day, i, entry_idx)
-                    sl = short_entry_price * (1.0 + SHORT_STOP_PCT)
-                    tgt = short_entry_price * (1.0 - SHORT_TARGET_PCT)
-                    diag = {"impulse_idx": i, "impulse_type": impulse_type, **common_dbg, **rej_dbg, "trigger": trigger}
-                    signals.append(LiveSignal(ticker, "SHORT", entry_ts, short_setup, short_entry_price, sl, tgt, score, diag))
-                    break
-
-            # MODERATE: pullback + break C2 low
-            if impulse_type == "MODERATE" and i + 2 == entry_idx:
-                c2 = df_day.iloc[i + 1]
-                c2o, c2c = _safe_float(c2["open"]), _safe_float(c2["close"])
-                c2_body = abs(c2c - c2o)
-                c2_atr = _safe_float(c2.get("ATR15", df_day.at[i, "ATR15"]))
-                c2_av = _safe_float(c2.get("AVWAP", np.nan))
-
-                c2_small_green = (np.isfinite(c2c) and np.isfinite(c2o) and c2c > c2o
-                                  and np.isfinite(c2_atr) and c2_atr > 0 and (c2_body <= SHORT_SMALL_GREEN_MAX_ATR * c2_atr))
-                c2_below_avwap = np.isfinite(c2_av) and np.isfinite(c2c) and (c2c < c2_av)
-
-                if c2_small_green and c2_below_avwap:
-                    low2 = _safe_float(c2["low"])
-                    buf = _buffer(low2)
-                    trigger = low2 - buf
-                    low_entry = _safe_float(df_day.at[entry_idx, "low"])
-                    close_entry = _safe_float(df_day.at[entry_idx, "close"])
-
-                    close_confirm_ok = (not REQUIRE_CLOSE_CONFIRM) or (np.isfinite(close_entry) and np.isfinite(trigger) and close_entry < trigger)
-
-                    if np.isfinite(low_entry) and np.isfinite(trigger) and (low_entry < trigger) and close_confirm_ok:
-                        rej_ok, rej_dbg = _avwap_rejection_short(df_day, i, entry_idx)
-                        if not rej_ok:
-                            continue
-
-                        short_triggered = True
-                        short_setup = "A_PULLBACK_C2_THEN_BREAK_C2_LOW"
-                        short_entry_price = float(trigger)
-                        score = _score_signal_short(df_day, i, entry_idx)
-                        sl = short_entry_price * (1.0 + SHORT_STOP_PCT)
-                        tgt = short_entry_price * (1.0 - SHORT_TARGET_PCT)
-                        diag = {"impulse_idx": i, "impulse_type": impulse_type, **common_dbg, **rej_dbg, "trigger": trigger}
-                        signals.append(LiveSignal(ticker, "SHORT", entry_ts, short_setup, short_entry_price, sl, tgt, score, diag))
-                        break
-
-            # HUGE: failed bounce breakdown
-            if impulse_type == "HUGE":
-                bounce_end = min(i + 3, entry_idx - 1)
-                if bounce_end <= i:
-                    continue
-                bounce = df_day.iloc[i + 1: bounce_end + 1].copy()
-                if bounce.empty:
-                    continue
-
-                bounce_atr = pd.to_numeric(bounce.get("ATR15", np.nan), errors="coerce").fillna(_safe_float(df_day.at[i, "ATR15"]))
-                bounce_body = (pd.to_numeric(bounce["close"], errors="coerce") - pd.to_numeric(bounce["open"], errors="coerce")).abs()
-                bounce_green = pd.to_numeric(bounce["close"], errors="coerce") > pd.to_numeric(bounce["open"], errors="coerce")
-                bounce_small = bounce_body <= (SHORT_SMALL_GREEN_MAX_ATR * bounce_atr)
-
-                if not bool((bounce_green & bounce_small).fillna(False).any()):
-                    continue
-
-                mid_body = (_safe_float(df_day.at[i, "open"]) + _safe_float(df_day.at[i, "close"])) / 2.0
-                closes = pd.to_numeric(bounce["close"], errors="coerce")
-                avwaps = pd.to_numeric(bounce["AVWAP"], errors="coerce")
-                fail_avwap = bool((closes < avwaps).fillna(False).all())
-                highs = pd.to_numeric(bounce["high"], errors="coerce")
-                fail_mid = bool((highs < mid_body).fillna(False).all())
-
-                if not (fail_avwap or fail_mid):
-                    continue
-
-                bounce_low = float(pd.to_numeric(bounce["low"], errors="coerce").min())
-                buf = _buffer(bounce_low)
-                trigger = bounce_low - buf
-
-                low_entry = _safe_float(df_day.at[entry_idx, "low"])
-                close_entry = _safe_float(df_day.at[entry_idx, "close"])
-                av_entry = _safe_float(df_day.at[entry_idx, "AVWAP"])
-
-                if np.isfinite(av_entry) and np.isfinite(close_entry) and (close_entry >= av_entry):
-                    continue
-
-                close_confirm_ok = (not REQUIRE_CLOSE_CONFIRM) or (np.isfinite(close_entry) and np.isfinite(trigger) and close_entry < trigger)
-
-                if np.isfinite(low_entry) and np.isfinite(trigger) and (low_entry < trigger) and close_confirm_ok:
-                    rej_ok, rej_dbg = _avwap_rejection_short(df_day, i, entry_idx)
-                    if not rej_ok:
-                        continue
-
-                    short_triggered = True
-                    short_setup = "B_HUGE_RED_FAILED_BOUNCE"
-                    short_entry_price = float(trigger)
-                    score = _score_signal_short(df_day, i, entry_idx)
-                    sl = short_entry_price * (1.0 + SHORT_STOP_PCT)
-                    tgt = short_entry_price * (1.0 - SHORT_TARGET_PCT)
-                    diag = {"impulse_idx": i, "impulse_type": impulse_type, **common_dbg, **rej_dbg, "trigger": trigger}
-                    signals.append(LiveSignal(ticker, "SHORT", entry_ts, short_setup, short_entry_price, sl, tgt, score, diag))
-                    break
-
-    short_diag.update({"signal": bool(short_triggered), "setup": short_setup,
-                       "entry_price": float(short_entry_price) if np.isfinite(short_entry_price) else np.nan})
-    checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": entry_ts, **short_diag})
-
-    # ---- LONG side ----
-    long_window_ok = _in_windows(entry_ts, LONG_SIGNAL_WINDOWS, LONG_USE_TIME_WINDOWS)
-    long_allowed = allow_signal_today(state, ticker, "LONG", today_str, LONG_CAP_PER_TICKER_PER_DAY)
-    long_triggered = False
-    long_setup = ""
-    long_entry_price = np.nan
-    long_diag: Dict[str, Any] = {"side": "LONG", "window_ok": long_window_ok, "cap_ok": long_allowed}
-
-    if long_window_ok and long_allowed:
-        candidates_i = list(range(max(2, entry_idx - 6), entry_idx))
-        for i in candidates_i:
-            impulse_type = classify_green_impulse(df_day.iloc[i])
-            if impulse_type == "":
-                continue
-            if not _in_windows(df_day.at[i, "date"], LONG_SIGNAL_WINDOWS, LONG_USE_TIME_WINDOWS):
-                continue
-
-            common_ok, common_dbg = _check_common_filters_long(df_day, i)
-            if not common_ok:
-                continue
-
-            # MODERATE: break impulse high on next candle
-            if impulse_type == "MODERATE" and i + 1 == entry_idx:
-                high1 = _safe_float(df_day.at[i, "high"])
-                buf = _buffer(high1)
-                trigger = high1 + buf
-                high_entry = _safe_float(df_day.at[entry_idx, "high"])
-                close_entry = _safe_float(df_day.at[entry_idx, "close"])
-
-                close_confirm_ok = (not REQUIRE_CLOSE_CONFIRM) or (np.isfinite(close_entry) and np.isfinite(trigger) and close_entry > trigger)
-
-                if np.isfinite(high_entry) and np.isfinite(trigger) and (high_entry > trigger) and close_confirm_ok:
-                    rej_ok, rej_dbg = _avwap_rejection_long(df_day, i, entry_idx)
-                    if not rej_ok:
-                        continue
-
-                    long_triggered = True
-                    long_setup = "A_MOD_BREAK_C1_HIGH"
-                    long_entry_price = float(trigger)
-                    score = _score_signal_long(df_day, i, entry_idx)
-                    sl = long_entry_price * (1.0 - LONG_STOP_PCT)
-                    tgt = long_entry_price * (1.0 + LONG_TARGET_PCT)
-                    diag = {"impulse_idx": i, "impulse_type": impulse_type, **common_dbg, **rej_dbg, "trigger": trigger}
-                    signals.append(LiveSignal(ticker, "LONG", entry_ts, long_setup, long_entry_price, sl, tgt, score, diag))
-                    break
-
-            # MODERATE: small red pullback + break C2 high
-            if impulse_type == "MODERATE" and i + 2 == entry_idx:
-                c2 = df_day.iloc[i + 1]
-                c2o, c2c = _safe_float(c2["open"]), _safe_float(c2["close"])
-                c2_body = abs(c2c - c2o)
-                c2_atr = _safe_float(c2.get("ATR15", df_day.at[i, "ATR15"]))
-                c2_av = _safe_float(c2.get("AVWAP", np.nan))
-
-                c2_small_red = (np.isfinite(c2c) and np.isfinite(c2o) and c2c < c2o
-                                and np.isfinite(c2_atr) and c2_atr > 0 and (c2_body <= LONG_SMALL_RED_MAX_ATR * c2_atr))
-                c2_above_avwap = np.isfinite(c2_av) and np.isfinite(c2c) and (c2c > c2_av)
-
-                if c2_small_red and c2_above_avwap:
-                    high2 = _safe_float(c2["high"])
-                    buf = _buffer(high2)
-                    trigger = high2 + buf
-                    high_entry = _safe_float(df_day.at[entry_idx, "high"])
-                    close_entry = _safe_float(df_day.at[entry_idx, "close"])
-
-                    close_confirm_ok = (not REQUIRE_CLOSE_CONFIRM) or (np.isfinite(close_entry) and np.isfinite(trigger) and close_entry > trigger)
-
-                    if np.isfinite(high_entry) and np.isfinite(trigger) and (high_entry > trigger) and close_confirm_ok:
-                        rej_ok, rej_dbg = _avwap_rejection_long(df_day, i, entry_idx)
-                        if not rej_ok:
-                            continue
-
-                        long_triggered = True
-                        long_setup = "A_PULLBACK_C2_THEN_BREAK_C2_HIGH"
-                        long_entry_price = float(trigger)
-                        score = _score_signal_long(df_day, i, entry_idx)
-                        sl = long_entry_price * (1.0 - LONG_STOP_PCT)
-                        tgt = long_entry_price * (1.0 + LONG_TARGET_PCT)
-                        diag = {"impulse_idx": i, "impulse_type": impulse_type, **common_dbg, **rej_dbg, "trigger": trigger}
-                        signals.append(LiveSignal(ticker, "LONG", entry_ts, long_setup, long_entry_price, sl, tgt, score, diag))
-                        break
-
-            # HUGE: failed retrace breakout
-            if impulse_type == "HUGE":
-                bounce_end = min(i + 3, entry_idx - 1)
-                if bounce_end <= i:
-                    continue
-                bounce = df_day.iloc[i + 1: bounce_end + 1].copy()
-                if bounce.empty:
-                    continue
-
-                bounce_atr = pd.to_numeric(bounce.get("ATR15", np.nan), errors="coerce").fillna(_safe_float(df_day.at[i, "ATR15"]))
-                bounce_body = (pd.to_numeric(bounce["close"], errors="coerce") - pd.to_numeric(bounce["open"], errors="coerce")).abs()
-                bounce_red = pd.to_numeric(bounce["close"], errors="coerce") < pd.to_numeric(bounce["open"], errors="coerce")
-                bounce_small = bounce_body <= (LONG_SMALL_RED_MAX_ATR * bounce_atr)
-
-                if not bool((bounce_red & bounce_small).fillna(False).any()):
-                    continue
-
-                mid_body = (_safe_float(df_day.at[i, "open"]) + _safe_float(df_day.at[i, "close"])) / 2.0
-                closes = pd.to_numeric(bounce["close"], errors="coerce")
-                avwaps = pd.to_numeric(bounce["AVWAP"], errors="coerce")
-                fail_avwap = bool((closes > avwaps).fillna(False).all())
-                lows = pd.to_numeric(bounce["low"], errors="coerce")
-                fail_mid = bool((lows > mid_body).fillna(False).all())
-
-                if not (fail_avwap or fail_mid):
-                    continue
-
-                bounce_high = float(pd.to_numeric(bounce["high"], errors="coerce").max())
-                buf = _buffer(bounce_high)
-                trigger = bounce_high + buf
-
-                high_entry = _safe_float(df_day.at[entry_idx, "high"])
-                close_entry = _safe_float(df_day.at[entry_idx, "close"])
-                av_entry = _safe_float(df_day.at[entry_idx, "AVWAP"])
-
-                if np.isfinite(av_entry) and np.isfinite(close_entry) and (close_entry <= av_entry):
-                    continue
-
-                close_confirm_ok = (not REQUIRE_CLOSE_CONFIRM) or (np.isfinite(close_entry) and np.isfinite(trigger) and close_entry > trigger)
-
-                if np.isfinite(high_entry) and np.isfinite(trigger) and (high_entry > trigger) and close_confirm_ok:
-                    rej_ok, rej_dbg = _avwap_rejection_long(df_day, i, entry_idx)
-                    if not rej_ok:
-                        continue
-
-                    long_triggered = True
-                    long_setup = "B_HUGE_GREEN_FAILED_RETRACE"
-                    long_entry_price = float(trigger)
-                    score = _score_signal_long(df_day, i, entry_idx)
-                    sl = long_entry_price * (1.0 - LONG_STOP_PCT)
-                    tgt = long_entry_price * (1.0 + LONG_TARGET_PCT)
-                    diag = {"impulse_idx": i, "impulse_type": impulse_type, **common_dbg, **rej_dbg, "trigger": trigger}
-                    signals.append(LiveSignal(ticker, "LONG", entry_ts, long_setup, long_entry_price, sl, tgt, score, diag))
-                    break
-
-    long_diag.update({"signal": bool(long_triggered), "setup": long_setup,
-                      "entry_price": float(long_entry_price) if np.isfinite(long_entry_price) else np.nan})
-    checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": entry_ts, **long_diag})
-    # NOTE: cap consumption is handled by the live runner when it actually writes a new signal.
+    checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": found["SHORT"]})
+    checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": found["LONG"]})
     return signals, checks
 
 
@@ -1397,7 +1237,7 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
     if not tickers:
         return pd.DataFrame(), pd.DataFrame()
 
-    state = _load_state()
+    state: Dict[str, Any] = {}
     all_checks: List[Dict[str, Any]] = []
     all_signals: List[Dict[str, Any]] = []
 
@@ -1405,14 +1245,10 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
         path = os.path.join(DIR_15M, f"{t}{END_15M}")
         try:
             df_raw = read_parquet_tail(path, n=TAIL_ROWS)
-            df_raw = normalize_dates(df_raw)
-            df_day = _prepare_today_df(df_raw)
-            if df_day.empty:
+            signals, checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state)
+            if not checks_rows and not signals:
                 all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": pd.NaT, "no_data": True})
                 all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": pd.NaT, "no_data": True})
-                continue
-
-            signals, checks_rows = _latest_entry_signals_for_ticker(t, df_day, state)
             all_checks.extend(checks_rows)
 
             for s in signals:
@@ -1429,8 +1265,6 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         if idx % 100 == 0:
             print(f"  scanned {idx}/{len(tickers)} | signals_so_far={len(all_signals)}")
-
-    _save_state(state)
 
     checks_df = pd.DataFrame(all_checks)
     signals_df = pd.DataFrame(all_signals)
@@ -1523,8 +1357,7 @@ def _scan_latest_slot(
 
     print(f"[SCAN] now={dt.strftime('%H:%M:%S')} slot_end={slot_end.strftime('%H:%M')} tickers={len(tickers)}", flush=True)
 
-    state_real = _load_state()
-    tmp_state = deepcopy(state_real)  # avoid consuming caps unless we write
+    tmp_state: Dict[str, Any] = {}
     all_signals: List[Dict[str, Any]] = []
     stale = 0
     scanned = 0
@@ -1533,12 +1366,9 @@ def _scan_latest_slot(
         path = os.path.join(DIR_15M, f"{t}{END_15M}")
         try:
             df_raw = read_parquet_tail(path, n=TAIL_ROWS)
-            df_raw = normalize_dates(df_raw)
-            df_day = _prepare_today_df(df_raw)
+            df_day = _prepare_today_df(normalize_dates(df_raw))
             if df_day.empty:
                 continue
-            if MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(MAX_BARS_PER_TICKER_TODAY):
-                df_day = df_day.iloc[-int(MAX_BARS_PER_TICKER_TODAY):].reset_index(drop=True)
 
             last_ts = pd.Timestamp(df_day["date"].iloc[-1])
             last_ts = last_ts.tz_convert(IST) if last_ts.tzinfo else last_ts.tz_localize(IST)
@@ -1550,7 +1380,7 @@ def _scan_latest_slot(
                     print(f"  [LAG] {t} last={last_ts.strftime('%H:%M')} expected={target_slot_end.strftime('%H:%M')}", flush=True)
                 continue
 
-            sigs, _checks = _latest_entry_signals_for_ticker(t, df_day, tmp_state)
+            sigs, _checks = _latest_entry_signals_for_ticker(t, df_raw, tmp_state)
             scanned += 1
             for s in sigs:
                 all_signals.append({
@@ -1574,21 +1404,6 @@ def _scan_latest_slot(
 
     # Write CSV (always prints its own log)
     written = _write_signals_csv(signals_df, strategy="eqidv3")
-
-    # Commit cap consumption only for signals we actually wrote
-    if written > 0 and (not signals_df.empty):
-        today_str = now_ist().strftime("%Y-%m-%d")
-        for _, row in signals_df.iterrows():
-            ticker = str(row.get("ticker", "")).upper()
-            side = str(row.get("side", "")).upper()
-            bar_time = str(row.get("bar_time_ist", ""))
-            setup = str(row.get("setup", ""))
-            sid = _generate_signal_id("eqidv3", ticker, side, bar_time, setup)
-            # Only mark those which were newly written (exists now in csv)
-            # We approximate by marking all generated this run when written>0.
-            mark_signal(state_real, ticker, side, today_str)
-
-        _save_state(state_real)
 
     print(f"[DONE] slot_end={slot_end.strftime('%H:%M')} scanned={scanned} stale={stale} signals={len(signals_df)} written={written}", flush=True)
 

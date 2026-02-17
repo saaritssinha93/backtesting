@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-eqidv3_eod_scheduler_for_15mins_data.py
+eqidv1_eod_scheduler_for_15mins_data.py
 ======================================
 
 Every 15 minutes during market hours:
-  1) Update eqidv3 15m parquet (core.run_mode(mode="15min"...))
-  2) Scan ONLY the latest 15m bar for signals (eqidv3_live_combined_analyser.run_one_scan)
+  1) Update eqidv1 15m parquet (core.run_mode(mode="15min"...))
+  2) Scan ONLY the latest 15m bar for signals (eqidv1_live_combined_analyser.run_one_scan)
   3) Print a compact result + let analyser write parquet/CSV as usual
 
 Key fix:
@@ -26,12 +26,12 @@ from kiteconnect import KiteConnect
 # Paths / imports
 # -----------------------------------------------------------------------------
 _ROOT = Path(__file__).resolve().parent
-_eqidv3 = _ROOT / "backtesting" / "eqidv3"
-if str(_eqidv3) not in sys.path:
-    sys.path.insert(0, str(_eqidv3))
+_eqidv1 = _ROOT / "backtesting" / "eqidv1"
+if str(_eqidv1) not in sys.path:
+    sys.path.insert(0, str(_eqidv1))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
-import eqidv3_live_combined_analyser as analyser  # noqa: E402
+import eqidv1_live_combined_analyser as analyser  # noqa: E402
 
 
 # -----------------------------------------------------------------------------
@@ -52,7 +52,7 @@ EXTRA_TRADING_DAYS: set[ddate] = set()
 API_KEY_FILE = _ROOT / "api_key.txt"
 ACCESS_TOKEN_FILE = _ROOT / "access_token.txt"
 
-REPORT_DIR = _ROOT / "reports" / "eqidv3_reports"
+REPORT_DIR = _ROOT / "reports" / "eqidv1_reports"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -171,7 +171,7 @@ def main() -> None:
     except Exception:
         holidays = set()
 
-    print("[LIVE] eqidv3 15m FETCH + LATEST-SIGNAL scheduler started.")
+    print("[LIVE] eqidv1 15m FETCH + LATEST-SIGNAL scheduler started.")
     print(f"       Market: {MARKET_OPEN.strftime('%H:%M')}–{MARKET_CLOSE.strftime('%H:%M')} IST | step={STEP_MIN}m")
     print(f"       Buffer after boundary: {BOUNDARY_BUFFER_SEC}s | exits at {SESSION_END.strftime('%H:%M')} IST")
 
