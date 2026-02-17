@@ -132,28 +132,25 @@ def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
             if live.MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(live.MAX_BARS_PER_TICKER_TODAY):
                 df_day = df_day.iloc[-int(live.MAX_BARS_PER_TICKER_TODAY):].reset_index(drop=True)
 
-            # Evaluate each row as the potential "entry candle" by slicing upto that row.
-            for entry_idx in range(6, len(df_day)):
-                df_upto = df_day.iloc[: entry_idx + 1].copy()
-                sigs, _checks = live._latest_entry_signals_for_ticker(t, df_upto, tmp_state)
-                if not sigs:
+            sigs = live._all_day_runner_parity_signals_for_ticker(t, df_day)
+            for s in sigs:
+                today_str = str(pd.Timestamp(s.bar_time_ist).tz_convert(live.IST).date())
+                cap = live.SHORT_CAP_PER_TICKER_PER_DAY if s.side == "SHORT" else live.LONG_CAP_PER_TICKER_PER_DAY
+                if not live.allow_signal_today(tmp_state, s.ticker, s.side, today_str, cap):
                     continue
 
-                today_str = str(df_upto.iloc[-1]["date"].tz_convert(live.IST).date())
-                for s in sigs:
-                    all_signals.append({
-                        "ticker": s.ticker,
-                        "side": s.side,
-                        "bar_time_ist": s.bar_time_ist,
-                        "setup": s.setup,
-                        "entry_price": s.entry_price,
-                        "sl_price": s.sl_price,
-                        "target_price": s.target_price,
-                        "score": s.score,
-                        "diagnostics_json": json.dumps(s.diagnostics, default=str),
-                    })
-                    # Consume side/ticker/day cap for subsequent candles in same run.
-                    live.mark_signal(tmp_state, s.ticker, s.side, today_str)
+                all_signals.append({
+                    "ticker": s.ticker,
+                    "side": s.side,
+                    "bar_time_ist": s.bar_time_ist,
+                    "setup": s.setup,
+                    "entry_price": s.entry_price,
+                    "sl_price": s.sl_price,
+                    "target_price": s.target_price,
+                    "score": s.score,
+                    "diagnostics_json": json.dumps(s.diagnostics, default=str),
+                })
+                live.mark_signal(tmp_state, s.ticker, s.side, today_str)
 
             scanned += 1
             if verbose and scanned % 25 == 0:
