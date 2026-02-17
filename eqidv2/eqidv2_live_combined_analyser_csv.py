@@ -125,6 +125,9 @@ UPDATE_15M_BEFORE_CHECK = False
 # How many tail rows to load per ticker parquet
 TAIL_ROWS = 260
 
+# Keep parity with avwap_v11_refactored StrategyConfig defaults.
+MIN_BARS_LEFT_AFTER_ENTRY = 4
+
 # =============================================================================
 # LATEST SLOT (15m) SCAN BEHAVIOR
 # =============================================================================
@@ -219,6 +222,9 @@ LONG_AVWAP_REJ_CONSEC_CLOSES = 2
 LONG_AVWAP_REJ_DIST_ATR_MULT = 0.25
 LONG_AVWAP_REJ_MODE = "any"
 
+# Keep parity with avwap_v11_refactored default_long_config().
+LONG_ENABLE_SETUP_A_PULLBACK_C2_BREAK = False
+
 LONG_CAP_PER_TICKER_PER_DAY = 1
 
 # =============================================================================
@@ -265,6 +271,28 @@ def _buffer(price: float) -> float:
 def in_session(ts: pd.Timestamp) -> bool:
     t = ts.tz_convert(IST).time()
     return (t >= SESSION_START) and (t <= SESSION_END)
+
+
+def _has_min_bars_left_in_session(entry_ts: pd.Timestamp, min_bars_left: int = MIN_BARS_LEFT_AFTER_ENTRY) -> bool:
+    """Mirror backtest guard: require minimum future 15m bars after entry candle."""
+    if min_bars_left <= 0:
+        return True
+
+    ts = pd.Timestamp(entry_ts)
+    ts = ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST)
+
+    session_end_dt = ts.replace(
+        hour=SESSION_END.hour,
+        minute=SESSION_END.minute,
+        second=SESSION_END.second,
+        microsecond=0,
+    )
+    if ts >= session_end_dt:
+        return False
+
+    mins_left = (session_end_dt - ts).total_seconds() / 60.0
+    bars_left = int(mins_left // 15)
+    return bars_left >= int(min_bars_left)
 
 
 def _in_windows(ts: pd.Timestamp, windows: List[Tuple[dtime, dtime]], enabled: bool) -> bool:
@@ -909,6 +937,7 @@ def _latest_entry_signals_for_ticker(
     entry_idx = len(df_day) - 1
     entry_ts = df_day.at[entry_idx, "date"]
     today_str = str(entry_ts.tz_convert(IST).date())
+    bars_left_ok = _has_min_bars_left_in_session(entry_ts)
 
     # ---- SHORT side ----
     short_window_ok = _in_windows(entry_ts, SHORT_SIGNAL_WINDOWS, SHORT_USE_TIME_WINDOWS)
@@ -916,9 +945,14 @@ def _latest_entry_signals_for_ticker(
     short_triggered = False
     short_setup = ""
     short_entry_price = np.nan
-    short_diag: Dict[str, Any] = {"side": "SHORT", "window_ok": short_window_ok, "cap_ok": short_allowed}
+    short_diag: Dict[str, Any] = {
+        "side": "SHORT",
+        "window_ok": short_window_ok,
+        "cap_ok": short_allowed,
+        "bars_left_ok": bars_left_ok,
+    }
 
-    if short_window_ok and short_allowed:
+    if short_window_ok and short_allowed and bars_left_ok:
         candidates_i = list(range(max(2, entry_idx - 6), entry_idx))
         for i in candidates_i:
             impulse_type = classify_red_impulse(df_day.iloc[i])
@@ -1057,9 +1091,14 @@ def _latest_entry_signals_for_ticker(
     long_triggered = False
     long_setup = ""
     long_entry_price = np.nan
-    long_diag: Dict[str, Any] = {"side": "LONG", "window_ok": long_window_ok, "cap_ok": long_allowed}
+    long_diag: Dict[str, Any] = {
+        "side": "LONG",
+        "window_ok": long_window_ok,
+        "cap_ok": long_allowed,
+        "bars_left_ok": bars_left_ok,
+    }
 
-    if long_window_ok and long_allowed:
+    if long_window_ok and long_allowed and bars_left_ok:
         candidates_i = list(range(max(2, entry_idx - 6), entry_idx))
         for i in candidates_i:
             impulse_type = classify_green_impulse(df_day.iloc[i])
@@ -1098,7 +1137,7 @@ def _latest_entry_signals_for_ticker(
                     break
 
             # MODERATE: small red pullback + break C2 high
-            if impulse_type == "MODERATE" and i + 2 == entry_idx:
+            if LONG_ENABLE_SETUP_A_PULLBACK_C2_BREAK and impulse_type == "MODERATE" and i + 2 == entry_idx:
                 c2 = df_day.iloc[i + 1]
                 c2o, c2c = _safe_float(c2["open"]), _safe_float(c2["close"])
                 c2_body = abs(c2c - c2o)
