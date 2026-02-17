@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+ # -*- coding: utf-8 -*-
 """
 EQIDV1 — LIVE 15m Signal Scanner (AVWAP v11 combined: LONG + SHORT)
 ====================================================================
