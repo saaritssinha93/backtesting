@@ -1002,7 +1002,9 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_raw: pd.DataFrame)
 def _latest_entry_signals_for_ticker(
     ticker: str, df_raw: pd.DataFrame, state: Dict[str, Any]
 ) -> Tuple[List[LiveSignal], List[Dict[str, Any]]]:
-    """Latest-candle signals, selected from runner-parity day scan."""
+    """Latest-candle signals selected from the runner-parity day scan."""
+    _ = state  # retained for backward-compatible call signature
+
     signals: List[LiveSignal] = []
     checks: List[Dict[str, Any]] = []
 
@@ -1012,111 +1014,21 @@ def _latest_entry_signals_for_ticker(
 
     latest_ts = pd.Timestamp(df_day_for_ts.iloc[-1]["date"])
     latest_ts = latest_ts.tz_localize(IST) if latest_ts.tzinfo is None else latest_ts.tz_convert(IST)
-    today_str = str(latest_ts.date())
 
     all_day = _all_day_runner_parity_signals_for_ticker(ticker, df_raw)
     if not all_day:
         checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": False})
         checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": False})
         return signals, checks
+
     found = {"SHORT": False, "LONG": False}
-
-    for s in all_day:
-        ts = pd.Timestamp(s.bar_time_ist)
-        ts = ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST)
-        if ts != latest_ts:
-
-    df = normalize_dates(df_raw)
-    if df.empty:
-        return []
-
-    for c in ["open", "high", "low", "close"]:
-        if c not in df.columns:
-            return []
-
-    # Keep all available days in session for indicator warmup parity.
-    df = df[df["date"].apply(in_session)].copy()
-    if df.empty:
-        return []
-
-    df = df.sort_values("date").reset_index(drop=True)
-    df = ref_prepare_indicators(df, default_short_config())
-
-    today = now_ist().date()
-    df_day = df[df["day"] == today].copy().reset_index(drop=True)
-    if df_day.empty or len(df_day) < 7:
-        return []
-
-    if MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(MAX_BARS_PER_TICKER_TODAY):
-        df_day = df_day.iloc[-int(MAX_BARS_PER_TICKER_TODAY):].reset_index(drop=True)
-
-    df_day["AVWAP"] = ref_compute_day_avwap(df_day)
-
-    day_str = str(today)
-    short_trades = scan_short_one_day(ticker, df_day.copy(), day_str, default_short_config())
-    long_trades = scan_long_one_day(ticker, df_day.copy(), day_str, default_long_config())
-
-    signals: List[LiveSignal] = []
-    for tr in (short_trades + long_trades):
-        diag = {
-            "impulse_type": tr.impulse_type,
-            "adx": tr.adx_signal,
-            "rsi": tr.rsi_signal,
-            "stochk": tr.stochk_signal,
-            "atr_pct": tr.atr_pct_signal,
-        }
-        signals.append(
-            LiveSignal(
-                ticker=tr.ticker,
-                side=tr.side,
-                bar_time_ist=pd.Timestamp(tr.entry_time_ist),
-                setup=tr.setup,
-                entry_price=float(tr.entry_price),
-                sl_price=float(tr.sl_price),
-                target_price=float(tr.target_price),
-                score=float(tr.quality_score),
-                diagnostics=diag,
-            )
-        )
-
-    signals.sort(key=lambda x: (pd.Timestamp(x.bar_time_ist), x.side, x.setup))
-    return signals
-
-
-def _latest_entry_signals_for_ticker(
-    ticker: str, df_raw: pd.DataFrame, state: Dict[str, Any]
-) -> Tuple[List[LiveSignal], List[Dict[str, Any]]]:
-    """Latest-candle signals, selected from runner-parity day scan."""
-    signals: List[LiveSignal] = []
-    checks: List[Dict[str, Any]] = []
-
-    df_day_for_ts = _prepare_today_df(normalize_dates(df_raw))
-    if df_day_for_ts.empty:
-        return signals, checks
-
-    latest_ts = pd.Timestamp(df_day_for_ts.iloc[-1]["date"])
-    latest_ts = latest_ts.tz_localize(IST) if latest_ts.tzinfo is None else latest_ts.tz_convert(IST)
-    today_str = str(latest_ts.date())
-
-    all_day = _all_day_runner_parity_signals_for_ticker(ticker, df_raw)
-    if not all_day:
-        checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": False})
-        checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": False})
-        return signals, checks
-    found = {"SHORT": False, "LONG": False}
-
-    for s in all_day:
-        ts = pd.Timestamp(s.bar_time_ist)
-        ts = ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST)
-        if ts != latest_ts:
+    for sig in all_day:
+        sig_ts = pd.Timestamp(sig.bar_time_ist)
+        sig_ts = sig_ts.tz_localize(IST) if sig_ts.tzinfo is None else sig_ts.tz_convert(IST)
+        if sig_ts != latest_ts:
             continue
-
-        cap = SHORT_CAP_PER_TICKER_PER_DAY if s.side == "SHORT" else LONG_CAP_PER_TICKER_PER_DAY
-        if not allow_signal_today(state, ticker, s.side, today_str, cap):
-            continue
-
-        found[s.side] = True
-        signals.append(s)
+        found[sig.side] = True
+        signals.append(sig)
 
     checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": found["SHORT"]})
     checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": found["LONG"]})
