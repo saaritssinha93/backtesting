@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ML meta-label filter/sizer for eqidv2 live + backtest usage.
+ML meta-label filter/sizer for eqidv3 live + backtest usage.
 
 Strategy v1 — AVWAP Rejection + ML Filter + Sizing
 ===================================================
@@ -25,8 +25,8 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 @dataclass
 class MetaFilterConfig:
-    model_path: str = "eqidv2/models/meta_model.pkl"
-    feature_path: str = "eqidv2/models/meta_features.json"
+    model_path: str = "eqidv3/models/meta_model.pkl"
+    feature_path: str = "eqidv3/models/meta_features.json"
     pwin_threshold: float = 0.62
 
     # Position sizing (Section 10)
@@ -562,18 +562,18 @@ class MetaLabelFilter:
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatible simple trainer (use eqidv2_meta_train_walkforward.py
+# Backward-compatible simple trainer (use eqidv3_meta_train_walkforward.py
 # for proper walk-forward training)
 # ---------------------------------------------------------------------------
 def train_simple_baseline(
     dataset_csv: str,
-    out_model_path: str = "eqidv2/models/meta_model.pkl",
-    out_features_path: str = "eqidv2/models/meta_features.json",
+    out_model_path: str = "eqidv3/models/meta_model.pkl",
+    out_features_path: str = "eqidv3/models/meta_features.json",
     label_col: str = "label",
 ) -> Dict[str, Any]:
     """
     Quick baseline trainer (LogisticRegression on legacy features).
-    For proper WF training use eqidv2_meta_train_walkforward.py.
+    For proper WF training use eqidv3_meta_train_walkforward.py.
     """
     from sklearn.linear_model import LogisticRegression
 

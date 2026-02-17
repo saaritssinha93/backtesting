@@ -91,7 +91,7 @@ except Exception:  # pragma: no cover
 # -----------------------------
 DEFAULT_OUT_DIR = "live_signals"
 DEFAULT_STATE_DIR = "logs"
-DEFAULT_STATE_FILE = "eqidv2_avwap_live_state_v11.json"
+DEFAULT_STATE_FILE = "eqidv3_avwap_live_state_v11.json"
 
 # NSE cash market close (15m candles end at 15:30)
 MARKET_OPEN = dtime(9, 15)

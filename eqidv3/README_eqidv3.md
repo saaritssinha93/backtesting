@@ -1,6 +1,6 @@
 # EQIDV2 — Strategy v1: AVWAP Rejection + ML Filter + Sizing
 
-This README documents the `eqidv2` folder after the **Strategy v1** upgrade — an end-to-end ML-filtered intraday trading pipeline for Indian equities (NSE cash market, 5-min/15-min timeframes).
+This README documents the `eqidv3` folder after the **Strategy v1** upgrade — an end-to-end ML-filtered intraday trading pipeline for Indian equities (NSE cash market, 5-min/15-min timeframes).
 
 ---
 
@@ -68,9 +68,9 @@ Configurable via `MetaFilterConfig`:
 | File | Role |
 |------|------|
 | `ml_meta_filter.py` | Core ML infrastructure: 30-feature builder, `MetaLabelFilter` inference, confidence sizing, risk config |
-| `eqidv2_meta_label_triple_barrier.py` | Build labeled dataset: R_net labels from candle data with slippage model |
-| `eqidv2_meta_train_walkforward.py` | Walk-forward training: LightGBM/LogReg, calibration, threshold optimization |
-| `eqidv2_ml_backtest.py` | Standalone ML filter over trade CSVs (v1 features, vol-capped sizing) |
+| `eqidv3_meta_label_triple_barrier.py` | Build labeled dataset: R_net labels from candle data with slippage model |
+| `eqidv3_meta_train_walkforward.py` | Walk-forward training: LightGBM/LogReg, calibration, threshold optimization |
+| `eqidv3_ml_backtest.py` | Standalone ML filter over trade CSVs (v1 features, vol-capped sizing) |
 | `avwap_ml_backtest_runner.py` | Full backtest runner: RAW + ML comparison with detailed stats and charts |
 
 ### Signal Generation
@@ -78,8 +78,8 @@ Configurable via `MetaFilterConfig`:
 | File | Role |
 |------|------|
 | `avwap_live_signal_generator.py` | ML-gated live signal scanner (15m candles, skip logging) |
-| `eqidv2_live_trading_signal_15m_v11_combined_parquet.py` | Live 15m combined AVWAP signal scanner |
-| `eqidv2_live_combined_analyser.py` | Live combined signal evaluation |
+| `eqidv3_live_trading_signal_15m_v11_combined_parquet.py` | Live 15m combined AVWAP signal scanner |
+| `eqidv3_live_combined_analyser.py` | Live combined signal evaluation |
 
 ### Strategy Engines
 
@@ -105,9 +105,9 @@ Configurable via `MetaFilterConfig`:
 |------|------|
 | `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py` | Multi-timeframe historical parquet updater |
 | `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py` | 15-minute focused updater |
-| `eqidv2_eod_15min_data_stocks.py` | EOD 15m updater |
-| `eqidv2_eod_scheduler_for_15mins_data.py` | Periodic 15m update scheduler |
-| `eqidv2_eod_scheduler_for_1540_update.py` | Fixed-time (15:40) EOD scheduler |
+| `eqidv3_eod_15min_data_stocks.py` | EOD 15m updater |
+| `eqidv3_eod_scheduler_for_15mins_data.py` | Periodic 15m update scheduler |
+| `eqidv3_eod_scheduler_for_1540_update.py` | Fixed-time (15:40) EOD scheduler |
 
 ### Config / Artifacts
 
@@ -126,10 +126,10 @@ Configurable via `MetaFilterConfig`:
 
 ```bash
 # Generate candidate trades via backtest
-python eqidv2/avwap_combined_runner.py
+python eqidv3/avwap_combined_runner.py
 
 # Label trades with triple-barrier R_net method
-python eqidv2/eqidv2_meta_label_triple_barrier.py \
+python eqidv3/eqidv3_meta_label_triple_barrier.py \
   --trades-csv outputs/avwap_longshort_trades_ALL_DAYS.csv \
   --candles-dir stocks_indicators_5min_eq \
   --out-csv meta_dataset.csv \
@@ -140,7 +140,7 @@ python eqidv2/eqidv2_meta_label_triple_barrier.py \
 ### B) Train ML Model
 
 ```bash
-python eqidv2/eqidv2_meta_train_walkforward.py \
+python eqidv3/eqidv3_meta_train_walkforward.py \
   --dataset-csv meta_dataset.csv \
   --out-model models/meta_model.pkl \
   --out-features models/meta_features.json \
@@ -155,13 +155,13 @@ python eqidv2/eqidv2_meta_train_walkforward.py \
 
 ```bash
 # Quick filter over trade CSV
-python eqidv2/eqidv2_ml_backtest.py \
+python eqidv3/eqidv3_ml_backtest.py \
   --input-csv outputs/base_trades.csv \
   --output-csv outputs/ml_filtered_trades.csv \
   --threshold 0.62
 
 # Full backtest with RAW vs ML comparison + charts
-python eqidv2/avwap_ml_backtest_runner.py \
+python eqidv3/avwap_ml_backtest_runner.py \
   --ml-threshold 0.62 \
   --model-path models/meta_model.pkl \
   --features-path models/meta_features.json
@@ -171,23 +171,23 @@ python eqidv2/avwap_ml_backtest_runner.py \
 
 ```bash
 # ML-gated live signals (runs continuously)
-python eqidv2/avwap_live_signal_generator.py \
+python eqidv3/avwap_live_signal_generator.py \
   --ml-threshold 0.62 \
   --model-path models/meta_model.pkl \
   --features-path models/meta_features.json
 
 # Single scan (for cron/scheduler)
-python eqidv2/avwap_live_signal_generator.py --run-once
+python eqidv3/avwap_live_signal_generator.py --run-once
 ```
 
 ### E) Execute Trades
 
 ```bash
 # Paper mode
-python eqidv2/avwap_trade_execution_PAPER_TRADE_TRUE.py
+python eqidv3/avwap_trade_execution_PAPER_TRADE_TRUE.py
 
 # Real mode (requires auth)
-python eqidv2/avwap_trade_execution_PAPER_TRADE_FALSE.py
+python eqidv3/avwap_trade_execution_PAPER_TRADE_FALSE.py
 ```
 
 ---
@@ -198,8 +198,8 @@ python eqidv2/avwap_trade_execution_PAPER_TRADE_FALSE.py
 
 ```python
 MetaFilterConfig(
-    model_path="eqidv2/models/meta_model.pkl",
-    feature_path="eqidv2/models/meta_features.json",
+    model_path="eqidv3/models/meta_model.pkl",
+    feature_path="eqidv3/models/meta_features.json",
     pwin_threshold=0.62,
     risk_per_trade_pct=0.20,
     conf_mult_min=0.7,
@@ -218,7 +218,7 @@ MetaFilterConfig(
 ### Backward Compatibility
 - All files auto-detect **v1 (30-feature)** or **legacy (5-feature)** mode
 - Legacy models with 5 features continue to work without changes
-- New datasets produced by `eqidv2_meta_label_triple_barrier.py` include all 30 features
+- New datasets produced by `eqidv3_meta_label_triple_barrier.py` include all 30 features
 
 ---
 

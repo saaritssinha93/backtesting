@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-eqidv2_eod_scheduler_for_15mins_data.py
+eqidv3_eod_scheduler_for_15mins_data.py
 ======================================
 
 Every 15 minutes during market hours:
   1) Update EQIDV2 15m parquet (core.run_mode(mode="15min"...))
-  2) Scan ONLY the latest 15m bar for signals (eqidv2_live_combined_analyser.run_one_scan)
+  2) Scan ONLY the latest 15m bar for signals (eqidv3_live_combined_analyser.run_one_scan)
   3) Print a compact result + let analyser write parquet/CSV as usual
 
 Key fix:
@@ -26,12 +26,12 @@ from kiteconnect import KiteConnect
 # Paths / imports
 # -----------------------------------------------------------------------------
 _ROOT = Path(__file__).resolve().parent
-_EQIDV2 = _ROOT / "backtesting" / "eqidv2"
+_EQIDV2 = _ROOT / "backtesting" / "eqidv3"
 if str(_EQIDV2) not in sys.path:
     sys.path.insert(0, str(_EQIDV2))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
-import eqidv2_live_combined_analyser as analyser  # noqa: E402
+import eqidv3_live_combined_analyser as analyser  # noqa: E402
 
 
 # -----------------------------------------------------------------------------
@@ -52,7 +52,7 @@ EXTRA_TRADING_DAYS: set[ddate] = set()
 API_KEY_FILE = _ROOT / "api_key.txt"
 ACCESS_TOKEN_FILE = _ROOT / "access_token.txt"
 
-REPORT_DIR = _ROOT / "reports" / "eqidv2_reports"
+REPORT_DIR = _ROOT / "reports" / "eqidv3_reports"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 

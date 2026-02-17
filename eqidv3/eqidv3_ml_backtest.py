@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-eqidv2 ML meta-label backtest filter over AVWAP trades.
+eqidv3 ML meta-label backtest filter over AVWAP trades.
 
 Strategy v1: supports expanded feature set (30 features) and
 confidence-based sizing with ATR volatility cap.
@@ -145,10 +145,10 @@ def run(input_csv: str, output_csv: str, threshold: float, summary_json: str | N
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input-csv", required=True)
-    ap.add_argument("--output-csv", default="eqidv2/outputs/ml_filtered_trades.csv")
+    ap.add_argument("--output-csv", default="eqidv3/outputs/ml_filtered_trades.csv")
     ap.add_argument("--threshold", type=float, default=0.62)
-    ap.add_argument("--summary-json", default="eqidv2/outputs/ml_backtest_summary.json")
-    ap.add_argument("--top-stocks-csv", default="eqidv2/outputs/ml_top_scanned_stocks.csv")
+    ap.add_argument("--summary-json", default="eqidv3/outputs/ml_backtest_summary.json")
+    ap.add_argument("--top-stocks-csv", default="eqidv3/outputs/ml_top_scanned_stocks.csv")
     ap.add_argument("--top-n", type=int, default=20)
     args = ap.parse_args()
     run(args.input_csv, args.output_csv, args.threshold, args.summary_json, args.top_stocks_csv, args.top_n)

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-eqidv2_meta_train_walkforward.py  (Strategy v1)
+eqidv3_meta_train_walkforward.py  (Strategy v1)
 =================================================
 
 Train and export a meta-label model that predicts p_win for candidate trades.
@@ -411,7 +411,7 @@ def train_walkforward(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset-csv", default="eqidv2/datasets/meta_dataset.csv")
+    ap.add_argument("--dataset-csv", default="eqidv3/datasets/meta_dataset.csv")
     ap.add_argument("--out-model", default="models/meta_model.pkl")
     ap.add_argument("--out-features", default="models/meta_features.json")
     ap.add_argument("--out-report", default="outputs/meta_train_report.json")

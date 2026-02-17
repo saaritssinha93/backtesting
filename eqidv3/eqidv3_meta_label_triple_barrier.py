@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-eqidv2_meta_label_triple_barrier.py  (Strategy v1)
+eqidv3_meta_label_triple_barrier.py  (Strategy v1)
 ====================================================
 
 Build a meta-label dataset from candidate trades using a triple-barrier label
@@ -16,7 +16,7 @@ Strategy v1 changes:
 
 Usage
 -----
-python eqidv2_meta_label_triple_barrier.py \\
+python eqidv3_meta_label_triple_barrier.py \\
   --trades-csv outputs/avwap_longshort_trades_ALL_DAYS_20260216_115227.csv \\
   --candles-dir stocks_indicators_5min_eq \\
   --out-csv meta_dataset.csv \\
@@ -428,7 +428,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--trades-csv", required=True, help="CSV produced by avwap_combined_runner")
     ap.add_argument("--candles-dir", required=True, help="Directory containing per-ticker 5m parquet files")
-    ap.add_argument("--out-csv", default="eqidv2/datasets/meta_dataset.csv", help="Output dataset CSV")
+    ap.add_argument("--out-csv", default="eqidv3/datasets/meta_dataset.csv", help="Output dataset CSV")
     ap.add_argument("--horizon-bars", type=int, default=6, help="N bars forward window (default 6 = 30min on 5m)")
     ap.add_argument("--bar-minutes", type=int, default=5, help="Bar size in minutes")
     ap.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS, help="Slippage per side in bps")
