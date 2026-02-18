@@ -1,4 +1,6 @@
-# EQIDV2 — Strategy v1: AVWAP Rejection + ML Filter + Sizing
+# EQIDV3 — Strategy v1: AVWAP Rejection + ML Filter + Sizing (Enhanced)
+
+EQIDV3 is the most advanced equity strategy — it extends eqidv2 with an **expanded 30-feature ML pipeline**, LightGBM with calibration, ATR volatility-capped position sizing, and comprehensive risk controls.
 
 This README documents the `eqidv3` folder after the **Strategy v1** upgrade — an end-to-end ML-filtered intraday trading pipeline for Indian equities (NSE cash market, 5-min/15-min timeframes).
 
@@ -222,10 +224,46 @@ MetaFilterConfig(
 
 ---
 
-## 6) Notes
+## 6) Known Issues & Bugs
+
+### CRITICAL
+
+1. **`allow_signal_today()` wrong keyword argument** (`eqidv3_live_combined_analyser.py:942`, `eqidv3_live_combined_analyser_parquet.py:942`)
+   - **Bug**: `allow_signal_today(state, ticker, sid=today_str)` — `sid` is not a valid parameter name; function signature is `(state, ticker, side, today, cap_per_day)`.
+   - **Impact**: `TypeError` at runtime — live analyser crashes when checking signal caps.
+   - **Fix**: Use positional args or correct keyword names: `allow_signal_today(state, ticker, side, today_str, cap)`.
+
+2. **Duplicate `_generate_signal_id` definition** (`eqidv3_live_combined_analyser_csv.py:1114–1123`)
+   - Two functions with the same name defined; the 3-arg version (line 1114) is immediately shadowed by a 5-arg version (line 1120).
+   - **Impact**: Dead code; first definition is unreachable.
+
+### MODERATE
+
+3. **Title mismatch in README** — Was titled "EQIDV2" instead of "EQIDV3" (now fixed).
+
+4. **`filtered_stocks_MIS.py` uses `set` instead of `list`** — non-deterministic ordering across Python runs.
+
+5. **Hardcoded XPath selectors in `authentication.py`** — brittle against Zerodha UI updates.
+
+---
+
+## 7) Notes
 
 - The `meta_model.pkl` + `meta_features.json` pair must be versioned together
 - Retrain periodically as market regime shifts (recommended: monthly walk-forward)
 - LightGBM is preferred but falls back to LogisticRegression if `lightgbm` is not installed
 - Keep credentials isolated in `authentication.py` and environment variables
 - Prefer the refactored AVWAP runner (`avwap_v11_refactored/`) over the legacy monolithic one
+
+---
+
+## 8) Key Differences: eqidv1 vs eqidv2 vs eqidv3
+
+| Feature | eqidv1 | eqidv2 | eqidv3 |
+|---------|--------|--------|--------|
+| ML filtering | No | Yes (legacy 5 features) | Yes (30 features, 6 groups) |
+| Model | N/A | LightGBM/LogReg | LightGBM + calibration (isotonic/sigmoid) |
+| Position sizing | Fixed | Confidence multiplier | Confidence + ATR vol cap |
+| Labeling | N/A | Triple-barrier | Triple-barrier R_net (net of costs) |
+| Risk controls | Basic | ML-gated | Full (kill-switch, max positions, force exit) |
+| Threshold optimization | N/A | Basic | Profit-based on OOF predictions |
