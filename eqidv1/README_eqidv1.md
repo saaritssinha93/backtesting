@@ -59,110 +59,173 @@ Data Ingestion → Signal Generation → Live Execution
 ### Live Signal Generation
 | File | Role |
 |------|------|
-| `eqidv1_live_trading_signal_15m_v11_combined_parquet.py` | Main live 15m signal scanner (parquet-based, scheduler loop) |
 | `eqidv1_live_combined_analyser.py` | Live combined analyser using refactored v11 modules |
-| `eqidv1_live_combined_analyser_csv.py` | Same as above with CSV bridge using runner-parity scan flow |
-| `eqidv1_live_combined_analyser_parquet.py` | Same as above with parquet output + CSV bridge |
-| `eqidv1_live_fetch_n_latestsignalprint.py` | Quick fetch latest signal and print |
+| `eqidv1_live_combined_analyser_csv.py` | Same with CSV bridge using runner-parity scan flow |
+| `eqidv1_live_combined_analyser_parquet.py` | Same with parquet output + CSV bridge |
+| `eqidv1_live_trading_signal_15m_v11_combined_parquet.py` | Standalone live 15m signal scanner (inline v11 logic) |
+| `eqidv1_live_fetch_n_latestsignalprint.py` | Quick fetch latest signal and print to console |
 | `avwap_combined_runner.py` | Root-level combined backtest runner (imports refactored modules) |
 
 ### Trade Execution
 | File | Role |
 |------|------|
-| `avwap_trade_execution_PAPER_TRADE_TRUE.py` | Paper trade simulator |
-| `avwap_trade_execution_PAPER_TRADE_FALSE.py` | Real-order executor (Zerodha/Kite) |
+| `avwap_trade_execution_PAPER_TRADE_TRUE.py` | Paper trade simulator (Watchdog CSV monitor, LTP polling, concurrent threads) |
+| `avwap_trade_execution_PAPER_TRADE_FALSE.py` | Real-order executor (Zerodha/Kite API, MARKET entry + LIMIT TP / SL-M orders) |
 | `authentication.py` | Browser-assisted Kite login (Selenium + TOTP) |
 
 ### Data Ingestion
 | File | Role |
 |------|------|
-| `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py` | Multi-TF historical parquet builder (5m + 15m) |
+| `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py` | Multi-TF historical parquet builder (5m + 15m), incremental updates, warmup |
 | `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py` | 15m-only lighter variant |
-| `eqidv1_eod_scheduler_for_15mins_data.py` | Periodic 15m update scheduler |
-| `eqidv1_eod_scheduler_for_1540_update.py` | 15:40 IST EOD flush |
+| `eqidv1_eod_scheduler_for_15mins_data.py` | Periodic 15m update scheduler (every 15m during market hours, 09:15–15:30) |
+| `eqidv1_eod_scheduler_for_1540_update.py` | 15:40 IST EOD flush (final data snapshot) |
 
 ### Universe
 | File | Role |
 |------|------|
 | `filtered_stocks.py` | Curated stock list (~400 stocks, `selected_stocks` list) |
-| `filtered_stocks_MIS.py` | MIS-focused universe (~900+ stocks, `selected_stocks` set) |
+| `filtered_stocks_MIS.py` | MIS-focused universe (~1045 stocks, `selected_stocks` sorted list) |
 
 ---
 
-## 4) Workflows
+## 4) Data Flow Architecture
 
-### A) Run Backtest
+```
+Historical Data (Zerodha Kite API)
+        ↓
+trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
+        ↓ (fetches + computes indicators)
+stocks_indicators_15min_eq/   (15m parquet files per ticker)
+stocks_indicators_5min_eq/    (5m parquet files per ticker)
+        ↓
+┌───────┴─────────────────────────────────────────┐
+│                                                   │
+│  Backtesting:                                    │
+│   avwap_combined_runner.py                       │
+│   ├─ 15m entries + 5m exit resolution            │
+│   ├─ portfolio sim + metrics                     │
+│   └─ outputs/avwap_longshort_trades_*.csv        │
+│                                                   │
+│  Live Signal Generation:                         │
+│   eqidv1_live_combined_analyser_csv.py           │
+│   └─ writes live_signals/signals_YYYY-MM-DD.csv  │
+│                                                   │
+│  Data Refresh:                                   │
+│   eqidv1_eod_scheduler_for_15mins_data.py        │
+│   eqidv1_eod_scheduler_for_1540_update.py        │
+│                                                   │
+│  Trade Execution:                                │
+│   avwap_trade_execution_PAPER_TRADE_TRUE.py      │
+│   avwap_trade_execution_PAPER_TRADE_FALSE.py     │
+│   └─ reads live_signals/signals_*.csv            │
+└──────────────────────────────────────────────────┘
+```
+
+---
+
+## 5) Workflows & Commands
+
+### A) One-Time Setup: Authentication
 ```bash
 cd eqidv1
-python avwap_combined_runner.py
-# or
-python -m avwap_v11_refactored.avwap_combined_runner
+# Ensure api_key.txt exists with: api_key api_secret username password totp_secret
+python authentication.py
+# Outputs: request_token.txt, access_token.txt, NSE_BSE_instruments.csv
 ```
-Outputs: `outputs/avwap_longshort_trades_ALL_DAYS_*.csv`, analytics charts in `outputs/charts/`
 
 ### B) Update Historical Data
 ```bash
-# Full multi-TF update
+cd eqidv1
+
+# Full multi-TF update (5m + 15m)
 python trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
 
-# 15m only (lighter)
+# 15m only (lighter, faster)
 python trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py
 ```
 
-### C) Live Signal Generation
+### C) Run Backtest
 ```bash
-# Continuous scanner (runs until 15:40 IST)
-python eqidv1_live_trading_signal_15m_v11_combined_parquet.py
+cd eqidv1
+python avwap_combined_runner.py
+# or from refactored module:
+python -m avwap_v11_refactored.avwap_combined_runner
+```
+**Outputs**: `outputs/avwap_longshort_trades_ALL_DAYS_*.csv`, analytics charts in `outputs/charts/`
 
-# Or the analyser variant with CSV bridge for trade executors
+### D) Live Signal Generation (continuous, runs during market hours)
+```bash
+cd eqidv1
+
+# Preferred: CSV analyser with runner-parity scan flow
 python eqidv1_live_combined_analyser_csv.py --verbose
+
+# Alternative: parquet output
+python eqidv1_live_combined_analyser_parquet.py
+
+# Quick signal peek (prints top 30 signals per 15m slot)
+python eqidv1_live_fetch_n_latestsignalprint.py
 ```
 
-### D) Trade Execution
+### E) Scheduled Data Refresh (run in separate terminals)
 ```bash
-# Paper mode
+cd eqidv1
+
+# Terminal 1: 15m data refresh every 15 minutes during market hours
+python eqidv1_eod_scheduler_for_15mins_data.py --buffer-sec 75
+
+# Terminal 2: EOD flush at 15:40 IST
+python eqidv1_eod_scheduler_for_1540_update.py
+```
+
+### F) Trade Execution
+```bash
+cd eqidv1
+
+# Paper mode (safe, recommended first)
 python avwap_trade_execution_PAPER_TRADE_TRUE.py
 
-# Real mode (requires authentication first)
+# Real mode (requires authentication first!)
 python authentication.py
 python avwap_trade_execution_PAPER_TRADE_FALSE.py
 ```
 
----
-
-## 5) Known Issues & Bugs
-
-### CRITICAL
-
-1. **`allow_signal_today()` wrong keyword argument** (`eqidv1_live_combined_analyser.py:942`, `eqidv1_live_combined_analyser_parquet.py:942`)
-   - **Bug**: `allow_signal_today(state, ticker, sid=today_str)` — uses `sid=` but function signature expects positional args `(state, ticker, side, today, cap_per_day)`.
-   - **Impact**: `TypeError` at runtime — live analyser crashes when checking signal caps.
-   - **Fix**: Change to `allow_signal_today(state, ticker, side="SHORT", today=today_str, cap_per_day=SHORT_CAP_PER_TICKER_PER_DAY)` or equivalent.
-
-2. **Duplicate `_generate_signal_id` definition** (`eqidv1_live_combined_analyser_csv.py:1114–1123`)
-   - **Bug**: Two functions with the same name defined — the 3-arg version (line 1114) is immediately shadowed by a 5-arg version (line 1120).
-   - **Impact**: Dead code; could cause confusion during maintenance.
-
-### MODERATE
-
-3. **`sys.path` manipulation with wrong relative path** (`eqidv1_live_trading_signal_15m_v11_combined_parquet.py:44`)
-   - `_EQIDV1 = _ROOT / "backtesting" / "eqidv1"` — adds a path relative to the file's parent, but this assumes the file is one directory ABOVE `backtesting/`. When run from within `eqidv1/`, this path won't exist.
-   - The `import core` on line 48 may fail depending on working directory.
-
-4. **`filtered_stocks_MIS.py` uses a `set` instead of `list`**
-   - `selected_stocks = {...}` — using a set means ordering is non-deterministic across Python runs. If downstream code depends on order (e.g., for reproducible backtests), results may vary.
-
-5. **Missing `eqidv3` subdirectory reference** — `eqidv3/eqidv3/` nested directory exists but isn't documented and may cause import confusion.
-
-### LOW
-
-6. **Hardcoded XPath selectors in `authentication.py`** — Zerodha UI changes will break the Selenium login flow. Consider using the Kite Connect API directly.
-
-7. **No error handling for missing `api_key.txt` / `request_token.txt`** — `authentication.py` will crash with an unhelpful error if files are missing.
+### Full Live Deployment Flow (4 terminals)
+```
+Terminal 1: python authentication.py                           # auth (once)
+Terminal 2: python eqidv1_eod_scheduler_for_15mins_data.py     # data refresh
+Terminal 3: python eqidv1_live_combined_analyser_csv.py        # signal generation
+Terminal 4: python avwap_trade_execution_PAPER_TRADE_TRUE.py   # execution (paper)
+```
 
 ---
 
-## 6) Key Differences from eqidv2/eqidv3
+## 6) Known Issues & Bugs
+
+### FIXED (in this review)
+
+1. **`allow_signal_today()` wrong keyword argument** — was `allow_signal_today(state, ticker, sid=today_str)`, now correctly checks both SHORT and LONG caps separately with proper positional args. Fixed in `eqidv1_live_combined_analyser.py` and `eqidv1_live_combined_analyser_parquet.py`.
+
+2. **Duplicate `_generate_signal_id` definition** — removed shadowed 3-arg version in `eqidv1_live_combined_analyser_csv.py`, keeping only the correct 5-arg version.
+
+3. **`sys.path` manipulation with wrong relative path** — `eqidv1_live_trading_signal_15m_v11_combined_parquet.py` now uses `_ROOT` (the file's own directory) instead of the incorrect `_ROOT / "backtesting" / "eqidv1"`.
+
+4. **`filtered_stocks_MIS.py` uses `set` instead of `list`** — converted to sorted list for deterministic ordering across Python runs.
+
+### REMAINING (lower severity)
+
+5. **Hardcoded XPath selectors in `authentication.py`** (LOW) — Zerodha UI changes will break the Selenium login flow. Consider switching to `By.NAME` or `By.CSS_SELECTOR` for more robust selectors.
+
+6. **No error handling for missing `api_key.txt` / `request_token.txt`** (LOW) — `authentication.py` will crash with an unhelpful error if files are missing.
+
+7. **Code duplication in `eqidv1_live_trading_signal_15m_v11_combined_parquet.py`** (LOW) — duplicates AVWAP v11 logic inline instead of importing refactored modules. Recommend refactoring to use `avwap_v11_refactored/` like the CSV/Parquet analysers.
+
+8. **Real trade executor lacks order rejection handling** (MODERATE for production) — `avwap_trade_execution_PAPER_TRADE_FALSE.py` doesn't retry or notify on order failures. Consider adding Telegram/Email alerts.
+
+---
+
+## 7) Key Differences from eqidv2/eqidv3
 
 | Feature | eqidv1 | eqidv2 | eqidv3 |
 |---------|--------|--------|--------|

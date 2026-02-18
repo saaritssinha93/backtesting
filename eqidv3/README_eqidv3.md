@@ -2,8 +2,6 @@
 
 EQIDV3 is the most advanced equity strategy — it extends eqidv2 with an **expanded 30-feature ML pipeline**, LightGBM with calibration, ATR volatility-capped position sizing, and comprehensive risk controls.
 
-This README documents the `eqidv3` folder after the **Strategy v1** upgrade — an end-to-end ML-filtered intraday trading pipeline for Indian equities (NSE cash market, 5-min/15-min timeframes).
-
 ---
 
 ## 1) Architecture Overview
@@ -11,7 +9,7 @@ This README documents the `eqidv3` folder after the **Strategy v1** upgrade — 
 The pipeline has five stages:
 
 ```
-Data Ingestion -> Signal Generation -> ML Labeling & Training -> ML-Filtered Backtest -> Live Execution
+Data Ingestion → Signal Generation → ML Labeling & Training → ML-Filtered Backtest → Live Execution
 ```
 
 1. **Data ingestion** — 5m/15m parquet builders + EOD schedulers
@@ -22,16 +20,15 @@ Data Ingestion -> Signal Generation -> ML Labeling & Training -> ML-Filtered Bac
 
 ---
 
-## 2) Strategy v1 — What Changed
+## 2) Strategy v1 — What Changed from eqidv2
 
-### Labeling (Section 5)
+### Labeling
 - **R_net based**: Label = 1 if `R_net >= +0.05R` (net-positive after costs), else 0
 - `R_net = (PnL_net) / SL_distance` in R-multiple units
 - Slippage (3 bps/side) + commission (2 bps/side) baked into label computation
 - Default horizon: N=6 bars (30 min on 5-min TF)
 
-### Features (Section 7)
-Expanded from 5 legacy features to **30 features** across 6 groups:
+### Features (30 total, 6 groups)
 
 | Group | Features | Description |
 |-------|----------|-------------|
@@ -42,19 +39,18 @@ Expanded from 5 legacy features to **30 features** across 6 groups:
 | E: AVWAP Rejection | `touch_depth`, `rejection_body_ratio`, `upper_wick_ratio`, `consec_below_avwap`, `pullback_from_low20_atr` | Rejection quality metrics |
 | F: Side | `side` | Encoded as +1 (LONG) / -1 (SHORT) |
 
-### Model (Section 9)
+### Model
 - **LightGBM** (300 trees, depth 5, balanced) with LogisticRegression fallback
 - Walk-forward validation with purging + embargo
 - Optional isotonic/sigmoid calibration
 - **Profit-based threshold optimization** on OOF predictions (maximizes mean R_net of taken trades)
 
-### Sizing (Section 10)
+### Sizing
 - Confidence multiplier: `m = clip(0.7, 1.2, 0.7 + (p - T)/(T_upper - T))`
 - ATR volatility cap: if `atr_pctile > 80th`, cap `m <= 1.0`
 - Position size: `qty = (risk_pct * capital / stop_distance) * m`
 
-### Risk Controls (Section 11)
-Configurable via `MetaFilterConfig`:
+### Risk Controls (via MetaFilterConfig)
 - Max open positions: 3
 - Max trades/day: 10, per ticker/day: 1
 - Daily loss kill-switch: -1.0R or -0.8% capital
@@ -66,43 +62,42 @@ Configurable via `MetaFilterConfig`:
 ## 3) File-by-File Map
 
 ### ML Pipeline (Strategy v1)
-
 | File | Role |
 |------|------|
-| `ml_meta_filter.py` | Core ML infrastructure: 30-feature builder, `MetaLabelFilter` inference, confidence sizing, risk config |
+| `ml_meta_filter.py` | Core ML infrastructure: 30-feature builder, `MetaLabelFilter` inference, confidence sizing, ATR vol cap |
 | `eqidv3_meta_label_triple_barrier.py` | Build labeled dataset: R_net labels from candle data with slippage model |
 | `eqidv3_meta_train_walkforward.py` | Walk-forward training: LightGBM/LogReg, calibration, threshold optimization |
 | `eqidv3_ml_backtest.py` | Standalone ML filter over trade CSVs (v1 features, vol-capped sizing) |
 | `avwap_ml_backtest_runner.py` | Full backtest runner: RAW + ML comparison with detailed stats and charts |
 
 ### Signal Generation
-
 | File | Role |
 |------|------|
 | `avwap_live_signal_generator.py` | ML-gated live signal scanner (15m candles, skip logging) |
-| `eqidv3_live_trading_signal_15m_v11_combined_parquet.py` | Live 15m combined AVWAP signal scanner |
 | `eqidv3_live_combined_analyser.py` | Live combined signal evaluation |
+| `eqidv3_live_combined_analyser_csv.py` | Same with CSV bridge for trade executors |
+| `eqidv3_live_combined_analyser_parquet.py` | Same with parquet output |
+| `eqidv3_live_trading_signal_15m_v11_combined_parquet.py` | Standalone live 15m signal scanner |
+| `eqidv3_live_fetch_n_latestsignalprint.py` | Quick fetch latest signal and print |
+| `eqidv3_daily_combined_analyser_csv.py` | Daily batch analyser |
 
 ### Strategy Engines
-
 | File | Role |
 |------|------|
-| `avwap_combined_runner.py` | Monolithic AVWAP long+short backtest runner (legacy) |
+| `avwap_combined_runner.py` | AVWAP long+short backtest runner |
 | `avwap_v11_refactored/avwap_common.py` | Shared config, helpers, indicators |
 | `avwap_v11_refactored/avwap_long_strategy.py` | Refactored LONG strategy scan + exits |
 | `avwap_v11_refactored/avwap_short_strategy.py` | Refactored SHORT strategy scan + exits |
 | `avwap_v11_refactored/avwap_combined_runner.py` | Refactored orchestrator |
 
 ### Trade Execution
-
 | File | Role |
 |------|------|
 | `avwap_trade_execution_PAPER_TRADE_TRUE.py` | Paper trade simulator |
 | `avwap_trade_execution_PAPER_TRADE_FALSE.py` | Real-order executor (Zerodha/Kite) |
-| `authentication.py` | Broker session bootstrap |
+| `authentication.py` | Broker session bootstrap (Selenium + TOTP) |
 
 ### Data Ingestion
-
 | File | Role |
 |------|------|
 | `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py` | Multi-timeframe historical parquet updater |
@@ -112,26 +107,58 @@ Configurable via `MetaFilterConfig`:
 | `eqidv3_eod_scheduler_for_1540_update.py` | Fixed-time (15:40) EOD scheduler |
 
 ### Config / Artifacts
-
 | File | Role |
 |------|------|
-| `filtered_stocks.py` | Stock universe list |
+| `filtered_stocks.py` | Stock universe list (~400 stocks) |
+| `filtered_stocks_MIS.py` | MIS universe (~1045 stocks, sorted list) |
 | `models/meta_model.pkl` | Trained meta model (LightGBM or LogReg) |
 | `models/meta_features.json` | Feature list (must be versioned with model) |
-| `datasets/meta_dataset.csv` | Labeled dataset from triple-barrier |
 
 ---
 
-## 4) Typical Workflows
+## 4) Data Flow Architecture
+
+```
+Zerodha Kite API
+     ↓
+trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
+     ↓ (OHLCV + indicators)
+stocks_indicators_15min_eq/  &  stocks_indicators_5min_eq/
+     ↓
+┌────┴──────────────────────────────────────────────────────┐
+│                                                            │
+│  ML Training Pipeline (run once, retrain monthly):         │
+│   avwap_combined_runner.py → trades.csv                    │
+│     ↓                                                      │
+│   eqidv3_meta_label_triple_barrier.py → meta_dataset.csv   │
+│     ↓  (30-feature extraction + R_net labels)              │
+│   eqidv3_meta_train_walkforward.py → meta_model.pkl        │
+│     ↓  (walk-forward + calibration + threshold opt)        │
+│   avwap_ml_backtest_runner.py → RAW vs ML comparison       │
+│                                                            │
+│  Live Signal Generation:                                   │
+│   eqidv3_live_combined_analyser_csv.py                     │
+│     + ml_meta_filter.py (30-feature p_win gate + sizing)   │
+│     → live_signals/signals_YYYY-MM-DD.csv                  │
+│     ↓                                                      │
+│   avwap_trade_execution_PAPER_TRADE_TRUE.py                │
+│     → live_signals/paper_trades_YYYY-MM-DD.csv             │
+└────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5) Workflows & Commands
 
 ### A) Build ML Dataset (one-time or periodic)
-
 ```bash
-# Generate candidate trades via backtest
-python eqidv3/avwap_combined_runner.py
+cd eqidv3
 
-# Label trades with triple-barrier R_net method
-python eqidv3/eqidv3_meta_label_triple_barrier.py \
+# Generate candidate trades via backtest
+python avwap_combined_runner.py
+
+# Label trades with triple-barrier R_net method (30-feature extraction)
+python eqidv3_meta_label_triple_barrier.py \
   --trades-csv outputs/avwap_longshort_trades_ALL_DAYS.csv \
   --candles-dir stocks_indicators_5min_eq \
   --out-csv meta_dataset.csv \
@@ -140,9 +167,9 @@ python eqidv3/eqidv3_meta_label_triple_barrier.py \
 ```
 
 ### B) Train ML Model
-
 ```bash
-python eqidv3/eqidv3_meta_train_walkforward.py \
+cd eqidv3
+python eqidv3_meta_train_walkforward.py \
   --dataset-csv meta_dataset.csv \
   --out-model models/meta_model.pkl \
   --out-features models/meta_features.json \
@@ -154,59 +181,103 @@ python eqidv3/eqidv3_meta_train_walkforward.py \
 ```
 
 ### C) Run ML-Filtered Backtest
-
 ```bash
+cd eqidv3
+
 # Quick filter over trade CSV
-python eqidv3/eqidv3_ml_backtest.py \
+python eqidv3_ml_backtest.py \
   --input-csv outputs/base_trades.csv \
   --output-csv outputs/ml_filtered_trades.csv \
   --threshold 0.62
 
 # Full backtest with RAW vs ML comparison + charts
-python eqidv3/avwap_ml_backtest_runner.py \
+python avwap_ml_backtest_runner.py \
   --ml-threshold 0.62 \
   --model-path models/meta_model.pkl \
   --features-path models/meta_features.json
 ```
 
 ### D) Live Signal Generation
-
 ```bash
+cd eqidv3
+
 # ML-gated live signals (runs continuously)
-python eqidv3/avwap_live_signal_generator.py \
+python avwap_live_signal_generator.py \
   --ml-threshold 0.62 \
   --model-path models/meta_model.pkl \
   --features-path models/meta_features.json
 
 # Single scan (for cron/scheduler)
-python eqidv3/avwap_live_signal_generator.py --run-once
+python avwap_live_signal_generator.py --run-once
 ```
 
 ### E) Execute Trades
-
 ```bash
+cd eqidv3
+
 # Paper mode
-python eqidv3/avwap_trade_execution_PAPER_TRADE_TRUE.py
+python avwap_trade_execution_PAPER_TRADE_TRUE.py
 
 # Real mode (requires auth)
-python eqidv3/avwap_trade_execution_PAPER_TRADE_FALSE.py
+python authentication.py
+python avwap_trade_execution_PAPER_TRADE_FALSE.py
+```
+
+### Full Live Deployment Flow (5 terminals)
+```
+Terminal 1: python authentication.py                            # auth (once)
+Terminal 2: python eqidv3_eod_scheduler_for_15mins_data.py      # data refresh
+Terminal 3: python eqidv3_live_combined_analyser_csv.py         # signal generation
+Terminal 4: python avwap_live_signal_generator.py --ml-threshold 0.62  # ML gate
+Terminal 5: python avwap_trade_execution_PAPER_TRADE_TRUE.py    # execution
+```
+
+### Full ML Training Pipeline (run once, retrain monthly)
+```
+Step 1: python avwap_combined_runner.py                         # generate raw trades
+Step 2: python eqidv3_meta_label_triple_barrier.py [args]       # label trades (30 features)
+Step 3: python eqidv3_meta_train_walkforward.py [args]          # train model + calibrate
+Step 4: python avwap_ml_backtest_runner.py [args]               # validate RAW vs ML
 ```
 
 ---
 
-## 5) Key Configuration
+## 6) Known Issues & Bugs
+
+### FIXED (in this review)
+
+1. **`allow_signal_today()` wrong keyword argument** — was `allow_signal_today(state, ticker, sid=today_str)`, now correctly checks both SHORT and LONG caps separately. Fixed in `eqidv3_live_combined_analyser.py` and `eqidv3_live_combined_analyser_parquet.py`.
+
+2. **Duplicate `_generate_signal_id` definition** — removed shadowed 3-arg version in `eqidv3_live_combined_analyser_csv.py`, keeping only the correct 5-arg version.
+
+3. **`sys.path` manipulation with wrong relative path** — `eqidv3_live_trading_signal_15m_v11_combined_parquet.py` now uses `_ROOT` directly instead of the incorrect `_ROOT / "backtesting" / "eqidv3"`.
+
+4. **`filtered_stocks_MIS.py` uses `set` instead of `list`** — converted to sorted list for deterministic ordering.
+
+### REMAINING (lower severity)
+
+5. **Hardcoded XPath selectors in `authentication.py`** (LOW) — brittle against Zerodha UI changes.
+
+6. **Triple-barrier labeling lacks parallel processing** (LOW) — `eqidv3_meta_label_triple_barrier.py` processes trades serially. Consider adding ThreadPoolExecutor for large datasets.
+
+7. **Threshold search range is hardcoded** (LOW) — `eqidv3_meta_train_walkforward.py` searches [0.50, 0.80) by 0.01 step. May be suboptimal for some datasets.
+
+8. **Real trade executor lacks order rejection handling** (MODERATE for production) — no retry or notification on order failures.
+
+---
+
+## 7) Key Configuration
 
 ### MetaFilterConfig (ml_meta_filter.py)
-
 ```python
 MetaFilterConfig(
     model_path="eqidv3/models/meta_model.pkl",
     feature_path="eqidv3/models/meta_features.json",
-    pwin_threshold=0.62,
+    pwin_threshold=0.50,           # default; use optimal from training
     risk_per_trade_pct=0.20,
     conf_mult_min=0.7,
     conf_mult_max=1.2,
-    atr_pctile_vol_cap=80.0,
+    atr_pctile_vol_cap=80.0,       # unique to v3: cap sizing in high-vol
     max_open_positions=3,
     max_trades_per_day=10,
     max_trades_per_ticker_per_day=1,
@@ -224,39 +295,6 @@ MetaFilterConfig(
 
 ---
 
-## 6) Known Issues & Bugs
-
-### CRITICAL
-
-1. **`allow_signal_today()` wrong keyword argument** (`eqidv3_live_combined_analyser.py:942`, `eqidv3_live_combined_analyser_parquet.py:942`)
-   - **Bug**: `allow_signal_today(state, ticker, sid=today_str)` — `sid` is not a valid parameter name; function signature is `(state, ticker, side, today, cap_per_day)`.
-   - **Impact**: `TypeError` at runtime — live analyser crashes when checking signal caps.
-   - **Fix**: Use positional args or correct keyword names: `allow_signal_today(state, ticker, side, today_str, cap)`.
-
-2. **Duplicate `_generate_signal_id` definition** (`eqidv3_live_combined_analyser_csv.py:1114–1123`)
-   - Two functions with the same name defined; the 3-arg version (line 1114) is immediately shadowed by a 5-arg version (line 1120).
-   - **Impact**: Dead code; first definition is unreachable.
-
-### MODERATE
-
-3. **Title mismatch in README** — Was titled "EQIDV2" instead of "EQIDV3" (now fixed).
-
-4. **`filtered_stocks_MIS.py` uses `set` instead of `list`** — non-deterministic ordering across Python runs.
-
-5. **Hardcoded XPath selectors in `authentication.py`** — brittle against Zerodha UI updates.
-
----
-
-## 7) Notes
-
-- The `meta_model.pkl` + `meta_features.json` pair must be versioned together
-- Retrain periodically as market regime shifts (recommended: monthly walk-forward)
-- LightGBM is preferred but falls back to LogisticRegression if `lightgbm` is not installed
-- Keep credentials isolated in `authentication.py` and environment variables
-- Prefer the refactored AVWAP runner (`avwap_v11_refactored/`) over the legacy monolithic one
-
----
-
 ## 8) Key Differences: eqidv1 vs eqidv2 vs eqidv3
 
 | Feature | eqidv1 | eqidv2 | eqidv3 |
@@ -267,3 +305,13 @@ MetaFilterConfig(
 | Labeling | N/A | Triple-barrier | Triple-barrier R_net (net of costs) |
 | Risk controls | Basic | ML-gated | Full (kill-switch, max positions, force exit) |
 | Threshold optimization | N/A | Basic | Profit-based on OOF predictions |
+
+---
+
+## 9) Notes
+
+- The `meta_model.pkl` + `meta_features.json` pair must be versioned together
+- Retrain periodically as market regime shifts (recommended: monthly walk-forward)
+- LightGBM is preferred but falls back to LogisticRegression if `lightgbm` is not installed
+- Keep credentials isolated in `authentication.py` and environment variables
+- Prefer the refactored AVWAP runner (`avwap_v11_refactored/`) over the legacy monolithic one
