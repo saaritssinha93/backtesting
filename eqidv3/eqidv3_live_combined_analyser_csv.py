@@ -1111,12 +1111,6 @@ def _sleep_until(dt: datetime) -> None:
 # =============================================================================
 # CSV BRIDGE: write signals to live_signals/ for trade executors
 # =============================================================================
-def _generate_signal_id(ticker: str, side: str, signal_dt: str) -> str:
-    """Deterministic signal ID from ticker + side + signal_datetime."""
-    raw = f"{ticker}|{side}|{signal_dt}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
 def _generate_signal_id(strategy: str, ticker: str, side: str, bar_time_ist: str, setup: str = "") -> str:
     """Deterministic signal id; prefixed by strategy to avoid collisions."""
     raw = f"{strategy}|{ticker.upper()}|{side.upper()}|{bar_time_ist}|{setup}"

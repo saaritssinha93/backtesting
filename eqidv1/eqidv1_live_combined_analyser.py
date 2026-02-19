@@ -939,13 +939,15 @@ def _latest_entry_signals_for_ticker(
     # Per-ticker/day cap (existing live behaviour)
     # IMPORTANT: cap is consumed later when signals are actually written (in generator),
     # but the analyser still uses allow_signal_today to avoid flooding checks.
-    if not allow_signal_today(state, ticker, sid=today_str):
+    short_capped = not allow_signal_today(state, ticker, "SHORT", today_str, SHORT_CAP_PER_TICKER_PER_DAY)
+    long_capped = not allow_signal_today(state, ticker, "LONG", today_str, LONG_CAP_PER_TICKER_PER_DAY)
+    if short_capped and long_capped:
         checks.append(
             {
                 "ticker": ticker,
                 "bar_time_ist": str(entry_ts),
                 "status": "SKIP_CAP",
-                "reason": "per_ticker_day_cap_reached",
+                "reason": "per_ticker_day_cap_reached_both_sides",
             }
         )
         return signals, checks
