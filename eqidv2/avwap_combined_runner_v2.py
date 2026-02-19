@@ -108,6 +108,10 @@ ENABLE_CASH_CONSTRAINED_PORTFOLIO_SIM = False
 # If True, force min_bars_left_after_entry=0 for BOTH sides (live-signal parity).
 # This makes entry counts comparable to eqidv2_* live/daily scanners.
 FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
+
+# If True, disable Top-N pruning on both sides so runner output does not
+# unintentionally suppress one side on a given day versus live/daily scanners.
+FORCE_LIVE_PARITY_DISABLE_TOPN = True
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 
@@ -1242,6 +1246,10 @@ def main() -> None:
                 short_cfg.min_bars_left_after_entry = 0
                 long_cfg.min_bars_left_after_entry = 0
 
+            if FORCE_LIVE_PARITY_DISABLE_TOPN:
+                short_cfg.enable_topn_per_day = False
+                long_cfg.enable_topn_per_day = False
+
             print(
                 f"[INFO] SHORT config: SL={short_cfg.stop_pct*100:.1f}%, TGT={short_cfg.target_pct*100:.1f}%, "
                 f"slippage={short_cfg.slippage_pct*10000:.0f}bps, comm={short_cfg.commission_pct*10000:.0f}bps"
@@ -1259,6 +1267,8 @@ def main() -> None:
             print(
                 f"[INFO] Notional exposure per trade: SHORT=Rs.{short_notional:,.0f} | LONG=Rs.{long_notional:,.0f}"
             )
+            print(f"[INFO] Live parity: min_bars_left=0 -> {FORCE_LIVE_PARITY_MIN_BARS_LEFT}")
+            print(f"[INFO] Live parity: disable_topn_per_day -> {FORCE_LIVE_PARITY_DISABLE_TOPN}")
             print(f"[INFO] Parallelism: max_workers={MAX_WORKERS}")
             print(f"[INFO] Output directory: {_outputs_dir}")
             print(f"[INFO] Console log: {log_path}")
