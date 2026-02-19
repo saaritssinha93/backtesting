@@ -91,6 +91,36 @@ except Exception:  # pragma: no cover
     eq_live_parity = None
 
 
+def _apply_final_signal_window_override_from_runner(
+    cfg_long: StrategyConfig, cfg_short: StrategyConfig
+) -> str:
+    """
+    Optionally override cfg signal windows from avwap_combined_runner.py.
+    Returns a short source label for logging.
+    """
+    try:
+        import avwap_combined_runner as _runner_cfg
+    except Exception:
+        return "local_default_config"
+
+    if not bool(getattr(_runner_cfg, "FINAL_SIGNAL_WINDOW_OVERRIDE", False)):
+        return "local_default_config"
+
+    cfg_short.use_time_windows = bool(
+        getattr(_runner_cfg, "FINAL_SHORT_USE_TIME_WINDOWS", cfg_short.use_time_windows)
+    )
+    cfg_long.use_time_windows = bool(
+        getattr(_runner_cfg, "FINAL_LONG_USE_TIME_WINDOWS", cfg_long.use_time_windows)
+    )
+    cfg_short.signal_windows = list(
+        getattr(_runner_cfg, "FINAL_SHORT_SIGNAL_WINDOWS", cfg_short.signal_windows)
+    )
+    cfg_long.signal_windows = list(
+        getattr(_runner_cfg, "FINAL_LONG_SIGNAL_WINDOWS", cfg_long.signal_windows)
+    )
+    return "avwap_combined_runner.py"
+
+
 def _build_ml_filter(args: argparse.Namespace):
     """
     Instantiate MetaLabelFilter robustly across different constructor signatures.
@@ -1240,6 +1270,7 @@ def main() -> None:
     # Build configs (selection logic lives in these configs)
     cfg_long = default_long_config()
     cfg_short = default_short_config()
+    window_source = _apply_final_signal_window_override_from_runner(cfg_long, cfg_short)
 
     # Ensure dir exists
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
@@ -1251,6 +1282,17 @@ def main() -> None:
     print(f"       ML={'OFF' if args.no_ml else 'ON'}  threshold={args.ml_threshold}")
     print(f"       TopN/run={args.topn_per_run}  side={args.side}")
     print(f"       Buffer={args.buffer_seconds}s  tail_rows={args.tail_rows}")
+    print(f"       signal_windows_source={window_source}")
+    print(
+        "       SHORT windows="
+        f"{cfg_short.use_time_windows} | "
+        + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in cfg_short.signal_windows])
+    )
+    print(
+        "       LONG  windows="
+        f"{cfg_long.use_time_windows} | "
+        + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in cfg_long.signal_windows])
+    )
 
     if args.run_once:
         rows = scan_latest_slot_all_tickers(cfg_long, cfg_short, args)
