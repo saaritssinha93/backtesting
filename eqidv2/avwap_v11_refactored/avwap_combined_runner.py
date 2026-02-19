@@ -112,6 +112,17 @@ FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
 # If True, disable Top-N pruning on both sides so runner output does not
 # unintentionally suppress one side on a given day versus live/daily scanners.
 FORCE_LIVE_PARITY_DISABLE_TOPN = True
+
+# Per-setup signal->entry lag (in 15-min bars).
+# Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
+# HUGE setup: use -1 for legacy dynamic "first valid bar" behavior.
+SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW = 1
+SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW = 2
+SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE = -1
+LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH = 1
+LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH = 2
+LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = -1
+
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 
@@ -1296,6 +1307,14 @@ def main() -> None:
                 reports_dir=_outputs_dir,
             )
 
+            # Apply per-setup signal->entry lag controls
+            short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
+            short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = int(SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW)
+            short_cfg.lag_bars_short_b_huge_failed_bounce = int(SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE)
+            long_cfg.lag_bars_long_a_mod_break_c1_high = int(LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH)
+            long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH)
+            long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK)
+
             if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
                 short_cfg.min_bars_left_after_entry = 0
                 long_cfg.min_bars_left_after_entry = 0
@@ -1311,6 +1330,18 @@ def main() -> None:
             print(
                 f"[INFO] LONG  config: SL={long_cfg.stop_pct*100:.1f}%, TGT={long_cfg.target_pct*100:.1f}%, "
                 f"slippage={long_cfg.slippage_pct*10000:.0f}bps, comm={long_cfg.commission_pct*10000:.0f}bps"
+            )
+            print(
+                "[INFO] Lag bars SHORT: "
+                f"A_MOD={short_cfg.lag_bars_short_a_mod_break_c1_low}, "
+                f"A_PULLBACK={short_cfg.lag_bars_short_a_pullback_c2_break_c2_low}, "
+                f"B_HUGE={short_cfg.lag_bars_short_b_huge_failed_bounce}"
+            )
+            print(
+                "[INFO] Lag bars LONG : "
+                f"A_MOD={long_cfg.lag_bars_long_a_mod_break_c1_high}, "
+                f"A_PULLBACK={long_cfg.lag_bars_long_a_pullback_c2_break_c2_high}, "
+                f"B_HUGE={long_cfg.lag_bars_long_b_huge_pullback_hold_break}"
             )
 
             short_notional = POSITION_SIZE_RS_SHORT * INTRADAY_LEVERAGE_SHORT

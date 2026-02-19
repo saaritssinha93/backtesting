@@ -90,7 +90,7 @@ TAIL_ROWS = 260
 # SESSION FILTER
 # =============================================================================
 SESSION_START = dtime(9, 15, 0)
-SESSION_END = dtime(14, 30, 0)
+SESSION_END = dtime(15, 30, 0)
 
 # =============================================================================
 # V11 SHORT PARAMETERS — refined from avwap_common.default_short_config()
@@ -109,8 +109,7 @@ SHORT_REQUIRE_AVWAP_BELOW = True
 
 SHORT_USE_TIME_WINDOWS = True
 SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(11, 30, 0)),
-    (dtime(13, 0, 0), dtime(14, 30, 0)),
+    (dtime(9, 15, 0), dtime(14, 30, 0)),
 ]
 
 # Impulse thresholds
@@ -152,9 +151,42 @@ LONG_REQUIRE_AVWAP_ABOVE = True
 
 LONG_USE_TIME_WINDOWS = True
 LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(11, 30, 0)),
-    (dtime(13, 0, 0), dtime(14, 30, 0)),
+    (dtime(9, 15, 0), dtime(14, 30, 0)),
 ]
+
+# Optional global override from avwap_combined_runner.py (applied last).
+WINDOW_OVERRIDE_SOURCE = "local_defaults"
+
+
+def _apply_final_signal_window_override_from_runner() -> None:
+    global SHORT_USE_TIME_WINDOWS, SHORT_SIGNAL_WINDOWS
+    global LONG_USE_TIME_WINDOWS, LONG_SIGNAL_WINDOWS
+    global WINDOW_OVERRIDE_SOURCE
+
+    try:
+        import avwap_combined_runner as _runner_cfg
+    except Exception:
+        return
+
+    if not bool(getattr(_runner_cfg, "FINAL_SIGNAL_WINDOW_OVERRIDE", False)):
+        return
+
+    SHORT_USE_TIME_WINDOWS = bool(
+        getattr(_runner_cfg, "FINAL_SHORT_USE_TIME_WINDOWS", SHORT_USE_TIME_WINDOWS)
+    )
+    LONG_USE_TIME_WINDOWS = bool(
+        getattr(_runner_cfg, "FINAL_LONG_USE_TIME_WINDOWS", LONG_USE_TIME_WINDOWS)
+    )
+    SHORT_SIGNAL_WINDOWS = list(
+        getattr(_runner_cfg, "FINAL_SHORT_SIGNAL_WINDOWS", SHORT_SIGNAL_WINDOWS)
+    )
+    LONG_SIGNAL_WINDOWS = list(
+        getattr(_runner_cfg, "FINAL_LONG_SIGNAL_WINDOWS", LONG_SIGNAL_WINDOWS)
+    )
+    WINDOW_OVERRIDE_SOURCE = "avwap_combined_runner.py"
+
+
+_apply_final_signal_window_override_from_runner()
 
 # Impulse thresholds
 LONG_MOD_GREEN_MIN_ATR = 0.30    # relaxed for LONG (was 0.40)
@@ -1308,6 +1340,17 @@ def main() -> None:
     print(f"[INFO] DIR_15M={DIR_15M} | tickers={len(list_tickers_15m())}")
     print(f"[INFO] SHORT: SL={SHORT_STOP_PCT*100:.2f}%, TGT={SHORT_TARGET_PCT*100:.2f}%, ADX>={SHORT_ADX_MIN}, RSI<={SHORT_RSI_MAX}, StochK<={SHORT_STOCHK_MAX}")
     print(f"[INFO] LONG : SL={LONG_STOP_PCT*100:.2f}%, TGT={LONG_TARGET_PCT*100:.2f}%, ADX>={LONG_ADX_MIN}, RSI>={LONG_RSI_MIN}, StochK>={LONG_STOCHK_MIN}")
+    print(f"[INFO] Signal window source: {WINDOW_OVERRIDE_SOURCE}")
+    print(
+        "[INFO] SHORT windows: "
+        f"use_time_windows={SHORT_USE_TIME_WINDOWS} | "
+        + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in SHORT_SIGNAL_WINDOWS])
+    )
+    print(
+        "[INFO] LONG  windows: "
+        f"use_time_windows={LONG_USE_TIME_WINDOWS} | "
+        + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in LONG_SIGNAL_WINDOWS])
+    )
     print(f"[INFO] Volume filter: {USE_VOLUME_FILTER} (ratio>={VOLUME_MIN_RATIO}, SMA={VOLUME_SMA_PERIOD})")
     print(f"[INFO] ATR% filter: {USE_ATR_PCT_FILTER} (min={ATR_PCT_MIN*100:.2f}%)")
     print(f"[INFO] Close-confirm: {REQUIRE_CLOSE_CONFIRM}")
