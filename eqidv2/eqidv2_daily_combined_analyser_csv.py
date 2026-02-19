@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 from copy import deepcopy
@@ -27,12 +28,66 @@ ROOT = Path(__file__).resolve().parent
 DAILY_SIGNAL_DIR = ROOT / "daily_signals"
 DAILY_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
 
+DAILY_SIGNAL_COLUMNS = [
+    "signal_id",
+    "logtime_ist",
+    "signal_entry_datetime_ist",
+    "signal_bar_time_ist",
+    "ticker",
+    "side",
+    "entry_price",
+    "sl_price",
+    "target_price",
+    "quality_score",
+    "atr_pct_signal",
+    "rsi_signal",
+    "adx_signal",
+    "p_win",
+    "ml_threshold",
+    "confidence_multiplier",
+    "quantity",
+    "notes",
+]
+
+
+def _make_signal_id(strategy: str, ticker: str, side: str, bar_time: str, setup: str = "") -> str:
+    raw = f"{strategy}|{ticker.upper()}|{side.upper()}|{bar_time}|{setup}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _ensure_daily_csv_schema(csv_path: str) -> None:
+    """Best-effort in-place schema migration for today's daily signal CSV."""
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+        return
+    try:
+        df_existing = pd.read_csv(
+            csv_path,
+            engine="python",
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+        )
+    except Exception:
+        return
+
+    missing = [c for c in DAILY_SIGNAL_COLUMNS if c not in df_existing.columns]
+    if not missing:
+        return
+
+    for c in missing:
+        df_existing[c] = ""
+
+    df_existing = df_existing[DAILY_SIGNAL_COLUMNS]
+    df_existing.to_csv(csv_path, index=False, quoting=csv.QUOTE_ALL)
+    print(f"[CSV][DAILY] migrated schema for {csv_path} | added={missing}", flush=True)
+
 
 def _write_daily_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV2_DAILY") -> int:
     """Append deduplicated signals into daily_signals/signals_YYYY-MM-DD.csv."""
     today_str = live.now_ist().strftime("%Y-%m-%d")
     csv_path = str(DAILY_SIGNAL_DIR / live.SIGNAL_CSV_PATTERN.format(today_str))
     DAILY_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_daily_csv_schema(csv_path)
 
     existing_ids = live._load_existing_ids(csv_path)
     logtime = live.now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
@@ -41,7 +96,7 @@ def _write_daily_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV
     written = 0
 
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=live.SIGNAL_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
+        writer = csv.DictWriter(f, fieldnames=DAILY_SIGNAL_COLUMNS, quoting=csv.QUOTE_ALL)
         if not file_exists:
             writer.writeheader()
 
@@ -52,7 +107,7 @@ def _write_daily_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV
                 bar_time = str(row.get("bar_time_ist", ""))
                 setup = str(row.get("setup", ""))
 
-                signal_id = live._generate_signal_id(strategy, ticker, side, bar_time, setup)
+                signal_id = _make_signal_id(strategy, ticker, side, bar_time, setup)
                 if signal_id in existing_ids:
                     continue
 
@@ -86,6 +141,8 @@ def _write_daily_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV
                 writer.writerow({
                     "signal_id": signal_id,
                     "logtime_ist": logtime,
+                    "signal_entry_datetime_ist": bar_time,
+                    "signal_bar_time_ist": bar_time,
                     "ticker": ticker,
                     "side": side,
                     "entry_price": round(entry, 4),

@@ -1,4 +1,4 @@
- # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 EQIDV1 — LIVE 15m Signal Scanner (AVWAP v11 combined: LONG + SHORT)
 ====================================================================
@@ -23,7 +23,6 @@ Core: backtesting/eqidv2/trading_data_continous_run_historical_alltf_v3_parquet_
 
 from __future__ import annotations
 
-import argparse
 import csv
 import hashlib
 import os
@@ -94,22 +93,10 @@ DEFAULT_POSITION_SIZE_RS = 50_000       # Rs. margin per trade
 INTRADAY_LEVERAGE = 5.0                 # MIS leverage on Zerodha
 
 SIGNAL_CSV_COLUMNS = [
-    "signal_id",
-    "logtime_ist",
-    "ticker",
-    "side",
-    "entry_price",
-    "sl_price",
-    "target_price",
-    "quality_score",
-    "atr_pct_signal",
-    "rsi_signal",
-    "adx_signal",
-    "p_win",
-    "ml_threshold",
-    "confidence_multiplier",
-    "quantity",
-    "notes",
+    "signal_id", "signal_datetime", "received_time", "ticker", "side",
+    "setup", "impulse_type", "entry_price", "stop_price", "target_price",
+    "quality_score", "atr_pct", "rsi", "adx", "quantity",
+    "signal_entry_datetime_ist", "signal_bar_time_ist",
 ]
 
 # =============================================================================
@@ -132,17 +119,18 @@ UPDATE_15M_BEFORE_CHECK = False
 # How many tail rows to load per ticker parquet
 TAIL_ROWS = 260
 
-# Keep parity with avwap_v11_refactored StrategyConfig defaults.
-MIN_BARS_LEFT_AFTER_ENTRY = 4
 
 # =============================================================================
 # LATEST SLOT (15m) SCAN BEHAVIOR
 # =============================================================================
-# Used by the avwap_live-style runner in this file (buffer/tolerance) and for
-# trimming today's data for speed.
+# If True: only evaluate signals on the latest COMPLETED 15m candle (slot_end),
+# i.e. the candle whose end time is floor(now - buffer_sec) to 15m.
+LATEST_SLOT_ONLY = True
 LATEST_SLOT_BUFFER_SEC = 60     # wait this many seconds after boundary before trusting the new candle
-LATEST_SLOT_TOLERANCE_SEC = 30  # allow small timestamp drift (seconds) in parquet timestamps
-MAX_BARS_PER_TICKER_TODAY = 120 # keep last N bars from today (must be >= 7 for v11 logic)
+LATEST_SLOT_TOLERANCE_SEC = 120  # allow small timestamp drift (seconds) in parquet timestamps
+
+# For speed, keep only the last N bars from today (must be >= 7 for v11 logic)
+MAX_BARS_PER_TICKER_TODAY = 120
 # =============================================================================
 # SESSION FILTER
 # =============================================================================
@@ -229,9 +217,6 @@ LONG_AVWAP_REJ_CONSEC_CLOSES = 2
 LONG_AVWAP_REJ_DIST_ATR_MULT = 0.25
 LONG_AVWAP_REJ_MODE = "any"
 
-# Keep parity with avwap_v11_refactored default_long_config().
-LONG_ENABLE_SETUP_A_PULLBACK_C2_BREAK = False
-
 LONG_CAP_PER_TICKER_PER_DAY = 1
 
 # =============================================================================
@@ -270,6 +255,21 @@ def _require_pyarrow() -> None:
 def now_ist() -> datetime:
     return datetime.now(IST)
 
+def latest_completed_15m_slot_end(buffer_sec: int = LATEST_SLOT_BUFFER_SEC) -> pd.Timestamp:
+    """Return the latest COMPLETED 15m candle end timestamp in IST.
+    Example: if now=13:16 and buffer=60s => slot_end=13:15.
+    """
+    dt = now_ist() - timedelta(seconds=int(buffer_sec))
+    minute = (dt.minute // 15) * 15
+    dt_floor = dt.replace(minute=minute, second=0, microsecond=0)
+    ts = pd.Timestamp(dt_floor)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize(IST)
+    else:
+        ts = ts.tz_convert(IST)
+    return ts
+
+
 
 def _buffer(price: float) -> float:
     return max(float(BUFFER_ABS), float(price) * float(BUFFER_PCT))
@@ -278,28 +278,6 @@ def _buffer(price: float) -> float:
 def in_session(ts: pd.Timestamp) -> bool:
     t = ts.tz_convert(IST).time()
     return (t >= SESSION_START) and (t <= SESSION_END)
-
-
-def _has_min_bars_left_in_session(entry_ts: pd.Timestamp, min_bars_left: int = MIN_BARS_LEFT_AFTER_ENTRY) -> bool:
-    """Mirror backtest guard: require minimum future 15m bars after entry candle."""
-    if min_bars_left <= 0:
-        return True
-
-    ts = pd.Timestamp(entry_ts)
-    ts = ts.tz_localize(IST) if ts.tzinfo is None else ts.tz_convert(IST)
-
-    session_end_dt = ts.replace(
-        hour=SESSION_END.hour,
-        minute=SESSION_END.minute,
-        second=SESSION_END.second,
-        microsecond=0,
-    )
-    if ts >= session_end_dt:
-        return False
-
-    mins_left = (session_end_dt - ts).total_seconds() / 60.0
-    bars_left = int(mins_left // 15)
-    return bars_left >= int(min_bars_left)
 
 
 def _in_windows(ts: pd.Timestamp, windows: List[Tuple[dtime, dtime]], enabled: bool) -> bool:
@@ -470,13 +448,23 @@ def list_tickers_15m() -> List[str]:
 
 
 def normalize_dates(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize the 'date' column to tz-aware IST timestamps.
+
+    IMPORTANT: Our candle-builder writes wall-clock IST times (often tz-naive) into parquet.
+    So if the column is tz-naive, we localize to IST (not UTC).
+    """
     if df.empty or "date" not in df.columns:
         return df
-    dt = pd.to_datetime(df["date"], errors="coerce")
-    if getattr(dt.dt, "tz", None) is None:
-        dt = dt.dt.tz_localize("UTC")
-    dt = dt.dt.tz_convert(IST)
+
     df = df.copy()
+    dt = pd.to_datetime(df["date"], errors="coerce")
+
+    # If tz-naive, assume timestamps are already in IST wall-clock.
+    if getattr(dt.dt, "tz", None) is None:
+        dt = dt.dt.tz_localize(IST)
+    else:
+        dt = dt.dt.tz_convert(IST)
+
     df["date"] = dt
     df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
     return df
@@ -932,17 +920,173 @@ def _check_common_filters_long(df_day: pd.DataFrame, i: int) -> Tuple[bool, Dict
 # =============================================================================
 # MAIN SIGNAL DETECTION (per-ticker, both sides)
 # =============================================================================
-def _all_day_runner_parity_signals_for_ticker(ticker: str, df_raw: pd.DataFrame) -> List[LiveSignal]:
-    """Generate *today* signals using exact avwap_v11_refactored scan flow.
 
-    Important parity detail:
-    indicators are prepared on multi-day session-filtered data first,
-    then today's slice is scanned (same pattern as scan_all_days_for_ticker).
-    """
+def _to_ist_ts(x: Any) -> pd.Timestamp:
+    ts = pd.Timestamp(x)
+    if ts.tzinfo is None:
+        return ts.tz_localize(IST)
+    return ts.tz_convert(IST)
+
+
+def _current_15m_slot_start_ist() -> pd.Timestamp:
+    """Current 15m bracket start in IST. Example: 10:05 -> 10:00."""
+    dt = now_ist().astimezone(IST)
+    flo = dt.replace(minute=(dt.minute // 15) * 15, second=0, microsecond=0)
+    return _to_ist_ts(flo)
+
+
+def _latest_entry_signals_for_ticker(
+    ticker: str,
+    df_raw: pd.DataFrame,
+    state: Dict[str, Any],
+    target_slot_ist: pd.Timestamp,
+) -> Tuple[List[LiveSignal], List[Dict[str, Any]]]:
+    """Strict live-slot parity check using v3 row-by-row signal generation logic."""
+    signals: List[LiveSignal] = []
+    checks: List[Dict[str, Any]] = []
+
     if df_raw is None or df_raw.empty:
-        return []
+        return signals, checks
 
     df = normalize_dates(df_raw)
+    if df.empty or "date" not in df.columns:
+        return signals, checks
+
+    df = df[df["date"].apply(in_session)].copy()
+    if df.empty:
+        return signals, checks
+
+    df["date_ist"] = df["date"].apply(_to_ist_ts)
+    df["day"] = df["date_ist"].dt.date
+    df = df.sort_values("date_ist").reset_index(drop=True)
+
+    target_slot = _to_ist_ts(target_slot_ist).floor("min")
+    target_day = target_slot.date()
+    target_day_str = str(target_day)
+    df_day = df[df["day"] == target_day].copy().sort_values("date_ist").reset_index(drop=True)
+    if df_day.empty:
+        checks.append(
+            {
+                "ticker": ticker,
+                "side": "SHORT",
+                "bar_time_ist": str(target_slot),
+                "signal": False,
+                "no_target_day_data": True,
+            }
+        )
+        checks.append(
+            {
+                "ticker": ticker,
+                "side": "LONG",
+                "bar_time_ist": str(target_slot),
+                "signal": False,
+                "no_target_day_data": True,
+            }
+        )
+        return signals, checks
+
+    slot_rows = df_day[pd.to_datetime(df_day["date_ist"]).dt.floor("min") == target_slot]
+    if slot_rows.empty:
+        last_ts = pd.Timestamp(df_day.iloc[-1]["date_ist"]).floor("min")
+        checks.append(
+            {
+                "ticker": ticker,
+                "side": "SHORT",
+                "bar_time_ist": str(last_ts),
+                "expected_bar_time_ist": str(target_slot),
+                "signal": False,
+                "stale_data": True,
+            }
+        )
+        checks.append(
+            {
+                "ticker": ticker,
+                "side": "LONG",
+                "bar_time_ist": str(last_ts),
+                "expected_bar_time_ist": str(target_slot),
+                "signal": False,
+                "stale_data": True,
+            }
+        )
+        return signals, checks
+
+    # Same parity source used by v3 row-by-row script.
+    df_upto_target = df[df["day"] <= target_day].copy()
+    all_sigs = _all_day_runner_parity_signals_for_ticker(ticker, df_upto_target)
+    if not all_sigs:
+        checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": str(target_slot), "signal": False})
+        checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": str(target_slot), "signal": False})
+        return signals, checks
+
+    slot_map: Dict[pd.Timestamp, List[Any]] = {}
+    for s in all_sigs:
+        s_bar_ts = _to_ist_ts(getattr(s, "bar_time_ist", pd.NaT))
+        if pd.isna(s_bar_ts) or s_bar_ts.date() != target_day:
+            continue
+        slot = s_bar_ts.floor("min")
+        slot_map.setdefault(slot, []).append((s, s_bar_ts))
+
+    found_short = False
+    found_long = False
+
+    slot_sigs = slot_map.get(target_slot, [])
+    for s, s_bar_ts in slot_sigs:
+        side = str(getattr(s, "side", "")).upper()
+        if side not in {"SHORT", "LONG"}:
+            continue
+
+        short_cap = int(SHORT_CAP_PER_TICKER_PER_DAY)
+        long_cap = int(LONG_CAP_PER_TICKER_PER_DAY)
+        cap = short_cap if side == "SHORT" else long_cap
+
+        sig_ticker = str(getattr(s, "ticker", ticker)).upper()
+        if not allow_signal_today(state, sig_ticker, side, target_day_str, cap):
+            continue
+
+        diag = dict(getattr(s, "diagnostics", {}) or {})
+        entry_price = _safe_float(getattr(s, "entry_price", np.nan))
+        sl_price = _safe_float(getattr(s, "sl_price", np.nan))
+        target_price = _safe_float(getattr(s, "target_price", np.nan))
+        score = _safe_float(getattr(s, "score", 0.0))
+        if not (np.isfinite(entry_price) and np.isfinite(sl_price) and np.isfinite(target_price)):
+            continue
+
+        signal = LiveSignal(
+            ticker=sig_ticker,
+            side=side,
+            bar_time_ist=s_bar_ts,
+            setup=str(getattr(s, "setup", "")),
+            entry_price=float(entry_price),
+            sl_price=float(sl_price),
+            target_price=float(target_price),
+            score=float(score if np.isfinite(score) else 0.0),
+            diagnostics=diag,
+        )
+        mark_signal(state, sig_ticker, side, target_day_str)
+        signals.append(signal)
+
+        if side == "SHORT":
+            found_short = True
+        else:
+            found_long = True
+
+        print(
+            f"[SIG ] {signal.ticker} {signal.side} {pd.Timestamp(signal.bar_time_ist).strftime('%Y-%m-%d %H:%M')} "
+            f"setup={signal.setup} score={signal.score:.3f}",
+            flush=True,
+        )
+
+    checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": str(target_slot), "signal": found_short})
+    checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": str(target_slot), "signal": found_long})
+    return signals, checks
+
+
+def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.DataFrame):
+    """Generate parity signals for the latest day present in `df_upto_target`."""
+    if df_upto_target is None or df_upto_target.empty:
+        return []
+
+    df = normalize_dates(df_upto_target)
     if df.empty:
         return []
 
@@ -950,7 +1094,7 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_raw: pd.DataFrame)
         if c not in df.columns:
             return []
 
-    # Keep all available days in session for indicator warmup parity.
+    # Keep all available in-session bars for indicator warmup parity.
     df = df[df["date"].apply(in_session)].copy()
     if df.empty:
         return []
@@ -969,8 +1113,8 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_raw: pd.DataFrame)
     df_day["AVWAP"] = ref_compute_day_avwap(df_day)
 
     day_str = str(target_day)
-    short_trades = scan_short_one_day(ticker, df_day.copy(), day_str, default_short_config())
-    long_trades = scan_long_one_day(ticker, df_day.copy(), day_str, default_long_config())
+    short_trades = scan_short_one_day(str(ticker).upper(), df_day.copy(), day_str, default_short_config())
+    long_trades = scan_long_one_day(str(ticker).upper(), df_day.copy(), day_str, default_long_config())
 
     signals: List[LiveSignal] = []
     for tr in (short_trades + long_trades):
@@ -998,46 +1142,6 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_raw: pd.DataFrame)
     signals.sort(key=lambda x: (pd.Timestamp(x.bar_time_ist), x.side, x.setup))
     return signals
 
-
-def _latest_entry_signals_for_ticker(
-    ticker: str, df_raw: pd.DataFrame, state: Dict[str, Any]
-) -> Tuple[List[LiveSignal], List[Dict[str, Any]]]:
-    """Latest-candle signals selected from the runner-parity day scan."""
-    _ = state  # retained for backward-compatible call signature
-
-    signals: List[LiveSignal] = []
-    checks: List[Dict[str, Any]] = []
-
-    df_day_for_ts = _prepare_today_df(normalize_dates(df_raw))
-    if df_day_for_ts.empty:
-        return signals, checks
-
-    latest_ts = pd.Timestamp(df_day_for_ts.iloc[-1]["date"])
-    latest_ts = latest_ts.tz_localize(IST) if latest_ts.tzinfo is None else latest_ts.tz_convert(IST)
-
-    all_day = _all_day_runner_parity_signals_for_ticker(ticker, df_raw)
-    if not all_day:
-        checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": False})
-        checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": False})
-        return signals, checks
-
-    found = {"SHORT": False, "LONG": False}
-    for sig in all_day:
-        sig_ts = pd.Timestamp(sig.bar_time_ist)
-        sig_ts = sig_ts.tz_localize(IST) if sig_ts.tzinfo is None else sig_ts.tz_convert(IST)
-        if sig_ts != latest_ts:
-            continue
-        found[sig.side] = True
-        signals.append(sig)
-
-    checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": latest_ts, "signal": found["SHORT"]})
-    checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": latest_ts, "signal": found["LONG"]})
-    return signals, checks
-
-
-# =============================================================================
-# TRADING DAY HELPERS
-# =============================================================================
 def _read_holidays_safe() -> set:
     try:
         return set(core._read_holidays(core.HOLIDAYS_FILE_DEFAULT))
@@ -1111,43 +1215,76 @@ def _sleep_until(dt: datetime) -> None:
 # =============================================================================
 # CSV BRIDGE: write signals to live_signals/ for trade executors
 # =============================================================================
-def _generate_signal_id(strategy: str, ticker: str, side: str, bar_time_ist: str, setup: str = "") -> str:
-    """Deterministic signal id; prefixed by strategy to avoid collisions."""
-    raw = f"{strategy}|{ticker.upper()}|{side.upper()}|{bar_time_ist}|{setup}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+def _generate_signal_id(ticker: str, side: str, signal_dt: str, setup: str = "") -> str:
+    """Deterministic signal ID; include setup to avoid same-bar collisions."""
+    raw = f"EQIDV2|{ticker.upper()}|{side.upper()}|{signal_dt}|{setup}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _load_existing_ids(csv_path: str) -> set:
-    if (not os.path.exists(csv_path)) or os.path.getsize(csv_path) <= 0:
+    """Read existing signal IDs from a CSV file; return empty set on any read issue."""
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
         return set()
     try:
-        df = pd.read_csv(csv_path, usecols=["signal_id"], engine="python",
-                         quotechar='"', quoting=csv.QUOTE_ALL,
-                         on_bad_lines="warn")
-        return set(df["signal_id"].astype(str))
+        df_existing = pd.read_csv(
+            csv_path,
+            usecols=["signal_id"],
+            engine="python",
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+        )
+        return set(df_existing["signal_id"].astype(str))
     except Exception:
         return set()
 
 
-def _write_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV2") -> int:
-    """
-    Append live signals to: live_signals/signals_YYYY-MM-DD.csv
+def _ensure_signal_csv_schema(csv_path: str) -> None:
+    """Best-effort in-place schema migration for today's signal CSV."""
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+        return
+    try:
+        df_existing = pd.read_csv(
+            csv_path,
+            engine="python",
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+        )
+    except Exception:
+        return
 
-    This uses the SAME folder + naming convention as avwap_live_signal_generator.py
-    and prints a CSV log line every run (even if written=0).
+    missing = [c for c in SIGNAL_CSV_COLUMNS if c not in df_existing.columns]
+    if not missing:
+        return
+
+    for c in missing:
+        df_existing[c] = ""
+
+    df_existing = df_existing[SIGNAL_CSV_COLUMNS]
+    df_existing.to_csv(csv_path, index=False, quoting=csv.QUOTE_ALL)
+    print(f"[CSV ] migrated schema for {csv_path} | added={missing}", flush=True)
+
+
+def _write_signals_csv(signals_df: pd.DataFrame) -> int:
+    """
+    Convert analyser signals_df to the CSV format expected by trade executors
+    and append new signals to live_signals/signals_YYYY-MM-DD.csv.
+    Returns count of new signals written.
     """
     today_str = now_ist().strftime("%Y-%m-%d")
     csv_path = str(LIVE_SIGNAL_DIR / SIGNAL_CSV_PATTERN.format(today_str))
-    ensure_dir = LIVE_SIGNAL_DIR.mkdir  # already exists, but keep intent clear
-    ensure_dir(parents=True, exist_ok=True)
+    received_time = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
 
-    existing_ids = _load_existing_ids(csv_path)
-    logtime = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    _ensure_signal_csv_schema(csv_path)
+
+    # Read existing signal IDs from today's CSV to avoid duplicates
+    existing_ids: set = _load_existing_ids(csv_path)
 
     file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
     written = 0
+    scanned = 0 if signals_df is None else int(len(signals_df))
 
-    # Always open and ensure header exists, so you can "see" the file even when no signals happen.
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=SIGNAL_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
         if not file_exists:
@@ -1159,69 +1296,77 @@ def _write_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "EQIDV2") ->
                 side = str(row.get("side", "")).upper()
                 bar_time = str(row.get("bar_time_ist", ""))
                 setup = str(row.get("setup", ""))
+                signal_id = _generate_signal_id(ticker, side, bar_time, setup)
 
-                signal_id = _generate_signal_id(strategy, ticker, side, bar_time, setup)
                 if signal_id in existing_ids:
                     continue
 
-                entry = float(row.get("entry_price", 0.0) or 0.0)
-                slp = float(row.get("sl_price", 0.0) or 0.0)
-                tgt = float(row.get("target_price", 0.0) or 0.0)
-                score = float(row.get("score", 0.0) or 0.0)
+                entry_price = float(row.get("entry_price", 0))
+                notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
+                qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
 
-                # Pull indicators from diagnostics_json if present
+                # Extract indicator values from diagnostics JSON if available
                 atr_pct = 0.0
-                rsi = 0.0
-                adx = 0.0
-                impulse = ""
+                rsi_val = 0.0
+                adx_val = 0.0
                 diag_str = row.get("diagnostics_json", "")
-                if isinstance(diag_str, str) and diag_str:
+                if diag_str:
                     try:
-                        diag = json.loads(diag_str)
-                        atr_val = _safe_float(diag.get("atr", diag.get("ATR15", 0)))
-                        close_val = _safe_float(diag.get("close", entry))
+                        diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
+                        atr_val = _safe_float(diag.get("atr", 0))
+                        close_val = _safe_float(diag.get("close", entry_price))
                         if np.isfinite(atr_val) and np.isfinite(close_val) and close_val > 0:
-                            atr_pct = float(atr_val) / float(close_val)
-                        rsi = _safe_float(diag.get("rsi", diag.get("RSI15", 0)))
-                        adx = _safe_float(diag.get("adx", diag.get("ADX15", 0)))
-                        impulse = str(diag.get("impulse_type", ""))
-                    except Exception:
+                            atr_pct = atr_val / close_val
+                        rsi_val = _safe_float(diag.get("rsi", 0))
+                        adx_val = _safe_float(diag.get("adx", 0))
+                    except (json.JSONDecodeError, TypeError):
                         pass
 
-                # EQIDV2 scanner is rule-based; ML fields are neutral
-                p_win = 1.0
-                ml_thr = 0.0
-                conf_mult = 1.0
+                # Determine impulse_type from diagnostics
+                impulse_type = ""
+                if diag_str:
+                    try:
+                        diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
+                        impulse_type = str(diag.get("impulse_type", ""))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
-                # Quantity sizing (same style as avwap_live)
-                notional = float(DEFAULT_POSITION_SIZE_RS) * float(INTRADAY_LEVERAGE) * float(conf_mult)
-                qty = max(1, int(notional / entry)) if entry > 0 else 1
-
-                notes = f"eqidv2|setup={setup}|impulse={impulse}"
-
-                writer.writerow({
+                # Keep both names for compatibility:
+                # - signal_entry_datetime_ist: explicit user-facing label
+                # - signal_bar_time_ist: legacy alias
+                out_row = {
                     "signal_id": signal_id,
-                    "logtime_ist": logtime,
+                    "signal_datetime": bar_time,
+                    "signal_entry_datetime_ist": bar_time,
+                    "signal_bar_time_ist": bar_time,
+                    "received_time": received_time,
                     "ticker": ticker,
                     "side": side,
-                    "entry_price": round(entry, 4),
-                    "sl_price": round(slp, 4),
-                    "target_price": round(tgt, 4),
-                    "quality_score": round(score, 6),
-                    "atr_pct_signal": round(float(atr_pct), 6),
-                    "rsi_signal": round(float(rsi), 2),
-                    "adx_signal": round(float(adx), 2),
-                    "p_win": round(float(p_win), 6),
-                    "ml_threshold": round(float(ml_thr), 6),
-                    "confidence_multiplier": round(float(conf_mult), 4),
-                    "quantity": int(qty),
-                    "notes": notes,
-                })
+                    "setup": setup,
+                    "impulse_type": impulse_type,
+                    "entry_price": round(entry_price, 2),
+                    "stop_price": round(float(row.get("sl_price", 0)), 2),
+                    "target_price": round(float(row.get("target_price", 0)), 2),
+                    "quality_score": round(float(row.get("score", 0)), 4),
+                    "atr_pct": round(atr_pct, 6),
+                    "rsi": round(rsi_val, 2),
+                    "adx": round(adx_val, 2),
+                    "quantity": qty,
+                }
+
+                writer.writerow(out_row)
                 existing_ids.add(signal_id)
                 written += 1
+                print(
+                    f"[CSV+] {ticker} {side} {bar_time} setup={setup} "
+                    f"entry={entry_price:.2f} sl={float(row.get('sl_price', 0)):.2f} tgt={float(row.get('target_price', 0)):.2f}",
+                    flush=True,
+                )
 
-    print(f"[CSV ] {strategy} written={written} path={csv_path}")
+    print(f"[CSV ] scanned={scanned} written={written} path={csv_path}", flush=True)
+
     return written
+
 
 # =============================================================================
 # RUN ONE SCAN
@@ -1231,7 +1376,10 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
     if not tickers:
         return pd.DataFrame(), pd.DataFrame()
 
-    state: Dict[str, Any] = {}
+    state = _load_state()
+    target_slot_ist = _current_15m_slot_start_ist()
+    print(f"[SLOT] strict_target_slot={target_slot_ist.strftime('%Y-%m-%d %H:%M:%S%z')}", flush=True)
+
     all_checks: List[Dict[str, Any]] = []
     all_signals: List[Dict[str, Any]] = []
 
@@ -1239,10 +1387,12 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
         path = os.path.join(DIR_15M, f"{t}{END_15M}")
         try:
             df_raw = read_parquet_tail(path, n=TAIL_ROWS)
-            signals, checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state)
-            if not checks_rows and not signals:
+            if df_raw is None or df_raw.empty:
                 all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": pd.NaT, "no_data": True})
                 all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": pd.NaT, "no_data": True})
+                continue
+
+            signals, checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state, target_slot_ist)
             all_checks.extend(checks_rows)
 
             for s in signals:
@@ -1253,12 +1403,18 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
                     "score": s.score,
                     "diagnostics_json": json.dumps(s.diagnostics, default=str),
                 })
+
+            if signals:
+                print(f"[SCAN] {t} slot_signals={len(signals)}", flush=True)
         except Exception as e:
             all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": pd.NaT, "error": str(e)})
             all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": pd.NaT, "error": str(e)})
+            print(f"[ERR ] {t} scan_failed: {e}", flush=True)
 
         if idx % 100 == 0:
-            print(f"  scanned {idx}/{len(tickers)} | signals_so_far={len(all_signals)}")
+            print(f"  scanned {idx}/{len(tickers)} | signals_so_far={len(all_signals)}", flush=True)
+
+    _save_state(state)
 
     checks_df = pd.DataFrame(all_checks)
     signals_df = pd.DataFrame(all_signals)
@@ -1290,9 +1446,9 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
     print(f"[SAVED] {signals_path}")
 
     # Bridge: write signals to CSV for trade executors
-    _write_signals_csv(signals_df)
+    written = _write_signals_csv(signals_df)
 
-    print(f"[RUN ] done | checks={len(checks_df)} rows | signals={len(signals_df)} rows")
+    print(f"[RUN ] done | checks={len(checks_df)} rows | signals={len(signals_df)} rows | csv_written={written}", flush=True)
 
     return checks_df, signals_df
 
@@ -1300,172 +1456,80 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
 # =============================================================================
 # MAIN LOOP
 # =============================================================================
+def main() -> None:
+    print("[LIVE] EQIDV2 CSV v2 (15m) | strict current 15m slot only")
+    print(f"[INFO] DIR_15M={DIR_15M} | tickers={len(list_tickers_15m())}")
+    print(f"[INFO] SHORT: SL={SHORT_STOP_PCT*100:.2f}%, TGT={SHORT_TARGET_PCT*100:.2f}%, ADX>={SHORT_ADX_MIN}, RSI<={SHORT_RSI_MAX}, StochK<={SHORT_STOCHK_MAX}")
+    print(f"[INFO] LONG : SL={LONG_STOP_PCT*100:.2f}%, TGT={LONG_TARGET_PCT*100:.2f}%, ADX>={LONG_ADX_MIN}, RSI>={LONG_RSI_MIN}, StochK>={LONG_STOCHK_MIN}")
+    print(f"[INFO] Volume filter: {USE_VOLUME_FILTER} (ratio>={VOLUME_MIN_RATIO}, SMA={VOLUME_SMA_PERIOD})")
+    print(f"[INFO] ATR% filter: {USE_ATR_PCT_FILTER} (min={ATR_PCT_MIN*100:.2f}%)")
+    print(f"[INFO] Close-confirm: {REQUIRE_CLOSE_CONFIRM}")
+    print(f"[INFO] UPDATE_15M_BEFORE_CHECK={UPDATE_15M_BEFORE_CHECK}")
+    print(f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s")
 
-# =============================================================================
-# LIVE RUNNER (avwap_live style)
-# =============================================================================
-def _floor_15m(dt: datetime) -> datetime:
-    minute = (dt.minute // 15) * 15
-    return dt.replace(minute=minute, second=0, microsecond=0)
+    holidays = _read_holidays_safe()
 
-def _last_completed_slot(dt: datetime, buffer_sec: int) -> datetime:
-    dt2 = dt - timedelta(seconds=int(buffer_sec))
-    return _floor_15m(dt2)
-
-def _next_slot_after(dt: datetime) -> datetime:
-    flo = _floor_15m(dt)
-    return flo + timedelta(minutes=15)
-
-def _sleep_until(target: datetime) -> None:
     while True:
         now = now_ist()
-        if now >= target:
-            return
-        time.sleep(min(2.0, (target - now).total_seconds()))
-
-def _scan_latest_slot(
-    *,
-    buffer_sec: int,
-    tolerance_sec: int,
-    verbose: bool,
-) -> None:
-    dt = now_ist()
-
-    # Trading day / session checks
-    holidays = _read_holidays_safe()
-    if not is_trading_day_safe(dt.date(), holidays):
-        print(f"[SKIP] not a trading day | {dt.date()}")
-        return
-    if dt.time() < START_TIME or dt.time() > END_TIME:
-        print(f"[SKIP] outside market window | now={dt.strftime('%H:%M:%S')}")
-        return
-
-    slot_end = _last_completed_slot(dt, buffer_sec)
-    target_slot_end = pd.Timestamp(slot_end)
-    target_slot_end = target_slot_end.tz_localize(IST) if target_slot_end.tzinfo is None else target_slot_end.tz_convert(IST)
-
-    tickers = list_tickers_15m()
-    if not tickers:
-        print(f"[WARN] no parquet files found in {DIR_15M}")
-        return
-
-    print(f"[SCAN] now={dt.strftime('%H:%M:%S')} slot_end={slot_end.strftime('%H:%M')} tickers={len(tickers)}", flush=True)
-
-    tmp_state: Dict[str, Any] = {}
-    all_signals: List[Dict[str, Any]] = []
-    stale = 0
-    scanned = 0
-
-    for t in tickers:
-        path = os.path.join(DIR_15M, f"{t}{END_15M}")
-        try:
-            df_raw = read_parquet_tail(path, n=TAIL_ROWS)
-            df_day = _prepare_today_df(normalize_dates(df_raw))
-            if df_day.empty:
-                continue
-
-            last_ts = pd.Timestamp(df_day["date"].iloc[-1])
-            last_ts = last_ts.tz_convert(IST) if last_ts.tzinfo else last_ts.tz_localize(IST)
-
-            drift = abs((last_ts - target_slot_end).total_seconds())
-            if drift > float(tolerance_sec):
-                stale += 1
-                if verbose:
-                    print(f"  [LAG] {t} last={last_ts.strftime('%H:%M')} expected={target_slot_end.strftime('%H:%M')}", flush=True)
-                continue
-
-            sigs, _checks = _latest_entry_signals_for_ticker(t, df_raw, tmp_state)
-            scanned += 1
-            for s in sigs:
-                all_signals.append({
-                    "ticker": s.ticker,
-                    "side": s.side,
-                    "bar_time_ist": s.bar_time_ist,
-                    "setup": s.setup,
-                    "entry_price": s.entry_price,
-                    "sl_price": s.sl_price,
-                    "target_price": s.target_price,
-                    "score": s.score,
-                    "diagnostics_json": json.dumps(s.diagnostics, default=str),
-                })
-
-        except Exception as e:
-            if verbose:
-                print(f"  [ERR] {t} {e}", flush=True)
-            continue
-
-    signals_df = pd.DataFrame(all_signals)
-
-    # Write CSV (always prints its own log)
-    written = _write_signals_csv(signals_df, strategy="EQIDV2")
-
-    print(f"[DONE] slot_end={slot_end.strftime('%H:%M')} scanned={scanned} stale={stale} signals={len(signals_df)} written={written}", flush=True)
-
-
-def main() -> None:
-    global DIR_15M
-    global LIVE_SIGNAL_DIR
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default=DIR_15M)
-    ap.add_argument("--signals-dir", default=str(LIVE_SIGNAL_DIR))
-    ap.add_argument("--buffer-sec", type=int, default=LATEST_SLOT_BUFFER_SEC)
-    ap.add_argument("--tolerance-sec", type=int, default=LATEST_SLOT_TOLERANCE_SEC)
-    ap.add_argument("--once", action="store_true")
-    ap.add_argument("--verbose", action="store_true")
-    args = ap.parse_args()
-
-    DIR_15M = str(args.data_dir)
-
-    LIVE_SIGNAL_DIR = Path(args.signals_dir)
-    LIVE_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
-
-    print(f"[START] EQIDV2 live (avwap_live style) | data_dir={DIR_15M} | out={LIVE_SIGNAL_DIR}", flush=True)
-    print(f"        buffer={args.buffer_sec}s tolerance={args.tolerance_sec}s | window={START_TIME.strftime('%H:%M')}–{END_TIME.strftime('%H:%M')}", flush=True)
-
-    if args.once:
-        _scan_latest_slot(buffer_sec=int(args.buffer_sec), tolerance_sec=int(args.tolerance_sec), verbose=bool(args.verbose))
-        return
-
-    last_slot_done: Optional[datetime] = None
-    while True:
-        dt = now_ist()
-
-        if dt.time() > HARD_STOP_TIME:
-            print("[STOP] hard stop reached for today", flush=True)
+        if now.time() >= HARD_STOP_TIME:
+            print("[STOP] Hard-stop reached for today. Exiting.")
             return
 
-        # Wait for market to open
-        if dt.time() < START_TIME:
-            today = dt.date()
-            open_dt = IST.localize(datetime(today.year, today.month, today.day, START_TIME.hour, START_TIME.minute, 0))
-            print(f"[WAIT] market not open | sleeping until {open_dt.strftime('%H:%M:%S')}", flush=True)
-            _sleep_until(open_dt)
+        if not is_trading_day_safe(now.date(), holidays):
+            nxt = _next_slot_after(now + timedelta(days=1))
+            print(f"[SKIP] Not a trading day ({now.date()}). Sleeping until {nxt}.")
+            _sleep_until(nxt)
             continue
 
-        slot_end = _last_completed_slot(dt, int(args.buffer_sec))
-        if last_slot_done is not None and slot_end <= last_slot_done:
-            time.sleep(1.0)
+        slot = _next_slot_after(now)
+        if slot.date() != now.date():
+            print(f"[WAIT] Next slot is tomorrow {slot}. Sleeping.")
+            _sleep_until(slot)
             continue
 
-                # --- Run multiple scans per slot to catch freshly-updated data ---
-        scan_labels = [chr(ord("A") + i) for i in range(int(NUM_SCANS_PER_SLOT))]
+        if now < slot:
+            print(f"[WAIT] Sleeping until slot {slot.strftime('%Y-%m-%d %H:%M:%S%z')}")
+            _sleep_until(slot)
+
+        now = now_ist()
+        if now.time() > END_TIME:
+            nxt = _next_slot_after(now + timedelta(days=1))
+            print(f"[DONE] Past END_TIME. Sleeping until {nxt}.")
+            _sleep_until(nxt)
+            continue
+
+        if UPDATE_15M_BEFORE_CHECK:
+            try:
+                print(f"[UPD ] Running eqidv2 core 15m update at {now_ist().strftime('%Y-%m-%d %H:%M:%S%z')}")
+                run_update_15m_once(holidays)
+            except Exception as e:
+                print(f"[WARN] Update failed: {e!r}")
+
+        # --- Wait for data fetcher to finish (~1 min after slot boundary) ---
+        delay_target = slot + timedelta(seconds=INITIAL_DELAY_SECONDS)
+        now = now_ist()
+        if now < delay_target:
+            wait_secs = (delay_target - now).total_seconds()
+            print(f"[WAIT] Delaying {wait_secs:.0f}s for data fetch to complete (until {delay_target.strftime('%H:%M:%S')})")
+            time.sleep(max(0, wait_secs))
+
+        # --- Run multiple scans per slot to catch freshly-updated data ---
+        scan_labels = [chr(ord("A") + i) for i in range(NUM_SCANS_PER_SLOT)]
         for scan_idx, label in enumerate(scan_labels):
             now = now_ist()
             if now.time() >= HARD_STOP_TIME:
-                print("[STOP] hard stop reached mid-slot", flush=True)
+                print("[STOP] Hard-stop reached mid-slot. Exiting.")
                 return
 
-            print(f"[RUN ] slot={slot_end.strftime('%H:%M')} | scan {label} ({scan_idx+1}/{len(scan_labels)}) at {now.strftime('%H:%M:%S')}", flush=True)
-            _scan_latest_slot(buffer_sec=int(args.buffer_sec), tolerance_sec=int(args.tolerance_sec), verbose=bool(args.verbose))
+            print(f"[RUN ] Slot {slot.strftime('%H:%M')} | scan {label} ({scan_idx+1}/{NUM_SCANS_PER_SLOT}) at {now.strftime('%H:%M:%S')}")
+            run_one_scan(run_tag=label)
 
+            # Sleep between scans (skip after the last one)
             if scan_idx < len(scan_labels) - 1:
                 time.sleep(float(SCAN_INTERVAL_SECONDS))
 
-        last_slot_done = slot_end
+        time.sleep(1.0)
 
-        # Sleep until the next slot + buffer (use slot_end, not dt, to avoid drift)
-        nxt = slot_end + timedelta(minutes=15) + timedelta(seconds=int(args.buffer_sec))
-        print(f"[NEXT] next_run_at={nxt.strftime('%H:%M:%S')}", flush=True)
-        _sleep_until(nxt)
+
 if __name__ == "__main__":
     main()
