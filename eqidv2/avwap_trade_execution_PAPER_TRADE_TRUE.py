@@ -91,6 +91,7 @@ TRADE_LOG_COLUMNS = [
     "trade_id",
     "signal_id",
     "signal_datetime",
+    "signal_entry_datetime_ist",
     "entry_time",
     "exit_time",
     "ticker",
@@ -115,6 +116,7 @@ SIGNAL_COLUMNS = [
     "signal_id", "signal_datetime", "received_time", "ticker", "side",
     "setup", "impulse_type", "entry_price", "stop_price", "target_price",
     "quality_score", "atr_pct", "rsi", "adx", "quantity",
+    "signal_entry_datetime_ist", "signal_bar_time_ist",
 ]
 
 # Column name mapping: signal generator CSV name → executor expected name
@@ -124,6 +126,8 @@ _SIGNAL_COL_MAP = {
     "target":         "target_price",
     "impulse":        "impulse_type",
     "created_ts_ist": "signal_datetime",
+    "bar_time_ist":   "signal_entry_datetime_ist",
+    "signal_bar_time_ist": "signal_entry_datetime_ist",
     "conf_mult":      "confidence_multiplier",
 }
 
@@ -227,6 +231,7 @@ class PaperTrade:
     trade_id: str = ""
     signal_id: str = ""
     signal_datetime: str = ""
+    signal_entry_datetime_ist: str = ""
     entry_time: str = ""
     exit_time: str = ""
     ticker: str = ""
@@ -408,6 +413,7 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
         trade_id=trade_id,
         signal_id=signal_id,
         signal_datetime=signal.get("signal_datetime", ""),
+        signal_entry_datetime_ist=signal.get("signal_entry_datetime_ist", ""),
         entry_time=now_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
         exit_time=exit_time_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
         ticker=ticker,
@@ -472,6 +478,7 @@ def _log_trade(trade: PaperTrade) -> None:
             "trade_id": trade.trade_id,
             "signal_id": trade.signal_id,
             "signal_datetime": trade.signal_datetime,
+            "signal_entry_datetime_ist": trade.signal_entry_datetime_ist,
             "entry_time": trade.entry_time,
             "exit_time": trade.exit_time,
             "ticker": trade.ticker,
@@ -523,6 +530,17 @@ def _normalize_signal(raw: dict) -> dict:
     for k, v in raw.items():
         mapped = _SIGNAL_COL_MAP.get(k, k)
         sig[mapped] = v
+
+    if not sig.get("signal_entry_datetime_ist"):
+        sig["signal_entry_datetime_ist"] = (
+            sig.get("signal_bar_time_ist")
+            or sig.get("bar_time_ist")
+            or sig.get("signal_datetime")
+            or ""
+        )
+
+    if not sig.get("signal_datetime"):
+        sig["signal_datetime"] = sig.get("signal_entry_datetime_ist", "")
 
     # Compute quantity if missing (generator does not emit one)
     if "quantity" not in sig or pd.isna(sig.get("quantity")):
