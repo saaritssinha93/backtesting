@@ -257,3 +257,16 @@ eqidv1/**
 # -----------------------------
 !eqidv1/outputs/
 !eqidv1/outputs/**
+
+
+# Include backtesting directory but only CSV and py files inside it
+!etfposv1/
+etfposv1/**
+!etfposv1/**/
+!etfposv1/**/*.py
+
+# Allow ALL outputs artifacts inside eqidv3/outputs
+# (png, csv, txt, parquet, anything)
+# -----------------------------
+!etfposv1/outputs/
+!etfposv1/outputs/**

@@ -1,13 +1,15 @@
 @echo off
-set ROOT=C:\Users\Saarit\OneDrive\Desktop\Trading\algosm1\algo_trading
+set SCRIPT_DIR=%~dp0
+for %%I in ("%SCRIPT_DIR%..") do set ROOT=%%~fI
 set LOG=%ROOT%\logs\live_signals_15m.log
 
 call C:\Users\Saarit\anaconda3\Scripts\activate.bat fin
-cd /d %ROOT%
+if not exist "%ROOT%\logs" mkdir "%ROOT%\logs"
+cd /d "%ROOT%"
 
-echo ================================ >> %LOG%
-echo [%DATE% %TIME%] START live signals >> %LOG%
+echo ================================ >> "%LOG%"
+echo [%DATE% %TIME%] START live signals >> "%LOG%"
 
-python etf_live_trading_signal_15m_v7_parquet.py >> %LOG% 2>&1
+python etf_live_trading_signal_15m_v7_parquet.py >> "%LOG%" 2>&1
 
-echo [%DATE% %TIME%] END live signals >> %LOG%
+echo [%DATE% %TIME%] END live signals >> "%LOG%"

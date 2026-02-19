@@ -1,14 +1,14 @@
-selected_etfs = {
-    "NIFTYBEES",     # Nifty 50 (most liquid tracker)
-    "JUNIORBEES",    # Nifty Next 50
-    "SENSEXETF",     # Sensex
-    "BANKBEES",      # Nifty Bank
-    "AUTOBEES",      # Nifty Auto
-    "ITBEES",        # Nifty IT
-    "CONSUMBEES",    # Nifty Consumption
-    "PSUBNKBEES",    # Nifty PSU Bank
-    "EVINDIA",       # EV theme (pick one)
-    "CPSEETF",       # CPSE/PSU basket
+selected_etfs = [
+    "NIFTYBEES",      # Nifty 50 (most liquid tracker)
+    "JUNIORBEES",     # Nifty Next 50
+    "SENSEXETF",      # Sensex
+    "BANKBEES",       # Nifty Bank
+    "AUTOBEES",       # Nifty Auto
+    "ITBEES",         # Nifty IT
+    "CONSUMBEES",     # Nifty Consumption
+    "PSUBNKBEES",     # Nifty PSU Bank
+    "EVINDIA",        # EV theme
+    "CPSEETF",        # CPSE/PSU basket
     "SILVERBEES",
     "GOLDBEES",
     "HNGSNGBEES",
@@ -18,8 +18,7 @@ selected_etfs = {
     "MODEFENCE",
     "PHARMABEES",
     "MOREALTY",
-
-}
+]
 
 
 
@@ -39,10 +38,3 @@ SIMILAR_GROUPS = {
     "Private Bank ETFs": {"PVTBANIETF","PVTBANKADD"},
     "Broad market 500": {"MONIFTY500","BSE500IETF"},
 }
-
-{
-    "SHARIABEES",    # Shariah Nifty
-    "LIQUIDBEES",    # Liquid/cash ETF
-    "LOWVOL",        # Low Volatility
-    "MIDSELIETF",    # Nifty MidSmallcap 400 (pick one)
-    }

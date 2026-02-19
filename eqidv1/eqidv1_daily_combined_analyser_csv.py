@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-eqidv3_daily_combined_analyser_csv.py
+eqidv1_daily_combined_analyser_csv.py
 ===================================
 
-Daily variant of eqidv3_live_combined_analyser_csv.py:
+Daily variant of eqidv1_live_combined_analyser_csv.py:
 - scans ALL 15-minute candles of TODAY (not only latest candle)
 - writes CSV to: daily_signals/signals_YYYY-MM-DD.csv
 - keeps signal logic identical by reusing helpers from the live analyser
@@ -22,7 +22,7 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
-import eqidv3_live_combined_analyser_csv as live
+import eqidv1_live_combined_analyser_csv as live
 
 ROOT = Path(__file__).resolve().parent
 DAILY_SIGNAL_DIR = ROOT / "daily_signals"
@@ -82,7 +82,7 @@ def _ensure_daily_csv_schema(csv_path: str) -> None:
     print(f"[CSV][DAILY] migrated schema for {csv_path} | added={missing}", flush=True)
 
 
-def _write_daily_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "eqidv3_DAILY") -> int:
+def _write_daily_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "eqidv1_DAILY") -> int:
     """Append deduplicated signals into daily_signals/signals_YYYY-MM-DD.csv."""
     today_str = live.now_ist().strftime("%Y-%m-%d")
     csv_path = str(DAILY_SIGNAL_DIR / live.SIGNAL_CSV_PATTERN.format(today_str))
@@ -136,7 +136,7 @@ def _write_daily_signals_csv(signals_df: pd.DataFrame, *, strategy: str = "eqidv
                         pass
 
                 qty = int(round((live.DEFAULT_POSITION_SIZE_RS * live.INTRADAY_LEVERAGE) / entry)) if entry > 0 else 0
-                notes = f"eqidv3_daily|setup={setup}|impulse={impulse}"
+                notes = f"eqidv1_daily|setup={setup}|impulse={impulse}"
 
                 writer.writerow({
                     "signal_id": signal_id,
@@ -203,7 +203,7 @@ def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
             continue
 
     signals_df = pd.DataFrame(all_signals)
-    written = _write_daily_signals_csv(signals_df, strategy="eqidv3_DAILY")
+    written = _write_daily_signals_csv(signals_df, strategy="eqidv1_DAILY")
 
     print(f"[DONE][DAILY] scanned={scanned} signals={len(signals_df)} written={written}", flush=True)
     return signals_df

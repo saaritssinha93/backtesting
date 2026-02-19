@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time as _time
 from datetime import datetime, timedelta, time as dtime
+from pathlib import Path
 import pytz
 
 from kiteconnect import KiteConnect
@@ -19,16 +20,17 @@ import algosm1_trading_data_continous_run_historical_alltf_v3_parquet_etfsonly a
 
 
 IST = pytz.timezone("Asia/Kolkata")
+ROOT = Path(__file__).resolve().parent
 
-RUN_AT = dtime(15, 50)   # 15:40 IST daily
+RUN_AT = dtime(15, 40)   # 15:40 IST daily
 # NEW: hard stop for this process run
-SESSION_END = dtime(16, 00)
+SESSION_END = dtime(15, 50)
 
-API_KEY_FILE = "api_key.txt"
-ACCESS_TOKEN_FILE = "access_token.txt"
+API_KEY_FILE = ROOT / "api_key.txt"
+ACCESS_TOKEN_FILE = ROOT / "access_token.txt"
 
 
-def read_first_nonempty_line(path: str) -> str:
+def read_first_nonempty_line(path: str | Path) -> str:
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             s = line.strip()
@@ -109,6 +111,7 @@ def run_eod_updates(holidays: set) -> None:
 
 def main() -> None:
     holidays = core._read_holidays(core.HOLIDAYS_FILE_DEFAULT)
+    special_open = core._read_special_trading_days(getattr(core, "SPECIAL_TRADING_DAYS_FILE_DEFAULT", "nse_special_trading_days.csv"))
 
     print("[EOD] Daily+Weekly scheduler started.")
     print("      Runs once per trading day at 15:40 IST.")
@@ -126,7 +129,7 @@ def main() -> None:
             return
 
         # If non-trading day, for a scheduled run just exit
-        if not core._is_trading_day(n.date(), holidays):
+        if not core._is_trading_day(n.date(), holidays, special_open):
             print("[INFO] Non-trading day. Exiting.")
             return
 

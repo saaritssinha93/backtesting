@@ -1,1 +1,0 @@
-selected_etfs = {'SILVERBEES', 'GOLDBEES'}

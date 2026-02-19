@@ -41,8 +41,9 @@ import pytz
 # Wire eqidv3 core into sys.path
 # =============================================================================
 _ROOT = Path(__file__).resolve().parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_EQIDV1 = _ROOT / "backtesting" / "eqidv3"
+if str(_EQIDV1) not in sys.path:
+    sys.path.insert(0, str(_EQIDV1))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
 

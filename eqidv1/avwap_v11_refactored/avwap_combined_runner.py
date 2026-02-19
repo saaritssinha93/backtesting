@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-avwap_combined_runner.py — AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
+avwap_combined_runner_v2.py — AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
 ==================================================================================
 
 Changes from v1:
@@ -104,6 +104,14 @@ INTRADAY_LEVERAGE_SHORT = 5.0
 INTRADAY_LEVERAGE_LONG = 5.0
 
 ENABLE_CASH_CONSTRAINED_PORTFOLIO_SIM = False
+
+# If True, force min_bars_left_after_entry=0 for BOTH sides (live-signal parity).
+# This makes entry counts comparable to eqidv2_* live/daily scanners.
+FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
+
+# If True, disable Top-N pruning on both sides so runner output does not
+# unintentionally suppress one side on a given day versus live/daily scanners.
+FORCE_LIVE_PARITY_DISABLE_TOPN = True
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 
@@ -501,6 +509,60 @@ def _add_notional_pnl(df: pd.DataFrame) -> pd.DataFrame:
     d["pnl_rs_gross"] = (pd.to_numeric(d["pnl_pct_gross_price"], errors="coerce").fillna(0.0) / 100.0) * d["notional_exposure_rs"]
 
     return d
+
+
+def _sort_trades_for_output(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Keep exports deterministic and day-level readable so LONG/SHORT rows are
+    naturally interleaved by date/time instead of appearing in side blocks.
+    """
+    if df.empty:
+        return df
+
+    d = df.copy()
+
+    if "trade_date" in d.columns:
+        d["trade_date"] = pd.to_datetime(d["trade_date"], errors="coerce")
+
+    for c in ["signal_time_ist", "entry_time_ist", "exit_time_ist"]:
+        if c in d.columns:
+            d[c] = pd.to_datetime(d[c], errors="coerce")
+
+    sort_cols = [
+        c
+        for c in ["trade_date", "entry_time_ist", "signal_time_ist", "ticker", "side"]
+        if c in d.columns
+    ]
+    if sort_cols:
+        d = d.sort_values(sort_cols).reset_index(drop=True)
+
+    return d
+
+
+def _print_day_side_mix(df: pd.DataFrame) -> None:
+    """
+    Print how many dates contain only LONG, only SHORT, or both.
+    """
+    if df.empty or not {"trade_date", "side"}.issubset(df.columns):
+        return
+
+    d = df.copy()
+    d["trade_date"] = pd.to_datetime(d["trade_date"], errors="coerce").dt.date
+    d["side"] = d["side"].astype(str).str.upper()
+
+    pivot = d.groupby(["trade_date", "side"]).size().unstack(fill_value=0)
+    short_s = pivot["SHORT"] if "SHORT" in pivot.columns else pd.Series(0, index=pivot.index)
+    long_s = pivot["LONG"] if "LONG" in pivot.columns else pd.Series(0, index=pivot.index)
+
+    only_short = int(((short_s > 0) & (long_s == 0)).sum())
+    only_long = int(((long_s > 0) & (short_s == 0)).sum())
+    both = int(((short_s > 0) & (long_s > 0)).sum())
+    total_days = int(len(pivot))
+
+    print(
+        f"[INFO] Day-side mix: both={both} | short_only={only_short} | "
+        f"long_only={only_long} | total_days={total_days}"
+    )
 
 
 
@@ -1234,6 +1296,14 @@ def main() -> None:
                 reports_dir=_outputs_dir,
             )
 
+            if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
+                short_cfg.min_bars_left_after_entry = 0
+                long_cfg.min_bars_left_after_entry = 0
+
+            if FORCE_LIVE_PARITY_DISABLE_TOPN:
+                short_cfg.enable_topn_per_day = False
+                long_cfg.enable_topn_per_day = False
+
             print(
                 f"[INFO] SHORT config: SL={short_cfg.stop_pct*100:.1f}%, TGT={short_cfg.target_pct*100:.1f}%, "
                 f"slippage={short_cfg.slippage_pct*10000:.0f}bps, comm={short_cfg.commission_pct*10000:.0f}bps"
@@ -1251,6 +1321,8 @@ def main() -> None:
             print(
                 f"[INFO] Notional exposure per trade: SHORT=Rs.{short_notional:,.0f} | LONG=Rs.{long_notional:,.0f}"
             )
+            print(f"[INFO] Live parity: min_bars_left=0 -> {FORCE_LIVE_PARITY_MIN_BARS_LEFT}")
+            print(f"[INFO] Live parity: disable_topn_per_day -> {FORCE_LIVE_PARITY_DISABLE_TOPN}")
             print(f"[INFO] Parallelism: max_workers={MAX_WORKERS}")
             print(f"[INFO] Output directory: {_outputs_dir}")
             print(f"[INFO] Console log: {log_path}")
@@ -1288,11 +1360,15 @@ def main() -> None:
             # ---- Apply leverage-aware P&L (capital ROI + notional rupees) ----
             if not short_df.empty:
                 short_df = _add_notional_pnl(short_df)
+                short_df = _sort_trades_for_output(short_df)
             if not long_df.empty:
                 long_df = _add_notional_pnl(long_df)
+                long_df = _sort_trades_for_output(long_df)
 
             combined = pd.concat([short_df, long_df], ignore_index=True)
             combined = _add_notional_pnl(combined)
+            combined = _sort_trades_for_output(combined)
+            _print_day_side_mix(combined)
 
             # --- Comprehensive metrics ---
             print_metrics("SHORT (net of slippage+comm, 5-min exits)", compute_backtest_metrics(short_df))
@@ -1305,7 +1381,8 @@ def main() -> None:
             if ENABLE_CASH_CONSTRAINED_PORTFOLIO_SIM:
                 sim_df, pstats = _simulate_cash_constrained(combined)
                 _print_portfolio(pstats)
-                combined = sim_df
+                combined = _sort_trades_for_output(sim_df)
+                _print_day_side_mix(combined)
 
             # --- Save CSV ---
             out_csv = _outputs_dir / f"avwap_longshort_trades_ALL_DAYS_{ts}.csv"

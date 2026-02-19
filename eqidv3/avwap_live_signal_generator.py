@@ -28,6 +28,7 @@ Author: ChatGPT rewrite (Feb 2026)
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -144,6 +145,34 @@ def _build_ml_filter(args: argparse.Namespace):
 DEFAULT_OUT_DIR = "live_signals"
 DEFAULT_STATE_DIR = "logs"
 DEFAULT_STATE_FILE = "eqidv3_avwap_live_state_v11.json"
+SIGNAL_CSV_PATTERN = "signals_{}.csv"
+
+# Position sizing for CSV output
+DEFAULT_POSITION_SIZE_RS = 50_000
+INTRADAY_LEVERAGE = 5.0
+
+SIGNAL_CSV_COLUMNS = [
+    "signal_id",
+    "signal_datetime",
+    "signal_entry_datetime_ist",
+    "signal_bar_time_ist",
+    "received_time",
+    "ticker",
+    "side",
+    "setup",
+    "impulse_type",
+    "entry_price",
+    "stop_price",
+    "target_price",
+    "quality_score",
+    "atr_pct",
+    "rsi",
+    "adx",
+    "quantity",
+    "p_win",
+    "ml_threshold",
+    "confidence_multiplier",
+]
 
 # NSE cash market close (15m candles end at 15:30)
 MARKET_OPEN = dtime(9, 15)
@@ -337,31 +366,91 @@ def _stable_signal_id(ticker: str, side: str, bar_ts: str, setup: str) -> str:
 
 
 def _read_seen_signal_ids(csv_path: Path) -> Set[str]:
-    if not csv_path.exists():
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
         return set()
     try:
-        df = pd.read_csv(csv_path)
-        if "signal_id" in df.columns:
-            return set(df["signal_id"].astype(str).tolist())
+        df = pd.read_csv(
+            csv_path,
+            usecols=["signal_id"],
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+            engine="python",
+        )
+        return set(df["signal_id"].astype(str).tolist())
     except Exception:
         pass
     return set()
 
 
-def _append_signals_to_csv(csv_path: Path, rows: List[Dict]) -> None:
-    if not rows:
+def _ensure_signal_csv_schema(csv_path: Path) -> None:
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
         return
+    try:
+        df_existing = pd.read_csv(
+            csv_path,
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+            engine="python",
+        )
+    except Exception:
+        return
+
+    missing = [c for c in SIGNAL_CSV_COLUMNS if c not in df_existing.columns]
+    if not missing:
+        return
+
+    for c in missing:
+        df_existing[c] = ""
+
+    df_existing = df_existing[SIGNAL_CSV_COLUMNS]
+    df_existing.to_csv(csv_path, index=False, quoting=csv.QUOTE_ALL)
+    print(f"[CSV ] migrated schema for {csv_path.as_posix()} | added={missing}")
+
+
+def _append_signals_to_csv(csv_path: Path, rows: List[Dict]) -> int:
+    """
+    Append rows in live CSV style with deterministic dedupe on signal_id.
+    Returns written row count.
+    """
+    if not rows:
+        return 0
+
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    df_new = pd.DataFrame(rows)
-    if csv_path.exists():
-        try:
-            df_old = pd.read_csv(csv_path)
-            df_all = pd.concat([df_old, df_new], ignore_index=True)
-        except Exception:
-            df_all = df_new
-    else:
-        df_all = df_new
-    df_all.to_csv(csv_path, index=False)
+    _ensure_signal_csv_schema(csv_path)
+    existing_ids = _read_seen_signal_ids(csv_path)
+
+    file_exists = csv_path.exists() and csv_path.stat().st_size > 0
+    scanned = len(rows)
+    written = 0
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=SIGNAL_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
+        if not file_exists:
+            writer.writeheader()
+
+        for row in rows:
+            signal_id = str(row.get("signal_id", "")).strip()
+            if not signal_id or signal_id in existing_ids:
+                continue
+
+            out_row = {}
+            for k in SIGNAL_CSV_COLUMNS:
+                out_row[k] = row.get(k, "")
+
+            writer.writerow(out_row)
+            existing_ids.add(signal_id)
+            written += 1
+            print(
+                f"[CSV+] {out_row.get('ticker', '')} {out_row.get('side', '')} "
+                f"{out_row.get('signal_entry_datetime_ist', out_row.get('signal_datetime', ''))} "
+                f"setup={out_row.get('setup', '')} entry={out_row.get('entry_price', '')} "
+                f"sl={out_row.get('stop_price', '')} tgt={out_row.get('target_price', '')}"
+            )
+
+    print(f"[CSV ] scanned={scanned} written={written} path={csv_path.as_posix()}")
+    return written
 
 
 # -----------------------------
@@ -872,6 +961,7 @@ def detect_latest_signals_for_ticker(
     tail_rows: int,
     cfg_long: StrategyConfig,
     cfg_short: StrategyConfig,
+    slot_ts: datetime,
     st: Dict,
 ) -> List[LiveSignal]:
     """Detect latest-slot signals using runner-parity static logic when available."""
@@ -881,7 +971,6 @@ def detect_latest_signals_for_ticker(
 
     # Source-of-truth static logic parity with avwap_combined_runner / eqidv3 live analyser.
     if eq_live_parity is not None and hasattr(eq_live_parity, "_all_day_runner_parity_signals_for_ticker"):
-        slot_ts = last_completed_15m_slot(now_ist(), buffer_seconds=0)
         day = slot_ts.astimezone(IST).strftime("%Y-%m-%d")
         all_sigs = eq_live_parity._all_day_runner_parity_signals_for_ticker(ticker, df_tail)
         out: List[LiveSignal] = []
@@ -892,7 +981,12 @@ def detect_latest_signals_for_ticker(
                 continue
 
             side = str(s.side).upper()
-            if _count_today(st, day, ticker, side) >= cfg_long.max_trades_per_ticker_per_day:
+            cap = (
+                cfg_long.max_trades_per_ticker_per_day
+                if side == "LONG"
+                else cfg_short.max_trades_per_ticker_per_day
+            )
+            if _count_today(st, day, ticker, side) >= cap:
                 continue
 
             d = dict(getattr(s, "diagnostics", {}) or {})
@@ -923,7 +1017,6 @@ def detect_latest_signals_for_ticker(
     if df_day.empty or not day:
         return []
 
-    slot_ts = last_completed_15m_slot(now_ist(), buffer_seconds=0)
     entry_idx = _find_entry_idx_for_slot(df_day, slot_ts)
     if entry_idx is None:
         return []
@@ -1016,11 +1109,6 @@ def scan_latest_slot_all_tickers(
                 ml_filter.cfg.pwin_threshold = float(args.ml_threshold)
             except Exception:
                 pass
-# keep threshold consistent with CLI
-            try:
-                ml_filter.cfg.pwin_threshold = float(args.ml_threshold)
-            except Exception:
-                pass
         except Exception as e:
             print(f"[WARN] ML filter unavailable: {e}")
             ml_filter = None
@@ -1030,27 +1118,18 @@ def scan_latest_slot_all_tickers(
     for t in tickers:
         path = os.path.join(args.dir_15m, f"{t}{args.suffix}")
         try:
-            # use slot_ts inside (buffer handled by loop); we also need exact slot in df
-            df_tail = read_parquet_tail(path, tail_rows=args.tail_rows, engine=cfg_long.parquet_engine)
-            if df_tail.empty:
-                continue
-            df_day, day = _prepare_today_df(df_tail, cfg_long)
-            if df_day.empty:
-                continue
-            entry_idx = _find_entry_idx_for_slot(df_day, slot_ts)
-            if entry_idx is None:
-                continue
-
-            # LONG
-            if side_filter in ("BOTH", "LONG"):
-                sL = _latest_long_signal_for_ticker(t, df_day, day, entry_idx, cfg_long, st)
-                if sL is not None:
-                    candidates.append(sL)
-            # SHORT
-            if side_filter in ("BOTH", "SHORT"):
-                sS = _latest_short_signal_for_ticker(t, df_day, day, entry_idx, cfg_short, st)
-                if sS is not None:
-                    candidates.append(sS)
+            sigs = detect_latest_signals_for_ticker(
+                ticker=t,
+                parquet_path=path,
+                tail_rows=args.tail_rows,
+                cfg_long=cfg_long,
+                cfg_short=cfg_short,
+                slot_ts=slot_ts,
+                st=st,
+            )
+            if side_filter != "BOTH":
+                sigs = [s for s in sigs if s.side.upper() == side_filter]
+            candidates.extend(sigs)
         except Exception as e:
             print(f"[WARN] {t}: scan error: {e}")
             continue
@@ -1075,37 +1154,46 @@ def scan_latest_slot_all_tickers(
     gated = _apply_ml_gate(candidates, ml_filter, args.ml_threshold, args.no_ml)
 
     # Build CSV rows (dedup by signal_id)
-    out_csv = Path(args.out_dir) / f"signals_{day_str}.csv"
+    out_csv = Path(args.out_dir) / SIGNAL_CSV_PATTERN.format(day_str)
     seen_ids = _read_seen_signal_ids(out_csv)
 
-    created_ts = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    received_time = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
     accepted = 0
     for sig, ml in gated:
         signal_id = _stable_signal_id(sig.ticker, sig.side, sig.bar_time_ist, sig.setup)
         if signal_id in seen_ids:
             continue
 
+        entry_price = float(sig.entry)
+        qty = (
+            max(1, int((DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE) / entry_price))
+            if entry_price > 0
+            else 1
+        )
+        p_win = ml.get("p_win", np.nan)
+        conf_mult = ml.get("conf_mult", 1.0)
+
         row = {
-            "date": day_str,
+            "signal_id": signal_id,
+            "signal_datetime": sig.bar_time_ist,
+            "signal_entry_datetime_ist": sig.bar_time_ist,
+            "signal_bar_time_ist": sig.bar_time_ist,
+            "received_time": received_time,
             "ticker": sig.ticker,
             "side": sig.side,
-            "bar_time_ist": sig.bar_time_ist,
-            "entry": sig.entry,
-            "sl": sig.sl,
-            "target": sig.target,
             "setup": sig.setup,
-            "impulse": sig.impulse,
-            "quality_score": sig.quality_score,
-            "adx": sig.adx,
-            "rsi": sig.rsi,
-            "k": sig.k,
-            "avwap_dist_atr": sig.avwap_dist_atr,
-            "ema_gap_atr": sig.ema_gap_atr,
+            "impulse_type": sig.impulse,
+            "entry_price": round(entry_price, 2),
+            "stop_price": round(float(sig.sl), 2),
+            "target_price": round(float(sig.target), 2),
+            "quality_score": round(float(sig.quality_score), 4),
             "atr_pct": sig.atr_pct,
-            "p_win": ml.get("p_win", np.nan),
-            "conf_mult": ml.get("conf_mult", 1.0),
-            "signal_id": signal_id,
-            "created_ts_ist": created_ts,
+            "rsi": sig.rsi,
+            "adx": sig.adx,
+            "quantity": int(qty),
+            "p_win": p_win,
+            "ml_threshold": float(args.ml_threshold),
+            "confidence_multiplier": conf_mult,
         }
         out_rows.append(row)
         seen_ids.add(signal_id)
@@ -1167,7 +1255,7 @@ def main() -> None:
     if args.run_once:
         rows = scan_latest_slot_all_tickers(cfg_long, cfg_short, args)
         if rows and (not args.dry_run):
-            out_csv = Path(args.out_dir) / f"signals_{now_ist().strftime('%Y-%m-%d')}.csv"
+            out_csv = Path(args.out_dir) / SIGNAL_CSV_PATTERN.format(now_ist().strftime("%Y-%m-%d"))
             _append_signals_to_csv(out_csv, rows)
         return
 
@@ -1184,7 +1272,7 @@ def main() -> None:
             rows = scan_latest_slot_all_tickers(cfg_long, cfg_short, args)
             if rows and (not args.dry_run):
                 day_str = now_ist().strftime("%Y-%m-%d")
-                out_csv = Path(args.out_dir) / f"signals_{day_str}.csv"
+                out_csv = Path(args.out_dir) / SIGNAL_CSV_PATTERN.format(day_str)
                 _append_signals_to_csv(out_csv, rows)
         except KeyboardInterrupt:
             print("\n[STOP] user interrupt")

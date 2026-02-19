@@ -14,12 +14,16 @@ from selenium.common.exceptions import StaleElementReferenceException
 from webdriver_manager.chrome import ChromeDriverManager
 import time
 import os
+from pathlib import Path
 from pyotp import TOTP
 import pandas as pd
 
 
+ROOT = Path(__file__).resolve().parent
+
+
 def autologin():
-    token_path = "api_key.txt"
+    token_path = ROOT / "api_key.txt"
     with open(token_path, 'r') as f:
         key_secret = f.read().split()
     kite = KiteConnect(api_key=key_secret[0])
@@ -84,35 +88,40 @@ def autologin():
         request_token = driver.current_url.split('request_token=')[1][:32]
 
     # Save request token to file
-    with open('request_token.txt', 'w') as the_file:
+    with open(ROOT / 'request_token.txt', 'w') as the_file:
         the_file.write(request_token)
     driver.quit()
 
-autologin()
 
-# Generate and store access token - valid till 6 AM the next day
-with open("request_token.txt", 'r') as f:
-    request_token = f.read()
-with open("api_key.txt", 'r') as f:
-    key_secret = f.read().split()
-kite = KiteConnect(api_key=key_secret[0])
-data = kite.generate_session(request_token, api_secret=key_secret[1])
+def main() -> None:
+    autologin()
 
-with open('access_token.txt', 'w') as file:
-    file.write(data["access_token"])
+    # Generate and store access token - valid till 6 AM the next day
+    with open(ROOT / "request_token.txt", 'r') as f:
+        request_token = f.read()
+    with open(ROOT / "api_key.txt", 'r') as f:
+        key_secret = f.read().split()
+    kite = KiteConnect(api_key=key_secret[0])
+    data = kite.generate_session(request_token, api_secret=key_secret[1])
+
+    with open(ROOT / 'access_token.txt', 'w') as file:
+        file.write(data["access_token"])
+
+    # Get dump of all NSE instruments
+    nse_instrument_dump = kite.instruments("NSE")
+    nse_instrument_df = pd.DataFrame(nse_instrument_dump)
+
+    # Get dump of all BSE instruments
+    bse_instrument_dump = kite.instruments("BSE")
+    bse_instrument_df = pd.DataFrame(bse_instrument_dump)
+
+    # Merge the NSE and BSE data
+    merged_instrument_df = pd.concat([nse_instrument_df, bse_instrument_df])
+
+    # Save the merged data to a single CSV
+    merged_instrument_df.to_csv(ROOT / "Merged_NSE_BSE_Instruments.csv", index=False)
 
 
-# Get dump of all NSE instruments
-nse_instrument_dump = kite.instruments("NSE")
-nse_instrument_df = pd.DataFrame(nse_instrument_dump)
-
-# Get dump of all BSE instruments
-bse_instrument_dump = kite.instruments("BSE")
-bse_instrument_df = pd.DataFrame(bse_instrument_dump)
-
-# Merge the NSE and BSE data
-merged_instrument_df = pd.concat([nse_instrument_df, bse_instrument_df])
-
-# Save the merged data to a single CSV
-merged_instrument_df.to_csv("Merged_NSE_BSE_Instruments.csv", index=False)
+if __name__ == "__main__":
+    main()
 

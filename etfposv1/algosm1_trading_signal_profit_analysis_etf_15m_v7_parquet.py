@@ -40,6 +40,7 @@ import os
 import glob
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -50,6 +51,7 @@ import pytz
 # TIMEZONE (define BEFORE any function default uses it)
 # =============================================================================
 IST = pytz.timezone("Asia/Kolkata")
+ROOT = Path(__file__).resolve().parent
 
 # =============================================================================
 # PARQUET I/O HELPERS
@@ -118,27 +120,18 @@ def write_parquet(df: pd.DataFrame, path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     df.to_parquet(path, index=False, engine=PARQUET_ENGINE)
 
-
-
-import pandas as pd
-import pytz
-
-
 # =============================================================================
 # CONFIG
 # =============================================================================
 
 # Indicator CSV directories
-DIR_15M = "etf_indicators_15min_pq"      # <-- 15m intraday indicators
-DIR_D   = "etf_indicators_daily_pq"
-DIR_W   = "etf_indicators_weekly_pq"
+DIR_15M = str(ROOT / "etf_indicators_15min_pq")      # <-- 15m intraday indicators
+DIR_D   = str(ROOT / "etf_indicators_daily_pq")
+DIR_W   = str(ROOT / "etf_indicators_weekly_pq")
 
 # Output directory
-OUT_DIR = "etf_signals"
+OUT_DIR = str(ROOT / "etf_signals")
 os.makedirs(OUT_DIR, exist_ok=True)
-
-# Timezone
-IST = pytz.timezone("Asia/Kolkata")
 
 # ---- Target configuration (single source of truth) ----
 TARGET_PCT: float = 8.0
@@ -212,6 +205,17 @@ def fmt_rs(x: float) -> str:
         return f"₹{float(x):,.2f}"
     except Exception:
         return "₹NA"
+
+
+# Robust conversion helper for timestamp columns that may be tz-naive or tz-aware.
+def to_ist_datetime(series: pd.Series) -> pd.Series:
+    dt = pd.to_datetime(series, errors="coerce")
+    try:
+        if getattr(dt.dt, "tz", None) is None:
+            return dt.dt.tz_localize(IST)
+        return dt.dt.tz_convert(IST)
+    except Exception:
+        return dt
 
 
 # =============================================================================
@@ -750,7 +754,7 @@ def main() -> None:
 
     sig_df = pd.DataFrame(all_signals).sort_values(["signal_time_ist", "ticker"]).reset_index(drop=True)
     sig_df["itr"] = np.arange(1, len(sig_df) + 1)
-    sig_df["signal_date"] = sig_df["signal_time_ist"].dt.tz_convert(IST).dt.date
+    sig_df["signal_date"] = to_ist_datetime(sig_df["signal_time_ist"]).dt.date
 
     ts = datetime.now(IST).strftime("%Y%m%d_%H%M")
 
@@ -864,7 +868,7 @@ def main() -> None:
 
     out_df_ruled = out_df_ruled.sort_values(["signal_time_ist", "ticker"]).reset_index(drop=True)
     out_df_ruled["itr"] = np.arange(1, len(out_df_ruled) + 1)
-    out_df_ruled["signal_date"] = pd.to_datetime(out_df_ruled["signal_time_ist"], errors="coerce").dt.tz_convert(IST).dt.date
+    out_df_ruled["signal_date"] = to_ist_datetime(out_df_ruled["signal_time_ist"]).dt.date
 
     signals_path = os.path.join(OUT_DIR, f"multi_tf_signals_{ts}_IST.parquet")
     out_df_ruled[[

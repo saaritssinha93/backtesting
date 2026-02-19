@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import time as _time
 from datetime import datetime, timedelta, time as dtime
+from pathlib import Path
 import pytz
 
 from kiteconnect import KiteConnect
@@ -13,6 +14,7 @@ import algosm1_trading_data_continous_run_historical_alltf_v3_parquet_etfsonly a
 
 
 IST = pytz.timezone("Asia/Kolkata")
+ROOT = Path(__file__).resolve().parent
 
 MARKET_OPEN  = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
@@ -21,11 +23,11 @@ STEP_MIN     = 15
 # NEW: hard stop for this process run
 SESSION_END  = dtime(15, 50)
 
-API_KEY_FILE = "api_key.txt"
-ACCESS_TOKEN_FILE = "access_token.txt"
+API_KEY_FILE = ROOT / "api_key.txt"
+ACCESS_TOKEN_FILE = ROOT / "access_token.txt"
 
 
-def read_first_nonempty_line(path: str) -> str:
+def read_first_nonempty_line(path: str | Path) -> str:
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             s = line.strip()
@@ -99,7 +101,7 @@ def run_update_15m(holidays: set) -> None:
         intraday_ts="end",          # use candle END timestamps
         holidays=holidays,
         refresh_tokens=False,       # uses cached tokens unless you force refresh
-        report_dir="reports",
+        report_dir="etf_missing_reports",
         print_missing_rows=False,
         print_missing_rows_max=200,
     )

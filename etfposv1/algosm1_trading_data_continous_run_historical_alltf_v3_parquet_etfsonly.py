@@ -190,7 +190,7 @@ def load_etf_universe(logger: logging.Logger) -> tuple[list[str], dict[str, int]
                 token_map = {str(k).strip().upper(): int(v) for k, v in raw.items() if str(k).strip()}
                 tickers = sorted(token_map.keys())
                 if tickers:
-                    logger.info("Loaded %d ETFs from etf_filtered_etfs.etf_tokens", len(tickers))
+                    logger.info("Loaded %d ETFs from etf_filtered_etfs_all.etf_tokens", len(tickers))
                     return tickers, token_map
             except Exception:
                 pass

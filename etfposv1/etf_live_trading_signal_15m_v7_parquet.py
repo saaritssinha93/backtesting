@@ -53,6 +53,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, date, time as dtime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -71,15 +72,16 @@ except Exception:
 # =============================================================================
 
 IST = pytz.timezone("Asia/Kolkata")
+ROOT = Path(__file__).resolve().parent
 
 # Indicator parquet directories (match your v7 parquet scripts)
-DIR_15M = "etf_indicators_15min_pq"
-DIR_D   = "etf_indicators_daily_pq"
-DIR_W   = "etf_indicators_weekly_pq"
+DIR_15M = ROOT / "etf_indicators_15min_pq"
+DIR_D   = ROOT / "etf_indicators_daily_pq"
+DIR_W   = ROOT / "etf_indicators_weekly_pq"
 
 # Output folders (per-run parquet files)
-OUT_CHECKS_DIR  = "out_live_checks"
-OUT_SIGNALS_DIR = "out_live_signals"
+OUT_CHECKS_DIR  = ROOT / "out_live_checks"
+OUT_SIGNALS_DIR = ROOT / "out_live_signals"
 
 # File endings (match your naming)
 END_15M = "_etf_indicators_15min.parquet"
@@ -90,7 +92,7 @@ END_W   = "_etf_indicators_weekly.parquet"
 START_TIME = dtime(9, 15, 10)   # 09:15:30 IST
 END_TIME   = dtime(15, 30, 10)  # 15:30:30 IST
 SLOT_MINS  = 15
-SECOND_RUN_GAP_SECONDS = 15
+SECOND_RUN_GAP_SECONDS = 20
 SESSION_END_TIME = dtime(15, 40, 0)   # hard stop for the script (exit)
 
 # Concurrency / performance
@@ -120,7 +122,7 @@ def is_trading_day(day: date) -> bool:
 
 
 def list_tickers_from_dir(directory: str, ending: str) -> List[str]:
-    pattern = os.path.join(directory, f"*{ending}")
+    pattern = str(Path(directory) / f"*{ending}")
     files = glob.glob(pattern)
     tickers: List[str] = []
     for f in files:
@@ -364,9 +366,9 @@ CACHE = ParquetCache()
 # =============================================================================
 
 def check_latest_for_ticker(ticker: str, checked_at: pd.Timestamp, run_tag: str) -> Optional[Dict]:
-    path_i = os.path.join(DIR_15M, f"{ticker}{END_15M}")
-    path_d = os.path.join(DIR_D,   f"{ticker}{END_D}")
-    path_w = os.path.join(DIR_W,   f"{ticker}{END_W}")
+    path_i = str(DIR_15M / f"{ticker}{END_15M}")
+    path_d = str(DIR_D / f"{ticker}{END_D}")
+    path_w = str(DIR_W / f"{ticker}{END_W}")
 
     # Intraday: tail only
     df_i = CACHE.get(path_i, tail_rows=INTRADAY_TAIL_ROWS)
@@ -443,15 +445,18 @@ def write_run_outputs(records: List[Dict], checked_at: pd.Timestamp, run_tag: st
     day_folder = checked_at.strftime("%Y%m%d")
     tstamp = checked_at.strftime("%H%M%S")
 
-    ensure_dir(os.path.join(OUT_CHECKS_DIR, day_folder))
-    ensure_dir(os.path.join(OUT_SIGNALS_DIR, day_folder))
+    ensure_dir(str(OUT_CHECKS_DIR / day_folder))
+    ensure_dir(str(OUT_SIGNALS_DIR / day_folder))
 
-    checks_path = os.path.join(OUT_CHECKS_DIR, day_folder, f"checks_{tstamp}_{run_tag}.parquet")
+    checks_path = str(OUT_CHECKS_DIR / day_folder / f"checks_{tstamp}_{run_tag}.parquet")
     df.to_parquet(checks_path, index=False)
 
-    sig_df = df[df.get("signal_triggered", False)].copy()
+    if "signal_triggered" in df.columns:
+        sig_df = df[df["signal_triggered"] == True].copy()
+    else:
+        sig_df = pd.DataFrame(columns=df.columns)
     if not sig_df.empty:
-        signals_path = os.path.join(OUT_SIGNALS_DIR, day_folder, f"signals_{tstamp}_{run_tag}.parquet")
+        signals_path = str(OUT_SIGNALS_DIR / day_folder / f"signals_{tstamp}_{run_tag}.parquet")
         sig_df.to_parquet(signals_path, index=False)
 
 
@@ -490,7 +495,12 @@ def run_one_check(tickers: List[str], run_tag: str) -> None:
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futs = {ex.submit(check_latest_for_ticker, t, checked_at, run_tag): t for t in tickers}
         for fut in as_completed(futs):
-            rec = fut.result()
+            tkr = futs[fut]
+            try:
+                rec = fut.result()
+            except Exception as e:
+                print(f"[WARN] {tkr}: check failed: {e}")
+                continue
             if rec is not None:
                 records.append(rec)
 

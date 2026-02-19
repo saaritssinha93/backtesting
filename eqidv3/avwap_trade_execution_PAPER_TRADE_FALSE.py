@@ -102,6 +102,7 @@ TRADE_LOG_COLUMNS = [
     "trade_id",
     "signal_id",
     "signal_datetime",
+    "signal_entry_datetime_ist",
     "entry_time",
     "exit_time",
     "ticker",
@@ -129,6 +130,7 @@ SIGNAL_COLUMNS = [
     "signal_id", "signal_datetime", "received_time", "ticker", "side",
     "setup", "impulse_type", "entry_price", "stop_price", "target_price",
     "quality_score", "atr_pct", "rsi", "adx", "quantity",
+    "signal_entry_datetime_ist", "signal_bar_time_ist",
 ]
 
 # Column name mapping: signal generator CSV name → executor expected name
@@ -138,6 +140,8 @@ _SIGNAL_COL_MAP = {
     "target":         "target_price",
     "impulse":        "impulse_type",
     "created_ts_ist": "signal_datetime",
+    "bar_time_ist":   "signal_entry_datetime_ist",
+    "signal_bar_time_ist": "signal_entry_datetime_ist",
     "conf_mult":      "confidence_multiplier",
 }
 
@@ -296,6 +300,7 @@ class LiveTradeResult:
     trade_id: str = ""
     signal_id: str = ""
     signal_datetime: str = ""
+    signal_entry_datetime_ist: str = ""
     entry_time: str = ""
     exit_time: str = ""
     ticker: str = ""
@@ -394,6 +399,7 @@ def execute_live_trade(signal: dict) -> None:
         trade_id=trade_id,
         signal_id=signal_id,
         signal_datetime=signal.get("signal_datetime", ""),
+        signal_entry_datetime_ist=signal.get("signal_entry_datetime_ist", ""),
         ticker=ticker,
         side=side,
         setup=signal.get("setup", ""),
@@ -632,6 +638,7 @@ def _log_trade_result(result: LiveTradeResult) -> None:
             "trade_id": result.trade_id,
             "signal_id": result.signal_id,
             "signal_datetime": result.signal_datetime,
+            "signal_entry_datetime_ist": result.signal_entry_datetime_ist,
             "entry_time": result.entry_time,
             "exit_time": result.exit_time,
             "ticker": result.ticker,
@@ -687,6 +694,17 @@ def _normalize_signal(raw: dict) -> dict:
     for k, v in raw.items():
         mapped = _SIGNAL_COL_MAP.get(k, k)
         sig[mapped] = v
+
+    if not sig.get("signal_entry_datetime_ist"):
+        sig["signal_entry_datetime_ist"] = (
+            sig.get("signal_bar_time_ist")
+            or sig.get("bar_time_ist")
+            or sig.get("signal_datetime")
+            or ""
+        )
+
+    if not sig.get("signal_datetime"):
+        sig["signal_datetime"] = sig.get("signal_entry_datetime_ist", "")
 
     # Compute quantity if missing (generator does not emit one)
     if "quantity" not in sig or pd.isna(sig.get("quantity")):
