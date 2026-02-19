@@ -30,6 +30,7 @@ import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
+from datetime import time as dtime
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
@@ -112,6 +113,29 @@ FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
 # If True, disable Top-N pruning on both sides so runner output does not
 # unintentionally suppress one side on a given day versus live/daily scanners.
 FORCE_LIVE_PARITY_DISABLE_TOPN = True
+
+# Final signal-window override (applied last in main()).
+# Edit these windows here to override defaults from avwap_common/default_*_config.
+FINAL_SIGNAL_WINDOW_OVERRIDE = True
+FINAL_SHORT_USE_TIME_WINDOWS = True
+FINAL_SHORT_SIGNAL_WINDOWS = [
+    (dtime(9, 15, 0), dtime(14, 30, 0))
+]
+FINAL_LONG_USE_TIME_WINDOWS = True
+FINAL_LONG_SIGNAL_WINDOWS = [
+    (dtime(9, 15, 0), dtime(14, 30, 0))
+]
+
+# Per-setup signal->entry lag (in 15-min bars).
+# Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
+# HUGE setup: use -1 for legacy dynamic "first valid bar" behavior.
+SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW = 1
+SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW = 2
+SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE = -1
+LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH = 1
+LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH = 2
+LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = -1
+
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 
@@ -563,6 +587,65 @@ def _print_day_side_mix(df: pd.DataFrame) -> None:
         f"[INFO] Day-side mix: both={both} | short_only={only_short} | "
         f"long_only={only_long} | total_days={total_days}"
     )
+
+
+def _print_signal_entry_lag_summary(df: pd.DataFrame) -> None:
+    """
+    Print signal->entry lag stats by side/setup/impulse to debug execution gaps.
+    Lag is measured in minutes: entry_time_ist - signal_time_ist.
+    """
+    if df.empty:
+        return
+
+    required = {"signal_time_ist", "entry_time_ist"}
+    if not required.issubset(df.columns):
+        missing = sorted(required - set(df.columns))
+        print(f"[INFO] Lag summary skipped (missing columns: {missing})")
+        return
+
+    d = df.copy()
+    d["signal_time_ist"] = pd.to_datetime(d["signal_time_ist"], errors="coerce")
+    d["entry_time_ist"] = pd.to_datetime(d["entry_time_ist"], errors="coerce")
+    d = d.dropna(subset=["signal_time_ist", "entry_time_ist"]).copy()
+    if d.empty:
+        print("[INFO] Lag summary skipped (no valid signal/entry timestamps).")
+        return
+
+    for c in ["side", "setup", "impulse_type"]:
+        if c not in d.columns:
+            d[c] = ""
+        d[c] = d[c].fillna("").astype(str)
+    d["side"] = d["side"].str.upper()
+
+    d["lag_min"] = (
+        d["entry_time_ist"] - d["signal_time_ist"]
+    ).dt.total_seconds() / 60.0
+
+    grouped = d.groupby(["side", "setup", "impulse_type"], dropna=False)["lag_min"]
+    lag_summary = grouped.agg(
+        count="size",
+        min="min",
+        p50="median",
+        mean="mean",
+        p90=lambda s: s.quantile(0.90),
+        max="max",
+    ).reset_index()
+
+    lag_summary["p50_bars_15m"] = lag_summary["p50"] / 15.0
+    lag_summary = lag_summary.sort_values(["side", "setup", "impulse_type"]).reset_index(drop=True)
+
+    for col in ["min", "p50", "mean", "p90", "max", "p50_bars_15m"]:
+        lag_summary[col] = pd.to_numeric(lag_summary[col], errors="coerce").round(2)
+
+    neg_rows = int((d["lag_min"] < 0).sum())
+    zero_rows = int((d["lag_min"] == 0).sum())
+
+    print("\n[DEBUG] Signal->Entry lag by setup (minutes)")
+    print(
+        f"[DEBUG] Rows={len(d)} | negative_lag_rows={neg_rows} | "
+        f"same_timestamp_rows={zero_rows}"
+    )
+    print(lag_summary.to_string(index=False))
 
 
 
@@ -1296,6 +1379,14 @@ def main() -> None:
                 reports_dir=_outputs_dir,
             )
 
+            # Apply per-setup signal->entry lag controls
+            short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
+            short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = int(SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW)
+            short_cfg.lag_bars_short_b_huge_failed_bounce = int(SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE)
+            long_cfg.lag_bars_long_a_mod_break_c1_high = int(LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH)
+            long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH)
+            long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK)
+
             if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
                 short_cfg.min_bars_left_after_entry = 0
                 long_cfg.min_bars_left_after_entry = 0
@@ -1304,6 +1395,13 @@ def main() -> None:
                 short_cfg.enable_topn_per_day = False
                 long_cfg.enable_topn_per_day = False
 
+            # Apply final signal-window override LAST (takes precedence over all earlier config).
+            if FINAL_SIGNAL_WINDOW_OVERRIDE:
+                short_cfg.use_time_windows = bool(FINAL_SHORT_USE_TIME_WINDOWS)
+                long_cfg.use_time_windows = bool(FINAL_LONG_USE_TIME_WINDOWS)
+                short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
+                long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
+
             print(
                 f"[INFO] SHORT config: SL={short_cfg.stop_pct*100:.1f}%, TGT={short_cfg.target_pct*100:.1f}%, "
                 f"slippage={short_cfg.slippage_pct*10000:.0f}bps, comm={short_cfg.commission_pct*10000:.0f}bps"
@@ -1311,6 +1409,31 @@ def main() -> None:
             print(
                 f"[INFO] LONG  config: SL={long_cfg.stop_pct*100:.1f}%, TGT={long_cfg.target_pct*100:.1f}%, "
                 f"slippage={long_cfg.slippage_pct*10000:.0f}bps, comm={long_cfg.commission_pct*10000:.0f}bps"
+            )
+            print(
+                "[INFO] Lag bars SHORT: "
+                f"A_MOD={short_cfg.lag_bars_short_a_mod_break_c1_low}, "
+                f"A_PULLBACK={short_cfg.lag_bars_short_a_pullback_c2_break_c2_low}, "
+                f"B_HUGE={short_cfg.lag_bars_short_b_huge_failed_bounce}"
+            )
+            print(
+                "[INFO] Lag bars LONG : "
+                f"A_MOD={long_cfg.lag_bars_long_a_mod_break_c1_high}, "
+                f"A_PULLBACK={long_cfg.lag_bars_long_a_pullback_c2_break_c2_high}, "
+                f"B_HUGE={long_cfg.lag_bars_long_b_huge_pullback_hold_break}"
+            )
+            print(
+                f"[INFO] Final signal-window override -> {FINAL_SIGNAL_WINDOW_OVERRIDE}"
+            )
+            print(
+                "[INFO] SHORT windows: "
+                f"use_time_windows={short_cfg.use_time_windows} | "
+                + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in short_cfg.signal_windows])
+            )
+            print(
+                "[INFO] LONG  windows: "
+                f"use_time_windows={long_cfg.use_time_windows} | "
+                + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in long_cfg.signal_windows])
             )
 
             short_notional = POSITION_SIZE_RS_SHORT * INTRADAY_LEVERAGE_SHORT
@@ -1369,6 +1492,7 @@ def main() -> None:
             combined = _add_notional_pnl(combined)
             combined = _sort_trades_for_output(combined)
             _print_day_side_mix(combined)
+            _print_signal_entry_lag_summary(combined)
 
             # --- Comprehensive metrics ---
             print_metrics("SHORT (net of slippage+comm, 5-min exits)", compute_backtest_metrics(short_df))

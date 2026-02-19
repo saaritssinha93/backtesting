@@ -50,6 +50,7 @@ import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core
 from avwap_v11_refactored.avwap_common import (
     default_short_config,
     default_long_config,
+    in_session as ref_in_session,
     prepare_indicators as ref_prepare_indicators,
     compute_day_avwap as ref_compute_day_avwap,
 )
@@ -135,7 +136,7 @@ MAX_BARS_PER_TICKER_TODAY = 120
 # SESSION FILTER
 # =============================================================================
 SESSION_START = dtime(9, 15, 0)
-SESSION_END = dtime(14, 30, 0)
+SESSION_END = dtime(15, 30, 0)
 
 # =============================================================================
 # V11 SHORT PARAMETERS — refined from avwap_common.default_short_config()
@@ -154,8 +155,7 @@ SHORT_REQUIRE_AVWAP_BELOW = True
 
 SHORT_USE_TIME_WINDOWS = True
 SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(11, 30, 0)),
-    (dtime(13, 0, 0), dtime(14, 30, 0)),
+    (dtime(9, 15, 0), dtime(14, 30, 0))
 ]
 
 # Impulse thresholds
@@ -197,9 +197,42 @@ LONG_REQUIRE_AVWAP_ABOVE = True
 
 LONG_USE_TIME_WINDOWS = True
 LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(11, 30, 0)),
-    (dtime(13, 0, 0), dtime(14, 30, 0)),
+    (dtime(9, 15, 0), dtime(14, 30, 0))
 ]
+
+# Optional global override from avwap_combined_runner.py (applied last).
+WINDOW_OVERRIDE_SOURCE = "local_defaults"
+
+
+def _apply_final_signal_window_override_from_runner() -> None:
+    global SHORT_USE_TIME_WINDOWS, SHORT_SIGNAL_WINDOWS
+    global LONG_USE_TIME_WINDOWS, LONG_SIGNAL_WINDOWS
+    global WINDOW_OVERRIDE_SOURCE
+
+    try:
+        import avwap_combined_runner as _runner_cfg
+    except Exception:
+        return
+
+    if not bool(getattr(_runner_cfg, "FINAL_SIGNAL_WINDOW_OVERRIDE", False)):
+        return
+
+    SHORT_USE_TIME_WINDOWS = bool(
+        getattr(_runner_cfg, "FINAL_SHORT_USE_TIME_WINDOWS", SHORT_USE_TIME_WINDOWS)
+    )
+    LONG_USE_TIME_WINDOWS = bool(
+        getattr(_runner_cfg, "FINAL_LONG_USE_TIME_WINDOWS", LONG_USE_TIME_WINDOWS)
+    )
+    SHORT_SIGNAL_WINDOWS = list(
+        getattr(_runner_cfg, "FINAL_SHORT_SIGNAL_WINDOWS", SHORT_SIGNAL_WINDOWS)
+    )
+    LONG_SIGNAL_WINDOWS = list(
+        getattr(_runner_cfg, "FINAL_LONG_SIGNAL_WINDOWS", LONG_SIGNAL_WINDOWS)
+    )
+    WINDOW_OVERRIDE_SOURCE = "avwap_combined_runner.py"
+
+
+_apply_final_signal_window_override_from_runner()
 
 # Impulse thresholds
 LONG_MOD_GREEN_MIN_ATR = 0.30    # relaxed for LONG (was 0.40)
@@ -1094,13 +1127,64 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
         if c not in df.columns:
             return []
 
+    # Build configs used by backtest runner parity.
+    short_cfg = default_short_config()
+    long_cfg = default_long_config()
+    short_cfg.use_time_windows = bool(SHORT_USE_TIME_WINDOWS)
+    short_cfg.signal_windows = list(SHORT_SIGNAL_WINDOWS)
+    long_cfg.use_time_windows = bool(LONG_USE_TIME_WINDOWS)
+    long_cfg.signal_windows = list(LONG_SIGNAL_WINDOWS)
+
+    # Pull additional parity knobs from runner if available.
+    try:
+        import avwap_combined_runner as _runner_cfg
+    except Exception:
+        _runner_cfg = None
+
+    if _runner_cfg is not None:
+        if bool(getattr(_runner_cfg, "FORCE_LIVE_PARITY_MIN_BARS_LEFT", False)):
+            short_cfg.min_bars_left_after_entry = 0
+            long_cfg.min_bars_left_after_entry = 0
+
+        short_cfg.lag_bars_short_a_mod_break_c1_low = int(
+            getattr(_runner_cfg, "SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW", short_cfg.lag_bars_short_a_mod_break_c1_low)
+        )
+        short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = int(
+            getattr(
+                _runner_cfg,
+                "SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW",
+                short_cfg.lag_bars_short_a_pullback_c2_break_c2_low,
+            )
+        )
+        short_cfg.lag_bars_short_b_huge_failed_bounce = int(
+            getattr(_runner_cfg, "SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE", short_cfg.lag_bars_short_b_huge_failed_bounce)
+        )
+        long_cfg.lag_bars_long_a_mod_break_c1_high = int(
+            getattr(_runner_cfg, "LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH", long_cfg.lag_bars_long_a_mod_break_c1_high)
+        )
+        long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(
+            getattr(
+                _runner_cfg,
+                "LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH",
+                long_cfg.lag_bars_long_a_pullback_c2_break_c2_high,
+            )
+        )
+        long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(
+            getattr(
+                _runner_cfg,
+                "LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK",
+                long_cfg.lag_bars_long_b_huge_pullback_hold_break,
+            )
+        )
+
     # Keep all available in-session bars for indicator warmup parity.
-    df = df[df["date"].apply(in_session)].copy()
+    # Use shared avwap_common session gate so backtest/live daily parity matches.
+    df = df[df["date"].apply(lambda ts: ref_in_session(ts, short_cfg))].copy()
     if df.empty:
         return []
 
     df = df.sort_values("date").reset_index(drop=True)
-    df = ref_prepare_indicators(df, default_short_config())
+    df = ref_prepare_indicators(df, short_cfg)
 
     target_day = df["day"].max()
     df_day = df[df["day"] == target_day].copy().reset_index(drop=True)
@@ -1113,8 +1197,8 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
     df_day["AVWAP"] = ref_compute_day_avwap(df_day)
 
     day_str = str(target_day)
-    short_trades = scan_short_one_day(str(ticker).upper(), df_day.copy(), day_str, default_short_config())
-    long_trades = scan_long_one_day(str(ticker).upper(), df_day.copy(), day_str, default_long_config())
+    short_trades = scan_short_one_day(str(ticker).upper(), df_day.copy(), day_str, short_cfg)
+    long_trades = scan_long_one_day(str(ticker).upper(), df_day.copy(), day_str, long_cfg)
 
     signals: List[LiveSignal] = []
     for tr in (short_trades + long_trades):
@@ -1461,6 +1545,17 @@ def main() -> None:
     print(f"[INFO] DIR_15M={DIR_15M} | tickers={len(list_tickers_15m())}")
     print(f"[INFO] SHORT: SL={SHORT_STOP_PCT*100:.2f}%, TGT={SHORT_TARGET_PCT*100:.2f}%, ADX>={SHORT_ADX_MIN}, RSI<={SHORT_RSI_MAX}, StochK<={SHORT_STOCHK_MAX}")
     print(f"[INFO] LONG : SL={LONG_STOP_PCT*100:.2f}%, TGT={LONG_TARGET_PCT*100:.2f}%, ADX>={LONG_ADX_MIN}, RSI>={LONG_RSI_MIN}, StochK>={LONG_STOCHK_MIN}")
+    print(f"[INFO] Signal window source: {WINDOW_OVERRIDE_SOURCE}")
+    print(
+        "[INFO] SHORT windows: "
+        f"use_time_windows={SHORT_USE_TIME_WINDOWS} | "
+        + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in SHORT_SIGNAL_WINDOWS])
+    )
+    print(
+        "[INFO] LONG  windows: "
+        f"use_time_windows={LONG_USE_TIME_WINDOWS} | "
+        + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in LONG_SIGNAL_WINDOWS])
+    )
     print(f"[INFO] Volume filter: {USE_VOLUME_FILTER} (ratio>={VOLUME_MIN_RATIO}, SMA={VOLUME_SMA_PERIOD})")
     print(f"[INFO] ATR% filter: {USE_ATR_PCT_FILTER} (min={ATR_PCT_MIN*100:.2f}%)")
     print(f"[INFO] Close-confirm: {REQUIRE_CLOSE_CONFIRM}")

@@ -352,9 +352,11 @@ def scan_one_day(
             buf1 = entry_buffer(low1, cfg)
             trigger1 = low1 - buf1
 
-            # Option 1: break C1 low on C2
-            if float(c2["low"]) < trigger1:
-                entry_idx = i + 1
+            # Option 1: break C1 low on configured lag bar
+            lag1 = int(cfg.lag_bars_short_a_mod_break_c1_low)
+            entry_idx_1 = i + lag1 if lag1 >= 0 else (i + 1)
+            if entry_idx_1 < len(df_day) and float(df_day.at[entry_idx_1, "low"]) < trigger1:
+                entry_idx = entry_idx_1
                 entry_ts = df_day.at[entry_idx, "date"]
 
                 if (
@@ -379,13 +381,14 @@ def scan_one_day(
             c2_below_avwap = np.isfinite(c2_avwap) and (c2c < c2_avwap)
 
             if c2_small_green and c2_below_avwap and (i + 2 < len(df_day)):
-                c3 = df_day.iloc[i + 2]
                 low2 = float(c2["low"])
                 buf2 = entry_buffer(low2, cfg)
                 trigger2 = low2 - buf2
 
-                if float(c3["low"]) < trigger2:
-                    entry_idx = i + 2
+                lag2 = int(cfg.lag_bars_short_a_pullback_c2_break_c2_low)
+                entry_idx_2 = i + lag2 if lag2 >= 0 else (i + 2)
+                if entry_idx_2 < len(df_day) and float(df_day.at[entry_idx_2, "low"]) < trigger2:
+                    entry_idx = entry_idx_2
                     entry_ts = df_day.at[entry_idx, "date"]
 
                     if (
@@ -445,7 +448,14 @@ def scan_one_day(
             trigger_b = bounce_low - buf
             entered = False
 
-            for j in range(bounce_end + 1, len(df_day)):
+            lag_huge = int(cfg.lag_bars_short_b_huge_failed_bounce)
+            if lag_huge >= 0:
+                j_fixed = i + lag_huge
+                j_iter = [j_fixed] if (bounce_end + 1 <= j_fixed < len(df_day)) else []
+            else:
+                j_iter = range(bounce_end + 1, len(df_day))
+
+            for j in j_iter:
                 tsj = df_day.at[j, "date"]
                 if not in_signal_window(tsj, cfg):
                     continue
