@@ -1202,20 +1202,6 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
     df_day["AVWAP"] = ref_compute_day_avwap(df_day)
 
     day_str = str(target_day)
-<<<<<<< HEAD
-    short_cfg = default_short_config()
-    long_cfg = default_long_config()
-
-    if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
-        short_cfg.min_bars_left_after_entry = 0
-        long_cfg.min_bars_left_after_entry = 0
-
-    if FORCE_LIVE_PARITY_DISABLE_TOPN:
-        short_cfg.enable_topn_per_day = False
-        long_cfg.enable_topn_per_day = False
-
-=======
->>>>>>> d91b64fb3d577f401846640e224c8334c4a57d1c
     short_trades = scan_short_one_day(str(ticker).upper(), df_day.copy(), day_str, short_cfg)
     long_trades = scan_long_one_day(str(ticker).upper(), df_day.copy(), day_str, long_cfg)
 
