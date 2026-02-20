@@ -1,288 +1,111 @@
-# EQIDV2 — ML-Filtered AVWAP Rejection Intraday Strategy (Equities)
+# EQIDV2 — Folder Guide (AVWAP + Live Trading + Meta-Label ML)
 
-EQIDV2 extends eqidv1 by adding an **ML meta-label filter** over the same AVWAP v11 rule-based signals. Trades are gated by a trained model's `p_win` prediction and sized by confidence.
-
----
-
-## 1) Architecture Overview
-
-```
-Data Ingestion → Signal Generation → ML Filter/Size → Live Execution
-     ↓                  ↓                  ↓               ↓
-  Parquet 15m      AVWAP v11 rules    LightGBM/LogReg  Paper/Real orders
-  (historical)    (impulse + reject)   p_win gating    (Zerodha/Kite)
-```
+This README is an updated map of the `eqidv2` folder based on the current branch contents.
 
 ---
 
-## 2) What eqidv2 Adds Over eqidv1
+## 1) What is in `eqidv2`
 
-| Feature | eqidv1 | eqidv2 |
-|---------|--------|--------|
-| Signal generation | AVWAP v11 rules | Same AVWAP v11 rules |
-| ML gating | None | p_win threshold (take/skip) |
-| Position sizing | Fixed | Confidence-based multiplier |
-| Feature set | N/A | Legacy 5-feature set |
-| Training | N/A | Walk-forward LightGBM/LogReg |
-| Labeling | N/A | Triple-barrier R_net method |
+`eqidv2` combines four major parts:
+
+1. **Historical data ingestion and refresh** (5m/15m parquet builders + EOD schedulers)
+2. **Signal generation** (AVWAP long/short scans and live signal emitters)
+3. **Execution** (paper and real-order executors)
+4. **ML overlay** (meta-label dataset creation, walk-forward training, and ML-filtered backtests)
 
 ---
 
-## 3) Strategy Logic
+## 2) File-by-file quick map
 
-Same as eqidv1 (see `eqidv1/README_eqidv1.md`) for entry/exit rules, with the addition of:
+### Core strategy / backtest engines
+- `avwap_combined_runner.py` — monolithic AVWAP long+short scanner/backtest runner (legacy-style all-in-one).
+- `avwap_v11_refactored/avwap_common.py` — shared dataclasses/config/helpers for refactored AVWAP flows.
+- `avwap_v11_refactored/avwap_long_strategy.py` — refactored long strategy scan and exits.
+- `avwap_v11_refactored/avwap_short_strategy.py` — refactored short strategy scan and exits.
+- `avwap_v11_refactored/avwap_combined_runner.py` — orchestrates refactored long/short runners.
 
-### ML Meta-Label Filter
-- After a raw AVWAP signal is generated, `ml_meta_filter.py` predicts `p_win` (probability of profitable trade)
-- **Gate**: Only take trades where `p_win >= threshold` (default: ~0.62)
-- **Size**: Confidence multiplier `m = clip(0.7, 1.2, f(p_win))` scales position size
-- **Fallback**: If model not available, uses heuristic sigmoid scoring
+### Live signal generation / analysis
+- `eqidv2_live_trading_signal_15m_v11_combined_parquet.py` — live 15m combined AVWAP signal scanner.
+- `eqidv2_live_combined_analyser.py` — analyser variant for live combined signal evaluation.
+- `avwap_live_signal_generator.py` — ML-aware live signal generator that writes actionable signals.
 
-### 5 Legacy Features
-| Feature | Description |
-|---------|-------------|
-| `quality_score` | Signal quality from AVWAP v11 rules |
-| `atr_pct` | ATR as percentage of close price |
-| `rsi_centered` | RSI centered around 50 |
-| `adx_norm` | ADX normalized |
-| `side` | +1 (LONG) / -1 (SHORT) |
+### Trade execution
+- `avwap_trade_execution_PAPER_TRADE_TRUE.py` — paper trade execution simulator.
+- `avwap_trade_execution_PAPER_TRADE_FALSE.py` — real-order executor (Zerodha/Kite based).
+- `authentication.py` — login/session bootstrap helper.
 
-### Risk Controls (via MetaFilterConfig)
-- Max open positions: 3
-- Max trades/day: 10, per ticker/day: 1
-- Daily loss kill-switch: -1.0R or -0.8% capital
-- No entry after 14:30 IST
-- EOD force exit, min 4 bars left in day
+### Data ingestion / schedulers
+- `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py` — multi-timeframe historical parquet updater.
+- `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py` — 15-minute-focused data updater.
+- `eqidv2_eod_15min_data_stocks.py` — end-of-day 15m updater.
+- `eqidv2_eod_scheduler_for_15mins_data.py` — periodic schedule wrapper for 15m updates.
+- `eqidv2_eod_scheduler_for_1540_update.py` — fixed-time (~15:40) EOD scheduler.
 
----
+### ML meta-label pipeline
+- `ml_meta_filter.py` — inference + baseline training utilities for trade filtering.
+- `eqidv2_meta_label_triple_barrier.py` — generates triple-barrier labels for candidate trades.
+- `eqidv2_meta_train_walkforward.py` — walk-forward model training/evaluation.
+- `eqidv2_ml_backtest.py` — applies ML filter over historical trade CSVs and summarizes results.
+- `avwap_ml_backtest_runner.py` — richer performance report runner for ML-filtered backtests.
 
-## 4) File-by-File Map
-
-### ML Pipeline
-| File | Role |
-|------|------|
-| `ml_meta_filter.py` | Core ML infrastructure: feature builder, `MetaLabelFilter` inference, confidence sizing |
-| `eqidv2_meta_label_triple_barrier.py` | Build labeled dataset: R_net labels from candle data with slippage model |
-| `eqidv2_meta_train_walkforward.py` | Walk-forward training: LightGBM/LogReg, calibration, threshold optimization |
-| `eqidv2_ml_backtest.py` | Standalone ML filter over trade CSVs |
-| `avwap_ml_backtest_runner.py` | Full backtest runner: RAW vs ML comparison with stats + charts |
-
-### Signal Generation
-| File | Role |
-|------|------|
-| `avwap_live_signal_generator.py` | ML-gated live signal scanner (15m candles) |
-| `eqidv2_live_combined_analyser.py` | Live combined signal evaluation |
-| `eqidv2_live_combined_analyser_csv.py` | Same with CSV bridge for trade executors |
-| `eqidv2_live_combined_analyser_parquet.py` | Same with parquet output |
-| `eqidv2_live_trading_signal_15m_v11_combined_parquet.py` | Standalone live 15m signal scanner |
-| `eqidv2_live_fetch_n_latestsignalprint.py` | Quick fetch latest signal and print |
-| `eqidv2_daily_combined_analyser_csv.py` | Daily batch analyser |
-
-### Strategy Engines (avwap_v11_refactored/)
-| File | Role |
-|------|------|
-| `avwap_v11_refactored/avwap_common.py` | Shared `StrategyConfig`, indicators, IO helpers, metrics |
-| `avwap_v11_refactored/avwap_short_strategy.py` | SHORT rule engine |
-| `avwap_v11_refactored/avwap_long_strategy.py` | LONG rule engine |
-| `avwap_v11_refactored/avwap_combined_runner.py` | Combined backtest orchestrator |
-
-### Trade Execution
-| File | Role |
-|------|------|
-| `avwap_trade_execution_PAPER_TRADE_TRUE.py` | Paper trade simulator (Watchdog, LTP polling, concurrent threads) |
-| `avwap_trade_execution_PAPER_TRADE_FALSE.py` | Real-order executor (Zerodha/Kite, MARKET + LIMIT TP / SL-M) |
-| `authentication.py` | Broker session bootstrap (Selenium + TOTP) |
-
-### Data Ingestion
-| File | Role |
-|------|------|
-| `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py` | Multi-TF historical parquet builder |
-| `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py` | 15m-only variant |
-| `eqidv2_eod_scheduler_for_15mins_data.py` | Periodic 15m update scheduler (with monkey-patch fixes) |
-| `eqidv2_eod_scheduler_for_1540_update.py` | 15:40 IST EOD flush |
-
-### Universe
-| File | Role |
-|------|------|
-| `filtered_stocks.py` | Curated stock universe (~400 stocks, list) |
-| `filtered_stocks_MIS.py` | MIS-focused universe (~1045 stocks, sorted list) |
+### Universe / config / artifacts
+- `filtered_stocks.py` — stock universe list.
+- `filtered_stocks_MIS.py` — MIS list placeholder.
+- `models/meta_model.pkl` — serialized trained meta model.
+- `models/meta_features.json` — model feature schema.
+- `stocks_tokens_cache.json` — instrument token cache.
+- `live_signals/.seen_signals.json` — dedupe state for emitted live signals.
 
 ---
 
-## 5) Data Flow Architecture
+## 3) Typical workflows
 
-```
-Zerodha Kite API
-     ↓
-trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
-     ↓ (OHLCV + indicators)
-stocks_indicators_15min_eq/  &  stocks_indicators_5min_eq/
-     ↓
-┌────┴──────────────────────────────────────────────────────┐
-│                                                            │
-│  Backtesting:                                             │
-│   avwap_combined_runner.py → outputs/trades.csv            │
-│                    ↓                                       │
-│   eqidv2_meta_label_triple_barrier.py → meta_dataset.csv   │
-│                    ↓                                       │
-│   eqidv2_meta_train_walkforward.py → models/meta_model.pkl │
-│                    ↓                                       │
-│   avwap_ml_backtest_runner.py → RAW vs ML comparison       │
-│                                                            │
-│  Live:                                                    │
-│   eqidv2_live_combined_analyser_csv.py                     │
-│     + ml_meta_filter.py (p_win gate + sizing)              │
-│     → live_signals/signals_YYYY-MM-DD.csv                  │
-│                    ↓                                       │
-│   avwap_trade_execution_PAPER_TRADE_TRUE.py                │
-│     → live_signals/paper_trades_YYYY-MM-DD.csv             │
-└────────────────────────────────────────────────────────────┘
-```
+### A) Refresh candle data
+1. Run one of the parquet updater scripts:
+   - full/multi-timeframe: `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py`
+   - 15m-focused: `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py`
+2. Optionally run the EOD schedulers for automated refresh windows.
+
+### B) Generate strategy signals
+1. For historical scans/backtests, run one of the AVWAP runners (`avwap_combined_runner.py` or refactored equivalent).
+2. For live signal generation, use:
+   - `eqidv2_live_trading_signal_15m_v11_combined_parquet.py`, and/or
+   - `avwap_live_signal_generator.py` (with ML gating fields like `p_win`, threshold, confidence multiplier).
+
+### C) Execute trades
+- Paper mode: `avwap_trade_execution_PAPER_TRADE_TRUE.py`
+- Real mode: `avwap_trade_execution_PAPER_TRADE_FALSE.py`
+
+### D) Train + apply ML overlay
+1. Build meta-label dataset: `eqidv2_meta_label_triple_barrier.py`
+2. Train with walk-forward validation: `eqidv2_meta_train_walkforward.py`
+3. Run filtered backtest/report:
+   - `eqidv2_ml_backtest.py`
+   - optionally `avwap_ml_backtest_runner.py` for richer metrics.
 
 ---
 
-## 6) Workflows & Commands
+## 4) Minimal command examples
 
-### A) Build ML Dataset
 ```bash
-cd eqidv2
+# 1) Generate ML-filtered backtest summary from base trade CSV
+python eqidv2/eqidv2_ml_backtest.py \
+  --input-csv eqidv2/outputs/base_trades.csv \
+  --output-csv eqidv2/outputs/ml_filtered_trades.csv \
+  --summary-json eqidv2/outputs/ml_backtest_summary.json \
+  --threshold 0.60
 
-# 1. Generate candidate trades via backtest
-python avwap_combined_runner.py
+# 2) Emit live ML-gated signals
+python eqidv2/avwap_live_signal_generator.py --ml-threshold 0.62
 
-# 2. Label trades with triple-barrier R_net
-python eqidv2_meta_label_triple_barrier.py \
-  --trades-csv outputs/avwap_longshort_trades_ALL_DAYS.csv \
-  --candles-dir stocks_indicators_5min_eq \
-  --out-csv meta_dataset.csv \
-  --horizon-bars 6 --bar-minutes 5
-```
-
-### B) Train ML Model
-```bash
-cd eqidv2
-python eqidv2_meta_train_walkforward.py \
-  --dataset-csv meta_dataset.csv \
-  --out-model models/meta_model.pkl \
-  --out-features models/meta_features.json \
-  --out-report outputs/meta_train_report.json \
-  --train-days 60 --test-days 10
-```
-
-### C) Run ML-Filtered Backtest
-```bash
-cd eqidv2
-
-# Quick filter
-python eqidv2_ml_backtest.py \
-  --input-csv outputs/base_trades.csv \
-  --output-csv outputs/ml_filtered_trades.csv \
-  --threshold 0.62
-
-# Full RAW vs ML comparison
-python avwap_ml_backtest_runner.py \
-  --ml-threshold 0.62 \
-  --model-path models/meta_model.pkl \
-  --features-path models/meta_features.json
-```
-
-### D) Live Signal Generation
-```bash
-cd eqidv2
-
-# ML-gated live signals (continuous)
-python avwap_live_signal_generator.py \
-  --ml-threshold 0.62 \
-  --model-path models/meta_model.pkl \
-  --features-path models/meta_features.json
-
-# Single scan
-python avwap_live_signal_generator.py --run-once
-```
-
-### E) Trade Execution
-```bash
-cd eqidv2
-python authentication.py              # first, authenticate
-python avwap_trade_execution_PAPER_TRADE_TRUE.py   # paper
-python avwap_trade_execution_PAPER_TRADE_FALSE.py  # real
-```
-
-### Full Live Deployment Flow (5 terminals)
-```
-Terminal 1: python authentication.py                            # auth (once)
-Terminal 2: python eqidv2_eod_scheduler_for_15mins_data.py      # data refresh
-Terminal 3: python eqidv2_live_combined_analyser_csv.py         # signal generation
-Terminal 4: python avwap_live_signal_generator.py --ml-threshold 0.62  # ML gate
-Terminal 5: python avwap_trade_execution_PAPER_TRADE_TRUE.py    # execution
-```
-
-### Full ML Training Pipeline (run once, retrain monthly)
-```
-Step 1: python avwap_combined_runner.py                         # generate raw trades
-Step 2: python eqidv2_meta_label_triple_barrier.py [args]       # label trades
-Step 3: python eqidv2_meta_train_walkforward.py [args]          # train model
-Step 4: python avwap_ml_backtest_runner.py [args]               # validate
+# 3) Run paper execution loop
+python eqidv2/avwap_trade_execution_PAPER_TRADE_TRUE.py
 ```
 
 ---
 
-## 7) Known Issues & Bugs
+## 5) Notes
 
-### FIXED (in this review)
-
-1. **`allow_signal_today()` wrong keyword argument** — was `allow_signal_today(state, ticker, sid=today_str)`, now correctly checks both SHORT and LONG caps separately. Fixed in `eqidv2_live_combined_analyser.py` and `eqidv2_live_combined_analyser_parquet.py`.
-
-2. **Duplicate `_generate_signal_id` definition** — removed shadowed 3-arg version in `eqidv2_live_combined_analyser_csv.py`, keeping only the correct 5-arg version.
-
-3. **`sys.path` manipulation with wrong relative path** — `eqidv2_live_trading_signal_15m_v11_combined_parquet.py` now uses `_ROOT` directly instead of the incorrect `_ROOT / "backtesting" / "eqidv2"`.
-
-4. **`filtered_stocks_MIS.py` uses `set` instead of `list`** — converted to sorted list for deterministic ordering.
-
-### REMAINING (lower severity)
-
-5. **Hardcoded XPath selectors in `authentication.py`** (LOW) — brittle against Zerodha UI changes.
-
-6. **ML heuristic fallback uses hardcoded weights** (LOW) — `ml_meta_filter.py` fallback sigmoid may diverge from trained model behavior.
-
-7. **Threading race conditions in paper trade executor** (MODERATE) — concurrent threads access shared `executed_signals_dict` without explicit locking.
-
-8. **Real trade executor lacks order rejection handling** (MODERATE for production) — no retry or notification on order failures.
-
-9. **Hard-coded position sizes** (LOW) — `POSITION_SIZE_RS_SHORT = 50,000`, `POSITION_SIZE_RS_LONG = 100,000` in backtest runner. Should be configurable.
-
----
-
-## 8) Key Configuration
-
-### MetaFilterConfig (ml_meta_filter.py)
-```python
-MetaFilterConfig(
-    model_path="eqidv2/models/meta_model.pkl",
-    feature_path="eqidv2/models/meta_features.json",
-    pwin_threshold=0.62,
-    risk_per_trade_pct=0.20,
-    conf_mult_min=0.7,
-    conf_mult_max=1.2,
-    max_open_positions=3,
-    max_trades_per_day=10,
-    max_trades_per_ticker_per_day=1,
-    daily_loss_kill_R=-1.0,
-    no_entry_after_ist="14:30",
-    slippage_bps=3.0,
-    commission_bps=2.0,
-)
-```
-
----
-
-## 9) Key Differences: eqidv1 vs eqidv2 vs eqidv3
-
-| Feature | eqidv1 | eqidv2 | eqidv3 |
-|---------|--------|--------|--------|
-| ML filtering | No | Yes (legacy 5 features) | Yes (30 features, 6 groups) |
-| Model | N/A | LightGBM/LogReg | LightGBM + calibration (isotonic/sigmoid) |
-| Position sizing | Fixed | Confidence multiplier | Confidence + ATR vol cap |
-| Labeling | N/A | Triple-barrier | Triple-barrier R_net (net of costs) |
-| Risk controls | Basic | ML-gated | Full (kill-switch, max positions, force exit) |
-| Threshold optimization | N/A | Basic | Profit-based on OOF predictions |
+- Keep credentials and broker session handling isolated in `authentication.py` and runtime env/config files.
+- The `meta_model.pkl` + `meta_features.json` pair should be versioned together.
+- If both old and refactored AVWAP runners exist, prefer one path per deployment to avoid configuration drift.
