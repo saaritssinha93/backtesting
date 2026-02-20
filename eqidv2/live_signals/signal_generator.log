@@ -1,0 +1,11 @@
+2026-02-13 18:08:25,456 | INFO    | ============================================================
+2026-02-13 18:08:25,457 | INFO    | AVWAP Live Signal Generator — Starting
+2026-02-13 18:08:25,457 | INFO    |   Data directory : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\stocks_indicators_15min_eq
+2026-02-13 18:08:25,458 | INFO    |   Position size  : Rs.50,000
+2026-02-13 18:08:25,458 | INFO    |   Signal output  : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-13 18:08:25,459 | INFO    |   Scan interval  : 15 minutes
+2026-02-13 18:08:25,460 | INFO    | ============================================================
+2026-02-13 18:08:25,471 | INFO    | Loaded avwap_v11_refactored strategy modules.
+2026-02-13 18:08:25,473 | INFO    | Entering continuous scan loop. Press Ctrl+C to stop.
+2026-02-13 18:08:25,473 | INFO    | Market closed for today. Shutting down.
+2026-02-13 18:08:25,475 | INFO    | Signal generator stopped.

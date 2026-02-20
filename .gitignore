@@ -221,13 +221,22 @@ __pycache__
 
 
 # Include backtesting directory but only CSV and py files inside it
-!eqidv1/
-eqidv1/**
-!eqidv1/**/
-!eqidv1/**/*.py
+!eqidv2/
+eqidv2/**
+!eqidv2/**/
+!eqidv2/**/*.py
 
-# Allow ALL outputs artifacts inside eqidv1/outputs
+# Allow ALL outputs artifacts inside eqidv2/outputs
 # (png, csv, txt, parquet, anything)
 # -----------------------------
-!eqidv1/outputs/
-!eqidv1/outputs/**
+!eqidv2/outputs/
+!eqidv2/outputs/**
+
+!eqidv2/bat/
+!eqidv2/bat/**
+
+!eqidv2/live_signals/
+!eqidv2/live_signals/**
+
+!eqidv2/models/
+!eqidv2/models/**
