@@ -470,8 +470,11 @@ def read_parquet_tail(path: str, n: int = 250) -> pd.DataFrame:
                 df = df.tail(n).reset_index(drop=True)
         return df
     except Exception:
-        df = pd.read_parquet(path, engine=PARQUET_ENGINE)
-        return df.tail(n).reset_index(drop=True)
+        try:
+            df = pd.read_parquet(path, engine=PARQUET_ENGINE)
+            return df.tail(n).reset_index(drop=True)
+        except Exception:
+            return pd.DataFrame()
 
 
 def list_tickers_15m() -> List[str]:
@@ -1146,10 +1149,16 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
     except Exception:
         _runner_cfg = None
 
+    force_min_bars_left = bool(FORCE_LIVE_PARITY_MIN_BARS_LEFT)
+    force_disable_topn = bool(FORCE_LIVE_PARITY_DISABLE_TOPN)
+
     if _runner_cfg is not None:
-        if bool(getattr(_runner_cfg, "FORCE_LIVE_PARITY_MIN_BARS_LEFT", False)):
-            short_cfg.min_bars_left_after_entry = 0
-            long_cfg.min_bars_left_after_entry = 0
+        force_min_bars_left = bool(
+            getattr(_runner_cfg, "FORCE_LIVE_PARITY_MIN_BARS_LEFT", force_min_bars_left)
+        )
+        force_disable_topn = bool(
+            getattr(_runner_cfg, "FORCE_LIVE_PARITY_DISABLE_TOPN", force_disable_topn)
+        )
 
         short_cfg.lag_bars_short_a_mod_break_c1_low = int(
             getattr(_runner_cfg, "SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW", short_cfg.lag_bars_short_a_mod_break_c1_low)
@@ -1181,6 +1190,14 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
                 long_cfg.lag_bars_long_b_huge_pullback_hold_break,
             )
         )
+
+    if force_min_bars_left:
+        short_cfg.min_bars_left_after_entry = 0
+        long_cfg.min_bars_left_after_entry = 0
+
+    if force_disable_topn:
+        short_cfg.enable_topn_per_day = False
+        long_cfg.enable_topn_per_day = False
 
     # Keep all available in-session bars for indicator warmup parity.
     # Use shared avwap_common session gate so backtest/live daily parity matches.
