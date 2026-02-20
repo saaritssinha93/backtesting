@@ -13,9 +13,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
+LIVE_SIGNAL_DIR = BASE_DIR / "live_signals"
+IST = ZoneInfo("Asia/Kolkata")
 
 LOG_FILES: Dict[str, str] = {
     "authentication": "authentication_runner.log",
@@ -172,7 +175,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <div class="wrap" id="cards"></div>
 
   <script>
-    const LOG_ORDER = ["authentication","eod_15min_data","eod_1540_update","live_combined_csv","paper_trade"];
+    const LOG_ORDER = ["authentication","eod_15min_data","eod_1540_update","live_combined_csv","live_signals_csv","paper_trade"];
     const API_TOKEN = __API_TOKEN_JSON__;
 
     function esc(s) {
@@ -277,6 +280,26 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                     "tail": tail_text(path, lines=lines),
                 }
             )
+
+        # Dynamic card: today's live signal CSV used by trade execution.
+        today_ist = dt.datetime.now(IST).date().isoformat()
+        live_csv_name = f"signals_{today_ist}.csv"
+        live_csv_path = LIVE_SIGNAL_DIR / live_csv_name
+        try:
+            live_size = live_csv_path.stat().st_size if live_csv_path.exists() else 0
+        except OSError:
+            live_size = 0
+        items.append(
+            {
+                "id": "live_signals_csv",
+                "file_name": str(Path("live_signals") / live_csv_name),
+                "exists": live_csv_path.exists(),
+                "mtime": iso_mtime(live_csv_path),
+                "size_bytes": live_size,
+                "status": {},
+                "tail": tail_text(live_csv_path, lines=lines),
+            }
+        )
 
         return {
             "server_time": dt.datetime.now().isoformat(sep=" ", timespec="seconds"),
