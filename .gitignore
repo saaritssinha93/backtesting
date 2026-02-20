@@ -245,6 +245,14 @@ eqidv2/**
 !eqidv2/outputs/
 !eqidv2/outputs/**
 
+!eqidv2/bat/
+!eqidv2/bat/**
+
+!eqidv2/live_signals/
+!eqidv2/live_signals/**
+
+!eqidv2/models/
+!eqidv2/models/**
 
 # Include backtesting directory but only CSV and py files inside it
 !eqidv1/
