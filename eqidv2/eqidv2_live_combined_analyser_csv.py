@@ -128,6 +128,9 @@ TAIL_ROWS = 260
 LATEST_SLOT_ONLY = True
 LATEST_SLOT_BUFFER_SEC = 60     # wait this many seconds after boundary before trusting the new candle
 LATEST_SLOT_TOLERANCE_SEC = 120  # allow small timestamp drift (seconds) in parquet timestamps
+# Also rescan a few previous 15m slots to catch delayed parquet finalization.
+# Example with 2: at 11:17, scanner evaluates 11:15 + 11:00 + 10:45.
+SLOT_LOOKBACK_COUNT = 2
 
 # For speed, keep only the last N bars from today (must be >= 7 for v11 logic)
 MAX_BARS_PER_TICKER_TODAY = 120
@@ -218,6 +221,11 @@ LONG_AVWAP_REJ_DIST_ATR_MULT = 0.25
 LONG_AVWAP_REJ_MODE = "any"
 
 LONG_CAP_PER_TICKER_PER_DAY = 1
+
+# Keep all-day analyzer outputs aligned with avwap_combined_runner live-parity mode.
+# This allows intraday/off-market scans to emit signals even when the session is incomplete.
+FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
+FORCE_LIVE_PARITY_DISABLE_TOPN = True
 
 # =============================================================================
 # NEW: QUALITY FILTERS (from avwap_common refactored config)
@@ -432,11 +440,75 @@ def read_parquet_tail(path: str, n: int = 250) -> pd.DataFrame:
                 df = df.tail(n).reset_index(drop=True)
         return df
     except Exception:
-        df = pd.read_parquet(path, engine=PARQUET_ENGINE)
-        return df.tail(n).reset_index(drop=True)
+        try:
+            df = pd.read_parquet(path, engine=PARQUET_ENGINE)
+            return df.tail(n).reset_index(drop=True)
+        except Exception:
+            return pd.DataFrame()
+
+
+def _has_15m_files(path: Path) -> bool:
+    try:
+        return path.is_dir() and any(path.glob(f"*{END_15M}"))
+    except Exception:
+        return False
+
+
+def _resolve_15m_dir(preferred_dir: str) -> str:
+    """
+    Resolve a usable 15m parquet directory.
+    Tries preferred path first, then common project-relative fallbacks.
+    """
+    pref = Path(preferred_dir)
+    leaf = pref.name if pref.name else str(pref)
+
+    roots: List[Path] = []
+    for base in [Path.cwd(), ROOT]:
+        if base not in roots:
+            roots.append(base)
+        for anc in list(base.parents)[:6]:
+            if anc not in roots:
+                roots.append(anc)
+
+    seen: set = set()
+    candidates: List[Path] = []
+
+    def _add_candidate(p: Path) -> None:
+        key = os.path.normcase(os.path.abspath(str(p)))
+        if key not in seen:
+            seen.add(key)
+            candidates.append(p)
+
+    _add_candidate(pref)
+    if not pref.is_absolute():
+        _add_candidate(ROOT / pref)
+        _add_candidate(Path.cwd() / pref)
+
+    for base in roots:
+        _add_candidate(base / leaf)
+        _add_candidate(base / "eqidv2" / "backtesting" / "eqidv2" / leaf)
+        _add_candidate(base / "main" / "backtesting" / "eqidv2" / leaf)
+
+    for cand in candidates:
+        if _has_15m_files(cand):
+            return str(cand.resolve())
+
+    for cand in candidates:
+        if cand.is_dir():
+            return str(cand.resolve())
+
+    if pref.is_absolute():
+        return str(pref)
+    return str((ROOT / pref).resolve())
 
 
 def list_tickers_15m() -> List[str]:
+    global DIR_15M
+    resolved_dir = _resolve_15m_dir(DIR_15M)
+    if os.path.normcase(os.path.abspath(resolved_dir)) != os.path.normcase(os.path.abspath(DIR_15M)):
+        print(f"[PATH] DIR_15M resolved to {resolved_dir}", flush=True)
+    DIR_15M = resolved_dir
+
     pattern = os.path.join(DIR_15M, f"*{END_15M}")
     files = glob.glob(pattern)
     out: List[str] = []
@@ -1113,8 +1185,19 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
     df_day["AVWAP"] = ref_compute_day_avwap(df_day)
 
     day_str = str(target_day)
-    short_trades = scan_short_one_day(str(ticker).upper(), df_day.copy(), day_str, default_short_config())
-    long_trades = scan_long_one_day(str(ticker).upper(), df_day.copy(), day_str, default_long_config())
+    short_cfg = default_short_config()
+    long_cfg = default_long_config()
+
+    if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
+        short_cfg.min_bars_left_after_entry = 0
+        long_cfg.min_bars_left_after_entry = 0
+
+    if FORCE_LIVE_PARITY_DISABLE_TOPN:
+        short_cfg.enable_topn_per_day = False
+        long_cfg.enable_topn_per_day = False
+
+    short_trades = scan_short_one_day(str(ticker).upper(), df_day.copy(), day_str, short_cfg)
+    long_trades = scan_long_one_day(str(ticker).upper(), df_day.copy(), day_str, long_cfg)
 
     signals: List[LiveSignal] = []
     for tr in (short_trades + long_trades):
@@ -1378,7 +1461,23 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     state = _load_state()
     target_slot_ist = _current_15m_slot_start_ist()
-    print(f"[SLOT] strict_target_slot={target_slot_ist.strftime('%Y-%m-%d %H:%M:%S%z')}", flush=True)
+    target_slots_ist: List[pd.Timestamp] = []
+    for k in range(int(max(0, SLOT_LOOKBACK_COUNT)) + 1):
+        slot = (target_slot_ist - pd.Timedelta(minutes=15 * k)).floor("min")
+        if slot.date() != target_slot_ist.date():
+            continue
+        if not in_session(slot):
+            continue
+        target_slots_ist.append(slot)
+    if not target_slots_ist:
+        target_slots_ist = [target_slot_ist]
+    target_slots_ist = sorted(set(target_slots_ist))
+    slot_label = ", ".join([s.strftime("%H:%M") for s in target_slots_ist])
+    print(
+        f"[SLOT] latest={target_slot_ist.strftime('%Y-%m-%d %H:%M:%S%z')} "
+        f"| lookback={SLOT_LOOKBACK_COUNT} | evaluating=[{slot_label}]",
+        flush=True,
+    )
 
     all_checks: List[Dict[str, Any]] = []
     all_signals: List[Dict[str, Any]] = []
@@ -1388,14 +1487,18 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
         try:
             df_raw = read_parquet_tail(path, n=TAIL_ROWS)
             if df_raw is None or df_raw.empty:
-                all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": pd.NaT, "no_data": True})
-                all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": pd.NaT, "no_data": True})
+                for slot in target_slots_ist:
+                    all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": str(slot), "no_data": True})
+                    all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": str(slot), "no_data": True})
                 continue
 
-            signals, checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state, target_slot_ist)
-            all_checks.extend(checks_rows)
+            ticker_signals: List[LiveSignal] = []
+            for slot in target_slots_ist:
+                signals, checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state, slot)
+                all_checks.extend(checks_rows)
+                ticker_signals.extend(signals)
 
-            for s in signals:
+            for s in ticker_signals:
                 all_signals.append({
                     "ticker": s.ticker, "side": s.side, "bar_time_ist": s.bar_time_ist,
                     "setup": s.setup, "entry_price": s.entry_price,
@@ -1404,11 +1507,12 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
                     "diagnostics_json": json.dumps(s.diagnostics, default=str),
                 })
 
-            if signals:
-                print(f"[SCAN] {t} slot_signals={len(signals)}", flush=True)
+            if ticker_signals:
+                print(f"[SCAN] {t} slot_signals={len(ticker_signals)}", flush=True)
         except Exception as e:
-            all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": pd.NaT, "error": str(e)})
-            all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": pd.NaT, "error": str(e)})
+            for slot in target_slots_ist:
+                all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": str(slot), "error": str(e)})
+                all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": str(slot), "error": str(e)})
             print(f"[ERR ] {t} scan_failed: {e}", flush=True)
 
         if idx % 100 == 0:
@@ -1465,6 +1569,7 @@ def main() -> None:
     print(f"[INFO] ATR% filter: {USE_ATR_PCT_FILTER} (min={ATR_PCT_MIN*100:.2f}%)")
     print(f"[INFO] Close-confirm: {REQUIRE_CLOSE_CONFIRM}")
     print(f"[INFO] UPDATE_15M_BEFORE_CHECK={UPDATE_15M_BEFORE_CHECK}")
+    print(f"[INFO] SLOT_LOOKBACK_COUNT={SLOT_LOOKBACK_COUNT}")
     print(f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s")
 
     holidays = _read_holidays_safe()

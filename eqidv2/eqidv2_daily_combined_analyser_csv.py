@@ -212,13 +212,17 @@ def _scan_today_all_slots(verbose: bool = False) -> pd.DataFrame:
 def main() -> None:
     global DAILY_SIGNAL_DIR
 
+    default_data_dir = Path(live.DIR_15M)
+    if not default_data_dir.is_absolute():
+        default_data_dir = ROOT / default_data_dir
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default=live.DIR_15M)
+    ap.add_argument("--data-dir", default=str(default_data_dir))
     ap.add_argument("--signals-dir", default=str(DAILY_SIGNAL_DIR))
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
-    live.DIR_15M = str(args.data_dir)
+    live.DIR_15M = str(Path(args.data_dir))
 
     DAILY_SIGNAL_DIR = Path(args.signals_dir)
     DAILY_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)

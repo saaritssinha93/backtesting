@@ -150,6 +150,67 @@ def _resolve_5min_dir() -> Path:
     return candidates[0]
 
 
+def _has_15m_files(path: Path, end_15m: str) -> bool:
+    try:
+        return path.is_dir() and any(path.glob(f"*{end_15m}"))
+    except Exception:
+        return False
+
+
+def _resolve_15m_dir(preferred_dir: str, end_15m: str) -> Path:
+    """
+    Resolve a usable 15-min data directory for scans.
+    """
+    pref = Path(preferred_dir)
+    leaf = pref.name if pref.name else str(pref)
+
+    _script_dir = Path(__file__).resolve().parent
+    if _script_dir.name == "avwap_v11_refactored":
+        _proj = _script_dir.parent
+    else:
+        _proj = _script_dir
+
+    roots: List[Path] = []
+    for base in [_proj, Path.cwd()]:
+        if base not in roots:
+            roots.append(base)
+        for anc in list(base.parents)[:6]:
+            if anc not in roots:
+                roots.append(anc)
+
+    seen = set()
+    candidates: List[Path] = []
+
+    def _add_candidate(p: Path) -> None:
+        key = os.path.normcase(os.path.abspath(str(p)))
+        if key not in seen:
+            seen.add(key)
+            candidates.append(p)
+
+    _add_candidate(pref)
+    if not pref.is_absolute():
+        _add_candidate(_proj / pref)
+        _add_candidate(Path.cwd() / pref)
+
+    for base in roots:
+        _add_candidate(base / leaf)
+        _add_candidate(base / "data" / leaf)
+        _add_candidate(base / "eqidv2" / "backtesting" / "eqidv2" / leaf)
+        _add_candidate(base / "main" / "backtesting" / "eqidv2" / leaf)
+
+    for cand in candidates:
+        if _has_15m_files(cand, end_15m):
+            return cand
+
+    for cand in candidates:
+        if cand.is_dir():
+            return cand
+
+    if pref.is_absolute():
+        return pref
+    return _proj / pref
+
+
 def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
     """
     Read a 5-minute parquet file for a ticker.
@@ -1289,11 +1350,24 @@ def main() -> None:
             else:
                 print("[WARN] 5-min data directory not found — will fall back to 15-min exits.")
 
+            base_cfg = default_short_config()
+            dir_15m = _resolve_15m_dir(base_cfg.dir_15m, base_cfg.end_15m)
+            print(f"[INFO] 15-min data directory: {dir_15m}")
+            if dir_15m.is_dir():
+                n_15m = len(list(dir_15m.glob(f"*{base_cfg.end_15m}")))
+                print(f"[INFO] 15-min parquet files found: {n_15m}")
+            else:
+                print("[WARN] 15-min data directory not found.")
+
             short_cfg = default_short_config(
                 reports_dir=_outputs_dir,
+                dir_15m=str(dir_15m),
+                end_15m=base_cfg.end_15m,
             )
             long_cfg = default_long_config(
                 reports_dir=_outputs_dir,
+                dir_15m=str(dir_15m),
+                end_15m=base_cfg.end_15m,
             )
 
             if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
