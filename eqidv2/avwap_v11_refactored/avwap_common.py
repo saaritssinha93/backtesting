@@ -81,14 +81,13 @@ class StrategyConfig:
 
     # --- Session ---
     session_start: dtime = field(default_factory=lambda: dtime(9, 15, 0))
-    session_end: dtime = field(default_factory=lambda: dtime(14, 30, 0))
+    session_end: dtime = field(default_factory=lambda: dtime(15, 30, 0))
 
     # --- Time windows (Option E) ---
     use_time_windows: bool = True
     signal_windows: List[Tuple[dtime, dtime]] = field(
         default_factory=lambda: [
-            (dtime(9, 15, 0), dtime(11, 30, 0)),
-            (dtime(13, 0, 0), dtime(14, 30, 0)),
+            (dtime(9, 15, 0), dtime(14, 30, 0)),
         ]
     )
 
@@ -122,6 +121,16 @@ class StrategyConfig:
     require_entry_close_confirm: bool = True
     min_bars_left_after_entry: int = 4
 
+    # --- Signal->Entry lag controls (in 15-min bars) ---
+    # These control (entry_time_ist - signal_time_ist) per setup.
+    # Use -1 for dynamic legacy behavior (only meaningful for HUGE setups).
+    lag_bars_short_a_mod_break_c1_low: int = 1
+    lag_bars_short_a_pullback_c2_break_c2_low: int = 2
+    lag_bars_short_b_huge_failed_bounce: int = -1
+    lag_bars_long_a_mod_break_c1_high: int = 1
+    lag_bars_long_a_pullback_c2_break_c2_high: int = 2
+    lag_bars_long_b_huge_pullback_hold_break: int = -1
+
     # Breakeven
     enable_breakeven: bool = True
     be_trigger_pct: float = 0.0040
@@ -150,7 +159,7 @@ def default_short_config(**overrides) -> StrategyConfig:
     - TGT=1.2%: better R:R (1.6:1) captures more from momentum moves
     - BE trigger 0.50%: gives trades more room to develop, reduces excessive BE exits
     - Trail 0.30%: locks in partial gains instead of giving back to flat BE
-    - Afternoon window added: captures late-day momentum setups (13:00-14:30)
+    - Continuous signal window: 09:15-14:30
     - topn_per_day=10: allows more quality trades per day
     """
     base = dict(
@@ -164,8 +173,7 @@ def default_short_config(**overrides) -> StrategyConfig:
         stochk_max=75.0,
         topn_per_day=10,
         signal_windows=[
-            (dtime(9, 15, 0), dtime(11, 30, 0)),
-            (dtime(13, 0, 0), dtime(14, 30, 0)),
+            (dtime(9, 15, 0), dtime(14, 30, 0)),
         ],
     )
     base.update(overrides)
