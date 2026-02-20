@@ -23,6 +23,7 @@ Usage (from inside eqidv2 folder)
 import os
 import argparse
 from datetime import datetime, date
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List
 
@@ -30,6 +31,7 @@ import pandas as pd
 
 
 IST_TZ = ZoneInfo("Asia/Kolkata")
+ROOT = Path(__file__).resolve().parent
 
 def _parse_dates_arg(s: str):
     """Parse comma-separated YYYY-MM-DD dates."""
@@ -67,9 +69,9 @@ def _to_ist_ts(x) -> pd.Timestamp:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="stocks_indicators_15min_eq", help="Directory with 15m parquet files")
+    ap.add_argument("--data-dir", default=str(ROOT / "stocks_indicators_15min_eq"), help="Directory with 15m parquet files")
     ap.add_argument("--suffix", default="_stocks_indicators_15min.parquet", help="Parquet suffix")
-    ap.add_argument("--out-dir", default="daily_signals_offmarket", help="Output directory for CSVs")
+    ap.add_argument("--out-dir", default=str(ROOT / "daily_signals_offmarket"), help="Output directory for CSVs")
 
     ap.add_argument(
         "--date",

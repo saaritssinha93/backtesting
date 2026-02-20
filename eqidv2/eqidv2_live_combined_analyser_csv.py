@@ -219,6 +219,11 @@ LONG_AVWAP_REJ_MODE = "any"
 
 LONG_CAP_PER_TICKER_PER_DAY = 1
 
+# Keep all-day analyzer outputs aligned with avwap_combined_runner live-parity mode.
+# This allows intraday/off-market scans to emit signals even when the session is incomplete.
+FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
+FORCE_LIVE_PARITY_DISABLE_TOPN = True
+
 # =============================================================================
 # NEW: QUALITY FILTERS (from avwap_common refactored config)
 # =============================================================================
@@ -1113,8 +1118,19 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
     df_day["AVWAP"] = ref_compute_day_avwap(df_day)
 
     day_str = str(target_day)
-    short_trades = scan_short_one_day(str(ticker).upper(), df_day.copy(), day_str, default_short_config())
-    long_trades = scan_long_one_day(str(ticker).upper(), df_day.copy(), day_str, default_long_config())
+    short_cfg = default_short_config()
+    long_cfg = default_long_config()
+
+    if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
+        short_cfg.min_bars_left_after_entry = 0
+        long_cfg.min_bars_left_after_entry = 0
+
+    if FORCE_LIVE_PARITY_DISABLE_TOPN:
+        short_cfg.enable_topn_per_day = False
+        long_cfg.enable_topn_per_day = False
+
+    short_trades = scan_short_one_day(str(ticker).upper(), df_day.copy(), day_str, short_cfg)
+    long_trades = scan_long_one_day(str(ticker).upper(), df_day.copy(), day_str, long_cfg)
 
     signals: List[LiveSignal] = []
     for tr in (short_trades + long_trades):
