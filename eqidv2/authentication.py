@@ -10,7 +10,11 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import StaleElementReferenceException
+from selenium.common.exceptions import (
+    StaleElementReferenceException,
+    ElementClickInterceptedException,
+    TimeoutException,
+)
 from webdriver_manager.chrome import ChromeDriverManager
 import time
 import os
@@ -31,62 +35,106 @@ def autologin():
     # options.add_argument('--headless')
 
     driver = webdriver.Chrome(service=service, options=options)
-    driver.get(kite.login_url())
-
-    # Use WebDriverWait to ensure elements are present
-    wait = WebDriverWait(driver, 10)
-
-    def retry_element(by, value, retries=3):
-        """
-        A helper function to retry locating an element if it goes stale.
-        :param by: Locator strategy (By.XPATH, etc.)
-        :param value: Locator value
-        :param retries: Number of retry attempts
-        :return: The located web element
-        """
-        attempt = 0
-        while attempt < retries:
-            try:
-                element = wait.until(EC.presence_of_element_located((by, value)))
-                return element
-            except StaleElementReferenceException:
-                attempt += 1
-                time.sleep(2)  # Short delay before retry
-                print(f"Retrying element location: {attempt}/{retries}")
-        raise StaleElementReferenceException(f"Could not locate element after {retries} retries")
-
-    # Login Process
-    username = retry_element(By.XPATH, '/html/body/div[1]/div/div[2]/div[1]/div/div/div[2]/form/div[1]/input')
-    password = retry_element(By.XPATH, '/html/body/div[1]/div/div[2]/div[1]/div/div/div[2]/form/div[2]/input')
-    username.send_keys(key_secret[2])
-    password.send_keys(key_secret[3])
-
-    # Click login button
-    retry_element(By.XPATH, '/html/body/div[1]/div/div[2]/div[1]/div/div/div[2]/form/div[4]/button').click()
-
-    # Enter TOTP PIN
-    pin = retry_element(By.XPATH, '/html/body/div[1]/div/div[2]/div[1]/div[2]/div/div[2]/form/div[1]/input')
-    totp = TOTP(key_secret[4])
-    token = totp.now()
-    pin.send_keys(token)
-
-    # Submit the form
-    retry_element(By.XPATH, '/html/body/div[1]/div/div[2]/div[1]/div[2]/div/div[2]/form/div[2]/button').click()
-
-    time.sleep(5)  # Wait for the page to redirect and token to appear
-
-    # Extract request token
     try:
-        request_token = driver.current_url.split('request_token=')[1][:32]
-    except StaleElementReferenceException:
-        print("Encountered stale element. Retrying...")
-        time.sleep(2)  # Delay before retrying
-        request_token = driver.current_url.split('request_token=')[1][:32]
+        driver.get(kite.login_url())
+        wait = WebDriverWait(driver, 12)
 
-    # Save request token to file
-    with open('request_token.txt', 'w') as the_file:
-        the_file.write(request_token)
-    driver.quit()
+        def _find_first(locators, condition, timeout=12):
+            last_err = None
+            for by, value in locators:
+                try:
+                    return WebDriverWait(driver, timeout).until(condition((by, value)))
+                except TimeoutException as err:
+                    last_err = err
+            if last_err:
+                raise last_err
+            raise TimeoutException("No matching locator found.")
+
+        def retry_send_keys(locators, keys, retries=4):
+            attempt = 0
+            while attempt < retries:
+                try:
+                    elem = _find_first(locators, EC.presence_of_element_located)
+                    elem.clear()
+                    elem.send_keys(keys)
+                    return
+                except (StaleElementReferenceException, TimeoutException):
+                    attempt += 1
+                    time.sleep(1.5)
+                    print(f"Retrying send_keys: {attempt}/{retries}")
+            raise TimeoutException(f"Could not send keys after {retries} retries.")
+
+        def retry_click(locators, retries=4):
+            attempt = 0
+            while attempt < retries:
+                try:
+                    elem = _find_first(locators, EC.element_to_be_clickable)
+                    elem.click()
+                    return
+                except (StaleElementReferenceException, ElementClickInterceptedException, TimeoutException):
+                    attempt += 1
+                    time.sleep(1.5)
+                    print(f"Retrying click: {attempt}/{retries}")
+            raise TimeoutException(f"Could not click after {retries} retries.")
+
+        def optional_click(locators):
+            try:
+                retry_click(locators, retries=2)
+                return True
+            except TimeoutException:
+                return False
+
+        username_locators = [
+            (By.ID, "userid"),
+            (By.NAME, "user_id"),
+            (By.CSS_SELECTOR, "input#userid"),
+            (By.XPATH, "//form//input[@type='text']"),
+        ]
+        password_locators = [
+            (By.ID, "password"),
+            (By.NAME, "password"),
+            (By.CSS_SELECTOR, "input#password"),
+            (By.XPATH, "//form//input[@type='password']"),
+        ]
+        submit_button_locators = [
+            (By.CSS_SELECTOR, "button[type='submit']"),
+            (By.XPATH, "//button[@type='submit']"),
+        ]
+        totp_input_locators = [
+            (By.ID, "totp"),
+            (By.NAME, "totp"),
+            (By.CSS_SELECTOR, "input[autocomplete='one-time-code']"),
+            (By.XPATH, "//form//input[@type='text' or @type='tel' or @type='number']"),
+        ]
+
+        # Step 1: Username/password page
+        retry_send_keys(username_locators, key_secret[2])
+        retry_send_keys(password_locators, key_secret[3])
+        retry_click(submit_button_locators)
+
+        # Step 2: TOTP page
+        totp = TOTP(key_secret[4])
+        retry_send_keys(totp_input_locators, totp.now())
+        optional_click(submit_button_locators)
+
+        # Step 3: Wait for redirect with request_token
+        request_token = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            current_url = driver.current_url
+            if "request_token=" in current_url:
+                request_token = current_url.split("request_token=")[1][:32]
+                break
+            time.sleep(1)
+
+        if not request_token:
+            raise RuntimeError(f"request_token not found in redirect URL: {driver.current_url}")
+
+        # Save request token to file
+        with open('request_token.txt', 'w') as the_file:
+            the_file.write(request_token)
+    finally:
+        driver.quit()
 
 autologin()
 
