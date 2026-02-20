@@ -23,6 +23,7 @@ Core: backtesting/eqidv2/trading_data_continous_run_historical_alltf_v3_parquet_
 
 from __future__ import annotations
 
+import argparse
 import csv
 import hashlib
 import os
@@ -129,6 +130,9 @@ TAIL_ROWS = 260
 LATEST_SLOT_ONLY = True
 LATEST_SLOT_BUFFER_SEC = 60     # wait this many seconds after boundary before trusting the new candle
 LATEST_SLOT_TOLERANCE_SEC = 120  # allow small timestamp drift (seconds) in parquet timestamps
+# Also rescan a few previous 15m slots to catch delayed parquet finalization.
+# Example with 2: at 11:17, scanner evaluates 11:15 + 11:00 + 10:45.
+SLOT_LOOKBACK_COUNT = 2
 
 # For speed, keep only the last N bars from today (must be >= 7 for v11 logic)
 MAX_BARS_PER_TICKER_TODAY = 120
@@ -1484,7 +1488,23 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     state = _load_state()
     target_slot_ist = _current_15m_slot_start_ist()
-    print(f"[SLOT] strict_target_slot={target_slot_ist.strftime('%Y-%m-%d %H:%M:%S%z')}", flush=True)
+    target_slots_ist: List[pd.Timestamp] = []
+    for k in range(int(max(0, SLOT_LOOKBACK_COUNT)) + 1):
+        slot = (target_slot_ist - pd.Timedelta(minutes=15 * k)).floor("min")
+        if slot.date() != target_slot_ist.date():
+            continue
+        if not in_session(slot):
+            continue
+        target_slots_ist.append(slot)
+    if not target_slots_ist:
+        target_slots_ist = [target_slot_ist]
+    target_slots_ist = sorted(set(target_slots_ist))
+    slot_label = ", ".join([s.strftime("%H:%M") for s in target_slots_ist])
+    print(
+        f"[SLOT] latest={target_slot_ist.strftime('%Y-%m-%d %H:%M:%S%z')} "
+        f"| lookback={SLOT_LOOKBACK_COUNT} | evaluating=[{slot_label}]",
+        flush=True,
+    )
 
     all_checks: List[Dict[str, Any]] = []
     all_signals: List[Dict[str, Any]] = []
@@ -1494,14 +1514,18 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
         try:
             df_raw = read_parquet_tail(path, n=TAIL_ROWS)
             if df_raw is None or df_raw.empty:
-                all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": pd.NaT, "no_data": True})
-                all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": pd.NaT, "no_data": True})
+                for slot in target_slots_ist:
+                    all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": str(slot), "no_data": True})
+                    all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": str(slot), "no_data": True})
                 continue
 
-            signals, checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state, target_slot_ist)
-            all_checks.extend(checks_rows)
+            ticker_signals: List[LiveSignal] = []
+            for slot in target_slots_ist:
+                signals, checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state, slot)
+                all_checks.extend(checks_rows)
+                ticker_signals.extend(signals)
 
-            for s in signals:
+            for s in ticker_signals:
                 all_signals.append({
                     "ticker": s.ticker, "side": s.side, "bar_time_ist": s.bar_time_ist,
                     "setup": s.setup, "entry_price": s.entry_price,
@@ -1510,11 +1534,12 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
                     "diagnostics_json": json.dumps(s.diagnostics, default=str),
                 })
 
-            if signals:
-                print(f"[SCAN] {t} slot_signals={len(signals)}", flush=True)
+            if ticker_signals:
+                print(f"[SCAN] {t} slot_signals={len(ticker_signals)}", flush=True)
         except Exception as e:
-            all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": pd.NaT, "error": str(e)})
-            all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": pd.NaT, "error": str(e)})
+            for slot in target_slots_ist:
+                all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": str(slot), "error": str(e)})
+                all_checks.append({"ticker": t, "side": "LONG", "bar_time_ist": str(slot), "error": str(e)})
             print(f"[ERR ] {t} scan_failed: {e}", flush=True)
 
         if idx % 100 == 0:
@@ -1559,10 +1584,100 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
     return checks_df, signals_df
 
 
+def run_replay_for_date(date_str: str, out_csv: Optional[str] = None) -> pd.DataFrame:
+    """
+    One-shot deterministic replay for a single IST date.
+    Scans every 15-min slot from START_TIME to END_TIME using this file's live-slot logic.
+    """
+    target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    tickers = list_tickers_15m()
+    if not tickers:
+        print("[REPLAY] No tickers found.", flush=True)
+        return pd.DataFrame()
+
+    slots = pd.date_range(
+        f"{target_date} {START_TIME.strftime('%H:%M:%S')}",
+        f"{target_date} {END_TIME.strftime('%H:%M:%S')}",
+        freq="15min",
+        tz="Asia/Kolkata",
+    )
+    print(
+        f"[REPLAY] date={target_date} tickers={len(tickers)} slots={len(slots)} "
+        f"window={START_TIME.strftime('%H:%M')}-{END_TIME.strftime('%H:%M')}",
+        flush=True,
+    )
+
+    state = {"count": {}, "last_signal": {}}
+    seen_ids: set = set()
+    out_rows: List[Dict[str, Any]] = []
+
+    for idx, t in enumerate(tickers, start=1):
+        path = os.path.join(DIR_15M, f"{t}{END_15M}")
+        df_raw = read_parquet_tail(path, n=TAIL_ROWS)
+        if df_raw is None or df_raw.empty:
+            continue
+
+        for slot in slots:
+            signals, _checks_rows = _latest_entry_signals_for_ticker(t, df_raw, state, pd.Timestamp(slot))
+            if not signals:
+                continue
+
+            for s in signals:
+                bar_ts = pd.Timestamp(s.bar_time_ist)
+                bar_ts = bar_ts.tz_convert(IST) if bar_ts.tzinfo is not None else bar_ts.tz_localize(IST)
+                signal_id = _generate_signal_id(str(s.ticker), str(s.side), str(bar_ts), str(s.setup))
+                if signal_id in seen_ids:
+                    continue
+                seen_ids.add(signal_id)
+                out_rows.append(
+                    {
+                        "date": str(target_date),
+                        "ticker": str(s.ticker).upper(),
+                        "side": str(s.side).upper(),
+                        "signal_entry_datetime_ist": str(bar_ts),
+                        "signal_bar_time_ist": str(bar_ts),
+                        "setup": str(s.setup),
+                        "impulse_type": str(getattr(s, "diagnostics", {}).get("impulse_type", "")),
+                        "entry_price": float(s.entry_price),
+                        "sl_price": float(s.sl_price),
+                        "target_price": float(s.target_price),
+                        "quality_score": float(s.score),
+                        "signal_id": signal_id,
+                    }
+                )
+
+        if idx % 100 == 0:
+            print(f"[REPLAY] scanned {idx}/{len(tickers)} tickers | signals={len(out_rows)}", flush=True)
+
+    replay_df = pd.DataFrame(out_rows)
+    if replay_df.empty:
+        print(f"[REPLAY] No signals for {target_date}.", flush=True)
+        return replay_df
+
+    replay_df = replay_df.sort_values(["signal_bar_time_ist", "side", "ticker"]).reset_index(drop=True)
+    if out_csv:
+        out_path = Path(out_csv)
+    else:
+        out_path = OUT_SIGNALS_DIR / f"replay_signals_{target_date}.csv"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    replay_df.to_csv(out_path, index=False)
+    print(f"[REPLAY] Wrote {len(replay_df)} signals -> {out_path}", flush=True)
+    return replay_df
+
+
 # =============================================================================
 # MAIN LOOP
 # =============================================================================
 def main() -> None:
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--replay-date", default=None, help="Run one-shot replay for YYYY-MM-DD (IST) and exit.")
+    ap.add_argument("--replay-out-csv", default=None, help="Optional output path for --replay-date CSV.")
+    args = ap.parse_args()
+
+    if args.replay_date:
+        run_replay_for_date(args.replay_date, args.replay_out_csv)
+        return
+
     print("[LIVE] EQIDV2 CSV v2 (15m) | strict current 15m slot only")
     print(f"[INFO] DIR_15M={DIR_15M} | tickers={len(list_tickers_15m())}")
     print(f"[INFO] SHORT: SL={SHORT_STOP_PCT*100:.2f}%, TGT={SHORT_TARGET_PCT*100:.2f}%, ADX>={SHORT_ADX_MIN}, RSI<={SHORT_RSI_MAX}, StochK<={SHORT_STOCHK_MAX}")
@@ -1582,6 +1697,7 @@ def main() -> None:
     print(f"[INFO] ATR% filter: {USE_ATR_PCT_FILTER} (min={ATR_PCT_MIN*100:.2f}%)")
     print(f"[INFO] Close-confirm: {REQUIRE_CLOSE_CONFIRM}")
     print(f"[INFO] UPDATE_15M_BEFORE_CHECK={UPDATE_15M_BEFORE_CHECK}")
+    print(f"[INFO] SLOT_LOOKBACK_COUNT={SLOT_LOOKBACK_COUNT}")
     print(f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s")
 
     holidays = _read_holidays_safe()
