@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 eqidv1_eod_scheduler_for_15mins_data.py  (FIXED)
 ================================================
@@ -51,24 +51,24 @@ def _find_core_dir(start: Path, max_up: int = 6) -> Path:
     # fallback: use script dir
     return start
 
-eqidv1_DIR = _find_core_dir(SCRIPT_DIR)
-if str(eqidv1_DIR) not in sys.path:
-    sys.path.insert(0, str(eqidv1_DIR))
+EQIDV1_DIR = _find_core_dir(SCRIPT_DIR)
+if str(EQIDV1_DIR) not in sys.path:
+    sys.path.insert(0, str(EQIDV1_DIR))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
 
 
 # ---------------------------------------------------------------------
-# Monkey-patch kite session to read api_key.txt / access_token.txt from eqidv1_DIR
-# (core.setup_kite_session reads relative files from CWD) fileciteturn36file10L31-L38
+# Monkey-patch kite session to read api_key.txt / access_token.txt from EQIDV1_DIR
+# (core.setup_kite_session reads relative files from CWD) îˆ€fileciteîˆ‚turn36file10îˆ‚L31-L38îˆ
 # ---------------------------------------------------------------------
 def _read_first_line(p: Path) -> str:
     return p.read_text(encoding="utf-8").strip().splitlines()[0].strip()
 
 def setup_kite_session_from_eqidv1_dir():
     from kiteconnect import KiteConnect  # imported here to avoid import costs on module import
-    api_key = _read_first_line(eqidv1_DIR / "api_key.txt")
-    access_token = _read_first_line(eqidv1_DIR / "access_token.txt")
+    api_key = _read_first_line(EQIDV1_DIR / "api_key.txt")
+    access_token = _read_first_line(EQIDV1_DIR / "access_token.txt")
     kc = KiteConnect(api_key=api_key)
     kc.set_access_token(access_token)
     return kc
@@ -80,7 +80,7 @@ core.setup_kite_session = setup_kite_session_from_eqidv1_dir
 # Monkey-patch universe loader: if token_map looks like weights/flags (all small),
 # ignore it so core will fetch real instrument tokens.
 #
-# Core currently can treat selected_stocks dict numeric values as tokens fileciteturn43file2L95-L103
+# Core currently can treat selected_stocks dict numeric values as tokens îˆ€fileciteîˆ‚turn43file2îˆ‚L95-L103îˆ
 # ---------------------------------------------------------------------
 _orig_load_universe = getattr(core, "load_stocks_universe", None)
 
@@ -170,7 +170,7 @@ def _is_trading_time(dt: datetime) -> bool:
     return (t >= MARKET_OPEN) and (t <= MARKET_CLOSE)
 
 def _read_holidays_set() -> set:
-    # Core exposes HOLIDAYS_FILE_DEFAULT fileciteturn36file2L54-L56
+    # Core exposes HOLIDAYS_FILE_DEFAULT îˆ€fileciteîˆ‚turn36file2îˆ‚L54-L56îˆ
     hf = getattr(core, "HOLIDAYS_FILE_DEFAULT", "holidays.csv")
     try:
         return set(core._read_holidays(str(Path(hf))))
@@ -200,8 +200,8 @@ def main() -> None:
     ap.add_argument("--report-dir", default="reports/stocks_missing_reports")
     args = ap.parse_args()
 
-    print("[LIVE] eqidv1 15m scheduler started.")
-    print(f"       Using eqidv1_DIR: {eqidv1_DIR}")
+    print("[LIVE] EQIDV1 15m scheduler started.")
+    print(f"       Using EQIDV1_DIR: {EQIDV1_DIR}")
     print(f"       Output dir (15m): {getattr(core, 'DIRS', {}).get('15min', {}).get('out', 'stocks_indicators_15min_eq')}")
     print(f"       Runs every 15 mins between {MARKET_OPEN.strftime('%H:%M')} and {MARKET_CLOSE.strftime('%H:%M')} IST (trading days).")
     print(f"       Buffer after boundary: {args.buffer_sec}s")
@@ -238,7 +238,7 @@ def main() -> None:
             time.sleep(max(2.0, (nxt - now_ist()).total_seconds()))
             continue
 
-        print(f"[RUN ] Updating eqidv1 15m for slot {slot_end.strftime('%H:%M')} at {dt.strftime('%Y-%m-%d %H:%M:%S%z')}")
+        print(f"[RUN ] Updating EQIDV1 15m for slot {slot_end.strftime('%H:%M')} at {dt.strftime('%Y-%m-%d %H:%M:%S%z')}")
         try:
             run_update_15m_once(
                 max_workers=int(args.max_workers),
@@ -258,3 +258,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

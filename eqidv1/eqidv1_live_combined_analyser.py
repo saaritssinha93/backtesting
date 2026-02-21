@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 eqidv1_live_combined_analyser.py
 ================================
@@ -17,3 +17,4 @@ from eqidv1_live_combined_analyser_csv import *  # noqa: F401,F403
 
 if __name__ == "__main__":
     main()
+

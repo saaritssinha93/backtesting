@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-eqidv1_eod_scheduler_for_15mins_data.py
-======================================
+eqidv1_live_fetch_n_latestsignalprint.py
+========================================
 
 Every 15 minutes during market hours:
-  1) Update eqidv1 15m parquet (core.run_mode(mode="15min"...))
+  1) Update EQIDV1 15m parquet (core.run_mode(mode="15min"...))
   2) Scan ONLY the latest 15m bar for signals (eqidv1_live_combined_analyser.run_one_scan)
   3) Print a compact result + let analyser write parquet/CSV as usual
 
@@ -26,9 +26,8 @@ from kiteconnect import KiteConnect
 # Paths / imports
 # -----------------------------------------------------------------------------
 _ROOT = Path(__file__).resolve().parent
-_eqidv1 = _ROOT / "backtesting" / "eqidv1"
-if str(_eqidv1) not in sys.path:
-    sys.path.insert(0, str(_eqidv1))
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core  # noqa: E402
 import eqidv1_live_combined_analyser as analyser  # noqa: E402
@@ -171,8 +170,8 @@ def main() -> None:
     except Exception:
         holidays = set()
 
-    print("[LIVE] eqidv1 15m FETCH + LATEST-SIGNAL scheduler started.")
-    print(f"       Market: {MARKET_OPEN.strftime('%H:%M')}–{MARKET_CLOSE.strftime('%H:%M')} IST | step={STEP_MIN}m")
+    print("[LIVE] EQIDV1 15m FETCH + LATEST-SIGNAL scheduler started.")
+    print(f"       Market: {MARKET_OPEN.strftime('%H:%M')}â€“{MARKET_CLOSE.strftime('%H:%M')} IST | step={STEP_MIN}m")
     print(f"       Buffer after boundary: {BOUNDARY_BUFFER_SEC}s | exits at {SESSION_END.strftime('%H:%M')} IST")
 
     last_slot_run: datetime | None = None
@@ -240,3 +239,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

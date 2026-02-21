@@ -1,4 +1,4 @@
-# EQIDV1 — Rule-Based AVWAP Rejection Intraday Strategy (Equities)
+﻿# EQIDV1 â€” Rule-Based AVWAP Rejection Intraday Strategy (Equities)
 
 EQIDV1 is the **baseline rule-based** intraday strategy for Indian equities (NSE cash market). It uses 15-minute AVWAP rejection patterns (long + short) without ML filtering.
 
@@ -7,24 +7,24 @@ EQIDV1 is the **baseline rule-based** intraday strategy for Indian equities (NSE
 ## 1) Architecture Overview
 
 ```
-Data Ingestion → Signal Generation → Live Execution
-     ↓                  ↓                   ↓
+Data Ingestion â†’ Signal Generation â†’ Live Execution
+     â†“                  â†“                   â†“
   Parquet 15m      AVWAP v11 rules     Paper/Real orders
   (historical)    (impulse + reject)   (Zerodha/Kite)
 ```
 
-**No ML pipeline** — eqidv1 is purely rule-based. For ML-enhanced versions, see eqidv2/eqidv3.
+**No ML pipeline** â€” eqidv1 is purely rule-based. For ML-enhanced versions, see eqidv1/eqidv3.
 
 ---
 
 ## 2) Strategy Logic (AVWAP v11)
 
 ### Entry Conditions (SHORT)
-1. **Impulse detection**: Red candle with body >= 0.45×ATR (MODERATE) or >= 1.60×ATR (HUGE)
+1. **Impulse detection**: Red candle with body >= 0.45Ã—ATR (MODERATE) or >= 1.60Ã—ATR (HUGE)
 2. **Trend filters**: ADX >= 25 (rising), RSI <= 55 (falling), StochK <= 75 (K < D, falling)
 3. **EMA trend**: Close < EMA20 < EMA50
 4. **AVWAP**: Close below AVWAP with rejection evidence
-5. **Volume**: Impulse bar volume >= 1.2× SMA(20)
+5. **Volume**: Impulse bar volume >= 1.2Ã— SMA(20)
 6. **ATR%**: ATR/close >= 0.20%
 7. **Close-confirm**: Entry candle close confirms breakout direction
 
@@ -34,15 +34,15 @@ Data Ingestion → Signal Generation → Live Execution
 ### Entry Setups
 | Setup | Description |
 |-------|-------------|
-| A_MOD_BREAK_C1 | MODERATE impulse → next candle breaks impulse extreme |
-| A_PULLBACK_C2 | MODERATE impulse → small pullback → C3 breaks C2 extreme |
-| B_HUGE_FAILED_BOUNCE | HUGE impulse → small counter candles fail to reclaim AVWAP → breakdown |
+| A_MOD_BREAK_C1 | MODERATE impulse â†’ next candle breaks impulse extreme |
+| A_PULLBACK_C2 | MODERATE impulse â†’ small pullback â†’ C3 breaks C2 extreme |
+| B_HUGE_FAILED_BOUNCE | HUGE impulse â†’ small counter candles fail to reclaim AVWAP â†’ breakdown |
 
 ### Risk Parameters
 - **Stop-loss**: 0.75% from entry
 - **Target**: SHORT 1.2%, LONG 1.5%
 - **Cap**: 1 signal per ticker per day per side
-- **Session**: 09:15–14:30 IST (signal windows: 09:15–11:30, 13:00–14:30)
+- **Session**: 09:15â€“14:30 IST (signal windows: 09:15â€“11:30, 13:00â€“14:30)
 
 ---
 
@@ -78,7 +78,7 @@ Data Ingestion → Signal Generation → Live Execution
 |------|------|
 | `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py` | Multi-TF historical parquet builder (5m + 15m), incremental updates, warmup |
 | `trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly.py` | 15m-only lighter variant |
-| `eqidv1_eod_scheduler_for_15mins_data.py` | Periodic 15m update scheduler (every 15m during market hours, 09:15–15:30) |
+| `eqidv1_eod_scheduler_for_15mins_data.py` | Periodic 15m update scheduler (every 15m during market hours, 09:15â€“15:30) |
 | `eqidv1_eod_scheduler_for_1540_update.py` | 15:40 IST EOD flush (final data snapshot) |
 
 ### Universe
@@ -93,33 +93,33 @@ Data Ingestion → Signal Generation → Live Execution
 
 ```
 Historical Data (Zerodha Kite API)
-        ↓
+        â†“
 trading_data_continous_run_historical_alltf_v3_parquet_stocksonly.py
-        ↓ (fetches + computes indicators)
+        â†“ (fetches + computes indicators)
 stocks_indicators_15min_eq/   (15m parquet files per ticker)
 stocks_indicators_5min_eq/    (5m parquet files per ticker)
-        ↓
-┌───────┴─────────────────────────────────────────┐
-│                                                   │
-│  Backtesting:                                    │
-│   avwap_combined_runner.py                       │
-│   ├─ 15m entries + 5m exit resolution            │
-│   ├─ portfolio sim + metrics                     │
-│   └─ outputs/avwap_longshort_trades_*.csv        │
-│                                                   │
-│  Live Signal Generation:                         │
-│   eqidv1_live_combined_analyser_csv.py           │
-│   └─ writes live_signals/signals_YYYY-MM-DD.csv  │
-│                                                   │
-│  Data Refresh:                                   │
-│   eqidv1_eod_scheduler_for_15mins_data.py        │
-│   eqidv1_eod_scheduler_for_1540_update.py        │
-│                                                   │
-│  Trade Execution:                                │
-│   avwap_trade_execution_PAPER_TRADE_TRUE.py      │
-│   avwap_trade_execution_PAPER_TRADE_FALSE.py     │
-│   └─ reads live_signals/signals_*.csv            │
-└──────────────────────────────────────────────────┘
+        â†“
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                                                   â”‚
+â”‚  Backtesting:                                    â”‚
+â”‚   avwap_combined_runner.py                       â”‚
+â”‚   â”œâ”€ 15m entries + 5m exit resolution            â”‚
+â”‚   â”œâ”€ portfolio sim + metrics                     â”‚
+â”‚   â””â”€ outputs/avwap_longshort_trades_*.csv        â”‚
+â”‚                                                   â”‚
+â”‚  Live Signal Generation:                         â”‚
+â”‚   eqidv1_live_combined_analyser_csv.py           â”‚
+â”‚   â””â”€ writes live_signals/signals_YYYY-MM-DD.csv  â”‚
+â”‚                                                   â”‚
+â”‚  Data Refresh:                                   â”‚
+â”‚   eqidv1_eod_scheduler_for_15mins_data.py        â”‚
+â”‚   eqidv1_eod_scheduler_for_1540_update.py        â”‚
+â”‚                                                   â”‚
+â”‚  Trade Execution:                                â”‚
+â”‚   avwap_trade_execution_PAPER_TRADE_TRUE.py      â”‚
+â”‚   avwap_trade_execution_PAPER_TRADE_FALSE.py     â”‚
+â”‚   â””â”€ reads live_signals/signals_*.csv            â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -205,32 +205,33 @@ Terminal 4: python avwap_trade_execution_PAPER_TRADE_TRUE.py   # execution (pape
 
 ### FIXED (in this review)
 
-1. **`allow_signal_today()` wrong keyword argument** — was `allow_signal_today(state, ticker, sid=today_str)`, now correctly checks both SHORT and LONG caps separately with proper positional args. Fixed in `eqidv1_live_combined_analyser.py` and `eqidv1_live_combined_analyser_parquet.py`.
+1. **`allow_signal_today()` wrong keyword argument** â€” was `allow_signal_today(state, ticker, sid=today_str)`, now correctly checks both SHORT and LONG caps separately with proper positional args. Fixed in `eqidv1_live_combined_analyser.py` and `eqidv1_live_combined_analyser_parquet.py`.
 
-2. **Duplicate `_generate_signal_id` definition** — removed shadowed 3-arg version in `eqidv1_live_combined_analyser_csv.py`, keeping only the correct 5-arg version.
+2. **Duplicate `_generate_signal_id` definition** â€” removed shadowed 3-arg version in `eqidv1_live_combined_analyser_csv.py`, keeping only the correct 5-arg version.
 
-3. **`sys.path` manipulation with wrong relative path** — `eqidv1_live_trading_signal_15m_v11_combined_parquet.py` now uses `_ROOT` (the file's own directory) instead of the incorrect `_ROOT / "backtesting" / "eqidv1"`.
+3. **`sys.path` manipulation with wrong relative path** â€” `eqidv1_live_trading_signal_15m_v11_combined_parquet.py` now uses `_ROOT` (the file's own directory) instead of the incorrect `_ROOT / "backtesting" / "eqidv1"`.
 
-4. **`filtered_stocks_MIS.py` uses `set` instead of `list`** — converted to sorted list for deterministic ordering across Python runs.
+4. **`filtered_stocks_MIS.py` uses `set` instead of `list`** â€” converted to sorted list for deterministic ordering across Python runs.
 
 ### REMAINING (lower severity)
 
-5. **Hardcoded XPath selectors in `authentication.py`** (LOW) — Zerodha UI changes will break the Selenium login flow. Consider switching to `By.NAME` or `By.CSS_SELECTOR` for more robust selectors.
+5. **Hardcoded XPath selectors in `authentication.py`** (LOW) â€” Zerodha UI changes will break the Selenium login flow. Consider switching to `By.NAME` or `By.CSS_SELECTOR` for more robust selectors.
 
-6. **No error handling for missing `api_key.txt` / `request_token.txt`** (LOW) — `authentication.py` will crash with an unhelpful error if files are missing.
+6. **No error handling for missing `api_key.txt` / `request_token.txt`** (LOW) â€” `authentication.py` will crash with an unhelpful error if files are missing.
 
-7. **Code duplication in `eqidv1_live_trading_signal_15m_v11_combined_parquet.py`** (LOW) — duplicates AVWAP v11 logic inline instead of importing refactored modules. Recommend refactoring to use `avwap_v11_refactored/` like the CSV/Parquet analysers.
+7. **Code duplication in `eqidv1_live_trading_signal_15m_v11_combined_parquet.py`** (LOW) â€” duplicates AVWAP v11 logic inline instead of importing refactored modules. Recommend refactoring to use `avwap_v11_refactored/` like the CSV/Parquet analysers.
 
-8. **Real trade executor lacks order rejection handling** (MODERATE for production) — `avwap_trade_execution_PAPER_TRADE_FALSE.py` doesn't retry or notify on order failures. Consider adding Telegram/Email alerts.
+8. **Real trade executor lacks order rejection handling** (MODERATE for production) â€” `avwap_trade_execution_PAPER_TRADE_FALSE.py` doesn't retry or notify on order failures. Consider adding Telegram/Email alerts.
 
 ---
 
-## 7) Key Differences from eqidv2/eqidv3
+## 7) Key Differences from eqidv1/eqidv3
 
-| Feature | eqidv1 | eqidv2 | eqidv3 |
+| Feature | eqidv1 | eqidv1 | eqidv3 |
 |---------|--------|--------|--------|
 | ML filtering | No | Yes | Yes (enhanced) |
 | Position sizing | Fixed | ML confidence-based | ML confidence + ATR vol cap |
 | Feature set | N/A | 5 legacy features | 30 features (6 groups) |
 | Model | N/A | LogReg/LightGBM | LightGBM + calibration |
 | Risk controls | Basic (cap per ticker/day) | ML-gated | Full (kill-switch, max positions, etc.) |
+

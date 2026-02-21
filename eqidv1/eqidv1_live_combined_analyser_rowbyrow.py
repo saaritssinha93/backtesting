@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-eqidv1 v3 Off-market "row-by-row" signal scan for ONE date (default: today IST)
+EQIDV1 v3 Off-market "row-by-row" signal scan for ONE date (default: today IST)
 
 What it does
 - Loads each ticker's 15m indicator parquet from a directory (default: stocks_indicators_15min_eq)
@@ -23,6 +23,7 @@ Usage (from inside eqidv1 folder)
 import os
 import argparse
 from datetime import datetime, date
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List
 
@@ -30,6 +31,7 @@ import pandas as pd
 
 
 IST_TZ = ZoneInfo("Asia/Kolkata")
+ROOT = Path(__file__).resolve().parent
 
 def _parse_dates_arg(s: str):
     """Parse comma-separated YYYY-MM-DD dates."""
@@ -67,9 +69,9 @@ def _to_ist_ts(x) -> pd.Timestamp:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="stocks_indicators_15min_eq", help="Directory with 15m parquet files")
+    ap.add_argument("--data-dir", default=str(ROOT / "stocks_indicators_15min_eq"), help="Directory with 15m parquet files")
     ap.add_argument("--suffix", default="_stocks_indicators_15min.parquet", help="Parquet suffix")
-    ap.add_argument("--out-dir", default="daily_signals_offmarket", help="Output directory for CSVs")
+    ap.add_argument("--out-dir", default=str(ROOT / "daily_signals_offmarket"), help="Output directory for CSVs")
 
     ap.add_argument(
         "--date",
@@ -112,7 +114,7 @@ def main() -> None:
 
     # Point it at the same dir/suffix the user wants (for tickers list)
     live.DIR_15M = args.data_dir
-    # IMPORTANT: list_tickers_15m typically uses END_15M suffix — set it too
+    # IMPORTANT: list_tickers_15m typically uses END_15M suffix â€” set it too
     if hasattr(live, "END_15M"):
         live.END_15M = args.suffix
 
@@ -211,3 +213,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
