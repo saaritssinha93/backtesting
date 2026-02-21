@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 eqidv3_live_combined_analyser_parquet.py
 ========================================
@@ -169,7 +169,7 @@ def main() -> None:
     LIVE_PQ_DIR = Path(args.out_dir)
     LIVE_PQ_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("[LIVE] eqidv3 PARQUET v2 (15m) | strict current 15m slot only")
+    print("[LIVE] EQIDV3 PARQUET v2 (15m) | strict current 15m slot only")
     print(f"[INFO] DIR_15M={live.DIR_15M} | tickers={len(live.list_tickers_15m())}")
     print(f"[INFO] OUT_PQ={LIVE_PQ_DIR}")
     print(f"[INFO] SHORT: SL={live.SHORT_STOP_PCT*100:.2f}%, TGT={live.SHORT_TARGET_PCT*100:.2f}%, ADX>={live.SHORT_ADX_MIN}, RSI<={live.SHORT_RSI_MAX}, StochK<={live.SHORT_STOCHK_MAX}")
@@ -243,3 +243,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

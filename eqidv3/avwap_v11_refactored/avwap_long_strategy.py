@@ -381,9 +381,11 @@ def scan_one_day(
             buf1 = entry_buffer(high1, cfg)
             trigger = high1 + buf1
 
-            # Option 1: break C1 high on C2
-            if float(c2["high"]) > trigger:
-                entry_idx = i + 1
+            # Option 1: break C1 high on configured lag bar
+            lag1 = int(cfg.lag_bars_long_a_mod_break_c1_high)
+            entry_idx_1 = i + lag1 if lag1 >= 0 else (i + 1)
+            if entry_idx_1 < len(df_day) and float(df_day.at[entry_idx_1, "high"]) > trigger:
+                entry_idx = entry_idx_1
                 entry_ts = df_day.at[entry_idx, "date"]
 
                 if not in_signal_window(entry_ts, cfg):
@@ -426,13 +428,14 @@ def scan_one_day(
             c2_above_avwap = np.isfinite(c2_avwap) and (c2c > c2_avwap)
 
             if cfg.enable_setup_a_pullback_c2_break and c2_small_red and c2_above_avwap and (i + 2 < len(df_day)):
-                c3 = df_day.iloc[i + 2]
                 high2 = float(c2["high"])
                 buf2 = entry_buffer(high2, cfg)
                 trigger2 = high2 + buf2
 
-                if float(c3["high"]) > trigger2:
-                    entry_idx = i + 2
+                lag2 = int(cfg.lag_bars_long_a_pullback_c2_break_c2_high)
+                entry_idx_2 = i + lag2 if lag2 >= 0 else (i + 2)
+                if entry_idx_2 < len(df_day) and float(df_day.at[entry_idx_2, "high"]) > trigger2:
+                    entry_idx = entry_idx_2
                     entry_ts = df_day.at[entry_idx, "date"]
 
                     if not in_signal_window(entry_ts, cfg):
@@ -507,7 +510,14 @@ def scan_one_day(
             trigger = pull_high + entry_buffer(pull_high, cfg)
             entered = False
 
-            for j in range(pull_end + 1, len(df_day)):
+            lag_huge = int(cfg.lag_bars_long_b_huge_pullback_hold_break)
+            if lag_huge >= 0:
+                j_fixed = i + lag_huge
+                j_iter = [j_fixed] if (pull_end + 1 <= j_fixed < len(df_day)) else []
+            else:
+                j_iter = range(pull_end + 1, len(df_day))
+
+            for j in j_iter:
                 tsj = df_day.at[j, "date"]
                 if not in_signal_window(tsj, cfg):
                     continue

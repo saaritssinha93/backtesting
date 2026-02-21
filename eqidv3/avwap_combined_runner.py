@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v2.py — AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
+avwap_combined_runner_v2.py â€” AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
 ==================================================================================
 
 Changes from v1:
@@ -9,11 +9,11 @@ Changes from v1:
    from */stocks_indicators_5min_eq/ for higher resolution P&L
 3. Significantly expanded charting suite with more detailed & analytical charts
 4. Normal Python imports (no importlib hacks)
-5. Unified Trade dataclass — both sides produce identical columns
+5. Unified Trade dataclass â€” both sides produce identical columns
 6. Parallel ticker scanning via ProcessPoolExecutor
 7. Slippage + commission model baked into P&L
 8. Comprehensive backtest metrics (Sharpe, Sortino, Calmar, drawdown, profit factor)
-9. All config via StrategyConfig dataclass — no module-level globals
+9. All config via StrategyConfig dataclass â€” no module-level globals
 10. Cash-constrained portfolio sim uses itertuples() instead of iterrows()
 
 Usage:
@@ -30,6 +30,7 @@ import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
+from datetime import time as dtime
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
@@ -112,6 +113,29 @@ FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
 # If True, disable Top-N pruning on both sides so runner output does not
 # unintentionally suppress one side on a given day versus live/daily scanners.
 FORCE_LIVE_PARITY_DISABLE_TOPN = True
+
+# Final signal-window override (applied last in main()).
+# Edit these windows here to override defaults from avwap_common/default_*_config.
+FINAL_SIGNAL_WINDOW_OVERRIDE = True
+FINAL_SHORT_USE_TIME_WINDOWS = True
+FINAL_SHORT_SIGNAL_WINDOWS = [
+    (dtime(9, 15, 0), dtime(14, 30, 0))
+]
+FINAL_LONG_USE_TIME_WINDOWS = True
+FINAL_LONG_SIGNAL_WINDOWS = [
+    (dtime(9, 15, 0), dtime(14, 30, 0))
+]
+
+# Per-setup signal->entry lag (in 15-min bars).
+# Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
+# HUGE setup: use -1 for legacy dynamic "first valid bar" behavior.
+SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW = 1
+SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW = 2
+SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE = -1
+LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH = 1
+LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH = 2
+LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = -1
+
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 
@@ -351,7 +375,7 @@ def _resolve_exits_5min(
 
 
 # ===========================================================================
-# WORKER FUNCTIONS (for parallel scanning — still uses 15-min for entry signals)
+# WORKER FUNCTIONS (for parallel scanning â€” still uses 15-min for entry signals)
 # ===========================================================================
 def _scan_one_ticker_short(args: Tuple[str, str, StrategyConfig]) -> List[dict]:
     """Scan one ticker on the SHORT side. Returns list of Trade dicts."""
@@ -565,6 +589,65 @@ def _print_day_side_mix(df: pd.DataFrame) -> None:
     )
 
 
+def _print_signal_entry_lag_summary(df: pd.DataFrame) -> None:
+    """
+    Print signal->entry lag stats by side/setup/impulse to debug execution gaps.
+    Lag is measured in minutes: entry_time_ist - signal_time_ist.
+    """
+    if df.empty:
+        return
+
+    required = {"signal_time_ist", "entry_time_ist"}
+    if not required.issubset(df.columns):
+        missing = sorted(required - set(df.columns))
+        print(f"[INFO] Lag summary skipped (missing columns: {missing})")
+        return
+
+    d = df.copy()
+    d["signal_time_ist"] = pd.to_datetime(d["signal_time_ist"], errors="coerce")
+    d["entry_time_ist"] = pd.to_datetime(d["entry_time_ist"], errors="coerce")
+    d = d.dropna(subset=["signal_time_ist", "entry_time_ist"]).copy()
+    if d.empty:
+        print("[INFO] Lag summary skipped (no valid signal/entry timestamps).")
+        return
+
+    for c in ["side", "setup", "impulse_type"]:
+        if c not in d.columns:
+            d[c] = ""
+        d[c] = d[c].fillna("").astype(str)
+    d["side"] = d["side"].str.upper()
+
+    d["lag_min"] = (
+        d["entry_time_ist"] - d["signal_time_ist"]
+    ).dt.total_seconds() / 60.0
+
+    grouped = d.groupby(["side", "setup", "impulse_type"], dropna=False)["lag_min"]
+    lag_summary = grouped.agg(
+        count="size",
+        min="min",
+        p50="median",
+        mean="mean",
+        p90=lambda s: s.quantile(0.90),
+        max="max",
+    ).reset_index()
+
+    lag_summary["p50_bars_15m"] = lag_summary["p50"] / 15.0
+    lag_summary = lag_summary.sort_values(["side", "setup", "impulse_type"]).reset_index(drop=True)
+
+    for col in ["min", "p50", "mean", "p90", "max", "p50_bars_15m"]:
+        lag_summary[col] = pd.to_numeric(lag_summary[col], errors="coerce").round(2)
+
+    neg_rows = int((d["lag_min"] < 0).sum())
+    zero_rows = int((d["lag_min"] == 0).sum())
+
+    print("\n[DEBUG] Signal->Entry lag by setup (minutes)")
+    print(
+        f"[DEBUG] Rows={len(d)} | negative_lag_rows={neg_rows} | "
+        f"same_timestamp_rows={zero_rows}"
+    )
+    print(lag_summary.to_string(index=False))
+
+
 
 # ===========================================================================
 # CASH-CONSTRAINED PORTFOLIO SIM (optimized with itertuples)
@@ -727,14 +810,14 @@ def generate_enhanced_charts(
     Returns list of saved file paths.
 
     Charts generated:
-      1.  Cumulative P&L (combined, short, long) — line
+      1.  Cumulative P&L (combined, short, long) â€” line
       2.  Daily P&L bar chart (combined)
       3.  Drawdown curve (combined equity)
-      4.  Win rate by side — bar chart
+      4.  Win rate by side â€” bar chart
       5.  P&L distribution histogram (combined)
       6.  P&L distribution by side (overlay histograms)
-      7.  Outcome breakdown — pie chart (TARGET / SL / EOD)
-      8.  Outcome breakdown by side — grouped bar chart
+      7.  Outcome breakdown â€” pie chart (TARGET / SL / EOD)
+      8.  Outcome breakdown by side â€” grouped bar chart
       9.  Monthly P&L heatmap
       10. Weekday P&L analysis
       11. Hourly entry time distribution
@@ -756,7 +839,7 @@ def generate_enhanced_charts(
         from matplotlib.gridspec import GridSpec
         import matplotlib.ticker as mticker
     except ImportError:
-        print("[WARN] matplotlib not available — skipping chart generation.")
+        print("[WARN] matplotlib not available â€” skipping chart generation.")
         return []
 
     warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
@@ -802,12 +885,12 @@ def generate_enhanced_charts(
                     where=cum_pnl.values >= 0, alpha=0.15, color="#2563EB")
     ax.fill_between(range(len(cum_pnl)), cum_pnl.values, 0,
                     where=cum_pnl.values < 0, alpha=0.15, color="#DC2626")
-    ax.set_title("Cumulative P&L (Rs.) — Combined / Short / Long", fontsize=14, fontweight="bold")
+    ax.set_title("Cumulative P&L (Rs.) â€” Combined / Short / Long", fontsize=14, fontweight="bold")
     ax.set_xlabel("Trade #")
     ax.set_ylabel("Cumulative P&L (Rs.)")
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
     _save(fig, "01_cumulative_pnl")
 
     # ========== CHART 2: Daily P&L Bar Chart ==========
@@ -821,7 +904,7 @@ def generate_enhanced_charts(
         ax.set_xlabel("Trading Day")
         ax.set_ylabel("P&L (Rs.)")
         ax.grid(True, alpha=0.3, axis="y")
-        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
         # Show date labels for first, middle, last
         n = len(daily)
         tick_positions = [0, n // 4, n // 2, 3 * n // 4, n - 1] if n > 5 else list(range(n))
@@ -841,14 +924,14 @@ def generate_enhanced_charts(
         ax1.set_ylabel("Cumulative P&L (Rs.)")
         ax1.legend(fontsize=10)
         ax1.grid(True, alpha=0.3)
-        ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+        ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
 
         ax2.fill_between(range(len(drawdown)), drawdown.values, 0, color="#DC2626", alpha=0.4)
         ax2.plot(drawdown.values, color="#DC2626", linewidth=1)
         ax2.set_ylabel("Drawdown (Rs.)")
         ax2.set_xlabel("Trade #")
         ax2.grid(True, alpha=0.3)
-        ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+        ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
         plt.tight_layout()
         _save(fig, "03_drawdown_curve")
 
@@ -892,7 +975,7 @@ def generate_enhanced_charts(
         ax.axvline(pnl_vals.mean(), color="#DC2626", linestyle="--", linewidth=2, label=f"Mean: {pnl_vals.mean():.2f}%")
         ax.axvline(pnl_vals.median(), color="#F59E0B", linestyle="--", linewidth=2, label=f"Median: {pnl_vals.median():.2f}%")
         ax.axvline(0, color="grey", linewidth=1, linestyle="-")
-        ax.set_title("P&L Distribution (%) — All Trades", fontsize=14, fontweight="bold")
+        ax.set_title("P&L Distribution (%) â€” All Trades", fontsize=14, fontweight="bold")
         ax.set_xlabel("P&L (%)")
         ax.set_ylabel("Frequency")
         ax.legend(fontsize=11)
@@ -904,11 +987,11 @@ def generate_enhanced_charts(
     if not short_df.empty:
         s_pnl = _safe_col(short_df, "pnl_pct").dropna()
         if len(s_pnl) > 0:
-            ax.hist(s_pnl, bins=50, color="#DC2626", alpha=0.5, edgecolor="white", linewidth=0.3, label=f"Short (μ={s_pnl.mean():.2f}%)")
+            ax.hist(s_pnl, bins=50, color="#DC2626", alpha=0.5, edgecolor="white", linewidth=0.3, label=f"Short (Î¼={s_pnl.mean():.2f}%)")
     if not long_df.empty:
         l_pnl = _safe_col(long_df, "pnl_pct").dropna()
         if len(l_pnl) > 0:
-            ax.hist(l_pnl, bins=50, color="#16A34A", alpha=0.5, edgecolor="white", linewidth=0.3, label=f"Long (μ={l_pnl.mean():.2f}%)")
+            ax.hist(l_pnl, bins=50, color="#16A34A", alpha=0.5, edgecolor="white", linewidth=0.3, label=f"Long (Î¼={l_pnl.mean():.2f}%)")
     ax.axvline(0, color="grey", linewidth=1, linestyle="-")
     ax.set_title("P&L Distribution by Side (Overlay)", fontsize=14, fontweight="bold")
     ax.set_xlabel("P&L (%)")
@@ -917,7 +1000,7 @@ def generate_enhanced_charts(
     ax.grid(True, alpha=0.3, axis="y")
     _save(fig, "06_pnl_distribution_by_side")
 
-    # ========== CHART 7: Outcome Breakdown — Pie Chart ==========
+    # ========== CHART 7: Outcome Breakdown â€” Pie Chart ==========
     if "outcome" in combined_sorted.columns:
         outcome_counts = combined_sorted["outcome"].value_counts()
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -932,7 +1015,7 @@ def generate_enhanced_charts(
         ax.set_title("Trade Outcome Breakdown", fontsize=14, fontweight="bold")
         _save(fig, "07_outcome_pie")
 
-    # ========== CHART 8: Outcome Breakdown by Side — Grouped Bar ==========
+    # ========== CHART 8: Outcome Breakdown by Side â€” Grouped Bar ==========
     if "outcome" in combined_sorted.columns and "side" in combined_sorted.columns:
         cross = pd.crosstab(combined_sorted["outcome"], combined_sorted["side"])
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -955,14 +1038,14 @@ def generate_enhanced_charts(
             bars = ax.bar(range(len(monthly)), monthly.values, color=colors_monthly, alpha=0.85, width=0.7)
             for bar, v in zip(bars, monthly.values):
                 ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + abs(monthly.values).max() * 0.02,
-                        f"₹{v:,.0f}", ha="center", va="bottom", fontsize=8, rotation=45)
+                        f"â‚¹{v:,.0f}", ha="center", va="bottom", fontsize=8, rotation=45)
             ax.set_xticks(range(len(monthly)))
             ax.set_xticklabels([str(m) for m in monthly.index], rotation=45, fontsize=9)
             ax.axhline(0, color="grey", linewidth=0.8, linestyle="--")
             ax.set_title("Monthly P&L (Rs.)", fontsize=14, fontweight="bold")
             ax.set_ylabel("P&L (Rs.)")
             ax.grid(True, alpha=0.3, axis="y")
-            ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+            ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
             _save(fig, "09_monthly_pnl")
         combined_sorted.drop(columns=["_month"], inplace=True, errors="ignore")
 
@@ -980,7 +1063,7 @@ def generate_enhanced_charts(
             ax1.set_ylabel("P&L (Rs.)")
             ax1.grid(True, alpha=0.3, axis="y")
             ax1.tick_params(axis="x", rotation=30)
-            ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+            ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
 
             colors_wd2 = ["#16A34A" if v >= 0 else "#DC2626" for v in weekday_pnl["mean"].values]
             ax2.bar(weekday_pnl.index, weekday_pnl["mean"].values, color=colors_wd2, alpha=0.85)
@@ -988,7 +1071,7 @@ def generate_enhanced_charts(
             ax2.set_ylabel("Avg P&L (Rs.)")
             ax2.grid(True, alpha=0.3, axis="y")
             ax2.tick_params(axis="x", rotation=30)
-            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
             plt.tight_layout()
             _save(fig, "10_weekday_pnl")
         combined_sorted.drop(columns=["_weekday"], inplace=True, errors="ignore")
@@ -1205,7 +1288,7 @@ def generate_enhanced_charts(
             ax2.set_xlabel("Hour (IST)")
             ax2.set_ylabel("Total P&L (Rs.)")
             ax2.grid(True, alpha=0.3, axis="y")
-            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
             plt.tight_layout()
             _save(fig, "19_avg_pnl_by_hour")
         combined_sorted.drop(columns=["_entry_hour"], inplace=True, errors="ignore")
@@ -1236,8 +1319,8 @@ def generate_enhanced_charts(
             ax.plot([0, max_val], [0, max_val * 2], "--", color="#F59E0B", linewidth=1, alpha=0.5, label="1:2 R:R")
             ax.axhline(0, color="grey", linewidth=0.8, linestyle="-")
             ax.set_title("Realized Risk vs Reward (per trade)", fontsize=14, fontweight="bold")
-            ax.set_xlabel("Risk (entry→stop distance)")
-            ax.set_ylabel("Reward (entry→exit distance)")
+            ax.set_xlabel("Risk (entryâ†’stop distance)")
+            ax.set_ylabel("Reward (entryâ†’exit distance)")
             ax.legend(fontsize=10)
             ax.grid(True, alpha=0.3)
             _save(fig, "20_risk_reward_scatter")
@@ -1270,7 +1353,7 @@ def main() -> None:
 
         try:
             print("=" * 70)
-            print("AVWAP v11 COMBINED runner — LONG + SHORT (refactored v2)")
+            print("AVWAP v11 COMBINED runner â€” LONG + SHORT (refactored v2)")
             print("  - Entry signals: 15-min data")
             print("  - Exit resolution: 5-min data (stocks_indicators_5min_eq)")
             print("  - Outputs: */algo_trading/outputs")
@@ -1287,7 +1370,7 @@ def main() -> None:
                 n_files = len(list(dir_5m.glob("*.parquet")))
                 print(f"[INFO] 5-min parquet files found: {n_files}")
             else:
-                print("[WARN] 5-min data directory not found — will fall back to 15-min exits.")
+                print("[WARN] 5-min data directory not found â€” will fall back to 15-min exits.")
 
             short_cfg = default_short_config(
                 reports_dir=_outputs_dir,
@@ -1295,6 +1378,14 @@ def main() -> None:
             long_cfg = default_long_config(
                 reports_dir=_outputs_dir,
             )
+
+            # Apply per-setup signal->entry lag controls
+            short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
+            short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = int(SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW)
+            short_cfg.lag_bars_short_b_huge_failed_bounce = int(SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE)
+            long_cfg.lag_bars_long_a_mod_break_c1_high = int(LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH)
+            long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH)
+            long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK)
 
             if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
                 short_cfg.min_bars_left_after_entry = 0
@@ -1304,6 +1395,13 @@ def main() -> None:
                 short_cfg.enable_topn_per_day = False
                 long_cfg.enable_topn_per_day = False
 
+            # Apply final signal-window override LAST (takes precedence over all earlier config).
+            if FINAL_SIGNAL_WINDOW_OVERRIDE:
+                short_cfg.use_time_windows = bool(FINAL_SHORT_USE_TIME_WINDOWS)
+                long_cfg.use_time_windows = bool(FINAL_LONG_USE_TIME_WINDOWS)
+                short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
+                long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
+
             print(
                 f"[INFO] SHORT config: SL={short_cfg.stop_pct*100:.1f}%, TGT={short_cfg.target_pct*100:.1f}%, "
                 f"slippage={short_cfg.slippage_pct*10000:.0f}bps, comm={short_cfg.commission_pct*10000:.0f}bps"
@@ -1311,6 +1409,31 @@ def main() -> None:
             print(
                 f"[INFO] LONG  config: SL={long_cfg.stop_pct*100:.1f}%, TGT={long_cfg.target_pct*100:.1f}%, "
                 f"slippage={long_cfg.slippage_pct*10000:.0f}bps, comm={long_cfg.commission_pct*10000:.0f}bps"
+            )
+            print(
+                "[INFO] Lag bars SHORT: "
+                f"A_MOD={short_cfg.lag_bars_short_a_mod_break_c1_low}, "
+                f"A_PULLBACK={short_cfg.lag_bars_short_a_pullback_c2_break_c2_low}, "
+                f"B_HUGE={short_cfg.lag_bars_short_b_huge_failed_bounce}"
+            )
+            print(
+                "[INFO] Lag bars LONG : "
+                f"A_MOD={long_cfg.lag_bars_long_a_mod_break_c1_high}, "
+                f"A_PULLBACK={long_cfg.lag_bars_long_a_pullback_c2_break_c2_high}, "
+                f"B_HUGE={long_cfg.lag_bars_long_b_huge_pullback_hold_break}"
+            )
+            print(
+                f"[INFO] Final signal-window override -> {FINAL_SIGNAL_WINDOW_OVERRIDE}"
+            )
+            print(
+                "[INFO] SHORT windows: "
+                f"use_time_windows={short_cfg.use_time_windows} | "
+                + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in short_cfg.signal_windows])
+            )
+            print(
+                "[INFO] LONG  windows: "
+                f"use_time_windows={long_cfg.use_time_windows} | "
+                + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in long_cfg.signal_windows])
             )
 
             short_notional = POSITION_SIZE_RS_SHORT * INTRADAY_LEVERAGE_SHORT
@@ -1369,6 +1492,7 @@ def main() -> None:
             combined = _add_notional_pnl(combined)
             combined = _sort_trades_for_output(combined)
             _print_day_side_mix(combined)
+            _print_signal_entry_lag_summary(combined)
 
             # --- Comprehensive metrics ---
             print_metrics("SHORT (net of slippage+comm, 5-min exits)", compute_backtest_metrics(short_df))
@@ -1443,3 +1567,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

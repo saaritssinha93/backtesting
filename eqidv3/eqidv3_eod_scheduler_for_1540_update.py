@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 eqidv3_eod_scheduler_for_1540_update.py
 ========================================
 
 Runs once per trading day at 15:40 IST to perform a final flush of
-EQIDV1 intraday parquet data (15-minute and 5-minute) with all of
+EQIDV3 intraday parquet data (15-minute and 5-minute) with all of
 today's candles, ensuring nothing is stale heading into the next session.
 
 Adapted from stocks_eod_daily_weekly_scheduler_for_daily_1540_update.py.
@@ -133,7 +133,7 @@ def main() -> None:
     except Exception:
         holidays = set()
 
-    print("[EOD] EQIDV1 1540 scheduler started.")
+    print("[EOD] EQIDV3 1540 scheduler started.")
     print("      Runs once per trading day at 15:40 IST (15min + 5min final flush).")
     print("      Process will exit at 16:00 IST.")
 
@@ -183,3 +183,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
