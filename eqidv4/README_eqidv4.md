@@ -5,7 +5,7 @@ EQIDV4 is now a production-oriented intraday strategy for NSE equities using:
 - 15m VWAP + EMA trend filter
 - 5m time-of-day normalized Relative Volume (RVOL)
 
-It supports long and short, strict completed-candle logic, portfolio risk controls, and separate live/backtest entry points.
+It supports long and short (side toggles), strict completed-candle logic, portfolio risk controls, and separate live/backtest entry points.
 
 ## 1) Session and execution controls
 - Market session: `09:15` to `15:30` IST
@@ -16,11 +16,11 @@ It supports long and short, strict completed-candle logic, portfolio risk contro
 ## 2) Universe selection
 Universe is selected daily from 15m data using 20-session historical liquidity:
 - Metric: median daily traded value (`sum(close * volume)` per day)
-- Default universe size: top `500` symbols (`--universe-top-n`)
+- Default universe size: `ALL` symbols (`--universe-top-n 0`)
 - Filters:
-  - minimum history sessions: `10`
-  - minimum median traded value: `5e7`
-  - minimum median price: `40`
+  - minimum history sessions: `1`
+  - minimum median traded value: `0`
+  - minimum median price: `0`
 
 Cached file:
 - `outputs/universe_turnover_15m.csv`
@@ -51,13 +51,21 @@ Opening range values:
 
 ## 5) Default parameters
 - OR buffer: `max(0.05% of price, 0.10 * ATR_15m)`
-- RVOL threshold: `1.5`
+- RVOL threshold:
+  - long: `2.0`
+  - short: `20.0`
 - Anti-chop: skip if `OR_Range < 0.25 * ATR_15m`
 - Stop distance: `0.8 * ATR_5m`
 - Partial: 50% at `+1R`
 - Time stop: if max favorable move `< +0.5R` within 6 bars, exit
-- Max open positions: `10`
-- Daily loss stop: `-1.5R`
+- Max open positions: `5`
+- Daily loss stop: `-1.0R`
+- Entry windows:
+  - long: `10:00-10:30`
+  - short: `09:30-10:30`
+- Side toggles:
+  - default: `enable_long=False`, `enable_short=True`
+  - enable long with `--enable-long`
 
 ## 6) Entry rules (implemented)
 ### Long
@@ -110,14 +118,16 @@ If index file is unavailable in 15m data (`<index_ticker>_stocks_indicators_15mi
 From `eqidv4` folder:
 
 ```powershell
-python eqidv4_orb_vwap_rvol_backtest.py --start-date 2026-02-19 --end-date 2026-02-20 --universe-top-n 300 --ticker-limit 300 --require-two-close-confirm --verbose
+python eqidv4_orb_vwap_rvol_backtest.py --start-date 2026-02-19 --end-date 2026-02-20 --ticker-limit 300 --require-two-close-confirm
 ```
 
 Important options:
 - `--orb-minutes 15|30`
-- `--rvol-min 1.2|1.5|1.8`
+- `--rvol-min`, `--rvol-min-long`, `--rvol-min-short`
 - `--stop-atr5-mult 0.6|0.8|1.0`
 - `--trail-method vwap15|ema20_5m`
+- `--enable-long|--disable-long`
+- `--enable-short|--disable-short`
 - `--disable-index-regime`
 - `--refresh-universe-cache`
 

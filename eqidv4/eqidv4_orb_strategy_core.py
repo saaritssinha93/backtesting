@@ -35,31 +35,44 @@ SESSION_END = dtime(15, 30)
 @dataclass
 class StrategyConfig:
     # Universe
-    universe_top_n: int = 500
+    universe_top_n: int = 0  # <=0 means no cap (all available tickers)
     universe_lookback_sessions: int = 20
-    universe_min_history_sessions: int = 10
-    universe_min_median_traded_value: float = 5.0e7
-    universe_min_price: float = 40.0
+    universe_min_history_sessions: int = 1
+    universe_min_median_traded_value: float = 0.0
+    universe_min_price: float = 0.0
 
     # ORB + filters
     orb_minutes: int = 15  # 15 or 30
     or_buffer_pct: float = 0.0005
     or_buffer_atr15_mult: float = 0.10
     rvol_lookback_sessions: int = 20
-    rvol_min: float = 1.5
+    rvol_min: float = 2.0
+    rvol_min_long: float = 2.0
+    rvol_min_short: float = 20.0
     anti_chop_or_atr15_mult: float = 0.25
     require_two_close_confirm: bool = True
+    min_ema_spread_pct_15m: float = 0.0
+    min_vwap_gap_pct_15m: float = 0.0
+    breakout_min_body_frac_5m: float = 0.0
+    breakout_long_min_clv_5m: float = 0.0
+    breakout_short_max_clv_5m: float = 1.0
+    enable_long: bool = False
+    enable_short: bool = True
 
     # Time controls
+    long_entry_start: dtime = dtime(10, 0)
+    long_entry_end: dtime = dtime(10, 30)
+    short_entry_start: dtime = dtime(9, 30)
+    short_entry_end: dtime = dtime(10, 30)
     no_new_entries_after: dtime = dtime(14, 45)
     force_exit_time: dtime = dtime(15, 10)
     hard_exit_time: dtime = dtime(15, 15)
 
     # Risk
     risk_per_trade_pct: float = 0.001  # 0.10% capital
-    max_open_positions: int = 10
+    max_open_positions: int = 5
     max_trades_per_symbol_per_day: int = 1
-    daily_loss_limit_r: float = -1.5
+    daily_loss_limit_r: float = -1.0
     stop_atr5_mult: float = 0.8
     partial_at_r: float = 1.0
     time_stop_bars: int = 6
@@ -210,7 +223,19 @@ def build_turnover_cache(
         try:
             c = pd.read_csv(cache)
             c["session_date"] = pd.to_datetime(c["session_date"]).dt.date
-            return c
+            if tickers:
+                expected = {str(t).upper() for t in tickers}
+                got = set(c["ticker"].astype(str).str.upper().unique().tolist())
+                missing = expected - got
+                if missing:
+                    print(
+                        f"[UNIVERSE] cache missing {len(missing)} tickers for current run; rebuilding cache...",
+                        flush=True,
+                    )
+                else:
+                    return c
+            else:
+                return c
         except Exception:
             pass
 
@@ -252,8 +277,13 @@ def select_universe_for_date(
         return []
     d = pd.to_datetime(trade_date).date()
     hist_dates = sorted(x for x in turnover_df["session_date"].unique() if x < d)
+    # For the earliest available date, no prior history exists.
+    # In that case, scan all available tickers (or top-N if configured).
     if not hist_dates:
-        return []
+        all_tickers = sorted(turnover_df["ticker"].astype(str).str.upper().unique().tolist())
+        if int(cfg.universe_top_n) > 0:
+            all_tickers = all_tickers[: int(cfg.universe_top_n)]
+        return all_tickers
     use_dates = hist_dates[-cfg.universe_lookback_sessions :]
     hist = turnover_df[turnover_df["session_date"].isin(use_dates)].copy()
     if hist.empty:
@@ -264,12 +294,16 @@ def select_universe_for_date(
         med_close=("close_last", "median"),
         sessions=("session_date", "nunique"),
     )
-    med = med[
-        (med["sessions"] >= cfg.universe_min_history_sessions)
-        & (med["med_traded_value"] >= cfg.universe_min_median_traded_value)
-        & (med["med_close"] >= cfg.universe_min_price)
-    ].copy()
-    med = med.sort_values("med_traded_value", ascending=False).head(cfg.universe_top_n)
+    min_sessions = max(1, int(cfg.universe_min_history_sessions))
+    mask = med["sessions"] >= min_sessions
+    if float(cfg.universe_min_median_traded_value) > 0:
+        mask = mask & (med["med_traded_value"] >= float(cfg.universe_min_median_traded_value))
+    if float(cfg.universe_min_price) > 0:
+        mask = mask & (med["med_close"] >= float(cfg.universe_min_price))
+    med = med[mask].copy()
+    med = med.sort_values("med_traded_value", ascending=False)
+    if int(cfg.universe_top_n) > 0:
+        med = med.head(int(cfg.universe_top_n))
     return med["ticker"].astype(str).str.upper().tolist()
 
 
@@ -380,12 +414,43 @@ def check_entry_signal(
         return False, "bad_atr15", None
     if not np.isfinite(row.get("rvol", np.nan)):
         return False, "no_rvol_ref", None
-    if float(row["rvol"]) < float(cfg.rvol_min):
+    rvol_need = float(cfg.rvol_min_short if s == "SHORT" else cfg.rvol_min_long)
+    if not np.isfinite(rvol_need) or rvol_need <= 0:
+        rvol_need = float(cfg.rvol_min)
+    if float(row["rvol"]) < rvol_need:
         return False, "low_rvol", None
 
     or_range = float(orb["or_range"])
     if or_range < float(cfg.anti_chop_or_atr15_mult) * float(row["atr15"]):
         return False, "anti_chop", None
+
+    close15 = float(row["close15"])
+    vwap15 = float(row["vwap15"])
+    ema20_15 = float(row["ema20_15"])
+    ema50_15 = float(row["ema50_15"])
+    ema20_prev_15 = float(row["ema20_prev_15"])
+    close5 = float(row["close"])
+
+    if not np.isfinite(close15) or close15 <= 0:
+        return False, "bad_close15", None
+    ema_spread_pct = abs(ema20_15 - ema50_15) / close15
+    if ema_spread_pct < float(cfg.min_ema_spread_pct_15m):
+        return False, "weak_ema_spread", None
+
+    vwap_gap_pct = abs(close15 - vwap15) / close15
+    if vwap_gap_pct < float(cfg.min_vwap_gap_pct_15m):
+        return False, "weak_vwap_gap", None
+
+    bar_high = float(row["high"])
+    bar_low = float(row["low"])
+    bar_open = float(row["open"])
+    bar_range = bar_high - bar_low
+    if not np.isfinite(bar_range) or bar_range <= 0:
+        return False, "flat_bar", None
+    body_frac = abs(close5 - bar_open) / bar_range
+    if body_frac < float(cfg.breakout_min_body_frac_5m):
+        return False, "weak_body", None
+    clv = (close5 - bar_low) / bar_range
 
     buffer_now = _buffer_value(float(row["close"]), float(row["atr15"]), cfg)
     or_high = float(orb["or_high"])
@@ -395,11 +460,13 @@ def check_entry_signal(
         if not bool(row.get("index_long_ok", True)):
             return False, "index_regime", None
         if not (
-            float(row["close15"]) > float(row["vwap15"])
-            and float(row["ema20_15"]) > float(row["ema50_15"])
-            and float(row["ema20_15"]) > float(row["ema20_prev_15"])
+            close15 > vwap15
+            and ema20_15 > ema50_15
+            and ema20_15 > ema20_prev_15
         ):
             return False, "context_filter", None
+        if clv < float(cfg.breakout_long_min_clv_5m):
+            return False, "weak_clv_long", None
         cond_now = float(row["close"]) > (or_high + buffer_now)
         if cfg.require_two_close_confirm:
             if prev_row is None:
@@ -416,11 +483,13 @@ def check_entry_signal(
     if not bool(row.get("index_short_ok", True)):
         return False, "index_regime", None
     if not (
-        float(row["close15"]) < float(row["vwap15"])
-        and float(row["ema20_15"]) < float(row["ema50_15"])
-        and float(row["ema20_15"]) < float(row["ema20_prev_15"])
+        close15 < vwap15
+        and ema20_15 < ema50_15
+        and ema20_15 < ema20_prev_15
     ):
         return False, "context_filter", None
+    if clv > float(cfg.breakout_short_max_clv_5m):
+        return False, "weak_clv_short", None
     cond_now = float(row["close"]) < (or_low - buffer_now)
     if cfg.require_two_close_confirm:
         if prev_row is None:
