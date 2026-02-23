@@ -509,3 +509,49 @@ KeyError: 'stop_price'
 2026-02-23 16:02:40,084 | INFO    |   Total P&L    : Rs.+0.00
 2026-02-23 16:02:40,084 | INFO    | =======================================================
 2026-02-23 16:02:40,084 | INFO    | Paper trade executor stopped.
+2026-02-23 16:36:05,929 | INFO    | =================================================================
+2026-02-23 16:36:05,929 | INFO    | AVWAP Paper Trade Executor — PAPER_TRADE = TRUE
+2026-02-23 16:36:05,929 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-02-23 16:36:05,929 | INFO    |   LTP polling     : Enabled
+2026-02-23 16:36:05,929 | INFO    |   Entry source    : ltp_on_signal
+2026-02-23 16:36:05,929 | INFO    |   Starting capital: Rs.1,000,000
+2026-02-23 16:36:05,929 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-23 16:36:05,929 | INFO    |   Forced close at : 15:20:00 IST
+2026-02-23 16:36:05,929 | INFO    | =================================================================
+2026-02-23 16:36:06,788 | INFO    | Kite session established (LTP polling enabled).
+2026-02-23 16:36:06,788 | INFO    | Loaded 8 previously executed signals.
+2026-02-23 16:36:06,790 | INFO    | Watchdog started — monitoring live_signals\signals_2026-02-23.csv
+2026-02-23 16:36:06,790 | INFO    | Checking for existing unprocessed signals...
+2026-02-23 16:36:06,795 | INFO    | Market closed. All simulations complete.
+2026-02-23 16:36:06,797 | INFO    | =======================================================
+2026-02-23 16:36:06,797 | INFO    | DAILY PAPER TRADE SUMMARY
+2026-02-23 16:36:06,797 | INFO    |   Total trades : 0
+2026-02-23 16:36:06,797 | INFO    |   Wins         : 0
+2026-02-23 16:36:06,797 | INFO    |   Losses       : 0
+2026-02-23 16:36:06,797 | INFO    |   Win rate     : 0.0%
+2026-02-23 16:36:06,797 | INFO    |   Total P&L    : Rs.+0.00
+2026-02-23 16:36:06,797 | INFO    | =======================================================
+2026-02-23 16:36:06,797 | INFO    | Paper trade executor stopped.
+2026-02-23 16:38:29,628 | INFO    | =================================================================
+2026-02-23 16:38:29,628 | INFO    | AVWAP Paper Trade Executor — PAPER_TRADE = TRUE
+2026-02-23 16:38:29,628 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-02-23 16:38:29,628 | INFO    |   LTP polling     : Enabled
+2026-02-23 16:38:29,628 | INFO    |   Entry source    : ltp_on_signal
+2026-02-23 16:38:29,628 | INFO    |   Starting capital: Rs.1,000,000
+2026-02-23 16:38:29,628 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-23 16:38:29,628 | INFO    |   Forced close at : 15:20:00 IST
+2026-02-23 16:38:29,628 | INFO    | =================================================================
+2026-02-23 16:38:30,394 | INFO    | Kite session established (LTP polling enabled).
+2026-02-23 16:38:30,404 | INFO    | Loaded 8 previously executed signals.
+2026-02-23 16:38:30,406 | INFO    | Watchdog started — monitoring live_signals\signals_2026-02-23.csv
+2026-02-23 16:38:30,407 | INFO    | Checking for existing unprocessed signals...
+2026-02-23 16:38:30,412 | INFO    | Market closed. All simulations complete.
+2026-02-23 16:38:30,413 | INFO    | =======================================================
+2026-02-23 16:38:30,414 | INFO    | DAILY PAPER TRADE SUMMARY
+2026-02-23 16:38:30,414 | INFO    |   Total trades : 0
+2026-02-23 16:38:30,414 | INFO    |   Wins         : 0
+2026-02-23 16:38:30,414 | INFO    |   Losses       : 0
+2026-02-23 16:38:30,414 | INFO    |   Win rate     : 0.0%
+2026-02-23 16:38:30,414 | INFO    |   Total P&L    : Rs.+0.00
+2026-02-23 16:38:30,414 | INFO    | =======================================================
+2026-02-23 16:38:30,414 | INFO    | Paper trade executor stopped.
