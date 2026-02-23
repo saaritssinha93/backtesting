@@ -240,3 +240,15 @@ eqidv2/**
 
 !eqidv2/models/
 !eqidv2/models/**
+
+# ----------------------------------
+# Explicitly ignore secret files
+# (re-ignore after broad allow rules)
+# ----------------------------------
+eqidv2/api_key.txt
+eqidv2/access_token.txt
+eqidv2/request_token.txt
+eqidv2/stocks_tokens_cache.json
+eqidv2/bat/gmail_client_secret.json
+eqidv2/bat/gmail_token.json
+eqidv2/bat/client_secret_*.json

@@ -11,24 +11,19 @@ set "LOG_DIR=%BASE_DIR%\logs"
 set "LOG_FILE=%LOG_DIR%\log_dashboard_public_link.log"
 set "LATEST_URL_FILE=%LOG_DIR%\log_dashboard_latest_url.txt"
 
-set "PYTHON_EXE=%LOG_DASH_PYTHON_EXE%"
-if "%PYTHON_EXE%"=="" set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
-if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
-
-set "GMAIL_API_SCRIPT=%BAT_DIR%\send_gmail_api.py"
-set "GMAIL_CREDENTIALS_FILE=%LOG_DASH_GMAIL_CREDENTIALS_FILE%"
-if "%GMAIL_CREDENTIALS_FILE%"=="" set "GMAIL_CREDENTIALS_FILE=%BAT_DIR%\gmail_client_secret.json"
-set "GMAIL_TOKEN_FILE=%LOG_DASH_GMAIL_TOKEN_FILE%"
-if "%GMAIL_TOKEN_FILE%"=="" set "GMAIL_TOKEN_FILE=%BAT_DIR%\gmail_token.json"
-set "GMAIL_INTERACTIVE_AUTH=%LOG_DASH_GMAIL_INTERACTIVE_AUTH%"
-if "%GMAIL_INTERACTIVE_AUTH%"=="" set "GMAIL_INTERACTIVE_AUTH=0"
-
 set "EMAIL_TO=%LOG_DASH_EMAIL_TO%"
-if "%EMAIL_TO%"=="" set "EMAIL_TO=saaritssinha93@gmail.com,dragontastic007@gmail.com"
+if "%EMAIL_TO%"=="" set "EMAIL_TO=saaritssinha93@gmail.com"
 set "EMAIL_FROM=%LOG_DASH_EMAIL_FROM%"
-if "%EMAIL_FROM%"=="" set "EMAIL_FROM=saaritssinha93@gmail.com"
+set "SMTP_USER=%LOG_DASH_SMTP_USER%"
+if "%SMTP_USER%"=="" set "SMTP_USER=%EMAIL_TO%"
+if "%EMAIL_FROM%"=="" set "EMAIL_FROM=%SMTP_USER%"
+set "SMTP_APP_PASSWORD=%LOG_DASH_SMTP_APP_PASSWORD%"
+set "SMTP_SERVER=%LOG_DASH_SMTP_SERVER%"
+if "%SMTP_SERVER%"=="" set "SMTP_SERVER=smtp.gmail.com"
+set "SMTP_PORT=%LOG_DASH_SMTP_PORT%"
+if "%SMTP_PORT%"=="" set "SMTP_PORT=587"
 set "EMAIL_SEND_MODE=%LOG_DASH_EMAIL_SEND_MODE%"
-if "%EMAIL_SEND_MODE%"=="" set "EMAIL_SEND_MODE=gmail_api_only"
+if "%EMAIL_SEND_MODE%"=="" set "EMAIL_SEND_MODE=smtp_only"
 set "EMAIL_SUBJECT_PREFIX=%LOG_DASH_EMAIL_SUBJECT_PREFIX%"
 if "%EMAIL_SUBJECT_PREFIX%"=="" set "EMAIL_SUBJECT_PREFIX=EQIDV2 Dashboard URL"
 
@@ -68,17 +63,23 @@ echo Starting cloudflared tunnel for %DASH_URL%
 echo Open the https://*.trycloudflare.com URL shown below on your phone.
 echo Email target: %EMAIL_TO%
 echo Email send mode: %EMAIL_SEND_MODE%
-echo Gmail credentials file: %GMAIL_CREDENTIALS_FILE%
-echo Gmail token file: %GMAIL_TOKEN_FILE%
-echo Gmail interactive auth: %GMAIL_INTERACTIVE_AUTH%
-echo Python exe: %PYTHON_EXE%
+echo SMTP server: %SMTP_SERVER%:%SMTP_PORT%
+if "%SMTP_USER%"=="" (
+  echo SMTP user: ^(not set^)
+) else (
+  echo SMTP user: %SMTP_USER%
+)
 echo Latest URL file: %LATEST_URL_FILE%
 echo [INFO] Using protocol=http2 and edge-ip-version=4 for better stability on restrictive networks.
 
 :RUN_TUNNEL
 set "EMAIL_FROM_ARG=%EMAIL_FROM%"
 if "%EMAIL_FROM_ARG%"=="" set "EMAIL_FROM_ARG=__EMPTY__"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%BAT_DIR%\run_log_dashboard_public_link_capture.ps1" -CloudflaredPath "%CF_BIN%" -DashUrl "%DASH_URL%" -LogFile "%LOG_FILE%" -LatestUrlFile "%LATEST_URL_FILE%" -PythonExe "%PYTHON_EXE%" -GmailApiScript "%GMAIL_API_SCRIPT%" -GmailCredentialsFile "%GMAIL_CREDENTIALS_FILE%" -GmailTokenFile "%GMAIL_TOKEN_FILE%" -GmailInteractiveAuth "%GMAIL_INTERACTIVE_AUTH%" -EmailTo "%EMAIL_TO%" -EmailFrom "%EMAIL_FROM_ARG%" -EmailSendMode "%EMAIL_SEND_MODE%" -EmailSubjectPrefix "%EMAIL_SUBJECT_PREFIX%"
+set "SMTP_USER_ARG=%SMTP_USER%"
+if "%SMTP_USER_ARG%"=="" set "SMTP_USER_ARG=__EMPTY__"
+set "SMTP_APP_PASSWORD_ARG=%SMTP_APP_PASSWORD%"
+if "%SMTP_APP_PASSWORD_ARG%"=="" set "SMTP_APP_PASSWORD_ARG=__EMPTY__"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%BAT_DIR%\run_log_dashboard_public_link_capture.ps1" -CloudflaredPath "%CF_BIN%" -DashUrl "%DASH_URL%" -LogFile "%LOG_FILE%" -LatestUrlFile "%LATEST_URL_FILE%" -EmailTo "%EMAIL_TO%" -EmailFrom "%EMAIL_FROM_ARG%" -SmtpUser "%SMTP_USER_ARG%" -SmtpAppPassword "%SMTP_APP_PASSWORD_ARG%" -SmtpServer "%SMTP_SERVER%" -SmtpPort "%SMTP_PORT%" -EmailSendMode "%EMAIL_SEND_MODE%" -EmailSubjectPrefix "%EMAIL_SUBJECT_PREFIX%"
 set "CF_EXIT=%ERRORLEVEL%"
 
 if "%CF_EXIT%"=="0" (

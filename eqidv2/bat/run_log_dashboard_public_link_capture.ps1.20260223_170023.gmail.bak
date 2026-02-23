@@ -1,0 +1,294 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$CloudflaredPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$DashUrl,
+
+    [Parameter(Mandatory = $true)]
+    [string]$LogFile,
+
+    [Parameter(Mandatory = $true)]
+    [string]$LatestUrlFile,
+
+    [Parameter(Mandatory = $true)]
+    [string]$WaLinkFile,
+
+    [string]$WhatsappTo = "",
+    [string]$WhatsappSendMode = "api_first",
+    [string]$WabaAccessToken = "",
+    [string]$WabaPhoneNumberId = "",
+    [string]$WabaGraphVersion = "v20.0",
+    [string]$WabaTemplateName = "",
+    [string]$WabaTemplateLanguage = "en_US",
+
+    [switch]$OpenWhatsappLink,
+    [switch]$AutoSendWhatsapp
+)
+
+$ErrorActionPreference = "Continue"
+
+function Write-LogLine {
+    param(
+        [string]$Message,
+        [string]$Path
+    )
+    Write-Output $Message
+    try { Add-Content -Path $Path -Value $Message -Encoding utf8 } catch {}
+}
+
+function Normalize-SendMode {
+    param([string]$Mode)
+    $m = ("" + $Mode).Trim().ToLowerInvariant()
+    switch ($m) {
+        "api_only" { return "api_only" }
+        "api_first" { return "api_first" }
+        "ui_only" { return "ui_only" }
+        "link_only" { return "link_only" }
+        default { return "api_first" }
+    }
+}
+
+function Send-WhatsAppCloudMessage {
+    param(
+        [string]$ToDigits,
+        [string]$Url,
+        [string]$AccessToken,
+        [string]$PhoneNumberId,
+        [string]$GraphVersion,
+        [string]$TemplateName,
+        [string]$TemplateLanguage
+    )
+
+    if ([string]::IsNullOrWhiteSpace($AccessToken) -or [string]::IsNullOrWhiteSpace($PhoneNumberId)) {
+        return @{
+            ok = $false
+            reason = "Missing LOG_DASH_WABA_ACCESS_TOKEN or LOG_DASH_WABA_PHONE_NUMBER_ID."
+        }
+    }
+
+    $graphVer = if ([string]::IsNullOrWhiteSpace($GraphVersion)) { "v20.0" } else { $GraphVersion.Trim() }
+    $bodyText = "EQIDV2 dashboard: $Url"
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($TemplateName)) {
+            $payload = @{
+                messaging_product = "whatsapp"
+                to = $ToDigits
+                type = "text"
+                text = @{
+                    preview_url = $true
+                    body = $bodyText
+                }
+            }
+        }
+        else {
+            $payload = @{
+                messaging_product = "whatsapp"
+                to = $ToDigits
+                type = "template"
+                template = @{
+                    name = $TemplateName
+                    language = @{
+                        code = $(if ([string]::IsNullOrWhiteSpace($TemplateLanguage)) { "en_US" } else { $TemplateLanguage.Trim() })
+                    }
+                    components = @(
+                        @{
+                            type = "body"
+                            parameters = @(
+                                @{
+                                    type = "text"
+                                    text = $bodyText
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
+        $uri = "https://graph.facebook.com/$graphVer/$PhoneNumberId/messages"
+        $headers = @{
+            Authorization = "Bearer $AccessToken"
+            "Content-Type" = "application/json"
+        }
+        $json = $payload | ConvertTo-Json -Depth 20 -Compress
+        $resp = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $json -TimeoutSec 30
+
+        $messageId = ""
+        if ($resp -and $resp.messages -and $resp.messages.Count -gt 0 -and $resp.messages[0].id) {
+            $messageId = [string]$resp.messages[0].id
+        }
+
+        return @{
+            ok = $true
+            message_id = $messageId
+        }
+    }
+    catch {
+        $reason = $_.Exception.Message
+        try {
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $reason = $_.ErrorDetails.Message
+            }
+        }
+        catch {}
+
+        return @{
+            ok = $false
+            reason = $reason
+        }
+    }
+}
+
+function Invoke-WhatsAppUiFlow {
+    param(
+        [string]$ToDigits,
+        [string]$Url,
+        [string]$WaLink,
+        [bool]$DoOpen,
+        [bool]$DoAutoSend,
+        [string]$LogPath
+    )
+
+    if (-not $DoOpen -and -not $DoAutoSend) {
+        Write-LogLine "[WARN] UI send path selected but both OpenWhatsappLink and AutoSendWhatsapp are disabled." $LogPath
+        return $false
+    }
+
+    $bodyText = [uri]::EscapeDataString("EQIDV2 dashboard: $Url")
+    $deepLink = "whatsapp://send?phone=$ToDigits&text=$bodyText"
+    $opened = $false
+
+    try {
+        Start-Process $deepLink | Out-Null
+        $opened = $true
+        Write-LogLine "[INFO] WhatsApp deep link opened." $LogPath
+    }
+    catch {
+        try {
+            Start-Process $WaLink | Out-Null
+            $opened = $true
+            Write-LogLine "[INFO] WhatsApp web link opened." $LogPath
+        }
+        catch {}
+    }
+
+    if (-not $DoAutoSend -or -not $opened) {
+        if (-not $opened) {
+            Write-LogLine "[WARN] WhatsApp UI link could not be opened." $LogPath
+        }
+        return $false
+    }
+
+    $sent = $false
+    try {
+        Start-Sleep -Seconds 8
+        $ws = New-Object -ComObject WScript.Shell
+        for ($i = 1; $i -le 10 -and -not $sent; $i++) {
+            foreach ($title in @("WhatsApp", "Google Chrome", "Microsoft Edge", "Chrome", "Edge")) {
+                if ($ws.AppActivate($title)) {
+                    Start-Sleep -Milliseconds 700
+                    $ws.SendKeys("{ENTER}")
+                    Start-Sleep -Milliseconds 700
+                    $ws.SendKeys("{ENTER}")
+                    $sent = $true
+                    break
+                }
+            }
+            if (-not $sent) { Start-Sleep -Seconds 1 }
+        }
+    }
+    catch {}
+
+    if ($sent) {
+        Write-LogLine "[INFO] WhatsApp auto-send keystroke attempted (ENTER x2)." $LogPath
+    }
+    else {
+        Write-LogLine "[WARN] WhatsApp auto-send could not activate app/window." $LogPath
+    }
+
+    return $sent
+}
+
+try {
+    $logDir = Split-Path -Parent $LogFile
+    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+        New-Item -Path $logDir -ItemType Directory -Force | Out-Null
+    }
+
+    $waToDigits = ($WhatsappTo -replace "[^0-9]", "")
+    $sendMode = Normalize-SendMode $WhatsappSendMode
+    $announced = $false
+
+    if ([string]::IsNullOrWhiteSpace($waToDigits)) {
+        Write-LogLine "[WARN] WhatsApp number is empty after normalization; no outbound send will be attempted." $LogFile
+    }
+    else {
+        Write-LogLine "[INFO] WhatsApp send mode active: $sendMode" $LogFile
+    }
+
+    & $CloudflaredPath tunnel --url $DashUrl --protocol http2 --edge-ip-version 4 2>&1 | ForEach-Object {
+        $line = $_.ToString()
+        Write-LogLine $line $LogFile
+
+        if (-not $announced -and $line -match "https://[a-z0-9-]+\.trycloudflare\.com") {
+            $url = $Matches[0]
+            Set-Content -Path $LatestUrlFile -Value $url -Encoding utf8
+            Write-LogLine "[INFO] Public URL saved: $url" $LogFile
+
+            if (-not [string]::IsNullOrWhiteSpace($waToDigits)) {
+                $waText = [uri]::EscapeDataString("EQIDV2 dashboard: $url")
+                $waLink = "https://wa.me/${waToDigits}?text=$waText"
+                Set-Content -Path $WaLinkFile -Value $waLink -Encoding utf8
+                Write-LogLine "[INFO] WhatsApp share link saved: $waLink" $LogFile
+
+                $apiSent = $false
+                if ($sendMode -eq "api_only" -or $sendMode -eq "api_first") {
+                    $apiResult = Send-WhatsAppCloudMessage -ToDigits $waToDigits -Url $url -AccessToken $WabaAccessToken -PhoneNumberId $WabaPhoneNumberId -GraphVersion $WabaGraphVersion -TemplateName $WabaTemplateName -TemplateLanguage $WabaTemplateLanguage
+                    if ($apiResult.ok) {
+                        $msgId = ""
+                        if ($null -ne $apiResult.message_id) {
+                            $msgId = ("" + $apiResult.message_id).Trim()
+                        }
+                        if ([string]::IsNullOrWhiteSpace($msgId)) {
+                            Write-LogLine "[INFO] WhatsApp Cloud API send succeeded (message id unavailable)." $LogFile
+                        }
+                        else {
+                            Write-LogLine "[INFO] WhatsApp Cloud API send succeeded. message_id=$msgId" $LogFile
+                        }
+                        $apiSent = $true
+                    }
+                    else {
+                        Write-LogLine "[WARN] WhatsApp Cloud API send failed: $($apiResult.reason)" $LogFile
+                    }
+                }
+
+                $needUiFlow = $false
+                if ($sendMode -eq "ui_only") { $needUiFlow = $true }
+                if ($sendMode -eq "api_first" -and -not $apiSent) { $needUiFlow = $true }
+
+                if ($needUiFlow) {
+                    [void](Invoke-WhatsAppUiFlow -ToDigits $waToDigits -Url $url -WaLink $waLink -DoOpen $OpenWhatsappLink.IsPresent -DoAutoSend $AutoSendWhatsapp.IsPresent -LogPath $LogFile)
+                }
+                elseif ($sendMode -eq "api_only" -and -not $apiSent) {
+                    Write-LogLine "[ERROR] WhatsApp send mode is api_only and API send failed." $LogFile
+                }
+                elseif ($sendMode -eq "link_only") {
+                    Write-LogLine "[INFO] WhatsApp send mode link_only: URL and share link created only." $LogFile
+                }
+            }
+
+            try { Set-Clipboard -Value $url } catch {}
+            $announced = $true
+        }
+    }
+
+    exit $LASTEXITCODE
+}
+catch {
+    $err = "[ERROR] run_log_dashboard_public_link_capture.ps1 failed: $($_.Exception.Message)"
+    Write-Output $err
+    try { Add-Content -Path $LogFile -Value $err -Encoding utf8 } catch {}
+    exit 1
+}
