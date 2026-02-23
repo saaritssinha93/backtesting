@@ -24,6 +24,7 @@ Core: backtesting/eqidv2/trading_data_continous_run_historical_alltf_v3_parquet_
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
 import os
@@ -39,6 +40,16 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import pytz
+
+try:
+    import msvcrt  # Windows file locking
+except Exception:
+    msvcrt = None
+
+try:
+    import fcntl  # POSIX file locking
+except Exception:
+    fcntl = None
 
 # =============================================================================
 # Wire eqidv2 core into sys.path
@@ -95,7 +106,7 @@ DEFAULT_POSITION_SIZE_RS = 50_000       # Rs. margin per trade
 INTRADAY_LEVERAGE = 5.0                 # MIS leverage on Zerodha
 
 SIGNAL_CSV_COLUMNS = [
-    "signal_id", "signal_datetime", "received_time", "ticker", "side",
+    "signal_id", "signal_datetime", "received_time", "detected_time_ist", "logtime_ist", "ticker", "side",
     "setup", "impulse_type", "entry_price", "stop_price", "target_price",
     "quality_score", "atr_pct", "rsi", "adx", "quantity",
     "signal_entry_datetime_ist", "signal_bar_time_ist",
@@ -130,9 +141,10 @@ TAIL_ROWS = 260
 LATEST_SLOT_ONLY = True
 LATEST_SLOT_BUFFER_SEC = 60     # wait this many seconds after boundary before trusting the new candle
 LATEST_SLOT_TOLERANCE_SEC = 120  # allow small timestamp drift (seconds) in parquet timestamps
-# Also rescan a few previous 15m slots to catch delayed parquet finalization.
-# Example with 2: at 11:17, scanner evaluates 11:15 + 11:00 + 10:45.
-SLOT_LOOKBACK_COUNT = 2
+# Also rescan a few previous 15m slots to catch delayed parquet finalization
+# and delayed strategy confirmations.
+# Example with 3: at 11:17, scanner evaluates 11:15 + 11:00 + 10:45 + 10:30.
+SLOT_LOOKBACK_COUNT = 3
 
 # For speed, keep only the last N bars from today (must be >= 7 for v11 logic)
 MAX_BARS_PER_TICKER_TODAY = 120
@@ -260,6 +272,8 @@ LONG_CAP_PER_TICKER_PER_DAY = 1
 # This allows intraday/off-market scans to emit signals even when the session is incomplete.
 FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
 FORCE_LIVE_PARITY_DISABLE_TOPN = True
+ALLOW_INCOMPLETE_TAIL_IN_LIVE = True
+LIVE_MIN_BARS_FOR_SCAN = 5
 
 # =============================================================================
 # NEW: QUALITY FILTERS (from avwap_common refactored config)
@@ -279,6 +293,10 @@ REQUIRE_CLOSE_CONFIRM = True
 # Top-N filter (optional; usually off in live)
 USE_TOPN_PER_RUN = False
 TOPN_PER_RUN = 30
+
+# One-time startup catch-up: scans today's available data and appends any
+# missing historical-intraday signals into live_signals CSV (dedupe-safe).
+RUN_STARTUP_BACKFILL = True
 
 
 # =============================================================================
@@ -1203,6 +1221,11 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
         short_cfg.enable_topn_per_day = False
         long_cfg.enable_topn_per_day = False
 
+    short_cfg.allow_incomplete_tail = bool(ALLOW_INCOMPLETE_TAIL_IN_LIVE)
+    long_cfg.allow_incomplete_tail = bool(ALLOW_INCOMPLETE_TAIL_IN_LIVE)
+    short_cfg.min_bars_for_scan = int(LIVE_MIN_BARS_FOR_SCAN)
+    long_cfg.min_bars_for_scan = int(LIVE_MIN_BARS_FOR_SCAN)
+
     # Keep all available in-session bars for indicator warmup parity.
     # Use shared avwap_common session gate so backtest/live daily parity matches.
     df = df[df["date"].apply(lambda ts: ref_in_session(ts, short_cfg))].copy()
@@ -1214,7 +1237,8 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
 
     target_day = df["day"].max()
     df_day = df[df["day"] == target_day].copy().reset_index(drop=True)
-    if df_day.empty or len(df_day) < 7:
+    min_bars_needed = min(int(short_cfg.min_bars_for_scan), int(long_cfg.min_bars_for_scan))
+    if df_day.empty or len(df_day) < min_bars_needed:
         return []
 
     if MAX_BARS_PER_TICKER_TODAY and len(df_day) > int(MAX_BARS_PER_TICKER_TODAY):
@@ -1325,10 +1349,84 @@ def _sleep_until(dt: datetime) -> None:
 # =============================================================================
 # CSV BRIDGE: write signals to live_signals/ for trade executors
 # =============================================================================
+@contextlib.contextmanager
+def _locked_signal_csv(csv_path: str, timeout_sec: float = 30.0, poll_sec: float = 0.1):
+    """Cross-process lock around signal CSV read/migrate/append operations."""
+    lock_path = f"{csv_path}.lock"
+    lock_fh = open(lock_path, "a+b")
+    locked = False
+
+    try:
+        # Ensure file has at least one byte for msvcrt 1-byte region locking.
+        lock_fh.seek(0, os.SEEK_END)
+        if lock_fh.tell() == 0:
+            lock_fh.write(b"0")
+            lock_fh.flush()
+
+        deadline = time.time() + max(0.1, float(timeout_sec))
+        while True:
+            try:
+                lock_fh.seek(0)
+                if msvcrt is not None:
+                    msvcrt.locking(lock_fh.fileno(), msvcrt.LK_NBLCK, 1)
+                elif fcntl is not None:
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    raise TimeoutError(f"Timed out acquiring signal CSV lock: {lock_path}")
+                time.sleep(max(0.01, float(poll_sec)))
+
+        yield
+    finally:
+        if locked:
+            try:
+                lock_fh.seek(0)
+                if msvcrt is not None:
+                    msvcrt.locking(lock_fh.fileno(), msvcrt.LK_UNLCK, 1)
+                elif fcntl is not None:
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        try:
+            lock_fh.close()
+        except Exception:
+            pass
+
+
 def _generate_signal_id(ticker: str, side: str, signal_dt: str, setup: str = "") -> str:
     """Deterministic signal ID; include setup to avoid same-bar collisions."""
     raw = f"EQIDV2|{ticker.upper()}|{side.upper()}|{signal_dt}|{setup}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _canonical_signal_dt(signal_dt: str) -> str:
+    """Normalize signal datetime for stable de-duplication."""
+    s = str(signal_dt or "").strip()
+    if not s:
+        return ""
+    try:
+        ts = pd.to_datetime(s, errors="coerce")
+        if pd.isna(ts):
+            return s
+        ts = pd.Timestamp(ts)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(IST)
+        else:
+            ts = ts.tz_convert(IST)
+        ts = ts.floor("min")
+        return ts.strftime("%Y-%m-%d %H:%M:%S%z")
+    except Exception:
+        return s
+
+
+def _signal_dedupe_key(ticker: str, side: str, signal_dt: str, setup: str = "") -> str:
+    ticker_norm = str(ticker or "").upper().strip()
+    side_norm = str(side or "").upper().strip()
+    setup_norm = str(setup or "").upper().strip()
+    dt_norm = _canonical_signal_dt(signal_dt)
+    return f"{ticker_norm}|{side_norm}|{dt_norm}|{setup_norm}"
 
 
 def _load_existing_ids(csv_path: str) -> set:
@@ -1347,6 +1445,36 @@ def _load_existing_ids(csv_path: str) -> set:
         return set(df_existing["signal_id"].astype(str))
     except Exception:
         return set()
+
+
+def _load_existing_signal_keys(csv_path: str) -> set:
+    """Read existing signal semantic keys to prevent near-duplicate appends."""
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+        return set()
+    try:
+        df_existing = pd.read_csv(
+            csv_path,
+            engine="python",
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+        )
+    except Exception:
+        return set()
+
+    keys = set()
+    for _, row in df_existing.iterrows():
+        ticker = str(row.get("ticker", "")).upper().strip()
+        side = str(row.get("side", "")).upper().strip()
+        setup = str(row.get("setup", "")).strip()
+        signal_dt = (
+            row.get("signal_entry_datetime_ist", "")
+            or row.get("signal_bar_time_ist", "")
+            or row.get("signal_datetime", "")
+        )
+        if ticker and side and str(signal_dt or "").strip():
+            keys.add(_signal_dedupe_key(ticker, side, str(signal_dt), setup))
+    return keys
 
 
 def _ensure_signal_csv_schema(csv_path: str) -> None:
@@ -1385,96 +1513,182 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
     today_str = now_ist().strftime("%Y-%m-%d")
     csv_path = str(LIVE_SIGNAL_DIR / SIGNAL_CSV_PATTERN.format(today_str))
     received_time = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
-
-    _ensure_signal_csv_schema(csv_path)
-
-    # Read existing signal IDs from today's CSV to avoid duplicates
-    existing_ids: set = _load_existing_ids(csv_path)
-
-    file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
     written = 0
     scanned = 0 if signals_df is None else int(len(signals_df))
+    skipped_duplicate_key = 0
+    skipped_duplicate_id = 0
+    skipped_missing_time = 0
 
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=SIGNAL_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
-        if not file_exists:
-            writer.writeheader()
+    with _locked_signal_csv(csv_path):
+        _ensure_signal_csv_schema(csv_path)
 
-        if signals_df is not None and (not signals_df.empty):
-            for _, row in signals_df.iterrows():
-                ticker = str(row.get("ticker", "")).upper()
-                side = str(row.get("side", "")).upper()
-                bar_time = str(row.get("bar_time_ist", ""))
-                setup = str(row.get("setup", ""))
-                signal_id = _generate_signal_id(ticker, side, bar_time, setup)
+        # Read existing signal IDs from today's CSV to avoid duplicates
+        existing_ids: set = _load_existing_ids(csv_path)
+        existing_keys: set = _load_existing_signal_keys(csv_path)
+        file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
+        run_keys: set = set()
 
-                if signal_id in existing_ids:
-                    continue
+        with open(csv_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=SIGNAL_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
+            if not file_exists:
+                writer.writeheader()
 
-                entry_price = float(row.get("entry_price", 0))
-                notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
-                qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
+            if signals_df is not None and (not signals_df.empty):
+                for _, row in signals_df.iterrows():
+                    ticker = str(row.get("ticker", "")).upper()
+                    side = str(row.get("side", "")).upper()
+                    bar_time = str(row.get("bar_time_ist", ""))
+                    setup = str(row.get("setup", ""))
+                    if not bar_time:
+                        skipped_missing_time += 1
+                        continue
+                    dedupe_key = _signal_dedupe_key(ticker, side, bar_time, setup)
+                    if dedupe_key in existing_keys or dedupe_key in run_keys:
+                        skipped_duplicate_key += 1
+                        continue
+                    signal_id = _generate_signal_id(ticker, side, bar_time, setup)
 
-                # Extract indicator values from diagnostics JSON if available
-                atr_pct = 0.0
-                rsi_val = 0.0
-                adx_val = 0.0
-                diag_str = row.get("diagnostics_json", "")
-                if diag_str:
-                    try:
-                        diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
-                        atr_val = _safe_float(diag.get("atr", 0))
-                        close_val = _safe_float(diag.get("close", entry_price))
-                        if np.isfinite(atr_val) and np.isfinite(close_val) and close_val > 0:
-                            atr_pct = atr_val / close_val
-                        rsi_val = _safe_float(diag.get("rsi", 0))
-                        adx_val = _safe_float(diag.get("adx", 0))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    if signal_id in existing_ids:
+                        skipped_duplicate_id += 1
+                        continue
 
-                # Determine impulse_type from diagnostics
-                impulse_type = ""
-                if diag_str:
-                    try:
-                        diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
-                        impulse_type = str(diag.get("impulse_type", ""))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    entry_price = float(row.get("entry_price", 0))
+                    notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
+                    qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
 
-                # Keep both names for compatibility:
-                # - signal_entry_datetime_ist: explicit user-facing label
-                # - signal_bar_time_ist: legacy alias
-                out_row = {
-                    "signal_id": signal_id,
-                    "signal_datetime": bar_time,
-                    "signal_entry_datetime_ist": bar_time,
-                    "signal_bar_time_ist": bar_time,
-                    "received_time": received_time,
-                    "ticker": ticker,
-                    "side": side,
-                    "setup": setup,
-                    "impulse_type": impulse_type,
-                    "entry_price": round(entry_price, 2),
-                    "stop_price": round(float(row.get("sl_price", 0)), 2),
-                    "target_price": round(float(row.get("target_price", 0)), 2),
-                    "quality_score": round(float(row.get("score", 0)), 4),
-                    "atr_pct": round(atr_pct, 6),
-                    "rsi": round(rsi_val, 2),
-                    "adx": round(adx_val, 2),
-                    "quantity": qty,
-                }
+                    # Extract indicator values from diagnostics JSON if available
+                    atr_pct = 0.0
+                    rsi_val = 0.0
+                    adx_val = 0.0
+                    diag_str = row.get("diagnostics_json", "")
+                    if diag_str:
+                        try:
+                            diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
+                            atr_val = _safe_float(diag.get("atr", 0))
+                            close_val = _safe_float(diag.get("close", entry_price))
+                            if np.isfinite(atr_val) and np.isfinite(close_val) and close_val > 0:
+                                atr_pct = atr_val / close_val
+                            rsi_val = _safe_float(diag.get("rsi", 0))
+                            adx_val = _safe_float(diag.get("adx", 0))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
 
-                writer.writerow(out_row)
-                existing_ids.add(signal_id)
-                written += 1
-                print(
-                    f"[CSV+] {ticker} {side} {bar_time} setup={setup} "
-                    f"entry={entry_price:.2f} sl={float(row.get('sl_price', 0)):.2f} tgt={float(row.get('target_price', 0)):.2f}",
-                    flush=True,
+                    # Determine impulse_type from diagnostics
+                    impulse_type = ""
+                    if diag_str:
+                        try:
+                            diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
+                            impulse_type = str(diag.get("impulse_type", ""))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                    # Keep both names for compatibility:
+                    # - signal_entry_datetime_ist: explicit user-facing label
+                    # - signal_bar_time_ist: legacy alias
+                    out_row = {
+                        "signal_id": signal_id,
+                        "signal_datetime": bar_time,
+                        "detected_time_ist": received_time,
+                        "logtime_ist": received_time,
+                        "signal_entry_datetime_ist": bar_time,
+                        "signal_bar_time_ist": bar_time,
+                        "received_time": received_time,
+                        "ticker": ticker,
+                        "side": side,
+                        "setup": setup,
+                        "impulse_type": impulse_type,
+                        "entry_price": round(entry_price, 2),
+                        "stop_price": round(float(row.get("sl_price", 0)), 2),
+                        "target_price": round(float(row.get("target_price", 0)), 2),
+                        "quality_score": round(float(row.get("score", 0)), 4),
+                        "atr_pct": round(atr_pct, 6),
+                        "rsi": round(rsi_val, 2),
+                        "adx": round(adx_val, 2),
+                        "quantity": qty,
+                    }
+
+                    writer.writerow(out_row)
+                    existing_ids.add(signal_id)
+                    existing_keys.add(dedupe_key)
+                    run_keys.add(dedupe_key)
+                    written += 1
+                    print(
+                        f"[CSV+] {ticker} {side} {bar_time} setup={setup} "
+                        f"entry={entry_price:.2f} sl={float(row.get('sl_price', 0)):.2f} tgt={float(row.get('target_price', 0)):.2f}",
+                        flush=True,
+                    )
+
+    print(
+        f"[CSV ] scanned={scanned} written={written} "
+        f"skipped_dup_key={skipped_duplicate_key} skipped_dup_id={skipped_duplicate_id} "
+        f"skipped_missing_time={skipped_missing_time} path={csv_path}",
+        flush=True,
+    )
+
+    return written
+
+
+# =============================================================================
+# STARTUP BACKFILL (catch-up after restart)
+# =============================================================================
+def _collect_today_parity_signals(verbose: bool = False) -> Tuple[pd.DataFrame, int]:
+    tickers = list_tickers_15m()
+    if not tickers:
+        return pd.DataFrame(), 0
+
+    all_signals: List[Dict[str, Any]] = []
+    scanned = 0
+
+    for idx, t in enumerate(tickers, start=1):
+        path = os.path.join(DIR_15M, f"{t}{END_15M}")
+        try:
+            df_raw = read_parquet_tail(path, n=TAIL_ROWS)
+            if df_raw is None or df_raw.empty:
+                continue
+
+            sigs = _all_day_runner_parity_signals_for_ticker(t, df_raw)
+            for s in sigs:
+                all_signals.append(
+                    {
+                        "ticker": s.ticker,
+                        "side": s.side,
+                        "bar_time_ist": s.bar_time_ist,
+                        "setup": s.setup,
+                        "entry_price": s.entry_price,
+                        "sl_price": s.sl_price,
+                        "target_price": s.target_price,
+                        "score": s.score,
+                        "diagnostics_json": json.dumps(s.diagnostics, default=str),
+                    }
                 )
 
-    print(f"[CSV ] scanned={scanned} written={written} path={csv_path}", flush=True)
+            scanned += 1
+            if verbose and scanned % 100 == 0:
+                print(
+                    f"[BACKFILL] scanned={scanned}/{len(tickers)} tickers | signals_so_far={len(all_signals)}",
+                    flush=True,
+                )
+        except Exception as e:
+            if verbose:
+                print(f"[BACKFILL][ERR] {t} {e}", flush=True)
+            continue
 
+    return pd.DataFrame(all_signals), scanned
+
+
+def run_startup_backfill(verbose: bool = False) -> int:
+    started = now_ist()
+    print(
+        f"[BACKFILL] Startup catch-up scan begin at {started.strftime('%Y-%m-%d %H:%M:%S%z')}",
+        flush=True,
+    )
+    signals_df, scanned = _collect_today_parity_signals(verbose=verbose)
+    written = _write_signals_csv(signals_df)
+    elapsed = (now_ist() - started).total_seconds()
+    print(
+        f"[BACKFILL] done | scanned={scanned} signals={len(signals_df)} written={written} elapsed={elapsed:.1f}s",
+        flush=True,
+    )
     return written
 
 
@@ -1672,6 +1886,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--replay-date", default=None, help="Run one-shot replay for YYYY-MM-DD (IST) and exit.")
     ap.add_argument("--replay-out-csv", default=None, help="Optional output path for --replay-date CSV.")
+    ap.add_argument(
+        "--no-startup-backfill",
+        action="store_true",
+        help="Skip one-time startup catch-up append into live_signals CSV.",
+    )
+    ap.add_argument(
+        "--startup-backfill-verbose",
+        action="store_true",
+        help="Verbose logs for startup catch-up scan.",
+    )
     args = ap.parse_args()
 
     if args.replay_date:
@@ -1698,9 +1922,16 @@ def main() -> None:
     print(f"[INFO] Close-confirm: {REQUIRE_CLOSE_CONFIRM}")
     print(f"[INFO] UPDATE_15M_BEFORE_CHECK={UPDATE_15M_BEFORE_CHECK}")
     print(f"[INFO] SLOT_LOOKBACK_COUNT={SLOT_LOOKBACK_COUNT}")
+    print(f"[INFO] STARTUP_BACKFILL={RUN_STARTUP_BACKFILL and (not args.no_startup_backfill)}")
     print(f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s")
 
     holidays = _read_holidays_safe()
+
+    if RUN_STARTUP_BACKFILL and (not args.no_startup_backfill):
+        try:
+            run_startup_backfill(verbose=bool(args.startup_backfill_verbose))
+        except Exception as e:
+            print(f"[WARN] Startup backfill failed: {e!r}", flush=True)
 
     while True:
         now = now_ist()

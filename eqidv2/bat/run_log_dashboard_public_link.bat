@@ -7,6 +7,10 @@ set "DASH_BAT=%BAT_DIR%\run_log_dashboard_server.bat"
 set "DASH_URL=http://127.0.0.1:8787"
 set "CF_BIN="
 set "CF_RETRY_SEC=5"
+set "LOG_DIR=%BASE_DIR%\logs"
+set "LOG_FILE=%LOG_DIR%\log_dashboard_public_link.log"
+
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
 if "%LOG_DASH_PASS%"=="" (
@@ -28,6 +32,9 @@ if not defined CF_BIN (
   endlocal & exit /b 3
 )
 
+echo [%DATE% %TIME%] START run_log_dashboard_public_link.bat
+echo [%DATE% %TIME%] START run_log_dashboard_public_link.bat>>"%LOG_FILE%"
+
 echo Starting local dashboard server...
 start "EQIDV2 Log Dashboard" /MIN cmd /c call "%DASH_BAT%"
 
@@ -40,15 +47,17 @@ echo Open the https://*.trycloudflare.com URL shown below on your phone.
 echo [INFO] Using protocol=http2 and edge-ip-version=4 for better stability on restrictive networks.
 
 :RUN_TUNNEL
-"%CF_BIN%" tunnel --url %DASH_URL% --protocol http2 --edge-ip-version 4
+powershell -NoProfile -Command "& { & '%CF_BIN%' tunnel --url '%DASH_URL%' --protocol http2 --edge-ip-version 4 *>&1 | ForEach-Object { $_.ToString() } | Tee-Object -FilePath '%LOG_FILE%' -Append; exit $LASTEXITCODE }"
 set "CF_EXIT=%ERRORLEVEL%"
 
 if "%CF_EXIT%"=="0" (
   echo [INFO] cloudflared exited normally.
+  echo [%DATE% %TIME%] END run_log_dashboard_public_link.bat ^(exit=0^)>>"%LOG_FILE%"
   endlocal & exit /b 0
 )
 
 echo [WARN] cloudflared exited with code %CF_EXIT%. Retrying in %CF_RETRY_SEC%s...
+echo [%DATE% %TIME%] cloudflared exited with code %CF_EXIT%. Retrying in %CF_RETRY_SEC%s...>>"%LOG_FILE%"
 timeout /t %CF_RETRY_SEC% >nul
 goto RUN_TUNNEL
 
