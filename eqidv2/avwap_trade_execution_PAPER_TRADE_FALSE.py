@@ -378,9 +378,9 @@ def execute_live_trade(signal: dict) -> None:
     signal_target = float(signal["target_price"])
     quantity = int(signal.get("quantity", 1))
 
-    now_ist = datetime.now(IST)
-    trade_id = f"LT-{signal_id[:8]}-{now_ist.strftime('%H%M%S')}"
-    today = now_ist.date()
+    trade_start_ist = datetime.now(IST)
+    trade_id = f"LT-{signal_id[:8]}-{trade_start_ist.strftime('%H%M%S')}"
+    today = trade_start_ist.date()
     forced_close_dt = IST.localize(datetime.combine(today, FORCED_CLOSE_TIME))
 
     if side == "SHORT":

@@ -400,3 +400,112 @@ KeyError: 'stop_price'
 2026-02-20 23:22:27,438 | INFO    |   Total P&L    : Rs.+0.00
 2026-02-20 23:22:27,439 | INFO    | =======================================================
 2026-02-20 23:22:27,439 | INFO    | Paper trade executor stopped.
+2026-02-23 09:00:01,884 | INFO    | =================================================================
+2026-02-23 09:00:01,885 | INFO    | AVWAP Paper Trade Executor — PAPER_TRADE = TRUE
+2026-02-23 09:00:01,885 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-02-23 09:00:01,885 | INFO    |   LTP polling     : Enabled
+2026-02-23 09:00:01,885 | INFO    |   Starting capital: Rs.1,000,000
+2026-02-23 09:00:01,885 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-23 09:00:01,885 | INFO    |   Forced close at : 15:20:00 IST
+2026-02-23 09:00:01,885 | INFO    | =================================================================
+2026-02-23 09:00:03,002 | INFO    | Kite session established (LTP polling enabled).
+2026-02-23 09:00:03,013 | INFO    | Loaded 0 previously executed signals.
+2026-02-23 09:00:03,015 | INFO    | Watchdog started — monitoring live_signals\signals_2026-02-23.csv
+2026-02-23 09:16:41,681 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 10:17:39,527 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 10:18:34,364 | INFO    | =================================================================
+2026-02-23 10:18:34,364 | INFO    | AVWAP Paper Trade Executor — PAPER_TRADE = TRUE
+2026-02-23 10:18:34,364 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-02-23 10:18:34,364 | INFO    |   LTP polling     : Enabled
+2026-02-23 10:18:34,364 | INFO    |   Starting capital: Rs.1,000,000
+2026-02-23 10:18:34,364 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-23 10:18:34,364 | INFO    |   Forced close at : 15:20:00 IST
+2026-02-23 10:18:34,364 | INFO    | =================================================================
+2026-02-23 10:18:34,976 | INFO    | Kite session established (LTP polling enabled).
+2026-02-23 10:18:34,977 | INFO    | Loaded 0 previously executed signals.
+2026-02-23 10:18:34,980 | INFO    | Watchdog started — monitoring live_signals\signals_2026-02-23.csv
+2026-02-23 10:18:34,980 | INFO    | Checking for existing unprocessed signals...
+2026-02-23 11:04:21,768 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 11:04:21,792 | INFO    | [SIM] ENTRY SHORT COFORGE @ 1304.09 | SL=1314.52 TGT=1289.08 qty=191 | ID=PT-db257eb5-110421
+2026-02-23 11:04:21,792 | INFO    | [DISPATCH] Launched simulation for SHORT COFORGE @ 1304.74 | p_win=? | ID=db257eb51ec9
+2026-02-23 11:04:21,793 | INFO    | [SIM] ENTRY SHORT PENIND @ 146.18 | SL=147.35 TGT=144.5 qty=1709 | ID=PT-2446faba-110421
+2026-02-23 11:04:21,793 | INFO    | [DISPATCH] Launched simulation for SHORT PENIND @ 146.25 | p_win=? | ID=2446faba9d9d
+2026-02-23 11:04:21,797 | INFO    | Processed 2 new signal(s). Active sims: 2
+2026-02-23 11:09:34,683 | INFO    | [SIM] TARGET HIT SHORT PENIND @ 144.5 (LTP=144.5) | ID=PT-2446faba-110421
+2026-02-23 11:09:34,685 | INFO    | [SIM] RESULT SHORT PENIND | TARGET | P&L: Rs.+2,871.12 (+1.15%) | Day total: Rs.+2,871.12 (1W/0L)
+2026-02-23 11:19:33,289 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 11:19:33,304 | INFO    | [SIM] ENTRY SHORT WIPRO @ 205.37 | SL=207.01 TGT=203.0 qty=1216 | ID=PT-ac4d6b40-111933
+2026-02-23 11:19:33,304 | INFO    | [DISPATCH] Launched simulation for SHORT WIPRO @ 205.47 | p_win=? | ID=ac4d6b40362a
+2026-02-23 11:19:33,305 | INFO    | Processed 1 new signal(s). Active sims: 2
+2026-02-23 11:28:30,212 | INFO    | =================================================================
+2026-02-23 11:28:30,212 | INFO    | AVWAP Paper Trade Executor — PAPER_TRADE = TRUE
+2026-02-23 11:28:30,212 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-02-23 11:28:30,212 | INFO    |   LTP polling     : Enabled
+2026-02-23 11:28:30,212 | INFO    |   Starting capital: Rs.1,000,000
+2026-02-23 11:28:30,212 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-23 11:28:30,212 | INFO    |   Forced close at : 15:20:00 IST
+2026-02-23 11:28:30,212 | INFO    | =================================================================
+2026-02-23 11:28:30,822 | INFO    | Kite session established (LTP polling enabled).
+2026-02-23 11:28:30,831 | INFO    | Loaded 3 previously executed signals.
+2026-02-23 11:28:30,832 | INFO    | Watchdog started — monitoring live_signals\signals_2026-02-23.csv
+2026-02-23 11:28:30,832 | INFO    | Checking for existing unprocessed signals...
+2026-02-23 12:19:34,640 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 12:23:27,073 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 12:23:27,085 | INFO    | [SIM] ENTRY SHORT CIGNITITEC @ 1292.39 | SL=1302.74 TGT=1277.52 qty=193 | ID=PT-3d3052b8-122327
+2026-02-23 12:23:27,086 | INFO    | [DISPATCH] Launched simulation for SHORT CIGNITITEC @ 1293.04 | p_win=? | ID=3d3052b8337e
+2026-02-23 12:23:27,087 | INFO    | [SIM] ENTRY SHORT LATENTVIEW @ 354.1 | SL=356.94 TGT=350.03 qty=705 | ID=PT-c4724f93-122327
+2026-02-23 12:23:27,087 | INFO    | [DISPATCH] Launched simulation for SHORT LATENTVIEW @ 354.28 | p_win=? | ID=c4724f93892b
+2026-02-23 12:23:27,088 | INFO    | [SIM] ENTRY SHORT TATAELXSI @ 4761.17 | SL=4799.27 TGT=4706.38 qty=52 | ID=PT-bf636e59-122327
+2026-02-23 12:23:27,088 | INFO    | [DISPATCH] Launched simulation for SHORT TATAELXSI @ 4763.55 | p_win=? | ID=bf636e590454
+2026-02-23 12:23:27,092 | INFO    | [SIM] ENTRY SHORT UGROCAP @ 114.24 | SL=115.16 TGT=112.93 qty=2187 | ID=PT-95692069-122327
+2026-02-23 12:23:27,093 | INFO    | [DISPATCH] Launched simulation for SHORT UGROCAP @ 114.3 | p_win=? | ID=956920692596
+2026-02-23 12:23:27,094 | INFO    | Processed 4 new signal(s). Active sims: 4
+2026-02-23 12:23:27,175 | INFO    | [SIM] SL HIT SHORT UGROCAP @ 115.16 (LTP=117.55) | ID=PT-95692069-122327
+2026-02-23 12:23:27,179 | INFO    | [SIM] RESULT SHORT UGROCAP | SL | P&L: Rs.-2,012.04 (-0.81%) | Day total: Rs.-2,012.04 (0W/1L)
+2026-02-23 12:33:28,097 | INFO    | [SIM] TARGET HIT SHORT TATAELXSI @ 4706.38 (LTP=4706.0) | ID=PT-bf636e59-122327
+2026-02-23 12:33:28,106 | INFO    | [SIM] RESULT SHORT TATAELXSI | TARGET | P&L: Rs.+2,849.08 (+1.15%) | Day total: Rs.+837.04 (1W/1L)
+2026-02-23 12:46:19,787 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 12:52:19,640 | INFO    | [SIM] TARGET HIT SHORT CIGNITITEC @ 1277.52 (LTP=1277.1) | ID=PT-3d3052b8-122327
+2026-02-23 12:52:19,659 | INFO    | [SIM] RESULT SHORT CIGNITITEC | TARGET | P&L: Rs.+2,869.91 (+1.15%) | Day total: Rs.+3,706.95 (2W/1L)
+2026-02-23 13:42:03,234 | INFO    | [SIM] TARGET HIT SHORT LATENTVIEW @ 350.03 (LTP=349.65) | ID=PT-c4724f93-122327
+2026-02-23 13:42:03,237 | INFO    | [SIM] RESULT SHORT LATENTVIEW | TARGET | P&L: Rs.+2,869.35 (+1.15%) | Day total: Rs.+6,576.30 (3W/1L)
+2026-02-23 13:46:30,794 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 14:35:42,724 | INFO    | Signal CSV changed — processing new signals...
+2026-02-23 14:35:42,740 | INFO    | [SIM] ENTRY SHORT MAZDOCK @ 2283.8 | SL=2302.08 TGT=2257.52 qty=109 | ID=PT-8a84f97d-143542
+2026-02-23 14:35:42,740 | INFO    | [DISPATCH] Launched simulation for SHORT MAZDOCK @ 2284.94 | p_win=? | ID=8a84f97d922f
+2026-02-23 14:35:42,749 | INFO    | Processed 1 new signal(s). Active sims: 1
+2026-02-23 15:20:03,707 | INFO    | [SIM] FORCED CLOSE SHORT MAZDOCK @ 2278.4 (EOD forced close) | ID=PT-8a84f97d-143542
+2026-02-23 15:20:03,718 | INFO    | [SIM] RESULT SHORT MAZDOCK | EOD_CLOSE | P&L: Rs.+588.60 (+0.24%) | Day total: Rs.+7,164.90 (4W/1L)
+2026-02-23 15:30:00,622 | INFO    | Market closed. All simulations complete.
+2026-02-23 15:30:00,641 | INFO    | =======================================================
+2026-02-23 15:30:00,641 | INFO    | DAILY PAPER TRADE SUMMARY
+2026-02-23 15:30:00,641 | INFO    |   Total trades : 5
+2026-02-23 15:30:00,641 | INFO    |   Wins         : 4
+2026-02-23 15:30:00,641 | INFO    |   Losses       : 1
+2026-02-23 15:30:00,641 | INFO    |   Win rate     : 80.0%
+2026-02-23 15:30:00,641 | INFO    |   Total P&L    : Rs.+7,164.90
+2026-02-23 15:30:00,641 | INFO    | =======================================================
+2026-02-23 15:30:00,641 | INFO    | Paper trade executor stopped.
+2026-02-23 16:02:39,458 | INFO    | =================================================================
+2026-02-23 16:02:39,459 | INFO    | AVWAP Paper Trade Executor — PAPER_TRADE = TRUE
+2026-02-23 16:02:39,459 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-02-23 16:02:39,459 | INFO    |   LTP polling     : Enabled
+2026-02-23 16:02:39,459 | INFO    |   Entry source    : signal_bar
+2026-02-23 16:02:39,459 | INFO    |   Starting capital: Rs.1,000,000
+2026-02-23 16:02:39,459 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-23 16:02:39,459 | INFO    |   Forced close at : 15:20:00 IST
+2026-02-23 16:02:39,459 | INFO    | =================================================================
+2026-02-23 16:02:40,075 | INFO    | Kite session established (LTP polling enabled).
+2026-02-23 16:02:40,076 | INFO    | Loaded 8 previously executed signals.
+2026-02-23 16:02:40,078 | INFO    | Watchdog started — monitoring live_signals\signals_2026-02-23.csv
+2026-02-23 16:02:40,078 | INFO    | Checking for existing unprocessed signals...
+2026-02-23 16:02:40,082 | INFO    | Market closed. All simulations complete.
+2026-02-23 16:02:40,084 | INFO    | =======================================================
+2026-02-23 16:02:40,084 | INFO    | DAILY PAPER TRADE SUMMARY
+2026-02-23 16:02:40,084 | INFO    |   Total trades : 0
+2026-02-23 16:02:40,084 | INFO    |   Wins         : 0
+2026-02-23 16:02:40,084 | INFO    |   Losses       : 0
+2026-02-23 16:02:40,084 | INFO    |   Win rate     : 0.0%
+2026-02-23 16:02:40,084 | INFO    |   Total P&L    : Rs.+0.00
+2026-02-23 16:02:40,084 | INFO    | =======================================================
+2026-02-23 16:02:40,084 | INFO    | Paper trade executor stopped.

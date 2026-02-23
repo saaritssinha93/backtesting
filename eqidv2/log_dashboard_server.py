@@ -21,7 +21,7 @@ LIVE_SIGNAL_DIR = BASE_DIR / "live_signals"
 IST = ZoneInfo("Asia/Kolkata")
 
 LOG_FILES: Dict[str, str] = {
-    "authentication": "authentication_runner.log",
+    "authentication_v2": "authentication_v2_runner.log",
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
     "live_combined_csv": "eqidv2_live_combined_analyser_csv.log",
@@ -29,7 +29,7 @@ LOG_FILES: Dict[str, str] = {
 }
 
 STATUS_FILES: Dict[str, str] = {
-    "authentication": "authentication_runner.status",
+    "authentication_v2": "authentication_v2_runner.status",
     "live_combined_csv": "eqidv2_live_combined_analyser_csv.status",
 }
 
@@ -175,7 +175,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <div class="wrap" id="cards"></div>
 
   <script>
-    const LOG_ORDER = ["authentication","eod_15min_data","eod_1540_update","live_combined_csv","live_signals_csv","paper_trade"];
+    const LOG_ORDER = ["authentication_v2","eod_15min_data","eod_1540_update","live_combined_csv","live_signals_csv","paper_trade"];
     const API_TOKEN = __API_TOKEN_JSON__;
 
     function esc(s) {

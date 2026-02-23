@@ -250,13 +250,14 @@ def _trend_filter_short(
 def scan_one_day(
     ticker: str, df_day: pd.DataFrame, day_str: str, cfg: StrategyConfig
 ) -> List[Trade]:
-    if len(df_day) < 7:
+    if len(df_day) < int(cfg.min_bars_for_scan):
         return []
 
     trades: List[Trade] = []
     i = 2
 
-    while i < len(df_day) - 3:
+    tail_guard = 1 if cfg.allow_incomplete_tail else 3
+    while i < len(df_day) - tail_guard:
         if len(trades) >= cfg.max_trades_per_ticker_per_day:
             break
 
@@ -514,7 +515,7 @@ def scan_all_days_for_ticker(
     all_trades: List[Trade] = []
     for day_val, df_day in df.groupby("day", sort=True):
         df_day = df_day.copy().reset_index(drop=True)
-        if len(df_day) < 7:
+        if len(df_day) < int(cfg.min_bars_for_scan):
             continue
         df_day["AVWAP"] = compute_day_avwap(df_day)
         trades = scan_one_day(ticker, df_day, str(day_val), cfg)

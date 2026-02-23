@@ -4,13 +4,13 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
+set "PYTHONUNBUFFERED=1"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "ALERT_DIR=%LOG_DIR%\alerts"
 set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.log"
 set "ALERT_LOG=%ALERT_DIR%\CRITICAL_eqidv2_live_combined_analyser_csv.log"
 set "STATUS_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.status"
-set "RUN_OUT=%TEMP%\eqidv2_live_combined_analyser_csv_%RANDOM%_%RANDOM%.log"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "%ALERT_DIR%" mkdir "%ALERT_DIR%"
@@ -20,14 +20,8 @@ cd /d "%BASE_DIR%"
 echo [%DATE% %TIME%] START %SCRIPT_NAME%
 echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
 
-"%PYTHON_EXE%" "%BASE_DIR%\%SCRIPT_NAME%" >"%RUN_OUT%" 2>&1
+"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
-
-if exist "%RUN_OUT%" (
-  type "%RUN_OUT%"
-  type "%RUN_OUT%" >>"%LOG_FILE%"
-  del "%RUN_OUT%" >nul 2>&1
-)
 
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)>>"%LOG_FILE%"
