@@ -120,6 +120,7 @@ class StrategyConfig:
     max_trades_per_ticker_per_day: int = 1
     require_entry_close_confirm: bool = True
     min_bars_left_after_entry: int = 4
+    min_bars_for_scan: int = 7
 
     # --- Signal->Entry lag controls (in 15-min bars) ---
     # These control (entry_time_ist - signal_time_ist) per setup.
@@ -130,6 +131,9 @@ class StrategyConfig:
     lag_bars_long_a_mod_break_c1_high: int = 1
     lag_bars_long_a_pullback_c2_break_c2_high: int = 2
     lag_bars_long_b_huge_pullback_hold_break: int = -1
+    # Live-only option: allow evaluating setups even with incomplete tail bars.
+    # Keep False by default to preserve existing backtest behavior.
+    allow_incomplete_tail: bool = False
 
     # Breakeven
     enable_breakeven: bool = True

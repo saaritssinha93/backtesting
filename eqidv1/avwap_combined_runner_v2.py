@@ -94,15 +94,16 @@ from avwap_v11_refactored.avwap_long_strategy import (
 # ===========================================================================
 # RUNNER CONFIG (top-level orchestration settings)
 # ===========================================================================
-POSITION_SIZE_RS_SHORT = 50_000
-POSITION_SIZE_RS_LONG = 100_000
+# Capital allocation profile (reinvest mode): high PF + high profit
+POSITION_SIZE_RS_SHORT = 110_000
+POSITION_SIZE_RS_LONG = 500_000
 
 # Intraday leverage (margin). Position sizes above are *capital/margin per trade*.
 # Notional exposure = capital * leverage. Set leverage=1.0 to disable leverage effects.
 INTRADAY_LEVERAGE_SHORT = 5.0
 INTRADAY_LEVERAGE_LONG = 5.0
 
-ENABLE_CASH_CONSTRAINED_PORTFOLIO_SIM = False
+ENABLE_CASH_CONSTRAINED_PORTFOLIO_SIM = True
 
 # If True, force min_bars_left_after_entry=0 for BOTH sides (live-signal parity).
 # This makes entry counts comparable to eqidv1_* live/daily scanners.

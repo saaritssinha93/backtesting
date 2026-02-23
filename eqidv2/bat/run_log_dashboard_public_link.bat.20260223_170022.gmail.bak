@@ -1,0 +1,90 @@
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+
+set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
+set "BAT_DIR=%BASE_DIR%\bat"
+set "DASH_BAT=%BAT_DIR%\run_log_dashboard_server.bat"
+set "DASH_URL=http://127.0.0.1:8787"
+set "CF_BIN="
+set "CF_RETRY_SEC=5"
+set "LOG_DIR=%BASE_DIR%\logs"
+set "LOG_FILE=%LOG_DIR%\log_dashboard_public_link.log"
+set "LATEST_URL_FILE=%LOG_DIR%\log_dashboard_latest_url.txt"
+set "WA_LINK_FILE=%LOG_DIR%\log_dashboard_whatsapp_link.txt"
+set "WHATSAPP_TO=%LOG_DASH_WHATSAPP_TO%"
+if "%WHATSAPP_TO%"=="" set "WHATSAPP_TO=+919910666914"
+set "WHATSAPP_OPEN=%LOG_DASH_WHATSAPP_OPEN%"
+if "%WHATSAPP_OPEN%"=="" set "WHATSAPP_OPEN=0"
+set "WHATSAPP_AUTO_SEND=%LOG_DASH_WHATSAPP_AUTO_SEND%"
+if "%WHATSAPP_AUTO_SEND%"=="" set "WHATSAPP_AUTO_SEND=1"
+set "WHATSAPP_SEND_MODE=%LOG_DASH_WHATSAPP_SEND_MODE%"
+if "%WHATSAPP_SEND_MODE%"=="" set "WHATSAPP_SEND_MODE=api_first"
+set "WABA_ACCESS_TOKEN=%LOG_DASH_WABA_ACCESS_TOKEN%"
+set "WABA_PHONE_NUMBER_ID=%LOG_DASH_WABA_PHONE_NUMBER_ID%"
+set "WABA_GRAPH_VERSION=%LOG_DASH_WABA_GRAPH_VERSION%"
+if "%WABA_GRAPH_VERSION%"=="" set "WABA_GRAPH_VERSION=v20.0"
+set "WABA_TEMPLATE_NAME=%LOG_DASH_WABA_TEMPLATE_NAME%"
+set "WABA_TEMPLATE_LANG=%LOG_DASH_WABA_TEMPLATE_LANG%"
+if "%WABA_TEMPLATE_LANG%"=="" set "WABA_TEMPLATE_LANG=en_US"
+
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+
+if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
+if "%LOG_DASH_PASS%"=="" (
+  echo [ERROR] LOG_DASH_PASS is not set.
+  echo Example: set LOG_DASH_PASS=your_strong_password
+  endlocal & exit /b 2
+)
+
+for %%I in (cloudflared.exe) do set "CF_BIN=%%~$PATH:I"
+if not defined CF_BIN if exist "C:\Program Files (x86)\cloudflared\cloudflared.exe" set "CF_BIN=C:\Program Files (x86)\cloudflared\cloudflared.exe"
+if not defined CF_BIN if exist "C:\Program Files\cloudflared\cloudflared.exe" set "CF_BIN=C:\Program Files\cloudflared\cloudflared.exe"
+if not defined CF_BIN if exist "C:\Program Files\Cloudflare\cloudflared\cloudflared.exe" set "CF_BIN=C:\Program Files\Cloudflare\cloudflared\cloudflared.exe"
+
+if not defined CF_BIN (
+  echo [ERROR] cloudflared is not installed.
+  echo Install once with: winget install --id Cloudflare.cloudflared -e
+  echo If already installed, restart terminal or run this directly:
+  echo   "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --url %DASH_URL%
+  endlocal & exit /b 3
+)
+
+echo [%DATE% %TIME%] START run_log_dashboard_public_link.bat
+echo [%DATE% %TIME%] START run_log_dashboard_public_link.bat>>"%LOG_FILE%"
+
+echo Starting local dashboard server...
+start "EQIDV2 Log Dashboard" /MIN cmd /c call "%DASH_BAT%"
+
+timeout /t 3 >nul
+
+echo Using cloudflared: %CF_BIN%
+"%CF_BIN%" --version
+echo Starting cloudflared tunnel for %DASH_URL%
+echo Open the https://*.trycloudflare.com URL shown below on your phone.
+echo WhatsApp target number: %WHATSAPP_TO%
+echo Latest URL file: %LATEST_URL_FILE%
+echo WhatsApp link file: %WA_LINK_FILE%
+echo WhatsApp auto-send: %WHATSAPP_AUTO_SEND%
+echo WhatsApp send mode: %WHATSAPP_SEND_MODE%
+echo [INFO] Using protocol=http2 and edge-ip-version=4 for better stability on restrictive networks.
+
+:RUN_TUNNEL
+set "OPEN_ARG="
+set "AUTO_ARG="
+if "%WHATSAPP_OPEN%"=="1" set "OPEN_ARG=-OpenWhatsappLink"
+if "%WHATSAPP_AUTO_SEND%"=="1" set "AUTO_ARG=-AutoSendWhatsapp"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%BAT_DIR%\run_log_dashboard_public_link_capture.ps1" -CloudflaredPath "%CF_BIN%" -DashUrl "%DASH_URL%" -LogFile "%LOG_FILE%" -LatestUrlFile "%LATEST_URL_FILE%" -WaLinkFile "%WA_LINK_FILE%" -WhatsappTo "%WHATSAPP_TO%" -WhatsappSendMode "%WHATSAPP_SEND_MODE%" -WabaAccessToken "%WABA_ACCESS_TOKEN%" -WabaPhoneNumberId "%WABA_PHONE_NUMBER_ID%" -WabaGraphVersion "%WABA_GRAPH_VERSION%" -WabaTemplateName "%WABA_TEMPLATE_NAME%" -WabaTemplateLanguage "%WABA_TEMPLATE_LANG%" %OPEN_ARG% %AUTO_ARG%
+set "CF_EXIT=%ERRORLEVEL%"
+
+if "%CF_EXIT%"=="0" (
+  echo [INFO] cloudflared exited normally.
+  echo [%DATE% %TIME%] END run_log_dashboard_public_link.bat ^(exit=0^)>>"%LOG_FILE%"
+  endlocal & exit /b 0
+)
+
+echo [WARN] cloudflared exited with code %CF_EXIT%. Retrying in %CF_RETRY_SEC%s...
+echo [%DATE% %TIME%] cloudflared exited with code %CF_EXIT%. Retrying in %CF_RETRY_SEC%s...>>"%LOG_FILE%"
+timeout /t %CF_RETRY_SEC% >nul
+goto RUN_TUNNEL
+
+endlocal

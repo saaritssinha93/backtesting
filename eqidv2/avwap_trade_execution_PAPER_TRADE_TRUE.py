@@ -75,6 +75,10 @@ FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe befo
 POLL_INTERVAL_SEC = 5
 MAX_CONCURRENT_TRADES = 30
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
+ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
+ENTRY_PRICE_SOURCE_DEFAULT = str(os.getenv("ENTRY_PRICE_SOURCE", "signal_bar")).strip().lower()
+if ENTRY_PRICE_SOURCE_DEFAULT not in ENTRY_PRICE_SOURCE_CHOICES:
+    ENTRY_PRICE_SOURCE_DEFAULT = "signal_bar"
 
 # Default capital
 DEFAULT_START_CAPITAL = 1_000_000
@@ -290,7 +294,11 @@ def _check_risk_limits(signal: dict) -> Optional[str]:
     return None
 
 
-def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
+def simulate_trade(
+    signal: dict,
+    use_ltp: bool = True,
+    entry_price_source: str = "signal_bar",
+) -> None:
     """
     Simulate a single trade in a background thread.
     Monitors LTP (if available) against target and stop-loss.
@@ -298,11 +306,28 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
     """
     ticker = signal["ticker"]
     side = signal["side"].upper()
-    raw_entry = float(signal["entry_price"])
+    signal_entry_price = float(signal["entry_price"])
     stop_price = float(signal["stop_price"])
     target_price = float(signal["target_price"])
     quantity = int(signal.get("quantity", 1))
     signal_id = signal["signal_id"]
+
+    # Select raw entry reference price:
+    # - signal_bar: use signal CSV entry_price (15m logic)
+    # - ltp_on_signal: use current LTP at dispatch time; fallback to signal_bar if unavailable
+    raw_entry = signal_entry_price
+    entry_source_used = "signal_bar"
+    if entry_price_source == "ltp_on_signal":
+        ltp_dispatch = get_ltp(ticker) if use_ltp else None
+        if ltp_dispatch is not None and ltp_dispatch > 0:
+            raw_entry = float(ltp_dispatch)
+            entry_source_used = "ltp_on_signal"
+        else:
+            entry_source_used = "signal_bar_fallback"
+            log.warning(
+                f"[SIM] LTP-at-dispatch unavailable for {ticker}; "
+                f"fallback to signal entry {signal_entry_price:.2f}"
+            )
 
     # Apply realistic slippage: worsen entry in the unfavourable direction
     if side == "LONG":
@@ -310,15 +335,16 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
     else:
         entry_price = round(raw_entry * (1 - SLIPPAGE_PCT), 2)
 
-    now_ist = datetime.now(IST)
-    trade_id = f"PT-{signal_id[:8]}-{now_ist.strftime('%H%M%S')}"
-    today = now_ist.date()
+    entry_time_ist = datetime.now(IST)
+    trade_id = f"PT-{signal_id[:8]}-{entry_time_ist.strftime('%H%M%S')}"
+    today = entry_time_ist.date()
     forced_close_dt = IST.localize(
         datetime.combine(today, FORCED_CLOSE_TIME)
     )
 
     log.info(
         f"[SIM] ENTRY {side} {ticker} @ {entry_price} | "
+        f"src={entry_source_used} raw={raw_entry:.2f} signal={signal_entry_price:.2f} | "
         f"SL={stop_price} TGT={target_price} qty={quantity} | ID={trade_id}"
     )
 
@@ -414,7 +440,7 @@ def simulate_trade(signal: dict, use_ltp: bool = True) -> None:
         signal_id=signal_id,
         signal_datetime=signal.get("signal_datetime", ""),
         signal_entry_datetime_ist=signal.get("signal_entry_datetime_ist", ""),
-        entry_time=now_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+        entry_time=entry_time_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
         exit_time=exit_time_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
         ticker=ticker,
         side=side,
@@ -584,6 +610,7 @@ def process_new_signals(
     executed: Set[str],
     use_ltp: bool,
     trade_semaphore: threading.Semaphore,
+    entry_price_source: str = "signal_bar",
 ) -> Set[str]:
     """
     Read signals CSV, find unprocessed signals, launch simulation threads.
@@ -614,10 +641,10 @@ def process_new_signals(
         new_count += 1
 
         # Launch simulation thread
-        def _run_sim(sig=signal, ultp=use_ltp):
+        def _run_sim(sig=signal, ultp=use_ltp, eps=entry_price_source):
             trade_semaphore.acquire()
             try:
-                simulate_trade(sig, use_ltp=ultp)
+                simulate_trade(sig, use_ltp=ultp, entry_price_source=eps)
             except Exception as e:
                 log.error(f"Simulation error for {sig.get('ticker', '?')}: {e}")
                 log.error(traceback.format_exc())
@@ -690,6 +717,17 @@ def main():
         "--capital", type=float, default=DEFAULT_START_CAPITAL,
         help=f"Starting capital in Rs (default: {DEFAULT_START_CAPITAL})",
     )
+    parser.add_argument(
+        "--entry-price-source",
+        choices=ENTRY_PRICE_SOURCE_CHOICES,
+        default=ENTRY_PRICE_SOURCE_DEFAULT,
+        help=(
+            "Entry reference source: "
+            "'signal_bar' uses CSV 15m entry_price, "
+            "'ltp_on_signal' uses live LTP at dispatch "
+            "(fallback to signal_bar when LTP is unavailable)."
+        ),
+    )
     args = parser.parse_args()
 
     use_ltp = not args.no_ltp
@@ -698,10 +736,16 @@ def main():
     log.info("AVWAP Paper Trade Executor — PAPER_TRADE = TRUE")
     log.info(f"  Mode            : SIMULATION (no real orders)")
     log.info(f"  LTP polling     : {'Enabled' if use_ltp else 'Disabled'}")
+    log.info(f"  Entry source    : {args.entry_price_source}")
     log.info(f"  Starting capital: Rs.{args.capital:,.0f}")
     log.info(f"  Signal dir      : {os.path.abspath(SIGNAL_DIR)}/")
     log.info(f"  Forced close at : {FORCED_CLOSE_TIME} IST")
     log.info("=" * 65)
+
+    if args.entry_price_source == "ltp_on_signal" and not use_ltp:
+        log.warning(
+            "entry-price-source=ltp_on_signal with --no-ltp; using signal_bar fallback."
+        )
 
     # Set up Kite for LTP if requested
     if use_ltp:
@@ -709,6 +753,11 @@ def main():
         if kite is None:
             log.warning("LTP polling disabled — Kite session unavailable.")
             use_ltp = False
+            if args.entry_price_source == "ltp_on_signal":
+                log.warning(
+                    "entry-price-source=ltp_on_signal but Kite LTP is unavailable; "
+                    "using signal_bar fallback."
+                )
 
     # Load executed signals
     executed = load_executed_signals()
@@ -725,7 +774,13 @@ def main():
     def on_csv_change():
         nonlocal executed
         log.info("Signal CSV changed — processing new signals...")
-        executed = process_new_signals(csv_path, executed, use_ltp, trade_semaphore)
+        executed = process_new_signals(
+            csv_path,
+            executed,
+            use_ltp,
+            trade_semaphore,
+            entry_price_source=args.entry_price_source,
+        )
 
     # Set up watchdog
     os.makedirs(SIGNAL_DIR, exist_ok=True)
@@ -738,7 +793,13 @@ def main():
     # Initial check for existing signals
     if os.path.exists(csv_path):
         log.info("Checking for existing unprocessed signals...")
-        executed = process_new_signals(csv_path, executed, use_ltp, trade_semaphore)
+        executed = process_new_signals(
+            csv_path,
+            executed,
+            use_ltp,
+            trade_semaphore,
+            entry_price_source=args.entry_price_source,
+        )
 
     # Main loop
     try:

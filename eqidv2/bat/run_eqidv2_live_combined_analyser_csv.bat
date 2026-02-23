@@ -1,48 +1,42 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-set "BAT_DIR=%~dp0"
-for %%I in ("%BAT_DIR%..") do set "BASE_DIR=%%~fI"
-set "PYTHON_CMD="
-if defined PYTHON_EXE (
-  if exist "%PYTHON_EXE%" (
-    set "PYTHON_CMD=""%PYTHON_EXE%"""
-  ) else (
-    set "PYTHON_CMD=%PYTHON_EXE%"
-  )
-)
-if not defined PYTHON_CMD (
-  where py >nul 2>&1 && (set "PYTHON_CMD=py -3") || set "PYTHON_CMD=python"
-)
+set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
+set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
+if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
+set "PYTHONUNBUFFERED=1"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "ALERT_DIR=%LOG_DIR%\alerts"
 set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.log"
 set "ALERT_LOG=%ALERT_DIR%\CRITICAL_eqidv2_live_combined_analyser_csv.log"
 set "STATUS_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.status"
-set "RUN_OUT=%TEMP%\eqidv2_live_combined_analyser_csv_%RANDOM%_%RANDOM%.log"
-
-if not exist "%BASE_DIR%\%SCRIPT_NAME%" (
-  echo [ERROR] Script not found: "%BASE_DIR%\%SCRIPT_NAME%"
-  endlocal & exit /b 4
-)
+set "END_CUTOFF_HHMM=1540"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "%ALERT_DIR%" mkdir "%ALERT_DIR%"
 
 cd /d "%BASE_DIR%"
 
+for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmm')"') do set "NOW_HHMM=%%a"
+if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
+  echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^) 
+  echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^)>>"%LOG_FILE%"
+  for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm:ss"') do set "RUN_TS=%%a"
+  >"%STATUS_FILE%" echo status=SKIPPED_CUTOFF
+  >>"%STATUS_FILE%" echo script=%SCRIPT_NAME%
+  >>"%STATUS_FILE%" echo ts=!RUN_TS!
+  >>"%STATUS_FILE%" echo cutoff_hhmm=%END_CUTOFF_HHMM%
+  >>"%STATUS_FILE%" echo now_hhmm=!NOW_HHMM!
+  >>"%STATUS_FILE%" echo log_file=%LOG_FILE%
+  endlocal & exit /b 0
+)
+
 echo [%DATE% %TIME%] START %SCRIPT_NAME%
 echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
 
-call %PYTHON_CMD% "%BASE_DIR%\%SCRIPT_NAME%" >"%RUN_OUT%" 2>&1
+"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
-
-if exist "%RUN_OUT%" (
-  type "%RUN_OUT%"
-  type "%RUN_OUT%" >>"%LOG_FILE%"
-  del "%RUN_OUT%" >nul 2>&1
-)
 
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)>>"%LOG_FILE%"

@@ -1,0 +1,181 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$CloudflaredPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$DashUrl,
+
+    [Parameter(Mandatory = $true)]
+    [string]$LogFile,
+
+    [Parameter(Mandatory = $true)]
+    [string]$LatestUrlFile,
+
+    [string]$EmailTo = "",
+    [string]$EmailFrom = "",
+    [string]$SmtpUser = "",
+    [string]$SmtpAppPassword = "",
+    [string]$SmtpServer = "smtp.gmail.com",
+    [int]$SmtpPort = 587,
+    [string]$EmailSendMode = "smtp_only",
+    [string]$EmailSubjectPrefix = "EQIDV2 Dashboard URL"
+)
+
+$ErrorActionPreference = "Continue"
+
+function Write-LogLine {
+    param(
+        [string]$Message,
+        [string]$Path
+    )
+    Write-Output $Message
+    try { Add-Content -Path $Path -Value $Message -Encoding utf8 } catch {}
+}
+
+function Normalize-EmailSendMode {
+    param([string]$Mode)
+    $m = ("" + $Mode).Trim().ToLowerInvariant()
+    switch ($m) {
+        "smtp_only" { return "smtp_only" }
+        "link_only" { return "link_only" }
+        default { return "smtp_only" }
+    }
+}
+
+function Send-UrlBySmtp {
+    param(
+        [string]$Url,
+        [string]$To,
+        [string]$From,
+        [string]$User,
+        [string]$AppPassword,
+        [string]$Server,
+        [int]$Port,
+        [string]$SubjectPrefix
+    )
+
+    $toAddr = ("" + $To).Trim()
+    if ([string]::IsNullOrWhiteSpace($toAddr)) {
+        return @{
+            ok = $false
+            reason = "Missing LOG_DASH_EMAIL_TO."
+        }
+    }
+
+    $fromAddr = ("" + $From).Trim()
+    if ([string]::IsNullOrWhiteSpace($fromAddr)) {
+        $fromAddr = ("" + $User).Trim()
+    }
+    if ([string]::IsNullOrWhiteSpace($fromAddr)) {
+        return @{
+            ok = $false
+            reason = "Missing LOG_DASH_EMAIL_FROM (or LOG_DASH_SMTP_USER as sender)."
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($User) -or [string]::IsNullOrWhiteSpace($AppPassword)) {
+        return @{
+            ok = $false
+            reason = "Missing LOG_DASH_SMTP_USER or LOG_DASH_SMTP_APP_PASSWORD."
+        }
+    }
+
+    $subPrefix = ("" + $SubjectPrefix).Trim()
+    if ([string]::IsNullOrWhiteSpace($subPrefix)) {
+        $subPrefix = "EQIDV2 Dashboard URL"
+    }
+    $subject = "$subPrefix - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
+    $body = @"
+EQIDV2 dashboard URL generated.
+
+URL:
+$Url
+
+Generated at:
+$(Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz")
+"@
+
+    try {
+        $secure = ConvertTo-SecureString $AppPassword -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential($User, $secure)
+        Send-MailMessage -SmtpServer $Server -Port $Port -UseSsl -Credential $cred -From $fromAddr -To $toAddr -Subject $subject -Body $body -BodyAsHtml:$false
+        return @{
+            ok = $true
+            reason = ""
+        }
+    }
+    catch {
+        $reason = $_.Exception.Message
+        try {
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $reason = $_.ErrorDetails.Message
+            }
+        }
+        catch {}
+        return @{
+            ok = $false
+            reason = $reason
+        }
+    }
+}
+
+try {
+    $logDir = Split-Path -Parent $LogFile
+    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+        New-Item -Path $logDir -ItemType Directory -Force | Out-Null
+    }
+
+    if ($EmailTo -eq "__EMPTY__") { $EmailTo = "" }
+    if ($EmailFrom -eq "__EMPTY__") { $EmailFrom = "" }
+    if ($SmtpUser -eq "__EMPTY__") { $SmtpUser = "" }
+    if ($SmtpAppPassword -eq "__EMPTY__") { $SmtpAppPassword = "" }
+
+    $sendMode = Normalize-EmailSendMode $EmailSendMode
+    $emailToResolved = ("" + $EmailTo).Trim()
+    if ([string]::IsNullOrWhiteSpace($emailToResolved)) {
+        $emailToResolved = ("" + $SmtpUser).Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($emailToResolved)) {
+        Write-LogLine "[WARN] Email recipient is not set; URL email will not be sent." $LogFile
+    }
+    else {
+        Write-LogLine "[INFO] Email send mode active: $sendMode | recipient=$emailToResolved" $LogFile
+    }
+
+    $announced = $false
+    & $CloudflaredPath tunnel --url $DashUrl --protocol http2 --edge-ip-version 4 2>&1 | ForEach-Object {
+        $line = $_.ToString()
+        Write-LogLine $line $LogFile
+
+        if (-not $announced -and $line -match "https://[a-z0-9-]+\.trycloudflare\.com") {
+            $url = $Matches[0]
+            Set-Content -Path $LatestUrlFile -Value $url -Encoding utf8
+            Write-LogLine "[INFO] Public URL saved: $url" $LogFile
+
+            if ($sendMode -eq "smtp_only") {
+                $send = Send-UrlBySmtp -Url $url -To $emailToResolved -From $EmailFrom -User $SmtpUser -AppPassword $SmtpAppPassword -Server $SmtpServer -Port $SmtpPort -SubjectPrefix $EmailSubjectPrefix
+                if ($send.ok) {
+                    Write-LogLine "[INFO] Email sent successfully to $emailToResolved via ${SmtpServer}:$SmtpPort." $LogFile
+                }
+                else {
+                    Write-LogLine "[ERROR] Email send failed: $($send.reason)" $LogFile
+                }
+            }
+            else {
+                Write-LogLine "[INFO] Email send mode link_only: URL was generated but email was skipped." $LogFile
+            }
+
+            try { Set-Clipboard -Value $url } catch {}
+            $announced = $true
+        }
+    }
+
+    exit $LASTEXITCODE
+}
+catch {
+    $err = "[ERROR] run_log_dashboard_public_link_capture.ps1 failed: $($_.Exception.Message)"
+    Write-Output $err
+    try { Add-Content -Path $LogFile -Value $err -Encoding utf8 } catch {}
+    exit 1
+}
