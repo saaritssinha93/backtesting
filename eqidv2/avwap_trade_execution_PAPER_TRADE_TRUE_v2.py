@@ -61,12 +61,12 @@ except ImportError:
 IST = pytz.timezone("Asia/Kolkata")
 
 SIGNAL_DIR = "live_signals"
-SIGNAL_CSV_PATTERN = "signals_{}.csv"
-PAPER_TRADE_LOG_PATTERN = "paper_trades_{}.csv"
-PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}.log"
-EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper.json")
-SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary.json")
-OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}.json"
+SIGNAL_CSV_PATTERN = "signals_{}_v2.csv"
+PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v2.csv"
+PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v2.log"
+EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper_v2.json")
+SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary_v2.json")
+OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}_v2.json"
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -143,7 +143,7 @@ _SIGNAL_COL_MAP = {
 # LOGGING
 # ============================================================================
 def setup_logging() -> logging.Logger:
-    logger = logging.getLogger("paper_trade")
+    logger = logging.getLogger("paper_trade_v2")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
 
@@ -646,6 +646,24 @@ def simulate_trade(
             entry_price = round(raw_entry * (1 + SLIPPAGE_PCT), 2)
         else:
             entry_price = round(raw_entry * (1 - SLIPPAGE_PCT), 2)
+
+    # When entry is taken from live LTP, rebase SL/target to executed entry
+    # so % distances remain consistent with signal design.
+    if (not resume_mode) and entry_source_used == "ltp_on_signal" and signal_entry_price > 0:
+        stop_mult = float(stop_price / signal_entry_price)
+        target_mult = float(target_price / signal_entry_price)
+        rebased_stop = round(entry_price * stop_mult, 2)
+        rebased_target = round(entry_price * target_mult, 2)
+        if rebased_stop > 0 and rebased_target > 0:
+            old_stop = stop_price
+            old_target = target_price
+            stop_price = float(rebased_stop)
+            target_price = float(rebased_target)
+            log.info(
+                f"[ENTRY.REBASE] ticker={ticker} | side={side} | signal_id={signal_id[:12]} | "
+                f"src={entry_source_used} | signal_entry={signal_entry_price:.2f} | entry_exec={entry_price:.2f} | "
+                f"sl:{old_stop:.2f}->{stop_price:.2f} | tgt:{old_target:.2f}->{target_price:.2f}"
+            )
 
     invested = float(entry_price * quantity)
     margin = float(invested / INTRADAY_LEVERAGE)

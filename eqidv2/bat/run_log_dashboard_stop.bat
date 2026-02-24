@@ -17,6 +17,7 @@ set "PS_SCRIPT=!PS_SCRIPT! $procs=Get-CimInstance Win32_Process ^| Where-Object 
 set "PS_SCRIPT=!PS_SCRIPT!   $_.ProcessId -ne $self -and ("
 set "PS_SCRIPT=!PS_SCRIPT!     ($_.CommandLine -like '*cloudflared*' -and $_.CommandLine -like '*127.0.0.1:8787*') -or"
 set "PS_SCRIPT=!PS_SCRIPT!     ($_.CommandLine -like '*run_log_dashboard_public_link.bat*') -or"
+set "PS_SCRIPT=!PS_SCRIPT!     ($_.CommandLine -like '*run_log_dashboard_public_link_scheduled.bat*') -or"
 set "PS_SCRIPT=!PS_SCRIPT!     ($_.CommandLine -like '*run_log_dashboard_public_link_capture.ps1*') -or"
 set "PS_SCRIPT=!PS_SCRIPT!     ($_.CommandLine -like '*run_log_dashboard_server.bat*') -or"
 set "PS_SCRIPT=!PS_SCRIPT!     ($_.CommandLine -like '*log_dashboard_server.py*')"

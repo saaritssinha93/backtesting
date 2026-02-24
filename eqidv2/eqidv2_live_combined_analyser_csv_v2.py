@@ -82,14 +82,14 @@ ROOT = Path(__file__).resolve().parent
 REPORTS_DIR = ROOT / "reports" / "eqidv2_reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_CHECKS_DIR = ROOT / "out_eqidv2_live_checks_15m"
-OUT_SIGNALS_DIR = ROOT / "out_eqidv2_live_signals_15m"
+OUT_CHECKS_DIR = ROOT / "out_eqidv2_live_checks_15m_v2"
+OUT_SIGNALS_DIR = ROOT / "out_eqidv2_live_signals_15m_v2"
 OUT_CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 OUT_SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 
 STATE_DIR = ROOT / "logs"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
-STATE_FILE = STATE_DIR / "eqidv2_avwap_live_state_v11.json"
+STATE_FILE = STATE_DIR / "eqidv2_avwap_live_state_v11_v2.json"
 
 PARQUET_ENGINE = "pyarrow"
 
@@ -98,7 +98,7 @@ PARQUET_ENGINE = "pyarrow"
 # =============================================================================
 LIVE_SIGNAL_DIR = ROOT / "live_signals"
 LIVE_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
-SIGNAL_CSV_PATTERN = "signals_{}.csv"
+SIGNAL_CSV_PATTERN = "signals_{}_v2.csv"
 
 # Position sizing for CSV output
 # position_size = capital/margin per trade; notional = position_size * leverage
@@ -112,6 +112,28 @@ SIGNAL_CSV_COLUMNS = [
     "signal_entry_datetime_ist", "signal_bar_time_ist",
 ]
 
+
+def _env_int(name: str, default: int, min_value: Optional[int] = None) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        val = int(default)
+    else:
+        try:
+            val = int(str(raw).strip())
+        except Exception:
+            val = int(default)
+    if min_value is not None:
+        val = max(int(min_value), val)
+    return val
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 # =============================================================================
 # SCHEDULER CONFIG
 # =============================================================================
@@ -122,9 +144,16 @@ HARD_STOP_TIME = dtime(15, 40)
 # Timing: data fetcher (eqidv2_eod_15min_data_stocks) takes ~1 minute after each
 # 15-min boundary.  We delay the first scan and run multiple attempts so at least
 # one scan sees fully-updated data.
-INITIAL_DELAY_SECONDS = 60      # wait 60s after slot for data to settle
-NUM_SCANS_PER_SLOT = 3          # run 3 scans per 15-min window
-SCAN_INTERVAL_SECONDS = 60      # 60s gap between consecutive scans
+INITIAL_DELAY_SECONDS = _env_int("EQIDV2_INITIAL_DELAY_SECONDS", 5, min_value=0)
+NUM_SCANS_PER_SLOT = _env_int("EQIDV2_NUM_SCANS_PER_SLOT", 5, min_value=1)
+SCAN_INTERVAL_SECONDS = _env_int("EQIDV2_SCAN_INTERVAL_SECONDS", 15, min_value=0)
+
+# Guardrail: don't allow one slot cycle to run indefinitely.
+SLOT_SCAN_BUDGET_SECONDS = _env_int("EQIDV2_SLOT_SCAN_BUDGET_SECONDS", 13 * 60, min_value=60)
+SCAN_OVERRUN_WARN_SECONDS = _env_int("EQIDV2_SCAN_OVERRUN_WARN_SECONDS", 180, min_value=1)
+
+# Emit rows into live signal CSV during scan, not only at scan-end.
+IMMEDIATE_SIGNAL_CSV_FLUSH = _env_bool("EQIDV2_IMMEDIATE_SIGNAL_CSV_FLUSH", True)
 
 # Update flag: set True to call eqidv2 core.run_mode("15min") before each scan
 UPDATE_15M_BEFORE_CHECK = False
@@ -144,7 +173,7 @@ LATEST_SLOT_TOLERANCE_SEC = 120  # allow small timestamp drift (seconds) in parq
 # Also rescan a few previous 15m slots to catch delayed parquet finalization
 # and delayed strategy confirmations.
 # Example with 3: at 11:17, scanner evaluates 11:15 + 11:00 + 10:45 + 10:30.
-SLOT_LOOKBACK_COUNT = 3
+SLOT_LOOKBACK_COUNT = _env_int("EQIDV2_SLOT_LOOKBACK_COUNT", 0, min_value=0)
 
 # For speed, keep only the last N bars from today (must be >= 7 for v11 logic)
 MAX_BARS_PER_TICKER_TODAY = 120
@@ -296,7 +325,7 @@ TOPN_PER_RUN = 30
 
 # One-time startup catch-up: scans today's available data and appends any
 # missing historical-intraday signals into live_signals CSV (dedupe-safe).
-RUN_STARTUP_BACKFILL = True
+RUN_STARTUP_BACKFILL = _env_bool("EQIDV2_RUN_STARTUP_BACKFILL", False)
 
 
 # =============================================================================
@@ -1849,6 +1878,13 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     all_checks: List[Dict[str, Any]] = []
     all_signals: List[Dict[str, Any]] = []
+    inline_csv_written = 0
+    immediate_flush_enabled = bool(IMMEDIATE_SIGNAL_CSV_FLUSH and (not USE_TOPN_PER_RUN))
+    if IMMEDIATE_SIGNAL_CSV_FLUSH and USE_TOPN_PER_RUN:
+        print(
+            "[WARN] IMMEDIATE_SIGNAL_CSV_FLUSH is disabled for this run because USE_TOPN_PER_RUN=True.",
+            flush=True,
+        )
 
     for idx, t in enumerate(tickers, start=1):
         path = os.path.join(DIR_15M, f"{t}{END_15M}")
@@ -1866,17 +1902,23 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
                 all_checks.extend(checks_rows)
                 ticker_signals.extend(signals)
 
+            ticker_signal_rows: List[Dict[str, Any]] = []
             for s in ticker_signals:
-                all_signals.append({
+                row_payload = {
                     "ticker": s.ticker, "side": s.side, "bar_time_ist": s.bar_time_ist,
                     "setup": s.setup, "entry_price": s.entry_price,
                     "sl_price": s.sl_price, "target_price": s.target_price,
                     "score": s.score,
                     "diagnostics_json": json.dumps(s.diagnostics, default=str),
-                })
+                }
+                all_signals.append(row_payload)
+                ticker_signal_rows.append(row_payload)
 
             if ticker_signals:
                 print(f"[SCAN] {t} slot_signals={len(ticker_signals)}", flush=True)
+                if immediate_flush_enabled and ticker_signal_rows:
+                    written_now = _write_signals_csv(pd.DataFrame(ticker_signal_rows))
+                    inline_csv_written += int(written_now)
         except Exception as e:
             for slot in target_slots_ist:
                 all_checks.append({"ticker": t, "side": "SHORT", "bar_time_ist": str(slot), "error": str(e)})
@@ -1918,7 +1960,14 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
     print(f"[SAVED] {signals_path}")
 
     # Bridge: write signals to CSV for trade executors
-    written = _write_signals_csv(signals_df)
+    if immediate_flush_enabled:
+        written = int(inline_csv_written)
+        print(
+            f"[CSV ] immediate_flush=true | written_during_scan={written}",
+            flush=True,
+        )
+    else:
+        written = _write_signals_csv(signals_df)
 
     print(f"[RUN ] done | checks={len(checks_df)} rows | signals={len(signals_df)} rows | csv_written={written}", flush=True)
 
@@ -2051,6 +2100,10 @@ def main() -> None:
     print(f"[INFO] SLOT_LOOKBACK_COUNT={SLOT_LOOKBACK_COUNT}")
     print(f"[INFO] STARTUP_BACKFILL={RUN_STARTUP_BACKFILL and (not args.no_startup_backfill)}")
     print(f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s")
+    print(
+        f"[INFO] Immediate CSV flush={IMMEDIATE_SIGNAL_CSV_FLUSH} | "
+        f"slot_scan_budget={SLOT_SCAN_BUDGET_SECONDS}s | overrun_warn={SCAN_OVERRUN_WARN_SECONDS}s"
+    )
 
     holidays = _read_holidays_safe()
     rows_before, rows_removed = _sanitize_today_signal_csv()
@@ -2111,19 +2164,59 @@ def main() -> None:
             time.sleep(max(0, wait_secs))
 
         # --- Run multiple scans per slot to catch freshly-updated data ---
+        slot_end = slot + timedelta(minutes=15)
+        slot_budget_end = min(slot_end, slot + timedelta(seconds=float(SLOT_SCAN_BUDGET_SECONDS)))
+        print(
+            f"[GUARD] Slot budget deadline: {slot_budget_end.strftime('%H:%M:%S')} "
+            f"(slot_end={slot_end.strftime('%H:%M:%S')})",
+            flush=True,
+        )
         scan_labels = [chr(ord("A") + i) for i in range(NUM_SCANS_PER_SLOT)]
         for scan_idx, label in enumerate(scan_labels):
             now = now_ist()
             if now.time() >= HARD_STOP_TIME:
                 print("[STOP] Hard-stop reached mid-slot. Exiting.")
                 return
+            if now >= slot_budget_end:
+                print(
+                    f"[GUARD] Slot budget exhausted before scan {label}. "
+                    f"Skipping remaining scans for slot {slot.strftime('%H:%M')}.",
+                    flush=True,
+                )
+                break
 
-            print(f"[RUN ] Slot {slot.strftime('%H:%M')} | scan {label} ({scan_idx+1}/{NUM_SCANS_PER_SLOT}) at {now.strftime('%H:%M:%S')}")
+            scan_started = now_ist()
+            print(f"[RUN ] Slot {slot.strftime('%H:%M')} | scan {label} ({scan_idx+1}/{NUM_SCANS_PER_SLOT}) at {scan_started.strftime('%H:%M:%S')}")
             run_one_scan(run_tag=label)
+            scan_finished = now_ist()
+            scan_elapsed = (scan_finished - scan_started).total_seconds()
+            if scan_elapsed >= float(SCAN_OVERRUN_WARN_SECONDS):
+                print(
+                    f"[WARN] Scan {label} runtime={scan_elapsed:.1f}s exceeded "
+                    f"overrun_warn={SCAN_OVERRUN_WARN_SECONDS}s",
+                    flush=True,
+                )
+            if scan_finished >= slot_budget_end:
+                print(
+                    f"[GUARD] Slot budget reached after scan {label}. "
+                    f"Skipping remaining scans for slot {slot.strftime('%H:%M')}.",
+                    flush=True,
+                )
+                break
 
             # Sleep between scans (skip after the last one)
             if scan_idx < len(scan_labels) - 1:
-                time.sleep(float(SCAN_INTERVAL_SECONDS))
+                now_after_scan = now_ist()
+                remaining_budget = (slot_budget_end - now_after_scan).total_seconds()
+                sleep_secs = min(float(SCAN_INTERVAL_SECONDS), max(0.0, remaining_budget))
+                if sleep_secs <= 0:
+                    print(
+                        f"[GUARD] No budget left for scan interval sleep. "
+                        f"Skipping remaining scans for slot {slot.strftime('%H:%M')}.",
+                        flush=True,
+                    )
+                    break
+                time.sleep(sleep_secs)
 
         time.sleep(1.0)
 
