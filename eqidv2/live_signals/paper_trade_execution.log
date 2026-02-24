@@ -555,3 +555,57 @@ KeyError: 'stop_price'
 2026-02-23 16:38:30,414 | INFO    |   Total P&L    : Rs.+0.00
 2026-02-23 16:38:30,414 | INFO    | =======================================================
 2026-02-23 16:38:30,414 | INFO    | Paper trade executor stopped.
+2026-02-24 09:00:03,396 | INFO    | =================================================================
+2026-02-24 09:00:03,396 | INFO    | AVWAP Paper Trade Executor — PAPER_TRADE = TRUE
+2026-02-24 09:00:03,396 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-02-24 09:00:03,396 | INFO    |   LTP polling     : Enabled
+2026-02-24 09:00:03,396 | INFO    |   Entry source    : ltp_on_signal
+2026-02-24 09:00:03,396 | INFO    |   Starting capital: Rs.1,000,000
+2026-02-24 09:00:03,396 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-24 09:00:03,396 | INFO    |   Forced close at : 15:20:00 IST
+2026-02-24 09:00:03,396 | INFO    | =================================================================
+2026-02-24 09:00:04,255 | INFO    | Kite session established (LTP polling enabled).
+2026-02-24 09:00:04,265 | INFO    | Loaded 0 previously executed signals.
+2026-02-24 09:00:04,265 | INFO    | Watchdog started — monitoring live_signals\signals_2026-02-24.csv
+2026-02-24 09:00:44,299 | INFO    | Signal CSV changed — processing new signals...
+2026-02-24 09:00:44,316 | INFO    | [DISPATCH] Launched simulation for SHORT CIGNITITEC @ 1293.04 | p_win=? | ID=3d3052b8337e
+2026-02-24 09:00:44,316 | INFO    | [DISPATCH] Launched simulation for SHORT COFORGE @ 1304.74 | p_win=? | ID=db257eb51ec9
+2026-02-24 09:00:44,316 | INFO    | [DISPATCH] Launched simulation for SHORT LATENTVIEW @ 354.28 | p_win=? | ID=c4724f93892b
+2026-02-24 09:00:44,316 | INFO    | [DISPATCH] Launched simulation for SHORT MAZDOCK @ 2284.94 | p_win=? | ID=8a84f97d922f
+2026-02-24 09:00:44,316 | INFO    | [DISPATCH] Launched simulation for SHORT PENIND @ 146.25 | p_win=? | ID=2446faba9d9d
+2026-02-24 09:00:44,316 | INFO    | [DISPATCH] Launched simulation for SHORT TATAELXSI @ 4763.55 | p_win=? | ID=bf636e590454
+2026-02-24 09:00:44,316 | INFO    | [DISPATCH] Launched simulation for SHORT UGROCAP @ 114.3 | p_win=? | ID=956920692596
+2026-02-24 09:00:44,316 | INFO    | [DISPATCH] Launched simulation for SHORT WIPRO @ 205.47 | p_win=? | ID=ac4d6b40362a
+2026-02-24 09:00:44,325 | INFO    | Processed 8 new signal(s). Active sims: 8
+2026-02-24 09:00:44,410 | WARNING | [SIM] LTP-at-dispatch unavailable for WIPRO; fallback to signal entry 205.47
+2026-02-24 09:00:44,411 | INFO    | [SIM] ENTRY SHORT WIPRO @ 205.37 | src=signal_bar_fallback raw=205.47 signal=205.47 | SL=207.01 TGT=203.0 qty=1216 | ID=PT-ac4d6b40-090044
+2026-02-24 09:00:44,411 | WARNING | [SIM] LTP-at-dispatch unavailable for UGROCAP; fallback to signal entry 114.30
+2026-02-24 09:00:44,411 | INFO    | [SIM] ENTRY SHORT UGROCAP @ 114.24 | src=signal_bar_fallback raw=114.30 signal=114.30 | SL=115.16 TGT=112.93 qty=2187 | ID=PT-95692069-090044
+2026-02-24 09:00:44,413 | WARNING | [SIM] LTP-at-dispatch unavailable for TATAELXSI; fallback to signal entry 4763.55
+2026-02-24 09:00:44,413 | INFO    | [SIM] ENTRY SHORT TATAELXSI @ 4761.17 | src=signal_bar_fallback raw=4763.55 signal=4763.55 | SL=4799.27 TGT=4706.38 qty=52 | ID=PT-bf636e59-090044
+2026-02-24 09:00:44,414 | WARNING | [SIM] LTP-at-dispatch unavailable for LATENTVIEW; fallback to signal entry 354.28
+2026-02-24 09:00:44,414 | WARNING | [SIM] LTP-at-dispatch unavailable for MAZDOCK; fallback to signal entry 2284.94
+2026-02-24 09:00:44,415 | INFO    | [SIM] ENTRY SHORT LATENTVIEW @ 354.1 | src=signal_bar_fallback raw=354.28 signal=354.28 | SL=356.94 TGT=350.03 qty=705 | ID=PT-c4724f93-090044
+2026-02-24 09:00:44,415 | INFO    | [SIM] ENTRY SHORT MAZDOCK @ 2283.8 | src=signal_bar_fallback raw=2284.94 signal=2284.94 | SL=2302.08 TGT=2257.52 qty=109 | ID=PT-8a84f97d-090044
+2026-02-24 09:00:44,416 | WARNING | [SIM] LTP-at-dispatch unavailable for CIGNITITEC; fallback to signal entry 1293.04
+2026-02-24 09:00:44,416 | INFO    | [SIM] ENTRY SHORT CIGNITITEC @ 1292.39 | src=signal_bar_fallback raw=1293.04 signal=1293.04 | SL=1302.74 TGT=1277.52 qty=193 | ID=PT-3d3052b8-090044
+2026-02-24 09:00:44,417 | WARNING | [SIM] LTP-at-dispatch unavailable for COFORGE; fallback to signal entry 1304.74
+2026-02-24 09:00:44,417 | INFO    | [SIM] ENTRY SHORT COFORGE @ 1304.09 | src=signal_bar_fallback raw=1304.74 signal=1304.74 | SL=1314.52 TGT=1289.08 qty=191 | ID=PT-db257eb5-090044
+2026-02-24 09:00:44,419 | WARNING | [SIM] LTP-at-dispatch unavailable for PENIND; fallback to signal entry 146.25
+2026-02-24 09:00:44,419 | INFO    | [SIM] ENTRY SHORT PENIND @ 146.18 | src=signal_bar_fallback raw=146.25 signal=146.25 | SL=147.35 TGT=144.5 qty=1709 | ID=PT-2446faba-090044
+2026-02-24 09:00:44,450 | INFO    | [SIM] NO LTP — recording SHORT UGROCAP @ 114.24 as simulated entry | ID=PT-95692069-090044
+2026-02-24 09:00:44,450 | INFO    | [SIM] NO LTP — recording SHORT WIPRO @ 205.37 as simulated entry | ID=PT-ac4d6b40-090044
+2026-02-24 09:00:44,450 | INFO    | [SIM] NO LTP — recording SHORT MAZDOCK @ 2283.8 as simulated entry | ID=PT-8a84f97d-090044
+2026-02-24 09:00:44,455 | INFO    | [SIM] NO LTP — recording SHORT LATENTVIEW @ 354.1 as simulated entry | ID=PT-c4724f93-090044
+2026-02-24 09:00:44,455 | INFO    | [SIM] NO LTP — recording SHORT CIGNITITEC @ 1292.39 as simulated entry | ID=PT-3d3052b8-090044
+2026-02-24 09:00:44,455 | INFO    | [SIM] NO LTP — recording SHORT PENIND @ 146.18 as simulated entry | ID=PT-2446faba-090044
+2026-02-24 09:00:44,455 | INFO    | [SIM] NO LTP — recording SHORT COFORGE @ 1304.09 as simulated entry | ID=PT-db257eb5-090044
+2026-02-24 09:00:44,455 | INFO    | [SIM] NO LTP — recording SHORT TATAELXSI @ 4761.17 as simulated entry | ID=PT-bf636e59-090044
+2026-02-24 09:00:44,455 | INFO    | [SIM] RESULT SHORT UGROCAP | NO_LTP_SIMULATED | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00 (0W/0L)
+2026-02-24 09:00:44,466 | INFO    | [SIM] RESULT SHORT WIPRO | NO_LTP_SIMULATED | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00 (0W/0L)
+2026-02-24 09:00:44,475 | INFO    | [SIM] RESULT SHORT MAZDOCK | NO_LTP_SIMULATED | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00 (0W/0L)
+2026-02-24 09:00:44,482 | INFO    | [SIM] RESULT SHORT LATENTVIEW | NO_LTP_SIMULATED | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00 (0W/0L)
+2026-02-24 09:00:44,490 | INFO    | [SIM] RESULT SHORT CIGNITITEC | NO_LTP_SIMULATED | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00 (0W/0L)
+2026-02-24 09:00:44,495 | INFO    | [SIM] RESULT SHORT COFORGE | NO_LTP_SIMULATED | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00 (0W/0L)
+2026-02-24 09:00:44,500 | INFO    | [SIM] RESULT SHORT PENIND | NO_LTP_SIMULATED | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00 (0W/0L)
+2026-02-24 09:00:44,510 | INFO    | [SIM] RESULT SHORT TATAELXSI | NO_LTP_SIMULATED | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00 (0W/0L)
