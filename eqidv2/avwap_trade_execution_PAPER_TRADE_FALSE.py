@@ -46,9 +46,9 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import datetime, timedelta, time as dt_time
+from datetime import date, datetime, timedelta, time as dt_time
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import pytz
@@ -273,23 +273,27 @@ def wait_for_fill(order_id: str, timeout_sec: int = FILL_WAIT_TIMEOUT_SEC) -> Op
 def load_executed_signals() -> Set[str]:
     if os.path.exists(EXECUTED_SIGNALS_FILE):
         try:
-            with open(EXECUTED_SIGNALS_FILE, "r") as f:
+            with open(EXECUTED_SIGNALS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if data.get("date") != datetime.now(IST).strftime("%Y-%m-%d"):
                     return set()
                 return set(data.get("signals", []))
         except (json.JSONDecodeError, KeyError):
+            try:
+                bad = EXECUTED_SIGNALS_FILE + ".corrupt"
+                os.replace(EXECUTED_SIGNALS_FILE, bad)
+            except Exception:
+                pass
             return set()
     return set()
 
 
 def save_executed_signals(executed: Set[str]) -> None:
-    os.makedirs(SIGNAL_DIR, exist_ok=True)
-    with open(EXECUTED_SIGNALS_FILE, "w") as f:
-        json.dump({
-            "date": datetime.now(IST).strftime("%Y-%m-%d"),
-            "signals": list(executed),
-        }, f)
+    payload = {
+        "date": datetime.now(IST).strftime("%Y-%m-%d"),
+        "signals": sorted(set(executed)),
+    }
+    _atomic_write_json(EXECUTED_SIGNALS_FILE, payload)
 
 
 # ============================================================================
@@ -326,12 +330,60 @@ class LiveTradeResult:
 # Shared state
 active_trades: Dict[str, threading.Thread] = {}
 active_trades_lock = threading.Lock()
+inflight_signals: Set[str] = set()
+inflight_signals_lock = threading.Lock()
+executed_lock = threading.Lock()
 daily_pnl: Dict[str, Any] = {"total": 0.0, "wins": 0, "losses": 0, "trades": 0}
 daily_pnl_lock = threading.Lock()
 
 # Capital / position tracking (margin, not notional — accounts for MIS leverage)
 capital_deployed: Dict[str, float] = {}   # signal_id → margin blocked
 capital_lock = threading.Lock()
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _safe_int(value: object, default: int = 1) -> int:
+    try:
+        parsed = int(float(value))
+        return parsed if parsed > 0 else int(default)
+    except Exception:
+        return int(default)
+
+
+def _calc_pnl(side: str, entry_price: float, exit_price: float, qty: int) -> Tuple[float, float]:
+    if side.upper() == "SHORT":
+        pnl_rs = (entry_price - exit_price) * qty
+    else:
+        pnl_rs = (exit_price - entry_price) * qty
+    pnl_pct = (pnl_rs / (entry_price * qty) * 100) if (entry_price > 0 and qty > 0) else 0.0
+    return float(pnl_rs), float(pnl_pct)
+
+
+def _atomic_write_json(path: str, payload: object) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
+def _release_capacity(signal_id: str) -> None:
+    with capital_lock:
+        capital_deployed.pop(signal_id, None)
+
+
+def _is_market_open_now(now_ist: Optional[datetime] = None) -> bool:
+    ts = now_ist or datetime.now(IST)
+    t = ts.time()
+    return MARKET_OPEN <= t <= MARKET_CLOSE
 
 
 def _check_risk_limits(signal: dict) -> Optional[str]:
@@ -350,8 +402,8 @@ def _check_risk_limits(signal: dict) -> Optional[str]:
     if open_count >= MAX_OPEN_POSITIONS:
         return f"max open positions reached ({open_count}/{MAX_OPEN_POSITIONS})"
 
-    entry_price = float(signal.get("entry_price", 0))
-    quantity = int(signal.get("quantity", 1))
+    entry_price = _safe_float(signal.get("entry_price", 0), 0.0)
+    quantity = _safe_int(signal.get("quantity", 1), 1)
     margin = (entry_price * quantity) / INTRADAY_LEVERAGE
     if (total_deployed + margin) > MAX_CAPITAL_DEPLOYED_RS:
         return (
@@ -360,6 +412,47 @@ def _check_risk_limits(signal: dict) -> Optional[str]:
         )
 
     return None
+
+
+def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, str, float]:
+    """
+    Atomically validate risk and reserve margin for a signal to avoid races
+    between concurrent CSV callbacks/threads.
+    """
+    entry_price = _safe_float(signal.get("entry_price", 0), 0.0)
+    quantity = _safe_int(signal.get("quantity", 1), 1)
+    margin = (entry_price * quantity) / INTRADAY_LEVERAGE if INTRADAY_LEVERAGE > 0 else 0.0
+    margin = float(max(0.0, margin))
+
+    with daily_pnl_lock:
+        total_now = float(daily_pnl.get("total", 0.0))
+    if total_now <= -MAX_DAILY_LOSS_RS:
+        return (
+            False,
+            f"daily loss limit hit (Rs.{total_now:+,.2f} <= -{MAX_DAILY_LOSS_RS:,})",
+            0.0,
+        )
+
+    with capital_lock:
+        open_count = len(capital_deployed)
+        total_deployed = float(sum(capital_deployed.values()))
+
+        if signal_id in capital_deployed:
+            return False, "already reserved", float(capital_deployed.get(signal_id, 0.0))
+
+        if open_count >= MAX_OPEN_POSITIONS:
+            return False, f"max open positions reached ({open_count}/{MAX_OPEN_POSITIONS})", 0.0
+
+        if (total_deployed + margin) > MAX_CAPITAL_DEPLOYED_RS:
+            return (
+                False,
+                f"margin limit exceeded (deployed Rs.{total_deployed:,.0f} + "
+                f"Rs.{margin:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})",
+                0.0,
+            )
+
+        capital_deployed[signal_id] = margin
+        return True, "ok", margin
 
 
 def execute_live_trade(signal: dict) -> None:
@@ -372,11 +465,11 @@ def execute_live_trade(signal: dict) -> None:
     """
     ticker = str(signal["ticker"]).upper()
     side = str(signal["side"]).upper()
-    signal_id = signal["signal_id"]
-    signal_entry_price = float(signal["entry_price"])
-    signal_stop = float(signal["stop_price"])
-    signal_target = float(signal["target_price"])
-    quantity = int(signal.get("quantity", 1))
+    signal_id = str(signal.get("signal_id", ""))
+    signal_entry_price = _safe_float(signal.get("entry_price", 0), 0.0)
+    signal_stop = _safe_float(signal.get("stop_price", 0), 0.0)
+    signal_target = _safe_float(signal.get("target_price", 0), 0.0)
+    quantity = _safe_int(signal.get("quantity", 1), 1)
 
     trade_start_ist = datetime.now(IST)
     trade_id = f"LT-{signal_id[:8]}-{trade_start_ist.strftime('%H%M%S')}"
@@ -408,7 +501,7 @@ def execute_live_trade(signal: dict) -> None:
         entry_price=signal_entry_price,
         stop_price=signal_stop,
         target_price=signal_target,
-        quality_score=float(signal.get("quality_score", 0)),
+        quality_score=_safe_float(signal.get("quality_score", 0), 0.0),
     )
 
     try:
@@ -433,7 +526,11 @@ def execute_live_trade(signal: dict) -> None:
         if filled_price is None or filled_price == 0:
             log.error(f"[LIVE] Entry order {entry_order_id} not filled. Aborting trade.")
             result.outcome = "ENTRY_FAILED"
+            result.exit_price = signal_entry_price
             _log_trade_result(result)
+            _release_capacity(signal_id)
+            with active_trades_lock:
+                active_trades.pop(signal_id, None)
             return
 
         result.filled_price = filled_price
@@ -586,12 +683,9 @@ def execute_live_trade(signal: dict) -> None:
     ep = result.filled_price if result.filled_price > 0 else signal_entry_price
     xp = result.exit_price if result.exit_price > 0 else ep
 
-    if side == "SHORT":
-        result.pnl_rs = round((ep - xp) * quantity, 2)
-        result.pnl_pct = round((ep - xp) / ep * 100, 4) if ep > 0 else 0
-    else:
-        result.pnl_rs = round((xp - ep) * quantity, 2)
-        result.pnl_pct = round((xp - ep) / ep * 100, 4) if ep > 0 else 0
+    pnl_rs, pnl_pct = _calc_pnl(side, ep, xp, quantity)
+    result.pnl_rs = round(pnl_rs, 2)
+    result.pnl_pct = round(pnl_pct, 4)
 
     # Log the trade
     _log_trade_result(result)
@@ -605,17 +699,17 @@ def execute_live_trade(signal: dict) -> None:
         elif result.pnl_rs < 0:
             daily_pnl["losses"] += 1
         _save_summary()
+        day_total = float(daily_pnl["total"])
 
     log.info(
         f"[LIVE] RESULT {side} {ticker} | {result.outcome} | "
         f"Entry={ep} Exit={xp} | "
         f"P&L: Rs.{result.pnl_rs:+,.2f} ({result.pnl_pct:+.2f}%) | "
-        f"Day total: Rs.{daily_pnl['total']:+,.2f}"
+        f"Day total: Rs.{day_total:+,.2f}"
     )
 
     # Release capital
-    with capital_lock:
-        capital_deployed.pop(signal_id, None)
+    _release_capacity(signal_id)
 
     # Remove from active trades
     with active_trades_lock:
@@ -676,8 +770,7 @@ def _save_summary() -> None:
             "win_rate_pct": round(wr, 2),
             "last_updated": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
         }
-        with open(SUMMARY_FILE, "w") as f:
-            json.dump(summary, f, indent=2)
+        _atomic_write_json(SUMMARY_FILE, summary)
     except Exception:
         pass
 
@@ -708,13 +801,98 @@ def _normalize_signal(raw: dict) -> dict:
 
     # Compute quantity if missing (generator does not emit one)
     if "quantity" not in sig or pd.isna(sig.get("quantity")):
-        entry = float(sig.get("entry_price", 0) or 0)
+        entry = _safe_float(sig.get("entry_price", 0), 0.0)
         if entry > 0:
             sig["quantity"] = max(1, int(DEFAULT_POSITION_SIZE / entry))
         else:
             sig["quantity"] = 1
+    else:
+        sig["quantity"] = _safe_int(sig.get("quantity", 1), 1)
 
     return sig
+
+
+def _parse_ist_signal_ts(value: object) -> Optional[pd.Timestamp]:
+    s = str(value or "").strip()
+    if not s:
+        return None
+    try:
+        ts = pd.to_datetime(s, errors="coerce")
+        if pd.isna(ts):
+            return None
+        ts = pd.Timestamp(ts)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(IST)
+        else:
+            ts = ts.tz_convert(IST)
+        return ts
+    except Exception:
+        return None
+
+
+def _signal_ist_date(sig: dict) -> Optional[date]:
+    for key in ("signal_entry_datetime_ist", "signal_bar_time_ist", "bar_time_ist", "signal_datetime"):
+        ts = _parse_ist_signal_ts(sig.get(key, ""))
+        if ts is not None:
+            return ts.date()
+    return None
+
+
+def _filter_today_signals(signals: List[dict]) -> Tuple[List[dict], int]:
+    today = datetime.now(IST).date()
+    filtered: List[dict] = []
+    dropped = 0
+    for sig in signals:
+        sig_date = _signal_ist_date(sig)
+        if sig_date == today:
+            filtered.append(sig)
+        else:
+            dropped += 1
+    return filtered, dropped
+
+
+def _sanitize_today_trade_csv() -> Tuple[int, int]:
+    """
+    Ensure today's live trade CSV only has rows whose signal time is from today (IST).
+    Returns (rows_before, rows_removed).
+    """
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    today_date = datetime.now(IST).date()
+    csv_path = os.path.join(SIGNAL_DIR, TRADE_LOG_PATTERN.format(today_str))
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+        return 0, 0
+
+    try:
+        df = pd.read_csv(
+            csv_path,
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+            engine="python",
+        )
+    except Exception:
+        return 0, 0
+
+    if df.empty:
+        return 0, 0
+
+    rows_before = int(len(df))
+    keep_mask = []
+    for _, row in df.iterrows():
+        row_date = _signal_ist_date(row)
+        keep_mask.append(row_date == today_date if row_date is not None else False)
+
+    df_today = df[pd.Series(keep_mask, index=df.index)].copy()
+    rows_removed = rows_before - int(len(df_today))
+    if rows_removed <= 0:
+        return rows_before, 0
+
+    for c in TRADE_LOG_COLUMNS:
+        if c not in df_today.columns:
+            df_today[c] = ""
+    df_today = df_today[TRADE_LOG_COLUMNS]
+    df_today.to_csv(csv_path, index=False, quoting=csv.QUOTE_ALL)
+    return rows_before, rows_removed
 
 
 # ============================================================================
@@ -734,7 +912,13 @@ def read_signals_csv(csv_path: str) -> List[dict]:
         )
         if df.empty:
             return []
-        return [_normalize_signal(row) for row in df.to_dict("records")]
+        signals = [_normalize_signal(row) for row in df.to_dict("records")]
+        signals, dropped = _filter_today_signals(signals)
+        if dropped > 0:
+            log.warning(
+                f"[CSV] Ignored {dropped} stale signal row(s) not matching today's IST date."
+            )
+        return signals
     except Exception as e:
         log.error(f"Error reading signals CSV: {e}")
         return []
@@ -753,15 +937,27 @@ def process_new_signals(
     Read signals CSV, find unprocessed signals, launch trade threads.
     Returns updated executed signals set.
     """
+    if not _is_market_open_now():
+        return executed
+
     signals = read_signals_csv(csv_path)
     if not signals:
         return executed
 
     new_count = 0
+    executed_changed = False
     for signal in signals:
-        signal_id = str(signal.get("signal_id", ""))
-        if not signal_id or signal_id in executed:
+        signal_id = str(signal.get("signal_id", "")).strip()
+        if not signal_id:
             continue
+
+        with executed_lock:
+            if signal_id in executed:
+                continue
+
+        with inflight_signals_lock:
+            if signal_id in inflight_signals:
+                continue
 
         # Validate required fields
         required = ["ticker", "side", "entry_price", "stop_price", "target_price"]
@@ -770,19 +966,19 @@ def process_new_signals(
             log.warning(f"Signal {signal_id[:12]} missing fields: {missing}. Skipping.")
             continue
 
-        # Risk checks: daily loss, open positions, capital deployed
-        reject_reason = _check_risk_limits(signal)
-        if reject_reason:
+        # Risk + margin reservation (atomic)
+        allowed, reason, reserved_margin = _reserve_capacity_for_signal(signal_id, signal)
+        if not allowed:
             log.warning(
                 f"[RISK] Rejecting {signal.get('side', '?')} "
-                f"{signal.get('ticker', '?')}: {reject_reason}"
+                f"{signal.get('ticker', '?')}: {reason}"
             )
-            executed.add(signal_id)  # don't re-process
             continue
 
-        # Mark as executed immediately
-        executed.add(signal_id)
-        new_count += 1
+        # Mark executed only after reservation succeeds.
+        with executed_lock:
+            executed.add(signal_id)
+            executed_changed = True
 
         ticker = signal.get("ticker", "?")
         side = signal.get("side", "?")
@@ -793,10 +989,13 @@ def process_new_signals(
                 f"[DRY-RUN] Would execute: {side} {ticker} @ {entry_p} | "
                 f"SL={signal.get('stop_price')} TGT={signal.get('target_price')}"
             )
+            _release_capacity(signal_id)
             continue
 
         # Launch trade thread
         def _run_trade(sig=signal):
+            with inflight_signals_lock:
+                inflight_signals.add(signal_id)
             trade_semaphore.acquire()
             try:
                 execute_live_trade(sig)
@@ -805,22 +1004,43 @@ def process_new_signals(
                 log.error(traceback.format_exc())
             finally:
                 trade_semaphore.release()
+                with inflight_signals_lock:
+                    inflight_signals.discard(signal_id)
 
-        t = threading.Thread(target=_run_trade, daemon=True)
-        with active_trades_lock:
-            active_trades[signal_id] = t
-        t.start()
+        try:
+            t = threading.Thread(target=_run_trade, daemon=True)
+            with active_trades_lock:
+                active_trades[signal_id] = t
+            t.start()
+        except Exception:
+            with active_trades_lock:
+                active_trades.pop(signal_id, None)
+            _release_capacity(signal_id)
+            with executed_lock:
+                executed.discard(signal_id)
+                executed_changed = True
+            with inflight_signals_lock:
+                inflight_signals.discard(signal_id)
+            log.error(f"[DISPATCH] Failed to launch trade thread for signal_id={signal_id[:12]}")
+            continue
 
         log.info(
             f"[DISPATCH] Launched LIVE trade: {side} {ticker} @ {entry_p} "
-            f"| ID={signal_id[:12]}"
+            f"| reserved_margin=Rs.{reserved_margin:,.2f} | ID={signal_id[:12]}"
         )
+        new_count += 1
+
+    if executed_changed:
+        with executed_lock:
+            executed_snapshot = set(executed)
+        save_executed_signals(executed_snapshot)
 
     if new_count > 0:
-        save_executed_signals(executed)
+        with active_trades_lock:
+            active_count = len(active_trades)
         log.info(
             f"Dispatched {new_count} new trade(s). "
-            f"Active trades: {len(active_trades)}"
+            f"Active trades: {active_count}"
         )
 
     return executed
