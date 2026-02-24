@@ -1079,3 +1079,30 @@
 2026-02-24 15:30:00,272 | INFO    |   Total P&L    : Rs.+10,477.92
 2026-02-24 15:30:00,272 | INFO    | =======================================================
 2026-02-24 15:30:00,273 | INFO    | Paper trade executor stopped.
+2026-02-24 17:49:07,864 | INFO    | =================================================================
+2026-02-24 17:49:07,865 | INFO    | AVWAP Paper Trade Executor â€” PAPER_TRADE = TRUE
+2026-02-24 17:49:07,865 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-02-24 17:49:07,865 | INFO    |   LTP polling     : Disabled
+2026-02-24 17:49:07,865 | INFO    |   Entry source    : signal_bar
+2026-02-24 17:49:07,865 | INFO    |   Starting capital: Rs.1,000,000
+2026-02-24 17:49:07,865 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-24 17:49:07,865 | INFO    |   Forced close at : 15:20:00 IST
+2026-02-24 17:49:07,865 | INFO    | =================================================================
+2026-02-24 17:49:07,885 | INFO    | Loaded 23 previously executed signals.
+2026-02-24 17:49:07,918 | INFO    | [RESTORE] signals_today=15 | executed_loaded=8 | closed_today=15 | open_restored=0 | restored_exact=0 | restored_reconstructed=0 | realized_trades=15 | realized_total=Rs.+10,477.92 | deployed_margin=Rs.0.00
+2026-02-24 17:49:07,928 | INFO    | Watchdog started - monitoring live_signals\signals_2026-02-24.csv
+2026-02-24 17:49:07,929 | INFO    | Checking for existing unprocessed signals...
+2026-02-24 17:49:07,929 | INFO    | startup | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+10,477.92 | total=Rs.+10,477.92 | deployed_margin=Rs.0.00
+2026-02-24 17:49:07,929 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+10,477.92 | total=Rs.+10,477.92 | deployed_margin=Rs.0.00
+2026-02-24 17:49:07,929 | INFO    | Market closed. All simulations complete.
+2026-02-24 17:49:07,938 | INFO    | =======================================================
+2026-02-24 17:49:07,938 | INFO    | DAILY PAPER TRADE SUMMARY
+2026-02-24 17:49:07,938 | INFO    |   Total trades : 15
+2026-02-24 17:49:07,939 | INFO    |   Wins         : 10
+2026-02-24 17:49:07,939 | INFO    |   Losses       : 4
+2026-02-24 17:49:07,939 | INFO    |   Win rate     : 66.7%
+2026-02-24 17:49:07,939 | INFO    |   Gross profit : Rs.+15,103.92
+2026-02-24 17:49:07,939 | INFO    |   Gross loss   : Rs.-4,626.00
+2026-02-24 17:49:07,939 | INFO    |   Total P&L    : Rs.+10,477.92
+2026-02-24 17:49:07,939 | INFO    | =======================================================
+2026-02-24 17:49:07,939 | INFO    | Paper trade executor stopped.

@@ -1,0 +1,42 @@
+2026-02-24 17:48:52,236 | INFO    | =================================================================
+2026-02-24 17:48:52,236 | INFO    | AVWAP Live Trade Executor - PAPER_TRADE = FALSE
+2026-02-24 17:48:52,236 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-02-24 17:48:52,236 | INFO    |   Mode              : DRY-RUN
+2026-02-24 17:48:52,236 | INFO    |   Max concurrent    : 20
+2026-02-24 17:48:52,236 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-24 17:48:52,236 | INFO    |   Forced close at   : 15:20:00 IST
+2026-02-24 17:48:52,237 | INFO    | =================================================================
+2026-02-24 17:48:52,237 | INFO    | Loaded 0 previously executed signals.
+2026-02-24 17:48:52,239 | INFO    | Watchdog started - monitoring live_signals\signals_2026-02-24.csv
+2026-02-24 17:48:52,239 | INFO    | Checking for existing unprocessed signals...
+2026-02-24 17:48:52,239 | INFO    | Market closed. All trades complete.
+2026-02-24 17:48:52,247 | INFO    | =======================================================
+2026-02-24 17:48:52,248 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-02-24 17:48:52,248 | INFO    |   Total trades : 0
+2026-02-24 17:48:52,248 | INFO    |   Wins         : 0
+2026-02-24 17:48:52,248 | INFO    |   Losses       : 0
+2026-02-24 17:48:52,248 | INFO    |   Win rate     : 0.0%
+2026-02-24 17:48:52,248 | INFO    |   Total P&L    : Rs.+0.00
+2026-02-24 17:48:52,248 | INFO    | =======================================================
+2026-02-24 17:48:52,248 | INFO    | Live trade executor stopped.
+2026-02-24 18:21:04,480 | INFO    | =================================================================
+2026-02-24 18:21:04,480 | INFO    | AVWAP Live Trade Executor - PAPER_TRADE = FALSE
+2026-02-24 18:21:04,480 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-02-24 18:21:04,480 | INFO    |   Mode              : DRY-RUN
+2026-02-24 18:21:04,480 | INFO    |   Max concurrent    : 1
+2026-02-24 18:21:04,480 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-02-24 18:21:04,480 | INFO    |   Forced close at   : 15:20:00 IST
+2026-02-24 18:21:04,480 | INFO    | =================================================================
+2026-02-24 18:21:04,480 | INFO    | Loaded 0 previously executed signals.
+2026-02-24 18:21:04,480 | INFO    | Watchdog started - monitoring live_signals\signals_2026-02-24.csv
+2026-02-24 18:21:04,480 | INFO    | Checking for existing unprocessed signals...
+2026-02-24 18:21:04,480 | INFO    | Market closed. All trades complete.
+2026-02-24 18:21:04,497 | INFO    | =======================================================
+2026-02-24 18:21:04,497 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-02-24 18:21:04,497 | INFO    |   Total trades : 0
+2026-02-24 18:21:04,497 | INFO    |   Wins         : 0
+2026-02-24 18:21:04,497 | INFO    |   Losses       : 0
+2026-02-24 18:21:04,497 | INFO    |   Win rate     : 0.0%
+2026-02-24 18:21:04,497 | INFO    |   Total P&L    : Rs.+0.00
+2026-02-24 18:21:04,497 | INFO    | =======================================================
+2026-02-24 18:21:04,497 | INFO    | Live trade executor stopped.
