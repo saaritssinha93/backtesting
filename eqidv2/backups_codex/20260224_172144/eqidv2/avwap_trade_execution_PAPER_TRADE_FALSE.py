@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-avwap_trade_execution_PAPER_TRADE_FALSE.py - Live Trade Executor (Zerodha Real)
+avwap_trade_execution_PAPER_TRADE_FALSE.py — Live Trade Executor (Zerodha Real)
 ================================================================================
 
 Watches the daily signal CSV produced by avwap_live_signal_generator.py and
@@ -11,7 +11,7 @@ For each new signal:
   2. Waits for fill confirmation
   3. Places a LIMIT target order + SL-M stop-loss order
   4. Monitors target/SL in a background thread
-  5. If either fills -> cancels the other (with retry)
+  5. If either fills → cancels the other (with retry)
   6. Forces close at 15:15 IST if neither is hit
 
 Concurrent trades run in parallel threads (up to MAX_CONCURRENT_TRADES).
@@ -133,7 +133,7 @@ SIGNAL_COLUMNS = [
     "signal_entry_datetime_ist", "signal_bar_time_ist",
 ]
 
-# Column name mapping: signal generator CSV name -> executor expected name
+# Column name mapping: signal generator CSV name → executor expected name
 _SIGNAL_COL_MAP = {
     "entry":          "entry_price",
     "sl":             "stop_price",
@@ -336,8 +336,8 @@ executed_lock = threading.Lock()
 daily_pnl: Dict[str, Any] = {"total": 0.0, "wins": 0, "losses": 0, "trades": 0}
 daily_pnl_lock = threading.Lock()
 
-# Capital / position tracking (margin, not notional - accounts for MIS leverage)
-capital_deployed: Dict[str, float] = {}   # signal_id -> margin blocked
+# Capital / position tracking (margin, not notional — accounts for MIS leverage)
+capital_deployed: Dict[str, float] = {}   # signal_id → margin blocked
 capital_lock = threading.Lock()
 
 
@@ -525,7 +525,6 @@ def execute_live_trade(signal: dict) -> None:
         filled_price = wait_for_fill(entry_order_id)
         if filled_price is None or filled_price == 0:
             log.error(f"[LIVE] Entry order {entry_order_id} not filled. Aborting trade.")
-            cancel_order_safe(kite.VARIETY_REGULAR, str(entry_order_id))
             result.outcome = "ENTRY_FAILED"
             result.exit_price = signal_entry_price
             _log_trade_result(result)
@@ -559,79 +558,40 @@ def execute_live_trade(signal: dict) -> None:
         result.stop_price = sl_price
         result.target_price = tgt_price
 
-        target_order_id = ""
-        sl_order_id = ""
-        exit_legs_ready = False
+        # ---- STEP 3: Place target order (LIMIT) ----
+        target_order_id = kite.place_order(
+            variety=kite.VARIETY_REGULAR,
+            exchange=kite.EXCHANGE_NSE,
+            tradingsymbol=ticker,
+            transaction_type=exit_txn,
+            quantity=quantity,
+            product=kite.PRODUCT_MIS,
+            order_type=kite.ORDER_TYPE_LIMIT,
+            price=tgt_price,
+            validity=kite.VALIDITY_DAY,
+            tag="AVWAPTarget",
+        )
+        result.target_order_id = str(target_order_id)
+        log.info(f"[LIVE] Target order: {exit_txn} LIMIT @ {tgt_price} ID={target_order_id}")
 
-        # ---- STEP 3/4: Place target and stop-loss exit legs ----
-        try:
-            target_order_id = str(
-                kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    exchange=kite.EXCHANGE_NSE,
-                    tradingsymbol=ticker,
-                    transaction_type=exit_txn,
-                    quantity=quantity,
-                    product=kite.PRODUCT_MIS,
-                    order_type=kite.ORDER_TYPE_LIMIT,
-                    price=tgt_price,
-                    validity=kite.VALIDITY_DAY,
-                    tag="AVWAPTarget",
-                )
-            )
-            result.target_order_id = target_order_id
-            log.info(f"[LIVE] Target order: {exit_txn} LIMIT @ {tgt_price} ID={target_order_id}")
-
-            sl_order_id = str(
-                kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    exchange=kite.EXCHANGE_NSE,
-                    tradingsymbol=ticker,
-                    transaction_type=exit_txn,
-                    quantity=quantity,
-                    product=kite.PRODUCT_MIS,
-                    order_type=kite.ORDER_TYPE_SLM,
-                    trigger_price=sl_price,
-                    validity=kite.VALIDITY_DAY,
-                    tag="AVWAPStopLoss",
-                )
-            )
-            result.sl_order_id = sl_order_id
-            log.info(f"[LIVE] SL order: {exit_txn} SL-M trigger={sl_price} ID={sl_order_id}")
-            exit_legs_ready = True
-        except Exception as e:
-            log.error(f"[LIVE] Exit leg placement failed for {ticker}: {e}")
-            if target_order_id:
-                cancel_order_safe(kite.VARIETY_REGULAR, target_order_id)
-            if sl_order_id:
-                cancel_order_safe(kite.VARIETY_REGULAR, sl_order_id)
-            try:
-                close_order_id = kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    exchange=kite.EXCHANGE_NSE,
-                    tradingsymbol=ticker,
-                    transaction_type=exit_txn,
-                    quantity=quantity,
-                    product=kite.PRODUCT_MIS,
-                    order_type=kite.ORDER_TYPE_MARKET,
-                    validity=kite.VALIDITY_DAY,
-                    tag="AVWAPExitSetupFailClose",
-                )
-                result.close_order_id = str(close_order_id)
-                close_price = wait_for_fill(close_order_id, timeout_sec=30)
-                result.exit_price = close_price if close_price else filled_price
-                result.outcome = "EXIT_SETUP_FAILED_FORCE_CLOSED"
-                log.warning(
-                    f"[LIVE] Exit setup fallback close for {ticker}: "
-                    f"close_order_id={close_order_id} exit={result.exit_price}"
-                )
-            except Exception as close_err:
-                log.error(f"[LIVE] Exit setup fallback close failed for {ticker}: {close_err}")
-                result.exit_price = filled_price
-                result.outcome = "EXIT_SETUP_FAILED"
+        # ---- STEP 4: Place stop-loss order (SL-M) ----
+        sl_order_id = kite.place_order(
+            variety=kite.VARIETY_REGULAR,
+            exchange=kite.EXCHANGE_NSE,
+            tradingsymbol=ticker,
+            transaction_type=exit_txn,
+            quantity=quantity,
+            product=kite.PRODUCT_MIS,
+            order_type=kite.ORDER_TYPE_SLM,
+            trigger_price=sl_price,
+            validity=kite.VALIDITY_DAY,
+            tag="AVWAPStopLoss",
+        )
+        result.sl_order_id = str(sl_order_id)
+        log.info(f"[LIVE] SL order: {exit_txn} SL-M trigger={sl_price} ID={sl_order_id}")
 
         # ---- STEP 5: Monitor until target/SL/forced close ----
-        while exit_legs_ready:
+        while True:
             now_ist = datetime.now(IST)
 
             # Force close at 15:15
@@ -693,7 +653,7 @@ def execute_live_trade(signal: dict) -> None:
             if target_filled:
                 log.info(
                     f"[LIVE] TARGET HIT: {ticker} @ {target_fill_price} "
-                    f"-> cancelling SL {sl_order_id}"
+                    f"→ cancelling SL {sl_order_id}"
                 )
                 cancel_order_safe(kite.VARIETY_REGULAR, sl_order_id)
                 result.exit_price = target_fill_price
@@ -703,7 +663,7 @@ def execute_live_trade(signal: dict) -> None:
             elif sl_filled:
                 log.info(
                     f"[LIVE] SL TRIGGERED: {ticker} @ {sl_fill_price} "
-                    f"-> cancelling Target {target_order_id}"
+                    f"→ cancelling Target {target_order_id}"
                 )
                 cancel_order_safe(kite.VARIETY_REGULAR, target_order_id)
                 result.exit_price = sl_fill_price
@@ -1032,12 +992,10 @@ def process_new_signals(
             _release_capacity(signal_id)
             continue
 
-        sid = signal_id
-
         # Launch trade thread
-        def _run_trade(sig=signal, signal_key=sid):
+        def _run_trade(sig=signal):
             with inflight_signals_lock:
-                inflight_signals.add(signal_key)
+                inflight_signals.add(signal_id)
             trade_semaphore.acquire()
             try:
                 execute_live_trade(sig)
@@ -1047,23 +1005,23 @@ def process_new_signals(
             finally:
                 trade_semaphore.release()
                 with inflight_signals_lock:
-                    inflight_signals.discard(signal_key)
+                    inflight_signals.discard(signal_id)
 
         try:
             t = threading.Thread(target=_run_trade, daemon=True)
             with active_trades_lock:
-                active_trades[sid] = t
+                active_trades[signal_id] = t
             t.start()
         except Exception:
             with active_trades_lock:
-                active_trades.pop(sid, None)
-            _release_capacity(sid)
+                active_trades.pop(signal_id, None)
+            _release_capacity(signal_id)
             with executed_lock:
-                executed.discard(sid)
+                executed.discard(signal_id)
                 executed_changed = True
             with inflight_signals_lock:
-                inflight_signals.discard(sid)
-            log.error(f"[DISPATCH] Failed to launch trade thread for signal_id={sid[:12]}")
+                inflight_signals.discard(signal_id)
+            log.error(f"[DISPATCH] Failed to launch trade thread for signal_id={signal_id[:12]}")
             continue
 
         log.info(
@@ -1141,7 +1099,7 @@ def main():
     args = parser.parse_args()
 
     log.info("=" * 65)
-    log.info("AVWAP Live Trade Executor - PAPER_TRADE = FALSE")
+    log.info("AVWAP Live Trade Executor — PAPER_TRADE = FALSE")
     log.info("  ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***")
     log.info(f"  Mode              : {'DRY-RUN' if args.dry_run else 'LIVE TRADING'}")
     log.info(f"  Max concurrent    : {args.max_trades}")
@@ -1157,13 +1115,6 @@ def main():
     executed = load_executed_signals()
     log.info(f"Loaded {len(executed)} previously executed signals.")
 
-    rows_before, rows_removed = _sanitize_today_trade_csv()
-    if rows_removed > 0:
-        log.warning(
-            f"[CSV] Removed {rows_removed}/{rows_before} stale row(s) "
-            "from today's live trade CSV."
-        )
-
     # Resolve today's signal CSV
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     csv_path = os.path.join(SIGNAL_DIR, SIGNAL_CSV_PATTERN.format(today_str))
@@ -1174,7 +1125,7 @@ def main():
     # Callback for watchdog
     def on_csv_change():
         nonlocal executed
-        log.info("Signal CSV changed - processing new signals...")
+        log.info("Signal CSV changed — processing new signals...")
         executed = process_new_signals(
             csv_path, executed, trade_semaphore, dry_run=args.dry_run,
         )
@@ -1185,7 +1136,7 @@ def main():
     observer = Observer()
     observer.schedule(handler, path=SIGNAL_DIR, recursive=False)
     observer.start()
-    log.info(f"Watchdog started - monitoring {csv_path}")
+    log.info(f"Watchdog started — monitoring {csv_path}")
 
     # Initial check for existing signals
     if os.path.exists(csv_path):

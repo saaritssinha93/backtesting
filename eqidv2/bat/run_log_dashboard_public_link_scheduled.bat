@@ -6,7 +6,11 @@ set "BAT_DIR=%BASE_DIR%\bat"
 set "DASH_BAT=%BAT_DIR%\run_log_dashboard_public_link.bat"
 
 if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
-if "%LOG_DASH_PASS%"=="" set "LOG_DASH_PASS=eqidv2"
+if "%LOG_DASH_PASS%"=="" (
+  echo [ERROR] LOG_DASH_PASS is not set.
+  echo Set LOG_DASH_PASS in the task environment before scheduled launch.
+  endlocal & exit /b 2
+)
 if "%LOG_DASH_EMAIL_TO%"=="" set "LOG_DASH_EMAIL_TO=saaritssinha93@gmail.com,dragontastic007@gmail.com"
 if "%LOG_DASH_EMAIL_FROM%"=="" set "LOG_DASH_EMAIL_FROM=saaritssinha93@gmail.com"
 if "%LOG_DASH_EMAIL_SEND_MODE%"=="" set "LOG_DASH_EMAIL_SEND_MODE=gmail_api_only"
