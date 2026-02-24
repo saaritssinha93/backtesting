@@ -1429,6 +1429,32 @@ def _signal_dedupe_key(ticker: str, side: str, signal_dt: str, setup: str = "") 
     return f"{ticker_norm}|{side_norm}|{dt_norm}|{setup_norm}"
 
 
+def _parse_ist_timestamp(value: Any) -> Optional[pd.Timestamp]:
+    s = str(value or "").strip()
+    if not s:
+        return None
+    try:
+        ts = pd.to_datetime(s, errors="coerce")
+        if pd.isna(ts):
+            return None
+        ts = pd.Timestamp(ts)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(IST)
+        else:
+            ts = ts.tz_convert(IST)
+        return ts
+    except Exception:
+        return None
+
+
+def _row_signal_ist_date(row_like: Dict[str, Any]) -> Optional[datetime.date]:
+    for key in ("signal_entry_datetime_ist", "signal_bar_time_ist", "bar_time_ist", "signal_datetime"):
+        ts = _parse_ist_timestamp(row_like.get(key, ""))
+        if ts is not None:
+            return ts.date()
+    return None
+
+
 def _load_existing_ids(csv_path: str) -> set:
     """Read existing signal IDs from a CSV file; return empty set on any read issue."""
     if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
@@ -1504,6 +1530,52 @@ def _ensure_signal_csv_schema(csv_path: str) -> None:
     print(f"[CSV ] migrated schema for {csv_path} | added={missing}", flush=True)
 
 
+def _sanitize_today_signal_csv() -> Tuple[int, int]:
+    """
+    Ensure today's signal CSV only contains rows whose signal time belongs to today (IST).
+    Returns (rows_before, rows_removed).
+    """
+    today_str = now_ist().strftime("%Y-%m-%d")
+    today_date = now_ist().date()
+    csv_path = str(LIVE_SIGNAL_DIR / SIGNAL_CSV_PATTERN.format(today_str))
+
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+        return 0, 0
+
+    try:
+        df = pd.read_csv(
+            csv_path,
+            engine="python",
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+        )
+    except Exception:
+        return 0, 0
+
+    if df.empty:
+        return 0, 0
+
+    rows_before = int(len(df))
+    keep_mask = []
+    for _, row in df.iterrows():
+        row_date = _row_signal_ist_date(row)
+        keep_mask.append(row_date == today_date if row_date is not None else False)
+
+    df_today = df[pd.Series(keep_mask, index=df.index)].copy()
+    rows_removed = rows_before - int(len(df_today))
+    if rows_removed <= 0:
+        return rows_before, 0
+
+    # Keep schema stable after cleanup.
+    for c in SIGNAL_CSV_COLUMNS:
+        if c not in df_today.columns:
+            df_today[c] = ""
+    df_today = df_today[SIGNAL_CSV_COLUMNS]
+    df_today.to_csv(csv_path, index=False, quoting=csv.QUOTE_ALL)
+    return rows_before, rows_removed
+
+
 def _write_signals_csv(signals_df: pd.DataFrame) -> int:
     """
     Convert analyser signals_df to the CSV format expected by trade executors
@@ -1518,6 +1590,8 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
     skipped_duplicate_key = 0
     skipped_duplicate_id = 0
     skipped_missing_time = 0
+    skipped_stale_day = 0
+    today_date = now_ist().date()
 
     with _locked_signal_csv(csv_path):
         _ensure_signal_csv_schema(csv_path)
@@ -1537,11 +1611,19 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
                 for _, row in signals_df.iterrows():
                     ticker = str(row.get("ticker", "")).upper()
                     side = str(row.get("side", "")).upper()
-                    bar_time = str(row.get("bar_time_ist", ""))
+                    bar_time_raw = str(row.get("bar_time_ist", ""))
                     setup = str(row.get("setup", ""))
-                    if not bar_time:
+                    if not bar_time_raw:
                         skipped_missing_time += 1
                         continue
+                    bar_time_ts = _parse_ist_timestamp(bar_time_raw)
+                    if bar_time_ts is None:
+                        skipped_missing_time += 1
+                        continue
+                    if bar_time_ts.date() != today_date:
+                        skipped_stale_day += 1
+                        continue
+                    bar_time = str(bar_time_ts)
                     dedupe_key = _signal_dedupe_key(ticker, side, bar_time, setup)
                     if dedupe_key in existing_keys or dedupe_key in run_keys:
                         skipped_duplicate_key += 1
@@ -1621,7 +1703,8 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
     print(
         f"[CSV ] scanned={scanned} written={written} "
         f"skipped_dup_key={skipped_duplicate_key} skipped_dup_id={skipped_duplicate_id} "
-        f"skipped_missing_time={skipped_missing_time} path={csv_path}",
+        f"skipped_missing_time={skipped_missing_time} skipped_stale_day={skipped_stale_day} "
+        f"path={csv_path}",
         flush=True,
     )
 
@@ -1638,6 +1721,8 @@ def _collect_today_parity_signals(verbose: bool = False) -> Tuple[pd.DataFrame, 
 
     all_signals: List[Dict[str, Any]] = []
     scanned = 0
+    today_date = now_ist().date()
+    skipped_stale_day = 0
 
     for idx, t in enumerate(tickers, start=1):
         path = os.path.join(DIR_15M, f"{t}{END_15M}")
@@ -1648,11 +1733,15 @@ def _collect_today_parity_signals(verbose: bool = False) -> Tuple[pd.DataFrame, 
 
             sigs = _all_day_runner_parity_signals_for_ticker(t, df_raw)
             for s in sigs:
+                s_bar_ts = _parse_ist_timestamp(getattr(s, "bar_time_ist", ""))
+                if s_bar_ts is None or s_bar_ts.date() != today_date:
+                    skipped_stale_day += 1
+                    continue
                 all_signals.append(
                     {
                         "ticker": s.ticker,
                         "side": s.side,
-                        "bar_time_ist": s.bar_time_ist,
+                        "bar_time_ist": s_bar_ts,
                         "setup": s.setup,
                         "entry_price": s.entry_price,
                         "sl_price": s.sl_price,
@@ -1673,6 +1762,11 @@ def _collect_today_parity_signals(verbose: bool = False) -> Tuple[pd.DataFrame, 
                 print(f"[BACKFILL][ERR] {t} {e}", flush=True)
             continue
 
+    if skipped_stale_day:
+        print(
+            f"[BACKFILL] dropped stale rows from non-today bars: {skipped_stale_day}",
+            flush=True,
+        )
     return pd.DataFrame(all_signals), scanned
 
 
@@ -1926,6 +2020,12 @@ def main() -> None:
     print(f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s")
 
     holidays = _read_holidays_safe()
+    rows_before, rows_removed = _sanitize_today_signal_csv()
+    if rows_removed > 0:
+        print(
+            f"[CSV ] startup_cleanup removed stale rows from today's signals CSV: {rows_removed}/{rows_before}",
+            flush=True,
+        )
 
     if RUN_STARTUP_BACKFILL and (not args.no_startup_backfill):
         try:
