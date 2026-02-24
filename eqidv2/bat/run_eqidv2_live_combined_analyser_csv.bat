@@ -11,88 +11,34 @@ set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.log"
 set "ALERT_LOG=%ALERT_DIR%\CRITICAL_eqidv2_live_combined_analyser_csv.log"
 set "STATUS_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.status"
-set "END_CUTOFF_HHMM=1540"
-set "MAX_RESTARTS=20"
-set "RESTART_DELAY_SEC=15"
-set /a RESTART_COUNT=0
-set "STATUS_OVERRIDE="
+set "HEARTBEAT_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.heartbeat"
+set "SUPERVISOR_PS1=%BASE_DIR%\bat\supervise_command.ps1"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "%ALERT_DIR%" mkdir "%ALERT_DIR%"
 
 cd /d "%BASE_DIR%"
 
-for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmm')"') do set "NOW_HHMM=%%a"
-if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
-  echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^) 
-  echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^)>>"%LOG_FILE%"
-  for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm:ss"') do set "RUN_TS=%%a"
-  >"%STATUS_FILE%" echo status=SKIPPED_CUTOFF
-  >>"%STATUS_FILE%" echo script=%SCRIPT_NAME%
-  >>"%STATUS_FILE%" echo ts=!RUN_TS!
-  >>"%STATUS_FILE%" echo cutoff_hhmm=%END_CUTOFF_HHMM%
-  >>"%STATUS_FILE%" echo now_hhmm=!NOW_HHMM!
-  >>"%STATUS_FILE%" echo log_file=%LOG_FILE%
-  endlocal & exit /b 0
-)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
+  -Name "%SCRIPT_NAME%" ^
+  -FilePath "%PYTHON_EXE%" ^
+  -ArgumentList "-u","%BASE_DIR%\%SCRIPT_NAME%" ^
+  -WorkDir "%BASE_DIR%" ^
+  -LogFile "%LOG_FILE%" ^
+  -StatusFile "%STATUS_FILE%" ^
+  -HeartbeatFile "%HEARTBEAT_FILE%" ^
+  -MaxRestarts 20 ^
+  -RestartDelaySec 15 ^
+  -MonitorIntervalSec 5 ^
+  -HungTimeoutSec 900 ^
+  -CooldownWindowSec 300 ^
+  -CooldownMaxRestarts 6 ^
+  -CooldownDelaySec 120 ^
+  -CutoffHHmm 1540 ^
+  -SkipRunAfterCutoff ^
+  -StopRestartsAfterCutoff
 
-echo [%DATE% %TIME%] START %SCRIPT_NAME%
-echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
-echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
-
-:RUN_LOOP
-"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
-
-echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)
-echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)>>"%LOG_FILE%"
-
-if "%EXIT_CODE%"=="0" goto AFTER_RUN
-
-for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmm')"') do set "NOW_HHMM=%%a"
-if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
-  set "STATUS_OVERRIDE=STOPPED_AFTER_CUTOFF"
-  set "EXIT_CODE=0"
-  echo [WARN] Crash after cutoff ^(HHmm=!NOW_HHMM!^). Not restarting.>>"%LOG_FILE%"
-  goto AFTER_RUN
-)
-
-set /a RESTART_COUNT+=1
-if !RESTART_COUNT! GTR %MAX_RESTARTS% (
-  echo [ERROR] Max restarts exceeded for %SCRIPT_NAME% ^(attempts=!RESTART_COUNT!^).>>"%LOG_FILE%"
-  goto AFTER_RUN
-)
-
-echo [WARN] %SCRIPT_NAME% crashed ^(exit=%EXIT_CODE%^). Restart !RESTART_COUNT!/%MAX_RESTARTS% in %RESTART_DELAY_SEC%s...>>"%LOG_FILE%"
-timeout /t %RESTART_DELAY_SEC% >nul
-goto RUN_LOOP
-
-:AFTER_RUN
-
-for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm:ss"') do set "RUN_TS=%%a"
-if defined STATUS_OVERRIDE (
-  >"%STATUS_FILE%" echo status=%STATUS_OVERRIDE%
-  >>"%STATUS_FILE%" echo script=%SCRIPT_NAME%
-  >>"%STATUS_FILE%" echo ts=!RUN_TS!
-  >>"%STATUS_FILE%" echo exit_code=%EXIT_CODE%
-  >>"%STATUS_FILE%" echo restart_count=!RESTART_COUNT!
-  >>"%STATUS_FILE%" echo cutoff_hhmm=%END_CUTOFF_HHMM%
-  >>"%STATUS_FILE%" echo log_file=%LOG_FILE%
-) else if "%EXIT_CODE%"=="0" (
-  >"%STATUS_FILE%" echo status=SUCCESS
-  >>"%STATUS_FILE%" echo script=%SCRIPT_NAME%
-  >>"%STATUS_FILE%" echo ts=!RUN_TS!
-  >>"%STATUS_FILE%" echo exit_code=%EXIT_CODE%
-  >>"%STATUS_FILE%" echo restart_count=!RESTART_COUNT!
-  >>"%STATUS_FILE%" echo log_file=%LOG_FILE%
-) else (
-  >"%STATUS_FILE%" echo status=FAILED
-  >>"%STATUS_FILE%" echo script=%SCRIPT_NAME%
-  >>"%STATUS_FILE%" echo ts=!RUN_TS!
-  >>"%STATUS_FILE%" echo exit_code=%EXIT_CODE%
-  >>"%STATUS_FILE%" echo restart_count=!RESTART_COUNT!
-  >>"%STATUS_FILE%" echo log_file=%LOG_FILE%
-)
 
 if not "%EXIT_CODE%"=="0" (
   for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "TS=%%a"
@@ -132,8 +78,4 @@ if not "%EXIT_CODE%"=="0" (
 )
 
 endlocal & exit /b %EXIT_CODE%
-
-
-
-
 
