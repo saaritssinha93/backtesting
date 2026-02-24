@@ -76,6 +76,7 @@ SIGNAL_CSV_PATTERN = "signals_{}.csv"
 TRADE_LOG_PATTERN = "live_trades_{}.csv"
 EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_live.json")
 SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary.json")
+OPEN_TRADES_STATE_PATTERN = "open_live_trades_state_{}.json"
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -267,6 +268,47 @@ def wait_for_fill(order_id: str, timeout_sec: int = FILL_WAIT_TIMEOUT_SEC) -> Op
     return None
 
 
+def _place_exit_legs(
+    ticker: str,
+    exit_txn: str,
+    quantity: int,
+    target_price: float,
+    stop_price: float,
+) -> Tuple[str, str]:
+    """
+    Place target LIMIT + stop-loss SLM exit legs and return their order IDs.
+    """
+    target_order_id = str(
+        kite.place_order(
+            variety=kite.VARIETY_REGULAR,
+            exchange=kite.EXCHANGE_NSE,
+            tradingsymbol=ticker,
+            transaction_type=exit_txn,
+            quantity=quantity,
+            product=kite.PRODUCT_MIS,
+            order_type=kite.ORDER_TYPE_LIMIT,
+            price=target_price,
+            validity=kite.VALIDITY_DAY,
+            tag="AVWAPTarget",
+        )
+    )
+    sl_order_id = str(
+        kite.place_order(
+            variety=kite.VARIETY_REGULAR,
+            exchange=kite.EXCHANGE_NSE,
+            tradingsymbol=ticker,
+            transaction_type=exit_txn,
+            quantity=quantity,
+            product=kite.PRODUCT_MIS,
+            order_type=kite.ORDER_TYPE_SLM,
+            trigger_price=stop_price,
+            validity=kite.VALIDITY_DAY,
+            tag="AVWAPStopLoss",
+        )
+    )
+    return target_order_id, sl_order_id
+
+
 # ============================================================================
 # EXECUTED SIGNALS TRACKING
 # ============================================================================
@@ -330,11 +372,15 @@ class LiveTradeResult:
 # Shared state
 active_trades: Dict[str, threading.Thread] = {}
 active_trades_lock = threading.Lock()
+active_positions: Dict[str, Dict[str, Any]] = {}
+active_positions_lock = threading.Lock()
 inflight_signals: Set[str] = set()
 inflight_signals_lock = threading.Lock()
 executed_lock = threading.Lock()
 daily_pnl: Dict[str, Any] = {"total": 0.0, "wins": 0, "losses": 0, "trades": 0}
 daily_pnl_lock = threading.Lock()
+dispatch_lockdown_reason: Optional[str] = None
+dispatch_lockdown_lock = threading.Lock()
 
 # Capital / position tracking (margin, not notional - accounts for MIS leverage)
 capital_deployed: Dict[str, float] = {}   # signal_id -> margin blocked
@@ -373,6 +419,65 @@ def _atomic_write_json(path: str, payload: object) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_path, path)
+
+
+def _open_trades_state_path(for_date: Optional[str] = None) -> str:
+    day = for_date or datetime.now(IST).strftime("%Y-%m-%d")
+    return os.path.join(SIGNAL_DIR, OPEN_TRADES_STATE_PATTERN.format(day))
+
+
+def _persist_open_trades_state() -> None:
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    with active_positions_lock:
+        open_rows = [dict(v) for v in active_positions.values()]
+    payload = {
+        "date": today_str,
+        "open_trades": open_rows,
+        "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _atomic_write_json(_open_trades_state_path(today_str), payload)
+
+
+def _load_open_trades_state(today_str: str) -> Dict[str, Dict[str, Any]]:
+    state_path = _open_trades_state_path(today_str)
+    if not os.path.exists(state_path):
+        return {}
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:
+        log.warning(f"[RESTORE] Could not parse open-trades state file: {e}")
+        return {}
+
+    if str(payload.get("date", "")).strip() != today_str:
+        return {}
+
+    rows = payload.get("open_trades", [])
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    if not isinstance(rows, list):
+        return {}
+
+    restored: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sid = str(row.get("signal_id", "")).strip()
+        if not sid:
+            continue
+        restored[sid] = dict(row)
+    return restored
+
+
+def _set_dispatch_lockdown(reason: Optional[str]) -> None:
+    global dispatch_lockdown_reason
+    with dispatch_lockdown_lock:
+        dispatch_lockdown_reason = reason.strip() if reason else None
+
+
+def _get_dispatch_lockdown() -> Optional[str]:
+    with dispatch_lockdown_lock:
+        return dispatch_lockdown_reason
 
 
 def _release_capacity(signal_id: str) -> None:
@@ -455,13 +560,13 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
         return True, "ok", margin
 
 
-def execute_live_trade(signal: dict) -> None:
+def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
     """
-    Execute a complete live MIS trade on Zerodha:
-      1. Market entry order
-      2. Wait for fill
-      3. Place target (LIMIT) + stop-loss (SL-M)
-      4. Monitor until target/SL fills or 15:15 forced close
+    Execute or resume a complete live MIS trade on Zerodha:
+      1. Market entry order (new trades only)
+      2. Wait for fill (new trades only)
+      3. Place target (LIMIT) + stop-loss (SL-M), or restore existing legs
+      4. Monitor until target/SL fills or 15:20 forced close
     """
     ticker = str(signal["ticker"]).upper()
     side = str(signal["side"]).upper()
@@ -472,7 +577,8 @@ def execute_live_trade(signal: dict) -> None:
     quantity = _safe_int(signal.get("quantity", 1), 1)
 
     trade_start_ist = datetime.now(IST)
-    trade_id = f"LT-{signal_id[:8]}-{trade_start_ist.strftime('%H%M%S')}"
+    default_trade_id = f"LT-{signal_id[:8]}-{trade_start_ist.strftime('%H%M%S')}"
+    trade_id = str(signal.get("trade_id", "")).strip() or default_trade_id
     today = trade_start_ist.date()
     forced_close_dt = IST.localize(datetime.combine(today, FORCED_CLOSE_TIME))
 
@@ -482,11 +588,6 @@ def execute_live_trade(signal: dict) -> None:
     else:
         entry_txn = "BUY"
         exit_txn = "SELL"
-
-    log.info(
-        f"[LIVE] Starting trade {trade_id}: {entry_txn} {ticker} qty={quantity} "
-        f"| SL={signal_stop} TGT={signal_target}"
-    )
 
     result = LiveTradeResult(
         trade_id=trade_id,
@@ -503,234 +604,313 @@ def execute_live_trade(signal: dict) -> None:
         target_price=signal_target,
         quality_score=_safe_float(signal.get("quality_score", 0), 0.0),
     )
+    if resume_mode:
+        log.info(
+            f"[RESUME] Restoring trade {trade_id}: {entry_txn} {ticker} qty={quantity} "
+            f"| SL={signal_stop} TGT={signal_target}"
+        )
+    else:
+        log.info(
+            f"[LIVE] Starting trade {trade_id}: {entry_txn} {ticker} qty={quantity} "
+            f"| SL={signal_stop} TGT={signal_target}"
+        )
+
+    target_order_id = str(signal.get("target_order_id", "")).strip() if resume_mode else ""
+    sl_order_id = str(signal.get("sl_order_id", "")).strip() if resume_mode else ""
+    trade_closed = False
+
+    def _sync_active_position(stage: str) -> None:
+        with active_positions_lock:
+            active_positions[signal_id] = {
+                "signal_id": signal_id,
+                "trade_id": result.trade_id,
+                "ticker": ticker,
+                "side": side,
+                "quantity": int(quantity),
+                "entry_price": float(result.entry_price),
+                "filled_price": float(result.filled_price if result.filled_price > 0 else result.entry_price),
+                "stop_price": float(result.stop_price),
+                "target_price": float(result.target_price),
+                "entry_order_id": str(result.entry_order_id),
+                "target_order_id": str(result.target_order_id),
+                "sl_order_id": str(result.sl_order_id),
+                "entry_time": str(result.entry_time),
+                "signal_datetime": str(result.signal_datetime),
+                "signal_entry_datetime_ist": str(result.signal_entry_datetime_ist),
+                "setup": str(result.setup),
+                "impulse_type": str(result.impulse_type),
+                "quality_score": float(result.quality_score),
+                "stage": stage,
+                "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        _persist_open_trades_state()
 
     try:
-        # ---- STEP 1: Place market entry ----
-        entry_order_id = kite.place_order(
-            variety=kite.VARIETY_REGULAR,
-            exchange=kite.EXCHANGE_NSE,
-            tradingsymbol=ticker,
-            transaction_type=entry_txn,
-            quantity=quantity,
-            product=kite.PRODUCT_MIS,
-            order_type=kite.ORDER_TYPE_MARKET,
-            validity=kite.VALIDITY_DAY,
-            tag="AVWAPEntry",
-        )
-        result.entry_order_id = str(entry_order_id)
-        result.entry_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z")
-        log.info(f"[LIVE] Entry order placed: {entry_txn} {ticker} ID={entry_order_id}")
-
-        # ---- STEP 2: Wait for fill ----
-        filled_price = wait_for_fill(entry_order_id)
-        if filled_price is None or filled_price == 0:
-            log.error(f"[LIVE] Entry order {entry_order_id} not filled. Aborting trade.")
-            cancel_order_safe(kite.VARIETY_REGULAR, str(entry_order_id))
-            result.outcome = "ENTRY_FAILED"
-            result.exit_price = signal_entry_price
-            _log_trade_result(result)
-            _release_capacity(signal_id)
-            with active_trades_lock:
-                active_trades.pop(signal_id, None)
-            return
-
-        result.filled_price = filled_price
-        log.info(f"[LIVE] Entry filled: {ticker} @ {filled_price}")
-
-        # Register margin deployment (notional / leverage)
-        margin = (filled_price * quantity) / INTRADAY_LEVERAGE
-        with capital_lock:
-            capital_deployed[signal_id] = margin
-
-        # Recalculate SL/target based on actual fill price
-        if side == "SHORT":
-            # SL above entry, target below
-            sl_offset = abs(signal_stop - signal_entry_price)
-            tgt_offset = abs(signal_entry_price - signal_target)
-            sl_price = round_to_tick(filled_price + sl_offset)
-            tgt_price = round_to_tick(filled_price - tgt_offset)
-        else:
-            # SL below entry, target above
-            sl_offset = abs(signal_entry_price - signal_stop)
-            tgt_offset = abs(signal_target - signal_entry_price)
-            sl_price = round_to_tick(filled_price - sl_offset)
-            tgt_price = round_to_tick(filled_price + tgt_offset)
-
-        result.stop_price = sl_price
-        result.target_price = tgt_price
-
-        target_order_id = ""
-        sl_order_id = ""
-        exit_legs_ready = False
-
-        # ---- STEP 3/4: Place target and stop-loss exit legs ----
-        try:
-            target_order_id = str(
-                kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    exchange=kite.EXCHANGE_NSE,
-                    tradingsymbol=ticker,
-                    transaction_type=exit_txn,
-                    quantity=quantity,
-                    product=kite.PRODUCT_MIS,
-                    order_type=kite.ORDER_TYPE_LIMIT,
-                    price=tgt_price,
-                    validity=kite.VALIDITY_DAY,
-                    tag="AVWAPTarget",
-                )
-            )
+        if resume_mode:
+            result.entry_order_id = str(signal.get("entry_order_id", "")).strip()
             result.target_order_id = target_order_id
-            log.info(f"[LIVE] Target order: {exit_txn} LIMIT @ {tgt_price} ID={target_order_id}")
-
-            sl_order_id = str(
-                kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    exchange=kite.EXCHANGE_NSE,
-                    tradingsymbol=ticker,
-                    transaction_type=exit_txn,
-                    quantity=quantity,
-                    product=kite.PRODUCT_MIS,
-                    order_type=kite.ORDER_TYPE_SLM,
-                    trigger_price=sl_price,
-                    validity=kite.VALIDITY_DAY,
-                    tag="AVWAPStopLoss",
-                )
-            )
             result.sl_order_id = sl_order_id
-            log.info(f"[LIVE] SL order: {exit_txn} SL-M trigger={sl_price} ID={sl_order_id}")
-            exit_legs_ready = True
-        except Exception as e:
-            log.error(f"[LIVE] Exit leg placement failed for {ticker}: {e}")
-            if target_order_id:
-                cancel_order_safe(kite.VARIETY_REGULAR, target_order_id)
-            if sl_order_id:
-                cancel_order_safe(kite.VARIETY_REGULAR, sl_order_id)
-            try:
-                close_order_id = kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    exchange=kite.EXCHANGE_NSE,
-                    tradingsymbol=ticker,
-                    transaction_type=exit_txn,
-                    quantity=quantity,
-                    product=kite.PRODUCT_MIS,
-                    order_type=kite.ORDER_TYPE_MARKET,
-                    validity=kite.VALIDITY_DAY,
-                    tag="AVWAPExitSetupFailClose",
+            result.entry_time = str(signal.get("entry_time", "")).strip()
+            result.filled_price = _safe_float(signal.get("filled_price", signal_entry_price), signal_entry_price)
+            if result.filled_price <= 0:
+                log.error(
+                    f"[RESUME] Missing filled entry price for {ticker} (signal_id={signal_id[:12]}). "
+                    "Keeping position state for manual reconciliation."
                 )
-                result.close_order_id = str(close_order_id)
-                close_price = wait_for_fill(close_order_id, timeout_sec=30)
-                result.exit_price = close_price if close_price else filled_price
-                result.outcome = "EXIT_SETUP_FAILED_FORCE_CLOSED"
-                log.warning(
-                    f"[LIVE] Exit setup fallback close for {ticker}: "
-                    f"close_order_id={close_order_id} exit={result.exit_price}"
-                )
-            except Exception as close_err:
-                log.error(f"[LIVE] Exit setup fallback close failed for {ticker}: {close_err}")
-                result.exit_price = filled_price
-                result.outcome = "EXIT_SETUP_FAILED"
+                _sync_active_position("resume_missing_filled_price")
+                return
 
-        # ---- STEP 5: Monitor until target/SL/forced close ----
-        while exit_legs_ready:
-            now_ist = datetime.now(IST)
+            margin = (result.filled_price * quantity) / INTRADAY_LEVERAGE
+            with capital_lock:
+                capital_deployed[signal_id] = margin
+            _sync_active_position("restored")
+        else:
+            # ---- STEP 1: Place market entry ----
+            entry_order_id = kite.place_order(
+                variety=kite.VARIETY_REGULAR,
+                exchange=kite.EXCHANGE_NSE,
+                tradingsymbol=ticker,
+                transaction_type=entry_txn,
+                quantity=quantity,
+                product=kite.PRODUCT_MIS,
+                order_type=kite.ORDER_TYPE_MARKET,
+                validity=kite.VALIDITY_DAY,
+                tag="AVWAPEntry",
+            )
+            result.entry_order_id = str(entry_order_id)
+            result.entry_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z")
+            log.info(f"[LIVE] Entry order placed: {entry_txn} {ticker} ID={entry_order_id}")
 
-            # Force close at 15:15
-            if now_ist >= forced_close_dt:
-                log.info(f"[LIVE] EOD forced close for {ticker}")
+            # ---- STEP 2: Wait for fill ----
+            filled_price = wait_for_fill(entry_order_id)
+            if filled_price is None or filled_price == 0:
+                log.error(f"[LIVE] Entry order {entry_order_id} not filled. Aborting trade.")
+                cancel_order_safe(kite.VARIETY_REGULAR, str(entry_order_id))
+                result.outcome = "ENTRY_FAILED"
+                result.exit_price = signal_entry_price
+                trade_closed = True
+            else:
+                result.filled_price = filled_price
+                log.info(f"[LIVE] Entry filled: {ticker} @ {filled_price}")
 
-                cancel_order_safe(kite.VARIETY_REGULAR, target_order_id)
-                cancel_order_safe(kite.VARIETY_REGULAR, sl_order_id)
+                # Register margin deployment (notional / leverage)
+                margin = (filled_price * quantity) / INTRADAY_LEVERAGE
+                with capital_lock:
+                    capital_deployed[signal_id] = margin
 
-                # Place forced close market order
+                # Recalculate SL/target based on actual fill price
+                if side == "SHORT":
+                    sl_offset = abs(signal_stop - signal_entry_price)
+                    tgt_offset = abs(signal_entry_price - signal_target)
+                    sl_price = round_to_tick(filled_price + sl_offset)
+                    tgt_price = round_to_tick(filled_price - tgt_offset)
+                else:
+                    sl_offset = abs(signal_entry_price - signal_stop)
+                    tgt_offset = abs(signal_target - signal_entry_price)
+                    sl_price = round_to_tick(filled_price - sl_offset)
+                    tgt_price = round_to_tick(filled_price + tgt_offset)
+
+                result.stop_price = sl_price
+                result.target_price = tgt_price
+                _sync_active_position("entry_filled")
+
+        # No open position to monitor
+        if trade_closed:
+            pass
+        else:
+            # Ensure exit leg orders exist (for new trades and resumed trades alike)
+            if not target_order_id or not sl_order_id:
                 try:
-                    close_order_id = kite.place_order(
-                        variety=kite.VARIETY_REGULAR,
-                        exchange=kite.EXCHANGE_NSE,
-                        tradingsymbol=ticker,
-                        transaction_type=exit_txn,
+                    target_order_id, sl_order_id = _place_exit_legs(
+                        ticker=ticker,
+                        exit_txn=exit_txn,
                         quantity=quantity,
-                        product=kite.PRODUCT_MIS,
-                        order_type=kite.ORDER_TYPE_MARKET,
-                        validity=kite.VALIDITY_DAY,
-                        tag="AVWAPForceClose",
+                        target_price=result.target_price,
+                        stop_price=result.stop_price,
                     )
-                    result.close_order_id = str(close_order_id)
-
-                    close_price = wait_for_fill(close_order_id, timeout_sec=30)
-                    result.exit_price = close_price if close_price else filled_price
-                    result.outcome = "EOD_CLOSE"
-                    log.info(
-                        f"[LIVE] Forced close: {ticker} @ {result.exit_price} "
-                        f"ID={close_order_id}"
-                    )
+                    result.target_order_id = target_order_id
+                    result.sl_order_id = sl_order_id
+                    _sync_active_position("exit_legs_placed")
+                    if resume_mode:
+                        log.info(
+                            f"[RESUME] Rebuilt exit legs for {ticker}: "
+                            f"target_id={target_order_id} sl_id={sl_order_id}"
+                        )
+                    else:
+                        log.info(
+                            f"[LIVE] Exit legs placed for {ticker}: "
+                            f"target_id={target_order_id} sl_id={sl_order_id}"
+                        )
                 except Exception as e:
-                    log.error(f"[LIVE] Forced close failed for {ticker}: {e}")
-                    result.exit_price = filled_price
-                    result.outcome = "EOD_CLOSE_FAILED"
-                break
+                    log.error(f"[LIVE] Exit leg placement failed for {ticker}: {e}")
+                    if target_order_id:
+                        cancel_order_safe(kite.VARIETY_REGULAR, target_order_id)
+                    if sl_order_id:
+                        cancel_order_safe(kite.VARIETY_REGULAR, sl_order_id)
+                    if resume_mode:
+                        _sync_active_position("resume_pending_exit_legs")
+                        return
 
-            # Check order statuses
-            try:
-                orders = kite.orders()
-            except Exception as e:
-                log.warning(f"[LIVE] Order poll error: {e}")
+                    # New trade fallback: attempt immediate market close.
+                    try:
+                        close_order_id = kite.place_order(
+                            variety=kite.VARIETY_REGULAR,
+                            exchange=kite.EXCHANGE_NSE,
+                            tradingsymbol=ticker,
+                            transaction_type=exit_txn,
+                            quantity=quantity,
+                            product=kite.PRODUCT_MIS,
+                            order_type=kite.ORDER_TYPE_MARKET,
+                            validity=kite.VALIDITY_DAY,
+                            tag="AVWAPExitSetupFailClose",
+                        )
+                        result.close_order_id = str(close_order_id)
+                        close_price = wait_for_fill(close_order_id, timeout_sec=30)
+                        if close_price and close_price > 0:
+                            result.exit_price = close_price
+                            result.outcome = "EXIT_SETUP_FAILED_FORCE_CLOSED"
+                            trade_closed = True
+                            log.warning(
+                                f"[LIVE] Exit setup fallback close for {ticker}: "
+                                f"close_order_id={close_order_id} exit={result.exit_price}"
+                            )
+                        else:
+                            log.error(
+                                f"[LIVE] Exit setup fallback close unconfirmed for {ticker}; "
+                                "keeping state for restart reconciliation."
+                            )
+                            _sync_active_position("exit_setup_failed_needs_reconcile")
+                            return
+                    except Exception as close_err:
+                        log.error(f"[LIVE] Exit setup fallback close failed for {ticker}: {close_err}")
+                        _sync_active_position("exit_setup_failed_needs_reconcile")
+                        return
+            else:
+                result.target_order_id = target_order_id
+                result.sl_order_id = sl_order_id
+                _sync_active_position("monitoring")
+
+            # ---- STEP 5: Monitor until target/SL/forced close ----
+            while (not trade_closed) and result.target_order_id and result.sl_order_id:
+                now_ist = datetime.now(IST)
+
+                if now_ist >= forced_close_dt:
+                    log.info(f"[LIVE] EOD forced close for {ticker}")
+                    cancel_order_safe(kite.VARIETY_REGULAR, result.target_order_id)
+                    cancel_order_safe(kite.VARIETY_REGULAR, result.sl_order_id)
+                    try:
+                        close_order_id = kite.place_order(
+                            variety=kite.VARIETY_REGULAR,
+                            exchange=kite.EXCHANGE_NSE,
+                            tradingsymbol=ticker,
+                            transaction_type=exit_txn,
+                            quantity=quantity,
+                            product=kite.PRODUCT_MIS,
+                            order_type=kite.ORDER_TYPE_MARKET,
+                            validity=kite.VALIDITY_DAY,
+                            tag="AVWAPForceClose",
+                        )
+                        result.close_order_id = str(close_order_id)
+                        close_price = wait_for_fill(close_order_id, timeout_sec=30)
+                        if close_price and close_price > 0:
+                            result.exit_price = close_price
+                            result.outcome = "EOD_CLOSE"
+                            trade_closed = True
+                            log.info(
+                                f"[LIVE] Forced close: {ticker} @ {result.exit_price} "
+                                f"ID={close_order_id}"
+                            )
+                        else:
+                            log.error(
+                                f"[LIVE] Forced close unconfirmed for {ticker}; "
+                                "keeping state for restart reconciliation."
+                            )
+                            _sync_active_position("forced_close_unconfirmed")
+                            return
+                    except Exception as e:
+                        log.error(f"[LIVE] Forced close failed for {ticker}: {e}")
+                        _sync_active_position("forced_close_failed")
+                        return
+                    break
+
+                try:
+                    orders = kite.orders()
+                except Exception as e:
+                    log.warning(f"[LIVE] Order poll error: {e}")
+                    time.sleep(ORDER_POLL_SEC)
+                    continue
+
+                target_filled = False
+                sl_filled = False
+                target_fill_price = result.target_price
+                sl_fill_price = result.stop_price
+
+                for o in orders:
+                    oid = str(o.get("order_id", ""))
+                    status = str(o.get("status", "")).upper()
+                    if oid == result.target_order_id and status == "COMPLETE":
+                        target_filled = True
+                        target_fill_price = float(o.get("average_price", result.target_price))
+                    if oid == result.sl_order_id and status == "COMPLETE":
+                        sl_filled = True
+                        sl_fill_price = float(o.get("average_price", result.stop_price))
+
+                if target_filled:
+                    log.info(
+                        f"[LIVE] TARGET HIT: {ticker} @ {target_fill_price} "
+                        f"-> cancelling SL {result.sl_order_id}"
+                    )
+                    cancel_order_safe(kite.VARIETY_REGULAR, result.sl_order_id)
+                    result.exit_price = target_fill_price
+                    result.outcome = "TARGET"
+                    trade_closed = True
+                    break
+
+                if sl_filled:
+                    log.info(
+                        f"[LIVE] SL TRIGGERED: {ticker} @ {sl_fill_price} "
+                        f"-> cancelling Target {result.target_order_id}"
+                    )
+                    cancel_order_safe(kite.VARIETY_REGULAR, result.target_order_id)
+                    result.exit_price = sl_fill_price
+                    result.outcome = "SL"
+                    trade_closed = True
+                    break
+
                 time.sleep(ORDER_POLL_SEC)
-                continue
-
-            target_filled = False
-            sl_filled = False
-            target_fill_price = tgt_price
-            sl_fill_price = sl_price
-
-            for o in orders:
-                if o["order_id"] == target_order_id and o["status"] == "COMPLETE":
-                    target_filled = True
-                    target_fill_price = float(o.get("average_price", tgt_price))
-                if o["order_id"] == sl_order_id and o["status"] == "COMPLETE":
-                    sl_filled = True
-                    sl_fill_price = float(o.get("average_price", sl_price))
-
-            if target_filled:
-                log.info(
-                    f"[LIVE] TARGET HIT: {ticker} @ {target_fill_price} "
-                    f"-> cancelling SL {sl_order_id}"
-                )
-                cancel_order_safe(kite.VARIETY_REGULAR, sl_order_id)
-                result.exit_price = target_fill_price
-                result.outcome = "TARGET"
-                break
-
-            elif sl_filled:
-                log.info(
-                    f"[LIVE] SL TRIGGERED: {ticker} @ {sl_fill_price} "
-                    f"-> cancelling Target {target_order_id}"
-                )
-                cancel_order_safe(kite.VARIETY_REGULAR, target_order_id)
-                result.exit_price = sl_fill_price
-                result.outcome = "SL"
-                break
-
-            time.sleep(ORDER_POLL_SEC)
 
     except Exception as e:
+        if resume_mode:
+            log.error(f"[RESUME] Monitor error for {ticker}: {e}")
+            log.error(traceback.format_exc())
+            _sync_active_position("monitor_error")
+            return
+
         log.error(f"[LIVE] Trade execution error for {ticker}: {e}")
         log.error(traceback.format_exc())
         result.outcome = f"ERROR: {str(e)[:80]}"
         result.exit_price = result.filled_price or signal_entry_price
+        # If a real position may still be open, keep it in state for restart reconciliation.
+        if result.filled_price > 0:
+            _sync_active_position("error_needs_reconcile")
+            return
+        trade_closed = True
 
-    # Calculate P&L
+    # If trade has not actually closed, preserve state and exit without booking P&L.
+    if not trade_closed and result.outcome not in {"ENTRY_FAILED"}:
+        if resume_mode:
+            _sync_active_position("resume_incomplete")
+        return
+
     result.exit_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z")
     ep = result.filled_price if result.filled_price > 0 else signal_entry_price
     xp = result.exit_price if result.exit_price > 0 else ep
-
     pnl_rs, pnl_pct = _calc_pnl(side, ep, xp, quantity)
     result.pnl_rs = round(pnl_rs, 2)
     result.pnl_pct = round(pnl_pct, 4)
 
-    # Log the trade
     _log_trade_result(result)
 
-    # Update daily P&L
     with daily_pnl_lock:
         daily_pnl["total"] += result.pnl_rs
         daily_pnl["trades"] += 1
@@ -748,12 +928,10 @@ def execute_live_trade(signal: dict) -> None:
         f"Day total: Rs.{day_total:+,.2f}"
     )
 
-    # Release capital
     _release_capacity(signal_id)
-
-    # Remove from active trades
-    with active_trades_lock:
-        active_trades.pop(signal_id, None)
+    with active_positions_lock:
+        active_positions.pop(signal_id, None)
+    _persist_open_trades_state()
 
 
 def _log_trade_result(result: LiveTradeResult) -> None:
@@ -813,6 +991,230 @@ def _save_summary() -> None:
         _atomic_write_json(SUMMARY_FILE, summary)
     except Exception:
         pass
+
+
+def _load_closed_ids_and_realized_summary(
+    trade_csv_path: str,
+    today_date: date,
+) -> Tuple[Set[str], Dict[str, float]]:
+    closed_ids: Set[str] = set()
+    realized_total = 0.0
+    realized_trades = 0
+    realized_wins = 0
+    realized_losses = 0
+
+    if os.path.exists(trade_csv_path) and os.path.getsize(trade_csv_path) > 0:
+        try:
+            df = pd.read_csv(
+                trade_csv_path,
+                quotechar='"',
+                quoting=csv.QUOTE_ALL,
+                on_bad_lines="warn",
+                engine="python",
+            )
+            if not df.empty:
+                for row in df.to_dict("records"):
+                    row_date = _signal_ist_date(row)
+                    if row_date is not None and row_date != today_date:
+                        continue
+                    sid = str(row.get("signal_id", "")).strip()
+                    if sid:
+                        closed_ids.add(sid)
+                    pnl_rs = _safe_float(row.get("pnl_rs", 0.0), 0.0)
+                    realized_total += pnl_rs
+                    realized_trades += 1
+                    if pnl_rs > 0:
+                        realized_wins += 1
+                    elif pnl_rs < 0:
+                        realized_losses += 1
+        except Exception as e:
+            log.warning(f"[RESTORE] Could not parse live trade CSV: {e}")
+
+    return closed_ids, {
+        "realized_total": float(realized_total),
+        "realized_trades": float(realized_trades),
+        "realized_wins": float(realized_wins),
+        "realized_losses": float(realized_losses),
+    }
+
+
+def _restore_intraday_runtime_state(
+    signal_csv_path: str,
+    trade_csv_path: str,
+    executed: Set[str],
+) -> Tuple[Dict[str, float], List[dict]]:
+    """
+    Restore runtime state after mid-session restart using persisted open-trade state.
+    """
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    today_date = datetime.now(IST).date()
+
+    signal_rows = read_signals_csv(signal_csv_path)
+    signals_by_id: Dict[str, dict] = {}
+    for sig in signal_rows:
+        sid = str(sig.get("signal_id", "")).strip()
+        if sid:
+            signals_by_id[sid] = sig
+
+    closed_ids, realized = _load_closed_ids_and_realized_summary(
+        trade_csv_path=trade_csv_path,
+        today_date=today_date,
+    )
+
+    with daily_pnl_lock:
+        daily_pnl["total"] = float(realized["realized_total"])
+        daily_pnl["trades"] = int(realized["realized_trades"])
+        daily_pnl["wins"] = int(realized["realized_wins"])
+        daily_pnl["losses"] = int(realized["realized_losses"])
+        _save_summary()
+
+    raw_open_state = _load_open_trades_state(today_str)
+    restored_positions: Dict[str, Dict[str, Any]] = {}
+    resume_signals: List[dict] = []
+
+    for sid, pos in raw_open_state.items():
+        if sid in closed_ids:
+            continue
+
+        base = signals_by_id.get(sid, {})
+        ticker = str(pos.get("ticker") or base.get("ticker") or "").upper()
+        side = str(pos.get("side") or base.get("side") or "").upper()
+        qty = _safe_int(pos.get("quantity", base.get("quantity", 1)), 1)
+        entry_price = _safe_float(pos.get("entry_price", base.get("entry_price", 0.0)), 0.0)
+        filled_price = _safe_float(pos.get("filled_price", entry_price), entry_price)
+        stop_price = _safe_float(pos.get("stop_price", base.get("stop_price", 0.0)), 0.0)
+        target_price = _safe_float(pos.get("target_price", base.get("target_price", 0.0)), 0.0)
+        entry_order_id = str(pos.get("entry_order_id", "")).strip()
+        target_order_id = str(pos.get("target_order_id", "")).strip()
+        sl_order_id = str(pos.get("sl_order_id", "")).strip()
+        trade_id = str(pos.get("trade_id", "")).strip() or f"RESTORE-{sid[:8]}"
+        entry_time = str(pos.get("entry_time", "")).strip()
+
+        if not ticker or side not in {"LONG", "SHORT"}:
+            continue
+        if qty <= 0 or filled_price <= 0 or stop_price <= 0 or target_price <= 0:
+            continue
+
+        restored_positions[sid] = {
+            "signal_id": sid,
+            "trade_id": trade_id,
+            "ticker": ticker,
+            "side": side,
+            "quantity": int(qty),
+            "entry_price": float(entry_price if entry_price > 0 else filled_price),
+            "filled_price": float(filled_price),
+            "stop_price": float(stop_price),
+            "target_price": float(target_price),
+            "entry_order_id": entry_order_id,
+            "target_order_id": target_order_id,
+            "sl_order_id": sl_order_id,
+            "entry_time": entry_time,
+            "signal_datetime": str(base.get("signal_datetime", pos.get("signal_datetime", ""))),
+            "signal_entry_datetime_ist": str(
+                base.get("signal_entry_datetime_ist", pos.get("signal_entry_datetime_ist", ""))
+            ),
+            "setup": str(base.get("setup", pos.get("setup", ""))),
+            "impulse_type": str(base.get("impulse_type", pos.get("impulse_type", ""))),
+            "quality_score": _safe_float(base.get("quality_score", pos.get("quality_score", 0.0)), 0.0),
+            "stage": str(pos.get("stage", "restored")),
+            "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        resume_signals.append(
+            {
+                "signal_id": sid,
+                "trade_id": trade_id,
+                "ticker": ticker,
+                "side": side,
+                "quantity": int(qty),
+                "entry_price": float(entry_price if entry_price > 0 else filled_price),
+                "filled_price": float(filled_price),
+                "stop_price": float(stop_price),
+                "target_price": float(target_price),
+                "entry_order_id": entry_order_id,
+                "target_order_id": target_order_id,
+                "sl_order_id": sl_order_id,
+                "entry_time": entry_time,
+                "signal_datetime": str(base.get("signal_datetime", pos.get("signal_datetime", ""))),
+                "signal_entry_datetime_ist": str(
+                    base.get("signal_entry_datetime_ist", pos.get("signal_entry_datetime_ist", ""))
+                ),
+                "setup": str(base.get("setup", pos.get("setup", ""))),
+                "impulse_type": str(base.get("impulse_type", pos.get("impulse_type", ""))),
+                "quality_score": _safe_float(base.get("quality_score", pos.get("quality_score", 0.0)), 0.0),
+            }
+        )
+
+    with active_positions_lock:
+        active_positions.clear()
+        active_positions.update(restored_positions)
+
+    with capital_lock:
+        capital_deployed.clear()
+        for sid, pos in restored_positions.items():
+            margin = float(pos["filled_price"] * pos["quantity"] / INTRADAY_LEVERAGE)
+            capital_deployed[sid] = margin
+
+    with executed_lock:
+        executed.difference_update(closed_ids)
+        executed.update(restored_positions.keys())
+
+    _persist_open_trades_state()
+    with capital_lock:
+        deployed_margin = float(sum(capital_deployed.values()))
+    stats = {
+        "signals_today": float(len(signals_by_id)),
+        "executed_loaded": float(len(executed)),
+        "closed_today": float(len(closed_ids)),
+        "open_restored": float(len(restored_positions)),
+        "realized_trades": float(realized["realized_trades"]),
+        "realized_total": float(realized["realized_total"]),
+        "deployed_margin": float(deployed_margin),
+    }
+    return stats, resume_signals
+
+
+def _detect_orphan_broker_positions() -> List[dict]:
+    """
+    Detect open MIS positions present at broker but not tracked by executor state.
+    """
+    if kite is None:
+        return []
+    try:
+        payload = kite.positions()
+    except Exception as e:
+        log.warning(f"[RESTORE] Could not fetch broker positions for safety check: {e}")
+        return []
+
+    net_rows = payload.get("net", []) if isinstance(payload, dict) else []
+    if not isinstance(net_rows, list):
+        return []
+
+    with active_positions_lock:
+        tracked = {
+            str(pos.get("ticker", "")).upper(): int(_safe_int(pos.get("quantity", 0), 0))
+            for pos in active_positions.values()
+        }
+
+    orphans: List[dict] = []
+    for row in net_rows:
+        ticker = str(row.get("tradingsymbol", "")).upper()
+        product = str(row.get("product", "")).upper()
+        qty = int(_safe_int(row.get("quantity", 0), 0))
+        if qty == 0:
+            continue
+        if product and product != "MIS":
+            continue
+        tracked_qty = tracked.get(ticker)
+        if tracked_qty is None or abs(tracked_qty) != abs(qty):
+            orphans.append(
+                {
+                    "ticker": ticker,
+                    "quantity": qty,
+                    "product": product or "?",
+                    "average_price": _safe_float(row.get("average_price", 0.0), 0.0),
+                }
+            )
+    return orphans
 
 
 # ============================================================================
@@ -967,6 +1369,75 @@ def read_signals_csv(csv_path: str) -> List[dict]:
 # ============================================================================
 # SIGNAL PROCESSOR
 # ============================================================================
+def _launch_trade_thread(
+    signal: dict,
+    signal_id: str,
+    trade_semaphore: threading.Semaphore,
+    resume_mode: bool = False,
+) -> bool:
+    def _run_trade(sig=signal, sid=signal_id, is_resume=resume_mode):
+        with inflight_signals_lock:
+            if sid in inflight_signals:
+                return
+            inflight_signals.add(sid)
+        trade_semaphore.acquire()
+        try:
+            execute_live_trade(sig, resume_mode=is_resume)
+        except Exception as e:
+            mode = "RESUME" if is_resume else "LIVE"
+            log.error(f"{mode} trade thread error for {sig.get('ticker', '?')}: {e}")
+            log.error(traceback.format_exc())
+        finally:
+            trade_semaphore.release()
+            with inflight_signals_lock:
+                inflight_signals.discard(sid)
+            with active_trades_lock:
+                active_trades.pop(sid, None)
+
+    try:
+        t = threading.Thread(
+            target=_run_trade,
+            daemon=True,
+            name=f"{'resume' if resume_mode else 'live'}-trade-{signal_id[:8]}",
+        )
+        with active_trades_lock:
+            active_trades[signal_id] = t
+        t.start()
+        return True
+    except Exception:
+        with active_trades_lock:
+            active_trades.pop(signal_id, None)
+        with inflight_signals_lock:
+            inflight_signals.discard(signal_id)
+        return False
+
+
+def start_resumed_trade_monitors(
+    resumed_signals: List[dict],
+    trade_semaphore: threading.Semaphore,
+    dry_run: bool,
+) -> int:
+    if dry_run or not resumed_signals:
+        return 0
+
+    started = 0
+    for signal in resumed_signals:
+        sid = str(signal.get("signal_id", "")).strip()
+        if not sid:
+            continue
+        ok = _launch_trade_thread(
+            signal=signal,
+            signal_id=sid,
+            trade_semaphore=trade_semaphore,
+            resume_mode=True,
+        )
+        if ok:
+            started += 1
+        else:
+            log.error(f"[RESUME] Failed to launch monitor thread for signal_id={sid[:12]}")
+    return started
+
+
 def process_new_signals(
     csv_path: str,
     executed: Set[str],
@@ -977,6 +1448,11 @@ def process_new_signals(
     Read signals CSV, find unprocessed signals, launch trade threads.
     Returns updated executed signals set.
     """
+    lockdown = _get_dispatch_lockdown()
+    if lockdown:
+        log.error(f"[SAFETY] New entries blocked: {lockdown}")
+        return executed
+
     if not _is_market_open_now():
         return executed
 
@@ -1033,36 +1509,17 @@ def process_new_signals(
             continue
 
         sid = signal_id
-
-        # Launch trade thread
-        def _run_trade(sig=signal, signal_key=sid):
-            with inflight_signals_lock:
-                inflight_signals.add(signal_key)
-            trade_semaphore.acquire()
-            try:
-                execute_live_trade(sig)
-            except Exception as e:
-                log.error(f"Trade thread error for {sig.get('ticker', '?')}: {e}")
-                log.error(traceback.format_exc())
-            finally:
-                trade_semaphore.release()
-                with inflight_signals_lock:
-                    inflight_signals.discard(signal_key)
-
-        try:
-            t = threading.Thread(target=_run_trade, daemon=True)
-            with active_trades_lock:
-                active_trades[sid] = t
-            t.start()
-        except Exception:
-            with active_trades_lock:
-                active_trades.pop(sid, None)
+        started = _launch_trade_thread(
+            signal=signal,
+            signal_id=sid,
+            trade_semaphore=trade_semaphore,
+            resume_mode=False,
+        )
+        if not started:
             _release_capacity(sid)
             with executed_lock:
                 executed.discard(sid)
                 executed_changed = True
-            with inflight_signals_lock:
-                inflight_signals.discard(sid)
             log.error(f"[DISPATCH] Failed to launch trade thread for signal_id={sid[:12]}")
             continue
 
@@ -1139,6 +1596,7 @@ def main():
         help="Validate signals without placing real orders",
     )
     args = parser.parse_args()
+    _set_dispatch_lockdown(None)
 
     log.info("=" * 65)
     log.info("AVWAP Live Trade Executor - PAPER_TRADE = FALSE")
@@ -1167,9 +1625,58 @@ def main():
     # Resolve today's signal CSV
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     csv_path = os.path.join(SIGNAL_DIR, SIGNAL_CSV_PATTERN.format(today_str))
+    trade_csv_path = os.path.join(SIGNAL_DIR, TRADE_LOG_PATTERN.format(today_str))
 
     # Trade concurrency semaphore
     trade_semaphore = threading.Semaphore(args.max_trades)
+
+    # Restore runtime state for mid-session restarts.
+    if not args.dry_run:
+        restore_stats, resume_signals = _restore_intraday_runtime_state(
+            signal_csv_path=csv_path,
+            trade_csv_path=trade_csv_path,
+            executed=executed,
+        )
+        save_executed_signals(executed)
+        log.info(
+            "[RESTORE] "
+            f"signals_today={int(restore_stats['signals_today'])} "
+            f"executed={int(restore_stats['executed_loaded'])} "
+            f"closed_today={int(restore_stats['closed_today'])} "
+            f"open_restored={int(restore_stats['open_restored'])} "
+            f"realized_trades={int(restore_stats['realized_trades'])} "
+            f"realized_total=Rs.{restore_stats['realized_total']:+,.2f} "
+            f"deployed_margin=Rs.{restore_stats['deployed_margin']:,.2f}"
+        )
+
+        orphan_positions = _detect_orphan_broker_positions()
+        if orphan_positions:
+            orphan_summary = ", ".join(
+                f"{x['ticker']}:{x['quantity']}" for x in orphan_positions
+            )
+            reason = (
+                "orphan MIS broker positions detected; "
+                f"manual reconciliation required ({orphan_summary})"
+            )
+            _set_dispatch_lockdown(reason)
+            log.error(f"[SAFETY] {reason}")
+            for orphan in orphan_positions:
+                log.error(
+                    "[SAFETY] ORPHAN "
+                    f"{orphan.get('ticker', '?')} qty={orphan.get('quantity', 0)} "
+                    f"product={orphan.get('product', '?')} "
+                    f"avg={_safe_float(orphan.get('average_price', 0.0), 0.0):.2f}"
+                )
+        else:
+            log.info("[SAFETY] Broker MIS positions match restored runtime state.")
+
+        resumed_count = start_resumed_trade_monitors(
+            resumed_signals=resume_signals,
+            trade_semaphore=trade_semaphore,
+            dry_run=args.dry_run,
+        )
+        if resumed_count > 0:
+            log.info(f"[RESTORE] Resumed {resumed_count} open trade monitor(s).")
 
     # Callback for watchdog
     def on_csv_change():
