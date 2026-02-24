@@ -2029,7 +2029,7 @@ def main() -> None:
         run_replay_for_date(args.replay_date, args.replay_out_csv)
         return
 
-    print("[LIVE] EQIDV2 CSV (15m) | strict current 15m slot only")
+    print("[LIVE] EQIDV2 CSV v2 (15m) | strict current 15m slot only")
     print(f"[INFO] DIR_15M={DIR_15M} | tickers={len(list_tickers_15m())}")
     print(f"[INFO] SHORT: SL={SHORT_STOP_PCT*100:.2f}%, TGT={SHORT_TARGET_PCT*100:.2f}%, ADX>={SHORT_ADX_MIN}, RSI<={SHORT_RSI_MAX}, StochK<={SHORT_STOCHK_MAX}")
     print(f"[INFO] LONG : SL={LONG_STOP_PCT*100:.2f}%, TGT={LONG_TARGET_PCT*100:.2f}%, ADX>={LONG_ADX_MIN}, RSI>={LONG_RSI_MIN}, StochK>={LONG_STOCHK_MIN}")

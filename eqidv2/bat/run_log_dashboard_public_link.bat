@@ -57,10 +57,17 @@ if not defined CF_BIN (
 echo [%DATE% %TIME%] START run_log_dashboard_public_link.bat
 echo [%DATE% %TIME%] START run_log_dashboard_public_link.bat>>"%LOG_FILE%"
 
-echo Starting local dashboard server...
-start "EQIDV2 Log Dashboard" /MIN cmd /c call "%DASH_BAT%"
+set "DASH_LISTENING=0"
+netstat -ano | findstr /R /C:":8787 .*LISTENING" >nul 2>&1
+if not errorlevel 1 set "DASH_LISTENING=1"
 
-timeout /t 3 >nul
+if "%DASH_LISTENING%"=="1" (
+  echo [INFO] Dashboard server already listening on %DASH_URL%. Reusing existing process.
+) else (
+  echo Starting local dashboard server...
+  start "EQIDV2 Log Dashboard" /MIN cmd /c call "%DASH_BAT%"
+  timeout /t 3 >nul
+)
 
 echo Using cloudflared: %CF_BIN%
 "%CF_BIN%" --version

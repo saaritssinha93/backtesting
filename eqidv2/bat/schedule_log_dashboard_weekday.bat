@@ -11,7 +11,10 @@ set "TASK_START=EQIDV2_log_dashboard_start_0855"
 set "TASK_STOP=EQIDV2_log_dashboard_stop_1615"
 
 if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
-if "%LOG_DASH_PASS%"=="" set "LOG_DASH_PASS=eqidv2"
+if "%LOG_DASH_PASS%"=="" (
+  echo [WARN] LOG_DASH_PASS is not set in this shell.
+  echo [WARN] Ensure the scheduled task has LOG_DASH_PASS configured at runtime.
+)
 
 set "TR_START=%START_SCHEDULED_BAT%"
 set "TR_STOP=cmd /c \"call %STOP_BAT%\""
