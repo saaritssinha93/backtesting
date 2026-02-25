@@ -273,6 +273,7 @@ inflight_signals_lock = threading.Lock()
 executed_lock = threading.Lock()
 active_positions: Dict[str, dict] = {}  # signal_id -> open position state
 active_positions_lock = threading.Lock()
+state_file_lock = threading.Lock()
 daily_pnl: Dict[str, float] = {
     "total": 0.0,
     "wins": 0,
@@ -331,19 +332,40 @@ def _open_trades_state_path(today_str: Optional[str] = None) -> str:
 
 def _atomic_write_json(path: str, payload: object) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    last_err: Optional[Exception] = None
+    for attempt in range(5):
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+            return
+        except PermissionError as e:
+            last_err = e
+            # Windows can briefly deny replace/create under concurrent writers.
+            time.sleep(0.05 * (attempt + 1))
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+    if last_err is not None:
+        raise last_err
 
 
 def _persist_open_trades_state() -> None:
-    with active_positions_lock:
-        rows = [dict(v) for _, v in sorted(active_positions.items(), key=lambda kv: kv[0])]
-    payload = {"date": _today_ist_str(), "open_trades": rows, "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")}
-    _atomic_write_json(_open_trades_state_path(), payload)
+    with state_file_lock:
+        with active_positions_lock:
+            rows = [dict(v) for _, v in sorted(active_positions.items(), key=lambda kv: kv[0])]
+        payload = {
+            "date": _today_ist_str(),
+            "open_trades": rows,
+            "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        _atomic_write_json(_open_trades_state_path(), payload)
 
 
 def _load_open_trades_state(today_str: Optional[str] = None) -> List[dict]:
@@ -1735,6 +1757,17 @@ def main():
             if now_ts >= next_live_pnl_log_ts:
                 _log_live_pnl_snapshot(use_ltp, source="heartbeat")
                 next_live_pnl_log_ts = now_ts + live_pnl_interval
+
+            # Hard stop for runner if unrealized portfolio drawdown breaches limit.
+            unrealized_total = _unrealized_total_from_positions()
+            if unrealized_total <= -MAX_DAILY_LOSS_RS:
+                log.error(
+                    f"[RISK.HALT] unrealized loss limit breached "
+                    f"({ _fmt_rs_signed(unrealized_total) } <= -{MAX_DAILY_LOSS_RS:,}). "
+                    "Stopping analysis loop now."
+                )
+                _log_live_pnl_snapshot(use_ltp, source="risk_halt")
+                break
 
             # Check if market is still open
             if now.time() > MARKET_CLOSE:

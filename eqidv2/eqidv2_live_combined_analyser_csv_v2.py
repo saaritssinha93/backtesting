@@ -99,6 +99,9 @@ PARQUET_ENGINE = "pyarrow"
 LIVE_SIGNAL_DIR = ROOT / "live_signals"
 LIVE_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
 SIGNAL_CSV_PATTERN = "signals_{}_v2.csv"
+API_KEY_TXT = ROOT / "api_key.txt"
+ACCESS_TOKEN_TXT = ROOT / "access_token.txt"
+KITE_LTP_EXCHANGE = (os.getenv("EQIDV2_KITE_LTP_EXCHANGE", "NSE") or "NSE").strip().upper() or "NSE"
 
 # Position sizing for CSV output
 # position_size = capital/margin per trade; notional = position_size * leverage
@@ -132,6 +135,11 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return bool(default)
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+USE_KITE_LTP_FOR_SIGNAL_CSV = _env_bool("EQIDV2_USE_KITE_LTP_FOR_SIGNAL_CSV", True)
+_KITE_CLIENT: Any = None
+_KITE_RETRY_AFTER_TS = 0.0
 
 
 # =============================================================================
@@ -384,6 +392,106 @@ def _safe_float(x: Any) -> float:
         return float(x)
     except Exception:
         return float("nan")
+
+
+def _read_kite_api_key(path: Path = API_KEY_TXT) -> str:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing API key file: {path}")
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        raise ValueError(f"API key file is empty: {path}")
+    kv: Dict[str, str] = {}
+    for line in lines:
+        if "=" in line:
+            k, v = line.split("=", 1)
+            kv[k.strip().upper()] = v.strip()
+    return kv.get("API_KEY", lines[0])
+
+
+def _read_kite_access_token(path: Path = ACCESS_TOKEN_TXT) -> str:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing access token file: {path}")
+    token = path.read_text(encoding="utf-8").strip()
+    if not token:
+        raise ValueError(f"Access token file is empty: {path}")
+    return token
+
+
+def _get_kite_client() -> Any:
+    global _KITE_CLIENT, _KITE_RETRY_AFTER_TS
+    if not USE_KITE_LTP_FOR_SIGNAL_CSV:
+        return None
+    if _KITE_CLIENT is not None:
+        return _KITE_CLIENT
+    now_ts = time.time()
+    if now_ts < _KITE_RETRY_AFTER_TS:
+        return None
+    try:
+        from kiteconnect import KiteConnect  # type: ignore
+
+        kite = KiteConnect(api_key=_read_kite_api_key())
+        kite.set_access_token(_read_kite_access_token())
+        _KITE_CLIENT = kite
+        print(f"[CSV ] Kite LTP bridge enabled | exchange={KITE_LTP_EXCHANGE}", flush=True)
+        return _KITE_CLIENT
+    except Exception as exc:
+        _KITE_RETRY_AFTER_TS = now_ts + 120.0
+        print(f"[CSV ] WARNING Kite LTP unavailable (retry in 120s): {exc}", flush=True)
+        return None
+
+
+def _fetch_kite_ltp_map(tickers: List[str]) -> Dict[str, float]:
+    global _KITE_CLIENT, _KITE_RETRY_AFTER_TS
+    kite = _get_kite_client()
+    if kite is None or not tickers:
+        return {}
+    uniq = sorted({str(t).upper().strip() for t in tickers if str(t).strip()})
+    if not uniq:
+        return {}
+    instruments = [f"{KITE_LTP_EXCHANGE}:{t}" for t in uniq]
+    try:
+        payload = kite.ltp(instruments) or {}
+    except Exception as exc:
+        _KITE_CLIENT = None
+        _KITE_RETRY_AFTER_TS = time.time() + 120.0
+        print(f"[CSV ] WARNING Kite LTP fetch failed (retry in 120s): {exc}", flush=True)
+        return {}
+
+    out: Dict[str, float] = {}
+    for t in uniq:
+        key = f"{KITE_LTP_EXCHANGE}:{t}"
+        item = payload.get(key, {}) if isinstance(payload, dict) else {}
+        ltp = _safe_float(item.get("last_price", np.nan))
+        if np.isfinite(ltp) and ltp > 0:
+            out[t] = float(ltp)
+    return out
+
+
+def _rebase_signal_prices(
+    side: str,
+    entry_price: float,
+    stop_price: float,
+    target_price: float,
+    ltp_price: float,
+) -> Tuple[float, float, float, str]:
+    entry = _safe_float(entry_price)
+    stop = _safe_float(stop_price)
+    target = _safe_float(target_price)
+    ltp = _safe_float(ltp_price)
+    _ = side  # kept for explicitness/future side-specific logic
+
+    if not (np.isfinite(entry) and entry > 0):
+        return entry, stop, target, "signal_entry"
+    if not (np.isfinite(ltp) and ltp > 0):
+        return entry, stop, target, "signal_entry"
+
+    ratio = ltp / entry
+    if not (np.isfinite(ratio) and ratio > 0):
+        return entry, stop, target, "signal_entry"
+
+    stop_adj = stop * ratio if np.isfinite(stop) else stop
+    target_adj = target * ratio if np.isfinite(target) else target
+    return float(ltp), float(stop_adj), float(target_adj), "kite_ltp"
 
 
 def _twice_increasing(df: pd.DataFrame, idx: int, col: str) -> bool:
@@ -1654,6 +1762,14 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
     skipped_missing_time = 0
     skipped_stale_day = 0
     today_date = now_ist().date()
+    ltp_map: Dict[str, float] = {}
+    if USE_KITE_LTP_FOR_SIGNAL_CSV and signals_df is not None and (not signals_df.empty):
+        ltp_map = _fetch_kite_ltp_map([str(v) for v in signals_df.get("ticker", [])])
+        if ltp_map:
+            print(
+                f"[CSV ] Kite LTP fetched for {len(ltp_map)} ticker(s) in this batch",
+                flush=True,
+            )
 
     with _locked_signal_csv(csv_path):
         _ensure_signal_csv_schema(csv_path)
@@ -1696,35 +1812,52 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
                         skipped_duplicate_id += 1
                         continue
 
-                    entry_price = float(row.get("entry_price", 0))
+                    entry_price, stop_price, target_price, price_source = _rebase_signal_prices(
+                        side=side,
+                        entry_price=_safe_float(row.get("entry_price", np.nan)),
+                        stop_price=_safe_float(row.get("sl_price", np.nan)),
+                        target_price=_safe_float(row.get("target_price", np.nan)),
+                        ltp_price=ltp_map.get(ticker, float("nan")),
+                    )
+                    if not np.isfinite(entry_price):
+                        entry_price = 0.0
+                    if not np.isfinite(stop_price):
+                        stop_price = 0.0
+                    if not np.isfinite(target_price):
+                        target_price = 0.0
+
                     notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
                     qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
 
-                    # Extract indicator values from diagnostics JSON if available
+                    # Extract indicator values from diagnostics JSON if available.
+                    # Prefer direct atr_pct from diagnostics; fallback to atr/close.
                     atr_pct = 0.0
                     rsi_val = 0.0
                     adx_val = 0.0
+                    impulse_type = ""
+                    diag: Dict[str, Any] = {}
                     diag_str = row.get("diagnostics_json", "")
                     if diag_str:
                         try:
-                            diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
-                            atr_val = _safe_float(diag.get("atr", 0))
+                            if isinstance(diag_str, str):
+                                diag = json.loads(diag_str)
+                            elif isinstance(diag_str, dict):
+                                diag = diag_str
+                        except (json.JSONDecodeError, TypeError):
+                            diag = {}
+
+                    if diag:
+                        atr_pct_val = _safe_float(diag.get("atr_pct", np.nan))
+                        if np.isfinite(atr_pct_val):
+                            atr_pct = float(atr_pct_val)
+                        else:
+                            atr_val = _safe_float(diag.get("atr", np.nan))
                             close_val = _safe_float(diag.get("close", entry_price))
                             if np.isfinite(atr_val) and np.isfinite(close_val) and close_val > 0:
                                 atr_pct = atr_val / close_val
-                            rsi_val = _safe_float(diag.get("rsi", 0))
-                            adx_val = _safe_float(diag.get("adx", 0))
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-
-                    # Determine impulse_type from diagnostics
-                    impulse_type = ""
-                    if diag_str:
-                        try:
-                            diag = json.loads(diag_str) if isinstance(diag_str, str) else {}
-                            impulse_type = str(diag.get("impulse_type", ""))
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                        rsi_val = _safe_float(diag.get("rsi", 0))
+                        adx_val = _safe_float(diag.get("adx", 0))
+                        impulse_type = str(diag.get("impulse_type", ""))
 
                     # Keep both names for compatibility:
                     # - signal_entry_datetime_ist: explicit user-facing label
@@ -1742,8 +1875,8 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
                         "setup": setup,
                         "impulse_type": impulse_type,
                         "entry_price": round(entry_price, 2),
-                        "stop_price": round(float(row.get("sl_price", 0)), 2),
-                        "target_price": round(float(row.get("target_price", 0)), 2),
+                        "stop_price": round(stop_price, 2),
+                        "target_price": round(target_price, 2),
                         "quality_score": round(float(row.get("score", 0)), 4),
                         "atr_pct": round(atr_pct, 6),
                         "rsi": round(rsi_val, 2),
@@ -1758,7 +1891,7 @@ def _write_signals_csv(signals_df: pd.DataFrame) -> int:
                     written += 1
                     print(
                         f"[CSV+] {ticker} {side} {bar_time} setup={setup} "
-                        f"entry={entry_price:.2f} sl={float(row.get('sl_price', 0)):.2f} tgt={float(row.get('target_price', 0)):.2f}",
+                        f"entry={entry_price:.2f} sl={stop_price:.2f} tgt={target_price:.2f} src={price_source}",
                         flush=True,
                     )
 

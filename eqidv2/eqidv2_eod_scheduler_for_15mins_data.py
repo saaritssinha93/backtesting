@@ -200,6 +200,13 @@ def main() -> None:
     ap.add_argument("--report-dir", default="reports/stocks_missing_reports")
     args = ap.parse_args()
 
+    # Ensure core INFO logs (including timing/verification summaries) are emitted.
+    try:
+        core.setup_logger()
+        print("[INFO] stocks_fetcher logger initialized.")
+    except Exception as e:
+        print(f"[WARN] Failed to initialize stocks_fetcher logger: {e}")
+
     print("[LIVE] EQIDV2 15m scheduler started.")
     print(f"       Using EQIDV2_DIR: {EQIDV2_DIR}")
     print(f"       Output dir (15m): {getattr(core, 'DIRS', {}).get('15min', {}).get('out', 'stocks_indicators_15min_eq')}")
