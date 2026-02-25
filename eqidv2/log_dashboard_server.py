@@ -8,6 +8,7 @@ import base64
 import csv
 import datetime as dt
 import json
+import math
 import os
 import re
 from collections import deque
@@ -21,6 +22,7 @@ from zoneinfo import ZoneInfo
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 LIVE_SIGNAL_DIR = BASE_DIR / "live_signals"
+KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 IST = ZoneInfo("Asia/Kolkata")
 
 LOG_FILES: Dict[str, str] = {
@@ -29,13 +31,15 @@ LOG_FILES: Dict[str, str] = {
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
     "live_combined_csv": "eqidv2_live_combined_analyser_csv.log",
     "live_combined_csv_v2": "eqidv2_live_combined_analyser_csv_v2.log",
+    "live_combined_csv_v3": "eqidv2_live_combined_analyser_csv_v3.log",
 }
-LOG_IDS = tuple(LOG_FILES.keys()) + ("paper_trade", "paper_trade_v2", "kite_trade")
+LOG_IDS = tuple(LOG_FILES.keys()) + ("paper_trade", "paper_trade_v2", "paper_trade_v3", "kite_trade", "preopen_healthcheck")
 
 STATUS_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.status",
     "live_combined_csv": "eqidv2_live_combined_analyser_csv.status",
     "live_combined_csv_v2": "eqidv2_live_combined_analyser_csv_v2.status",
+    "live_combined_csv_v3": "eqidv2_live_combined_analyser_csv_v3.status",
 }
 
 
@@ -80,6 +84,17 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v2.log"
         return LOG_DIR / legacy_name, legacy_name
 
+    if name == "paper_trade_v3":
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v3_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v3_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v3.log"
+        return LOG_DIR / legacy_name, legacy_name
+
     if name == "kite_trade":
         today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_{today_ist}.log"
         today_path = LOG_DIR / today_name
@@ -97,6 +112,20 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         if signal_log_path.exists():
             return signal_log_path, str(Path("live_signals") / signal_log_name)
         return legacy_path, legacy_name
+
+    if name == "preopen_healthcheck":
+        today_name = f"preopen_session_healthcheck_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest_name = "preopen_session_healthcheck_latest.log"
+        latest_path = LOG_DIR / latest_name
+        if latest_path.exists():
+            return latest_path, latest_name
+        fallback = _latest_matching_file(LOG_DIR, "preopen_session_healthcheck_*.log")
+        if fallback is not None:
+            return fallback, fallback.name
+        return latest_path, latest_name
 
     if name == "paper_trade_exec":
         today_name = f"paper_trade_execution_{today_ist}.log"
@@ -192,11 +221,32 @@ def _extract_time_only(value: str) -> str:
     return s
 
 
+def _to_float_or_nan(value: str) -> float:
+    s = str(value or "").strip()
+    if not s:
+        return float("nan")
+    # tolerate display formats like Rs.+1,234.56
+    s = s.replace(",", "")
+    s = s.replace("Rs.", "").replace("RS.", "").replace("rs.", "")
+    try:
+        return float(s)
+    except ValueError:
+        return float("nan")
+
+
+def _fmt_rs(value: float) -> str:
+    return f"Rs.{value:+,.2f}"
+
+
 def _format_csv_projection(
     path: Path,
     columns: Sequence[Tuple[str, Sequence[str]]],
     limit_rows: int = 25,
     time_only_cols: Optional[Set[str]] = None,
+    sort_numeric_desc_by_keys: Optional[Sequence[str]] = None,
+    total_numeric_by_keys: Optional[Sequence[str]] = None,
+    total_numeric_label: str = "",
+    total_numeric_first: bool = False,
 ) -> str:
     """
     Render a compact fixed-width table from selected CSV columns.
@@ -208,6 +258,27 @@ def _format_csv_projection(
     rows_raw = _read_csv_tail_rows(path, limit=limit_rows)
     if not rows_raw:
         return "(no rows yet)"
+
+    if sort_numeric_desc_by_keys:
+        def _sort_key(row: dict[str, str]) -> tuple[int, float]:
+            raw = _pick_csv_value(row, sort_numeric_desc_by_keys)
+            num = _to_float_or_nan(raw)
+            if not math.isnan(num):
+                return (0, -float(num))
+            return (1, 0.0)
+
+        rows_raw = sorted(rows_raw, key=_sort_key)
+
+    total_val = 0.0
+    total_count = 0
+    if total_numeric_by_keys:
+        for row in rows_raw:
+            raw = _pick_csv_value(row, total_numeric_by_keys)
+            num = _to_float_or_nan(raw)
+            if math.isnan(num):
+                continue
+            total_val += float(num)
+            total_count += 1
 
     rows: list[dict[str, str]] = []
     time_only_cols = set(time_only_cols or set())
@@ -234,7 +305,74 @@ def _format_csv_projection(
         )
         for r in rows
     ]
-    return "\n".join([f"rows_shown={len(rows)} (latest)", header, sep] + body)
+    out_lines = [f"rows_shown={len(rows)} (latest)", header, sep] + body
+    if total_numeric_by_keys and total_numeric_label:
+        total_text = _fmt_rs(total_val) if total_count > 0 else "n/a"
+        total_line = f"{total_numeric_label}={total_text}"
+        if total_numeric_first:
+            out_lines = [total_line] + out_lines
+        else:
+            out_lines.append(total_line)
+    return "\n".join(out_lines)
+
+
+def _compute_holdings_summary(path: Path) -> tuple[float, float, float, float]:
+    invested = 0.0
+    current = 0.0
+
+    if not path.exists():
+        return float("nan"), float("nan"), float("nan"), float("nan")
+
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                if not row:
+                    continue
+                qty = _to_float_or_nan(_pick_csv_value(row, ("quantity",)))
+                t1_qty = _to_float_or_nan(_pick_csv_value(row, ("t1_quantity",)))
+                avg = _to_float_or_nan(_pick_csv_value(row, ("average_price", "avg_price", "price")))
+                ltp = _to_float_or_nan(_pick_csv_value(row, ("last_price", "ltp", "close_price")))
+
+                q = 0.0
+                if not math.isnan(qty):
+                    q += float(qty)
+                if not math.isnan(t1_qty):
+                    q += float(t1_qty)
+
+                if q == 0.0:
+                    continue
+
+                if not math.isnan(avg):
+                    invested += q * float(avg)
+                if not math.isnan(ltp):
+                    current += q * float(ltp)
+    except (OSError, csv.Error):
+        return float("nan"), float("nan"), float("nan"), float("nan")
+
+    pnl = current - invested
+    pnl_pct = (pnl * 100.0 / invested) if invested > 0 else float("nan")
+    return invested, current, pnl, pnl_pct
+
+
+def _read_kite_snapshot_meta(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _extract_funds_available(meta: dict[str, object]) -> float:
+    raw = meta.get("funds_available")
+    try:
+        if raw is None:
+            return float("nan")
+        return float(raw)
+    except (TypeError, ValueError):
+        return float("nan")
 
 
 def iso_mtime(path: Path) -> Optional[str]:
@@ -640,14 +778,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_15min_data",
       "live_combined_csv",
       "live_combined_csv_v2",
+      "live_combined_csv_v3",
       "live_signals_csv",
       "live_signals_csv_v2",
+      "live_signals_csv_v3",
       "live_papertrade_result_csv",
       "live_papertrade_result_csv_v2",
+      "live_papertrade_result_csv_v3",
       "paper_trade",
       "paper_trade_v2",
+      "paper_trade_v3",
+      "preopen_healthcheck",
       "kite_trade",
       "live_kite_trades_csv",
+      "kite_holdings_today_csv",
+      "kite_positions_day_today_csv",
       "authentication_v2",
       "eod_1540_update"
     ];
@@ -655,14 +800,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_15min_data": "Live Data Fetch (15mins)",
       "live_combined_csv": "Live Analysis And Signal Generation",
       "live_combined_csv_v2": "Live Analysis And Signal Generation V2",
+      "live_combined_csv_v3": "Live Analysis And Signal Generation V3",
       "live_signals_csv": "Live Entries CSV",
       "live_signals_csv_v2": "Live Entries CSV V2",
+      "live_signals_csv_v3": "Live Entries CSV V3",
       "live_papertrade_result_csv": "Live Papertrade Result CSV",
       "live_papertrade_result_csv_v2": "Live Papertrade Result CSV V2",
+      "live_papertrade_result_csv_v3": "Live Papertrade Result CSV V3",
       "live_kite_trades_csv": "Live Kite Trades CSV",
+      "kite_holdings_today_csv": "Kite Holdings (Today)",
+      "kite_positions_day_today_csv": "Kite Positions (Daily, Today)",
       "authentication_v2": "Auth_V2",
       "paper_trade": "Papertrade Runner view",
       "paper_trade_v2": "Papertrade Runner View V2",
+      "paper_trade_v3": "Papertrade Runner View V3",
+      "preopen_healthcheck": "Preopen Healthcheck 09:05",
       "kite_trade": "Live Kite Trades Log",
       "eod_1540_update": "Live EOD Data Fetch"
     };
@@ -881,6 +1033,31 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
+        # Dynamic card: today's live signal CSV V3 from analyzer v3.
+        live_csv_name_v3 = f"signals_{today_ist}_v3.csv"
+        live_csv_path_v3 = LIVE_SIGNAL_DIR / live_csv_name_v3
+        try:
+            live_size_v3 = live_csv_path_v3.stat().st_size if live_csv_path_v3.exists() else 0
+        except OSError:
+            live_size_v3 = 0
+        live_entries_tail_v3 = _format_csv_projection(
+            live_csv_path_v3,
+            live_entries_cols,
+            limit_rows=max(5, min(35, lines // 2)),
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v3",
+                "file_name": str(Path("live_signals") / live_csv_name_v3),
+                "exists": live_csv_path_v3.exists(),
+                "mtime": iso_mtime(live_csv_path_v3),
+                "size_bytes": live_size_v3,
+                "status": {},
+                "tail": live_entries_tail_v3,
+            }
+        )
+
         # Dynamic card: today's paper trade results CSV.
         paper_trade_csv_name = f"paper_trades_{today_ist}.csv"
         paper_trade_csv_path = LIVE_SIGNAL_DIR / paper_trade_csv_name
@@ -939,6 +1116,31 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
+        # Dynamic card: today's paper trade results CSV V3.
+        paper_trade_csv_name_v3 = f"paper_trades_{today_ist}_v3.csv"
+        paper_trade_csv_path_v3 = LIVE_SIGNAL_DIR / paper_trade_csv_name_v3
+        try:
+            paper_trade_size_v3 = paper_trade_csv_path_v3.stat().st_size if paper_trade_csv_path_v3.exists() else 0
+        except OSError:
+            paper_trade_size_v3 = 0
+        paper_trade_tail_v3 = _format_csv_projection(
+            paper_trade_csv_path_v3,
+            paper_trade_cols,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_v3",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_v3),
+                "exists": paper_trade_csv_path_v3.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_v3),
+                "size_bytes": paper_trade_size_v3,
+                "status": {},
+                "tail": paper_trade_tail_v3,
+            }
+        )
+
         # Dynamic card: today's live Kite trades CSV.
         live_kite_trade_csv_name = f"live_trades_{today_ist}.csv"
         live_kite_trade_csv_path = LIVE_SIGNAL_DIR / live_kite_trade_csv_name
@@ -973,6 +1175,110 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "size_bytes": live_kite_trade_size,
                 "status": {},
                 "tail": live_kite_trade_tail,
+            }
+        )
+
+        # Dynamic cards: today's Kite holdings / day positions exported by zerodha_kite_export.py
+        today_ymd = dt.datetime.now(IST).strftime("%Y%m%d")
+        kite_meta = _read_kite_snapshot_meta(KITE_EXPORT_DIR / "kite_snapshot_meta.json")
+        funds_available = _extract_funds_available(kite_meta)
+        funds_available_text = _fmt_rs(funds_available) if not math.isnan(funds_available) else "n/a"
+
+        holdings_candidates = [
+            KITE_EXPORT_DIR / f"holdings_{today_ymd}.csv",
+            KITE_EXPORT_DIR / "kite_holdings_today.csv",
+        ]
+        holdings_path = next((p for p in holdings_candidates if p.exists()), holdings_candidates[-1])
+        try:
+            holdings_size = holdings_path.stat().st_size if holdings_path.exists() else 0
+        except OSError:
+            holdings_size = 0
+        holdings_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("tradingsymbol", "symbol", "ticker")),
+            ("exchange", ("exchange",)),
+            ("qty", ("quantity", "qty")),
+            ("avg_price", ("average_price", "avg_price")),
+            ("last_price", ("last_price", "ltp")),
+            ("pnl", ("pnl", "unrealised", "unrealized")),
+            ("day_chg_pct", ("day_change_percentage", "day_change_pct")),
+        ]
+        holdings_tail = _format_csv_projection(
+            holdings_path,
+            holdings_cols,
+            limit_rows=max(200, lines),
+            sort_numeric_desc_by_keys=("pnl", "unrealised", "unrealized"),
+        )
+        invested_amt, current_amt, total_pnl, total_pnl_pct = _compute_holdings_summary(holdings_path)
+        total_current_with_funds = (
+            current_amt + funds_available
+            if (not math.isnan(current_amt) and not math.isnan(funds_available))
+            else float("nan")
+        )
+        total_invested_with_funds = (
+            invested_amt + funds_available
+            if (not math.isnan(invested_amt) and not math.isnan(funds_available))
+            else float("nan")
+        )
+        holdings_summary_lines = [
+            f"invested_amount={_fmt_rs(invested_amt) if not math.isnan(invested_amt) else 'n/a'}",
+            f"current_amount={_fmt_rs(current_amt) if not math.isnan(current_amt) else 'n/a'}",
+            f"total_pnl={_fmt_rs(total_pnl) if not math.isnan(total_pnl) else 'n/a'}",
+            f"total_pnl_pct={(f'{total_pnl_pct:+.2f}%') if not math.isnan(total_pnl_pct) else 'n/a'}",
+            f"funds_available={funds_available_text}",
+            f"TOTAL(invested)={_fmt_rs(total_invested_with_funds) if not math.isnan(total_invested_with_funds) else 'n/a'}",
+            f"TOTAL(current)={_fmt_rs(total_current_with_funds) if not math.isnan(total_current_with_funds) else 'n/a'}",
+        ]
+        holdings_tail = "\n".join(holdings_summary_lines + [holdings_tail])
+        items.append(
+            {
+                "id": "kite_holdings_today_csv",
+                "file_name": str(Path("kite_exports") / holdings_path.name),
+                "exists": holdings_path.exists(),
+                "mtime": iso_mtime(holdings_path),
+                "size_bytes": holdings_size,
+                "status": {},
+                "tail": holdings_tail,
+            }
+        )
+
+        positions_day_candidates = [
+            KITE_EXPORT_DIR / f"positions_day_{today_ymd}.csv",
+            KITE_EXPORT_DIR / "kite_positions_day_today.csv",
+        ]
+        positions_day_path = next((p for p in positions_day_candidates if p.exists()), positions_day_candidates[-1])
+        try:
+            positions_day_size = positions_day_path.stat().st_size if positions_day_path.exists() else 0
+        except OSError:
+            positions_day_size = 0
+        positions_day_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("tradingsymbol", "symbol", "ticker")),
+            ("exchange", ("exchange",)),
+            ("product", ("product",)),
+            ("qty", ("quantity", "qty")),
+            ("buy_qty", ("buy_quantity",)),
+            ("sell_qty", ("sell_quantity",)),
+            ("avg_price", ("average_price", "avg_price")),
+            ("last_price", ("last_price", "ltp")),
+            ("pnl", ("pnl", "unrealised", "unrealized")),
+        ]
+        positions_day_tail = _format_csv_projection(
+            positions_day_path,
+            positions_day_cols,
+            limit_rows=max(200, lines),
+            total_numeric_by_keys=("pnl", "unrealised", "unrealized"),
+            total_numeric_label="total_pnl_ongoing",
+            total_numeric_first=True,
+        )
+        positions_day_tail = "\n".join([f"funds_available={funds_available_text}", positions_day_tail])
+        items.append(
+            {
+                "id": "kite_positions_day_today_csv",
+                "file_name": str(Path("kite_exports") / positions_day_path.name),
+                "exists": positions_day_path.exists(),
+                "mtime": iso_mtime(positions_day_path),
+                "size_bytes": positions_day_size,
+                "status": {},
+                "tail": positions_day_tail,
             }
         )
 

@@ -89,8 +89,7 @@ FILL_WAIT_TIMEOUT_SEC = 60
 MAX_CANCEL_RETRIES = 3
 CANCEL_RETRY_WAIT_SEC = 2
 
-# Risk limits
-MAX_DAILY_LOSS_RS = 5_000           # stop taking new trades if daily loss exceeds this
+# Exposure limits
 MAX_OPEN_POSITIONS = 10             # max simultaneous open positions
 MAX_CAPITAL_DEPLOYED_RS = 500_000   # max total margin that can be deployed
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
@@ -493,13 +492,9 @@ def _is_market_open_now(now_ist: Optional[datetime] = None) -> bool:
 
 def _check_risk_limits(signal: dict) -> Optional[str]:
     """
-    Check daily loss limit, open positions, and capital deployed.
+    Check open positions and capital deployed.
     Returns a rejection reason string, or None if the trade is allowed.
     """
-    with daily_pnl_lock:
-        if daily_pnl["total"] <= -MAX_DAILY_LOSS_RS:
-            return f"daily loss limit hit (Rs.{daily_pnl['total']:+,.2f} <= -{MAX_DAILY_LOSS_RS:,})"
-
     with capital_lock:
         open_count = len(capital_deployed)
         total_deployed = sum(capital_deployed.values())
@@ -528,15 +523,6 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
     quantity = _safe_int(signal.get("quantity", 1), 1)
     margin = (entry_price * quantity) / INTRADAY_LEVERAGE if INTRADAY_LEVERAGE > 0 else 0.0
     margin = float(max(0.0, margin))
-
-    with daily_pnl_lock:
-        total_now = float(daily_pnl.get("total", 0.0))
-    if total_now <= -MAX_DAILY_LOSS_RS:
-        return (
-            False,
-            f"daily loss limit hit (Rs.{total_now:+,.2f} <= -{MAX_DAILY_LOSS_RS:,})",
-            0.0,
-        )
 
     with capital_lock:
         open_count = len(capital_deployed)

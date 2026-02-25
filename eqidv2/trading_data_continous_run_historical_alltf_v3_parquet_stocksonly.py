@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Unified Zerodha (KiteConnect) data fetch + indicator generator
 **ONLY for intraday 5-minute and 15-minute timeframes** (Parquet storage).
@@ -587,7 +587,7 @@ def fetch_historical_generic(
                 break
             except (kexc.NetworkException, kexc.DataException, kexc.TokenException, kexc.InputException) as ex:
                 if attempt == MAX_RETRIES:
-                    logger.warning("Failed chunk %s → %s (%s): %s", s, e, interval, ex)
+                    logger.warning("Failed chunk %s â†’ %s (%s): %s", s, e, interval, ex)
                 else:
                     _time.sleep(1.0 * attempt)
             finally:
@@ -954,6 +954,204 @@ class UpdateReport:
     new_first: str | None
     new_last: str | None
     new_rows_path: str | None
+    load_existing_secs: float
+    fetch_secs: float
+    indicators_secs: float
+    persist_secs: float
+    total_secs: float
+
+
+def verify_mode_outputs(
+    mode: str,
+    symbols: list[str],
+    expected_ts_ist: datetime,
+    logger: logging.Logger,
+) -> tuple[int, list[str]]:
+    """
+    Post-run verification:
+    - output file exists
+    - last timestamp is >= expected timestamp
+    """
+    failed: list[str] = []
+    ok = 0
+    tol = timedelta(seconds=1)
+
+    if expected_ts_ist.tzinfo is None:
+        expected_ts_ist = IST_TZ.localize(expected_ts_ist)
+
+    for t in symbols:
+        t_u = t.upper()
+        out_path = os.path.join(DIRS[mode]["out"], f"{t_u}_stocks_indicators_{mode}.parquet")
+        existing_path = _resolve_existing_store_path(out_path)
+        if not os.path.exists(existing_path):
+            failed.append(f"{t_u}:file_missing")
+            continue
+
+        last_ts = _read_last_ts_from_store(existing_path)
+        if last_ts is None:
+            failed.append(f"{t_u}:last_ts_missing")
+            continue
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.tz_localize(IST_TZ)
+        else:
+            last_ts = last_ts.tz_convert(IST_TZ)
+
+        if last_ts >= (expected_ts_ist - tol):
+            ok += 1
+        else:
+            failed.append(f"{t_u}:stale_last_ts={last_ts.strftime('%Y-%m-%d %H:%M:%S%z')}")
+
+    if failed:
+        logger.warning("[%s][VERIFY] Failed=%d | sample=%s", mode.upper(), len(failed), ", ".join(failed[:20]))
+    return ok, failed
+
+
+def _extract_failed_tickers(verify_failed: list[str], all_symbols: list[str]) -> list[str]:
+    allowed = {s.upper() for s in all_symbols}
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for item in verify_failed:
+        t = str(item).split(":", 1)[0].strip().upper()
+        if not t or t not in allowed or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def _recover_verify_failures(
+    mode: str,
+    verify_failed: list[str],
+    all_symbols: list[str],
+    expected_ts_ist: datetime,
+    kite: KiteConnect,
+    token_map: dict[str, int],
+    refresh_tokens: bool,
+    max_workers: int,
+    start_dt_ist: datetime,
+    end_dt_ist: datetime,
+    logger: logging.Logger,
+    holidays: set[date],
+    intraday_ts: str,
+    report_dir: str,
+    print_missing_rows: bool,
+    print_missing_rows_max: int,
+) -> float:
+    """
+    Recovery pass for symbols that failed final verification.
+    Re-fetch/recompute/re-save only failed tickers, then let caller run verify again.
+    """
+    failed_tickers = _extract_failed_tickers(verify_failed, all_symbols)
+    if not failed_tickers:
+        return 0.0
+
+    t0 = _time.perf_counter()
+    max_attempts = 2
+    retry_sleep_sec = 4
+    remaining = failed_tickers
+
+    logger.warning(
+        "[%s][VERIFY] Starting recovery for %d symbol(s): %s",
+        mode.upper(),
+        len(remaining),
+        ", ".join(remaining[:30]),
+    )
+
+    for attempt in range(1, max_attempts + 1):
+        if not remaining:
+            break
+
+        need_tokens = [t for t in remaining if t.upper() not in token_map]
+        if need_tokens:
+            fetched = load_or_fetch_tokens(kite, need_tokens, logger, refresh=(refresh_tokens and attempt == 1))
+            token_map.update({k.upper(): int(v) for k, v in fetched.items()})
+
+        work_items: list[tuple[str, int]] = []
+        token_missing: list[str] = []
+        for t in remaining:
+            tok = token_map.get(t.upper())
+            if tok:
+                work_items.append((t.upper(), int(tok)))
+            else:
+                token_missing.append(t.upper())
+
+        if token_missing:
+            logger.warning(
+                "[%s][VERIFY] Recovery attempt %d/%d: token missing for %d symbol(s): %s",
+                mode.upper(),
+                attempt,
+                max_attempts,
+                len(token_missing),
+                ", ".join(token_missing[:20]),
+            )
+
+        if work_items:
+            retry_workers = min(max(1, int(max_workers)), max(1, len(work_items)), 8)
+            logger.warning(
+                "[%s][VERIFY] Recovery attempt %d/%d: refetching %d symbol(s) with max_workers=%d",
+                mode.upper(),
+                attempt,
+                max_attempts,
+                len(work_items),
+                retry_workers,
+            )
+
+            with ThreadPoolExecutor(max_workers=retry_workers) as executor:
+                futures = {
+                    executor.submit(
+                        process_ticker,
+                        mode,
+                        tkr,
+                        tok,
+                        kite,
+                        start_dt_ist,
+                        end_dt_ist,
+                        logger,
+                        holidays,
+                        False,  # force check/fetch for failed symbol
+                        intraday_ts,
+                        report_dir,
+                        print_missing_rows,
+                        print_missing_rows_max,
+                    ): tkr
+                    for (tkr, tok) in work_items
+                }
+                for fut in as_completed(futures):
+                    tkr = futures[fut]
+                    try:
+                        rep: UpdateReport = fut.result()
+                        if rep.status == "failed":
+                            logger.warning("[%s][VERIFY] Recovery worker failed for %s", mode.upper(), tkr)
+                    except Exception as e:
+                        logger.exception("[%s][VERIFY] Recovery worker crashed for %s: %s", mode.upper(), tkr, e)
+
+        check_symbols = token_missing + [t for (t, _) in work_items]
+        _, verify_failed_subset = verify_mode_outputs(mode, check_symbols, expected_ts_ist, logger)
+        remaining = _extract_failed_tickers(verify_failed_subset, check_symbols)
+
+        if remaining and attempt < max_attempts:
+            logger.warning(
+                "[%s][VERIFY] Recovery attempt %d incomplete. Remaining=%d; retrying after %ds.",
+                mode.upper(),
+                attempt,
+                len(remaining),
+                retry_sleep_sec,
+            )
+            _time.sleep(retry_sleep_sec)
+
+    elapsed = _time.perf_counter() - t0
+    if remaining:
+        logger.warning(
+            "[%s][VERIFY] Recovery ended with unresolved=%d | sample=%s | elapsed=%.2fs",
+            mode.upper(),
+            len(remaining),
+            ", ".join(remaining[:20]),
+            elapsed,
+        )
+    else:
+        logger.info("[%s][VERIFY] Recovery succeeded for all failed symbols | elapsed=%.2fs", mode.upper(), elapsed)
+    return elapsed
 
 def process_ticker(
     mode: str,
@@ -970,6 +1168,12 @@ def process_ticker(
     print_missing_rows: bool,
     print_missing_rows_max: int
 ) -> UpdateReport:
+    t_total0 = _time.perf_counter()
+    load_existing_secs = 0.0
+    fetch_secs = 0.0
+    indicators_secs = 0.0
+    persist_secs = 0.0
+
     out_path = os.path.join(DIRS[mode]["out"], f"{ticker}_stocks_indicators_{mode}.parquet")
     now_ist = datetime.now(IST_TZ)
 
@@ -988,17 +1192,24 @@ def process_ticker(
     if skip_if_fresh and ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
-                            exp_str, 0, None, None, None)
+                            exp_str, 0, None, None, None,
+                            load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                            _time.perf_counter() - t_total0)
 
     inc_start = _incremental_start_from_existing(mode, out_path, start_dt_ist)
     if inc_start >= end_dt_ist:
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
-                            exp_str, 0, None, None, None)
+                            exp_str, 0, None, None, None,
+                            load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                            _time.perf_counter() - t_total0)
 
+    t_load0 = _time.perf_counter()
     existing = _load_existing_ohlc(out_path, intraday_ts, mode)
+    load_existing_secs = _time.perf_counter() - t_load0
 
     try:
+        t_fetch0 = _time.perf_counter()
         if mode == "5min":
             fetched = fetch_historical_5min_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
         elif mode == "15min":
@@ -1006,17 +1217,24 @@ def process_ticker(
         else:
             return UpdateReport(mode, ticker, "failed", out_path, existed_before,
                                 last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
-                                exp_str, 0, None, None, None)
+                                exp_str, 0, None, None, None,
+                                load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                                _time.perf_counter() - t_total0)
+        fetch_secs = _time.perf_counter() - t_fetch0
     except Exception as e:
         logger.exception("[%s] %s fetch failed: %s", mode.upper(), ticker, e)
         return UpdateReport(mode, ticker, "failed", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
-                            exp_str, 0, None, None, None)
+                            exp_str, 0, None, None, None,
+                            load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                            _time.perf_counter() - t_total0)
 
     if fetched is None or fetched.empty:
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
-                            exp_str, 0, None, None, None)
+                            exp_str, 0, None, None, None,
+                            load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                            _time.perf_counter() - t_total0)
 
     merged = fetched
     if not existing.empty:
@@ -1028,10 +1246,13 @@ def process_ticker(
         )
 
     try:
+        t_ind0 = _time.perf_counter()
         merged = _compute_common_features(merged, mode)
         merged = _downcast_numeric_columns(merged)
         _log_indicator_quality(logger, ticker, mode, merged)
+        indicators_secs = _time.perf_counter() - t_ind0
 
+        t_persist0 = _time.perf_counter()
         _finalize_and_save(merged, out_path)
 
         # Optional: if we migrated from a legacy CSV, delete it after successful parquet write
@@ -1067,6 +1288,7 @@ def process_ticker(
                 logger.info("[%s] %s NEW ROWS (last %d):\n%s",
                             mode.upper(), ticker, min(print_missing_rows_max, len(show)),
                             show.to_string(index=False))
+        persist_secs = _time.perf_counter() - t_persist0
 
         status = "created" if not existed_before else ("updated" if new_rows_count > 0 else "noop")
 
@@ -1081,14 +1303,21 @@ def process_ticker(
             new_rows_count=new_rows_count,
             new_first=new_first,
             new_last=new_last,
-            new_rows_path=new_rows_path
+            new_rows_path=new_rows_path,
+            load_existing_secs=load_existing_secs,
+            fetch_secs=fetch_secs,
+            indicators_secs=indicators_secs,
+            persist_secs=persist_secs,
+            total_secs=_time.perf_counter() - t_total0
         )
 
     except Exception as e:
         logger.exception("[%s] %s indicator/save failed: %s", mode.upper(), ticker, e)
         return UpdateReport(mode, ticker, "failed", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
-                            exp_str, 0, None, None, None)
+                            exp_str, 0, None, None, None,
+                            load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                            _time.perf_counter() - t_total0)
 
 
 # ========= DRIVER =========
@@ -1105,6 +1334,8 @@ def run_mode(
     print_missing_rows_max: int
 ):
     logger = logging.getLogger("stocks_fetcher")
+    t_mode0 = _time.perf_counter()
+
     mode = mode.lower().strip()
     if mode not in VALID_MODES:
         raise ValueError(f"Unknown mode '{mode}'. Expected: {', '.join(VALID_MODES)}")
@@ -1115,11 +1346,12 @@ def run_mode(
     step = 5 if mode == "5min" else 15
     end_dt = last_completed_intraday_end(now_ist, step, holidays)
 
-    logger.info("=== MODE=%s | intraday_ts=%s | Window: %s → %s (IST) ===",
+    logger.info("=== MODE=%s | intraday_ts=%s | Window: %s -> %s (IST) ===",
                 mode, intraday_ts, start_dt.strftime("%Y-%m-%d %H:%M"), end_dt.strftime("%Y-%m-%d %H:%M"))
 
     if end_dt <= start_dt:
         logger.info("End cutoff <= start. Nothing to fetch for %s.", mode)
+        logger.info("[%s][TIMING] total=%.2fs (nothing_to_fetch)", mode.upper(), _time.perf_counter() - t_mode0)
         return
 
     syms, pre_token_map = load_stocks_universe(logger)
@@ -1128,6 +1360,7 @@ def run_mode(
     missing_rows: list[str] = []
     fresh: list[str] = []
 
+    t_scan0 = _time.perf_counter()
     if skip_if_fresh:
         for t in syms:
             t = t.upper()
@@ -1142,25 +1375,43 @@ def run_mode(
                 missing_rows.append(t)
     else:
         missing_rows = [t.upper() for t in syms]
+    freshness_scan_secs = _time.perf_counter() - t_scan0
+
+    verify_expected_ts = end_dt if intraday_ts.lower() == "end" else (end_dt - timedelta(minutes=step))
+    if verify_expected_ts.tzinfo is None:
+        verify_expected_ts = IST_TZ.localize(verify_expected_ts)
 
     if skip_if_fresh:
         logger.info("[%s] Missing files: %d", mode.upper(), len(missing_files))
+        rep_dir = os.path.join(report_dir, "missing_files")
+        _safe_mkdir(rep_dir)
+        miss_file_path = os.path.join(rep_dir, f"missing_files_{mode}.txt")
+        Path(miss_file_path).write_text("\n".join(missing_files), encoding="utf-8")
+        logger.info("[%s] Missing files list saved: %s", mode.upper(), miss_file_path)
         if missing_files:
-            rep_dir = os.path.join(report_dir, "missing_files")
-            _safe_mkdir(rep_dir)
-            miss_file_path = os.path.join(rep_dir, f"missing_files_{mode}.txt")
-            Path(miss_file_path).write_text("\n".join(missing_files), encoding="utf-8")
-            logger.info("[%s] Missing files list saved: %s", mode.upper(), miss_file_path)
             logger.info("[%s] Missing files sample: %s", mode.upper(), ", ".join(missing_files[:50]))
+        else:
+            logger.info("[%s] Missing files list cleared (no missing files).", mode.upper())
 
         logger.info("[%s] Missing evaluation rows (stale symbols): %d", mode.upper(), len(missing_rows))
+        logger.info("[%s] Fresh symbols: %d", mode.upper(), len(fresh))
     else:
         logger.info("[%s] no-skip enabled => processing all symbols: %d", mode.upper(), len(missing_rows))
 
     if not missing_rows:
-        logger.info("[%s] Nothing missing — all symbols fresh.", mode.upper())
+        logger.info("[%s] Nothing missing - all symbols fresh.", mode.upper())
+        t_verify0 = _time.perf_counter()
+        ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+        verify_secs = _time.perf_counter() - t_verify0
+        logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
+                    mode.upper(),
+                    verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
+                    ok_count, len(syms), len(verify_failed), verify_secs)
+        logger.info("[%s][TIMING] scan=%.2fs | token_prep=0.00s | workers=0.00s | verify=%.2fs | total=%.2fs",
+                    mode.upper(), freshness_scan_secs, verify_secs, _time.perf_counter() - t_mode0)
         return
 
+    t_token0 = _time.perf_counter()
     kite = setup_kite_session()
 
     token_map = {k.upper(): int(v) for k, v in dict(pre_token_map).items()}
@@ -1169,6 +1420,7 @@ def run_mode(
     if need_tokens:
         fetched = load_or_fetch_tokens(kite, need_tokens, logger, refresh=refresh_tokens)
         token_map.update({k.upper(): int(v) for k, v in fetched.items()})
+    token_prep_secs = _time.perf_counter() - t_token0
 
     work_items = []
     for t in missing_rows:
@@ -1180,13 +1432,24 @@ def run_mode(
 
     if not work_items:
         logger.info("No valid symbols with tokens.")
+        t_verify0 = _time.perf_counter()
+        ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+        verify_secs = _time.perf_counter() - t_verify0
+        logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
+                    mode.upper(),
+                    verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
+                    ok_count, len(syms), len(verify_failed), verify_secs)
+        logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=0.00s | verify=%.2fs | total=%.2fs",
+                    mode.upper(), freshness_scan_secs, token_prep_secs, verify_secs, _time.perf_counter() - t_mode0)
         return
 
     logger.info("[%s] Processing ONLY missing symbols=%d with max_workers=%d ...", mode.upper(), len(work_items), max_workers)
 
+    all_reports: list[UpdateReport] = []
     updated_reports: list[UpdateReport] = []
     failed = 0
 
+    t_workers0 = _time.perf_counter()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
@@ -1202,6 +1465,7 @@ def run_mode(
             tkr = futures[fut]
             try:
                 rep: UpdateReport = fut.result()
+                all_reports.append(rep)
                 if rep.status == "failed":
                     failed += 1
                 if rep.status in ("created", "updated"):
@@ -1209,12 +1473,14 @@ def run_mode(
             except Exception as e:
                 failed += 1
                 logger.exception("Worker crashed for %s (%s): %s", tkr, mode, e)
+    workers_secs = _time.perf_counter() - t_workers0
 
     if updated_reports:
         logger.info("[%s] Updated symbols: %d", mode.upper(), len(updated_reports))
         for r in sorted(updated_reports, key=lambda x: x.ticker):
             logger.info(
-                "[%s] %s %s | last_before=%s | expected=%s | new_rows=%d | new_range=%s → %s | new_rows_store=%s",
+                "[%s] %s %s | last_before=%s | expected=%s | new_rows=%d | new_range=%s -> %s | "
+                "timing_s(load=%.2f,fetch=%.2f,ind=%.2f,persist=%.2f,total=%.2f) | new_rows_store=%s",
                 mode.upper(),
                 r.ticker,
                 r.status,
@@ -1223,6 +1489,11 @@ def run_mode(
                 r.new_rows_count,
                 r.new_first,
                 r.new_last,
+                r.load_existing_secs,
+                r.fetch_secs,
+                r.indicators_secs,
+                r.persist_secs,
+                r.total_secs,
                 r.new_rows_path
             )
     else:
@@ -1231,6 +1502,79 @@ def run_mode(
     if failed:
         logger.warning("[%s] Failed symbols: %d (see stocks_fetcher_run.log)", mode.upper(), failed)
 
+    if all_reports:
+        n = len(all_reports)
+        sum_load = sum(r.load_existing_secs for r in all_reports)
+        sum_fetch = sum(r.fetch_secs for r in all_reports)
+        sum_ind = sum(r.indicators_secs for r in all_reports)
+        sum_persist = sum(r.persist_secs for r in all_reports)
+        sum_total = sum(r.total_secs for r in all_reports)
+        logger.info("[%s][TIMING] per_ticker_avg_s load=%.2f fetch=%.2f ind=%.2f persist=%.2f total=%.2f (n=%d)",
+                    mode.upper(),
+                    sum_load / n,
+                    sum_fetch / n,
+                    sum_ind / n,
+                    sum_persist / n,
+                    sum_total / n,
+                    n)
+        logger.info("[%s][TIMING] per_ticker_sum_s load=%.2f fetch=%.2f ind=%.2f persist=%.2f total=%.2f",
+                    mode.upper(), sum_load, sum_fetch, sum_ind, sum_persist, sum_total)
+
+    t_verify0 = _time.perf_counter()
+    ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+    verify_secs = _time.perf_counter() - t_verify0
+    logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
+                mode.upper(),
+                verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
+                ok_count, len(syms), len(verify_failed), verify_secs)
+
+    recovery_secs = 0.0
+    verify_post_secs = 0.0
+    if verify_failed:
+        recovery_secs = _recover_verify_failures(
+            mode=mode,
+            verify_failed=verify_failed,
+            all_symbols=syms,
+            expected_ts_ist=verify_expected_ts,
+            kite=kite,
+            token_map=token_map,
+            refresh_tokens=refresh_tokens,
+            max_workers=max_workers,
+            start_dt_ist=start_dt,
+            end_dt_ist=end_dt,
+            logger=logger,
+            holidays=holidays,
+            intraday_ts=intraday_ts,
+            report_dir=report_dir,
+            print_missing_rows=print_missing_rows,
+            print_missing_rows_max=print_missing_rows_max,
+        )
+        t_verify1 = _time.perf_counter()
+        ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+        verify_post_secs = _time.perf_counter() - t_verify1
+        logger.info("[%s][VERIFY][POST] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
+                    mode.upper(),
+                    verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
+                    ok_count, len(syms), len(verify_failed), verify_post_secs)
+
+    if recovery_secs > 0.0:
+        logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=%.2fs | verify_pre=%.2fs | recover=%.2fs | verify_post=%.2fs | total=%.2fs",
+                    mode.upper(),
+                    freshness_scan_secs,
+                    token_prep_secs,
+                    workers_secs,
+                    verify_secs,
+                    recovery_secs,
+                    verify_post_secs,
+                    _time.perf_counter() - t_mode0)
+    else:
+        logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=%.2fs | verify=%.2fs | total=%.2fs",
+                    mode.upper(),
+                    freshness_scan_secs,
+                    token_prep_secs,
+                    workers_secs,
+                    verify_secs,
+                    _time.perf_counter() - t_mode0)
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -1314,3 +1658,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

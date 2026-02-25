@@ -76,7 +76,6 @@ FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe befo
 # Simulation
 POLL_INTERVAL_SEC = 5
 LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
-RISK_INCLUDE_UNREALIZED = str(os.getenv("RISK_INCLUDE_UNREALIZED", "1")).strip().lower() not in {"0", "false", "no"}
 MAX_CONCURRENT_TRADES = 30
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
@@ -89,8 +88,7 @@ DEFAULT_START_CAPITAL = 1_000_000
 DEFAULT_POSITION_SIZE = 50_000
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
-# Risk limits
-MAX_DAILY_LOSS_RS = 5_000           # stop taking new trades if daily loss exceeds this
+# Exposure limits
 MAX_OPEN_POSITIONS = 10             # max simultaneous open positions
 MAX_CAPITAL_DEPLOYED_RS = 500_000   # max total margin that can be deployed
 
@@ -273,6 +271,7 @@ inflight_signals_lock = threading.Lock()
 executed_lock = threading.Lock()
 active_positions: Dict[str, dict] = {}  # signal_id -> open position state
 active_positions_lock = threading.Lock()
+state_file_lock = threading.Lock()
 daily_pnl: Dict[str, float] = {
     "total": 0.0,
     "wins": 0,
@@ -331,19 +330,40 @@ def _open_trades_state_path(today_str: Optional[str] = None) -> str:
 
 def _atomic_write_json(path: str, payload: object) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    last_err: Optional[Exception] = None
+    for attempt in range(5):
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+            return
+        except PermissionError as e:
+            last_err = e
+            # Windows can briefly deny replace/create under concurrent writers.
+            time.sleep(0.05 * (attempt + 1))
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+    if last_err is not None:
+        raise last_err
 
 
 def _persist_open_trades_state() -> None:
-    with active_positions_lock:
-        rows = [dict(v) for _, v in sorted(active_positions.items(), key=lambda kv: kv[0])]
-    payload = {"date": _today_ist_str(), "open_trades": rows, "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")}
-    _atomic_write_json(_open_trades_state_path(), payload)
+    with state_file_lock:
+        with active_positions_lock:
+            rows = [dict(v) for _, v in sorted(active_positions.items(), key=lambda kv: kv[0])]
+        payload = {
+            "date": _today_ist_str(),
+            "open_trades": rows,
+            "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        _atomic_write_json(_open_trades_state_path(), payload)
 
 
 def _load_open_trades_state(today_str: Optional[str] = None) -> List[dict]:
@@ -467,7 +487,7 @@ def _log_live_pnl_snapshot(use_ltp: bool, source: str = "") -> None:
 
 def _check_risk_limits(signal: dict) -> Optional[str]:
     """
-    Check daily loss limit, open positions, and capital deployed.
+    Check open positions and capital deployed.
     Returns a rejection reason string, or None if the trade is allowed.
     """
     entry_price = _safe_float(signal.get("entry_price", 0.0), 0.0)
@@ -478,17 +498,6 @@ def _check_risk_limits(signal: dict) -> Optional[str]:
         return "invalid quantity"
 
     margin = (entry_price * quantity) / INTRADAY_LEVERAGE
-
-    with daily_pnl_lock:
-        realized_total = float(daily_pnl["total"])
-    effective_total = realized_total
-    if RISK_INCLUDE_UNREALIZED:
-        effective_total += _unrealized_total_from_positions()
-    if effective_total <= -MAX_DAILY_LOSS_RS:
-        return (
-            f"daily loss limit hit (effective PnL Rs.{effective_total:+,.2f} "
-            f"<= -{MAX_DAILY_LOSS_RS:,})"
-        )
 
     with capital_lock:
         open_count = len(capital_deployed)
@@ -520,18 +529,6 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
         return False, "invalid quantity", 0.0
 
     margin = float((entry_price * quantity) / INTRADAY_LEVERAGE)
-
-    with daily_pnl_lock:
-        realized_total = float(daily_pnl["total"])
-    effective_total = realized_total
-    if RISK_INCLUDE_UNREALIZED:
-        effective_total += _unrealized_total_from_positions()
-    if effective_total <= -MAX_DAILY_LOSS_RS:
-        return (
-            False,
-            f"daily loss limit hit (effective PnL Rs.{effective_total:+,.2f} <= -{MAX_DAILY_LOSS_RS:,})",
-            0.0,
-        )
 
     with capital_lock:
         if signal_id in capital_deployed:

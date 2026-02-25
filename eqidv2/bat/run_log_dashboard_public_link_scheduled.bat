@@ -6,8 +6,10 @@ set "BAT_DIR=%BASE_DIR%\bat"
 set "DASH_BAT=%BAT_DIR%\run_log_dashboard_public_link.bat"
 
 if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
+if "%LOG_DASH_PASS%"=="" if not "%LOG_DASH_SMTP_APP_PASSWORD%"=="" set "LOG_DASH_PASS=%LOG_DASH_SMTP_APP_PASSWORD%"
 if "%LOG_DASH_PASS%"=="" (
   echo [ERROR] LOG_DASH_PASS is not set.
+  echo [ERROR] LOG_DASH_SMTP_APP_PASSWORD fallback is also empty.
   echo Set LOG_DASH_PASS in the task environment before scheduled launch.
   endlocal & exit /b 2
 )

@@ -35,8 +35,10 @@ if "%EMAIL_SUBJECT_PREFIX%"=="" set "EMAIL_SUBJECT_PREFIX=EQIDV2 Dashboard URL"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
+if "%LOG_DASH_PASS%"=="" if not "%LOG_DASH_SMTP_APP_PASSWORD%"=="" set "LOG_DASH_PASS=%LOG_DASH_SMTP_APP_PASSWORD%"
 if "%LOG_DASH_PASS%"=="" (
   echo [ERROR] LOG_DASH_PASS is not set.
+  echo [ERROR] LOG_DASH_SMTP_APP_PASSWORD fallback is also empty.
   echo Example: set LOG_DASH_PASS=your_strong_password
   endlocal & exit /b 2
 )
