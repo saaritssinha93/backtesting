@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-open health check for EQIDV2 live sessions (v1/v2/v3/v4)."""
+"""Pre-open health check for EQIDV2 live sessions (v2/v3/v4/v5)."""
 
 from __future__ import annotations
 
@@ -157,9 +157,12 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
         "EQIDV2_live_combined_csv_v3_0900",
         "EQIDV2_live_combined_csv_v4_short_0900",
         "EQIDV2_live_combined_csv_v4_long_0900",
+        "EQIDV2_live_combined_csv_v5_short_0900",
+        "EQIDV2_live_combined_csv_v5_long_0900",
         "EQIDV2_avwap_paper_trade_v2_0900",
         "EQIDV2_avwap_paper_trade_v3_0900",
         "EQIDV2_avwap_paper_trade_v4_0900",
+        "EQIDV2_avwap_paper_trade_v5_0900",
         "EQIDV2_authentication_v2_0900",
     ]
     for task in preopen_tasks:
@@ -198,6 +201,22 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
             label="live_scanner_v4_long_log",
         )
     )
+    checks.append(
+        check_file_recent(
+            LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_short.log",
+            max_age_min=max_age_min,
+            required=True,
+            label="live_scanner_v5_short_log",
+        )
+    )
+    checks.append(
+        check_file_recent(
+            LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_long.log",
+            max_age_min=max_age_min,
+            required=True,
+            label="live_scanner_v5_long_log",
+        )
+    )
 
     # Papertrade logs should be fresh.
     today = now_ist().strftime("%Y-%m-%d")
@@ -223,6 +242,14 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
             max_age_min=max_age_min,
             required=True,
             label="papertrade_v4_log",
+        )
+    )
+    checks.append(
+        check_file_recent(
+            LOG_DIR / f"avwap_trade_execution_PAPER_TRADE_TRUE_v5_{today}.log",
+            max_age_min=max_age_min,
+            required=True,
+            label="papertrade_v5_log",
         )
     )
 
@@ -262,6 +289,22 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
         )
         checks.append(
             check_today_file(
+                "signals_{}_v5_short.csv",
+                required=False,
+                max_age_min=max_age_min,
+                label="live_entries_csv_v5_short",
+            )
+        )
+        checks.append(
+            check_today_file(
+                "signals_{}_v5_long.csv",
+                required=False,
+                max_age_min=max_age_min,
+                label="live_entries_csv_v5_long",
+            )
+        )
+        checks.append(
+            check_today_file(
                 "paper_trades_{}_v2.csv",
                 required=False,
                 max_age_min=max_age_min,
@@ -282,6 +325,14 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="papertrade_csv_v4",
+            )
+        )
+        checks.append(
+            check_today_file(
+                "paper_trades_{}_v5.csv",
+                required=False,
+                max_age_min=max_age_min,
+                label="papertrade_csv_v5",
             )
         )
 

@@ -33,11 +33,14 @@ LOG_FILES: Dict[str, str] = {
     "live_combined_csv_v3": "eqidv2_live_combined_analyser_csv_v3.log",
     "live_combined_csv_v4_short": "eqidv2_live_combined_analyser_csv_v4_short.log",
     "live_combined_csv_v4_long": "eqidv2_live_combined_analyser_csv_v4_long.log",
+    "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
+    "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.log",
 }
 LOG_IDS = tuple(LOG_FILES.keys()) + (
     "paper_trade_v2",
     "paper_trade_v3",
     "paper_trade_v4",
+    "paper_trade_v5",
     "kite_trade",
     "preopen_healthcheck",
 )
@@ -48,6 +51,8 @@ STATUS_FILES: Dict[str, str] = {
     "live_combined_csv_v3": "eqidv2_live_combined_analyser_csv_v3.status",
     "live_combined_csv_v4_short": "eqidv2_live_combined_analyser_csv_v4_short.status",
     "live_combined_csv_v4_long": "eqidv2_live_combined_analyser_csv_v4_long.status",
+    "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
+    "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
 }
 
 
@@ -101,6 +106,17 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         if latest is not None:
             return latest, latest.name
         legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v4.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "paper_trade_v5":
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v5_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v5_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v5.log"
         return LOG_DIR / legacy_name, legacy_name
 
     if name == "kite_trade":
@@ -1013,16 +1029,22 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "live_combined_csv_v3",
       "live_combined_csv_v4_short",
       "live_combined_csv_v4_long",
+      "live_combined_csv_v5_short",
+      "live_combined_csv_v5_long",
       "live_signals_csv_v2",
       "live_signals_csv_v3",
       "live_signals_csv_v4_short",
       "live_signals_csv_v4_long",
+      "live_signals_csv_v5_short",
+      "live_signals_csv_v5_long",
       "live_papertrade_result_csv_v2",
       "live_papertrade_result_csv_v3",
       "live_papertrade_result_csv_v4",
+      "live_papertrade_result_csv_v5",
       "paper_trade_v2",
       "paper_trade_v3",
       "paper_trade_v4",
+      "paper_trade_v5",
       "preopen_healthcheck",
       "kite_trade",
       "live_kite_trades_csv",
@@ -1037,13 +1059,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "live_combined_csv_v3": "Live Analysis And Signal Generation V3",
       "live_combined_csv_v4_short": "Live Analysis And Signal Generation V4 Short",
       "live_combined_csv_v4_long": "Live Analysis And Signal Generation V4 Long",
+      "live_combined_csv_v5_short": "Live Analysis And Signal Generation V5 Short",
+      "live_combined_csv_v5_long": "Live Analysis And Signal Generation V5 Long",
       "live_signals_csv_v2": "Live Entries CSV V2",
       "live_signals_csv_v3": "Live Entries CSV V3",
       "live_signals_csv_v4_short": "Live Entries CSV V4 Short",
       "live_signals_csv_v4_long": "Live Entries CSV V4 Long",
+      "live_signals_csv_v5_short": "Live Entries CSV V5 Short",
+      "live_signals_csv_v5_long": "Live Entries CSV V5 Long",
       "live_papertrade_result_csv_v2": "Live Papertrade Result CSV V2",
       "live_papertrade_result_csv_v3": "Live Papertrade Result CSV V3",
       "live_papertrade_result_csv_v4": "Live Papertrade Result CSV V4",
+      "live_papertrade_result_csv_v5": "Live Papertrade Result CSV V5",
       "live_kite_trades_csv": "Live Kite Trades CSV",
       "kite_holdings_today_csv": "Kite Holdings (Today)",
       "kite_positions_day_today_csv": "Kite Positions (Daily, Today)",
@@ -1051,6 +1078,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "paper_trade_v2": "Papertrade Runner View V2",
       "paper_trade_v3": "Papertrade Runner View V3",
       "paper_trade_v4": "Papertrade Runner View V4",
+      "paper_trade_v5": "Papertrade Runner View V5",
       "preopen_healthcheck": "Preopen Healthcheck 09:05",
       "kite_trade": "Live Kite Trades Log",
       "eod_1540_update": "Live EOD Data Fetch"
@@ -1466,6 +1494,56 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
+        # Dynamic card: today's live signal CSV V5 short.
+        live_csv_name_v5_short = f"signals_{today_ist}_v5_short.csv"
+        live_csv_path_v5_short = LIVE_SIGNAL_DIR / live_csv_name_v5_short
+        try:
+            live_size_v5_short = live_csv_path_v5_short.stat().st_size if live_csv_path_v5_short.exists() else 0
+        except OSError:
+            live_size_v5_short = 0
+        live_entries_tail_v5_short = _format_csv_projection(
+            live_csv_path_v5_short,
+            live_entries_cols,
+            limit_rows=max(5, min(35, lines // 2)),
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v5_short",
+                "file_name": str(Path("live_signals") / live_csv_name_v5_short),
+                "exists": live_csv_path_v5_short.exists(),
+                "mtime": iso_mtime(live_csv_path_v5_short),
+                "size_bytes": live_size_v5_short,
+                "status": {},
+                "tail": live_entries_tail_v5_short,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV V5 long.
+        live_csv_name_v5_long = f"signals_{today_ist}_v5_long.csv"
+        live_csv_path_v5_long = LIVE_SIGNAL_DIR / live_csv_name_v5_long
+        try:
+            live_size_v5_long = live_csv_path_v5_long.stat().st_size if live_csv_path_v5_long.exists() else 0
+        except OSError:
+            live_size_v5_long = 0
+        live_entries_tail_v5_long = _format_csv_projection(
+            live_csv_path_v5_long,
+            live_entries_cols,
+            limit_rows=max(5, min(35, lines // 2)),
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v5_long",
+                "file_name": str(Path("live_signals") / live_csv_name_v5_long),
+                "exists": live_csv_path_v5_long.exists(),
+                "mtime": iso_mtime(live_csv_path_v5_long),
+                "size_bytes": live_size_v5_long,
+                "status": {},
+                "tail": live_entries_tail_v5_long,
+            }
+        )
+
         # Dynamic cards: today's paper trade results CSV(s).
         paper_trade_cols: list[Tuple[str, Sequence[str]]] = [
             ("ticker", ("ticker",)),
@@ -1548,6 +1626,31 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "size_bytes": paper_trade_size_v4,
                 "status": {},
                 "tail": paper_trade_tail_v4,
+            }
+        )
+
+        # Dynamic card: today's paper trade results CSV V5 unified.
+        paper_trade_csv_name_v5 = f"paper_trades_{today_ist}_v5.csv"
+        paper_trade_csv_path_v5 = LIVE_SIGNAL_DIR / paper_trade_csv_name_v5
+        try:
+            paper_trade_size_v5 = paper_trade_csv_path_v5.stat().st_size if paper_trade_csv_path_v5.exists() else 0
+        except OSError:
+            paper_trade_size_v5 = 0
+        paper_trade_tail_v5 = _format_csv_projection(
+            paper_trade_csv_path_v5,
+            paper_trade_cols,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_v5",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_v5),
+                "exists": paper_trade_csv_path_v5.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_v5),
+                "size_bytes": paper_trade_size_v5,
+                "status": {},
+                "tail": paper_trade_tail_v5,
             }
         )
 
