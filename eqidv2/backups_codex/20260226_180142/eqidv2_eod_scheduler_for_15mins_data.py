@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-# Backup reference (2026-02-26):
-# - c:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\backups_codex\20260226_180142\eqidv2_eod_scheduler_for_15mins_data.py
-# - c:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\backups_codex\20260226_180142\run_eqidv2_eod_scheduler_for_15mins_data.bat
 """
 eqidv2_eod_scheduler_for_15mins_data.py  (FIXED)
 ================================================
@@ -14,8 +11,7 @@ Why your 15m parquet was not updating regularly:
    and force a real token fetch via kite.instruments().
 
 2) The old scheduler ran too close to the 15m boundary (buffer=7s). Kite can lag a bit.
-   This version runs exactly once per slot and uses a configurable buffer
-   (default 6s; override via --buffer-sec / EQIDV2_15M_BUFFER_SEC).
+   This version uses a safer buffer (default 60s) and runs exactly once per slot.
 
 3) The old scheduler referenced core.HOLIDAYS_FILE (not present). Core exposes HOLIDAYS_FILE_DEFAULT.
 
@@ -153,14 +149,6 @@ if hasattr(core, 'expected_last_stamp') and _orig_ticker_is_fresh is not None:
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 HARD_STOP = dtime(15, 50)  # exit after this
-DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_15M_MAX_WORKERS", "24"))
-DEFAULT_BUFFER_SEC = int(os.getenv("EQIDV2_15M_BUFFER_SEC", "6"))
-DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_15M_REFRESH_TOKENS", "0")).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 
 
 def now_ist() -> datetime:
@@ -206,11 +194,9 @@ def run_update_15m_once(max_workers: int, report_dir: str, buffer_sec: int, refr
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
-    ap.add_argument("--buffer-sec", type=int, default=DEFAULT_BUFFER_SEC, help="How long after boundary to run (Kite can lag).")
-    ap.add_argument("--refresh-tokens", dest="refresh_tokens", action="store_true", help="Force refresh kite instrument token cache.")
-    ap.add_argument("--no-refresh-tokens", dest="refresh_tokens", action="store_false", help="Do not refresh kite instrument token cache.")
-    ap.set_defaults(refresh_tokens=DEFAULT_REFRESH_TOKENS)
+    ap.add_argument("--max-workers", type=int, default=24)
+    ap.add_argument("--buffer-sec", type=int, default=6, help="How long after boundary to run (Kite can lag).")
+    ap.add_argument("--refresh-tokens", action="store_true", help="Force refresh kite instrument token cache.")
     ap.add_argument("--report-dir", default="reports/stocks_missing_reports")
     args = ap.parse_args()
 
@@ -226,8 +212,6 @@ def main() -> None:
     print(f"       Output dir (15m): {getattr(core, 'DIRS', {}).get('15min', {}).get('out', 'stocks_indicators_15min_eq')}")
     print(f"       Runs every 15 mins between {MARKET_OPEN.strftime('%H:%M')} and {MARKET_CLOSE.strftime('%H:%M')} IST (trading days).")
     print(f"       Buffer after boundary: {args.buffer_sec}s")
-    print(f"       Max workers: {args.max_workers}")
-    print(f"       Refresh tokens: {args.refresh_tokens}")
     print(f"       Process will exit at {HARD_STOP.strftime('%H:%M')} IST.")
 
     last_run_slot: Optional[datetime] = None

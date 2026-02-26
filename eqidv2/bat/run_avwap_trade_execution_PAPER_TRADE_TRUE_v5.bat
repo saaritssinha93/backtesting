@@ -9,19 +9,15 @@ set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.e
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "LOG_DIR=%BASE_DIR%\logs"
-set "SCRIPT_NAME=eqidv2_eod_scheduler_for_15mins_data.py"
-set "LOG_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_15mins_data.log"
-set "MAX_WORKERS=%EQIDV2_15M_MAX_WORKERS%"
-if "%MAX_WORKERS%"=="" set "MAX_WORKERS=24"
-set "BUFFER_SEC=%EQIDV2_15M_BUFFER_SEC%"
-if "%BUFFER_SEC%"=="" set "BUFFER_SEC=6"
-set "REFRESH_TOKENS_ARG="
-if /I "%EQIDV2_15M_REFRESH_TOKENS%"=="1" set "REFRESH_TOKENS_ARG=--refresh-tokens"
-if /I "%EQIDV2_15M_REFRESH_TOKENS%"=="true" set "REFRESH_TOKENS_ARG=--refresh-tokens"
+set "SCRIPT_NAME=avwap_trade_execution_PAPER_TRADE_TRUE_v5.py"
 set "END_CUTOFF_HHMM=1540"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
 set /a RESTART_COUNT=0
+
+for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"') do set "TODAY_IST=%%a"
+if not defined TODAY_IST set "TODAY_IST=%DATE%"
+set "LOG_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_TRUE_v5_%TODAY_IST%.log"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
@@ -29,18 +25,19 @@ cd /d "%BASE_DIR%"
 
 for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmm')"') do set "NOW_HHMM=%%a"
 if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
-  echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^) 
+  echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^)
   echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^)>>"%LOG_FILE%"
   endlocal & exit /b 0
 )
 
 echo [%DATE% %TIME%] START %SCRIPT_NAME%
 echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
+echo [INFO] Using daily log file: %LOG_FILE%
+echo [INFO] Using daily log file: %LOG_FILE%>>"%LOG_FILE%"
 echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
-echo [INFO] Runtime args: --max-workers %MAX_WORKERS% --buffer-sec %BUFFER_SEC% %REFRESH_TOKENS_ARG%>>"%LOG_FILE%"
 
 :RUN_LOOP
-"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --max-workers %MAX_WORKERS% --buffer-sec %BUFFER_SEC% %REFRESH_TOKENS_ARG% >>"%LOG_FILE%" 2>&1
+"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --entry-price-source ltp_on_signal >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)
@@ -67,4 +64,5 @@ goto RUN_LOOP
 
 :DONE
 endlocal & exit /b %EXIT_CODE%
+
 
