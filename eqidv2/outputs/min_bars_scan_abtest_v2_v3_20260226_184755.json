@@ -1,0 +1,148 @@
+{
+  "generated_at": "20260226_184755",
+  "scope": "all tickers, all days in local 15m parquet",
+  "notes": [
+    "Only parameter changed per runner: min_bars_for_scan (5 vs 3)",
+    "5-min exit resolution enabled",
+    "v3 run here enables both SHORT and LONG for comparable combined metrics",
+    "v3 LONG anti-chase model is applied"
+  ],
+  "results": {
+    "avwap_combined_runner.py": {
+      "runner": "v2",
+      "min_bars_5": {
+        "elapsed_sec": 197.66,
+        "entries": {
+          "short": 807,
+          "long": 250,
+          "combined": 1057
+        },
+        "metrics": {
+          "net_pnl_rs": 1412998.61,
+          "profit_pct_roi_on_start_capital": 141.299861,
+          "profit_factor": 3.2621704961835727,
+          "sum_pnl_pct": 1839.942307,
+          "avg_pnl_pct": 1.740721,
+          "hit_rate_pct": 0.0,
+          "total_trades": 1057
+        },
+        "side_metrics": {
+          "short": {
+            "total_trades": 807,
+            "profit_factor": 2.264869419313472,
+            "sum_pnl_pct": 853.887386
+          },
+          "long": {
+            "total_trades": 250,
+            "profit_factor": 8.13121055177516,
+            "sum_pnl_pct": 986.054922
+          }
+        }
+      },
+      "min_bars_3": {
+        "elapsed_sec": 176.16,
+        "entries": {
+          "short": 807,
+          "long": 250,
+          "combined": 1057
+        },
+        "metrics": {
+          "net_pnl_rs": 1412998.61,
+          "profit_pct_roi_on_start_capital": 141.299861,
+          "profit_factor": 3.2621704961835727,
+          "sum_pnl_pct": 1839.942307,
+          "avg_pnl_pct": 1.740721,
+          "hit_rate_pct": 0.0,
+          "total_trades": 1057
+        },
+        "side_metrics": {
+          "short": {
+            "total_trades": 807,
+            "profit_factor": 2.264869419313472,
+            "sum_pnl_pct": 853.887386
+          },
+          "long": {
+            "total_trades": 250,
+            "profit_factor": 8.13121055177516,
+            "sum_pnl_pct": 986.054922
+          }
+        }
+      },
+      "delta_3_minus_5": {
+        "entries_delta": 0,
+        "net_pnl_rs_delta": 0.0,
+        "profit_pct_delta": 0.0,
+        "profit_factor_delta": 0.0,
+        "sum_pnl_pct_delta": 0.0
+      }
+    },
+    "avwap_combined_runner_v3.py": {
+      "runner": "v3",
+      "min_bars_5": {
+        "elapsed_sec": 181.36,
+        "entries": {
+          "short": 807,
+          "long": 210,
+          "combined": 1017
+        },
+        "metrics": {
+          "net_pnl_rs": 1139211.67,
+          "profit_pct_roi_on_start_capital": 113.921167,
+          "profit_factor": 2.9511665143738575,
+          "sum_pnl_pct": 1566.155365,
+          "avg_pnl_pct": 1.539976,
+          "hit_rate_pct": 0.0,
+          "total_trades": 1017
+        },
+        "side_metrics": {
+          "short": {
+            "total_trades": 807,
+            "profit_factor": 2.264869419313472,
+            "sum_pnl_pct": 853.887386
+          },
+          "long": {
+            "total_trades": 210,
+            "profit_factor": 6.5821709005657,
+            "sum_pnl_pct": 712.267979
+          }
+        }
+      },
+      "min_bars_3": {
+        "elapsed_sec": 177.41,
+        "entries": {
+          "short": 807,
+          "long": 210,
+          "combined": 1017
+        },
+        "metrics": {
+          "net_pnl_rs": 1139211.67,
+          "profit_pct_roi_on_start_capital": 113.921167,
+          "profit_factor": 2.9511665143738575,
+          "sum_pnl_pct": 1566.155365,
+          "avg_pnl_pct": 1.539976,
+          "hit_rate_pct": 0.0,
+          "total_trades": 1017
+        },
+        "side_metrics": {
+          "short": {
+            "total_trades": 807,
+            "profit_factor": 2.264869419313472,
+            "sum_pnl_pct": 853.887386
+          },
+          "long": {
+            "total_trades": 210,
+            "profit_factor": 6.5821709005657,
+            "sum_pnl_pct": 712.267979
+          }
+        }
+      },
+      "delta_3_minus_5": {
+        "entries_delta": 0,
+        "net_pnl_rs_delta": 0.0,
+        "profit_pct_delta": 0.0,
+        "profit_factor_delta": 0.0,
+        "sum_pnl_pct_delta": 0.0
+      }
+    }
+  }
+}
