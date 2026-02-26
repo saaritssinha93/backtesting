@@ -128,7 +128,7 @@ SIGNAL_CSV_COLUMNS = [
 # SCHEDULER CONFIG
 # =============================================================================
 START_TIME = dtime(9, 15)
-END_TIME = dtime(15, 30)
+END_TIME = dtime(14, 40)
 HARD_STOP_TIME = dtime(15, 40)
 
 # Timing: data fetcher (eqidv2_eod_15min_data_stocks) takes ~1 minute after each
@@ -1491,6 +1491,22 @@ def _sleep_until(dt: datetime) -> None:
         time.sleep(delta)
 
 
+def _fmt_ist_dt(ts: datetime) -> str:
+    """Render as YYYY-MM-DD HH:MM:SS+05:30."""
+    return ts.astimezone(IST).isoformat(sep=" ", timespec="seconds")
+
+
+def _next_trading_day_start(now: datetime, holidays: set) -> datetime:
+    """Return next trading day's START_TIME in IST."""
+    probe = now.astimezone(IST).date() + timedelta(days=1)
+    for _ in range(370):
+        if is_trading_day_safe(probe, holidays):
+            return IST.localize(datetime.combine(probe, START_TIME))
+        probe += timedelta(days=1)
+    # Safe fallback
+    return IST.localize(datetime.combine(now.astimezone(IST).date() + timedelta(days=1), START_TIME))
+
+
 # =============================================================================
 # CSV BRIDGE: write signals to live_signals/ for trade executors
 # =============================================================================
@@ -2210,8 +2226,8 @@ def main() -> None:
             return
 
         if not is_trading_day_safe(now.date(), holidays):
-            nxt = _next_slot_after(now + timedelta(days=1))
-            print(f"[SKIP] Not a trading day ({now.date()}). Sleeping until {nxt}.")
+            nxt = _next_trading_day_start(now, holidays)
+            print(f"[SKIP] Not a trading day ({now.date()}). Sleeping until {_fmt_ist_dt(nxt)}.")
             _sleep_until(nxt)
             continue
 
@@ -2227,8 +2243,8 @@ def main() -> None:
 
         now = now_ist()
         if now.time() > END_TIME:
-            nxt = _next_slot_after(now + timedelta(days=1))
-            print(f"[DONE] Past END_TIME. Sleeping until {nxt}.")
+            nxt = _next_trading_day_start(now, holidays)
+            print(f"[DONE] Past END_TIME. Sleeping until {_fmt_ist_dt(nxt)}.")
             _sleep_until(nxt)
             continue
 
@@ -2249,8 +2265,12 @@ def main() -> None:
 
         # --- Run multiple scans per slot to catch freshly-updated data ---
         scan_labels = [chr(ord("A") + i) for i in range(NUM_SCANS_PER_SLOT)]
+        past_end_reached = False
         for scan_idx, label in enumerate(scan_labels):
             now = now_ist()
+            if now.time() > END_TIME:
+                past_end_reached = True
+                break
             if now.time() >= HARD_STOP_TIME:
                 print("[STOP] Hard-stop reached mid-slot. Exiting.")
                 return
@@ -2261,6 +2281,12 @@ def main() -> None:
             # Sleep between scans (skip after the last one)
             if scan_idx < len(scan_labels) - 1:
                 time.sleep(float(SCAN_INTERVAL_SECONDS))
+
+        if past_end_reached:
+            nxt = _next_trading_day_start(now_ist(), holidays)
+            print(f"[DONE] Past END_TIME. Sleeping until {_fmt_ist_dt(nxt)}.")
+            _sleep_until(nxt)
+            continue
 
         time.sleep(1.0)
 

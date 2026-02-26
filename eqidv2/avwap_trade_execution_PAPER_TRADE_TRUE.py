@@ -173,6 +173,50 @@ log = setup_logging()
 # KITE SESSION (optional â€” for LTP simulation)
 # ============================================================================
 kite = None
+_ltp_last_error_by_ticker: Dict[str, str] = {}
+_ltp_error_lock = threading.Lock()
+
+
+def _normalize_ticker_symbol(ticker: str) -> str:
+    return str(ticker or "").strip().upper()
+
+
+def _ltp_instrument_candidates(ticker: str) -> List[str]:
+    raw = _normalize_ticker_symbol(ticker)
+    if not raw:
+        return []
+    if ":" in raw:
+        ex, sym = raw.split(":", 1)
+        ex = ex.strip().upper()
+        sym = sym.strip().upper()
+        if not sym:
+            return []
+        out: List[str] = [f"{ex}:{sym}"]
+        if ex != "NSE":
+            out.append(f"NSE:{sym}")
+        if ex != "BSE":
+            out.append(f"BSE:{sym}")
+        return out
+    return [f"NSE:{raw}", f"BSE:{raw}"]
+
+
+def _set_ltp_error(ticker: str, msg: str) -> None:
+    key = _normalize_ticker_symbol(ticker)
+    if not key:
+        return
+    with _ltp_error_lock:
+        if msg:
+            _ltp_last_error_by_ticker[key] = str(msg)
+        else:
+            _ltp_last_error_by_ticker.pop(key, None)
+
+
+def get_last_ltp_error(ticker: str) -> str:
+    key = _normalize_ticker_symbol(ticker)
+    if not key:
+        return ""
+    with _ltp_error_lock:
+        return str(_ltp_last_error_by_ticker.get(key, ""))
 
 
 def setup_kite_session():
@@ -196,14 +240,41 @@ def setup_kite_session():
 
 
 def get_ltp(ticker: str) -> Optional[float]:
-    """Get last traded price from Kite. Returns None on failure."""
+    """Get last traded price from Kite with NSE/BSE fallback."""
     if kite is None:
         return None
-    try:
-        data = kite.ltp(f"NSE:{ticker}")
-        return float(data[f"NSE:{ticker}"]["last_price"])
-    except Exception:
+    instruments = _ltp_instrument_candidates(ticker)
+    if not instruments:
         return None
+    try:
+        data = kite.ltp(instruments if len(instruments) > 1 else instruments[0])
+        if isinstance(data, dict):
+            for inst in instruments:
+                row = data.get(inst)
+                if not isinstance(row, dict):
+                    continue
+                ltp = _safe_float(row.get("last_price", 0.0), 0.0)
+                if ltp > 0:
+                    _set_ltp_error(ticker, "")
+                    return float(ltp)
+    except Exception as e:
+        _set_ltp_error(ticker, f"ltp_error={e}")
+
+    try:
+        data_q = kite.quote(instruments)
+        if isinstance(data_q, dict):
+            for inst in instruments:
+                row = data_q.get(inst)
+                if not isinstance(row, dict):
+                    continue
+                ltp = _safe_float(row.get("last_price", 0.0), 0.0)
+                if ltp > 0:
+                    _set_ltp_error(ticker, "")
+                    return float(ltp)
+        _set_ltp_error(ticker, f"no_valid_last_price candidates={','.join(instruments)}")
+    except Exception as e:
+        _set_ltp_error(ticker, f"quote_error={e}")
+    return None
 
 
 # ============================================================================
@@ -779,9 +850,11 @@ def simulate_trade(
 
         if ltp is None:
             if ltp_miss_count == 1 or (ltp_miss_count % 12 == 0):
+                last_err = get_last_ltp_error(ticker)
                 log.warning(
                     f"[LTP.MISS] ticker={ticker} | side={side} | misses={ltp_miss_count} | "
                     f"action=retry_keep_open | ID={trade_id}"
+                    + (f" | reason={last_err}" if last_err else "")
                 )
             time.sleep(POLL_INTERVAL_SEC)
             continue

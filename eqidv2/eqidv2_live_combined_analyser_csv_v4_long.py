@@ -1,23 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-EQIDV2 LIVE Scanner V3 (base SHORT + LONG anti-chase pending entry)
-====================================================================
+EQIDV2 LIVE Scanner V4 LONG (long-only anti-chase split pipeline)
+==================================================================
 
 This file is a non-destructive wrapper over:
     eqidv2_live_combined_analyser_csv_v2.py
 
 Goals:
 1. Keep existing v2 files untouched.
-2. Keep SHORT flow from base v2 unchanged.
-3. Implement anti-chase LONG entry logic in live flow without scanning 5-min for all symbols:
-   - Signal detection remains from existing 15-min pipeline.
-   - LONG signals are first stored as pending entries.
-   - Pending entries are filled only when live LTP <= configured limit price before expiry.
-   - Only filled entries are appended to live signal CSV.
-
-Notes:
-- Pending fill uses Kite LTP bridge for the small set of pending symbols only.
-- Output/state paths are isolated to v3 (no overwrite of v2 artifacts).
+2. Emit only LONG signals.
+3. Keep anti-chase LONG pending-entry behavior from v3.
+4. Isolate all outputs/state with `v4_long` suffix.
 """
 
 from __future__ import annotations
@@ -35,17 +28,17 @@ import eqidv2_live_combined_analyser_csv_v2 as v2
 
 
 # -----------------------------------------------------------------------------
-# V3 LONG ANTI-CHASE CONFIG
+# V4_LONG ANTI-CHASE CONFIG
 # -----------------------------------------------------------------------------
-LONG_LIMIT_WAIT_MIN = int(os.getenv("EQIDV3_LONG_LIMIT_WAIT_MIN", "60"))
-LONG_LIMIT_OFFSET_PCT = float(os.getenv("EQIDV3_LONG_LIMIT_OFFSET_PCT", "-0.005"))  # -0.5%
-LONG_STOP_PCT = float(os.getenv("EQIDV3_LONG_STOP_PCT", "0.006"))                    # 0.6%
-LONG_TARGET_PCT = float(os.getenv("EQIDV3_LONG_TARGET_PCT", "0.018"))                # 1.8%
+LONG_LIMIT_WAIT_MIN = int(os.getenv("EQIDV4_LONG_LIMIT_WAIT_MIN", "60"))
+LONG_LIMIT_OFFSET_PCT = float(os.getenv("EQIDV4_LONG_LIMIT_OFFSET_PCT", "-0.005"))  # -0.5%
+LONG_STOP_PCT = float(os.getenv("EQIDV4_LONG_STOP_PCT", "0.006"))                    # 0.6%
+LONG_TARGET_PCT = float(os.getenv("EQIDV4_LONG_TARGET_PCT", "0.018"))                # 1.8%
 
 # Optional signal-quality filters before putting LONG into pending queue.
-LONG_RSI_CAP_RAW = os.getenv("EQIDV3_LONG_RSI_CAP", "").strip()
-LONG_ADX_MIN_RAW = os.getenv("EQIDV3_LONG_ADX_MIN", "").strip()
-LONG_QUALITY_MIN_RAW = os.getenv("EQIDV3_LONG_QUALITY_MIN", "").strip()
+LONG_RSI_CAP_RAW = os.getenv("EQIDV4_LONG_RSI_CAP", "").strip()
+LONG_ADX_MIN_RAW = os.getenv("EQIDV4_LONG_ADX_MIN", "").strip()
+LONG_QUALITY_MIN_RAW = os.getenv("EQIDV4_LONG_QUALITY_MIN", "").strip()
 
 LONG_RSI_CAP: Optional[float] = float(LONG_RSI_CAP_RAW) if LONG_RSI_CAP_RAW else None
 LONG_ADX_MIN: Optional[float] = float(LONG_ADX_MIN_RAW) if LONG_ADX_MIN_RAW else None
@@ -53,11 +46,12 @@ LONG_QUALITY_MIN: Optional[float] = float(LONG_QUALITY_MIN_RAW) if LONG_QUALITY_
 
 
 ROOT = Path(__file__).resolve().parent
-PENDING_STATE_FILE = ROOT / "logs" / "eqidv2_long_pending_state_v3.json"
+PENDING_STATE_FILE = ROOT / "logs" / "eqidv2_long_pending_state_v4_long.json"
 
 
 # Keep original functions so wrapper can delegate safely.
 _ORIG_WRITE_SIGNALS_CSV = v2._write_signals_csv
+_ORIG_LATEST_ENTRY_SIGNALS_FOR_TICKER = v2._latest_entry_signals_for_ticker
 _ORIG_RUN_ONE_SCAN = v2.run_one_scan
 _ORIG_RUN_REPLAY_FOR_DATE = v2.run_replay_for_date
 
@@ -115,7 +109,7 @@ def _save_pending_state(state: Dict[str, Any]) -> None:
 def _disable_kite_rebase_write(signals_df: pd.DataFrame) -> int:
     """
     Write rows through original v2 CSV appender but with Kite rebase temporarily disabled.
-    We already finalize entry/SL/TGT in v3 pending-fill logic.
+    We already finalize entry/SL/TGT in v4_long pending-fill logic.
     """
     old = bool(v2.USE_KITE_LTP_FOR_SIGNAL_CSV)
     try:
@@ -132,6 +126,26 @@ def _row_signal_time_ist(row: Dict[str, Any]) -> Optional[pd.Timestamp]:
             if ts is not None:
                 return ts
     return None
+
+
+def _latest_entry_signals_for_ticker_v4_long(
+    ticker: str,
+    df_raw: pd.DataFrame,
+    state: Dict[str, Any],
+    target_slot_ist: pd.Timestamp,
+):
+    """
+    Delegate to base detector, then keep only LONG rows/checks.
+    """
+    signals, checks = _ORIG_LATEST_ENTRY_SIGNALS_FOR_TICKER(
+        ticker=ticker,
+        df_raw=df_raw,
+        state=state,
+        target_slot_ist=target_slot_ist,
+    )
+    signals_long = [s for s in (signals or []) if str(getattr(s, "side", "")).upper().strip() == "LONG"]
+    checks_long = [c for c in (checks or []) if str(c.get("side", "")).upper().strip() == "LONG"]
+    return signals_long, checks_long
 
 
 def _to_pending_record(row: Dict[str, Any], now_ts: pd.Timestamp) -> Optional[Dict[str, Any]]:
@@ -211,12 +225,11 @@ def _pending_to_signal_row(p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _write_signals_csv_v3(signals_df: pd.DataFrame) -> int:
+def _write_signals_csv_v4_long(signals_df: pd.DataFrame) -> int:
     """
-    V3 bridge:
-    1) SHORT rows pass through base v2 CSV writer unchanged.
-    2) LONG rows are queued as pending anti-chase entries.
-    3) Pending LONG are filled via LTP and written when limit is hit.
+    V4_LONG bridge:
+    1) LONG rows are queued as pending anti-chase entries.
+    2) Pending LONG are filled via LTP and written when limit is hit.
     """
     now_ts = pd.Timestamp(v2.now_ist())
     today_str = str(now_ts.date())
@@ -228,17 +241,15 @@ def _write_signals_csv_v3(signals_df: pd.DataFrame) -> int:
     pending: Dict[str, Dict[str, Any]] = dict(state.get("pending", {}))
 
     scanned_total = 0 if signals_df is None else int(len(signals_df))
-    short_rows: List[Dict[str, Any]] = []
     long_rows: List[Dict[str, Any]] = []
-    short_scanned = 0
-    short_written = 0
+    short_dropped = 0
     long_scanned = 0
     added = 0
     expired = 0
     filled = 0
 
     # 1) Route incoming rows:
-    #    - SHORT -> passthrough via base writer.
+    #    - SHORT -> ignored.
     #    - LONG  -> pending anti-chase queue.
     if signals_df is not None and (not signals_df.empty):
         for _, row in signals_df.iterrows():
@@ -246,8 +257,7 @@ def _write_signals_csv_v3(signals_df: pd.DataFrame) -> int:
             scanned_total += 0  # explicit no-op for readability
             side = str(payload.get("side", "")).upper().strip()
             if side == "SHORT":
-                short_rows.append(payload)
-                short_scanned += 1
+                short_dropped += 1
                 continue
             if side != "LONG":
                 continue
@@ -270,11 +280,7 @@ def _write_signals_csv_v3(signals_df: pd.DataFrame) -> int:
             pending[key] = rec
             added += 1
 
-    # 2) Write SHORT rows with base v2 behavior.
-    if short_rows:
-        short_written = int(_ORIG_WRITE_SIGNALS_CSV(pd.DataFrame(short_rows)))
-
-    # 3) Process pending LONG queue against live LTP.
+    # 2) Process pending LONG queue against live LTP.
     still_pending: Dict[str, Dict[str, Any]] = {}
     active_tickers: List[str] = []
     for key, rec in pending.items():
@@ -306,49 +312,50 @@ def _write_signals_csv_v3(signals_df: pd.DataFrame) -> int:
     state = {"date": today_str, "pending": next_pending}
     _save_pending_state(state)
 
-    # 4) Emit only filled LONG rows through original bridge (without extra rebase).
+    # 3) Emit only filled LONG rows through original bridge (without extra rebase).
     long_written = 0
     if long_rows:
         df_filled = pd.DataFrame(long_rows)
         long_written = _disable_kite_rebase_write(df_filled)
 
     print(
-        f"[V3 CSV] scanned={0 if signals_df is None else len(signals_df)} "
-        f"| short_scanned={short_scanned} | short_written={short_written} "
+        f"[V4_LONG CSV] scanned={0 if signals_df is None else len(signals_df)} "
+        f"| short_dropped={short_dropped} "
         f"| long_scanned={long_scanned} | pending_added={added} "
         f"| pending_filled={filled} | pending_expired={expired} "
         f"| pending_open={len(next_pending)} | long_written={long_written}",
         flush=True,
     )
-    return int(short_written + long_written)
+    return int(long_written)
 
 
-def _apply_v3_overrides() -> None:
-    """Patch v2 module-level config/functions to isolate v3 behavior."""
-    v2.REPORTS_DIR = ROOT / "reports" / "eqidv2_reports_v3"
+def _apply_v4_long_overrides() -> None:
+    """Patch v2 module-level config/functions to isolate v4_long behavior."""
+    v2.REPORTS_DIR = ROOT / "reports" / "eqidv2_reports_v4_long"
     v2.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    v2.OUT_CHECKS_DIR = ROOT / "out_eqidv2_live_checks_15m_v3"
-    v2.OUT_SIGNALS_DIR = ROOT / "out_eqidv2_live_signals_15m_v3"
+    v2.OUT_CHECKS_DIR = ROOT / "out_eqidv2_live_checks_15m_v4_long"
+    v2.OUT_SIGNALS_DIR = ROOT / "out_eqidv2_live_signals_15m_v4_long"
     v2.OUT_CHECKS_DIR.mkdir(parents=True, exist_ok=True)
     v2.OUT_SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 
-    v2.STATE_FILE = ROOT / "logs" / "eqidv2_avwap_live_state_v11_v3.json"
-    v2.SIGNAL_CSV_PATTERN = "signals_{}_v3.csv"
+    v2.STATE_FILE = ROOT / "logs" / "eqidv2_avwap_live_state_v11_v4_long.json"
+    v2.SIGNAL_CSV_PATTERN = "signals_{}_v4_long.csv"
     v2.END_TIME = v2.dtime(14, 40)
     v2.SESSION_END = v2.dtime(14, 40, 0)
 
     # Ensure pending queue is processed even when no fresh signals in a scan cycle.
     v2.IMMEDIATE_SIGNAL_CSV_FLUSH = False
 
-    # Keep Kite enabled because v3 pending queue relies on LTP.
+    # Keep Kite enabled because v4_long pending queue relies on LTP.
     v2.USE_KITE_LTP_FOR_SIGNAL_CSV = True
 
-    # Install v3 writer (SHORT passthrough + LONG anti-chase).
-    v2._write_signals_csv = _write_signals_csv_v3
+    # Install LONG-only detector and LONG pending writer.
+    v2._latest_entry_signals_for_ticker = _latest_entry_signals_for_ticker_v4_long
+    v2._write_signals_csv = _write_signals_csv_v4_long
 
-    # Ensure per-scan parquet outputs get explicit `_v3` filename suffix.
-    def _run_one_scan_v3(run_tag: str = "A"):
+    # Ensure per-scan parquet outputs get explicit `_v4_long` filename suffix.
+    def _run_one_scan_v4_long(run_tag: str = "A"):
         checks_df, signals_df = _ORIG_RUN_ONE_SCAN(run_tag)
 
         def _rename_latest(folder: Path, prefix: str) -> None:
@@ -359,9 +366,9 @@ def _apply_v3_overrides() -> None:
             if not candidates:
                 return
             src = candidates[-1]
-            if src.stem.endswith("_v3"):
+            if src.stem.endswith("_v4_long"):
                 return
-            dst = src.with_name(src.stem + "_v3" + src.suffix)
+            dst = src.with_name(src.stem + "_v4_long" + src.suffix)
             try:
                 if dst.exists():
                     dst.unlink()
@@ -373,21 +380,21 @@ def _apply_v3_overrides() -> None:
         _rename_latest(v2.OUT_SIGNALS_DIR / datetime.now(v2.IST).strftime("%Y%m%d"), "signals")
         return checks_df, signals_df
 
-    v2.run_one_scan = _run_one_scan_v3
+    v2.run_one_scan = _run_one_scan_v4_long
 
-    # Ensure replay default output filename carries `_v3`.
-    def _run_replay_for_date_v3(date_str: str, out_csv: Optional[str] = None) -> pd.DataFrame:
+    # Ensure replay default output filename carries `_v4_long`.
+    def _run_replay_for_date_v4_long(date_str: str, out_csv: Optional[str] = None) -> pd.DataFrame:
         if out_csv is None:
-            out_csv = str(v2.OUT_SIGNALS_DIR / f"replay_signals_{date_str}_v3.csv")
+            out_csv = str(v2.OUT_SIGNALS_DIR / f"replay_signals_{date_str}_v4_long.csv")
         return _ORIG_RUN_REPLAY_FOR_DATE(date_str, out_csv=out_csv)
 
-    v2.run_replay_for_date = _run_replay_for_date_v3
+    v2.run_replay_for_date = _run_replay_for_date_v4_long
 
 
 def main() -> None:
-    _apply_v3_overrides()
+    _apply_v4_long_overrides()
     print(
-        "[V3] Base SHORT + LONG anti-chase enabled | "
+        "[V4_LONG] LONG-only anti-chase enabled | "
         f"limit_wait={LONG_LIMIT_WAIT_MIN}m "
         f"limit_offset={LONG_LIMIT_OFFSET_PCT*100:.2f}% "
         f"sl={LONG_STOP_PCT*100:.2f}% "
@@ -395,11 +402,11 @@ def main() -> None:
         flush=True,
     )
     if LONG_RSI_CAP is not None:
-        print(f"[V3] LONG_RSI_CAP={LONG_RSI_CAP}", flush=True)
+        print(f"[V4_LONG] LONG_RSI_CAP={LONG_RSI_CAP}", flush=True)
     if LONG_ADX_MIN is not None:
-        print(f"[V3] LONG_ADX_MIN={LONG_ADX_MIN}", flush=True)
+        print(f"[V4_LONG] LONG_ADX_MIN={LONG_ADX_MIN}", flush=True)
     if LONG_QUALITY_MIN is not None:
-        print(f"[V3] LONG_QUALITY_MIN={LONG_QUALITY_MIN}", flush=True)
+        print(f"[V4_LONG] LONG_QUALITY_MIN={LONG_QUALITY_MIN}", flush=True)
     v2.main()
 
 

@@ -7,10 +7,10 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "ALERT_DIR=%LOG_DIR%\alerts"
-set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv.py"
-set "LOG_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.log"
-set "ALERT_LOG=%ALERT_DIR%\CRITICAL_eqidv2_live_combined_analyser_csv.log"
-set "STATUS_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv.status"
+set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv_v4_short.py"
+set "LOG_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v4_short.log"
+set "ALERT_LOG=%ALERT_DIR%\CRITICAL_eqidv2_live_combined_analyser_csv_v4_short.log"
+set "STATUS_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v4_short.status"
 set "END_CUTOFF_HHMM=1540"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
@@ -125,10 +125,11 @@ if not "%EXIT_CODE%"=="0" (
   msg %USERNAME% /TIME:15 "CRITICAL: %SCRIPT_NAME% failed (exit=%EXIT_CODE%) - check %LOG_FILE%" >nul 2>&1
 
   powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "try { $ws = New-Object -ComObject WScript.Shell; [void]$ws.Popup('CRITICAL FAILURE in eqidv2_live_combined_analyser_csv.py`nExitCode: %EXIT_CODE%`nSee log: %LOG_FILE%', 10, 'EQIDV2 ALERT', 16) } catch { }"
+    "try { $ws = New-Object -ComObject WScript.Shell; [void]$ws.Popup('CRITICAL FAILURE in eqidv2_live_combined_analyser_csv_v4_short.py`nExitCode: %EXIT_CODE%`nSee log: %LOG_FILE%', 10, 'EQIDV2 ALERT', 16) } catch { }"
 
   echo [ALERT] CRITICAL: %SCRIPT_NAME% failed. ExitCode=%EXIT_CODE%
   echo [ALERT] AlertFile=!ALERT_FILE!
 )
 
 endlocal & exit /b %EXIT_CODE%
+
