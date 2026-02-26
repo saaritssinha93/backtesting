@@ -6,7 +6,7 @@ set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.e
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "LOG_DIR=%BASE_DIR%\logs"
-set "SCRIPT_NAME=avwap_trade_execution_PAPER_TRADE_TRUE.py"
+set "SCRIPT_NAME=avwap_trade_execution_PAPER_TRADE_TRUE_v4.py"
 set "END_CUTOFF_HHMM=1540"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
@@ -14,7 +14,7 @@ set /a RESTART_COUNT=0
 
 for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"') do set "TODAY_IST=%%a"
 if not defined TODAY_IST set "TODAY_IST=%DATE%"
-set "LOG_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_TRUE_%TODAY_IST%.log"
+set "LOG_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_TRUE_v4_%TODAY_IST%.log"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
@@ -61,3 +61,4 @@ goto RUN_LOOP
 
 :DONE
 endlocal & exit /b %EXIT_CODE%
+

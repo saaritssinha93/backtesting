@@ -1,6 +1,6 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
-avwap_trade_execution_PAPER_TRADE_TRUE.py Ã¢â‚¬â€ Paper Trade Executor (Simulation)
+avwap_trade_execution_PAPER_TRADE_TRUE.py â€” Paper Trade Executor (Simulation)
 ==============================================================================
 
 Watches the daily signal CSV produced by avwap_live_signal_generator.py and
@@ -24,9 +24,9 @@ Features:
   - Optional Kite LTP polling for realistic price simulation
 
 Usage:
-    python avwap_trade_execution_PAPER_TRADE_TRUE_v3.py
-    python avwap_trade_execution_PAPER_TRADE_TRUE_v3.py --no-ltp
-    python avwap_trade_execution_PAPER_TRADE_TRUE_v3.py --capital 500000
+    python avwap_trade_execution_PAPER_TRADE_TRUE_v2.py
+    python avwap_trade_execution_PAPER_TRADE_TRUE_v2.py --no-ltp
+    python avwap_trade_execution_PAPER_TRADE_TRUE_v2.py --capital 500000
 """
 
 from __future__ import annotations
@@ -61,12 +61,13 @@ except ImportError:
 IST = pytz.timezone("Asia/Kolkata")
 
 SIGNAL_DIR = "live_signals"
-SIGNAL_CSV_PATTERN = "signals_{}_v3.csv"
-PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v3.csv"
-PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v3.log"
-EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper_v3.json")
-SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary_v3.json")
-OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}_v3.json"
+SIGNAL_CSV_PATTERN = "signals_{}_v4_long.csv"
+PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v4_long.csv"
+PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v4_long.log"
+EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper_v4_long.json")
+SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary_v4_long.json")
+OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}_v4_long.json"
+ALLOWED_SIGNAL_SIDES = {"LONG"}
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -125,7 +126,7 @@ SIGNAL_COLUMNS = [
     "signal_entry_datetime_ist", "signal_bar_time_ist",
 ]
 
-# Column name mapping: signal generator CSV name Ã¢â€ â€™ executor expected name
+# Column name mapping: signal generator CSV name â†’ executor expected name
 _SIGNAL_COL_MAP = {
     "entry":          "entry_price",
     "sl":             "stop_price",
@@ -141,7 +142,7 @@ _SIGNAL_COL_MAP = {
 # LOGGING
 # ============================================================================
 def setup_logging() -> logging.Logger:
-    logger = logging.getLogger("paper_trade_v3")
+    logger = logging.getLogger("paper_trade_v2")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
 
@@ -168,7 +169,7 @@ log = setup_logging()
 
 
 # ============================================================================
-# KITE SESSION (optional Ã¢â‚¬â€ for LTP simulation)
+# KITE SESSION (optional â€” for LTP simulation)
 # ============================================================================
 kite = None
 _ltp_last_error_by_ticker: Dict[str, str] = {}
@@ -354,8 +355,8 @@ daily_pnl: Dict[str, float] = {
 }
 daily_pnl_lock = threading.Lock()
 
-# Capital / position tracking (margin, not notional Ã¢â‚¬â€ accounts for MIS leverage)
-capital_deployed: Dict[str, float] = {}   # signal_id Ã¢â€ â€™ margin blocked
+# Capital / position tracking (margin, not notional â€” accounts for MIS leverage)
+capital_deployed: Dict[str, float] = {}   # signal_id â†’ margin blocked
 capital_lock = threading.Lock()
 
 
@@ -1073,11 +1074,23 @@ def read_signals_csv(csv_path: str) -> List[dict]:
             return []
         signals = [_normalize_signal(row) for row in df.to_dict("records")]
         signals, dropped = _filter_today_signals(signals)
+        side_dropped = 0
+        filtered_by_side: List[dict] = []
+        for sig in signals:
+            side = str(sig.get("side", "")).upper().strip()
+            if side in ALLOWED_SIGNAL_SIDES:
+                filtered_by_side.append(sig)
+            else:
+                side_dropped += 1
         if dropped > 0:
             log.warning(
                 f"[CSV] Ignored {dropped} stale signal row(s) not matching today's IST date."
             )
-        return signals
+        if side_dropped > 0:
+            log.info(
+                f"[CSV] Ignored {side_dropped} signal row(s) outside side filter {sorted(ALLOWED_SIGNAL_SIDES)}."
+            )
+        return filtered_by_side
     except Exception as e:
         log.error(f"Error reading signals CSV: {e}")
         return []
@@ -1685,7 +1698,7 @@ def main():
     use_ltp = not args.no_ltp
 
     log.info("=" * 65)
-    log.info("AVWAP Paper Trade Executor Ã¢â‚¬â€ PAPER_TRADE = TRUE")
+    log.info("AVWAP Paper Trade Executor â€” PAPER_TRADE = TRUE")
     log.info(f"  Mode            : SIMULATION (no real orders)")
     log.info(f"  LTP polling     : {'Enabled' if use_ltp else 'Disabled'}")
     log.info(f"  Entry source    : {args.entry_price_source}")
@@ -1703,7 +1716,7 @@ def main():
     if use_ltp:
         setup_kite_session()
         if kite is None:
-            log.warning("LTP polling disabled Ã¢â‚¬â€ Kite session unavailable.")
+            log.warning("LTP polling disabled â€” Kite session unavailable.")
             use_ltp = False
             if args.entry_price_source == "ltp_on_signal":
                 log.warning(
@@ -1849,4 +1862,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

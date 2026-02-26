@@ -1,6 +1,6 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
-avwap_trade_execution_PAPER_TRADE_TRUE.py Ã¢â‚¬â€ Paper Trade Executor (Simulation)
+avwap_trade_execution_PAPER_TRADE_TRUE.py â€” Paper Trade Executor (Simulation)
 ==============================================================================
 
 Watches the daily signal CSV produced by avwap_live_signal_generator.py and
@@ -24,9 +24,9 @@ Features:
   - Optional Kite LTP polling for realistic price simulation
 
 Usage:
-    python avwap_trade_execution_PAPER_TRADE_TRUE_v3.py
-    python avwap_trade_execution_PAPER_TRADE_TRUE_v3.py --no-ltp
-    python avwap_trade_execution_PAPER_TRADE_TRUE_v3.py --capital 500000
+    python avwap_trade_execution_PAPER_TRADE_TRUE_v4.py
+    python avwap_trade_execution_PAPER_TRADE_TRUE_v4.py --no-ltp
+    python avwap_trade_execution_PAPER_TRADE_TRUE_v4.py --capital 500000
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, time as dt_time
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
@@ -61,12 +61,12 @@ except ImportError:
 IST = pytz.timezone("Asia/Kolkata")
 
 SIGNAL_DIR = "live_signals"
-SIGNAL_CSV_PATTERN = "signals_{}_v3.csv"
-PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v3.csv"
-PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v3.log"
-EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper_v3.json")
-SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary_v3.json")
-OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}_v3.json"
+SIGNAL_CSV_PATTERNS = ("signals_{}_v4_short.csv", "signals_{}_v4_long.csv")
+PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v4.csv"
+PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v4.log"
+EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper_v4.json")
+SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary_v4.json")
+OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}_v4.json"
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -125,7 +125,7 @@ SIGNAL_COLUMNS = [
     "signal_entry_datetime_ist", "signal_bar_time_ist",
 ]
 
-# Column name mapping: signal generator CSV name Ã¢â€ â€™ executor expected name
+# Column name mapping: signal generator CSV name â†’ executor expected name
 _SIGNAL_COL_MAP = {
     "entry":          "entry_price",
     "sl":             "stop_price",
@@ -141,7 +141,7 @@ _SIGNAL_COL_MAP = {
 # LOGGING
 # ============================================================================
 def setup_logging() -> logging.Logger:
-    logger = logging.getLogger("paper_trade_v3")
+    logger = logging.getLogger("paper_trade_v2")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
 
@@ -168,7 +168,7 @@ log = setup_logging()
 
 
 # ============================================================================
-# KITE SESSION (optional Ã¢â‚¬â€ for LTP simulation)
+# KITE SESSION (optional â€” for LTP simulation)
 # ============================================================================
 kite = None
 _ltp_last_error_by_ticker: Dict[str, str] = {}
@@ -354,8 +354,8 @@ daily_pnl: Dict[str, float] = {
 }
 daily_pnl_lock = threading.Lock()
 
-# Capital / position tracking (margin, not notional Ã¢â‚¬â€ accounts for MIS leverage)
-capital_deployed: Dict[str, float] = {}   # signal_id Ã¢â€ â€™ margin blocked
+# Capital / position tracking (margin, not notional â€” accounts for MIS leverage)
+capital_deployed: Dict[str, float] = {}   # signal_id â†’ margin blocked
 capital_lock = threading.Lock()
 
 
@@ -1083,6 +1083,44 @@ def read_signals_csv(csv_path: str) -> List[dict]:
         return []
 
 
+def get_signal_csv_paths_for_today() -> List[str]:
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    return [os.path.join(SIGNAL_DIR, pattern.format(today_str)) for pattern in SIGNAL_CSV_PATTERNS]
+
+
+def read_signals_csv_multi(csv_paths: Sequence[str]) -> List[dict]:
+    """
+    Read and merge signals from multiple CSV files (v4_short + v4_long).
+    Dedupe by signal_id, keeping first-seen row.
+    """
+    merged: Dict[str, dict] = {}
+    for csv_path in csv_paths:
+        rows = read_signals_csv(csv_path)
+        if not rows:
+            continue
+        for sig in rows:
+            sid = str(sig.get("signal_id", "")).strip()
+            if not sid:
+                continue
+            if sid not in merged:
+                merged[sid] = sig
+
+    out = list(merged.values())
+    out.sort(
+        key=lambda r: (
+            str(
+                r.get("signal_entry_datetime_ist")
+                or r.get("signal_bar_time_ist")
+                or r.get("signal_datetime")
+                or ""
+            ),
+            str(r.get("ticker", "")),
+            str(r.get("side", "")),
+        )
+    )
+    return out
+
+
 def _sanitize_today_paper_trade_csv() -> Tuple[int, int]:
     """
     Ensure today's paper trade CSV only has rows whose signal time is from today (IST).
@@ -1181,7 +1219,7 @@ def _load_closed_ids_and_realized_summary(
 
 
 def _restore_intraday_runtime_state(
-    signal_csv_path: str,
+    signal_csv_paths: Sequence[str],
     paper_csv_path: str,
     executed: Set[str],
 ) -> Tuple[Dict[str, float], List[dict]]:
@@ -1192,8 +1230,8 @@ def _restore_intraday_runtime_state(
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     today_date = datetime.now(IST).date()
 
-    # Build today's signal lookup by signal_id
-    signal_rows = read_signals_csv(signal_csv_path)
+    # Build today's signal lookup by signal_id from both v4_short + v4_long CSVs
+    signal_rows = read_signals_csv_multi(signal_csv_paths)
     signals_by_id: Dict[str, dict] = {}
     for sig in signal_rows:
         sid = str(sig.get("signal_id", "")).strip()
@@ -1488,20 +1526,20 @@ def _launch_trade_thread(
 
 
 def process_new_signals(
-    csv_path: str,
+    csv_paths: Sequence[str],
     executed: Set[str],
     use_ltp: bool,
     trade_semaphore: threading.Semaphore,
     entry_price_source: str = "signal_bar",
 ) -> Set[str]:
     """
-    Read signals CSV, find unprocessed signals, launch simulation threads.
+    Read signal CSVs, find unprocessed signals, launch simulation threads.
     Returns updated executed signals set.
     """
     if not _is_market_open_now():
         return executed
 
-    signals = read_signals_csv(csv_path)
+    signals = read_signals_csv_multi(csv_paths)
     if not signals:
         return executed
 
@@ -1625,12 +1663,12 @@ def start_resumed_trade_monitors(
 # WATCHDOG FILE MONITOR
 # ============================================================================
 class SignalCSVHandler(FileSystemEventHandler):
-    """Watches the signal CSV for modifications and triggers processing."""
+    """Watches multiple signal CSV files for modifications and triggers processing."""
 
-    def __init__(self, csv_path: str, callback, debounce_sec: float = 3.0):
+    def __init__(self, csv_paths: Sequence[str], callback, debounce_sec: float = 3.0):
         super().__init__()
-        self.csv_path = csv_path
-        self.csv_filename = os.path.basename(csv_path)
+        self.csv_paths = list(csv_paths)
+        self.csv_filenames = {os.path.basename(p) for p in self.csv_paths}
         self.callback = callback
         self.debounce_sec = debounce_sec
         self._timer: Optional[threading.Timer] = None
@@ -1639,13 +1677,13 @@ class SignalCSVHandler(FileSystemEventHandler):
     def on_modified(self, event):
         if event.is_directory:
             return
-        if os.path.basename(event.src_path) == self.csv_filename:
+        if os.path.basename(event.src_path) in self.csv_filenames:
             self._debounce()
 
     def on_created(self, event):
         if event.is_directory:
             return
-        if os.path.basename(event.src_path) == self.csv_filename:
+        if os.path.basename(event.src_path) in self.csv_filenames:
             self._debounce()
 
     def _debounce(self):
@@ -1685,7 +1723,7 @@ def main():
     use_ltp = not args.no_ltp
 
     log.info("=" * 65)
-    log.info("AVWAP Paper Trade Executor Ã¢â‚¬â€ PAPER_TRADE = TRUE")
+    log.info("AVWAP Paper Trade Executor â€” PAPER_TRADE = TRUE")
     log.info(f"  Mode            : SIMULATION (no real orders)")
     log.info(f"  LTP polling     : {'Enabled' if use_ltp else 'Disabled'}")
     log.info(f"  Entry source    : {args.entry_price_source}")
@@ -1703,7 +1741,7 @@ def main():
     if use_ltp:
         setup_kite_session()
         if kite is None:
-            log.warning("LTP polling disabled Ã¢â‚¬â€ Kite session unavailable.")
+            log.warning("LTP polling disabled â€” Kite session unavailable.")
             use_ltp = False
             if args.entry_price_source == "ltp_on_signal":
                 log.warning(
@@ -1723,13 +1761,16 @@ def main():
     executed = load_executed_signals()
     log.info(f"Loaded {len(executed)} previously executed signals.")
 
-    # Resolve today's signal CSV
+    # Resolve today's signal CSVs (v4_short + v4_long)
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
-    csv_path = os.path.join(SIGNAL_DIR, SIGNAL_CSV_PATTERN.format(today_str))
+    csv_paths = get_signal_csv_paths_for_today()
     paper_csv_path = os.path.join(SIGNAL_DIR, PAPER_TRADE_LOG_PATTERN.format(today_str))
+    log.info(
+        "Signal CSV sources: " + ", ".join(os.path.basename(p) for p in csv_paths)
+    )
 
     restore_stats, resumed_signals = _restore_intraday_runtime_state(
-        signal_csv_path=csv_path,
+        signal_csv_paths=csv_paths,
         paper_csv_path=paper_csv_path,
         executed=executed,
     )
@@ -1765,9 +1806,9 @@ def main():
     # Callback for watchdog
     def on_csv_change():
         nonlocal executed
-        log.info("Signal CSV changed - processing new signals...")
+        log.info("Signal CSV changed - processing new signals from v4_short + v4_long...")
         executed = process_new_signals(
-            csv_path,
+            csv_paths,
             executed,
             use_ltp,
             trade_semaphore,
@@ -1776,17 +1817,17 @@ def main():
 
     # Set up watchdog
     os.makedirs(SIGNAL_DIR, exist_ok=True)
-    handler = SignalCSVHandler(csv_path, on_csv_change, debounce_sec=2.0)
+    handler = SignalCSVHandler(csv_paths, on_csv_change, debounce_sec=2.0)
     observer = Observer()
     observer.schedule(handler, path=SIGNAL_DIR, recursive=False)
     observer.start()
-    log.info(f"Watchdog started - monitoring {csv_path}")
+    log.info("Watchdog started - monitoring " + ", ".join(csv_paths))
 
     # Initial check for existing signals
-    if os.path.exists(csv_path):
+    if any(os.path.exists(p) for p in csv_paths):
         log.info("Checking for existing unprocessed signals...")
         executed = process_new_signals(
-            csv_path,
+            csv_paths,
             executed,
             use_ltp,
             trade_semaphore,
@@ -1849,4 +1890,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

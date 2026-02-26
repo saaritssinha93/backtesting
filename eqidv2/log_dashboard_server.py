@@ -15,7 +15,7 @@ from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
@@ -29,17 +29,25 @@ LOG_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.log",
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
-    "live_combined_csv": "eqidv2_live_combined_analyser_csv.log",
     "live_combined_csv_v2": "eqidv2_live_combined_analyser_csv_v2.log",
     "live_combined_csv_v3": "eqidv2_live_combined_analyser_csv_v3.log",
+    "live_combined_csv_v4_short": "eqidv2_live_combined_analyser_csv_v4_short.log",
+    "live_combined_csv_v4_long": "eqidv2_live_combined_analyser_csv_v4_long.log",
 }
-LOG_IDS = tuple(LOG_FILES.keys()) + ("paper_trade", "paper_trade_v2", "paper_trade_v3", "kite_trade", "preopen_healthcheck")
+LOG_IDS = tuple(LOG_FILES.keys()) + (
+    "paper_trade_v2",
+    "paper_trade_v3",
+    "paper_trade_v4",
+    "kite_trade",
+    "preopen_healthcheck",
+)
 
 STATUS_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.status",
-    "live_combined_csv": "eqidv2_live_combined_analyser_csv.status",
     "live_combined_csv_v2": "eqidv2_live_combined_analyser_csv_v2.status",
     "live_combined_csv_v3": "eqidv2_live_combined_analyser_csv_v3.status",
+    "live_combined_csv_v4_short": "eqidv2_live_combined_analyser_csv_v4_short.status",
+    "live_combined_csv_v4_long": "eqidv2_live_combined_analyser_csv_v4_long.status",
 }
 
 
@@ -62,17 +70,6 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         file_name = LOG_FILES[name]
         return LOG_DIR / file_name, file_name
 
-    if name == "paper_trade":
-        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_{today_ist}.log"
-        today_path = LOG_DIR / today_name
-        if today_path.exists():
-            return today_path, today_name
-        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_*.log")
-        if latest is not None:
-            return latest, latest.name
-        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE.log"
-        return LOG_DIR / legacy_name, legacy_name
-
     if name == "paper_trade_v2":
         today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v2_{today_ist}.log"
         today_path = LOG_DIR / today_name
@@ -93,6 +90,17 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         if latest is not None:
             return latest, latest.name
         legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v3.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "paper_trade_v4":
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v4_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v4_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v4.log"
         return LOG_DIR / legacy_name, legacy_name
 
     if name == "kite_trade":
@@ -228,14 +236,79 @@ def _to_float_or_nan(value: str) -> float:
     # tolerate display formats like Rs.+1,234.56
     s = s.replace(",", "")
     s = s.replace("Rs.", "").replace("RS.", "").replace("rs.", "")
+    s = s.replace("%", "")
     try:
         return float(s)
     except ValueError:
         return float("nan")
 
 
+def _fmt_indian_number(value: float, decimals: int = 2, signed: bool = False) -> str:
+    if math.isnan(value):
+        return "n/a"
+
+    sign = ""
+    if value < 0:
+        sign = "-"
+    elif signed and value > 0:
+        sign = "+"
+
+    abs_val = abs(value)
+    if decimals <= 0:
+        numeric = f"{abs_val:.0f}"
+        int_part = numeric
+        frac_part = ""
+    else:
+        numeric = f"{abs_val:.{decimals}f}"
+        int_part, frac_part = numeric.split(".", 1)
+
+    if len(int_part) > 3:
+        head = int_part[:-3]
+        tail = int_part[-3:]
+        groups = []
+        while len(head) > 2:
+            groups.append(head[-2:])
+            head = head[:-2]
+        if head:
+            groups.append(head)
+        groups.reverse()
+        int_part = ",".join(groups + [tail])
+
+    if decimals <= 0:
+        return f"{sign}{int_part}"
+    return f"{sign}{int_part}.{frac_part}"
+
+
+def _fmt_pct(value: float, signed: bool = True) -> str:
+    return f"{_fmt_indian_number(value, decimals=2, signed=signed)}%"
+
+
 def _fmt_rs(value: float) -> str:
-    return f"Rs.{value:+,.2f}"
+    return f"Rs.{_fmt_indian_number(value, decimals=2, signed=True)}"
+
+
+def _compute_holding_total_pnl_pct(row: dict[str, str]) -> str:
+    qty = _to_float_or_nan(_pick_csv_value(row, ("quantity", "qty")))
+    t1_qty = _to_float_or_nan(_pick_csv_value(row, ("t1_quantity",)))
+    avg = _to_float_or_nan(_pick_csv_value(row, ("average_price", "avg_price", "price")))
+    pnl = _to_float_or_nan(_pick_csv_value(row, ("pnl", "unrealised", "unrealized")))
+
+    if math.isnan(avg) or math.isnan(pnl):
+        return ""
+
+    q = 0.0
+    if not math.isnan(qty):
+        q += float(qty)
+    if not math.isnan(t1_qty):
+        q += float(t1_qty)
+    if q <= 0.0:
+        return ""
+
+    invested = q * float(avg)
+    if invested <= 0.0:
+        return ""
+
+    return str((float(pnl) * 100.0) / invested)
 
 
 def _format_csv_projection(
@@ -247,6 +320,11 @@ def _format_csv_projection(
     total_numeric_by_keys: Optional[Sequence[str]] = None,
     total_numeric_label: str = "",
     total_numeric_first: bool = False,
+    indian_numeric_cols: Optional[Set[str]] = None,
+    indian_int_cols: Optional[Set[str]] = None,
+    percent_cols: Optional[Set[str]] = None,
+    signed_numeric_cols: Optional[Set[str]] = None,
+    computed_cols: Optional[Dict[str, Callable[[dict[str, str]], str]]] = None,
 ) -> str:
     """
     Render a compact fixed-width table from selected CSV columns.
@@ -259,9 +337,24 @@ def _format_csv_projection(
     if not rows_raw:
         return "(no rows yet)"
 
+    computed_cols = dict(computed_cols or {})
+
     if sort_numeric_desc_by_keys:
+        def _pick_numeric_raw_for_sort(row: dict[str, str], keys: Sequence[str]) -> str:
+            for key in keys:
+                if key in computed_cols:
+                    try:
+                        val = str(computed_cols[key](row) or "").strip()
+                    except Exception:
+                        val = ""
+                else:
+                    val = _pick_csv_value(row, (key,))
+                if val:
+                    return val
+            return ""
+
         def _sort_key(row: dict[str, str]) -> tuple[int, float]:
-            raw = _pick_csv_value(row, sort_numeric_desc_by_keys)
+            raw = _pick_numeric_raw_for_sort(row, sort_numeric_desc_by_keys)
             num = _to_float_or_nan(raw)
             if not math.isnan(num):
                 return (0, -float(num))
@@ -282,12 +375,34 @@ def _format_csv_projection(
 
     rows: list[dict[str, str]] = []
     time_only_cols = set(time_only_cols or set())
+    indian_numeric_cols = set(indian_numeric_cols or set())
+    indian_int_cols = set(indian_int_cols or set())
+    percent_cols = set(percent_cols or set())
+    signed_numeric_cols = set(signed_numeric_cols or set())
     for row in rows_raw:
         projected: dict[str, str] = {}
         for col_name, key_candidates in columns:
-            val = _pick_csv_value(row, key_candidates)
+            if col_name in computed_cols:
+                try:
+                    val = str(computed_cols[col_name](row) or "")
+                except Exception:
+                    val = ""
+            else:
+                val = _pick_csv_value(row, key_candidates)
             if col_name in time_only_cols:
                 val = _extract_time_only(val)
+            elif col_name in percent_cols:
+                num = _to_float_or_nan(val)
+                if not math.isnan(num):
+                    val = _fmt_pct(num, signed=(col_name in signed_numeric_cols))
+            elif col_name in indian_int_cols:
+                num = _to_float_or_nan(val)
+                if not math.isnan(num):
+                    val = _fmt_indian_number(num, decimals=0, signed=(col_name in signed_numeric_cols))
+            elif col_name in indian_numeric_cols:
+                num = _to_float_or_nan(val)
+                if not math.isnan(num):
+                    val = _fmt_indian_number(num, decimals=2, signed=(col_name in signed_numeric_cols))
             projected[col_name] = val
         rows.append(projected)
 
@@ -316,12 +431,21 @@ def _format_csv_projection(
     return "\n".join(out_lines)
 
 
-def _compute_holdings_summary(path: Path) -> tuple[float, float, float, float]:
+def _compute_holdings_summary(path: Path) -> tuple[float, float, float, float, float, float]:
     invested = 0.0
     current = 0.0
+    day_pnl = 0.0
+    prev_close_value = 0.0
 
     if not path.exists():
-        return float("nan"), float("nan"), float("nan"), float("nan")
+        return (
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+        )
 
     try:
         with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as fh:
@@ -333,6 +457,8 @@ def _compute_holdings_summary(path: Path) -> tuple[float, float, float, float]:
                 t1_qty = _to_float_or_nan(_pick_csv_value(row, ("t1_quantity",)))
                 avg = _to_float_or_nan(_pick_csv_value(row, ("average_price", "avg_price", "price")))
                 ltp = _to_float_or_nan(_pick_csv_value(row, ("last_price", "ltp", "close_price")))
+                close_price = _to_float_or_nan(_pick_csv_value(row, ("close_price",)))
+                day_change = _to_float_or_nan(_pick_csv_value(row, ("day_change",)))
 
                 q = 0.0
                 if not math.isnan(qty):
@@ -347,12 +473,29 @@ def _compute_holdings_summary(path: Path) -> tuple[float, float, float, float]:
                     invested += q * float(avg)
                 if not math.isnan(ltp):
                     current += q * float(ltp)
+                if not math.isnan(day_change):
+                    day_pnl += q * float(day_change)
+                elif not math.isnan(ltp) and not math.isnan(close_price):
+                    day_pnl += q * (float(ltp) - float(close_price))
+
+                if not math.isnan(close_price):
+                    prev_close_value += q * float(close_price)
+                elif not math.isnan(ltp) and not math.isnan(day_change):
+                    prev_close_value += q * (float(ltp) - float(day_change))
     except (OSError, csv.Error):
-        return float("nan"), float("nan"), float("nan"), float("nan")
+        return (
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+        )
 
     pnl = current - invested
     pnl_pct = (pnl * 100.0 / invested) if invested > 0 else float("nan")
-    return invested, current, pnl, pnl_pct
+    day_pnl_pct = (day_pnl * 100.0 / prev_close_value) if prev_close_value > 0 else float("nan")
+    return invested, current, pnl, pnl_pct, day_pnl, day_pnl_pct
 
 
 def _read_kite_snapshot_meta(path: Path) -> dict[str, object]:
@@ -706,6 +849,88 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       scrollbar-gutter: stable both-edges;
     }
 
+    .table-shell {
+      margin: 0;
+      padding: 8px;
+      max-height: 230px;
+      overflow-x: auto;
+      overflow-y: auto;
+      font-family: "Consolas", "Lucida Console", monospace;
+      font-size: 10px;
+      line-height: 1.25;
+      background: rgba(7, 16, 25, 0.78);
+      tab-size: 4;
+      scrollbar-gutter: stable both-edges;
+    }
+
+    .table-summary,
+    .table-meta {
+      white-space: pre;
+      overflow-wrap: anywhere;
+    }
+
+    .table-summary {
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .table-meta {
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .log-table {
+      border-collapse: collapse;
+      width: max-content;
+      min-width: max-content;
+      table-layout: auto;
+    }
+
+    .log-table th,
+    .log-table td {
+      border: 1px solid var(--line);
+      padding: 2px 5px;
+      white-space: nowrap;
+      text-align: left;
+      background: rgba(9, 18, 28, 0.65);
+    }
+
+    .log-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: rgba(12, 24, 37, 0.96);
+    }
+
+    .th-sort-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      border: 0 !important;
+      color: var(--text) !important;
+      font-weight: 700;
+      background: transparent !important;
+      padding: 0 !important;
+      border-radius: 0 !important;
+      font-size: 11px !important;
+      cursor: pointer;
+      box-shadow: none !important;
+    }
+
+    .th-sort-btn:hover {
+      transform: none !important;
+      box-shadow: none !important;
+      color: var(--accent) !important;
+      text-decoration: underline;
+    }
+
+    .sort-mark {
+      color: var(--muted);
+      font-size: 9px;
+      min-width: 1.7em;
+      text-align: right;
+    }
+
     body.has-fullscreen {
       overflow: hidden;
     }
@@ -749,6 +974,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       padding: 12px;
     }
 
+    body.has-fullscreen .card.is-fullscreen .table-shell {
+      max-height: calc(100vh - 92px);
+      height: calc(100vh - 92px);
+      font-size: 12px;
+      padding: 12px;
+    }
+
     @keyframes cardIn {
       from { opacity: 0; transform: translateY(6px); }
       to { opacity: 1; transform: translateY(0); }
@@ -759,6 +991,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       .wrap { grid-template-columns: 1fr; padding: 10px; gap: 10px; }
       .card-head { padding: 9px 10px; }
       pre { max-height: 250px; }
+      .table-shell { max-height: 250px; }
     }
   </style>
 </head>
@@ -776,18 +1009,20 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <script>
     const LOG_ORDER = [
       "eod_15min_data",
-      "live_combined_csv",
       "live_combined_csv_v2",
       "live_combined_csv_v3",
-      "live_signals_csv",
+      "live_combined_csv_v4_short",
+      "live_combined_csv_v4_long",
       "live_signals_csv_v2",
       "live_signals_csv_v3",
-      "live_papertrade_result_csv",
+      "live_signals_csv_v4_short",
+      "live_signals_csv_v4_long",
       "live_papertrade_result_csv_v2",
       "live_papertrade_result_csv_v3",
-      "paper_trade",
+      "live_papertrade_result_csv_v4",
       "paper_trade_v2",
       "paper_trade_v3",
+      "paper_trade_v4",
       "preopen_healthcheck",
       "kite_trade",
       "live_kite_trades_csv",
@@ -798,28 +1033,31 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     ];
     const LOG_TITLES = {
       "eod_15min_data": "Live Data Fetch (15mins)",
-      "live_combined_csv": "Live Analysis And Signal Generation",
       "live_combined_csv_v2": "Live Analysis And Signal Generation V2",
       "live_combined_csv_v3": "Live Analysis And Signal Generation V3",
-      "live_signals_csv": "Live Entries CSV",
+      "live_combined_csv_v4_short": "Live Analysis And Signal Generation V4 Short",
+      "live_combined_csv_v4_long": "Live Analysis And Signal Generation V4 Long",
       "live_signals_csv_v2": "Live Entries CSV V2",
       "live_signals_csv_v3": "Live Entries CSV V3",
-      "live_papertrade_result_csv": "Live Papertrade Result CSV",
+      "live_signals_csv_v4_short": "Live Entries CSV V4 Short",
+      "live_signals_csv_v4_long": "Live Entries CSV V4 Long",
       "live_papertrade_result_csv_v2": "Live Papertrade Result CSV V2",
       "live_papertrade_result_csv_v3": "Live Papertrade Result CSV V3",
+      "live_papertrade_result_csv_v4": "Live Papertrade Result CSV V4",
       "live_kite_trades_csv": "Live Kite Trades CSV",
       "kite_holdings_today_csv": "Kite Holdings (Today)",
       "kite_positions_day_today_csv": "Kite Positions (Daily, Today)",
       "authentication_v2": "Auth_V2",
-      "paper_trade": "Papertrade Runner view",
       "paper_trade_v2": "Papertrade Runner View V2",
       "paper_trade_v3": "Papertrade Runner View V3",
+      "paper_trade_v4": "Papertrade Runner View V4",
       "preopen_healthcheck": "Preopen Healthcheck 09:05",
       "kite_trade": "Live Kite Trades Log",
       "eod_1540_update": "Live EOD Data Fetch"
     };
     const API_TOKEN = __API_TOKEN_JSON__;
     let FULLSCREEN_ID = "";
+    const TABLE_SORT_STATE = {};
 
     function esc(s) {
       return (s || "")
@@ -844,6 +1082,148 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (!status) return '<span class="pill">UNKNOWN</span>';
       if (status === "SUCCESS") return '<span class="pill ok">SUCCESS</span>';
       return `<span class="pill fail">${esc(status)}</span>`;
+    }
+
+    function parseNumberish(value) {
+      const s = String(value || "").trim();
+      if (!s) return NaN;
+      const cleaned = s
+        .replace(/,/g, "")
+        .replace(/^Rs\\./i, "")
+        .replace(/%/g, "")
+        .replace(/\\s+/g, "");
+      const n = Number.parseFloat(cleaned);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
+    function isTickerColumn(header) {
+      return String(header || "").trim().toLowerCase() === "ticker";
+    }
+
+    function parseTabularTail(tailText) {
+      const lines = String(tailText || "").split(/\\r?\\n/);
+      const rowsMetaIdx = lines.findIndex((ln) => ln.startsWith("rows_shown="));
+      if (rowsMetaIdx < 0 || rowsMetaIdx + 2 >= lines.length) return null;
+
+      const headerLine = lines[rowsMetaIdx + 1] || "";
+      const sepLine = lines[rowsMetaIdx + 2] || "";
+      if (!headerLine.includes(" | ") || !sepLine.includes("-+-")) return null;
+
+      const headers = headerLine.split(" | ").map((h) => h.trim());
+      if (!headers.length) return null;
+
+      const dataLines = lines.slice(rowsMetaIdx + 3).filter((ln) => String(ln || "").trim().length > 0);
+      const rows = dataLines.map((ln) => {
+        const parts = ln.split(" | ").map((p) => String(p || "").trim());
+        while (parts.length < headers.length) parts.push("");
+        if (parts.length > headers.length) return parts.slice(0, headers.length);
+        return parts;
+      });
+
+      return {
+        rowsMeta: lines[rowsMetaIdx] || "",
+        summaryLines: lines.slice(0, rowsMetaIdx).filter((ln) => String(ln || "").trim().length > 0),
+        headers,
+        rows
+      };
+    }
+
+    function sortMark(header, cardId, colIdx) {
+      const st = TABLE_SORT_STATE[cardId];
+      if (!st || st.colIdx !== colIdx) return "↕";
+      if (isTickerColumn(header)) return st.dir === "asc" ? "A→Z" : "Z→A";
+      return st.dir === "asc" ? "↑" : "↓";
+    }
+
+    function sortedRows(parsed, cardId) {
+      const st = TABLE_SORT_STATE[cardId];
+      const indexed = parsed.rows.map((cells, idx) => ({ cells, idx }));
+      if (!st || st.colIdx < 0) return indexed.map((r) => r.cells);
+
+      const colIdx = st.colIdx;
+      const dirMul = st.dir === "asc" ? 1 : -1;
+      const header = parsed.headers[colIdx] || "";
+
+      indexed.sort((a, b) => {
+        const av = String((a.cells[colIdx] ?? "")).trim();
+        const bv = String((b.cells[colIdx] ?? "")).trim();
+        const aEmpty = !av;
+        const bEmpty = !bv;
+        if (aEmpty && bEmpty) return a.idx - b.idx;
+        if (aEmpty) return 1;
+        if (bEmpty) return -1;
+
+        let cmp = 0;
+        if (!isTickerColumn(header)) {
+          const an = parseNumberish(av);
+          const bn = parseNumberish(bv);
+          if (Number.isFinite(an) && Number.isFinite(bn)) {
+            cmp = an - bn;
+          }
+        }
+        if (cmp === 0) {
+          cmp = av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" });
+        }
+        if (cmp === 0) return a.idx - b.idx;
+        return cmp * dirMul;
+      });
+
+      return indexed.map((r) => r.cells);
+    }
+
+    function renderSortableTable(cardId, hostEl, parsed) {
+      const rows = sortedRows(parsed, cardId);
+
+      const summaryHtml = parsed.summaryLines.length
+        ? `<div class="table-summary">${parsed.summaryLines.map((ln) => esc(ln)).join("<br>")}</div>`
+        : "";
+      const metaHtml = parsed.rowsMeta ? `<div class="table-meta">${esc(parsed.rowsMeta)}</div>` : "";
+      const headHtml = parsed.headers.map((h, i) => `
+        <th>
+          <button type="button" class="th-sort-btn" data-col="${i}">
+            <span>${esc(h)}</span>
+            <span class="sort-mark">${esc(sortMark(h, cardId, i))}</span>
+          </button>
+        </th>
+      `).join("");
+      const bodyHtml = rows.map((cells) => `
+        <tr>${parsed.headers.map((_, i) => `<td>${esc(cells[i] ?? "")}</td>`).join("")}</tr>
+      `).join("");
+
+      hostEl.innerHTML = `
+        ${summaryHtml}
+        ${metaHtml}
+        <table class="log-table">
+          <thead><tr>${headHtml}</tr></thead>
+          <tbody>${bodyHtml}</tbody>
+        </table>
+      `;
+
+      hostEl.querySelectorAll(".th-sort-btn").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          const colIdx = Number((ev.currentTarget && ev.currentTarget.getAttribute("data-col")) || "-1");
+          if (!Number.isInteger(colIdx) || colIdx < 0) return;
+          const prev = TABLE_SORT_STATE[cardId] || { colIdx: -1, dir: "asc" };
+          const nextDir = prev.colIdx === colIdx && prev.dir === "asc" ? "desc" : "asc";
+          TABLE_SORT_STATE[cardId] = { colIdx, dir: nextDir };
+          renderSortableTable(cardId, hostEl, parsed);
+        });
+      });
+    }
+
+    function enhanceSortableTables() {
+      const cards = document.querySelectorAll("#cards .card");
+      cards.forEach((card) => {
+        const cardId = card.getAttribute("data-id") || "";
+        const preEl = card.querySelector("pre");
+        if (!preEl) return;
+        const parsed = parseTabularTail(preEl.textContent || "");
+        if (!parsed) return;
+        const host = document.createElement("div");
+        host.className = "table-shell";
+        preEl.replaceWith(host);
+        renderSortableTable(cardId, host, parsed);
+      });
     }
 
     function applyFullscreenState() {
@@ -920,6 +1300,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const cards = document.getElementById('cards');
         cards.innerHTML = html;
         wireCardControls();
+        enhanceSortableTables();
         applyFullscreenState();
         cards.querySelectorAll('pre').forEach((preEl) => {
           preEl.scrollTop = preEl.scrollHeight;
@@ -972,14 +1353,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 }
             )
 
-        # Dynamic card: today's live signal CSV used by trade execution.
+        # Dynamic cards: today's live signal CSV(s) used by trade execution.
         today_ist = dt.datetime.now(IST).date().isoformat()
-        live_csv_name = f"signals_{today_ist}.csv"
-        live_csv_path = LIVE_SIGNAL_DIR / live_csv_name
-        try:
-            live_size = live_csv_path.stat().st_size if live_csv_path.exists() else 0
-        except OSError:
-            live_size = 0
         live_entries_cols: list[Tuple[str, Sequence[str]]] = [
             ("signal_datetime", ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist", "created_ts_ist")),
             ("detected_time_ist", ("detected_time_ist",)),
@@ -990,23 +1365,6 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             ("stop_price", ("stop_price", "_stop_price")),
             ("quantity", ("quantity",)),
         ]
-        live_entries_tail = _format_csv_projection(
-            live_csv_path,
-            live_entries_cols,
-            limit_rows=max(5, min(35, lines // 2)),
-            time_only_cols={"signal_datetime", "detected_time_ist"},
-        )
-        items.append(
-            {
-                "id": "live_signals_csv",
-                "file_name": str(Path("live_signals") / live_csv_name),
-                "exists": live_csv_path.exists(),
-                "mtime": iso_mtime(live_csv_path),
-                "size_bytes": live_size,
-                "status": {},
-                "tail": live_entries_tail,
-            }
-        )
 
         # Dynamic card: today's live signal CSV V2 from analyzer v2.
         live_csv_name_v2 = f"signals_{today_ist}_v2.csv"
@@ -1058,13 +1416,57 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
-        # Dynamic card: today's paper trade results CSV.
-        paper_trade_csv_name = f"paper_trades_{today_ist}.csv"
-        paper_trade_csv_path = LIVE_SIGNAL_DIR / paper_trade_csv_name
+        # Dynamic card: today's live signal CSV V4 short.
+        live_csv_name_v4_short = f"signals_{today_ist}_v4_short.csv"
+        live_csv_path_v4_short = LIVE_SIGNAL_DIR / live_csv_name_v4_short
         try:
-            paper_trade_size = paper_trade_csv_path.stat().st_size if paper_trade_csv_path.exists() else 0
+            live_size_v4_short = live_csv_path_v4_short.stat().st_size if live_csv_path_v4_short.exists() else 0
         except OSError:
-            paper_trade_size = 0
+            live_size_v4_short = 0
+        live_entries_tail_v4_short = _format_csv_projection(
+            live_csv_path_v4_short,
+            live_entries_cols,
+            limit_rows=max(5, min(35, lines // 2)),
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v4_short",
+                "file_name": str(Path("live_signals") / live_csv_name_v4_short),
+                "exists": live_csv_path_v4_short.exists(),
+                "mtime": iso_mtime(live_csv_path_v4_short),
+                "size_bytes": live_size_v4_short,
+                "status": {},
+                "tail": live_entries_tail_v4_short,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV V4 long.
+        live_csv_name_v4_long = f"signals_{today_ist}_v4_long.csv"
+        live_csv_path_v4_long = LIVE_SIGNAL_DIR / live_csv_name_v4_long
+        try:
+            live_size_v4_long = live_csv_path_v4_long.stat().st_size if live_csv_path_v4_long.exists() else 0
+        except OSError:
+            live_size_v4_long = 0
+        live_entries_tail_v4_long = _format_csv_projection(
+            live_csv_path_v4_long,
+            live_entries_cols,
+            limit_rows=max(5, min(35, lines // 2)),
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v4_long",
+                "file_name": str(Path("live_signals") / live_csv_name_v4_long),
+                "exists": live_csv_path_v4_long.exists(),
+                "mtime": iso_mtime(live_csv_path_v4_long),
+                "size_bytes": live_size_v4_long,
+                "status": {},
+                "tail": live_entries_tail_v4_long,
+            }
+        )
+
+        # Dynamic cards: today's paper trade results CSV(s).
         paper_trade_cols: list[Tuple[str, Sequence[str]]] = [
             ("ticker", ("ticker",)),
             ("exit_time", ("exit_time",)),
@@ -1073,23 +1475,6 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             ("pnl_rs", ("pnl_rs",)),
             ("pnl_pct", ("pnl_pct",)),
         ]
-        paper_trade_tail = _format_csv_projection(
-            paper_trade_csv_path,
-            paper_trade_cols,
-            limit_rows=max(5, min(40, lines // 2)),
-            time_only_cols={"exit_time"},
-        )
-        items.append(
-            {
-                "id": "live_papertrade_result_csv",
-                "file_name": str(Path("live_signals") / paper_trade_csv_name),
-                "exists": paper_trade_csv_path.exists(),
-                "mtime": iso_mtime(paper_trade_csv_path),
-                "size_bytes": paper_trade_size,
-                "status": {},
-                "tail": paper_trade_tail,
-            }
-        )
 
         # Dynamic card: today's paper trade results CSV V2.
         paper_trade_csv_name_v2 = f"paper_trades_{today_ist}_v2.csv"
@@ -1138,6 +1523,31 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "size_bytes": paper_trade_size_v3,
                 "status": {},
                 "tail": paper_trade_tail_v3,
+            }
+        )
+
+        # Dynamic card: today's paper trade results CSV V4 unified.
+        paper_trade_csv_name_v4 = f"paper_trades_{today_ist}_v4.csv"
+        paper_trade_csv_path_v4 = LIVE_SIGNAL_DIR / paper_trade_csv_name_v4
+        try:
+            paper_trade_size_v4 = paper_trade_csv_path_v4.stat().st_size if paper_trade_csv_path_v4.exists() else 0
+        except OSError:
+            paper_trade_size_v4 = 0
+        paper_trade_tail_v4 = _format_csv_projection(
+            paper_trade_csv_path_v4,
+            paper_trade_cols,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_v4",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_v4),
+                "exists": paper_trade_csv_path_v4.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_v4),
+                "size_bytes": paper_trade_size_v4,
+                "status": {},
+                "tail": paper_trade_tail_v4,
             }
         )
 
@@ -1200,15 +1610,23 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             ("avg_price", ("average_price", "avg_price")),
             ("last_price", ("last_price", "ltp")),
             ("pnl", ("pnl", "unrealised", "unrealized")),
+            ("%total_pnl", ()),
             ("day_chg_pct", ("day_change_percentage", "day_change_pct")),
         ]
         holdings_tail = _format_csv_projection(
             holdings_path,
             holdings_cols,
             limit_rows=max(200, lines),
-            sort_numeric_desc_by_keys=("pnl", "unrealised", "unrealized"),
+            sort_numeric_desc_by_keys=("%total_pnl", "pnl", "unrealised", "unrealized"),
+            indian_numeric_cols={"avg_price", "last_price", "pnl"},
+            indian_int_cols={"qty"},
+            percent_cols={"%total_pnl", "day_chg_pct"},
+            signed_numeric_cols={"pnl", "%total_pnl", "day_chg_pct"},
+            computed_cols={"%total_pnl": _compute_holding_total_pnl_pct},
         )
-        invested_amt, current_amt, total_pnl, total_pnl_pct = _compute_holdings_summary(holdings_path)
+        invested_amt, current_amt, total_pnl, total_pnl_pct, day_pnl, day_pnl_pct = _compute_holdings_summary(
+            holdings_path
+        )
         total_current_with_funds = (
             current_amt + funds_available
             if (not math.isnan(current_amt) and not math.isnan(funds_available))
@@ -1223,7 +1641,9 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             f"invested_amount={_fmt_rs(invested_amt) if not math.isnan(invested_amt) else 'n/a'}",
             f"current_amount={_fmt_rs(current_amt) if not math.isnan(current_amt) else 'n/a'}",
             f"total_pnl={_fmt_rs(total_pnl) if not math.isnan(total_pnl) else 'n/a'}",
-            f"total_pnl_pct={(f'{total_pnl_pct:+.2f}%') if not math.isnan(total_pnl_pct) else 'n/a'}",
+            f"total_pnl_pct={_fmt_pct(total_pnl_pct) if not math.isnan(total_pnl_pct) else 'n/a'}",
+            f"day_pnl={_fmt_rs(day_pnl) if not math.isnan(day_pnl) else 'n/a'}",
+            f"day_pnl_pct={_fmt_pct(day_pnl_pct) if not math.isnan(day_pnl_pct) else 'n/a'}",
             f"funds_available={funds_available_text}",
             f"TOTAL(invested)={_fmt_rs(total_invested_with_funds) if not math.isnan(total_invested_with_funds) else 'n/a'}",
             f"TOTAL(current)={_fmt_rs(total_current_with_funds) if not math.isnan(total_current_with_funds) else 'n/a'}",
@@ -1268,6 +1688,9 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             total_numeric_by_keys=("pnl", "unrealised", "unrealized"),
             total_numeric_label="total_pnl_ongoing",
             total_numeric_first=True,
+            indian_numeric_cols={"avg_price", "last_price", "pnl"},
+            indian_int_cols={"qty", "buy_qty", "sell_qty"},
+            signed_numeric_cols={"pnl"},
         )
         positions_day_tail = "\n".join([f"funds_available={funds_available_text}", positions_day_tail])
         items.append(

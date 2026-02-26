@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-open health check for EQIDV2 live sessions (v1/v2/v3)."""
+"""Pre-open health check for EQIDV2 live sessions (v1/v2/v3/v4)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from zoneinfo import ZoneInfo
@@ -44,6 +45,11 @@ def check_http(url: str, timeout_sec: float) -> CheckResult:
             code = int(getattr(resp, "status", 0) or 0)
         if 200 <= code < 500:
             return CheckResult(name, "PASS", f"{url} responded HTTP {code}")
+        return CheckResult(name, "FAIL", f"{url} responded HTTP {code}")
+    except HTTPError as exc:
+        code = int(getattr(exc, "code", 0) or 0)
+        if code == 401:
+            return CheckResult(name, "PASS", f"{url} reachable (auth required, HTTP 401)")
         return CheckResult(name, "FAIL", f"{url} responded HTTP {code}")
     except Exception as exc:
         return CheckResult(name, "FAIL", f"{url} not reachable: {exc}")
@@ -109,6 +115,8 @@ def check_task_ran_today(task_name: str) -> CheckResult:
     state = _extract_value(lines, "Scheduled Task State")
     status = _extract_value(lines, "Status")
     last_run = _extract_value(lines, "Last Run Time")
+    start_date = _extract_value(lines, "Start Date")
+    next_run = _extract_value(lines, "Next Run Time")
 
     if state.upper() != "ENABLED":
         return CheckResult(label, "FAIL", f"task not enabled (state={state or 'N/A'})")
@@ -116,6 +124,16 @@ def check_task_ran_today(task_name: str) -> CheckResult:
     # Expected format in this environment: DD-MM-YYYY HH:MM:SS
     today_dmy = now_ist().strftime("%d-%m-%Y")
     if not last_run.startswith(today_dmy):
+        # Transitional acceptance:
+        # If task was created today (first run pending tomorrow) schtasks reports a
+        # sentinel last-run date 30-11-1999. Avoid false FAIL in that case.
+        never_ran = last_run.startswith("30-11-1999") or last_run.startswith("N/A")
+        if never_ran and start_date.startswith(today_dmy):
+            return CheckResult(
+                label,
+                "PASS",
+                f"new task created today | first run pending | status={status or 'N/A'} | next_run={next_run or 'N/A'}",
+            )
         return CheckResult(
             label,
             "FAIL",
@@ -135,26 +153,19 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
     preopen_tasks = [
         "EQIDV2_log_dashboard_start_0855",
         "EQIDV2_eod_15mins_data_0900",
-        "EQIDV2_live_combined_csv_0900",
         "EQIDV2_live_combined_csv_v2_0900",
         "EQIDV2_live_combined_csv_v3_0900",
-        "EQIDV2_avwap_paper_trade_0900",
+        "EQIDV2_live_combined_csv_v4_short_0900",
+        "EQIDV2_live_combined_csv_v4_long_0900",
         "EQIDV2_avwap_paper_trade_v2_0900",
         "EQIDV2_avwap_paper_trade_v3_0900",
+        "EQIDV2_avwap_paper_trade_v4_0900",
         "EQIDV2_authentication_v2_0900",
     ]
     for task in preopen_tasks:
         checks.append(check_task_ran_today(task))
 
     # Scanner logs should be fresh.
-    checks.append(
-        check_file_recent(
-            LOG_DIR / "eqidv2_live_combined_analyser_csv.log",
-            max_age_min=max_age_min,
-            required=True,
-            label="live_scanner_v1_log",
-        )
-    )
     checks.append(
         check_file_recent(
             LOG_DIR / "eqidv2_live_combined_analyser_csv_v2.log",
@@ -171,17 +182,25 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
             label="live_scanner_v3_log",
         )
     )
+    checks.append(
+        check_file_recent(
+            LOG_DIR / "eqidv2_live_combined_analyser_csv_v4_short.log",
+            max_age_min=max_age_min,
+            required=True,
+            label="live_scanner_v4_short_log",
+        )
+    )
+    checks.append(
+        check_file_recent(
+            LOG_DIR / "eqidv2_live_combined_analyser_csv_v4_long.log",
+            max_age_min=max_age_min,
+            required=True,
+            label="live_scanner_v4_long_log",
+        )
+    )
 
     # Papertrade logs should be fresh.
     today = now_ist().strftime("%Y-%m-%d")
-    checks.append(
-        check_file_recent(
-            LOG_DIR / f"avwap_trade_execution_PAPER_TRADE_TRUE_{today}.log",
-            max_age_min=max_age_min,
-            required=True,
-            label="papertrade_v1_log",
-        )
-    )
     checks.append(
         check_file_recent(
             LOG_DIR / f"avwap_trade_execution_PAPER_TRADE_TRUE_v2_{today}.log",
@@ -198,17 +217,17 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
             label="papertrade_v3_log",
         )
     )
+    checks.append(
+        check_file_recent(
+            LOG_DIR / f"avwap_trade_execution_PAPER_TRADE_TRUE_v4_{today}.log",
+            max_age_min=max_age_min,
+            required=True,
+            label="papertrade_v4_log",
+        )
+    )
 
     # Optional output file presence (can be empty early in session).
     if include_optional_csv:
-        checks.append(
-            check_today_file(
-                "signals_{}.csv",
-                required=False,
-                max_age_min=max_age_min,
-                label="live_entries_csv_v1",
-            )
-        )
         checks.append(
             check_today_file(
                 "signals_{}_v2.csv",
@@ -227,10 +246,18 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
         )
         checks.append(
             check_today_file(
-                "paper_trades_{}.csv",
+                "signals_{}_v4_short.csv",
                 required=False,
                 max_age_min=max_age_min,
-                label="papertrade_csv_v1",
+                label="live_entries_csv_v4_short",
+            )
+        )
+        checks.append(
+            check_today_file(
+                "signals_{}_v4_long.csv",
+                required=False,
+                max_age_min=max_age_min,
+                label="live_entries_csv_v4_long",
             )
         )
         checks.append(
@@ -247,6 +274,14 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="papertrade_csv_v3",
+            )
+        )
+        checks.append(
+            check_today_file(
+                "paper_trades_{}_v4.csv",
+                required=False,
+                max_age_min=max_age_min,
+                label="papertrade_csv_v4",
             )
         )
 
@@ -325,4 +360,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
