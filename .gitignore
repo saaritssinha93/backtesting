@@ -291,3 +291,16 @@ eqidv2/stocks_tokens_cache.json
 eqidv2/bat/gmail_client_secret.json
 eqidv2/bat/gmail_token.json
 eqidv2/bat/client_secret_*.json
+
+
+# Include backtesting directory but only CSV and py files inside it
+!nfoidv1/
+nfoidv1/**
+!nfoidv1/**/
+!nfoidv1/**/*.py
+
+# Allow ALL outputs artifacts inside eqidv3/outputs
+# (png, csv, txt, parquet, anything)
+# -----------------------------
+!nfoidv1/outputs/
+!nfoidv1/outputs/**
