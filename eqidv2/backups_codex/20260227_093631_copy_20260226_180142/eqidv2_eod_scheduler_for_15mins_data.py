@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-# Backup reference (2026-02-26):
-# - c:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\backups_codex\20260226_180142\eqidv2_eod_scheduler_for_15mins_data.py
-# - c:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\backups_codex\20260226_180142\run_eqidv2_eod_scheduler_for_15mins_data.bat
 """
 eqidv2_eod_scheduler_for_15mins_data.py  (FIXED)
 ================================================
@@ -14,8 +11,7 @@ Why your 15m parquet was not updating regularly:
    and force a real token fetch via kite.instruments().
 
 2) The old scheduler ran too close to the 15m boundary (buffer=7s). Kite can lag a bit.
-   This version runs exactly once per slot and uses a configurable buffer
-   (default 6s; override via --buffer-sec / EQIDV2_15M_BUFFER_SEC).
+   This version uses a safer buffer (default 60s) and runs exactly once per slot.
 
 3) The old scheduler referenced core.HOLIDAYS_FILE (not present). Core exposes HOLIDAYS_FILE_DEFAULT.
 
@@ -29,13 +25,12 @@ Optional:
 from __future__ import annotations
 
 import argparse
-import multiprocessing as mp
 import os
 import sys
 import time
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import pytz
 
@@ -67,62 +62,16 @@ import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly as core
 # Monkey-patch kite session to read api_key.txt / access_token.txt from EQIDV2_DIR
 # (core.setup_kite_session reads relative files from CWD) fileciteturn36file10L31-L38
 # ---------------------------------------------------------------------
-def _read_first_token(p: Path) -> str:
-    txt = p.read_text(encoding="utf-8").strip()
-    if not txt:
-        raise RuntimeError(f"Auth file is empty: {p}")
-    return txt.split()[0].strip()
+def _read_first_line(p: Path) -> str:
+    return p.read_text(encoding="utf-8").strip().splitlines()[0].strip()
 
 def setup_kite_session_from_eqidv2_dir():
     from kiteconnect import KiteConnect  # imported here to avoid import costs on module import
-    api_key = _read_first_token(EQIDV2_DIR / "api_key.txt")
-    access_token = _read_first_token(EQIDV2_DIR / "access_token.txt")
+    api_key = _read_first_line(EQIDV2_DIR / "api_key.txt")
+    access_token = _read_first_line(EQIDV2_DIR / "access_token.txt")
     kc = KiteConnect(api_key=api_key)
     kc.set_access_token(access_token)
     return kc
-
-def _setup_kite_session_n_from_eqidv2_dir(app_idx: int):
-    """
-    Additional app session (app2/app3/app4):
-    - request_tokenN.txt is validated for presence (operational sanity check)
-    - access_tokenN.txt is used for auth
-    - api_keyN.txt is preferred; fallback to api_key.txt if absent
-    """
-    from kiteconnect import KiteConnect  # imported here to avoid import costs on module import
-
-    if app_idx not in (2, 3, 4):
-        raise ValueError(f"Unsupported app index: {app_idx}")
-
-    request_token_n = EQIDV2_DIR / f"request_token{app_idx}.txt"
-    access_token_n = EQIDV2_DIR / f"access_token{app_idx}.txt"
-    api_key_n = EQIDV2_DIR / f"api_key{app_idx}.txt"
-    api_key1 = EQIDV2_DIR / "api_key.txt"
-
-    if not request_token_n.exists():
-        raise FileNotFoundError(f"Missing app{app_idx} auth file: {request_token_n}")
-    if not access_token_n.exists():
-        raise FileNotFoundError(f"Missing app{app_idx} auth file: {access_token_n}")
-
-    _ = _read_first_token(request_token_n)
-    api_key_path = api_key_n if api_key_n.exists() else api_key1
-    if api_key_path == api_key1:
-        print(f"[WARN] api_key{app_idx}.txt not found; app{app_idx} will use api_key.txt.")
-
-    api_key = _read_first_token(api_key_path)
-    access_token = _read_first_token(access_token_n)
-
-    kc = KiteConnect(api_key=api_key)
-    kc.set_access_token(access_token)
-    return kc
-
-def setup_kite_session2_from_eqidv2_dir():
-    return _setup_kite_session_n_from_eqidv2_dir(2)
-
-def setup_kite_session3_from_eqidv2_dir():
-    return _setup_kite_session_n_from_eqidv2_dir(3)
-
-def setup_kite_session4_from_eqidv2_dir():
-    return _setup_kite_session_n_from_eqidv2_dir(4)
 
 core.setup_kite_session = setup_kite_session_from_eqidv2_dir
 
@@ -200,14 +149,6 @@ if hasattr(core, 'expected_last_stamp') and _orig_ticker_is_fresh is not None:
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 HARD_STOP = dtime(15, 50)  # exit after this
-DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_15M_MAX_WORKERS", "24"))
-DEFAULT_BUFFER_SEC = int(os.getenv("EQIDV2_15M_BUFFER_SEC", "6"))
-DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_15M_REFRESH_TOKENS", "0")).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 
 
 def now_ist() -> datetime:
@@ -236,177 +177,26 @@ def _read_holidays_set() -> set:
     except Exception:
         return set()
 
-def _split_tickers_for_four_apps(tickers: list[str]) -> tuple[list[str], list[str], list[str], list[str]]:
-    ordered = sorted({str(t).strip().upper() for t in tickers if str(t).strip()})
-    q = len(ordered) // 4
-    return ordered[:q], ordered[q:(2 * q)], ordered[(2 * q):(3 * q)], ordered[(3 * q):]
-
-def _run_partition(
-    mode: str,
-    partition_name: str,
-    partition_tickers: list[str],
-    partition_token_map: dict[str, int],
-    setup_kite_fn: Callable[[], object],
-    *,
-    max_workers: int,
-    report_dir: str,
-    holidays: set,
-    refresh_tokens: bool,
-) -> None:
-    if not partition_tickers:
-        print(f"[INFO] {partition_name}: no tickers assigned; skipping.")
-        return
-
-    current_loader = core.load_stocks_universe
-    current_setup = core.setup_kite_session
-
-    def _partition_loader(logger):
-        logger.info("[%s] universe override for %s: %d symbols", mode.upper(), partition_name, len(partition_tickers))
-        return list(partition_tickers), dict(partition_token_map)
-
-    try:
-        core.load_stocks_universe = _partition_loader
-        core.setup_kite_session = setup_kite_fn
-        core.run_mode(
-            mode,
-            max_workers=max_workers,
-            skip_if_fresh=True,
-            intraday_ts="end",
-            holidays=holidays,
-            report_dir=report_dir,
-            refresh_tokens=refresh_tokens,
-            print_missing_rows=False,
-            print_missing_rows_max=5,
-        )
-    finally:
-        core.load_stocks_universe = current_loader
-        core.setup_kite_session = current_setup
-
-def _run_partition_worker(
-    mode: str,
-    partition_name: str,
-    partition_tickers: list[str],
-    partition_token_map: dict[str, int],
-    setup_kind: str,
-    *,
-    max_workers: int,
-    report_dir: str,
-    holidays: set,
-    refresh_tokens: bool,
-    result_queue,
-) -> None:
-    # Use stream-only logger in child process to avoid concurrent file truncation.
-    logger = core.logging.getLogger("stocks_fetcher")
-    logger.setLevel(core.logging.INFO)
-    if not logger.handlers:
-        fmt = core.logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-        sh = core.logging.StreamHandler()
-        sh.setFormatter(fmt)
-        logger.addHandler(sh)
-
-    setup_fn_map = {
-        "app1": setup_kite_session_from_eqidv2_dir,
-        "app2": setup_kite_session2_from_eqidv2_dir,
-        "app3": setup_kite_session3_from_eqidv2_dir,
-        "app4": setup_kite_session4_from_eqidv2_dir,
-    }
-    setup_fn = setup_fn_map.get(setup_kind, setup_kite_session_from_eqidv2_dir)
-    try:
-        _run_partition(
-            mode,
-            partition_name,
-            partition_tickers,
-            partition_token_map,
-            setup_fn,
-            max_workers=max_workers,
-            report_dir=report_dir,
-            holidays=holidays,
-            refresh_tokens=refresh_tokens,
-        )
-        result_queue.put((partition_name, True, ""))
-    except Exception as e:
-        result_queue.put((partition_name, False, str(e)))
-
 def run_update_15m_once(max_workers: int, report_dir: str, buffer_sec: int, refresh_tokens: bool) -> None:
     holidays = _read_holidays_set()
-    logger = core.logging.getLogger("stocks_fetcher")
-    all_tickers, pre_token_map = core.load_stocks_universe(logger)
-    token_map = {str(k).strip().upper(): int(v) for k, v in dict(pre_token_map).items()}
-
-    app1_tickers, app2_tickers, app3_tickers, app4_tickers = _split_tickers_for_four_apps(all_tickers)
-    app1_token_map = {t: token_map[t] for t in app1_tickers if t in token_map}
-    app2_token_map = {t: token_map[t] for t in app2_tickers if t in token_map}
-    app3_token_map = {t: token_map[t] for t in app3_tickers if t in token_map}
-    app4_token_map = {t: token_map[t] for t in app4_tickers if t in token_map}
-
-    print(
-        "[INFO] 15min split:",
-        f"app1={len(app1_tickers)} tickers (api_key.txt/access_token.txt),",
-        f"app2={len(app2_tickers)} tickers (request_token2.txt/access_token2.txt),",
-        f"app3={len(app3_tickers)} tickers (request_token3.txt/access_token3.txt),",
-        f"app4={len(app4_tickers)} tickers (request_token4.txt/access_token4.txt)",
+    # intraday_ts="end" matches your live 5m pipeline conventions
+    core.run_mode(
+        "15min",
+        max_workers=max_workers,
+        skip_if_fresh=True,
+        intraday_ts="end",
+        holidays=holidays,
+        report_dir=report_dir,
+        refresh_tokens=refresh_tokens,
+        print_missing_rows=False,
+        print_missing_rows_max=5,
     )
-
-    ctx = mp.get_context("spawn")
-    result_queue = ctx.Queue()
-    partitions = [
-        ("app1", app1_tickers, app1_token_map),
-        ("app2", app2_tickers, app2_token_map),
-        ("app3", app3_tickers, app3_token_map),
-        ("app4", app4_tickers, app4_token_map),
-    ]
-
-    workers: list[tuple[str, object]] = []
-    for pname, ptickers, ptoken_map in partitions:
-        proc = ctx.Process(
-            target=_run_partition_worker,
-            args=(
-                "15min",
-                pname,
-                ptickers,
-                ptoken_map,
-                pname,
-            ),
-            kwargs={
-                "max_workers": max_workers,
-                "report_dir": os.path.join(report_dir, pname),
-                "holidays": holidays,
-                "refresh_tokens": refresh_tokens,
-                "result_queue": result_queue,
-            },
-        )
-        workers.append((pname, proc))
-
-    for _, proc in workers:
-        proc.start()
-
-    for _, proc in workers:
-        proc.join()
-
-    result_map: dict[str, tuple[bool, str]] = {}
-    for _ in workers:
-        try:
-            pname, ok, msg = result_queue.get(timeout=1.0)
-            result_map[str(pname)] = (bool(ok), str(msg))
-        except Exception:
-            break
-
-    failures: list[str] = []
-    for pname, proc in workers:
-        ok, msg = result_map.get(pname, (proc.exitcode == 0, f"worker_exit={proc.exitcode}"))
-        if (not ok) or (proc.exitcode not in (0, None)):
-            failures.append(f"{pname}: {msg}")
-
-    if failures:
-        raise RuntimeError("Parallel partition run failed: " + " | ".join(failures))
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
-    ap.add_argument("--buffer-sec", type=int, default=DEFAULT_BUFFER_SEC, help="How long after boundary to run (Kite can lag).")
-    ap.add_argument("--refresh-tokens", dest="refresh_tokens", action="store_true", help="Force refresh kite instrument token cache.")
-    ap.add_argument("--no-refresh-tokens", dest="refresh_tokens", action="store_false", help="Do not refresh kite instrument token cache.")
-    ap.set_defaults(refresh_tokens=DEFAULT_REFRESH_TOKENS)
+    ap.add_argument("--max-workers", type=int, default=24)
+    ap.add_argument("--buffer-sec", type=int, default=6, help="How long after boundary to run (Kite can lag).")
+    ap.add_argument("--refresh-tokens", action="store_true", help="Force refresh kite instrument token cache.")
     ap.add_argument("--report-dir", default="reports/stocks_missing_reports")
     args = ap.parse_args()
 
@@ -422,8 +212,6 @@ def main() -> None:
     print(f"       Output dir (15m): {getattr(core, 'DIRS', {}).get('15min', {}).get('out', 'stocks_indicators_15min_eq')}")
     print(f"       Runs every 15 mins between {MARKET_OPEN.strftime('%H:%M')} and {MARKET_CLOSE.strftime('%H:%M')} IST (trading days).")
     print(f"       Buffer after boundary: {args.buffer_sec}s")
-    print(f"       Max workers: {args.max_workers}")
-    print(f"       Refresh tokens: {args.refresh_tokens}")
     print(f"       Process will exit at {HARD_STOP.strftime('%H:%M')} IST.")
 
     last_run_slot: Optional[datetime] = None

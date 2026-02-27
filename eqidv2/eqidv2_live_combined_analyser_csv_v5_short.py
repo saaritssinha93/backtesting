@@ -18,6 +18,7 @@ Goals:
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -35,6 +36,18 @@ _ORIG_WRITE_SIGNALS_CSV = v2._write_signals_csv
 _ORIG_LATEST_ENTRY_SIGNALS_FOR_TICKER = v2._latest_entry_signals_for_ticker
 _ORIG_RUN_ONE_SCAN = v2.run_one_scan
 _ORIG_RUN_REPLAY_FOR_DATE = v2.run_replay_for_date
+_ORIG_SCAN_SHORT_ONE_DAY = v2.scan_short_one_day
+_ORIG_SCAN_LONG_ONE_DAY = v2.scan_long_one_day
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+STALE_ONLY_RETRY_ENABLED = _env_bool("EQIDV5_STALE_ONLY_RETRY", True)
 
 
 def _is_short_side(side_value: Any) -> bool:
@@ -91,6 +104,35 @@ def _write_signals_csv_v5_short(signals_df: pd.DataFrame) -> int:
     return written
 
 
+def _scan_long_disabled(*_args, **_kwargs):
+    """v5_short must not compute LONG side internals."""
+    return []
+
+
+def _extract_stale_tickers(checks_df: pd.DataFrame) -> List[str]:
+    if checks_df is None or checks_df.empty or "ticker" not in checks_df.columns:
+        return []
+
+    mask = pd.Series(False, index=checks_df.index)
+    for col in ("stale_data", "no_target_day_data"):
+        if col in checks_df.columns:
+            mask = mask | checks_df[col].astype(str).str.strip().str.lower().isin(
+                {"1", "true", "yes", "y", "on"}
+            )
+
+    if not bool(mask.any()):
+        return []
+
+    tickers = (
+        checks_df.loc[mask, "ticker"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+    tickers = tickers[tickers != ""]
+    return sorted(set(tickers.tolist()))
+
+
 def _apply_v5_short_overrides() -> None:
     """Patch v2 module-level config/functions to isolate v5_short behavior."""
     v2.REPORTS_DIR = ROOT / "reports" / "eqidv2_reports_v5_short"
@@ -112,6 +154,10 @@ def _apply_v5_short_overrides() -> None:
     # Keep Kite entry rebase logic available as in v2 defaults.
     v2.USE_KITE_LTP_FOR_SIGNAL_CSV = True
 
+    # Compute only SHORT strategy internals in this process.
+    v2.scan_short_one_day = _ORIG_SCAN_SHORT_ONE_DAY
+    v2.scan_long_one_day = _scan_long_disabled
+
     # Install side filters.
     v2._latest_entry_signals_for_ticker = _latest_entry_signals_for_ticker_v5_short
     v2._write_signals_csv = _write_signals_csv_v5_short
@@ -120,9 +166,9 @@ def _apply_v5_short_overrides() -> None:
     def _run_one_scan_v5_short(run_tag: str = "A"):
         checks_df, signals_df = _ORIG_RUN_ONE_SCAN(run_tag)
 
-        def _rename_latest(folder: Path, prefix: str) -> None:
+        def _rename_latest(folder: Path, prefix: str, tag: str) -> None:
             candidates = sorted(
-                folder.glob(f"{prefix}_*_{run_tag}.parquet"),
+                folder.glob(f"{prefix}_*_{tag}.parquet"),
                 key=lambda p: p.stat().st_mtime,
             )
             if not candidates:
@@ -138,9 +184,44 @@ def _apply_v5_short_overrides() -> None:
             except Exception:
                 pass
 
-        day_dir = datetime.now(v2.IST).strftime("%Y%m%d")
-        _rename_latest(v2.OUT_CHECKS_DIR / day_dir, "checks")
-        _rename_latest(v2.OUT_SIGNALS_DIR / day_dir, "signals")
+        def _rename_for_tag(tag: str) -> None:
+            day_dir = datetime.now(v2.IST).strftime("%Y%m%d")
+            _rename_latest(v2.OUT_CHECKS_DIR / day_dir, "checks", tag)
+            _rename_latest(v2.OUT_SIGNALS_DIR / day_dir, "signals", tag)
+
+        _rename_for_tag(run_tag)
+
+        if STALE_ONLY_RETRY_ENABLED:
+            stale_tickers = _extract_stale_tickers(checks_df)
+            if stale_tickers:
+                retry_tag = f"{run_tag}R"
+                print(
+                    f"[V5_SHORT RETRY] stale_tickers={len(stale_tickers)} | "
+                    f"rerun_subset_tag={retry_tag}",
+                    flush=True,
+                )
+                print(
+                    f"[V5_SHORT RETRY] stale_ticker_names={','.join(stale_tickers)}",
+                    flush=True,
+                )
+                orig_list_tickers = v2.list_tickers_15m
+                try:
+                    v2.list_tickers_15m = lambda: stale_tickers
+                    checks_retry, signals_retry = _ORIG_RUN_ONE_SCAN(retry_tag)
+                finally:
+                    v2.list_tickers_15m = orig_list_tickers
+
+                _rename_for_tag(retry_tag)
+                if checks_retry is not None and (not checks_retry.empty):
+                    checks_df = pd.concat([checks_df, checks_retry], ignore_index=True)
+                if signals_retry is not None and (not signals_retry.empty):
+                    signals_df = pd.concat([signals_df, signals_retry], ignore_index=True)
+                print(
+                    f"[V5_SHORT RETRY] done | extra_checks={0 if checks_retry is None else len(checks_retry)} "
+                    f"| extra_signals={0 if signals_retry is None else len(signals_retry)}",
+                    flush=True,
+                )
+
         return checks_df, signals_df
 
     v2.run_one_scan = _run_one_scan_v5_short
@@ -158,6 +239,7 @@ def main() -> None:
     _apply_v5_short_overrides()
     print(
         "[V5_SHORT] SHORT-only split enabled | immediate_flush=True | "
+        f"stale_only_retry={STALE_ONLY_RETRY_ENABLED} | "
         "signal_csv=signals_YYYY-MM-DD_v5_short.csv",
         flush=True,
     )

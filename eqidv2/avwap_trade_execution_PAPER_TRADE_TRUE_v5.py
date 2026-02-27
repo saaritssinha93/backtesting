@@ -219,63 +219,149 @@ def get_last_ltp_error(ticker: str) -> str:
     with _ltp_error_lock:
         return str(_ltp_last_error_by_ticker.get(key, ""))
 
+_kite_session_lock = threading.Lock()
+_kite_last_refresh_monotonic = 0.0
+KITE_AUTH_RETRY_COOLDOWN_SEC = 10.0
+
+def _read_first_token(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        txt = f.read().strip()
+    if not txt:
+        raise RuntimeError(f"empty auth file: {path}")
+    return txt.split()[0].strip()
+
+def _kite_auth_profiles() -> List[Tuple[str, str, str]]:
+    profiles: List[Tuple[str, str, str]] = []
+    if os.path.exists("api_key.txt") and os.path.exists("access_token.txt"):
+        profiles.append(("primary", "api_key.txt", "access_token.txt"))
+    if os.path.exists("api_key2.txt") and os.path.exists("access_token2.txt"):
+        profiles.append(("secondary", "api_key2.txt", "access_token2.txt"))
+    return profiles
+
+def _is_kite_auth_error(exc: Exception) -> bool:
+    msg = str(exc).strip().lower()
+    return ("incorrect `api_key` or `access_token`" in msg) or ("tokenexception" in msg and "access_token" in msg)
+
+def _setup_kite_session_impl(log_success: bool = True) -> bool:
+    global kite
+    from kiteconnect import KiteConnect
+
+    last_error: Optional[Exception] = None
+    for profile_name, key_path, token_path in _kite_auth_profiles():
+        try:
+            api_key = _read_first_token(key_path)
+            access_token = _read_first_token(token_path)
+            client = KiteConnect(api_key=api_key)
+            client.set_access_token(access_token)
+            client.profile()  # validates api_key + access_token pairing
+            kite = client
+            if log_success:
+                log.info(
+                    "Kite session established (%s profile: %s + %s).",
+                    profile_name,
+                    key_path,
+                    token_path,
+                )
+            return True
+        except Exception as e:
+            last_error = e
+            log.warning(
+                "Kite auth profile '%s' failed (%s + %s): %s",
+                profile_name,
+                key_path,
+                token_path,
+                e,
+            )
+
+    kite = None
+    if last_error is not None:
+        log.warning("Kite session setup failed for all profiles: %s", last_error)
+    else:
+        log.warning("Kite session setup failed: no auth profile files found.")
+    return False
+
+def _refresh_kite_session(reason: str, force: bool = False) -> bool:
+    global _kite_last_refresh_monotonic
+    now_mono = time.monotonic()
+    with _kite_session_lock:
+        if (not force) and (now_mono - _kite_last_refresh_monotonic < KITE_AUTH_RETRY_COOLDOWN_SEC):
+            return kite is not None
+        _kite_last_refresh_monotonic = now_mono
+        log.warning("[KITE.AUTH] Refreshing session due to: %s", reason)
+        return _setup_kite_session_impl(log_success=True)
+
 
 def setup_kite_session():
     """Set up Kite session for LTP polling. Non-fatal if it fails."""
     global kite
     try:
-        from kiteconnect import KiteConnect
-
-        with open("access_token.txt", "r") as f:
-            access_token = f.read().strip()
-        with open("api_key.txt", "r") as f:
-            api_key = f.read().split()[0]
-
-        kite = KiteConnect(api_key=api_key)
-        kite.set_access_token(access_token)
-        log.info("Kite session established (LTP polling enabled).")
+        ok = _refresh_kite_session("startup", force=True)
+        if not ok:
+            raise RuntimeError("all Kite auth profiles failed")
     except Exception as e:
         log.warning(f"Kite session not available: {e}")
         log.warning("Paper trades will use signal entry price for simulation.")
         kite = None
 
+def _extract_ltp_from_payload(ticker: str, data: object, instruments: List[str]) -> Optional[float]:
+    if isinstance(data, dict):
+        for inst in instruments:
+            row = data.get(inst)
+            if not isinstance(row, dict):
+                continue
+            ltp = _safe_float(row.get("last_price", 0.0), 0.0)
+            if ltp > 0:
+                _set_ltp_error(ticker, "")
+                return float(ltp)
+    return None
+
 
 def get_ltp(ticker: str) -> Optional[float]:
     """Get last traded price from Kite with NSE/BSE fallback."""
     if kite is None:
-        return None
+        setup_kite_session()
+        if kite is None:
+            return None
     instruments = _ltp_instrument_candidates(ticker)
     if not instruments:
         return None
 
     try:
         data = kite.ltp(instruments if len(instruments) > 1 else instruments[0])
-        if isinstance(data, dict):
-            for inst in instruments:
-                row = data.get(inst)
-                if not isinstance(row, dict):
-                    continue
-                ltp = _safe_float(row.get("last_price", 0.0), 0.0)
-                if ltp > 0:
-                    _set_ltp_error(ticker, "")
-                    return float(ltp)
+        ltp = _extract_ltp_from_payload(ticker, data, instruments)
+        if ltp is not None:
+            return ltp
     except Exception as e:
-        _set_ltp_error(ticker, f"ltp_error={e}")
+        if _is_kite_auth_error(e) and _refresh_kite_session(f"ltp auth error ticker={ticker}", force=False) and kite is not None:
+            try:
+                data = kite.ltp(instruments if len(instruments) > 1 else instruments[0])
+                ltp = _extract_ltp_from_payload(ticker, data, instruments)
+                if ltp is not None:
+                    return ltp
+            except Exception as e2:
+                _set_ltp_error(ticker, f"ltp_error={e2}")
+        else:
+            _set_ltp_error(ticker, f"ltp_error={e}")
 
+    if kite is None:
+        return None
     try:
         data_q = kite.quote(instruments)
-        if isinstance(data_q, dict):
-            for inst in instruments:
-                row = data_q.get(inst)
-                if not isinstance(row, dict):
-                    continue
-                ltp = _safe_float(row.get("last_price", 0.0), 0.0)
-                if ltp > 0:
-                    _set_ltp_error(ticker, "")
-                    return float(ltp)
+        ltp = _extract_ltp_from_payload(ticker, data_q, instruments)
+        if ltp is not None:
+            return ltp
         _set_ltp_error(ticker, f"no_valid_last_price candidates={','.join(instruments)}")
     except Exception as e:
-        _set_ltp_error(ticker, f"quote_error={e}")
+        if _is_kite_auth_error(e) and _refresh_kite_session(f"quote auth error ticker={ticker}", force=False) and kite is not None:
+            try:
+                data_q = kite.quote(instruments)
+                ltp = _extract_ltp_from_payload(ticker, data_q, instruments)
+                if ltp is not None:
+                    return ltp
+            except Exception as e2:
+                _set_ltp_error(ticker, f"quote_error={e2}")
+        else:
+            _set_ltp_error(ticker, f"quote_error={e}")
     return None
 
 

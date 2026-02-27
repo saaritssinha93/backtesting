@@ -10,8 +10,17 @@ Design goals for test rollout:
 
 Files used:
 - api_key.txt
+- api_key2.txt (optional second Kite app)
+- api_key3.txt (optional third Kite app)
+- api_key4.txt (optional fourth Kite app)
 - request_token.txt
 - access_token.txt
+- request_token2.txt
+- access_token2.txt
+- request_token3.txt
+- access_token3.txt
+- request_token4.txt
+- access_token4.txt
 - refresh_token.txt
 - auth_v2_state.json
 """
@@ -52,10 +61,35 @@ IST = pytz.timezone("Asia/Kolkata")
 OTP_RE = re.compile(r"\b(\d{6})\b")
 
 API_KEY_FILE = ROOT / "api_key.txt"
+API_KEY2_FILE = ROOT / "api_key2.txt"
+API_KEY3_FILE = ROOT / "api_key3.txt"
+API_KEY4_FILE = ROOT / "api_key4.txt"
 REQUEST_TOKEN_FILE = ROOT / "request_token.txt"
 ACCESS_TOKEN_FILE = ROOT / "access_token.txt"
+REQUEST_TOKEN2_FILE = ROOT / "request_token2.txt"
+ACCESS_TOKEN2_FILE = ROOT / "access_token2.txt"
+REQUEST_TOKEN3_FILE = ROOT / "request_token3.txt"
+ACCESS_TOKEN3_FILE = ROOT / "access_token3.txt"
+REQUEST_TOKEN4_FILE = ROOT / "request_token4.txt"
+ACCESS_TOKEN4_FILE = ROOT / "access_token4.txt"
 REFRESH_TOKEN_FILE = ROOT / "refresh_token.txt"
 STATE_FILE = ROOT / "auth_v2_state.json"
+
+SECONDARY_API_KEY_FILES = {
+    2: API_KEY2_FILE,
+    3: API_KEY3_FILE,
+    4: API_KEY4_FILE,
+}
+SECONDARY_REQUEST_TOKEN_FILES = {
+    2: REQUEST_TOKEN2_FILE,
+    3: REQUEST_TOKEN3_FILE,
+    4: REQUEST_TOKEN4_FILE,
+}
+SECONDARY_ACCESS_TOKEN_FILES = {
+    2: ACCESS_TOKEN2_FILE,
+    3: ACCESS_TOKEN3_FILE,
+    4: ACCESS_TOKEN4_FILE,
+}
 
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
@@ -77,11 +111,35 @@ def _extract_otp(text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _read_key_secret() -> list[str]:
-    parts = API_KEY_FILE.read_text(encoding="utf-8").split()
+def _read_key_secret(path: Path = API_KEY_FILE) -> list[str]:
+    parts = path.read_text(encoding="utf-8").split()
     if len(parts) < 5:
-        raise RuntimeError("api_key.txt must contain: api_key api_secret user_id password totp_secret")
+        raise RuntimeError(f"{path.name} must contain: api_key api_secret user_id password totp_secret")
     return parts
+
+
+def _read_secondary_key_secret_with_fallback(primary_parts: list[str], app_idx: int) -> Optional[list[str]]:
+    api_key_path = SECONDARY_API_KEY_FILES.get(app_idx)
+    if api_key_path is None:
+        raise RuntimeError(f"Unsupported secondary app index: {app_idx}")
+    if not api_key_path.exists():
+        return None
+
+    raw = api_key_path.read_text(encoding="utf-8").split()
+    if len(raw) >= 5:
+        return raw[:5]
+    if len(raw) >= 2:
+        if len(primary_parts) < 5:
+            raise RuntimeError(
+                f"{api_key_path.name} has only api_key/api_secret, but primary credentials are incomplete."
+            )
+        # Allow compact api_keyN.txt containing only key+secret and reuse primary login creds.
+        return [raw[0], raw[1], primary_parts[2], primary_parts[3], primary_parts[4]]
+
+    raise RuntimeError(
+        f"{api_key_path.name} must contain either: "
+        "api_key api_secret OR api_key api_secret user_id password totp_secret"
+    )
 
 
 def _extract_request_token(url: str) -> Optional[str]:
@@ -428,6 +486,63 @@ def _seed_session_for_today(parts: list[str], force_login: bool) -> Tuple[KiteCo
     return kite, refresh_token
 
 
+def _seed_additional_session_for_today(primary_parts: list[str], force_login: bool, app_idx: int) -> None:
+    req_file = SECONDARY_REQUEST_TOKEN_FILES.get(app_idx)
+    acc_file = SECONDARY_ACCESS_TOKEN_FILES.get(app_idx)
+    if req_file is None or acc_file is None:
+        raise RuntimeError(f"Unsupported secondary app index: {app_idx}")
+
+    tag = f"AUTH{app_idx}"
+    try:
+        parts2 = _read_secondary_key_secret_with_fallback(primary_parts, app_idx)
+    except Exception as e:
+        print(f"[WARN] [{tag}] Invalid api_key{app_idx} configuration: {e}. Skipping app{app_idx}.", flush=True)
+        return
+    if not parts2:
+        print(f"[{tag}] api_key{app_idx}.txt not found; skipping app{app_idx} token generation.", flush=True)
+        return
+
+    api_key_n, api_secret_n, user_id_n, password_n, totp_secret_n = parts2[:5]
+    kite_n = KiteConnect(api_key=api_key_n)
+    today = str(today_ist())
+
+    existing_access = _read_first_line(acc_file)
+    if not force_login and existing_access:
+        try:
+            kite_n.set_access_token(existing_access)
+            if _access_token_is_valid(kite_n):
+                print(
+                    f"[{tag}] Reusing same-day access_token{app_idx} for {today}.",
+                    flush=True,
+                )
+                st = _load_state()
+                st[f"session_date_ist_app{app_idx}"] = today
+                st[f"updated_at_ist_app{app_idx}"] = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+                _save_state(st)
+                return
+        except Exception:
+            pass
+
+    print(f"[{tag}] Fresh browser login required for app{app_idx} ({today}).", flush=True)
+    request_token_n = _do_browser_login_for_request_token(kite_n, user_id_n, password_n, totp_secret_n)
+    _write_text(req_file, request_token_n)
+    print(f"[OK] request_token{app_idx} saved -> {req_file}", flush=True)
+
+    sess_n = kite_n.generate_session(request_token_n, api_secret=api_secret_n)
+    access_token_n = str(sess_n.get("access_token", "")).strip()
+    if not access_token_n:
+        raise RuntimeError(f"generate_session() for app{app_idx} did not return access_token")
+
+    _write_text(acc_file, access_token_n)
+    print(f"[OK] access_token{app_idx} saved -> {acc_file}", flush=True)
+
+    st = _load_state()
+    st[f"session_date_ist_app{app_idx}"] = today
+    st[f"request_token{app_idx}"] = request_token_n
+    st[f"updated_at_ist_app{app_idx}"] = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    _save_state(st)
+
+
 def _renew_access_token_fast(kite: KiteConnect, api_secret: str, refresh_token: str, reason: str) -> str:
     if not refresh_token:
         raise RuntimeError("refresh_token is empty; fast renewal is unavailable")
@@ -560,6 +675,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     parts = _read_key_secret()
+    for app_idx in (2, 3, 4):
+        try:
+            _seed_additional_session_for_today(
+                primary_parts=parts,
+                force_login=bool(args.force_login),
+                app_idx=app_idx,
+            )
+        except Exception as e:
+            print(
+                f"[WARN] [AUTH{app_idx}] App{app_idx} token generation failed: {e}. "
+                "Continuing with primary app only.",
+                flush=True,
+            )
     run_slot_scheduler(
         parts=parts,
         force_login=bool(args.force_login),

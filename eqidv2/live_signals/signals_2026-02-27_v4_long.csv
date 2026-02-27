@@ -1,0 +1,2 @@
+"signal_id","signal_datetime","received_time","detected_time_ist","logtime_ist","ticker","side","setup","impulse_type","entry_price","stop_price","target_price","quality_score","atr_pct","rsi","adx","quantity","signal_entry_datetime_ist","signal_bar_time_ist"
+"c285e2426e0be0b7","2026-02-27 14:00:00+05:30","2026-02-27 14:37:53+0530","2026-02-27 14:37:53+0530","2026-02-27 14:37:53+0530","KDDL","LONG","B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK","","2443.21","2428.55","2487.19","8.668","0.0","0.0","0.0","102","2026-02-27 14:00:00+05:30","2026-02-27 14:00:00+05:30"

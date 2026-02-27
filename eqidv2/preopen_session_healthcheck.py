@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-open health check for EQIDV2 live sessions (v2/v3/v4/v5)."""
+"""Pre-open health check for EQIDV2 live sessions (v4/v5)."""
 
 from __future__ import annotations
 
@@ -153,14 +153,10 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
     preopen_tasks = [
         "EQIDV2_log_dashboard_start_0855",
         "EQIDV2_eod_15mins_data_0900",
-        "EQIDV2_live_combined_csv_v2_0900",
-        "EQIDV2_live_combined_csv_v3_0900",
         "EQIDV2_live_combined_csv_v4_short_0900",
         "EQIDV2_live_combined_csv_v4_long_0900",
         "EQIDV2_live_combined_csv_v5_short_0900",
         "EQIDV2_live_combined_csv_v5_long_0900",
-        "EQIDV2_avwap_paper_trade_v2_0900",
-        "EQIDV2_avwap_paper_trade_v3_0900",
         "EQIDV2_avwap_paper_trade_v4_0900",
         "EQIDV2_avwap_paper_trade_v5_0900",
         "EQIDV2_authentication_v2_0900",
@@ -169,22 +165,6 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
         checks.append(check_task_ran_today(task))
 
     # Scanner logs should be fresh.
-    checks.append(
-        check_file_recent(
-            LOG_DIR / "eqidv2_live_combined_analyser_csv_v2.log",
-            max_age_min=max_age_min,
-            required=True,
-            label="live_scanner_v2_log",
-        )
-    )
-    checks.append(
-        check_file_recent(
-            LOG_DIR / "eqidv2_live_combined_analyser_csv_v3.log",
-            max_age_min=max_age_min,
-            required=True,
-            label="live_scanner_v3_log",
-        )
-    )
     checks.append(
         check_file_recent(
             LOG_DIR / "eqidv2_live_combined_analyser_csv_v4_short.log",
@@ -222,22 +202,6 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
     today = now_ist().strftime("%Y-%m-%d")
     checks.append(
         check_file_recent(
-            LOG_DIR / f"avwap_trade_execution_PAPER_TRADE_TRUE_v2_{today}.log",
-            max_age_min=max_age_min,
-            required=True,
-            label="papertrade_v2_log",
-        )
-    )
-    checks.append(
-        check_file_recent(
-            LOG_DIR / f"avwap_trade_execution_PAPER_TRADE_TRUE_v3_{today}.log",
-            max_age_min=max_age_min,
-            required=True,
-            label="papertrade_v3_log",
-        )
-    )
-    checks.append(
-        check_file_recent(
             LOG_DIR / f"avwap_trade_execution_PAPER_TRADE_TRUE_v4_{today}.log",
             max_age_min=max_age_min,
             required=True,
@@ -255,22 +219,6 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
 
     # Optional output file presence (can be empty early in session).
     if include_optional_csv:
-        checks.append(
-            check_today_file(
-                "signals_{}_v2.csv",
-                required=False,
-                max_age_min=max_age_min,
-                label="live_entries_csv_v2",
-            )
-        )
-        checks.append(
-            check_today_file(
-                "signals_{}_v3.csv",
-                required=False,
-                max_age_min=max_age_min,
-                label="live_entries_csv_v3",
-            )
-        )
         checks.append(
             check_today_file(
                 "signals_{}_v4_short.csv",
@@ -301,22 +249,6 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="live_entries_csv_v5_long",
-            )
-        )
-        checks.append(
-            check_today_file(
-                "paper_trades_{}_v2.csv",
-                required=False,
-                max_age_min=max_age_min,
-                label="papertrade_csv_v2",
-            )
-        )
-        checks.append(
-            check_today_file(
-                "paper_trades_{}_v3.csv",
-                required=False,
-                max_age_min=max_age_min,
-                label="papertrade_csv_v3",
             )
         )
         checks.append(

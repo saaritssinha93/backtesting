@@ -23,28 +23,20 @@ HEALTHCHECK_JSON = LOG_DIR / "preopen_session_healthcheck_latest.json"
 TASK_TO_BAT: Dict[str, Path] = {
     "EQIDV2_log_dashboard_start_0855": BAT_DIR / "run_log_dashboard_public_link_scheduled.bat",
     "EQIDV2_eod_15mins_data_0900": BAT_DIR / "run_eqidv2_eod_scheduler_for_15mins_data.bat",
-    "EQIDV2_live_combined_csv_v2_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v2.bat",
-    "EQIDV2_live_combined_csv_v3_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v3.bat",
     "EQIDV2_live_combined_csv_v4_short_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v4_short.bat",
     "EQIDV2_live_combined_csv_v4_long_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v4_long.bat",
     "EQIDV2_live_combined_csv_v5_short_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v5_short.bat",
     "EQIDV2_live_combined_csv_v5_long_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v5_long.bat",
-    "EQIDV2_avwap_paper_trade_v2_0900": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v2.bat",
-    "EQIDV2_avwap_paper_trade_v3_0900": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v3.bat",
     "EQIDV2_avwap_paper_trade_v4_0900": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v4.bat",
     "EQIDV2_avwap_paper_trade_v5_0900": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v5.bat",
     "EQIDV2_authentication_v2_0900": BAT_DIR / "run_authentication_v2.bat",
 }
 
 FAIL_CHECK_TO_BAT: Dict[str, Path] = {
-    "live_scanner_v2_log": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v2.bat",
-    "live_scanner_v3_log": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v3.bat",
     "live_scanner_v4_short_log": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v4_short.bat",
     "live_scanner_v4_long_log": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v4_long.bat",
     "live_scanner_v5_short_log": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v5_short.bat",
     "live_scanner_v5_long_log": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v5_long.bat",
-    "papertrade_v2_log": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v2.bat",
-    "papertrade_v3_log": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v3.bat",
     "papertrade_v4_log": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v4.bat",
     "papertrade_v5_log": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v5.bat",
 }
