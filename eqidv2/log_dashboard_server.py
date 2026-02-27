@@ -29,16 +29,12 @@ LOG_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.log",
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
-    "live_combined_csv_v2": "eqidv2_live_combined_analyser_csv_v2.log",
-    "live_combined_csv_v3": "eqidv2_live_combined_analyser_csv_v3.log",
     "live_combined_csv_v4_short": "eqidv2_live_combined_analyser_csv_v4_short.log",
     "live_combined_csv_v4_long": "eqidv2_live_combined_analyser_csv_v4_long.log",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.log",
 }
 LOG_IDS = tuple(LOG_FILES.keys()) + (
-    "paper_trade_v2",
-    "paper_trade_v3",
     "paper_trade_v4",
     "paper_trade_v5",
     "kite_trade",
@@ -47,8 +43,6 @@ LOG_IDS = tuple(LOG_FILES.keys()) + (
 
 STATUS_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.status",
-    "live_combined_csv_v2": "eqidv2_live_combined_analyser_csv_v2.status",
-    "live_combined_csv_v3": "eqidv2_live_combined_analyser_csv_v3.status",
     "live_combined_csv_v4_short": "eqidv2_live_combined_analyser_csv_v4_short.status",
     "live_combined_csv_v4_long": "eqidv2_live_combined_analyser_csv_v4_long.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
@@ -74,28 +68,6 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
     if name in LOG_FILES:
         file_name = LOG_FILES[name]
         return LOG_DIR / file_name, file_name
-
-    if name == "paper_trade_v2":
-        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v2_{today_ist}.log"
-        today_path = LOG_DIR / today_name
-        if today_path.exists():
-            return today_path, today_name
-        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v2_*.log")
-        if latest is not None:
-            return latest, latest.name
-        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v2.log"
-        return LOG_DIR / legacy_name, legacy_name
-
-    if name == "paper_trade_v3":
-        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v3_{today_ist}.log"
-        today_path = LOG_DIR / today_name
-        if today_path.exists():
-            return today_path, today_name
-        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v3_*.log")
-        if latest is not None:
-            return latest, latest.name
-        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v3.log"
-        return LOG_DIR / legacy_name, legacy_name
 
     if name == "paper_trade_v4":
         today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v4_{today_ist}.log"
@@ -1025,24 +997,16 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <script>
     const LOG_ORDER = [
       "eod_15min_data",
-      "live_combined_csv_v2",
-      "live_combined_csv_v3",
       "live_combined_csv_v4_short",
       "live_combined_csv_v4_long",
       "live_combined_csv_v5_short",
       "live_combined_csv_v5_long",
-      "live_signals_csv_v2",
-      "live_signals_csv_v3",
       "live_signals_csv_v4_short",
       "live_signals_csv_v4_long",
       "live_signals_csv_v5_short",
       "live_signals_csv_v5_long",
-      "live_papertrade_result_csv_v2",
-      "live_papertrade_result_csv_v3",
       "live_papertrade_result_csv_v4",
       "live_papertrade_result_csv_v5",
-      "paper_trade_v2",
-      "paper_trade_v3",
       "paper_trade_v4",
       "paper_trade_v5",
       "preopen_healthcheck",
@@ -1055,28 +1019,20 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     ];
     const LOG_TITLES = {
       "eod_15min_data": "Live Data Fetch (15mins)",
-      "live_combined_csv_v2": "Live Analysis And Signal Generation V2",
-      "live_combined_csv_v3": "Live Analysis And Signal Generation V3",
       "live_combined_csv_v4_short": "Live Analysis And Signal Generation V4 Short",
       "live_combined_csv_v4_long": "Live Analysis And Signal Generation V4 Long",
       "live_combined_csv_v5_short": "Live Analysis And Signal Generation V5 Short",
       "live_combined_csv_v5_long": "Live Analysis And Signal Generation V5 Long",
-      "live_signals_csv_v2": "Live Entries CSV V2",
-      "live_signals_csv_v3": "Live Entries CSV V3",
       "live_signals_csv_v4_short": "Live Entries CSV V4 Short",
       "live_signals_csv_v4_long": "Live Entries CSV V4 Long",
       "live_signals_csv_v5_short": "Live Entries CSV V5 Short",
       "live_signals_csv_v5_long": "Live Entries CSV V5 Long",
-      "live_papertrade_result_csv_v2": "Live Papertrade Result CSV V2",
-      "live_papertrade_result_csv_v3": "Live Papertrade Result CSV V3",
       "live_papertrade_result_csv_v4": "Live Papertrade Result CSV V4",
       "live_papertrade_result_csv_v5": "Live Papertrade Result CSV V5",
       "live_kite_trades_csv": "Live Kite Trades CSV",
       "kite_holdings_today_csv": "Kite Holdings (Today)",
       "kite_positions_day_today_csv": "Kite Positions (Daily, Today)",
       "authentication_v2": "Auth_V2",
-      "paper_trade_v2": "Papertrade Runner View V2",
-      "paper_trade_v3": "Papertrade Runner View V3",
       "paper_trade_v4": "Papertrade Runner View V4",
       "paper_trade_v5": "Papertrade Runner View V5",
       "preopen_healthcheck": "Preopen Healthcheck 09:05",
@@ -1394,56 +1350,6 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             ("quantity", ("quantity",)),
         ]
 
-        # Dynamic card: today's live signal CSV V2 from analyzer v2.
-        live_csv_name_v2 = f"signals_{today_ist}_v2.csv"
-        live_csv_path_v2 = LIVE_SIGNAL_DIR / live_csv_name_v2
-        try:
-            live_size_v2 = live_csv_path_v2.stat().st_size if live_csv_path_v2.exists() else 0
-        except OSError:
-            live_size_v2 = 0
-        live_entries_tail_v2 = _format_csv_projection(
-            live_csv_path_v2,
-            live_entries_cols,
-            limit_rows=max(5, min(35, lines // 2)),
-            time_only_cols={"signal_datetime", "detected_time_ist"},
-        )
-        items.append(
-            {
-                "id": "live_signals_csv_v2",
-                "file_name": str(Path("live_signals") / live_csv_name_v2),
-                "exists": live_csv_path_v2.exists(),
-                "mtime": iso_mtime(live_csv_path_v2),
-                "size_bytes": live_size_v2,
-                "status": {},
-                "tail": live_entries_tail_v2,
-            }
-        )
-
-        # Dynamic card: today's live signal CSV V3 from analyzer v3.
-        live_csv_name_v3 = f"signals_{today_ist}_v3.csv"
-        live_csv_path_v3 = LIVE_SIGNAL_DIR / live_csv_name_v3
-        try:
-            live_size_v3 = live_csv_path_v3.stat().st_size if live_csv_path_v3.exists() else 0
-        except OSError:
-            live_size_v3 = 0
-        live_entries_tail_v3 = _format_csv_projection(
-            live_csv_path_v3,
-            live_entries_cols,
-            limit_rows=max(5, min(35, lines // 2)),
-            time_only_cols={"signal_datetime", "detected_time_ist"},
-        )
-        items.append(
-            {
-                "id": "live_signals_csv_v3",
-                "file_name": str(Path("live_signals") / live_csv_name_v3),
-                "exists": live_csv_path_v3.exists(),
-                "mtime": iso_mtime(live_csv_path_v3),
-                "size_bytes": live_size_v3,
-                "status": {},
-                "tail": live_entries_tail_v3,
-            }
-        )
-
         # Dynamic card: today's live signal CSV V4 short.
         live_csv_name_v4_short = f"signals_{today_ist}_v4_short.csv"
         live_csv_path_v4_short = LIVE_SIGNAL_DIR / live_csv_name_v4_short
@@ -1553,56 +1459,6 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             ("pnl_rs", ("pnl_rs",)),
             ("pnl_pct", ("pnl_pct",)),
         ]
-
-        # Dynamic card: today's paper trade results CSV V2.
-        paper_trade_csv_name_v2 = f"paper_trades_{today_ist}_v2.csv"
-        paper_trade_csv_path_v2 = LIVE_SIGNAL_DIR / paper_trade_csv_name_v2
-        try:
-            paper_trade_size_v2 = paper_trade_csv_path_v2.stat().st_size if paper_trade_csv_path_v2.exists() else 0
-        except OSError:
-            paper_trade_size_v2 = 0
-        paper_trade_tail_v2 = _format_csv_projection(
-            paper_trade_csv_path_v2,
-            paper_trade_cols,
-            limit_rows=max(5, min(40, lines // 2)),
-            time_only_cols={"exit_time"},
-        )
-        items.append(
-            {
-                "id": "live_papertrade_result_csv_v2",
-                "file_name": str(Path("live_signals") / paper_trade_csv_name_v2),
-                "exists": paper_trade_csv_path_v2.exists(),
-                "mtime": iso_mtime(paper_trade_csv_path_v2),
-                "size_bytes": paper_trade_size_v2,
-                "status": {},
-                "tail": paper_trade_tail_v2,
-            }
-        )
-
-        # Dynamic card: today's paper trade results CSV V3.
-        paper_trade_csv_name_v3 = f"paper_trades_{today_ist}_v3.csv"
-        paper_trade_csv_path_v3 = LIVE_SIGNAL_DIR / paper_trade_csv_name_v3
-        try:
-            paper_trade_size_v3 = paper_trade_csv_path_v3.stat().st_size if paper_trade_csv_path_v3.exists() else 0
-        except OSError:
-            paper_trade_size_v3 = 0
-        paper_trade_tail_v3 = _format_csv_projection(
-            paper_trade_csv_path_v3,
-            paper_trade_cols,
-            limit_rows=max(5, min(40, lines // 2)),
-            time_only_cols={"exit_time"},
-        )
-        items.append(
-            {
-                "id": "live_papertrade_result_csv_v3",
-                "file_name": str(Path("live_signals") / paper_trade_csv_name_v3),
-                "exists": paper_trade_csv_path_v3.exists(),
-                "mtime": iso_mtime(paper_trade_csv_path_v3),
-                "size_bytes": paper_trade_size_v3,
-                "status": {},
-                "tail": paper_trade_tail_v3,
-            }
-        )
 
         # Dynamic card: today's paper trade results CSV V4 unified.
         paper_trade_csv_name_v4 = f"paper_trades_{today_ist}_v4.csv"
