@@ -140,7 +140,7 @@ def _normalize_ticker_list(obj) -> list[str]:
 
 def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, int]]:
     """
-    Preferred: filtered_stocks_MIS.py with:
+    Preferred: filtered_stocks_NSE_FO_only.py with:
       - stocks_tokens = {SYMBOL: TOKEN, ...}  OR
       - selected_stocks = [...] / {SYMBOL,...} / {SYMBOL:TOKEN,...}
 
@@ -158,7 +158,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
     mod: Optional[ModuleType] = None
 
     try:
-        mod = importlib.import_module("filtered_stocks_MIS")
+        mod = importlib.import_module("filtered_stocks_NSE_FO_only")
     except Exception:
         mod = None
 
@@ -169,7 +169,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                 token_map = {str(k).strip().upper(): int(v) for k, v in raw.items() if str(k).strip()}
                 tickers = sorted(token_map.keys())
                 if tickers:
-                    logger.info("Loaded %d symbols from filtered_stocks_MIS.stocks_tokens", len(tickers))
+                    logger.info("Loaded %d symbols from filtered_stocks_NSE_FO_only.stocks_tokens", len(tickers))
                     return tickers, token_map
             except Exception:
                 pass
@@ -185,12 +185,12 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                 except Exception:
                     pass
                 if tickers:
-                    logger.info("Loaded %d symbols from filtered_stocks_MIS.selected_stocks", len(tickers))
+                    logger.info("Loaded %d symbols from filtered_stocks_NSE_FO_only.selected_stocks", len(tickers))
                     return tickers, token_map
 
             tickers = _normalize_ticker_list(ss)
             if tickers:
-                logger.info("Loaded %d symbols from filtered_stocks_MIS.selected_stocks", len(tickers))
+                logger.info("Loaded %d symbols from filtered_stocks_NSE_FO_only.selected_stocks", len(tickers))
                 return tickers, token_map
 
     for base in (cwd, script_dir, parent_dir):
@@ -205,7 +205,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
     raise RuntimeError(
         "Could not load symbols.\n"
         "Fix options:\n"
-        "  1) Ensure filtered_stocks_MIS.py is importable and defines:\n"
+        "  1) Ensure filtered_stocks_NSE_FO_only.py is importable and defines:\n"
         "       - stocks_tokens = {SYMBOL: TOKEN, ...}   OR\n"
         "       - selected_stocks = [SYMBOL, ...]\n"
         "  2) Or create stocks_tickers.txt (one symbol per line).\n"

@@ -1,0 +1,31 @@
+======================================================================
+AVWAP v11 COMBINED runner — LONG + SHORT (refactored v2)
+  - Entry signals: 15-min data
+  - Exit resolution: 5-min data (stocks_indicators_5min_eq)
+  - Outputs: */algo_trading/outputs
+  - Intraday leverage: SHORT=5.0x | LONG=5.0x
+  - P&L% reported = ROI% on *capital/margin* (levered)
+    (unlevered price-return% is saved as pnl_pct_price)
+======================================================================
+[INFO] 5-min data directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\nfoidv1\backtesting\nfoidv1\stocks_indicators_5min_eq
+[INFO] 5-min parquet files found: 114
+[INFO] SHORT config: SL=0.8%, TGT=1.2%, slippage=5bps, comm=3bps
+[INFO] LONG  config: SL=0.8%, TGT=1.5%, slippage=5bps, comm=3bps
+[INFO] Lag bars SHORT: A_MOD=1, A_PULLBACK=2, B_HUGE=-1
+[INFO] Lag bars LONG : A_MOD=1, A_PULLBACK=2, B_HUGE=-1
+[INFO] Final signal-window override -> True
+[INFO] SHORT windows: use_time_windows=True | 09:15-14:30
+[INFO] LONG  windows: use_time_windows=True | 09:15-14:30
+[INFO] Capital/margin per trade: SHORT=Rs.50,000 | LONG=Rs.100,000
+[INFO] Notional exposure per trade: SHORT=Rs.250,000 | LONG=Rs.500,000
+[INFO] Live parity: min_bars_left=0 -> True
+[INFO] Live parity: disable_topn_per_day -> True
+[INFO] Parallelism: max_workers=4
+[INFO] Output directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\nfoidv1\backtesting\nfoidv1\outputs
+[INFO] Console log: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\nfoidv1\backtesting\nfoidv1\outputs\avwap_combined_runner_20260227_170344.txt
+----------------------------------------------------------------------
+
+[PHASE 1] Scanning for entry signals using 15-min data...
+[SHORT] Tickers found: 0
+[LONG] Tickers found: 0
+[DONE] No trades found.

@@ -107,7 +107,7 @@ INTRADAY_LEVERAGE_LONG = 5.0
 ENABLE_CASH_CONSTRAINED_PORTFOLIO_SIM = False
 
 # If True, force min_bars_left_after_entry=0 for BOTH sides (live-signal parity).
-# This makes entry counts comparable to eqidv2_* live/daily scanners.
+# This makes entry counts comparable to nfoidv1_* live/daily scanners.
 FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
 
 # If True, disable Top-N pruning on both sides so runner output does not
@@ -126,14 +126,42 @@ FINAL_LONG_SIGNAL_WINDOWS = [
     (dtime(9, 15, 0), dtime(14, 30, 0))
 ]
 
+# Candidate 1 @ 14:30 tuned profile (from parameter sweep).
+# These overrides are applied to default_short_config/default_long_config in main().
+SHORT_STOP_PCT = 0.0090
+SHORT_TARGET_PCT = 0.0120
+LONG_STOP_PCT = 0.0060
+LONG_TARGET_PCT = 0.0120
+
+SHORT_ADX_MIN = 22.0
+SHORT_ADX_SLOPE_MIN = 1.0
+SHORT_RSI_MAX = 58.0
+SHORT_STOCHK_MAX = 75.0
+
+LONG_ADX_MIN = 22.0
+LONG_ADX_SLOPE_MIN = 1.25
+LONG_RSI_MIN = 38.0
+LONG_STOCHK_MIN = 30.0
+LONG_STOCHK_MAX = 98.0
+
+USE_VOLUME_FILTER = True
+VOLUME_MIN_RATIO = 1.0
+USE_ATR_PCT_FILTER = True
+ATR_PCT_MIN = 0.0015
+AVWAP_DIST_ATR_MULT = 0.10
+
+REQUIRE_ENTRY_CLOSE_CONFIRM = True
+MAX_TRADES_PER_TICKER_PER_DAY = 2
+ENABLE_LONG_SETUP_A_PULLBACK_C2_BREAK = True
+
 # Per-setup signal->entry lag (in 15-min bars).
 # Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
 # HUGE setup: use -1 for legacy dynamic "first valid bar" behavior.
 SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW = 1
-SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW = 2
+SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW = 3
 SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE = -1
 LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH = 1
-LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH = 2
+LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH = 3
 LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = -1
 
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
@@ -1378,6 +1406,42 @@ def main() -> None:
             long_cfg = default_long_config(
                 reports_dir=_outputs_dir,
             )
+
+            # Apply tuned Candidate 1 parameter profile.
+            short_cfg.stop_pct = float(SHORT_STOP_PCT)
+            short_cfg.target_pct = float(SHORT_TARGET_PCT)
+            long_cfg.stop_pct = float(LONG_STOP_PCT)
+            long_cfg.target_pct = float(LONG_TARGET_PCT)
+
+            short_cfg.adx_min = float(SHORT_ADX_MIN)
+            short_cfg.adx_slope_min = float(SHORT_ADX_SLOPE_MIN)
+            short_cfg.rsi_max_short = float(SHORT_RSI_MAX)
+            short_cfg.stochk_max = float(SHORT_STOCHK_MAX)
+
+            long_cfg.adx_min = float(LONG_ADX_MIN)
+            long_cfg.adx_slope_min = float(LONG_ADX_SLOPE_MIN)
+            long_cfg.rsi_min_long = float(LONG_RSI_MIN)
+            long_cfg.stochk_min = float(LONG_STOCHK_MIN)
+            long_cfg.stochk_max = float(LONG_STOCHK_MAX)
+
+            short_cfg.use_volume_filter = bool(USE_VOLUME_FILTER)
+            long_cfg.use_volume_filter = bool(USE_VOLUME_FILTER)
+            short_cfg.volume_min_ratio = float(VOLUME_MIN_RATIO)
+            long_cfg.volume_min_ratio = float(VOLUME_MIN_RATIO)
+
+            short_cfg.use_atr_pct_filter = bool(USE_ATR_PCT_FILTER)
+            long_cfg.use_atr_pct_filter = bool(USE_ATR_PCT_FILTER)
+            short_cfg.atr_pct_min = float(ATR_PCT_MIN)
+            long_cfg.atr_pct_min = float(ATR_PCT_MIN)
+
+            short_cfg.avwap_dist_atr_mult = float(AVWAP_DIST_ATR_MULT)
+            long_cfg.avwap_dist_atr_mult = float(AVWAP_DIST_ATR_MULT)
+
+            short_cfg.require_entry_close_confirm = bool(REQUIRE_ENTRY_CLOSE_CONFIRM)
+            long_cfg.require_entry_close_confirm = bool(REQUIRE_ENTRY_CLOSE_CONFIRM)
+            short_cfg.max_trades_per_ticker_per_day = int(MAX_TRADES_PER_TICKER_PER_DAY)
+            long_cfg.max_trades_per_ticker_per_day = int(MAX_TRADES_PER_TICKER_PER_DAY)
+            long_cfg.enable_setup_a_pullback_c2_break = bool(ENABLE_LONG_SETUP_A_PULLBACK_C2_BREAK)
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
