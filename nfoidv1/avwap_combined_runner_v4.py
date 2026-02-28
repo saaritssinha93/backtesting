@@ -85,16 +85,16 @@ MAX_WORKERS    = _V2_MAX_WORKERS   # inherit from v2 (4)
 # "limit_retrace"    → fewer entries but better average fill price
 # "signal_entry"     → maximum entries, no price guard
 LONG_ENTRY_MODEL       = "next_open_guard"
-LONG_CHASE_CAP_PCT     = 0.0080    # allow gap up to 0.8% above signal (was 0.3%)
-LONG_LIMIT_OFFSET_PCT  = -0.0020   # retrace limit: -0.2% below signal (was -0.5%)
-LONG_LIMIT_WAIT_MIN    = 30        # wait window in minutes (was 60)
+LONG_CHASE_CAP_PCT     = 0.0040    # best sweep: cap up to 0.4% above signal
+LONG_LIMIT_OFFSET_PCT  = -0.0060   # best sweep companion setting
+LONG_LIMIT_WAIT_MIN    = 60        # best sweep companion setting
 
 # ---- v4 LONG risk model (rebuilt from executed entry) ----
 LONG_STOP_PCT_V4   = 0.0060   # 0.60%
-LONG_TARGET_PCT_V4 = 0.0200   # 2.00%  (up from 1.80% in v3)
+LONG_TARGET_PCT_V4 = 0.0250   # 2.50%
 
 # ---- v4 SHORT risk (same as v2 optimised) ----
-SHORT_STOP_PCT_V4   = 0.0075  # 0.75%
+SHORT_STOP_PCT_V4   = 0.0055  # 0.55%
 SHORT_TARGET_PCT_V4 = 0.0150  # 1.50%
 
 # ---- Optional LONG signal filters (None = disabled, inherited from base scan) ----
@@ -130,6 +130,23 @@ def _pick_col(df: pd.DataFrame, *candidates: str) -> Optional[str]:
         if c in df.columns:
             return c
     return None
+
+
+def _apply_short_risk_override(
+    short_df: pd.DataFrame,
+    short_stop_pct: float,
+    short_target_pct: float,
+) -> pd.DataFrame:
+    """Rebuild SHORT stop/target prices before 5-min exit re-resolution."""
+    if short_df.empty:
+        return short_df
+
+    d = short_df.copy()
+    entry = pd.to_numeric(d.get("entry_price"), errors="coerce")
+    d["stop_price"] = entry * (1.0 + float(short_stop_pct))
+    d["sl_price"] = d["stop_price"]
+    d["target_price"] = entry * (1.0 - float(short_target_pct))
+    return d
 
 
 # ===========================================================================
@@ -401,44 +418,68 @@ def main() -> None:
                 target_pct=LONG_TARGET_PCT_V4,
             )
 
-            # Apply v2 optimised parameters to SHORT
-            short_cfg.stop_pct         = float(SHORT_STOP_PCT_V4)
-            short_cfg.target_pct       = float(SHORT_TARGET_PCT_V4)
-            short_cfg.adx_min          = 20.0
-            short_cfg.adx_slope_min    = 0.75
-            short_cfg.rsi_max_short    = 62.0
-            short_cfg.stochk_max       = 80.0
-            short_cfg.be_trigger_pct   = 0.0040
-            short_cfg.trail_pct        = 0.0022
-            short_cfg.atr_pct_min      = 0.0018
-            short_cfg.avwap_dist_atr_mult = 0.05
-            short_cfg.volume_min_ratio = 1.0
-            short_cfg.max_trades_per_ticker_per_day = 2
-            short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = 2
-            short_cfg.min_bars_left_after_entry = 0
-            short_cfg.enable_topn_per_day = False
-            short_cfg.use_time_windows = True
+            # Base scan profile from the best-performing v4 sweep base (base1 from v2 sweep).
             from datetime import time as dtime
-            short_cfg.signal_windows = [(dtime(9, 15), dtime(15, 0))]
 
-            # Apply v2 optimised parameters to LONG (pre-anti-chase scan)
-            long_cfg.adx_min           = 18.0
-            long_cfg.adx_slope_min     = 0.60
-            long_cfg.rsi_min_long      = 35.0
-            long_cfg.stochk_min        = 22.0
-            long_cfg.stochk_max        = 98.0
-            long_cfg.be_trigger_pct    = 0.0045
-            long_cfg.trail_pct         = 0.0022
-            long_cfg.atr_pct_min       = 0.0018
+            # SHORT base scan profile
+            short_cfg.stop_pct = 0.0085
+            short_cfg.target_pct = 0.0120
+            short_cfg.adx_min = 22.0
+            short_cfg.adx_slope_min = 0.60
+            short_cfg.rsi_max_short = 54.0
+            short_cfg.stochk_max = 75.0
+            short_cfg.be_trigger_pct = 0.0045
+            short_cfg.trail_pct = 0.0028
+            short_cfg.use_atr_pct_filter = False
+            short_cfg.atr_pct_min = 0.0015
+            short_cfg.use_volume_filter = True
+            short_cfg.volume_min_ratio = 0.9
+            short_cfg.require_avwap_rule = False
+            short_cfg.avwap_touch = False
+            short_cfg.avwap_min_consec_closes = 1
+            short_cfg.avwap_mode = "any"
+            short_cfg.avwap_dist_atr_mult = 0.05
+            short_cfg.require_entry_close_confirm = True
+            short_cfg.max_trades_per_ticker_per_day = 1
+            short_cfg.min_bars_left_after_entry = 2
+            short_cfg.min_bars_for_scan = 7
+            short_cfg.enable_topn_per_day = False
+            short_cfg.topn_per_day = 60
+            short_cfg.use_time_windows = True
+            short_cfg.signal_windows = [(dtime(9, 15), dtime(15, 15))]
+            short_cfg.lag_bars_short_a_mod_break_c1_low = 1
+            short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = 2
+            short_cfg.lag_bars_short_b_huge_failed_bounce = -1
+
+            # LONG base scan profile (pre-anti-chase)
+            long_cfg.adx_min = 16.0
+            long_cfg.adx_slope_min = 1.25
+            long_cfg.rsi_min_long = 45.0
+            long_cfg.stochk_min = 15.0
+            long_cfg.stochk_max = 98.0
+            long_cfg.be_trigger_pct = 0.0045
+            long_cfg.trail_pct = 0.0022
+            long_cfg.use_atr_pct_filter = False
+            long_cfg.atr_pct_min = 0.0015
+            long_cfg.use_volume_filter = True
+            long_cfg.volume_min_ratio = 0.9
+            long_cfg.require_avwap_rule = False
+            long_cfg.avwap_touch = False
+            long_cfg.avwap_min_consec_closes = 1
+            long_cfg.avwap_mode = "any"
             long_cfg.avwap_dist_atr_mult = 0.05
-            long_cfg.volume_min_ratio  = 1.0
-            long_cfg.max_trades_per_ticker_per_day = 2
-            long_cfg.enable_setup_a_pullback_c2_break = True
-            long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = 2
-            long_cfg.min_bars_left_after_entry = 0
+            long_cfg.require_entry_close_confirm = True
+            long_cfg.max_trades_per_ticker_per_day = 1
+            long_cfg.min_bars_left_after_entry = 2
+            long_cfg.min_bars_for_scan = 7
             long_cfg.enable_topn_per_day = False
-            long_cfg.use_time_windows  = True
-            long_cfg.signal_windows    = [(dtime(9, 15), dtime(15, 0))]
+            long_cfg.topn_per_day = 60
+            long_cfg.enable_setup_a_pullback_c2_break = False
+            long_cfg.use_time_windows = True
+            long_cfg.signal_windows = [(dtime(9, 15), dtime(15, 15))]
+            long_cfg.lag_bars_long_a_mod_break_c1_high = 1
+            long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = 2
+            long_cfg.lag_bars_long_b_huge_pullback_hold_break = -1
 
             short_df = pd.DataFrame()
             long_df  = pd.DataFrame()
@@ -476,6 +517,11 @@ def main() -> None:
             # PHASE 3: Re-resolve exits on 5-min bars
             print("\n[PHASE 3] Re-resolving exits on 5-min bars...")
             if not short_df.empty:
+                short_df = _apply_short_risk_override(
+                    short_df,
+                    short_stop_pct=SHORT_STOP_PCT_V4,
+                    short_target_pct=SHORT_TARGET_PCT_V4,
+                )
                 short_df = _resolve_exits_5min(short_df, dir_5m, suffix_5m=suffix_5m, engine=short_cfg.parquet_engine)
             if not long_df.empty:
                 long_df  = _resolve_exits_5min(long_df, dir_5m, suffix_5m=suffix_5m, engine=long_cfg.parquet_engine)
