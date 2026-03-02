@@ -10,6 +10,7 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=avwap_trade_execution_PAPER_TRADE_TRUE_v5.py"
+set "MAX_TRADES=0"
 set "END_CUTOFF_HHMM=1540"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
@@ -37,7 +38,7 @@ echo [INFO] Using daily log file: %LOG_FILE%>>"%LOG_FILE%"
 echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
 
 :RUN_LOOP
-"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --entry-price-source ltp_on_signal >>"%LOG_FILE%" 2>&1
+"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --entry-price-source ltp_on_signal --max-trades %MAX_TRADES% >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)

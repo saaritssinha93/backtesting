@@ -1,0 +1,823 @@
+2026-03-02 09:38:41,761 | INFO    | =================================================================
+2026-03-02 09:38:41,761 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 09:38:41,761 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 09:38:41,761 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 09:38:41,761 | INFO    |   Max concurrent    : 20
+2026-03-02 09:38:41,761 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 09:38:41,774 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 09:38:41,774 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 09:38:41,774 | INFO    | =================================================================
+2026-03-02 09:38:41,774 | INFO    | Establishing Kite session...
+2026-03-02 09:38:41,846 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 09:38:41,846 | INFO    | Loaded 0 previously executed signals.
+2026-03-02 09:38:41,846 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 09:38:41,868 | INFO    | [RESTORE] signals_today=0 executed=0 closed_today=0 open_restored=0 realized_trades=0 realized_total=Rs.+0.00 deployed_margin=Rs.0.00
+2026-03-02 09:38:41,914 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 09:38:41,914 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 10:31:23,213 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 10:31:23,274 | INFO    | [LIVE] Starting trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=352.12 TGT=345.31
+2026-03-02 10:31:23,274 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ROHLTD @ 349.5 | reserved_margin=Rs.69.90 | ID=e9b3b5d26526
+2026-03-02 10:31:23,310 | INFO    | Dispatched 1 new trade(s). Active trades: 1
+2026-03-02 10:31:23,382 | INFO    | [LIVE] Entry order placed: SELL ROHLTD ID=260302170907598
+2026-03-02 10:31:23,445 | INFO    | [LIVE] Entry filled: ROHLTD @ 349.0
+2026-03-02 10:31:23,588 | INFO    | [LIVE] Exit legs placed for ROHLTD: target_id=260302170907615 sl_id=260302170907622
+2026-03-02 10:45:56,089 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 10:45:56,109 | INFO    | [LIVE] Starting trade LT-1704dabb-104556: SELL JTLIND qty=1 | SL=60.24 TGT=59.07
+2026-03-02 10:45:56,110 | INFO    | [DISPATCH] Launched LIVE trade: SHORT JTLIND @ 59.79 | reserved_margin=Rs.11.96 | ID=1704dabb16ac
+2026-03-02 10:45:56,121 | INFO    | Dispatched 1 new trade(s). Active trades: 2
+2026-03-02 10:45:56,173 | INFO    | [LIVE] Entry order placed: SELL JTLIND ID=260302170988779
+2026-03-02 10:45:56,240 | INFO    | [LIVE] Entry filled: JTLIND @ 59.74
+2026-03-02 10:45:56,389 | INFO    | [LIVE] Exit legs placed for JTLIND: target_id=260302170988789 sl_id=260302170988794
+2026-03-02 11:00:40,278 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:00:40,291 | INFO    | [LIVE] Starting trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.66 TGT=462.53
+2026-03-02 11:00:40,291 | INFO    | [DISPATCH] Launched LIVE trade: SHORT GHCL @ 468.15 | reserved_margin=Rs.93.63 | ID=62d78161ce18
+2026-03-02 11:00:40,291 | INFO    | [LIVE] Starting trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.66 TGT=95.77
+2026-03-02 11:00:40,291 | INFO    | [DISPATCH] Launched LIVE trade: SHORT GMRAIRPORT @ 96.93 | reserved_margin=Rs.19.39 | ID=26e28f6d79de
+2026-03-02 11:00:40,326 | INFO    | Dispatched 2 new trade(s). Active trades: 4
+2026-03-02 11:00:40,363 | INFO    | [LIVE] Entry order placed: SELL GHCL ID=260302171062600
+2026-03-02 11:00:40,369 | INFO    | [LIVE] Entry order placed: SELL GMRAIRPORT ID=260302171062601
+2026-03-02 11:00:40,427 | INFO    | [LIVE] Entry filled: GHCL @ 468.15
+2026-03-02 11:00:40,431 | INFO    | [LIVE] Entry filled: GMRAIRPORT @ 96.9
+2026-03-02 11:00:40,436 | ERROR   | [LIVE] Trade execution error for GHCL: [WinError 32] The process cannot access the file because it is being used by another process: 'live_signals\\open_live_trades_state_2026-03-02_v5.json.tmp' -> 'live_signals\\open_live_trades_state_2026-03-02_v5.json'
+2026-03-02 11:00:40,482 | ERROR   | Traceback (most recent call last):
+  File "C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\avwap_trade_execution_PAPER_TRADE_FALSE_v5.py", line 709, in execute_live_trade
+    _sync_active_position("entry_filled")
+  File "C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\avwap_trade_execution_PAPER_TRADE_FALSE_v5.py", line 640, in _sync_active_position
+    _persist_open_trades_state()
+  File "C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\avwap_trade_execution_PAPER_TRADE_FALSE_v5.py", line 441, in _persist_open_trades_state
+    _atomic_write_json(_open_trades_state_path(today_str), payload)
+  File "C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\avwap_trade_execution_PAPER_TRADE_FALSE_v5.py", line 424, in _atomic_write_json
+    os.replace(tmp_path, path)
+PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: 'live_signals\\open_live_trades_state_2026-03-02_v5.json.tmp' -> 'live_signals\\open_live_trades_state_2026-03-02_v5.json'
+
+2026-03-02 11:00:40,604 | INFO    | [LIVE] Exit legs placed for GMRAIRPORT: target_id=260302171062610 sl_id=260302171062614
+2026-03-02 11:01:09,148 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:01:09,163 | INFO    | [LIVE] Starting trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.72 TGT=127.2
+2026-03-02 11:01:09,163 | INFO    | [DISPATCH] Launched LIVE trade: SHORT MOTHERSON @ 128.75 | reserved_margin=Rs.25.75 | ID=d62938b7ce40
+2026-03-02 11:01:09,186 | INFO    | Dispatched 1 new trade(s). Active trades: 4
+2026-03-02 11:01:09,226 | INFO    | [LIVE] Entry order placed: SELL MOTHERSON ID=260302171064724
+2026-03-02 11:01:09,293 | INFO    | [LIVE] Entry filled: MOTHERSON @ 128.71
+2026-03-02 11:01:09,429 | INFO    | [LIVE] Exit legs placed for MOTHERSON: target_id=260302171064733 sl_id=260302171064738
+2026-03-02 11:15:21,859 | INFO    | =================================================================
+2026-03-02 11:15:21,859 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:15:21,859 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:15:21,859 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:15:21,859 | INFO    |   Max concurrent    : 20
+2026-03-02 11:15:21,859 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:15:21,859 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:15:21,859 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:15:21,859 | INFO    | =================================================================
+2026-03-02 11:15:21,859 | INFO    | Establishing Kite session...
+2026-03-02 11:15:21,922 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:15:21,922 | INFO    | Loaded 5 previously executed signals.
+2026-03-02 11:15:21,922 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:15:21,972 | INFO    | [RESTORE] signals_today=5 executed=5 closed_today=0 open_restored=5 realized_trades=0 realized_total=Rs.+0.00 deployed_margin=Rs.220.50
+2026-03-02 11:15:22,036 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:15:22,037 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:15:22,038 | INFO    | [RESUME] Restoring trade LT-1704dabb-104556: SELL JTLIND qty=1 | SL=60.2 TGT=59.0
+2026-03-02 11:15:22,039 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:15:22,039 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:15:22,040 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:15:22,040 | INFO    | [RESTORE] Resumed 5 open trade monitor(s).
+2026-03-02 11:15:22,040 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:15:22,040 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:15:22,204 | INFO    | [RESUME] Rebuilt exit legs for GHCL: target_id=260302171122750 sl_id=260302171122755
+2026-03-02 11:16:43,602 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:16:43,615 | INFO    | [LIVE] Starting trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.49
+2026-03-02 11:16:43,615 | INFO    | [DISPATCH] Launched LIVE trade: SHORT VPRPL @ 41.99 | reserved_margin=Rs.8.40 | ID=76fcb622c40c
+2026-03-02 11:16:43,617 | INFO    | Dispatched 1 new trade(s). Active trades: 6
+2026-03-02 11:16:43,678 | INFO    | [LIVE] Entry order placed: SELL VPRPL ID=260302171127813
+2026-03-02 11:16:43,745 | INFO    | [LIVE] Entry filled: VPRPL @ 41.98
+2026-03-02 11:16:43,897 | INFO    | [LIVE] Exit legs placed for VPRPL: target_id=260302171127828 sl_id=260302171127830
+2026-03-02 11:16:56,820 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:16:56,824 | INFO    | [LIVE] Starting trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1466.62 TGT=1438.23
+2026-03-02 11:16:56,824 | INFO    | [DISPATCH] Launched LIVE trade: SHORT BHARATRAS @ 1455.7 | reserved_margin=Rs.291.14 | ID=6ea0d0d5874e
+2026-03-02 11:16:56,836 | INFO    | Dispatched 1 new trade(s). Active trades: 7
+2026-03-02 11:16:56,914 | INFO    | [LIVE] Entry order placed: SELL BHARATRAS ID=260302171128623
+2026-03-02 11:16:56,986 | INFO    | [LIVE] Entry filled: BHARATRAS @ 1453.6
+2026-03-02 11:16:57,055 | ERROR   | [LIVE] Exit leg placement failed for BHARATRAS: Tick size for this script is 0.10. Kindly enter price in the multiple of tick size for this script
+2026-03-02 11:16:57,096 | ERROR   | [LIVE] Exit setup fallback close failed for BHARATRAS: Invalid tags: max allowed tag length is 20
+2026-03-02 11:25:02,771 | INFO    | =================================================================
+2026-03-02 11:25:02,771 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:25:02,771 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:25:02,771 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:25:02,771 | INFO    |   Max concurrent    : 20
+2026-03-02 11:25:02,771 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:25:02,771 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:25:02,771 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:25:02,771 | INFO    | =================================================================
+2026-03-02 11:25:02,771 | INFO    | Establishing Kite session...
+2026-03-02 11:25:02,860 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:25:02,989 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:25:02,991 | INFO    | Loaded 7 previously executed signals.
+2026-03-02 11:25:02,991 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:25:03,028 | INFO    | [RESTORE] signals_today=7 executed=7 closed_today=0 open_restored=7 realized_trades=0 realized_total=Rs.+0.00 deployed_margin=Rs.519.62
+2026-03-02 11:25:03,077 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:25:03,077 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:25:03,077 | INFO    | [RESUME] Restoring trade LT-1704dabb-104556: SELL JTLIND qty=1 | SL=60.2 TGT=59.0
+2026-03-02 11:25:03,077 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:25:03,077 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:25:03,077 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:25:03,093 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:25:03,094 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:25:03,094 | INFO    | [RESTORE] Resumed 7 open trade monitor(s).
+2026-03-02 11:25:03,094 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:25:03,094 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:25:03,277 | INFO    | [RESUME] Rebuilt exit legs for BHARATRAS: target_id=260302171163881 sl_id=260302171163885
+2026-03-02 11:27:38,398 | INFO    | =================================================================
+2026-03-02 11:27:38,398 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:27:38,398 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:27:38,398 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:27:38,398 | INFO    |   Max concurrent    : 20
+2026-03-02 11:27:38,398 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:27:38,398 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:27:38,398 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:27:38,398 | INFO    | =================================================================
+2026-03-02 11:27:38,398 | INFO    | Establishing Kite session...
+2026-03-02 11:27:38,507 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:27:38,647 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:27:38,650 | INFO    | Loaded 7 previously executed signals.
+2026-03-02 11:27:38,650 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:27:38,680 | INFO    | [RESTORE] signals_today=7 executed=7 closed_today=0 open_restored=7 realized_trades=0 realized_total=Rs.+0.00 deployed_margin=Rs.519.62
+2026-03-02 11:27:38,743 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:27:38,743 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:27:38,743 | INFO    | [RESUME] Restoring trade LT-1704dabb-104556: SELL JTLIND qty=1 | SL=60.2 TGT=59.0
+2026-03-02 11:27:38,743 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:27:38,750 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:27:38,750 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:27:38,750 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:27:38,750 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:27:38,750 | INFO    | [RESTORE] Resumed 7 open trade monitor(s).
+2026-03-02 11:27:38,750 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:27:38,750 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:30:40,695 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:30:40,706 | INFO    | [LIVE] Starting trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.54 TGT=689.92
+2026-03-02 11:30:40,706 | INFO    | [DISPATCH] Launched LIVE trade: SHORT GRAPHITE @ 698.3 | reserved_margin=Rs.139.66 | ID=9960d4c6dcc4
+2026-03-02 11:30:40,722 | INFO    | Dispatched 1 new trade(s). Active trades: 8
+2026-03-02 11:30:40,780 | INFO    | [LIVE] Entry order placed: SELL GRAPHITE ID=260302171193592
+2026-03-02 11:30:40,845 | INFO    | [LIVE] Entry filled: GRAPHITE @ 698.0
+2026-03-02 11:30:40,993 | INFO    | [LIVE] Exit legs placed for GRAPHITE: target_id=260302171193601 sl_id=260302171193611
+2026-03-02 11:30:53,429 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:30:53,447 | INFO    | [LIVE] Starting trade LT-7f26aa00-113053: SELL IRMENERGY qty=1 | SL=229.65 TGT=225.2
+2026-03-02 11:30:53,447 | INFO    | [DISPATCH] Launched LIVE trade: SHORT IRMENERGY @ 227.94 | reserved_margin=Rs.45.59 | ID=7f26aa009276
+2026-03-02 11:30:53,447 | INFO    | [LIVE] Starting trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.87 TGT=61.65
+2026-03-02 11:30:53,447 | INFO    | [DISPATCH] Launched LIVE trade: SHORT JAGRAN @ 62.4 | reserved_margin=Rs.12.48 | ID=f3386e73cdcd
+2026-03-02 11:30:53,459 | INFO    | Dispatched 2 new trade(s). Active trades: 10
+2026-03-02 11:30:53,510 | ERROR   | [LIVE] Trade execution error for IRMENERGY: MIS orders are currently blocked for IRMENERGY. Place a CNC order instead. [List of stocks](https://docs.google.com/spreadsheets/d/1fLTsNpFJPK349RTjs0GRSXJZD-5soCUkZt9eSMTJ2m4/edit?usp=sharing) allowed for MIS/CO trades.
+2026-03-02 11:30:53,512 | ERROR   | Traceback (most recent call last):
+  File "C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\avwap_trade_execution_PAPER_TRADE_FALSE_v5.py", line 786, in execute_live_trade
+    entry_order_id = kite.place_order(
+                     ^^^^^^^^^^^^^^^^^
+  File "C:\Users\Saarit\AppData\Local\Programs\Python\Python312\Lib\site-packages\kiteconnect\connect.py", line 361, in place_order
+    return self._post("order.place",
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Saarit\AppData\Local\Programs\Python\Python312\Lib\site-packages\kiteconnect\connect.py", line 865, in _post
+    return self._request(route, "POST", url_args=url_args, params=params, is_json=is_json, query_params=query_params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Saarit\AppData\Local\Programs\Python\Python312\Lib\site-packages\kiteconnect\connect.py", line 937, in _request
+    raise exp(data["message"], code=r.status_code)
+kiteconnect.exceptions.InputException: MIS orders are currently blocked for IRMENERGY. Place a CNC order instead. [List of stocks](https://docs.google.com/spreadsheets/d/1fLTsNpFJPK349RTjs0GRSXJZD-5soCUkZt9eSMTJ2m4/edit?usp=sharing) allowed for MIS/CO trades.
+
+2026-03-02 11:30:53,513 | INFO    | [LIVE] Entry order placed: SELL JAGRAN ID=260302171194759
+2026-03-02 11:30:53,523 | INFO    | [LIVE] RESULT SHORT IRMENERGY | ERROR: MIS orders are currently blocked for IRMENERGY. Place a CNC order instead. [List | Entry=227.94 Exit=227.94 | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00
+2026-03-02 11:30:53,570 | INFO    | [LIVE] Entry filled: JAGRAN @ 62.33
+2026-03-02 11:30:53,731 | INFO    | [LIVE] Exit legs placed for JAGRAN: target_id=260302171194774 sl_id=260302171194786
+2026-03-02 11:31:51,340 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:31:51,358 | INFO    | [LIVE] Starting trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=480.22 TGT=470.93
+2026-03-02 11:31:51,358 | INFO    | [DISPATCH] Launched LIVE trade: SHORT CONCOR @ 476.65 | reserved_margin=Rs.95.33 | ID=389f8b073d3d
+2026-03-02 11:31:51,374 | INFO    | Dispatched 1 new trade(s). Active trades: 10
+2026-03-02 11:31:51,422 | INFO    | [LIVE] Entry order placed: SELL CONCOR ID=260302171200075
+2026-03-02 11:31:51,496 | INFO    | [LIVE] Entry filled: CONCOR @ 478.25
+2026-03-02 11:31:51,649 | INFO    | [LIVE] Exit legs placed for CONCOR: target_id=260302171200089 sl_id=260302171200094
+2026-03-02 11:36:44,585 | INFO    | =================================================================
+2026-03-02 11:36:44,585 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:36:44,585 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:36:44,585 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:36:44,585 | INFO    |   Max concurrent    : 20
+2026-03-02 11:36:44,585 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:36:44,585 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:36:44,585 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:36:44,585 | INFO    | =================================================================
+2026-03-02 11:36:44,585 | INFO    | Establishing Kite session...
+2026-03-02 11:36:44,680 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:36:44,827 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:36:44,834 | INFO    | Loaded 11 previously executed signals.
+2026-03-02 11:36:44,844 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:36:44,889 | INFO    | [RESTORE] signals_today=11 executed=10 closed_today=1 open_restored=10 realized_trades=1 realized_total=Rs.+0.00 deployed_margin=Rs.767.33
+2026-03-02 11:36:44,946 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-1704dabb-104556: SELL JTLIND qty=1 | SL=60.2 TGT=59.0
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 11:36:44,946 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 11:36:44,946 | INFO    | [RESTORE] Resumed 10 open trade monitor(s).
+2026-03-02 11:36:44,962 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:36:44,962 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:36:44,969 | WARNING | [RISK] Rejecting SHORT IRMENERGY: max open positions reached (10/10)
+2026-03-02 11:38:14,926 | INFO    | =================================================================
+2026-03-02 11:38:14,926 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:38:14,926 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:38:14,926 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:38:14,926 | INFO    |   Max concurrent    : 20
+2026-03-02 11:38:14,926 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:38:14,926 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:38:14,926 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:38:14,926 | INFO    | =================================================================
+2026-03-02 11:38:14,926 | INFO    | Establishing Kite session...
+2026-03-02 11:38:14,993 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:38:15,141 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:38:15,148 | INFO    | Loaded 10 previously executed signals.
+2026-03-02 11:38:15,155 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:38:15,195 | INFO    | [RESTORE] signals_today=11 executed=10 closed_today=1 open_restored=10 realized_trades=1 realized_total=Rs.+0.00 deployed_margin=Rs.767.33
+2026-03-02 11:38:15,257 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:38:15,257 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:38:15,257 | INFO    | [RESUME] Restoring trade LT-1704dabb-104556: SELL JTLIND qty=1 | SL=60.2 TGT=59.0
+2026-03-02 11:38:15,257 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:38:15,257 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:38:15,257 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:38:15,257 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:38:15,269 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:38:15,269 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 11:38:15,269 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 11:38:15,269 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 11:38:15,269 | INFO    | [RESTORE] Resumed 10 open trade monitor(s).
+2026-03-02 11:38:15,273 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:38:15,273 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:38:15,280 | WARNING | [RISK] Rejecting SHORT IRMENERGY: max open positions reached (10/10)
+2026-03-02 11:38:15,429 | INFO    | [LIVE] TARGET HIT: JTLIND @ 59.0 -> cancelling SL 260302170988794
+2026-03-02 11:38:15,507 | INFO    | Cancelled order 260302170988794 (attempt 1)
+2026-03-02 11:38:15,517 | INFO    | [LIVE] RESULT SHORT JTLIND | TARGET | Entry=59.74 Exit=59.0 | P&L: Rs.+0.74 (+1.24%) | Day total: Rs.+0.74
+2026-03-02 11:40:00,144 | INFO    | =================================================================
+2026-03-02 11:40:00,144 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:40:00,144 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:40:00,144 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:40:00,144 | INFO    |   Max concurrent    : 20
+2026-03-02 11:40:00,144 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:40:00,144 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:40:00,144 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:40:00,144 | INFO    | =================================================================
+2026-03-02 11:40:00,144 | INFO    | Establishing Kite session...
+2026-03-02 11:40:00,212 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:40:00,357 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:40:00,360 | INFO    | Loaded 10 previously executed signals.
+2026-03-02 11:40:00,366 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:40:00,382 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 11:40:00,420 | INFO    | [RESTORE] signals_today=11 executed=9 closed_today=2 open_restored=9 realized_trades=2 realized_total=Rs.+0.74 deployed_margin=Rs.755.38
+2026-03-02 11:40:00,476 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 11:40:00,476 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 11:40:00,476 | INFO    | [RESTORE] Resumed 9 open trade monitor(s).
+2026-03-02 11:40:00,476 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:40:00,476 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:40:00,492 | INFO    | [LIVE] Starting trade LT-1704dabb-114000: SELL JTLIND qty=1 | SL=60.24 TGT=59.07
+2026-03-02 11:40:00,492 | INFO    | [DISPATCH] Launched LIVE trade: SHORT JTLIND @ 59.79 | reserved_margin=Rs.11.96 | ID=1704dabb16ac
+2026-03-02 11:40:00,492 | WARNING | [DISPATCH.SKIP] IRMENERGY signal_id=7f26aa009276 skipped: symbol already marked MIS blocked/missing for today.
+2026-03-02 11:40:00,557 | INFO    | Dispatched 1 new trade(s). Active trades: 10
+2026-03-02 11:40:00,567 | INFO    | [LIVE] Entry order placed: SELL JTLIND ID=260302171234459
+2026-03-02 11:40:00,633 | INFO    | [LIVE] Entry filled: JTLIND @ 58.92
+2026-03-02 11:40:00,770 | INFO    | [LIVE] Exit legs placed for JTLIND: target_id=260302171234475 sl_id=260302171234477
+2026-03-02 11:42:35,739 | INFO    | =================================================================
+2026-03-02 11:42:35,740 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:42:35,740 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:42:35,740 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:42:35,740 | INFO    |   Max concurrent    : 20
+2026-03-02 11:42:35,740 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:42:35,740 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:42:35,740 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:42:35,740 | INFO    | =================================================================
+2026-03-02 11:42:35,740 | INFO    | Establishing Kite session...
+2026-03-02 11:42:35,829 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:42:35,957 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:42:35,959 | INFO    | Loaded 11 previously executed signals.
+2026-03-02 11:42:35,959 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 11:42:35,967 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:42:35,971 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 11:42:36,010 | INFO    | [RESTORE] signals_today=11 executed=11 closed_today=2 open_restored=9 realized_trades=3 realized_total=Rs.+0.74 deployed_margin=Rs.755.38
+2026-03-02 11:42:36,073 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 11:42:36,073 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 11:42:36,073 | INFO    | [RESTORE] Resumed 9 open trade monitor(s).
+2026-03-02 11:42:36,073 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:42:36,073 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:45:38,070 | INFO    | =================================================================
+2026-03-02 11:45:38,070 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:45:38,071 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:45:38,071 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:45:38,071 | INFO    |   Max concurrent    : 20
+2026-03-02 11:45:38,071 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:45:38,071 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:45:38,071 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:45:38,071 | INFO    | =================================================================
+2026-03-02 11:45:38,071 | INFO    | Establishing Kite session...
+2026-03-02 11:45:38,150 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:45:38,319 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:45:38,322 | INFO    | Loaded 11 previously executed signals.
+2026-03-02 11:45:38,323 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 11:45:38,335 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:45:38,344 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 11:45:38,404 | INFO    | [RESTORE] signals_today=11 executed=11 closed_today=2 open_restored=9 realized_trades=3 realized_total=Rs.+0.74 deployed_margin=Rs.755.38
+2026-03-02 11:45:38,473 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:45:38,473 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:45:38,473 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:45:38,476 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:45:38,476 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:45:38,476 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:45:38,476 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:45:38,476 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 11:45:38,476 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 11:45:38,476 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 11:45:38,476 | INFO    | [RESTORE] Resumed 9 open trade monitor(s).
+2026-03-02 11:45:38,482 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:45:38,482 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:45:55,915 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:45:55,932 | INFO    | [LIVE] Starting trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=532.16 TGT=521.86
+2026-03-02 11:45:55,933 | INFO    | [DISPATCH] Launched LIVE trade: SHORT JBMA @ 528.2 | reserved_margin=Rs.105.64 | ID=6b5c949b61de
+2026-03-02 11:45:55,933 | WARNING | [RISK] Rejecting SHORT JIOFIN: max open positions reached (10/10)
+2026-03-02 11:45:55,944 | INFO    | Dispatched 1 new trade(s). Active trades: 10
+2026-03-02 11:45:56,000 | INFO    | [LIVE] Entry order placed: SELL JBMA ID=260302171255079
+2026-03-02 11:45:56,066 | INFO    | [LIVE] Entry filled: JBMA @ 528.0
+2026-03-02 11:45:56,196 | INFO    | [LIVE] Exit legs placed for JBMA: target_id=260302171255092 sl_id=260302171255103
+2026-03-02 11:45:58,992 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:45:59,011 | WARNING | [RISK] Rejecting SHORT JIOFIN: max open positions reached (10/10)
+2026-03-02 11:45:59,011 | WARNING | [RISK] Rejecting SHORT KECL: max open positions reached (10/10)
+2026-03-02 11:46:03,960 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:46:03,977 | WARNING | [RISK] Rejecting SHORT JIOFIN: max open positions reached (10/10)
+2026-03-02 11:46:03,979 | WARNING | [RISK] Rejecting SHORT KECL: max open positions reached (10/10)
+2026-03-02 11:46:03,979 | WARNING | [RISK] Rejecting SHORT M&M: max open positions reached (10/10)
+2026-03-02 11:46:14,212 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:46:14,231 | WARNING | [RISK] Rejecting SHORT JIOFIN: max open positions reached (10/10)
+2026-03-02 11:46:14,231 | WARNING | [RISK] Rejecting SHORT KECL: max open positions reached (10/10)
+2026-03-02 11:46:14,231 | WARNING | [RISK] Rejecting SHORT M&M: max open positions reached (10/10)
+2026-03-02 11:46:14,233 | WARNING | [RISK] Rejecting SHORT PAYTM: max open positions reached (10/10)
+2026-03-02 11:46:29,627 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:46:29,659 | WARNING | [RISK] Rejecting SHORT JIOFIN: max open positions reached (10/10)
+2026-03-02 11:46:29,659 | WARNING | [RISK] Rejecting SHORT KECL: max open positions reached (10/10)
+2026-03-02 11:46:29,659 | WARNING | [RISK] Rejecting SHORT M&M: max open positions reached (10/10)
+2026-03-02 11:46:29,659 | WARNING | [RISK] Rejecting SHORT PAYTM: max open positions reached (10/10)
+2026-03-02 11:46:29,659 | WARNING | [RISK] Rejecting SHORT SUNTECK: max open positions reached (10/10)
+2026-03-02 11:46:45,290 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:46:45,310 | WARNING | [RISK] Rejecting SHORT APOLLO: max open positions reached (10/10)
+2026-03-02 11:46:45,310 | WARNING | [RISK] Rejecting SHORT JIOFIN: max open positions reached (10/10)
+2026-03-02 11:46:45,310 | WARNING | [RISK] Rejecting SHORT KECL: max open positions reached (10/10)
+2026-03-02 11:46:45,312 | WARNING | [RISK] Rejecting SHORT M&M: max open positions reached (10/10)
+2026-03-02 11:46:45,312 | WARNING | [RISK] Rejecting SHORT PAYTM: max open positions reached (10/10)
+2026-03-02 11:46:45,312 | WARNING | [RISK] Rejecting SHORT SUNTECK: max open positions reached (10/10)
+2026-03-02 11:46:48,056 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 11:46:48,078 | WARNING | [RISK] Rejecting SHORT APOLLO: max open positions reached (10/10)
+2026-03-02 11:46:48,078 | WARNING | [RISK] Rejecting SHORT AWL: max open positions reached (10/10)
+2026-03-02 11:46:48,078 | WARNING | [RISK] Rejecting SHORT JIOFIN: max open positions reached (10/10)
+2026-03-02 11:46:48,078 | WARNING | [RISK] Rejecting SHORT KECL: max open positions reached (10/10)
+2026-03-02 11:46:48,078 | WARNING | [RISK] Rejecting SHORT M&M: max open positions reached (10/10)
+2026-03-02 11:46:48,078 | WARNING | [RISK] Rejecting SHORT PAYTM: max open positions reached (10/10)
+2026-03-02 11:46:48,078 | WARNING | [RISK] Rejecting SHORT SUNTECK: max open positions reached (10/10)
+2026-03-02 11:49:38,229 | INFO    | =================================================================
+2026-03-02 11:49:38,229 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:49:38,229 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:49:38,229 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:49:38,229 | INFO    |   Max concurrent    : 20
+2026-03-02 11:49:38,229 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:49:38,229 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:49:38,229 | WARNING |   Risk limits       : DISABLED (no max-open / margin cap checks)
+2026-03-02 11:49:38,229 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:49:38,229 | INFO    | =================================================================
+2026-03-02 11:49:38,229 | INFO    | Establishing Kite session...
+2026-03-02 11:49:38,289 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:49:38,420 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:49:38,435 | INFO    | Loaded 12 previously executed signals.
+2026-03-02 11:49:38,435 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 11:49:38,435 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:49:38,453 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 11:49:38,492 | INFO    | [RESTORE] signals_today=19 executed=12 closed_today=2 open_restored=10 realized_trades=3 realized_total=Rs.+0.74 deployed_margin=Rs.860.98
+2026-03-02 11:49:38,575 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:49:38,577 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:49:38,577 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:49:38,578 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:49:38,579 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:49:38,580 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:49:38,580 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:49:38,581 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 11:49:38,582 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 11:49:38,582 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 11:49:38,583 | INFO    | [RESUME] Restoring trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=531.95 TGT=521.65
+2026-03-02 11:49:38,583 | INFO    | [RESTORE] Resumed 10 open trade monitor(s).
+2026-03-02 11:49:38,584 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:49:38,585 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:49:38,595 | INFO    | [LIVE] Starting trade LT-b43ac7f0-114938: SELL APOLLO qty=1 | SL=215.63 TGT=211.45
+2026-03-02 11:49:38,595 | INFO    | [DISPATCH] Launched LIVE trade: SHORT APOLLO @ 214.02 | reserved_margin=Rs.42.80 | ID=b43ac7f0db06
+2026-03-02 11:49:38,597 | INFO    | [LIVE] Starting trade LT-d145318f-114938: SELL AWL qty=1 | SL=181.65 TGT=178.14
+2026-03-02 11:49:38,597 | INFO    | [DISPATCH] Launched LIVE trade: SHORT AWL @ 180.3 | reserved_margin=Rs.36.06 | ID=d145318fa721
+2026-03-02 11:49:38,599 | INFO    | [LIVE] Starting trade LT-0b177613-114938: SELL JIOFIN qty=1 | SL=249.21 TGT=244.38
+2026-03-02 11:49:38,599 | INFO    | [DISPATCH] Launched LIVE trade: SHORT JIOFIN @ 247.35 | reserved_margin=Rs.49.47 | ID=0b1776136592
+2026-03-02 11:49:38,601 | INFO    | [LIVE] Starting trade LT-9a26af33-114938: SELL KECL qty=1 | SL=85.98 TGT=84.32
+2026-03-02 11:49:38,601 | INFO    | [DISPATCH] Launched LIVE trade: SHORT KECL @ 85.34 | reserved_margin=Rs.17.07 | ID=9a26af3385a6
+2026-03-02 11:49:38,603 | INFO    | [LIVE] Starting trade LT-13094cae-114938: SELL M&M qty=1 | SL=3324.45 TGT=3260.1
+2026-03-02 11:49:38,603 | INFO    | [DISPATCH] Launched LIVE trade: SHORT M&M @ 3299.7 | reserved_margin=Rs.659.94 | ID=13094caeff85
+2026-03-02 11:49:38,605 | INFO    | [LIVE] Starting trade LT-cf1031c7-114938: SELL PAYTM qty=1 | SL=1070.17 TGT=1049.45
+2026-03-02 11:49:38,605 | INFO    | [DISPATCH] Launched LIVE trade: SHORT PAYTM @ 1062.2 | reserved_margin=Rs.212.44 | ID=cf1031c7bb41
+2026-03-02 11:49:38,606 | INFO    | [LIVE] Starting trade LT-403461a4-114938: SELL SUNTECK qty=1 | SL=395.19 TGT=387.54
+2026-03-02 11:49:38,606 | INFO    | [DISPATCH] Launched LIVE trade: SHORT SUNTECK @ 392.25 | reserved_margin=Rs.78.45 | ID=403461a4d3f5
+2026-03-02 11:49:38,656 | INFO    | [LIVE] Entry order placed: SELL APOLLO ID=260302171274676
+2026-03-02 11:49:38,669 | INFO    | Dispatched 7 new trade(s). Active trades: 17
+2026-03-02 11:49:38,686 | INFO    | [LIVE] Entry order placed: SELL AWL ID=260302171274679
+2026-03-02 11:49:38,696 | INFO    | [LIVE] Entry order placed: SELL KECL ID=260302171274680
+2026-03-02 11:49:38,696 | INFO    | [LIVE] Entry order placed: SELL SUNTECK ID=260302171274682
+2026-03-02 11:49:38,696 | INFO    | [LIVE] Entry order placed: SELL PAYTM ID=260302171274683
+2026-03-02 11:49:38,696 | INFO    | [LIVE] Entry order placed: SELL M&M ID=260302171274685
+2026-03-02 11:49:38,715 | INFO    | [LIVE] Entry order placed: SELL JIOFIN ID=260302171274686
+2026-03-02 11:49:38,760 | INFO    | [LIVE] Entry filled: KECL @ 85.44
+2026-03-02 11:49:38,760 | INFO    | [LIVE] Entry filled: AWL @ 180.1
+2026-03-02 11:49:38,771 | INFO    | [LIVE] Entry filled: SUNTECK @ 391.15
+2026-03-02 11:49:38,785 | INFO    | [LIVE] Entry filled: PAYTM @ 1060.2
+2026-03-02 11:49:38,790 | INFO    | [LIVE] Entry filled: JIOFIN @ 247.2
+2026-03-02 11:49:38,828 | INFO    | [LIVE] Entry filled: M&M @ 3298.7
+2026-03-02 11:49:38,937 | INFO    | [LIVE] Exit legs placed for KECL: target_id=260302171274697 sl_id=260302171274707
+2026-03-02 11:49:38,944 | INFO    | [LIVE] Exit legs placed for AWL: target_id=260302171274698 sl_id=260302171274708
+2026-03-02 11:49:38,960 | INFO    | [LIVE] Exit legs placed for SUNTECK: target_id=260302171274701 sl_id=260302171274710
+2026-03-02 11:49:38,966 | INFO    | [LIVE] Exit legs placed for PAYTM: target_id=260302171274702 sl_id=260302171274712
+2026-03-02 11:49:38,973 | INFO    | [LIVE] Exit legs placed for JIOFIN: target_id=260302171274703 sl_id=260302171274714
+2026-03-02 11:49:39,034 | INFO    | [LIVE] Exit legs placed for M&M: target_id=260302171274713 sl_id=260302171274719
+2026-03-02 11:49:42,010 | WARNING | [LIVE] Order poll error: Too many requests
+2026-03-02 11:49:42,016 | WARNING | [LIVE] Order poll error: Too many requests
+2026-03-02 11:49:42,025 | WARNING | [LIVE] Order poll error: Too many requests
+2026-03-02 11:49:42,068 | WARNING | [LIVE] Order poll error: Too many requests
+2026-03-02 11:50:40,006 | WARNING | Order 260302171274676 did not fill within 60s
+2026-03-02 11:50:40,006 | ERROR   | [LIVE] Entry order 260302171274676 not filled. Aborting trade.
+2026-03-02 11:50:40,091 | INFO    | Cancelled order 260302171274676 (attempt 1)
+2026-03-02 11:50:40,101 | INFO    | [LIVE] RESULT SHORT APOLLO | ENTRY_FAILED | Entry=214.02 Exit=214.02 | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.74
+2026-03-02 11:55:33,704 | INFO    | =================================================================
+2026-03-02 11:55:33,705 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:55:33,705 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:55:33,705 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:55:33,705 | INFO    |   Max concurrent    : 20
+2026-03-02 11:55:33,705 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:55:33,705 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:55:33,705 | WARNING |   Risk limits       : DISABLED (no max-open / margin cap checks)
+2026-03-02 11:55:33,705 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:55:33,705 | INFO    | =================================================================
+2026-03-02 11:55:33,705 | INFO    | Establishing Kite session...
+2026-03-02 11:55:33,795 | INFO    | Kite session established. User: Saarit Shankar Sinha
+2026-03-02 11:55:33,914 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:55:33,914 | INFO    | Loaded 19 previously executed signals.
+2026-03-02 11:55:33,930 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 11:55:33,938 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:55:33,942 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 11:55:33,977 | INFO    | [RESTORE] signals_today=19 executed=19 closed_today=3 open_restored=16 realized_trades=4 realized_total=Rs.+0.74 deployed_margin=Rs.1,913.54
+2026-03-02 11:55:34,048 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:55:34,050 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:55:34,052 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:55:34,053 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:55:34,054 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:55:34,056 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:55:34,057 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:55:34,058 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 11:55:34,058 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 11:55:34,059 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 11:55:34,060 | INFO    | [RESUME] Restoring trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=531.95 TGT=521.65
+2026-03-02 11:55:34,060 | INFO    | [RESUME] Restoring trade LT-9a26af33-114938: SELL KECL qty=1 | SL=86.08 TGT=84.42
+2026-03-02 11:55:34,060 | INFO    | [RESUME] Restoring trade LT-d145318f-114938: SELL AWL qty=1 | SL=181.45 TGT=177.94
+2026-03-02 11:55:34,061 | INFO    | [RESUME] Restoring trade LT-403461a4-114938: SELL SUNTECK qty=1 | SL=394.1 TGT=386.45
+2026-03-02 11:55:34,061 | INFO    | [RESUME] Restoring trade LT-cf1031c7-114938: SELL PAYTM qty=1 | SL=1068.2 TGT=1047.4
+2026-03-02 11:55:34,062 | INFO    | [RESUME] Restoring trade LT-0b177613-114938: SELL JIOFIN qty=1 | SL=249.05 TGT=244.25
+2026-03-02 11:55:34,063 | INFO    | [RESUME] Restoring trade LT-13094cae-114938: SELL M&M qty=1 | SL=3323.4 TGT=3259.1
+2026-03-02 11:55:34,063 | INFO    | [RESTORE] Resumed 16 open trade monitor(s).
+2026-03-02 11:55:34,064 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:55:34,064 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 11:57:49,102 | INFO    | =================================================================
+2026-03-02 11:57:49,102 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 11:57:49,102 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 11:57:49,102 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 11:57:49,102 | INFO    |   Max concurrent    : 20
+2026-03-02 11:57:49,102 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 11:57:49,102 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 11:57:49,102 | WARNING |   Risk limits       : DISABLED (no max-open / margin cap checks)
+2026-03-02 11:57:49,102 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 11:57:49,102 | INFO    | =================================================================
+2026-03-02 11:57:49,102 | INFO    | Establishing Kite session...
+2026-03-02 11:57:49,197 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 11:57:49,277 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 11:57:49,355 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 11:57:49,436 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 11:57:49,436 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 11:57:49,436 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 11:57:49,584 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 11:57:49,585 | INFO    | Loaded 19 previously executed signals.
+2026-03-02 11:57:49,585 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 11:57:49,585 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 11:57:49,602 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 11:57:49,644 | INFO    | [RESTORE] signals_today=19 executed=19 closed_today=3 open_restored=16 realized_trades=4 realized_total=Rs.+0.74 deployed_margin=Rs.1,913.54
+2026-03-02 11:57:49,702 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 11:57:49,702 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 11:57:49,702 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 11:57:49,702 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 11:57:49,702 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 11:57:49,702 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 11:57:49,702 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 11:57:49,702 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 11:57:49,702 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 11:57:49,717 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 11:57:49,718 | INFO    | [RESUME] Restoring trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=531.95 TGT=521.65
+2026-03-02 11:57:49,718 | INFO    | [RESUME] Restoring trade LT-9a26af33-114938: SELL KECL qty=1 | SL=86.08 TGT=84.42
+2026-03-02 11:57:49,718 | INFO    | [RESUME] Restoring trade LT-d145318f-114938: SELL AWL qty=1 | SL=181.45 TGT=177.94
+2026-03-02 11:57:49,718 | INFO    | [RESUME] Restoring trade LT-403461a4-114938: SELL SUNTECK qty=1 | SL=394.1 TGT=386.45
+2026-03-02 11:57:49,718 | INFO    | [RESUME] Restoring trade LT-cf1031c7-114938: SELL PAYTM qty=1 | SL=1068.2 TGT=1047.4
+2026-03-02 11:57:49,718 | INFO    | [RESUME] Restoring trade LT-0b177613-114938: SELL JIOFIN qty=1 | SL=249.05 TGT=244.25
+2026-03-02 11:57:49,718 | INFO    | [RESUME] Restoring trade LT-13094cae-114938: SELL M&M qty=1 | SL=3323.4 TGT=3259.1
+2026-03-02 11:57:49,718 | INFO    | [RESTORE] Resumed 16 open trade monitor(s).
+2026-03-02 11:57:49,718 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 11:57:49,718 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 12:00:39,586 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:00:39,609 | INFO    | [LIVE] Starting trade LT-fc6d2474-120039: SELL GNFC qty=1 | SL=445.87 TGT=437.24
+2026-03-02 12:00:39,609 | INFO    | [DISPATCH] Launched LIVE trade: SHORT GNFC @ 442.55 | reserved_margin=Rs.88.51 | ID=fc6d2474d99e
+2026-03-02 12:00:39,621 | INFO    | Dispatched 1 new trade(s). Active trades: 17
+2026-03-02 12:00:39,677 | INFO    | [LIVE] Entry order placed: SELL GNFC ID=260302171329136
+2026-03-02 12:00:39,744 | INFO    | [LIVE] Entry filled: GNFC @ 442.25
+2026-03-02 12:00:39,900 | INFO    | [LIVE] Exit legs placed for GNFC: target_id=260302171329153 sl_id=260302171329163
+2026-03-02 12:00:54,954 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:00:54,976 | INFO    | [LIVE] Starting trade LT-51a9e8fc-120054: SELL IRCON qty=1 | SL=137.78 TGT=135.11
+2026-03-02 12:00:54,976 | INFO    | [DISPATCH] Launched LIVE trade: SHORT IRCON @ 136.75 | reserved_margin=Rs.27.35 | ID=51a9e8fce699
+2026-03-02 12:00:54,978 | INFO    | [LIVE] Starting trade LT-51ae09e7-120054: SELL IREDA qty=1 | SL=116.84 TGT=114.58
+2026-03-02 12:00:54,978 | INFO    | [DISPATCH] Launched LIVE trade: SHORT IREDA @ 115.97 | reserved_margin=Rs.23.19 | ID=51ae09e76712
+2026-03-02 12:00:54,979 | INFO    | [LIVE] Starting trade LT-f3901d38-120054: SELL IXIGO qty=1 | SL=164.54 TGT=161.36
+2026-03-02 12:00:54,979 | INFO    | [DISPATCH] Launched LIVE trade: SHORT IXIGO @ 163.32 | reserved_margin=Rs.32.66 | ID=f3901d38f478
+2026-03-02 12:00:54,986 | INFO    | Dispatched 3 new trade(s). Active trades: 20
+2026-03-02 12:00:55,039 | INFO    | [LIVE] Entry order placed: SELL IRCON ID=260302171331428
+2026-03-02 12:00:55,107 | INFO    | [LIVE] Entry filled: IRCON @ 136.71
+2026-03-02 12:00:55,107 | INFO    | [LIVE] Entry order placed: SELL IREDA ID=260302171331436
+2026-03-02 12:00:55,107 | INFO    | [LIVE] Entry order placed: SELL IXIGO ID=260302171331438
+2026-03-02 12:00:55,179 | INFO    | [LIVE] Entry filled: IREDA @ 115.92
+2026-03-02 12:00:55,180 | INFO    | [LIVE] Entry filled: IXIGO @ 163.32
+2026-03-02 12:00:55,257 | INFO    | [LIVE] Exit legs placed for IRCON: target_id=260302171331452 sl_id=260302171331468
+2026-03-02 12:00:55,335 | INFO    | [LIVE] Exit legs placed for IREDA: target_id=260302171331469 sl_id=260302171331481
+2026-03-02 12:00:55,336 | INFO    | [LIVE] Exit legs placed for IXIGO: target_id=260302171331471 sl_id=260302171331482
+2026-03-02 12:01:01,271 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:01:01,288 | INFO    | [DISPATCH] Launched LIVE trade: SHORT KPITTECH @ 750.15 | reserved_margin=Rs.150.03 | ID=6025707ef617
+2026-03-02 12:01:01,288 | INFO    | Dispatched 1 new trade(s). Active trades: 21
+2026-03-02 12:01:12,398 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:01:12,415 | INFO    | [DISPATCH] Launched LIVE trade: SHORT NUVAMA @ 1202.0 | reserved_margin=Rs.240.40 | ID=3d3967e5e226
+2026-03-02 12:01:12,424 | INFO    | Dispatched 1 new trade(s). Active trades: 22
+2026-03-02 12:01:15,634 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:01:15,654 | INFO    | [DISPATCH] Launched LIVE trade: SHORT PFS @ 29.59 | reserved_margin=Rs.5.92 | ID=92642147e144
+2026-03-02 12:01:15,660 | INFO    | Dispatched 1 new trade(s). Active trades: 23
+2026-03-02 12:01:31,242 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:01:31,265 | INFO    | [DISPATCH] Launched LIVE trade: SHORT SWSOLAR @ 188.68 | reserved_margin=Rs.37.74 | ID=cabde9252acd
+2026-03-02 12:01:31,272 | INFO    | Dispatched 1 new trade(s). Active trades: 24
+2026-03-02 12:01:58,182 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:01:58,196 | INFO    | [DISPATCH] Launched LIVE trade: SHORT CONFIPET @ 30.0 | reserved_margin=Rs.6.00 | ID=8c548a2e2357
+2026-03-02 12:01:58,202 | INFO    | Dispatched 1 new trade(s). Active trades: 25
+2026-03-02 12:02:02,420 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:02:02,444 | INFO    | [DISPATCH] Launched LIVE trade: SHORT DPABHUSHAN @ 1153.0 | reserved_margin=Rs.230.60 | ID=788f010cedfc
+2026-03-02 12:02:02,451 | INFO    | Dispatched 1 new trade(s). Active trades: 26
+2026-03-02 12:04:00,311 | INFO    | =================================================================
+2026-03-02 12:04:00,311 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 12:04:00,311 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 12:04:00,311 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 12:04:00,311 | INFO    |   Max concurrent    : 20
+2026-03-02 12:04:00,311 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 12:04:00,311 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 12:04:00,311 | WARNING |   Risk limits       : DISABLED (no max-open / margin cap checks)
+2026-03-02 12:04:00,311 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 12:04:00,311 | INFO    | =================================================================
+2026-03-02 12:04:00,311 | INFO    | Establishing Kite session...
+2026-03-02 12:04:00,394 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 12:04:00,460 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 12:04:00,544 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 12:04:00,632 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 12:04:00,632 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 12:04:00,632 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 12:04:00,759 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 12:04:00,777 | INFO    | Loaded 29 previously executed signals.
+2026-03-02 12:04:00,777 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 12:04:00,786 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 12:04:00,788 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 12:04:00,837 | INFO    | [RESTORE] signals_today=29 executed=29 closed_today=3 open_restored=20 realized_trades=4 realized_total=Rs.+0.74 deployed_margin=Rs.2,085.18
+2026-03-02 12:04:00,897 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=531.95 TGT=521.65
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-9a26af33-114938: SELL KECL qty=1 | SL=86.08 TGT=84.42
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-d145318f-114938: SELL AWL qty=1 | SL=181.45 TGT=177.94
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-403461a4-114938: SELL SUNTECK qty=1 | SL=394.1 TGT=386.45
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-cf1031c7-114938: SELL PAYTM qty=1 | SL=1068.2 TGT=1047.4
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-0b177613-114938: SELL JIOFIN qty=1 | SL=249.05 TGT=244.25
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-13094cae-114938: SELL M&M qty=1 | SL=3323.4 TGT=3259.1
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-fc6d2474-120039: SELL GNFC qty=1 | SL=445.55 TGT=436.95
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-51a9e8fc-120054: SELL IRCON qty=1 | SL=137.74 TGT=135.07
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-51ae09e7-120054: SELL IREDA qty=1 | SL=116.79 TGT=114.53
+2026-03-02 12:04:00,899 | INFO    | [RESUME] Restoring trade LT-f3901d38-120054: SELL IXIGO qty=1 | SL=164.54 TGT=161.36
+2026-03-02 12:04:00,899 | INFO    | [RESTORE] Resumed 20 open trade monitor(s).
+2026-03-02 12:04:00,899 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 12:04:00,899 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 12:14:41,591 | INFO    | =================================================================
+2026-03-02 12:14:41,591 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 12:14:41,591 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 12:14:41,591 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 12:14:41,591 | INFO    |   Max concurrent    : 20
+2026-03-02 12:14:41,591 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 12:14:41,607 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 12:14:41,607 | WARNING |   Risk limits       : DISABLED (no max-open / margin cap checks)
+2026-03-02 12:14:41,607 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 12:14:41,607 | INFO    | =================================================================
+2026-03-02 12:14:41,607 | INFO    | Establishing Kite session...
+2026-03-02 12:14:41,671 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 12:14:41,764 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 12:14:41,841 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 12:14:41,928 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 12:14:41,928 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 12:14:41,928 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 12:14:42,060 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 12:14:42,060 | INFO    | Loaded 29 previously executed signals.
+2026-03-02 12:14:42,060 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 12:14:42,076 | WARNING | [CSV] Removed 1/4 stale row(s) from today's live trade CSV.
+2026-03-02 12:14:42,076 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 12:14:42,594 | WARNING | [CSV] Backfilled 26 missing trade row(s) as ENTRY_PENDING_RECOVERED.
+2026-03-02 12:14:42,594 | INFO    | [RESTORE] signals_today=29 executed=29 closed_today=3 open_restored=20 realized_trades=3 realized_total=Rs.+0.74 deployed_margin=Rs.2,085.18
+2026-03-02 12:14:42,645 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 12:14:42,660 | INFO    | [RESUME] Restoring trade LT-e9b3b5d2-103123: SELL ROHLTD qty=1 | SL=351.6 TGT=344.8
+2026-03-02 12:14:42,661 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 12:14:42,661 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-d62938b7-110109: SELL MOTHERSON qty=1 | SL=129.7 TGT=127.15
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=531.95 TGT=521.65
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-9a26af33-114938: SELL KECL qty=1 | SL=86.08 TGT=84.42
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-d145318f-114938: SELL AWL qty=1 | SL=181.45 TGT=177.94
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-403461a4-114938: SELL SUNTECK qty=1 | SL=394.1 TGT=386.45
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-cf1031c7-114938: SELL PAYTM qty=1 | SL=1068.2 TGT=1047.4
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-0b177613-114938: SELL JIOFIN qty=1 | SL=249.05 TGT=244.25
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-13094cae-114938: SELL M&M qty=1 | SL=3323.4 TGT=3259.1
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-fc6d2474-120039: SELL GNFC qty=1 | SL=445.55 TGT=436.95
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-51a9e8fc-120054: SELL IRCON qty=1 | SL=137.74 TGT=135.07
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-51ae09e7-120054: SELL IREDA qty=1 | SL=116.79 TGT=114.53
+2026-03-02 12:14:42,662 | INFO    | [RESUME] Restoring trade LT-f3901d38-120054: SELL IXIGO qty=1 | SL=164.54 TGT=161.36
+2026-03-02 12:14:42,662 | INFO    | [RESTORE] Resumed 20 open trade monitor(s).
+2026-03-02 12:14:42,662 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 12:14:42,662 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 12:15:36,332 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:15:36,389 | INFO    | [DISPATCH] Launched LIVE trade: SHORT FORTIS @ 927.0 | reserved_margin=Rs.185.40 | ID=cf00d9aaf30d
+2026-03-02 12:15:36,396 | INFO    | Dispatched 1 new trade(s). Active trades: 21
+2026-03-02 12:15:46,714 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:15:46,790 | INFO    | [DISPATCH] Launched LIVE trade: SHORT HAPPYFORGE @ 1282.9 | reserved_margin=Rs.256.58 | ID=ebeea82a11a0
+2026-03-02 12:15:46,825 | INFO    | [DISPATCH] Launched LIVE trade: SHORT HFCL @ 65.79 | reserved_margin=Rs.13.16 | ID=319712d62009
+2026-03-02 12:15:46,867 | INFO    | Dispatched 2 new trade(s). Active trades: 23
+2026-03-02 12:15:50,446 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:15:50,496 | INFO    | [DISPATCH] Launched LIVE trade: SHORT IEX @ 121.28 | reserved_margin=Rs.24.26 | ID=4e62d7899596
+2026-03-02 12:15:50,502 | INFO    | Dispatched 1 new trade(s). Active trades: 24
+2026-03-02 12:16:00,195 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:16:00,227 | INFO    | [DISPATCH] Launched LIVE trade: SHORT KHAICHEM @ 54.95 | reserved_margin=Rs.10.99 | ID=2e9a6ff44e41
+2026-03-02 12:16:00,230 | INFO    | Dispatched 1 new trade(s). Active trades: 25
+2026-03-02 12:16:48,790 | INFO    | [LIVE] TARGET HIT: MOTHERSON @ 127.15 -> cancelling SL 260302171064738
+2026-03-02 12:16:48,869 | INFO    | Cancelled order 260302171064738 (attempt 1)
+2026-03-02 12:16:48,885 | INFO    | [LIVE] RESULT SHORT MOTHERSON | TARGET | Entry=128.71 Exit=127.15 | P&L: Rs.+1.56 (+1.21%) | Day total: Rs.+2.30
+2026-03-02 12:16:48,885 | INFO    | [LIVE] Starting trade LT-cf00d9aa-121648: SELL FORTIS qty=1 | SL=933.95 TGT=915.88
+2026-03-02 12:16:48,961 | INFO    | [LIVE] Entry order placed: SELL FORTIS ID=260302171413835
+2026-03-02 12:16:49,036 | INFO    | [LIVE] Entry filled: FORTIS @ 927.0
+2026-03-02 12:16:49,195 | INFO    | [LIVE] Exit legs placed for FORTIS: target_id=260302171413858 sl_id=260302171413869
+2026-03-02 12:17:01,417 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:17:01,445 | INFO    | [DISPATCH] Launched LIVE trade: SHORT AZAD @ 1644.3 | reserved_margin=Rs.328.86 | ID=1d1b5e922c97
+2026-03-02 12:17:01,461 | INFO    | [DISPATCH] Launched LIVE trade: SHORT BAYERCROP @ 4555.0 | reserved_margin=Rs.911.00 | ID=627a47dd5a90
+2026-03-02 12:17:01,461 | INFO    | Dispatched 2 new trade(s). Active trades: 26
+2026-03-02 12:18:02,470 | INFO    | [LIVE] TARGET HIT: SUNTECK @ 386.45 -> cancelling SL 260302171274710
+2026-03-02 12:18:02,551 | INFO    | Cancelled order 260302171274710 (attempt 1)
+2026-03-02 12:18:02,569 | INFO    | [LIVE] RESULT SHORT SUNTECK | TARGET | Entry=391.15 Exit=386.45 | P&L: Rs.+4.70 (+1.20%) | Day total: Rs.+7.00
+2026-03-02 12:18:02,575 | INFO    | [LIVE] Starting trade LT-ebeea82a-121802: SELL HAPPYFORGE qty=1 | SL=1292.52 TGT=1267.51
+2026-03-02 12:18:02,627 | INFO    | [LIVE] Entry order placed: SELL HAPPYFORGE ID=260302171421255
+2026-03-02 12:18:02,708 | INFO    | [LIVE] Entry filled: HAPPYFORGE @ 1285.1
+2026-03-02 12:18:02,841 | INFO    | [LIVE] Exit legs placed for HAPPYFORGE: target_id=260302171421271 sl_id=260302171421282
+2026-03-02 12:19:25,662 | INFO    | [LIVE] TARGET HIT: ROHLTD @ 344.8 -> cancelling SL 260302170907622
+2026-03-02 12:19:25,968 | INFO    | Cancelled order 260302170907622 (attempt 1)
+2026-03-02 12:19:25,984 | INFO    | [LIVE] RESULT SHORT ROHLTD | TARGET | Entry=349.0 Exit=344.8 | P&L: Rs.+4.20 (+1.20%) | Day total: Rs.+11.20
+2026-03-02 12:19:25,992 | INFO    | [LIVE] Starting trade LT-319712d6-121925: SELL HFCL qty=1 | SL=66.28 TGT=65.0
+2026-03-02 12:19:26,055 | INFO    | [LIVE] Entry order placed: SELL HFCL ID=260302171429875
+2026-03-02 12:19:26,128 | INFO    | [LIVE] Entry filled: HFCL @ 65.85
+2026-03-02 12:19:26,267 | INFO    | [LIVE] Exit legs placed for HFCL: target_id=260302171429891 sl_id=260302171429900
+2026-03-02 12:21:22,645 | INFO    | =================================================================
+2026-03-02 12:21:22,646 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 12:21:22,646 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 12:21:22,646 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 12:21:22,646 | INFO    |   Max concurrent    : 0
+2026-03-02 12:21:22,646 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 12:21:22,646 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 12:21:22,646 | WARNING |   Risk limits       : DISABLED (no max-open / margin cap checks)
+2026-03-02 12:21:22,646 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 12:21:22,646 | INFO    | =================================================================
+2026-03-02 12:21:22,646 | INFO    | Establishing Kite session...
+2026-03-02 12:21:22,731 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 12:21:22,821 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 12:21:22,912 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 12:21:22,976 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 12:21:22,976 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 12:21:22,976 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 12:21:23,101 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 12:21:23,120 | INFO    | Loaded 36 previously executed signals.
+2026-03-02 12:21:23,120 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 12:21:23,134 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 12:21:23,157 | WARNING |   Trade worker cap   : DISABLED (unlimited concurrent workers)
+2026-03-02 12:21:23,230 | INFO    | [RESTORE] signals_today=36 executed=36 closed_today=6 open_restored=20 realized_trades=6 realized_total=Rs.+11.20 deployed_margin=Rs.2,367.00
+2026-03-02 12:21:23,274 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 12:21:23,289 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 12:21:23,289 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 12:21:23,292 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 12:21:23,293 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 12:21:23,293 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 12:21:23,295 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 12:21:23,295 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 12:21:23,296 | INFO    | [RESUME] Restoring trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=531.95 TGT=521.65
+2026-03-02 12:21:23,296 | INFO    | [RESUME] Restoring trade LT-9a26af33-114938: SELL KECL qty=1 | SL=86.08 TGT=84.42
+2026-03-02 12:21:23,297 | INFO    | [RESUME] Restoring trade LT-d145318f-114938: SELL AWL qty=1 | SL=181.45 TGT=177.94
+2026-03-02 12:21:23,298 | INFO    | [RESUME] Restoring trade LT-cf1031c7-114938: SELL PAYTM qty=1 | SL=1068.2 TGT=1047.4
+2026-03-02 12:21:23,299 | INFO    | [RESUME] Restoring trade LT-0b177613-114938: SELL JIOFIN qty=1 | SL=249.05 TGT=244.25
+2026-03-02 12:21:23,299 | INFO    | [RESUME] Restoring trade LT-13094cae-114938: SELL M&M qty=1 | SL=3323.4 TGT=3259.1
+2026-03-02 12:21:23,300 | INFO    | [RESUME] Restoring trade LT-fc6d2474-120039: SELL GNFC qty=1 | SL=445.55 TGT=436.95
+2026-03-02 12:21:23,302 | INFO    | [RESUME] Restoring trade LT-51a9e8fc-120054: SELL IRCON qty=1 | SL=137.74 TGT=135.07
+2026-03-02 12:21:23,302 | INFO    | [RESUME] Restoring trade LT-51ae09e7-120054: SELL IREDA qty=1 | SL=116.79 TGT=114.53
+2026-03-02 12:21:23,302 | INFO    | [RESUME] Restoring trade LT-f3901d38-120054: SELL IXIGO qty=1 | SL=164.54 TGT=161.36
+2026-03-02 12:21:23,303 | INFO    | [RESUME] Restoring trade LT-cf00d9aa-121648: SELL FORTIS qty=1 | SL=933.95 TGT=915.9
+2026-03-02 12:21:23,303 | INFO    | [RESUME] Restoring trade LT-ebeea82a-121802: SELL HAPPYFORGE qty=1 | SL=1294.7 TGT=1269.7
+2026-03-02 12:21:23,304 | INFO    | [RESUME] Restoring trade LT-319712d6-121925: SELL HFCL qty=1 | SL=66.34 TGT=65.06
+2026-03-02 12:21:23,304 | INFO    | [RESTORE] Resumed 20 open trade monitor(s).
+2026-03-02 12:21:23,305 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 12:21:23,305 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 12:21:35,719 | INFO    | [LIVE] TARGET HIT: KECL @ 84.42 -> cancelling SL 260302171274707
+2026-03-02 12:21:35,815 | INFO    | Cancelled order 260302171274707 (attempt 1)
+2026-03-02 12:21:35,832 | INFO    | [LIVE] RESULT SHORT KECL | TARGET | Entry=85.44 Exit=84.42 | P&L: Rs.+1.02 (+1.19%) | Day total: Rs.+12.22
+2026-03-02 12:25:08,128 | INFO    | =================================================================
+2026-03-02 12:25:08,128 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 12:25:08,128 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 12:25:08,128 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 12:25:08,128 | INFO    |   Max concurrent    : 0
+2026-03-02 12:25:08,128 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 12:25:08,128 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 12:25:08,128 | WARNING |   Risk limits       : DISABLED (no max-open / margin cap checks)
+2026-03-02 12:25:08,128 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 12:25:08,128 | INFO    | =================================================================
+2026-03-02 12:25:08,128 | INFO    | Establishing Kite session...
+2026-03-02 12:25:08,219 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 12:25:08,299 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 12:25:08,364 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 12:25:08,438 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 12:25:08,438 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 12:25:08,438 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 12:25:08,555 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 12:25:08,555 | INFO    | Loaded 36 previously executed signals.
+2026-03-02 12:25:08,555 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 12:25:08,589 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 12:25:08,604 | WARNING |   Trade worker cap   : DISABLED (unlimited concurrent workers)
+2026-03-02 12:25:08,677 | INFO    | [RESTORE] signals_today=36 executed=36 closed_today=7 open_restored=19 realized_trades=7 realized_total=Rs.+12.22 deployed_margin=Rs.2,349.91
+2026-03-02 12:25:08,727 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 12:25:08,742 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 12:25:08,742 | INFO    | [RESUME] Restoring trade LT-26e28f6d-110040: SELL GMRAIRPORT qty=1 | SL=97.65 TGT=95.75
+2026-03-02 12:25:08,742 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 12:25:08,748 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 12:25:08,749 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 12:25:08,749 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 12:25:08,750 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 12:25:08,750 | INFO    | [RESUME] Restoring trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=531.95 TGT=521.65
+2026-03-02 12:25:08,751 | INFO    | [RESUME] Restoring trade LT-d145318f-114938: SELL AWL qty=1 | SL=181.45 TGT=177.94
+2026-03-02 12:25:08,751 | INFO    | [RESUME] Restoring trade LT-cf1031c7-114938: SELL PAYTM qty=1 | SL=1068.2 TGT=1047.4
+2026-03-02 12:25:08,751 | INFO    | [RESUME] Restoring trade LT-0b177613-114938: SELL JIOFIN qty=1 | SL=249.05 TGT=244.25
+2026-03-02 12:25:08,752 | INFO    | [RESUME] Restoring trade LT-13094cae-114938: SELL M&M qty=1 | SL=3323.4 TGT=3259.1
+2026-03-02 12:25:08,753 | INFO    | [RESUME] Restoring trade LT-fc6d2474-120039: SELL GNFC qty=1 | SL=445.55 TGT=436.95
+2026-03-02 12:25:08,754 | INFO    | [RESUME] Restoring trade LT-51a9e8fc-120054: SELL IRCON qty=1 | SL=137.74 TGT=135.07
+2026-03-02 12:25:08,756 | INFO    | [RESUME] Restoring trade LT-51ae09e7-120054: SELL IREDA qty=1 | SL=116.79 TGT=114.53
+2026-03-02 12:25:08,756 | INFO    | [RESUME] Restoring trade LT-f3901d38-120054: SELL IXIGO qty=1 | SL=164.54 TGT=161.36
+2026-03-02 12:25:08,756 | INFO    | [RESUME] Restoring trade LT-cf00d9aa-121648: SELL FORTIS qty=1 | SL=933.95 TGT=915.9
+2026-03-02 12:25:08,757 | INFO    | [RESUME] Restoring trade LT-ebeea82a-121802: SELL HAPPYFORGE qty=1 | SL=1294.7 TGT=1269.7
+2026-03-02 12:25:08,757 | INFO    | [RESUME] Restoring trade LT-319712d6-121925: SELL HFCL qty=1 | SL=66.34 TGT=65.06
+2026-03-02 12:25:08,758 | INFO    | [RESTORE] Resumed 19 open trade monitor(s).
+2026-03-02 12:25:08,759 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 12:25:08,759 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 12:26:01,180 | INFO    | [LIVE] TARGET HIT: GMRAIRPORT @ 95.75 -> cancelling SL 260302171062614
+2026-03-02 12:26:01,268 | INFO    | Cancelled order 260302171062614 (attempt 1)
+2026-03-02 12:26:01,296 | INFO    | [LIVE] RESULT SHORT GMRAIRPORT | TARGET | Entry=96.9 Exit=95.75 | P&L: Rs.+1.15 (+1.19%) | Day total: Rs.+13.37
+2026-03-02 12:26:38,091 | INFO    | [LIVE] TARGET HIT: PAYTM @ 1047.4 -> cancelling SL 260302171274712
+2026-03-02 12:26:38,180 | INFO    | Cancelled order 260302171274712 (attempt 1)
+2026-03-02 12:26:38,201 | INFO    | [LIVE] RESULT SHORT PAYTM | TARGET | Entry=1060.2 Exit=1047.4 | P&L: Rs.+12.80 (+1.21%) | Day total: Rs.+26.17

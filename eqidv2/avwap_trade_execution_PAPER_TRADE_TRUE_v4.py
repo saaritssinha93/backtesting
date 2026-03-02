@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-avwap_trade_execution_PAPER_TRADE_TRUE.py â€” Paper Trade Executor (Simulation)
+avwap_trade_execution_PAPER_TRADE_TRUE.py Ã¢â‚¬â€ Paper Trade Executor (Simulation)
 ==============================================================================
 
 Watches the daily signal CSV produced by avwap_live_signal_generator.py and
@@ -125,7 +125,7 @@ SIGNAL_COLUMNS = [
     "signal_entry_datetime_ist", "signal_bar_time_ist",
 ]
 
-# Column name mapping: signal generator CSV name â†’ executor expected name
+# Column name mapping: signal generator CSV name Ã¢â€ â€™ executor expected name
 _SIGNAL_COL_MAP = {
     "entry":          "entry_price",
     "sl":             "stop_price",
@@ -168,7 +168,7 @@ log = setup_logging()
 
 
 # ============================================================================
-# KITE SESSION (optional â€” for LTP simulation)
+# KITE SESSION (optional Ã¢â‚¬â€ for LTP simulation)
 # ============================================================================
 kite = None
 _ltp_last_error_by_ticker: Dict[str, str] = {}
@@ -288,16 +288,16 @@ def _refresh_kite_session(reason: str, force: bool = False) -> bool:
         return _setup_kite_session_impl(log_success=True)
 
 
-def setup_kite_session():
+def setup_kite_session(reason: str = "startup", force: bool = True):
     """Set up Kite session for LTP polling. Non-fatal if it fails."""
     global kite
     try:
-        ok = _refresh_kite_session("startup", force=True)
+        ok = _refresh_kite_session(reason, force=force)
         if not ok:
             raise RuntimeError("all Kite auth profiles failed")
     except Exception as e:
-        log.warning(f"Kite session not available: {e}")
-        log.warning("Paper trades will use signal entry price for simulation.")
+        log.warning(f"Kite session not available right now: {e}")
+        log.warning("LTP polling remains enabled; runtime will retry Kite session automatically.")
         kite = None
 
 def _extract_ltp_from_payload(ticker: str, data: object, instruments: List[str]) -> Optional[float]:
@@ -316,8 +316,9 @@ def _extract_ltp_from_payload(ticker: str, data: object, instruments: List[str])
 def get_ltp(ticker: str) -> Optional[float]:
     """Get last traded price from Kite with NSE/BSE fallback."""
     if kite is None:
-        setup_kite_session()
+        setup_kite_session(reason=f"ltp_request ticker={ticker}", force=False)
         if kite is None:
+            _set_ltp_error(ticker, "kite_session_unavailable")
             return None
     instruments = _ltp_instrument_candidates(ticker)
     if not instruments:
@@ -440,8 +441,8 @@ daily_pnl: Dict[str, float] = {
 }
 daily_pnl_lock = threading.Lock()
 
-# Capital / position tracking (margin, not notional â€” accounts for MIS leverage)
-capital_deployed: Dict[str, float] = {}   # signal_id â†’ margin blocked
+# Capital / position tracking (margin, not notional Ã¢â‚¬â€ accounts for MIS leverage)
+capital_deployed: Dict[str, float] = {}   # signal_id Ã¢â€ â€™ margin blocked
 capital_lock = threading.Lock()
 
 
@@ -1809,7 +1810,7 @@ def main():
     use_ltp = not args.no_ltp
 
     log.info("=" * 65)
-    log.info("AVWAP Paper Trade Executor â€” PAPER_TRADE = TRUE")
+    log.info("AVWAP Paper Trade Executor Ã¢â‚¬â€ PAPER_TRADE = TRUE")
     log.info(f"  Mode            : SIMULATION (no real orders)")
     log.info(f"  LTP polling     : {'Enabled' if use_ltp else 'Disabled'}")
     log.info(f"  Entry source    : {args.entry_price_source}")
@@ -1823,16 +1824,17 @@ def main():
             "entry-price-source=ltp_on_signal with --no-ltp; using signal_bar fallback."
         )
 
-    # Set up Kite for LTP if requested
+    # Set up Kite for LTP if requested.
+    # Do not disable use_ltp on startup auth failure; tokens may refresh later
+    # and get_ltp() can recover automatically on-demand.
     if use_ltp:
-        setup_kite_session()
+        setup_kite_session(reason="startup", force=True)
         if kite is None:
-            log.warning("LTP polling disabled â€” Kite session unavailable.")
-            use_ltp = False
+            log.warning("LTP polling temporarily unavailable at startup (Kite session unavailable).")
             if args.entry_price_source == "ltp_on_signal":
                 log.warning(
-                    "entry-price-source=ltp_on_signal but Kite LTP is unavailable; "
-                    "using signal_bar fallback."
+                    "entry-price-source=ltp_on_signal and Kite LTP is unavailable now; "
+                    "fallback may be used until session recovers."
                 )
 
     # Morning cleanup: keep today's paper-trade CSV strictly intraday.

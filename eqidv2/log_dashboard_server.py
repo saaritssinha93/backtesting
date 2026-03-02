@@ -997,23 +997,23 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <script>
     const LOG_ORDER = [
       "eod_15min_data",
-      "live_combined_csv_v4_short",
-      "live_combined_csv_v4_long",
       "live_combined_csv_v5_short",
       "live_combined_csv_v5_long",
-      "live_signals_csv_v4_short",
-      "live_signals_csv_v4_long",
       "live_signals_csv_v5_short",
       "live_signals_csv_v5_long",
-      "live_papertrade_result_csv_v4",
-      "live_papertrade_result_csv_v5",
-      "paper_trade_v4",
-      "paper_trade_v5",
-      "preopen_healthcheck",
-      "kite_trade",
       "live_kite_trades_csv",
-      "kite_holdings_today_csv",
+      "kite_trade",
+      "paper_trade_v5",
+      "live_papertrade_result_csv_v5",
       "kite_positions_day_today_csv",
+      "kite_holdings_today_csv",
+      "live_combined_csv_v4_short",
+      "live_combined_csv_v4_long",
+      "live_signals_csv_v4_short",
+      "live_signals_csv_v4_long",
+      "live_papertrade_result_csv_v4",
+      "paper_trade_v4",
+      "preopen_healthcheck",
       "authentication_v2",
       "eod_1540_update"
     ];
@@ -1410,7 +1410,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         live_entries_tail_v5_short = _format_csv_projection(
             live_csv_path_v5_short,
             live_entries_cols,
-            limit_rows=max(5, min(35, lines // 2)),
+            # Show full intraday signal sheet instead of a tiny tail window.
+            limit_rows=5000,
             time_only_cols={"signal_datetime", "detected_time_ist"},
         )
         items.append(
@@ -1435,7 +1436,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         live_entries_tail_v5_long = _format_csv_projection(
             live_csv_path_v5_long,
             live_entries_cols,
-            limit_rows=max(5, min(35, lines // 2)),
+            # Show full intraday signal sheet instead of a tiny tail window.
+            limit_rows=5000,
             time_only_cols={"signal_datetime", "detected_time_ist"},
         )
         items.append(
@@ -1511,8 +1513,17 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         )
 
         # Dynamic card: today's live Kite trades CSV.
-        live_kite_trade_csv_name = f"live_trades_{today_ist}.csv"
-        live_kite_trade_csv_path = LIVE_SIGNAL_DIR / live_kite_trade_csv_name
+        # V5 live executor writes live_trades_YYYY-MM-DD_v5.csv.
+        live_kite_trade_csv_name_v5 = f"live_trades_{today_ist}_v5.csv"
+        live_kite_trade_csv_name_legacy = f"live_trades_{today_ist}.csv"
+        live_kite_trade_csv_path_v5 = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_v5
+        live_kite_trade_csv_path_legacy = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_legacy
+        if live_kite_trade_csv_path_v5.exists() or (not live_kite_trade_csv_path_legacy.exists()):
+            live_kite_trade_csv_name = live_kite_trade_csv_name_v5
+            live_kite_trade_csv_path = live_kite_trade_csv_path_v5
+        else:
+            live_kite_trade_csv_name = live_kite_trade_csv_name_legacy
+            live_kite_trade_csv_path = live_kite_trade_csv_path_legacy
         try:
             live_kite_trade_size = (
                 live_kite_trade_csv_path.stat().st_size if live_kite_trade_csv_path.exists() else 0
@@ -1532,7 +1543,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         live_kite_trade_tail = _format_csv_projection(
             live_kite_trade_csv_path,
             live_kite_trade_cols,
-            limit_rows=max(5, min(40, lines // 2)),
+            # Show full intraday live-trade sheet instead of a small tail window.
+            limit_rows=5000,
             time_only_cols={"entry_time", "exit_time"},
         )
         items.append(

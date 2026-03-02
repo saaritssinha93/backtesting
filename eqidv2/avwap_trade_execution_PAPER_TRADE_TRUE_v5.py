@@ -79,7 +79,8 @@ FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe befo
 # Simulation
 POLL_INTERVAL_SEC = 5
 LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
-MAX_CONCURRENT_TRADES = 30
+# 0 or negative means unlimited worker threads (no executor-side cap).
+MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V5_MAX_CONCURRENT_TRADES", "0"))
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
 ENTRY_PRICE_SOURCE_DEFAULT = str(os.getenv("ENTRY_PRICE_SOURCE", "signal_bar")).strip().lower()
@@ -92,8 +93,15 @@ DEFAULT_POSITION_SIZE = 50_000
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
 # Exposure limits
-MAX_OPEN_POSITIONS = 10             # max simultaneous open positions
-MAX_CAPITAL_DEPLOYED_RS = 500_000   # max total margin that can be deployed
+# Disabled by default for now (no max-open / margin cap checks).
+RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_PAPER_V5_ENABLE_RISK_LIMITS", "0")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_PAPER_V5_MAX_OPEN_POSITIONS", "10"))
+MAX_CAPITAL_DEPLOYED_RS = float(os.getenv("EQIDV2_PAPER_V5_MAX_CAPITAL_DEPLOYED_RS", "500000"))
 
 # Paper trade log columns
 TRADE_LOG_COLUMNS = [
@@ -291,16 +299,16 @@ def _refresh_kite_session(reason: str, force: bool = False) -> bool:
         return _setup_kite_session_impl(log_success=True)
 
 
-def setup_kite_session():
+def setup_kite_session(reason: str = "startup", force: bool = True):
     """Set up Kite session for LTP polling. Non-fatal if it fails."""
     global kite
     try:
-        ok = _refresh_kite_session("startup", force=True)
+        ok = _refresh_kite_session(reason, force=force)
         if not ok:
             raise RuntimeError("all Kite auth profiles failed")
     except Exception as e:
-        log.warning(f"Kite session not available: {e}")
-        log.warning("Paper trades will use signal entry price for simulation.")
+        log.warning(f"Kite session not available right now: {e}")
+        log.warning("LTP polling remains enabled; runtime will retry Kite session automatically.")
         kite = None
 
 def _extract_ltp_from_payload(ticker: str, data: object, instruments: List[str]) -> Optional[float]:
@@ -319,8 +327,9 @@ def _extract_ltp_from_payload(ticker: str, data: object, instruments: List[str])
 def get_ltp(ticker: str) -> Optional[float]:
     """Get last traded price from Kite with NSE/BSE fallback."""
     if kite is None:
-        setup_kite_session()
+        setup_kite_session(reason=f"ltp_request ticker={ticker}", force=False)
         if kite is None:
+            _set_ltp_error(ticker, "kite_session_unavailable")
             return None
     instruments = _ltp_instrument_candidates(ticker)
     if not instruments:
@@ -651,6 +660,9 @@ def _check_risk_limits(signal: dict) -> Optional[str]:
     Check open positions and capital deployed.
     Returns a rejection reason string, or None if the trade is allowed.
     """
+    if not RISK_LIMITS_ENABLED:
+        return None
+
     entry_price = _safe_float(signal.get("entry_price", 0.0), 0.0)
     quantity = _safe_int(signal.get("quantity", 1), 1)
     if entry_price <= 0:
@@ -695,21 +707,22 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
         if signal_id in capital_deployed:
             return False, "already_reserved_or_open", 0.0
 
-        open_count = len(capital_deployed)
-        total_deployed = float(sum(capital_deployed.values()))
+        if RISK_LIMITS_ENABLED:
+            open_count = len(capital_deployed)
+            total_deployed = float(sum(capital_deployed.values()))
 
-        if open_count >= MAX_OPEN_POSITIONS:
-            return False, f"max open positions reached ({open_count}/{MAX_OPEN_POSITIONS})", 0.0
+            if open_count >= MAX_OPEN_POSITIONS:
+                return False, f"max open positions reached ({open_count}/{MAX_OPEN_POSITIONS})", 0.0
 
-        if (total_deployed + margin) > MAX_CAPITAL_DEPLOYED_RS:
-            return (
-                False,
-                (
-                    f"margin limit exceeded (deployed Rs.{total_deployed:,.0f} + "
-                    f"Rs.{margin:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})"
-                ),
-                0.0,
-            )
+            if (total_deployed + margin) > MAX_CAPITAL_DEPLOYED_RS:
+                return (
+                    False,
+                    (
+                        f"margin limit exceeded (deployed Rs.{total_deployed:,.0f} + "
+                        f"Rs.{margin:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})"
+                    ),
+                    0.0,
+                )
 
         capital_deployed[signal_id] = margin
 
@@ -1543,7 +1556,7 @@ def _launch_trade_thread(
     signal_id: str,
     executed: Set[str],
     use_ltp: bool,
-    trade_semaphore: threading.Semaphore,
+    trade_semaphore: Optional[threading.Semaphore],
     entry_price_source: str,
     pre_reserved_margin: Optional[float] = None,
     resume_mode: bool = False,
@@ -1562,7 +1575,10 @@ def _launch_trade_thread(
         is_resume=resume_mode,
     ):
         ok = False
-        trade_semaphore.acquire()
+        acquired = False
+        if trade_semaphore is not None:
+            trade_semaphore.acquire()
+            acquired = True
         try:
             ok = simulate_trade(
                 sig,
@@ -1575,7 +1591,8 @@ def _launch_trade_thread(
             log.error(f"Simulation error for {sig.get('ticker', '?')}: {e}")
             log.error(traceback.format_exc())
         finally:
-            trade_semaphore.release()
+            if acquired and trade_semaphore is not None:
+                trade_semaphore.release()
             with inflight_signals_lock:
                 inflight_signals.discard(sid)
 
@@ -1618,7 +1635,7 @@ def process_new_signals(
     csv_paths: Sequence[str],
     executed: Set[str],
     use_ltp: bool,
-    trade_semaphore: threading.Semaphore,
+    trade_semaphore: Optional[threading.Semaphore],
     entry_price_source: str = "signal_bar",
 ) -> Set[str]:
     """
@@ -1705,7 +1722,7 @@ def start_resumed_trade_monitors(
     resumed_signals: List[dict],
     executed: Set[str],
     use_ltp: bool,
-    trade_semaphore: threading.Semaphore,
+    trade_semaphore: Optional[threading.Semaphore],
     entry_price_source: str = "signal_bar",
 ) -> int:
     if not resumed_signals:
@@ -1807,6 +1824,15 @@ def main():
             "(fallback to signal_bar when LTP is unavailable)."
         ),
     )
+    parser.add_argument(
+        "--max-trades",
+        type=int,
+        default=MAX_CONCURRENT_TRADES,
+        help=(
+            "Max concurrent simulation workers "
+            f"(default: {MAX_CONCURRENT_TRADES}; 0 or less = unlimited)"
+        ),
+    )
     args = parser.parse_args()
 
     use_ltp = not args.no_ltp
@@ -1816,9 +1842,17 @@ def main():
     log.info(f"  Mode            : SIMULATION (no real orders)")
     log.info(f"  LTP polling     : {'Enabled' if use_ltp else 'Disabled'}")
     log.info(f"  Entry source    : {args.entry_price_source}")
+    log.info(f"  Max concurrent  : {args.max_trades}")
     log.info(f"  Starting capital: Rs.{args.capital:,.0f}")
     log.info(f"  Signal dir      : {os.path.abspath(SIGNAL_DIR)}/")
     log.info(f"  Forced close at : {FORCED_CLOSE_TIME} IST")
+    if RISK_LIMITS_ENABLED:
+        log.info(
+            f"  Risk limits     : ENABLED (max_open={MAX_OPEN_POSITIONS}, "
+            f"max_margin=Rs.{MAX_CAPITAL_DEPLOYED_RS:,.0f})"
+        )
+    else:
+        log.warning("  Risk limits     : DISABLED (no max-open / margin cap checks)")
     log.info("=" * 65)
 
     if args.entry_price_source == "ltp_on_signal" and not use_ltp:
@@ -1826,16 +1860,17 @@ def main():
             "entry-price-source=ltp_on_signal with --no-ltp; using signal_bar fallback."
         )
 
-    # Set up Kite for LTP if requested
+    # Set up Kite for LTP if requested.
+    # Do not disable use_ltp on startup auth failure; tokens may refresh later
+    # and get_ltp() can recover automatically on-demand.
     if use_ltp:
-        setup_kite_session()
+        setup_kite_session(reason="startup", force=True)
         if kite is None:
-            log.warning("LTP polling disabled Ã¢â‚¬â€ Kite session unavailable.")
-            use_ltp = False
+            log.warning("LTP polling temporarily unavailable at startup (Kite session unavailable).")
             if args.entry_price_source == "ltp_on_signal":
                 log.warning(
-                    "entry-price-source=ltp_on_signal but Kite LTP is unavailable; "
-                    "using signal_bar fallback."
+                    "entry-price-source=ltp_on_signal and Kite LTP is unavailable now; "
+                    "fallback may be used until session recovers."
                 )
 
     # Morning cleanup: keep today's paper-trade CSV strictly intraday.
@@ -1879,8 +1914,12 @@ def main():
         executed_snapshot = set(executed)
     save_executed_signals(executed_snapshot)
 
-    # Semaphore for concurrent trade limit
-    trade_semaphore = threading.Semaphore(MAX_CONCURRENT_TRADES)
+    # Semaphore for concurrent trade limit (optional unlimited mode).
+    trade_semaphore: Optional[threading.Semaphore] = None
+    if args.max_trades > 0:
+        trade_semaphore = threading.Semaphore(args.max_trades)
+    else:
+        log.warning("  Simulation cap  : DISABLED (unlimited concurrent workers)")
 
     resumed_started = start_resumed_trade_monitors(
         resumed_signals=resumed_signals,
