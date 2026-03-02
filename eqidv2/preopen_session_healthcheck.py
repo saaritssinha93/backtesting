@@ -55,12 +55,20 @@ def check_http(url: str, timeout_sec: float) -> CheckResult:
         return CheckResult(name, "FAIL", f"{url} not reachable: {exc}")
 
 
-def check_file_recent(path: Path, max_age_min: int, required: bool, label: str) -> CheckResult:
+def check_file_recent(
+    path: Path,
+    max_age_min: int,
+    required: bool,
+    label: str,
+    optional_warn: bool = True,
+) -> CheckResult:
     now = now_ist()
     if not path.exists():
         if required:
             return CheckResult(label, "FAIL", f"missing file: {path}")
-        return CheckResult(label, "WARN", f"missing optional file: {path}")
+        if optional_warn:
+            return CheckResult(label, "WARN", f"missing optional file: {path}")
+        return CheckResult(label, "PASS", f"optional file not present yet: {path}")
     try:
         mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, tz=IST)
     except OSError as exc:
@@ -71,13 +79,27 @@ def check_file_recent(path: Path, max_age_min: int, required: bool, label: str) 
         return CheckResult(label, "PASS", f"updated {age_min:.1f}m ago | {path.name}")
     if required:
         return CheckResult(label, "FAIL", f"stale ({age_min:.1f}m) | {path.name}")
-    return CheckResult(label, "WARN", f"stale optional ({age_min:.1f}m) | {path.name}")
+    if optional_warn:
+        return CheckResult(label, "WARN", f"stale optional ({age_min:.1f}m) | {path.name}")
+    return CheckResult(label, "PASS", f"optional stale ({age_min:.1f}m) | {path.name}")
 
 
-def check_today_file(pattern: str, required: bool, max_age_min: int, label: str) -> CheckResult:
+def check_today_file(
+    pattern: str,
+    required: bool,
+    max_age_min: int,
+    label: str,
+    optional_warn: bool = True,
+) -> CheckResult:
     today = now_ist().strftime("%Y-%m-%d")
     path = LIVE_SIGNAL_DIR / pattern.format(today)
-    return check_file_recent(path, max_age_min=max_age_min, required=required, label=label)
+    return check_file_recent(
+        path,
+        max_age_min=max_age_min,
+        required=required,
+        label=label,
+        optional_warn=optional_warn,
+    )
 
 
 def _run_schtasks_query(task_name: str) -> Optional[str]:
@@ -143,7 +165,7 @@ def check_task_ran_today(task_name: str) -> CheckResult:
     return CheckResult(label, "PASS", f"ran today | status={status or 'N/A'} | last_run={last_run}")
 
 
-def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResult]:
+def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv: bool) -> List[CheckResult]:
     checks: List[CheckResult] = []
 
     # Core reachability.
@@ -216,6 +238,14 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
             label="papertrade_v5_log",
         )
     )
+    checks.append(
+        check_file_recent(
+            LOG_DIR / f"avwap_trade_execution_PAPER_TRADE_FALSE_v5_{today}.log",
+            max_age_min=max_age_min,
+            required=True,
+            label="live_kite_trades_log_v5",
+        )
+    )
 
     # Optional output file presence (can be empty early in session).
     if include_optional_csv:
@@ -225,6 +255,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="live_entries_csv_v4_short",
+                optional_warn=warn_optional_csv,
             )
         )
         checks.append(
@@ -233,6 +264,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="live_entries_csv_v4_long",
+                optional_warn=warn_optional_csv,
             )
         )
         checks.append(
@@ -241,6 +273,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="live_entries_csv_v5_short",
+                optional_warn=warn_optional_csv,
             )
         )
         checks.append(
@@ -249,6 +282,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="live_entries_csv_v5_long",
+                optional_warn=warn_optional_csv,
             )
         )
         checks.append(
@@ -257,6 +291,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="papertrade_csv_v4",
+                optional_warn=warn_optional_csv,
             )
         )
         checks.append(
@@ -265,6 +300,16 @@ def build_checks(max_age_min: int, include_optional_csv: bool) -> List[CheckResu
                 required=False,
                 max_age_min=max_age_min,
                 label="papertrade_csv_v5",
+                optional_warn=warn_optional_csv,
+            )
+        )
+        checks.append(
+            check_today_file(
+                "live_trades_{}_v5.csv",
+                required=False,
+                max_age_min=max_age_min,
+                label="live_kite_trades_csv_v5",
+                optional_warn=warn_optional_csv,
             )
         )
 
@@ -302,6 +347,11 @@ def main() -> int:
         help="Skip optional CSV presence checks.",
     )
     ap.add_argument(
+        "--warn-optional-csv",
+        action="store_true",
+        help="Mark missing/stale optional CSV checks as WARN (default is PASS for optional checks).",
+    )
+    ap.add_argument(
         "--report-path",
         default="",
         help="Optional explicit report output path. If omitted, writes date-stamped + latest file under logs/.",
@@ -311,6 +361,7 @@ def main() -> int:
     checks = build_checks(
         max_age_min=max(1, int(args.max_age_min)),
         include_optional_csv=not bool(args.skip_optional_csv),
+        warn_optional_csv=bool(args.warn_optional_csv),
     )
     report = render_report(checks)
     print(report, flush=True)

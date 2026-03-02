@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-avwap_trade_execution_PAPER_TRADE_FALSE.py - Live Trade Executor (Zerodha Real)
-================================================================================
+avwap_trade_execution_PAPER_TRADE_FALSE_v5.py - Live Trade Executor (Zerodha Real, V5)
+========================================================================================
 
-Watches the daily signal CSV produced by avwap_live_signal_generator.py and
-places REAL orders on Zerodha via KiteConnect.
+Watches the daily V5 signal CSVs and places REAL orders on Zerodha via KiteConnect.
 
 For each new signal:
   1. Places a MARKET entry order (MIS product for intraday)
@@ -17,8 +16,8 @@ For each new signal:
 Concurrent trades run in parallel threads (up to MAX_CONCURRENT_TRADES).
 
 Output:
-  - live_signals/live_trades_YYYY-MM-DD.csv   (detailed trade log)
-  - live_signals/live_trade_summary.json       (running P&L summary)
+  - live_signals/live_trades_YYYY-MM-DD_v5.csv   (detailed trade log)
+  - live_signals/live_trade_summary_v5.json       (running P&L summary)
 
 Safety features:
   - Signal deduplication via signal_id tracking
@@ -29,9 +28,9 @@ Safety features:
   - Graceful shutdown on Ctrl+C
 
 Usage:
-    python avwap_trade_execution_PAPER_TRADE_FALSE.py
-    python avwap_trade_execution_PAPER_TRADE_FALSE.py --max-trades 10
-    python avwap_trade_execution_PAPER_TRADE_FALSE.py --dry-run  # validate without trading
+    python avwap_trade_execution_PAPER_TRADE_FALSE_v5.py
+    python avwap_trade_execution_PAPER_TRADE_FALSE_v5.py --max-trades 10
+    python avwap_trade_execution_PAPER_TRADE_FALSE_v5.py --dry-run  # validate without trading
 """
 
 from __future__ import annotations
@@ -42,13 +41,14 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import threading
 import time
 import traceback
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, time as dt_time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
@@ -72,11 +72,13 @@ except ImportError:
 IST = pytz.timezone("Asia/Kolkata")
 
 SIGNAL_DIR = "live_signals"
-SIGNAL_CSV_PATTERN = "signals_{}.csv"
-TRADE_LOG_PATTERN = "live_trades_{}.csv"
-EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_live.json")
-SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary.json")
-OPEN_TRADES_STATE_PATTERN = "open_live_trades_state_{}.json"
+SIGNAL_CSV_PATTERNS = ("signals_{}_v5_short.csv", "signals_{}_v5_long.csv")
+TRADE_LOG_PATTERN = "live_trades_{}_v5.csv"
+LIVE_TRADE_EXEC_LOG_PATTERN = "live_trade_execution_{}_v5.log"
+EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_live_v5.json")
+MIS_REJECTED_SYMBOLS_FILE = os.path.join(SIGNAL_DIR, "mis_rejected_symbols_v5.json")
+SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary_v5.json")
+OPEN_TRADES_STATE_PATTERN = "open_live_trades_state_{}_v5.json"
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -88,14 +90,28 @@ ORDER_POLL_SEC = 3
 FILL_WAIT_TIMEOUT_SEC = 60
 MAX_CANCEL_RETRIES = 3
 CANCEL_RETRY_WAIT_SEC = 2
+ENTRY_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_ENTRY_RETRY_ATTEMPTS", "2")))
+ORDER_BOOK_CACHE_TTL_SEC = float(os.getenv("EQIDV2_ORDER_BOOK_CACHE_TTL_SEC", "1.0"))
+ORDER_POLL_RATE_LIMIT_BACKOFF_SEC = float(
+    os.getenv("EQIDV2_ORDER_POLL_RATE_LIMIT_BACKOFF_SEC", "2.0")
+)
 
 # Exposure limits
-MAX_OPEN_POSITIONS = 10             # max simultaneous open positions
-MAX_CAPITAL_DEPLOYED_RS = 500_000   # max total margin that can be deployed
+RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "0")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "10"))             # max simultaneous open positions
+MAX_CAPITAL_DEPLOYED_RS = float(os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "500000"))   # max total margin
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
 # Concurrency
-MAX_CONCURRENT_TRADES = 20
+# 0 or negative means unlimited worker threads (no executor-side cap).
+MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_MAX_CONCURRENT_TRADES", "0"))
+DEFAULT_TICK_SIZE = 0.05
+MAX_TICK_DECIMALS = 4
 
 # Trade log columns
 TRADE_LOG_COLUMNS = [
@@ -124,6 +140,14 @@ TRADE_LOG_COLUMNS = [
     "close_order_id",
     "quality_score",
 ]
+NON_TERMINAL_OUTCOMES = {
+    "",
+    "ENTRY_PENDING",
+    "ENTRY_PENDING_RECOVERED",
+    "ENTRY_SUBMITTED",
+    "ENTRY_OPEN",
+    "OPEN",
+}
 
 # Signal CSV columns
 SIGNAL_COLUMNS = [
@@ -166,8 +190,9 @@ def setup_logging() -> logging.Logger:
     logger.addHandler(sh)
 
     os.makedirs(SIGNAL_DIR, exist_ok=True)
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
     fh = logging.FileHandler(
-        os.path.join(SIGNAL_DIR, "live_trade_execution.log"),
+        os.path.join(SIGNAL_DIR, LIVE_TRADE_EXEC_LOG_PATTERN.format(today_str)),
         mode="a",
         encoding="utf-8",
     )
@@ -184,49 +209,247 @@ log = setup_logging()
 # KITE SESSION
 # ============================================================================
 kite: Optional[KiteConnect] = None
+kite_pool: List[KiteConnect] = []
+kite_pool_lock = threading.Lock()
+kite_pool_rr_idx = 0
+symbol_tick_size_cache: Dict[str, float] = {}
+symbol_tick_size_loaded = False
+symbol_tick_size_lock = threading.Lock()
 
 
 def setup_kite_session() -> KiteConnect:
-    """Set up and return a KiteConnect session. Fatal if it fails."""
-    global kite
-    try:
-        with open("access_token.txt", "r") as f:
-            access_token = f.read().strip()
-        with open("api_key.txt", "r") as f:
-            key_data = f.read().strip().split()
+    """Set up and return a KiteConnect primary session, with optional app pool."""
+    global kite, kite_pool, kite_pool_rr_idx
 
-        if len(key_data) < 2:
-            raise ValueError(
-                "api_key.txt must contain 'API_KEY API_SECRET' separated by space."
-            )
+    specs = [
+        ("app1", "api_key.txt", "access_token.txt"),
+        ("app2", "api_key2.txt", "access_token2.txt"),
+        ("app3", "api_key3.txt", "access_token3.txt"),
+        ("app4", "api_key4.txt", "access_token4.txt"),
+    ]
 
-        api_key = key_data[0]
-        kite = KiteConnect(api_key=api_key)
-        kite.set_access_token(access_token)
+    sessions: List[KiteConnect] = []
+    primary_user = "N/A"
 
-        # Validate session with a profile call
-        profile = kite.profile()
-        log.info(f"Kite session established. User: {profile.get('user_name', 'N/A')}")
-        return kite
+    for app_name, key_file, token_file in specs:
+        if not (os.path.exists(key_file) and os.path.exists(token_file)):
+            if app_name == "app1":
+                log.error(
+                    f"Primary credentials missing: {key_file} and/or {token_file}."
+                )
+            else:
+                log.warning(f"[KITE] {app_name} skipped (missing {key_file}/{token_file}).")
+            continue
 
-    except FileNotFoundError as e:
-        log.error(f"Credential file not found: {e}")
-        log.error("Ensure access_token.txt and api_key.txt exist in the working directory.")
-        raise
-    except Exception as e:
-        log.error(f"Kite session setup failed: {e}")
-        raise
+        try:
+            with open(key_file, "r", encoding="utf-8") as f_key:
+                key_data = f_key.read().strip().split()
+            with open(token_file, "r", encoding="utf-8") as f_tok:
+                access_token = f_tok.read().strip()
+            if len(key_data) < 2:
+                raise ValueError(
+                    f"{key_file} must contain 'API_KEY API_SECRET' separated by space."
+                )
+            api_key = key_data[0]
+            client = KiteConnect(api_key=api_key)
+            client.set_access_token(access_token)
+            profile = client.profile()
+            user_name = profile.get("user_name", "N/A")
+            if app_name == "app1":
+                primary_user = user_name
+            sessions.append(client)
+            log.info(f"[KITE] Session ready: {app_name} | user={user_name}")
+        except Exception as e:
+            if app_name == "app1":
+                log.error(f"Primary Kite session setup failed ({app_name}): {e}")
+                raise
+            log.warning(f"[KITE] {app_name} disabled due to setup error: {e}")
+
+    if not sessions:
+        raise RuntimeError(
+            "No valid Kite sessions available. Check api_key/access_token files."
+        )
+
+    kite = sessions[0]
+    with kite_pool_lock:
+        kite_pool = list(sessions)
+        kite_pool_rr_idx = 0
+
+    log.info(f"Kite primary session established. User: {primary_user}")
+    log.info(f"[KITE] Session pool active apps: {len(sessions)}")
+    return kite
+
+
+def _next_kite_for_reads() -> KiteConnect:
+    """Round-robin read client to spread polling load across app sessions."""
+    global kite_pool_rr_idx
+    with kite_pool_lock:
+        if kite_pool:
+            idx = kite_pool_rr_idx % len(kite_pool)
+            kite_pool_rr_idx = (kite_pool_rr_idx + 1) % len(kite_pool)
+            return kite_pool[idx]
+    if kite is None:
+        raise RuntimeError("Kite session not initialized")
+    return kite
 
 
 def get_ltp(ticker: str) -> float:
     """Get last traded price. Raises on failure."""
-    data = kite.ltp(f"NSE:{ticker}")
+    reader = _next_kite_for_reads()
+    data = reader.ltp(f"NSE:{ticker}")
     return float(data[f"NSE:{ticker}"]["last_price"])
 
 
-def round_to_tick(price: float, tick: float = 0.05) -> float:
+def preload_symbol_tick_sizes(exchange: str = "NSE") -> None:
+    """Load exchange tick-size metadata once and cache by tradingsymbol."""
+    global symbol_tick_size_loaded
+
+    if kite is None:
+        return
+
+    try:
+        instruments = kite.instruments(exchange)
+    except Exception as e:
+        log.warning(
+            f"[TICK] Could not load {exchange} instrument metadata: {e}. "
+            f"Using default tick={DEFAULT_TICK_SIZE:.2f} until available."
+        )
+        return
+
+    fresh: Dict[str, float] = {}
+    for row in instruments:
+        symbol = str(row.get("tradingsymbol") or "").upper()
+        if not symbol:
+            continue
+        try:
+            tick_size = float(row.get("tick_size", 0.0) or 0.0)
+        except Exception:
+            tick_size = 0.0
+        if tick_size > 0:
+            fresh[symbol] = tick_size
+
+    with symbol_tick_size_lock:
+        if fresh:
+            symbol_tick_size_cache.update(fresh)
+        symbol_tick_size_loaded = True
+
+    if fresh:
+        log.info(f"[TICK] Loaded tick sizes for {len(fresh)} {exchange} symbols.")
+    else:
+        log.warning(
+            f"[TICK] {exchange} instrument metadata had no tick sizes. "
+            f"Using default tick={DEFAULT_TICK_SIZE:.2f}."
+        )
+
+
+def get_tick_size(ticker: str) -> float:
+    """Resolve symbol tick size from cache with safe default fallback."""
+    symbol = str(ticker or "").upper()
+    if not symbol:
+        return DEFAULT_TICK_SIZE
+
+    with symbol_tick_size_lock:
+        cached = symbol_tick_size_cache.get(symbol)
+        loaded = symbol_tick_size_loaded
+
+    if cached and cached > 0:
+        return float(cached)
+
+    if not loaded:
+        preload_symbol_tick_sizes("NSE")
+        with symbol_tick_size_lock:
+            cached = symbol_tick_size_cache.get(symbol)
+        if cached and cached > 0:
+            return float(cached)
+
+    with symbol_tick_size_lock:
+        symbol_tick_size_cache[symbol] = DEFAULT_TICK_SIZE
+
+    log.warning(f"[TICK] Tick size missing for {symbol}; defaulting to {DEFAULT_TICK_SIZE:.2f}.")
+    return DEFAULT_TICK_SIZE
+
+
+def round_to_tick(price: float, tick: float = DEFAULT_TICK_SIZE) -> float:
     """Round price to nearest tick size."""
-    return round(round(price / tick) * tick, 2)
+    tick = float(tick) if tick else DEFAULT_TICK_SIZE
+    if tick <= 0:
+        tick = DEFAULT_TICK_SIZE
+    steps = round(float(price) / tick)
+    rounded = steps * tick
+    tick_text = f"{tick:.8f}".rstrip("0").rstrip(".")
+    decimals = len(tick_text.split(".")[1]) if "." in tick_text else 0
+    decimals = min(MAX_TICK_DECIMALS, max(0, decimals))
+    return round(rounded, decimals)
+
+
+def _is_rate_limit_error(error: Exception) -> bool:
+    text = _sanitize_error_message(error, limit=500).lower()
+    return (
+        "too many requests" in text
+        or "rate limit" in text
+        or "http 429" in text
+        or " 429 " in f" {text} "
+    )
+
+
+def _reset_orders_snapshot_cache() -> None:
+    global orders_snapshot_ts_monotonic
+    with orders_snapshot_lock:
+        orders_snapshot_ts_monotonic = 0.0
+
+
+def _find_order_in_list(orders: Sequence[dict], order_id: str) -> Optional[dict]:
+    for row in orders:
+        if str(row.get("order_id", "")).strip() == str(order_id).strip():
+            return row
+    return None
+
+
+def _get_orders_snapshot(force_refresh: bool = False) -> List[dict]:
+    """
+    Return a shared broker orderbook snapshot.
+    Serializes `kite.orders()` calls across all trade threads and reuses a
+    short-lived cache to prevent API throttling under high concurrency.
+    """
+    global orders_snapshot_cache, orders_snapshot_ts_monotonic, orders_snapshot_rate_limited_until
+
+    if kite is None:
+        return []
+
+    now = time.monotonic()
+    with orders_snapshot_lock:
+        has_cache = bool(orders_snapshot_cache)
+        cache_age = (
+            now - orders_snapshot_ts_monotonic
+            if orders_snapshot_ts_monotonic > 0
+            else float("inf")
+        )
+        cache_fresh = has_cache and (cache_age <= ORDER_BOOK_CACHE_TTL_SEC)
+
+        if (not force_refresh) and cache_fresh:
+            return list(orders_snapshot_cache)
+
+        if now < orders_snapshot_rate_limited_until and has_cache:
+            return list(orders_snapshot_cache)
+
+        try:
+            reader = _next_kite_for_reads()
+            rows = reader.orders()
+            if not isinstance(rows, list):
+                rows = []
+            orders_snapshot_cache = list(rows)
+            orders_snapshot_ts_monotonic = time.monotonic()
+            orders_snapshot_rate_limited_until = 0.0
+            return list(orders_snapshot_cache)
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                orders_snapshot_rate_limited_until = max(
+                    orders_snapshot_rate_limited_until,
+                    now + max(0.5, ORDER_POLL_RATE_LIMIT_BACKOFF_SEC),
+                )
+                if has_cache:
+                    return list(orders_snapshot_cache)
+            raise
 
 
 # ============================================================================
@@ -237,6 +460,7 @@ def cancel_order_safe(variety: str, order_id: str) -> bool:
     for attempt in range(1, MAX_CANCEL_RETRIES + 1):
         try:
             kite.cancel_order(variety, order_id)
+            _reset_orders_snapshot_cache()
             log.info(f"Cancelled order {order_id} (attempt {attempt})")
             return True
         except Exception as e:
@@ -254,17 +478,39 @@ def wait_for_fill(order_id: str, timeout_sec: int = FILL_WAIT_TIMEOUT_SEC) -> Op
     start = time.monotonic()
     while (time.monotonic() - start) < timeout_sec:
         try:
-            orders = kite.orders()
-            for o in orders:
-                if o["order_id"] == order_id:
-                    if o["status"] == "COMPLETE":
-                        return float(o.get("average_price", 0))
-                    elif o["status"] in ("REJECTED", "CANCELLED"):
-                        log.warning(f"Order {order_id} status: {o['status']}")
-                        return None
+            orders = _get_orders_snapshot(force_refresh=False)
+            row = _find_order_in_list(orders, order_id)
+            if row:
+                status = str(row.get("status", "")).upper()
+                if status == "COMPLETE":
+                    return float(row.get("average_price", 0) or 0)
+                if status in {"REJECTED", "CANCELLED"}:
+                    log.warning(f"Order {order_id} status: {status}")
+                    return None
         except Exception as e:
-            log.warning(f"Error polling order {order_id}: {e}")
+            if _is_rate_limit_error(e):
+                log.warning(
+                    f"Order poll throttled for {order_id}; "
+                    "using shared orderbook backoff."
+                )
+            else:
+                log.warning(f"Error polling order {order_id}: {e}")
         time.sleep(ORDER_POLL_SEC)
+
+    # One final fresh check before declaring timeout.
+    try:
+        orders = _get_orders_snapshot(force_refresh=True)
+        row = _find_order_in_list(orders, order_id)
+        if row:
+            status = str(row.get("status", "")).upper()
+            if status == "COMPLETE":
+                return float(row.get("average_price", 0) or 0)
+            if status in {"REJECTED", "CANCELLED"}:
+                log.warning(f"Order {order_id} status: {status}")
+                return None
+    except Exception as e:
+        if not _is_rate_limit_error(e):
+            log.warning(f"Final status check failed for {order_id}: {e}")
 
     log.warning(f"Order {order_id} did not fill within {timeout_sec}s")
     return None
@@ -280,6 +526,10 @@ def _place_exit_legs(
     """
     Place target LIMIT + stop-loss SLM exit legs and return their order IDs.
     """
+    tick_size = get_tick_size(ticker)
+    target_price = round_to_tick(target_price, tick=tick_size)
+    stop_price = round_to_tick(stop_price, tick=tick_size)
+
     target_order_id = str(
         kite.place_order(
             variety=kite.VARIETY_REGULAR,
@@ -308,6 +558,7 @@ def _place_exit_legs(
             tag="AVWAPStopLoss",
         )
     )
+    _reset_orders_snapshot_cache()
     return target_order_id, sl_order_id
 
 
@@ -338,6 +589,64 @@ def save_executed_signals(executed: Set[str]) -> None:
         "signals": sorted(set(executed)),
     }
     _atomic_write_json(EXECUTED_SIGNALS_FILE, payload)
+
+
+def load_mis_rejected_symbols() -> Set[str]:
+    if os.path.exists(MIS_REJECTED_SYMBOLS_FILE):
+        try:
+            with open(MIS_REJECTED_SYMBOLS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("date") != datetime.now(IST).strftime("%Y-%m-%d"):
+                return set()
+            return {str(x).upper() for x in data.get("symbols", []) if str(x).strip()}
+        except (json.JSONDecodeError, KeyError):
+            try:
+                bad = MIS_REJECTED_SYMBOLS_FILE + ".corrupt"
+                os.replace(MIS_REJECTED_SYMBOLS_FILE, bad)
+            except Exception:
+                pass
+    return set()
+
+
+def save_mis_rejected_symbols(symbols: Set[str]) -> None:
+    payload = {
+        "date": datetime.now(IST).strftime("%Y-%m-%d"),
+        "symbols": sorted({str(s).upper() for s in symbols if str(s).strip()}),
+    }
+    _atomic_write_json(MIS_REJECTED_SYMBOLS_FILE, payload)
+
+
+def hydrate_mis_rejected_symbols() -> int:
+    loaded = load_mis_rejected_symbols()
+    with mis_rejected_symbols_lock:
+        mis_rejected_symbols.clear()
+        mis_rejected_symbols.update(loaded)
+        return len(mis_rejected_symbols)
+
+
+def is_symbol_mis_rejected(ticker: str) -> bool:
+    symbol = str(ticker or "").upper().strip()
+    if not symbol:
+        return False
+    with mis_rejected_symbols_lock:
+        return symbol in mis_rejected_symbols
+
+
+def mark_symbol_mis_rejected(ticker: str, reason: str = "") -> None:
+    symbol = str(ticker or "").upper().strip()
+    if not symbol:
+        return
+    with mis_rejected_symbols_lock:
+        if symbol in mis_rejected_symbols:
+            return
+        mis_rejected_symbols.add(symbol)
+        snapshot = set(mis_rejected_symbols)
+    save_mis_rejected_symbols(snapshot)
+    reason_text = _sanitize_error_message(reason, limit=180)
+    if reason_text:
+        log.warning(f"[MIS] Marked {symbol} as MIS blocked/missing for today: {reason_text}")
+    else:
+        log.warning(f"[MIS] Marked {symbol} as MIS blocked/missing for today.")
 
 
 # ============================================================================
@@ -379,6 +688,11 @@ active_positions_lock = threading.Lock()
 inflight_signals: Set[str] = set()
 inflight_signals_lock = threading.Lock()
 executed_lock = threading.Lock()
+mis_rejected_symbols: Set[str] = set()
+mis_rejected_symbols_lock = threading.Lock()
+closed_signal_ids_today: Set[str] = set()
+closed_tickers_today: Set[str] = set()
+closed_trades_lock = threading.Lock()
 daily_pnl: Dict[str, Any] = {"total": 0.0, "wins": 0, "losses": 0, "trades": 0}
 daily_pnl_lock = threading.Lock()
 dispatch_lockdown_reason: Optional[str] = None
@@ -387,6 +701,15 @@ dispatch_lockdown_lock = threading.Lock()
 # Capital / position tracking (margin, not notional - accounts for MIS leverage)
 capital_deployed: Dict[str, float] = {}   # signal_id -> margin blocked
 capital_lock = threading.Lock()
+json_write_lock = threading.Lock()
+trade_log_lock = threading.Lock()
+orders_snapshot_lock = threading.Lock()
+orders_snapshot_cache: List[Dict[str, Any]] = []
+orders_snapshot_ts_monotonic = 0.0
+orders_snapshot_rate_limited_until = 0.0
+
+JSON_WRITE_RETRIES = 8
+JSON_WRITE_RETRY_BASE_SEC = 0.05
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -413,14 +736,66 @@ def _calc_pnl(side: str, entry_price: float, exit_price: float, qty: int) -> Tup
     return float(pnl_rs), float(pnl_pct)
 
 
+def _sanitize_error_message(message: object, limit: int = 240) -> str:
+    text = " ".join(str(message).split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+def _is_mis_block_or_missing_error(error: Exception) -> bool:
+    text = _sanitize_error_message(error, limit=500).lower()
+    patterns = (
+        "mis orders are currently blocked",
+        "place a cnc order instead",
+        "allowed for mis/co trades",
+        "not allowed for mis",
+        "rms:mis",
+        "product mis",
+    )
+    return any(pat in text for pat in patterns)
+
+
 def _atomic_write_json(path: str, payload: object) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    dir_path = os.path.dirname(path) or "."
+    os.makedirs(dir_path, exist_ok=True)
+
+    # Serialize local writers and use per-attempt unique temp files to avoid
+    # collisions under concurrent trade threads.
+    with json_write_lock:
+        for attempt in range(1, JSON_WRITE_RETRIES + 1):
+            fd = -1
+            tmp_path = ""
+            try:
+                fd, tmp_path = tempfile.mkstemp(
+                    prefix=f".{os.path.basename(path)}.",
+                    suffix=".tmp",
+                    dir=dir_path,
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    fd = -1
+                    json.dump(payload, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, path)
+                return
+            except OSError as e:
+                win_err = int(getattr(e, "winerror", 0) or 0)
+                retryable = win_err in (5, 32)  # access denied / sharing violation
+                if (not retryable) or attempt >= JSON_WRITE_RETRIES:
+                    raise
+                time.sleep(JSON_WRITE_RETRY_BASE_SEC * attempt)
+            finally:
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
 
 
 def _open_trades_state_path(for_date: Optional[str] = None) -> str:
@@ -498,6 +873,9 @@ def _check_risk_limits(signal: dict) -> Optional[str]:
     Check open positions and capital deployed.
     Returns a rejection reason string, or None if the trade is allowed.
     """
+    if not RISK_LIMITS_ENABLED:
+        return None
+
     with capital_lock:
         open_count = len(capital_deployed)
         total_deployed = sum(capital_deployed.values())
@@ -532,22 +910,23 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
     margin = float(max(0.0, margin))
 
     with capital_lock:
-        open_count = len(capital_deployed)
-        total_deployed = float(sum(capital_deployed.values()))
-
         if signal_id in capital_deployed:
             return False, "already reserved", float(capital_deployed.get(signal_id, 0.0))
 
-        if open_count >= MAX_OPEN_POSITIONS:
-            return False, f"max open positions reached ({open_count}/{MAX_OPEN_POSITIONS})", 0.0
+        if RISK_LIMITS_ENABLED:
+            open_count = len(capital_deployed)
+            total_deployed = float(sum(capital_deployed.values()))
 
-        if (total_deployed + margin) > MAX_CAPITAL_DEPLOYED_RS:
-            return (
-                False,
-                f"margin limit exceeded (deployed Rs.{total_deployed:,.0f} + "
-                f"Rs.{margin:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})",
-                0.0,
-            )
+            if open_count >= MAX_OPEN_POSITIONS:
+                return False, f"max open positions reached ({open_count}/{MAX_OPEN_POSITIONS})", 0.0
+
+            if (total_deployed + margin) > MAX_CAPITAL_DEPLOYED_RS:
+                return (
+                    False,
+                    f"margin limit exceeded (deployed Rs.{total_deployed:,.0f} + "
+                    f"Rs.{margin:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})",
+                    0.0,
+                )
 
         capital_deployed[signal_id] = margin
         return True, "ok", margin
@@ -659,31 +1038,87 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
             _sync_active_position("restored")
         else:
             # ---- STEP 1: Place market entry ----
-            entry_order_id = kite.place_order(
-                variety=kite.VARIETY_REGULAR,
-                exchange=kite.EXCHANGE_NSE,
-                tradingsymbol=ticker,
-                transaction_type=entry_txn,
-                quantity=quantity,
-                product=kite.PRODUCT_MIS,
-                order_type=kite.ORDER_TYPE_MARKET,
-                validity=kite.VALIDITY_DAY,
-                tag="AVWAPEntry",
-            )
-            result.entry_order_id = str(entry_order_id)
-            result.entry_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z")
-            log.info(f"[LIVE] Entry order placed: {entry_txn} {ticker} ID={entry_order_id}")
+            filled_price = 0.0
+            entry_filled = False
+            for entry_attempt in range(1, ENTRY_RETRY_ATTEMPTS + 1):
+                entry_order_id = kite.place_order(
+                    variety=kite.VARIETY_REGULAR,
+                    exchange=kite.EXCHANGE_NSE,
+                    tradingsymbol=ticker,
+                    transaction_type=entry_txn,
+                    quantity=quantity,
+                    product=kite.PRODUCT_MIS,
+                    order_type=kite.ORDER_TYPE_MARKET,
+                    validity=kite.VALIDITY_DAY,
+                    tag="AVWAPEntry",
+                )
+                _reset_orders_snapshot_cache()
+                result.entry_order_id = str(entry_order_id)
+                result.entry_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z")
+                if entry_attempt == 1:
+                    log.info(f"[LIVE] Entry order placed: {entry_txn} {ticker} ID={entry_order_id}")
+                else:
+                    log.info(
+                        f"[LIVE] Entry retry placed ({entry_attempt}/{ENTRY_RETRY_ATTEMPTS}): "
+                        f"{entry_txn} {ticker} ID={entry_order_id}"
+                    )
 
-            # ---- STEP 2: Wait for fill ----
-            filled_price = wait_for_fill(entry_order_id)
-            if filled_price is None or filled_price == 0:
-                log.error(f"[LIVE] Entry order {entry_order_id} not filled. Aborting trade.")
-                cancel_order_safe(kite.VARIETY_REGULAR, str(entry_order_id))
+                # ---- STEP 2: Wait for fill ----
+                filled_price = wait_for_fill(entry_order_id)
+                if filled_price and filled_price > 0:
+                    entry_filled = True
+                    break
+
+                status_upper = "UNKNOWN"
+                filled_qty = 0
+                avg_price = 0.0
+                try:
+                    latest_orders = _get_orders_snapshot(force_refresh=True)
+                    entry_row = _find_order_in_list(latest_orders, str(entry_order_id))
+                    if entry_row:
+                        status_upper = str(entry_row.get("status", "")).upper()
+                        filled_qty = _safe_int(entry_row.get("filled_quantity", 0), 0)
+                        avg_price = _safe_float(entry_row.get("average_price", 0.0), 0.0)
+                except Exception as status_err:
+                    if not _is_rate_limit_error(status_err):
+                        log.warning(
+                            f"[LIVE] Entry status check failed for {ticker} ID={entry_order_id}: {status_err}"
+                        )
+
+                if status_upper == "COMPLETE" and avg_price > 0:
+                    filled_price = avg_price
+                    entry_filled = True
+                    break
+
+                retryable_no_fill = (
+                    filled_qty <= 0
+                    and status_upper not in {"REJECTED", "COMPLETE"}
+                )
+                has_retry_left = entry_attempt < ENTRY_RETRY_ATTEMPTS
+
+                if retryable_no_fill and has_retry_left:
+                    if status_upper not in {"CANCELLED"}:
+                        cancel_order_safe(kite.VARIETY_REGULAR, str(entry_order_id))
+                    log.warning(
+                        f"[LIVE][ENTRY.RETRY] {ticker} entry not filled "
+                        f"(status={status_upper}, attempt={entry_attempt}/{ENTRY_RETRY_ATTEMPTS}). "
+                        "Retrying once."
+                    )
+                    continue
+
+                if status_upper not in {"CANCELLED", "REJECTED", "COMPLETE"}:
+                    cancel_order_safe(kite.VARIETY_REGULAR, str(entry_order_id))
+                log.error(
+                    f"[LIVE] Entry order {entry_order_id} not filled "
+                    f"(status={status_upper}). Aborting trade."
+                )
                 result.outcome = "ENTRY_FAILED"
                 result.exit_price = signal_entry_price
                 trade_closed = True
-            else:
-                result.filled_price = filled_price
+                break
+
+            if entry_filled:
+                result.filled_price = float(filled_price)
                 log.info(f"[LIVE] Entry filled: {ticker} @ {filled_price}")
 
                 # Register margin deployment (notional / leverage)
@@ -692,16 +1127,17 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     capital_deployed[signal_id] = margin
 
                 # Recalculate SL/target based on actual fill price
+                tick_size = get_tick_size(ticker)
                 if side == "SHORT":
                     sl_offset = abs(signal_stop - signal_entry_price)
                     tgt_offset = abs(signal_entry_price - signal_target)
-                    sl_price = round_to_tick(filled_price + sl_offset)
-                    tgt_price = round_to_tick(filled_price - tgt_offset)
+                    sl_price = round_to_tick(filled_price + sl_offset, tick=tick_size)
+                    tgt_price = round_to_tick(filled_price - tgt_offset, tick=tick_size)
                 else:
                     sl_offset = abs(signal_entry_price - signal_stop)
                     tgt_offset = abs(signal_target - signal_entry_price)
-                    sl_price = round_to_tick(filled_price - sl_offset)
-                    tgt_price = round_to_tick(filled_price + tgt_offset)
+                    sl_price = round_to_tick(filled_price - sl_offset, tick=tick_size)
+                    tgt_price = round_to_tick(filled_price + tgt_offset, tick=tick_size)
 
                 result.stop_price = sl_price
                 result.target_price = tgt_price
@@ -714,6 +1150,9 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
             # Ensure exit leg orders exist (for new trades and resumed trades alike)
             if not target_order_id or not sl_order_id:
                 try:
+                    tick_size = get_tick_size(ticker)
+                    result.target_price = round_to_tick(result.target_price, tick=tick_size)
+                    result.stop_price = round_to_tick(result.stop_price, tick=tick_size)
                     target_order_id, sl_order_id = _place_exit_legs(
                         ticker=ticker,
                         exit_txn=exit_txn,
@@ -755,8 +1194,9 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                             product=kite.PRODUCT_MIS,
                             order_type=kite.ORDER_TYPE_MARKET,
                             validity=kite.VALIDITY_DAY,
-                            tag="AVWAPExitSetupFailClose",
+                            tag="AVWAPExitFailClose",
                         )
+                        _reset_orders_snapshot_cache()
                         result.close_order_id = str(close_order_id)
                         close_price = wait_for_fill(close_order_id, timeout_sec=30)
                         if close_price and close_price > 0:
@@ -803,6 +1243,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                             validity=kite.VALIDITY_DAY,
                             tag="AVWAPForceClose",
                         )
+                        _reset_orders_snapshot_cache()
                         result.close_order_id = str(close_order_id)
                         close_price = wait_for_fill(close_order_id, timeout_sec=30)
                         if close_price and close_price > 0:
@@ -827,9 +1268,15 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     break
 
                 try:
-                    orders = kite.orders()
+                    orders = _get_orders_snapshot(force_refresh=False)
                 except Exception as e:
-                    log.warning(f"[LIVE] Order poll error: {e}")
+                    if _is_rate_limit_error(e):
+                        log.warning(
+                            "[LIVE] Order poll throttled by broker; "
+                            "using shared orderbook backoff."
+                        )
+                    else:
+                        log.warning(f"[LIVE] Order poll error: {e}")
                     time.sleep(ORDER_POLL_SEC)
                     continue
 
@@ -873,21 +1320,31 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 time.sleep(ORDER_POLL_SEC)
 
     except Exception as e:
-        if resume_mode:
+        if (not resume_mode) and result.filled_price <= 0 and _is_mis_block_or_missing_error(e):
+            err_text = _sanitize_error_message(e, limit=200)
+            mark_symbol_mis_rejected(ticker, err_text)
+            log.warning(
+                f"[LIVE] Entry rejected for {ticker}: MIS blocked/missing. "
+                f"Reason: {err_text}"
+            )
+            result.outcome = "ENTRY_REJECTED_MIS_BLOCKED_OR_MISSING"
+            result.exit_price = signal_entry_price
+            trade_closed = True
+        elif resume_mode:
             log.error(f"[RESUME] Monitor error for {ticker}: {e}")
             log.error(traceback.format_exc())
             _sync_active_position("monitor_error")
             return
-
-        log.error(f"[LIVE] Trade execution error for {ticker}: {e}")
-        log.error(traceback.format_exc())
-        result.outcome = f"ERROR: {str(e)[:80]}"
-        result.exit_price = result.filled_price or signal_entry_price
-        # If a real position may still be open, keep it in state for restart reconciliation.
-        if result.filled_price > 0:
-            _sync_active_position("error_needs_reconcile")
-            return
-        trade_closed = True
+        else:
+            log.error(f"[LIVE] Trade execution error for {ticker}: {e}")
+            log.error(traceback.format_exc())
+            result.outcome = f"ERROR: {_sanitize_error_message(e, limit=80)}"
+            result.exit_price = result.filled_price or signal_entry_price
+            # If a real position may still be open, keep it in state for restart reconciliation.
+            if result.filled_price > 0:
+                _sync_active_position("error_needs_reconcile")
+                return
+            trade_closed = True
 
     # If trade has not actually closed, preserve state and exit without booking P&L.
     if not trade_closed and result.outcome not in {"ENTRY_FAILED"}:
@@ -928,43 +1385,131 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
 
 
 def _log_trade_result(result: LiveTradeResult) -> None:
-    """Append trade result to daily CSV."""
+    """Upsert trade result to daily CSV keyed by signal_id (fallback: trade_id)."""
+    def _row_key(row: Dict[str, Any]) -> str:
+        sid = str(row.get("signal_id", "")).strip()
+        if sid:
+            return f"sid:{sid}"
+        tid = str(row.get("trade_id", "")).strip()
+        return f"tid:{tid}" if tid else ""
+
+    row = {
+        "trade_id": result.trade_id,
+        "signal_id": result.signal_id,
+        "signal_datetime": result.signal_datetime,
+        "signal_entry_datetime_ist": result.signal_entry_datetime_ist,
+        "entry_time": result.entry_time,
+        "exit_time": result.exit_time,
+        "ticker": result.ticker,
+        "side": result.side,
+        "setup": result.setup,
+        "impulse_type": result.impulse_type,
+        "quantity": result.quantity,
+        "entry_price": result.entry_price,
+        "filled_price": result.filled_price,
+        "exit_price": result.exit_price,
+        "stop_price": result.stop_price,
+        "target_price": result.target_price,
+        "outcome": result.outcome,
+        "pnl_rs": result.pnl_rs,
+        "pnl_pct": result.pnl_pct,
+        "entry_order_id": result.entry_order_id,
+        "target_order_id": result.target_order_id,
+        "sl_order_id": result.sl_order_id,
+        "close_order_id": result.close_order_id,
+        "quality_score": result.quality_score,
+    }
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     csv_path = os.path.join(SIGNAL_DIR, TRADE_LOG_PATTERN.format(today_str))
+    desired_key = _row_key(row)
+    with trade_log_lock:
+        rows: List[Dict[str, Any]] = []
+        if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+            try:
+                with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
+                    reader = csv.DictReader(f)
+                    for existing in reader:
+                        if not existing:
+                            continue
+                        rows.append(
+                            {col: ("" if existing.get(col) is None else existing.get(col, "")) for col in TRADE_LOG_COLUMNS}
+                        )
+            except Exception as e:
+                log.warning(f"[CSV] Could not read trade log for upsert: {e}")
+                rows = []
 
-    file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
+        rewritten: List[Dict[str, Any]] = []
+        replaced = False
+        seen_keys: Set[str] = set()
+        for existing in rows:
+            key = _row_key(existing)
+            if key and key in seen_keys:
+                # De-duplicate legacy duplicate rows; keep most recent replacement.
+                continue
+            if desired_key and key == desired_key:
+                if not replaced:
+                    rewritten.append(row)
+                    replaced = True
+                    seen_keys.add(key)
+                continue
+            rewritten.append(existing)
+            if key:
+                seen_keys.add(key)
+        if not replaced:
+            rewritten.append(row)
 
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=TRADE_LOG_COLUMNS, quoting=csv.QUOTE_ALL)
-        if not file_exists:
-            writer.writeheader()
+        os.makedirs(SIGNAL_DIR, exist_ok=True)
+        dir_path = os.path.dirname(csv_path) or "."
+        tmp_path = ""
+        try:
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=".live_trades_v5.",
+                suffix=".tmp",
+                dir=dir_path,
+            )
+            with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=TRADE_LOG_COLUMNS, quoting=csv.QUOTE_ALL)
+                writer.writeheader()
+                for r in rewritten:
+                    writer.writerow({col: r.get(col, "") for col in TRADE_LOG_COLUMNS})
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, csv_path)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
-        writer.writerow({
-            "trade_id": result.trade_id,
-            "signal_id": result.signal_id,
-            "signal_datetime": result.signal_datetime,
-            "signal_entry_datetime_ist": result.signal_entry_datetime_ist,
-            "entry_time": result.entry_time,
-            "exit_time": result.exit_time,
-            "ticker": result.ticker,
-            "side": result.side,
-            "setup": result.setup,
-            "impulse_type": result.impulse_type,
-            "quantity": result.quantity,
-            "entry_price": result.entry_price,
-            "filled_price": result.filled_price,
-            "exit_price": result.exit_price,
-            "stop_price": result.stop_price,
-            "target_price": result.target_price,
-            "outcome": result.outcome,
-            "pnl_rs": result.pnl_rs,
-            "pnl_pct": result.pnl_pct,
-            "entry_order_id": result.entry_order_id,
-            "target_order_id": result.target_order_id,
-            "sl_order_id": result.sl_order_id,
-            "close_order_id": result.close_order_id,
-            "quality_score": result.quality_score,
-        })
+
+def _log_pending_signal_to_csv(signal: dict, signal_id: str, outcome: str = "ENTRY_PENDING") -> None:
+    now_ist = datetime.now(IST)
+    now_str = now_ist.strftime("%Y-%m-%d %H:%M:%S%z")
+    entry_price = _safe_float(signal.get("entry_price", 0.0), 0.0)
+    result = LiveTradeResult(
+        trade_id=f"LT-{signal_id[:8]}-{now_ist.strftime('%H%M%S')}",
+        signal_id=signal_id,
+        signal_datetime=str(signal.get("signal_datetime", "")),
+        signal_entry_datetime_ist=str(signal.get("signal_entry_datetime_ist", "")),
+        entry_time=now_str,
+        exit_time="",
+        ticker=str(signal.get("ticker", "")).upper(),
+        side=str(signal.get("side", "")).upper(),
+        setup=str(signal.get("setup", "")),
+        impulse_type=str(signal.get("impulse_type", "")),
+        quantity=_safe_int(signal.get("quantity", 1), 1),
+        entry_price=entry_price,
+        filled_price=0.0,
+        exit_price=0.0,
+        stop_price=_safe_float(signal.get("stop_price", 0.0), 0.0),
+        target_price=_safe_float(signal.get("target_price", 0.0), 0.0),
+        outcome=str(outcome or "ENTRY_PENDING"),
+        pnl_rs=0.0,
+        pnl_pct=0.0,
+        quality_score=_safe_float(signal.get("quality_score", 0.0), 0.0),
+    )
+    _log_trade_result(result)
 
 
 def _save_summary() -> None:
@@ -986,11 +1531,88 @@ def _save_summary() -> None:
         pass
 
 
+def _log_non_executed_signal_to_csv(signal: dict, signal_id: str, outcome: str) -> None:
+    now_ist = datetime.now(IST)
+    now_str = now_ist.strftime("%Y-%m-%d %H:%M:%S%z")
+    entry_price = _safe_float(signal.get("entry_price", 0.0), 0.0)
+    result = LiveTradeResult(
+        trade_id=f"LT-{signal_id[:8]}-{now_ist.strftime('%H%M%S')}-SKIP",
+        signal_id=signal_id,
+        signal_datetime=str(signal.get("signal_datetime", "")),
+        signal_entry_datetime_ist=str(signal.get("signal_entry_datetime_ist", "")),
+        entry_time=now_str,
+        exit_time=now_str,
+        ticker=str(signal.get("ticker", "")).upper(),
+        side=str(signal.get("side", "")).upper(),
+        setup=str(signal.get("setup", "")),
+        impulse_type=str(signal.get("impulse_type", "")),
+        quantity=_safe_int(signal.get("quantity", 1), 1),
+        entry_price=entry_price,
+        filled_price=0.0,
+        exit_price=entry_price,
+        stop_price=_safe_float(signal.get("stop_price", 0.0), 0.0),
+        target_price=_safe_float(signal.get("target_price", 0.0), 0.0),
+        outcome=str(outcome),
+        pnl_rs=0.0,
+        pnl_pct=0.0,
+        quality_score=_safe_float(signal.get("quality_score", 0.0), 0.0),
+    )
+    _log_trade_result(result)
+
+
+def hydrate_mis_rejected_symbols_from_trade_csv(trade_csv_path: str) -> int:
+    if not os.path.exists(trade_csv_path) or os.path.getsize(trade_csv_path) <= 0:
+        return 0
+
+    detected: Set[str] = set()
+    today_date = datetime.now(IST).date()
+    try:
+        df = pd.read_csv(
+            trade_csv_path,
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+            engine="python",
+        )
+        if df.empty:
+            return 0
+        for row in df.to_dict("records"):
+            row_date = _signal_ist_date(row)
+            if row_date is not None and row_date != today_date:
+                continue
+            ticker = str(row.get("ticker", "")).strip().upper()
+            outcome = str(row.get("outcome", "")).strip().upper()
+            if not ticker or not outcome:
+                continue
+            if (
+                "ENTRY_REJECTED_MIS_BLOCKED_OR_MISSING" in outcome
+                or "MIS ORDERS ARE CURRENTLY BLOCKED" in outcome
+                or "MIS BLOCKED" in outcome
+            ):
+                detected.add(ticker)
+    except Exception as e:
+        log.warning(f"[MIS] Could not hydrate MIS-rejected symbols from trade CSV: {e}")
+        return 0
+
+    if not detected:
+        return 0
+
+    with mis_rejected_symbols_lock:
+        before = len(mis_rejected_symbols)
+        mis_rejected_symbols.update(detected)
+        after = len(mis_rejected_symbols)
+        snapshot = set(mis_rejected_symbols)
+    if after > before:
+        save_mis_rejected_symbols(snapshot)
+    return len(detected)
+
+
 def _load_closed_ids_and_realized_summary(
     trade_csv_path: str,
     today_date: date,
-) -> Tuple[Set[str], Dict[str, float]]:
+) -> Tuple[Set[str], Set[str], Dict[str, float]]:
     closed_ids: Set[str] = set()
+    traded_tickers: Set[str] = set()
     realized_total = 0.0
     realized_trades = 0
     realized_wins = 0
@@ -1011,8 +1633,15 @@ def _load_closed_ids_and_realized_summary(
                     if row_date is not None and row_date != today_date:
                         continue
                     sid = str(row.get("signal_id", "")).strip()
-                    if sid:
+                    outcome = str(row.get("outcome", "")).strip().upper()
+                    is_non_terminal = outcome in NON_TERMINAL_OUTCOMES
+                    if sid and not is_non_terminal:
                         closed_ids.add(sid)
+                    ticker = str(row.get("ticker", "")).strip().upper()
+                    if ticker and not is_non_terminal:
+                        traded_tickers.add(ticker)
+                    if is_non_terminal:
+                        continue
                     pnl_rs = _safe_float(row.get("pnl_rs", 0.0), 0.0)
                     realized_total += pnl_rs
                     realized_trades += 1
@@ -1023,7 +1652,7 @@ def _load_closed_ids_and_realized_summary(
         except Exception as e:
             log.warning(f"[RESTORE] Could not parse live trade CSV: {e}")
 
-    return closed_ids, {
+    return closed_ids, traded_tickers, {
         "realized_total": float(realized_total),
         "realized_trades": float(realized_trades),
         "realized_wins": float(realized_wins),
@@ -1032,7 +1661,7 @@ def _load_closed_ids_and_realized_summary(
 
 
 def _restore_intraday_runtime_state(
-    signal_csv_path: str,
+    signal_csv_paths: Sequence[str],
     trade_csv_path: str,
     executed: Set[str],
 ) -> Tuple[Dict[str, float], List[dict]]:
@@ -1042,14 +1671,14 @@ def _restore_intraday_runtime_state(
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     today_date = datetime.now(IST).date()
 
-    signal_rows = read_signals_csv(signal_csv_path)
+    signal_rows = read_signals_csv_multi(signal_csv_paths)
     signals_by_id: Dict[str, dict] = {}
     for sig in signal_rows:
         sid = str(sig.get("signal_id", "")).strip()
         if sid:
             signals_by_id[sid] = sig
 
-    closed_ids, realized = _load_closed_ids_and_realized_summary(
+    closed_ids, traded_tickers, realized = _load_closed_ids_and_realized_summary(
         trade_csv_path=trade_csv_path,
         today_date=today_date,
     )
@@ -1147,9 +1776,37 @@ def _restore_intraday_runtime_state(
             margin = float(pos["filled_price"] * pos["quantity"] / INTRADAY_LEVERAGE)
             capital_deployed[sid] = margin
 
+    with closed_trades_lock:
+        closed_signal_ids_today.clear()
+        closed_signal_ids_today.update(closed_ids)
+        closed_signal_ids_today.update(restored_positions.keys())
+        closed_tickers_today.clear()
+        closed_tickers_today.update(traded_tickers)
+        closed_tickers_today.update(
+            {
+                str(pos.get("ticker", "")).upper()
+                for pos in restored_positions.values()
+                if str(pos.get("ticker", "")).strip()
+            }
+        )
+
+    backlog_ids: Set[str] = set()
     with executed_lock:
-        executed.difference_update(closed_ids)
+        # Keep all closed signal_ids blocked for the full trading day.
+        # Otherwise, a restart can re-dispatch old rows still present in signal CSVs.
+        executed.update(closed_ids)
         executed.update(restored_positions.keys())
+        # Re-queue backlog signals that were marked executed earlier but never reached
+        # open position state and also have no terminal outcome row.
+        backlog_ids = {
+            sid
+            for sid in executed
+            if sid in signals_by_id
+            and sid not in closed_ids
+            and sid not in restored_positions
+        }
+        if backlog_ids:
+            executed.difference_update(backlog_ids)
 
     _persist_open_trades_state()
     with capital_lock:
@@ -1162,6 +1819,7 @@ def _restore_intraday_runtime_state(
         "realized_trades": float(realized["realized_trades"]),
         "realized_total": float(realized["realized_total"]),
         "deployed_margin": float(deployed_margin),
+        "requeued_backlog": float(len(backlog_ids)),
     }
     return stats, resume_signals
 
@@ -1321,6 +1979,12 @@ def _sanitize_today_trade_csv() -> Tuple[int, int]:
         keep_mask.append(row_date == today_date if row_date is not None else False)
 
     df_today = df[pd.Series(keep_mask, index=df.index)].copy()
+    if "signal_id" in df_today.columns:
+        sid = df_today["signal_id"].astype(str).str.strip()
+        df_today = df_today.assign(_sid=sid)
+        df_today = df_today[df_today["_sid"] != ""]
+        df_today = df_today.drop_duplicates(subset=["_sid"], keep="last")
+        df_today = df_today.drop(columns=["_sid"])
     rows_removed = rows_before - int(len(df_today))
     if rows_removed <= 0:
         return rows_before, 0
@@ -1331,6 +1995,43 @@ def _sanitize_today_trade_csv() -> Tuple[int, int]:
     df_today = df_today[TRADE_LOG_COLUMNS]
     df_today.to_csv(csv_path, index=False, quoting=csv.QUOTE_ALL)
     return rows_before, rows_removed
+
+
+def _backfill_missing_trade_rows(
+    signal_csv_paths: Sequence[str],
+    executed: Set[str],
+) -> int:
+    if not executed:
+        return 0
+    signals = read_signals_csv_multi(signal_csv_paths)
+    if not signals:
+        return 0
+    by_id: Dict[str, dict] = {}
+    for sig in signals:
+        sid = str(sig.get("signal_id", "")).strip()
+        if sid:
+            by_id[sid] = sig
+    if not by_id:
+        return 0
+
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    csv_path = os.path.join(SIGNAL_DIR, TRADE_LOG_PATTERN.format(today_str))
+    existing_ids: Set[str] = set()
+    if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+        try:
+            with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    sid = str((row or {}).get("signal_id", "")).strip()
+                    if sid:
+                        existing_ids.add(sid)
+        except Exception as e:
+            log.warning(f"[CSV] Could not scan trade CSV for backfill: {e}")
+
+    missing_ids = [sid for sid in sorted(executed) if sid in by_id and sid not in existing_ids]
+    for sid in missing_ids:
+        _log_pending_signal_to_csv(by_id[sid], sid, outcome="ENTRY_PENDING_RECOVERED")
+    return len(missing_ids)
 
 
 # ============================================================================
@@ -1362,13 +2063,51 @@ def read_signals_csv(csv_path: str) -> List[dict]:
         return []
 
 
+def get_signal_csv_paths_for_today() -> List[str]:
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    return [os.path.join(SIGNAL_DIR, pattern.format(today_str)) for pattern in SIGNAL_CSV_PATTERNS]
+
+
+def read_signals_csv_multi(csv_paths: Sequence[str]) -> List[dict]:
+    """
+    Read and merge signals from multiple CSV files (v5_short + v5_long).
+    Dedupe by signal_id, keeping first-seen row.
+    """
+    merged: Dict[str, dict] = {}
+    for csv_path in csv_paths:
+        rows = read_signals_csv(csv_path)
+        if not rows:
+            continue
+        for sig in rows:
+            sid = str(sig.get("signal_id", "")).strip()
+            if not sid:
+                continue
+            if sid not in merged:
+                merged[sid] = sig
+
+    out = list(merged.values())
+    out.sort(
+        key=lambda r: (
+            str(
+                r.get("signal_entry_datetime_ist")
+                or r.get("signal_bar_time_ist")
+                or r.get("signal_datetime")
+                or ""
+            ),
+            str(r.get("ticker", "")),
+            str(r.get("side", "")),
+        )
+    )
+    return out
+
+
 # ============================================================================
 # SIGNAL PROCESSOR
 # ============================================================================
 def _launch_trade_thread(
     signal: dict,
     signal_id: str,
-    trade_semaphore: threading.Semaphore,
+    trade_semaphore: Optional[threading.Semaphore],
     resume_mode: bool = False,
 ) -> bool:
     def _run_trade(sig=signal, sid=signal_id, is_resume=resume_mode):
@@ -1376,7 +2115,10 @@ def _launch_trade_thread(
             if sid in inflight_signals:
                 return
             inflight_signals.add(sid)
-        trade_semaphore.acquire()
+        acquired = False
+        if trade_semaphore is not None:
+            trade_semaphore.acquire()
+            acquired = True
         try:
             execute_live_trade(sig, resume_mode=is_resume)
         except Exception as e:
@@ -1384,7 +2126,8 @@ def _launch_trade_thread(
             log.error(f"{mode} trade thread error for {sig.get('ticker', '?')}: {e}")
             log.error(traceback.format_exc())
         finally:
-            trade_semaphore.release()
+            if acquired and trade_semaphore is not None:
+                trade_semaphore.release()
             with inflight_signals_lock:
                 inflight_signals.discard(sid)
             with active_trades_lock:
@@ -1410,7 +2153,7 @@ def _launch_trade_thread(
 
 def start_resumed_trade_monitors(
     resumed_signals: List[dict],
-    trade_semaphore: threading.Semaphore,
+    trade_semaphore: Optional[threading.Semaphore],
     dry_run: bool,
 ) -> int:
     if dry_run or not resumed_signals:
@@ -1435,9 +2178,9 @@ def start_resumed_trade_monitors(
 
 
 def process_new_signals(
-    csv_path: str,
+    csv_paths: Sequence[str],
     executed: Set[str],
-    trade_semaphore: threading.Semaphore,
+    trade_semaphore: Optional[threading.Semaphore],
     dry_run: bool = False,
 ) -> Set[str]:
     """
@@ -1452,7 +2195,7 @@ def process_new_signals(
     if not _is_market_open_now():
         return executed
 
-    signals = read_signals_csv(csv_path)
+    signals = read_signals_csv_multi(csv_paths)
     if not signals:
         return executed
 
@@ -1478,11 +2221,15 @@ def process_new_signals(
             log.warning(f"Signal {signal_id[:12]} missing fields: {missing}. Skipping.")
             continue
 
+        ticker = str(signal.get("ticker", "")).strip().upper()
         side = str(signal.get("side", "")).strip().upper()
         entry_price = _safe_float(signal.get("entry_price", 0.0), 0.0)
         stop_price = _safe_float(signal.get("stop_price", 0.0), 0.0)
         target_price = _safe_float(signal.get("target_price", 0.0), 0.0)
         quantity = _safe_int(signal.get("quantity", 1), 1)
+        if not ticker:
+            log.warning(f"Signal {signal_id[:12]} has invalid ticker. Skipping.")
+            continue
         if side not in {"LONG", "SHORT"}:
             log.warning(f"Signal {signal_id[:12]} has invalid side='{side}'. Skipping.")
             continue
@@ -1495,7 +2242,39 @@ def process_new_signals(
         if quantity <= 0:
             log.warning(f"Signal {signal_id[:12]} has invalid quantity={quantity}. Skipping.")
             continue
+        signal["ticker"] = ticker
         signal["side"] = side
+
+        with closed_trades_lock:
+            ticker_seen_today = ticker in closed_tickers_today
+        if ticker_seen_today:
+            outcome = "ENTRY_SKIPPED_TICKER_ALREADY_TRADED_TODAY"
+            log.warning(
+                f"[DISPATCH.SKIP] {ticker} signal_id={signal_id[:12]} "
+                "skipped: ticker already traded earlier today."
+            )
+            _log_non_executed_signal_to_csv(signal, signal_id, outcome)
+            with executed_lock:
+                executed.add(signal_id)
+                executed_changed = True
+            with closed_trades_lock:
+                closed_signal_ids_today.add(signal_id)
+            continue
+
+        if is_symbol_mis_rejected(ticker):
+            outcome = "ENTRY_SKIPPED_MIS_BLOCKED_OR_MISSING"
+            log.warning(
+                f"[DISPATCH.SKIP] {ticker} signal_id={signal_id[:12]} "
+                f"skipped: symbol already marked MIS blocked/missing for today."
+            )
+            _log_non_executed_signal_to_csv(signal, signal_id, outcome)
+            with executed_lock:
+                executed.add(signal_id)
+                executed_changed = True
+            with closed_trades_lock:
+                closed_signal_ids_today.add(signal_id)
+                closed_tickers_today.add(ticker)
+            continue
 
         # Risk + margin reservation (atomic)
         allowed, reason, reserved_margin = _reserve_capacity_for_signal(signal_id, signal)
@@ -1504,12 +2283,23 @@ def process_new_signals(
                 f"[RISK] Rejecting {signal.get('side', '?')} "
                 f"{signal.get('ticker', '?')}: {reason}"
             )
+            outcome = "ENTRY_SKIPPED_RISK_LIMIT"
+            _log_non_executed_signal_to_csv(signal, signal_id, outcome)
+            with executed_lock:
+                executed.add(signal_id)
+                executed_changed = True
+            with closed_trades_lock:
+                closed_signal_ids_today.add(signal_id)
+                closed_tickers_today.add(ticker)
             continue
 
         # Mark executed only after reservation succeeds.
         with executed_lock:
             executed.add(signal_id)
             executed_changed = True
+        with closed_trades_lock:
+            closed_signal_ids_today.add(signal_id)
+            closed_tickers_today.add(ticker)
 
         ticker = signal.get("ticker", "?")
         side = signal.get("side", "?")
@@ -1537,6 +2327,7 @@ def process_new_signals(
                 executed_changed = True
             log.error(f"[DISPATCH] Failed to launch trade thread for signal_id={sid[:12]}")
             continue
+        _log_pending_signal_to_csv(signal, signal_id)
 
         log.info(
             f"[DISPATCH] Launched LIVE trade: {side} {ticker} @ {entry_p} "
@@ -1564,12 +2355,12 @@ def process_new_signals(
 # WATCHDOG FILE MONITOR
 # ============================================================================
 class SignalCSVHandler(FileSystemEventHandler):
-    """Watches the signal CSV for modifications and triggers processing."""
+    """Watches multiple signal CSV files for modifications and triggers processing."""
 
-    def __init__(self, csv_path: str, callback, debounce_sec: float = 2.0):
+    def __init__(self, csv_paths: Sequence[str], callback, debounce_sec: float = 2.0):
         super().__init__()
-        self.csv_path = csv_path
-        self.csv_filename = os.path.basename(csv_path)
+        self.csv_paths = list(csv_paths)
+        self.csv_filenames = {os.path.basename(p) for p in self.csv_paths}
         self.callback = callback
         self.debounce_sec = debounce_sec
         self._timer: Optional[threading.Timer] = None
@@ -1578,13 +2369,13 @@ class SignalCSVHandler(FileSystemEventHandler):
     def on_modified(self, event):
         if event.is_directory:
             return
-        if os.path.basename(event.src_path) == self.csv_filename:
+        if os.path.basename(event.src_path) in self.csv_filenames:
             self._debounce()
 
     def on_created(self, event):
         if event.is_directory:
             return
-        if os.path.basename(event.src_path) == self.csv_filename:
+        if os.path.basename(event.src_path) in self.csv_filenames:
             self._debounce()
 
     def _debounce(self):
@@ -1600,11 +2391,14 @@ class SignalCSVHandler(FileSystemEventHandler):
 # ============================================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="AVWAP Live Trade Executor (Zerodha Real Orders)"
+        description="AVWAP Live Trade Executor V5 (Zerodha Real Orders)"
     )
     parser.add_argument(
         "--max-trades", type=int, default=MAX_CONCURRENT_TRADES,
-        help=f"Max concurrent trades (default: {MAX_CONCURRENT_TRADES})",
+        help=(
+            "Max concurrent trade worker threads "
+            f"(default: {MAX_CONCURRENT_TRADES}; 0 or less = unlimited)"
+        ),
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -1614,12 +2408,19 @@ def main():
     _set_dispatch_lockdown(None)
 
     log.info("=" * 65)
-    log.info("AVWAP Live Trade Executor - PAPER_TRADE = FALSE")
+    log.info("AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE")
     log.info("  ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***")
     log.info(f"  Mode              : {'DRY-RUN' if args.dry_run else 'LIVE TRADING'}")
     log.info(f"  Max concurrent    : {args.max_trades}")
     log.info(f"  Signal dir        : {os.path.abspath(SIGNAL_DIR)}/")
     log.info(f"  Forced close at   : {FORCED_CLOSE_TIME} IST")
+    if RISK_LIMITS_ENABLED:
+        log.info(
+            f"  Risk limits       : ENABLED (max_open={MAX_OPEN_POSITIONS}, "
+            f"max_margin=Rs.{MAX_CAPITAL_DEPLOYED_RS:,.0f})"
+        )
+    else:
+        log.warning("  Risk limits       : DISABLED (no max-open / margin cap checks)")
     if FORCE_ENTRY_QUANTITY is not None:
         log.warning(
             f"  Quantity override : FORCE_ENTRY_QUANTITY={FORCE_ENTRY_QUANTITY} "
@@ -1630,10 +2431,16 @@ def main():
     if not args.dry_run:
         log.info("Establishing Kite session...")
         setup_kite_session()
+        preload_symbol_tick_sizes("NSE")
 
     # Load executed signals
     executed = load_executed_signals()
     log.info(f"Loaded {len(executed)} previously executed signals.")
+    mis_rejected_loaded = hydrate_mis_rejected_symbols()
+    if mis_rejected_loaded > 0:
+        log.warning(
+            f"[MIS] Loaded {mis_rejected_loaded} symbol(s) already marked MIS blocked/missing today."
+        )
 
     rows_before, rows_removed = _sanitize_today_trade_csv()
     if rows_removed > 0:
@@ -1642,28 +2449,47 @@ def main():
             "from today's live trade CSV."
         )
 
-    # Resolve today's signal CSV
+    # Resolve today's signal CSVs (v5_short + v5_long)
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
-    csv_path = os.path.join(SIGNAL_DIR, SIGNAL_CSV_PATTERN.format(today_str))
+    csv_paths = get_signal_csv_paths_for_today()
     trade_csv_path = os.path.join(SIGNAL_DIR, TRADE_LOG_PATTERN.format(today_str))
+    log.info("Signal CSV sources: " + ", ".join(os.path.basename(p) for p in csv_paths))
+    csv_hydrated = hydrate_mis_rejected_symbols_from_trade_csv(trade_csv_path)
+    if csv_hydrated > 0:
+        log.warning(
+            f"[MIS] Hydrated {csv_hydrated} symbol(s) as MIS blocked/missing from today's trade CSV."
+        )
 
-    # Trade concurrency semaphore
-    trade_semaphore = threading.Semaphore(args.max_trades)
+    # Trade concurrency semaphore (optional unlimited mode).
+    trade_semaphore: Optional[threading.Semaphore] = None
+    if args.max_trades > 0:
+        trade_semaphore = threading.Semaphore(args.max_trades)
+    else:
+        log.warning("  Trade worker cap   : DISABLED (unlimited concurrent workers)")
 
     # Restore runtime state for mid-session restarts.
     if not args.dry_run:
         restore_stats, resume_signals = _restore_intraday_runtime_state(
-            signal_csv_path=csv_path,
+            signal_csv_paths=csv_paths,
             trade_csv_path=trade_csv_path,
             executed=executed,
         )
         save_executed_signals(executed)
+        backfilled = _backfill_missing_trade_rows(
+            signal_csv_paths=csv_paths,
+            executed=executed,
+        )
+        if backfilled > 0:
+            log.warning(
+                f"[CSV] Backfilled {backfilled} missing trade row(s) as ENTRY_PENDING_RECOVERED."
+            )
         log.info(
             "[RESTORE] "
             f"signals_today={int(restore_stats['signals_today'])} "
             f"executed={int(restore_stats['executed_loaded'])} "
             f"closed_today={int(restore_stats['closed_today'])} "
             f"open_restored={int(restore_stats['open_restored'])} "
+            f"requeued_backlog={int(restore_stats['requeued_backlog'])} "
             f"realized_trades={int(restore_stats['realized_trades'])} "
             f"realized_total=Rs.{restore_stats['realized_total']:+,.2f} "
             f"deployed_margin=Rs.{restore_stats['deployed_margin']:,.2f}"
@@ -1701,24 +2527,24 @@ def main():
     # Callback for watchdog
     def on_csv_change():
         nonlocal executed
-        log.info("Signal CSV changed - processing new signals...")
+        log.info("Signal CSV changed - processing new signals from v5_short + v5_long...")
         executed = process_new_signals(
-            csv_path, executed, trade_semaphore, dry_run=args.dry_run,
+            csv_paths, executed, trade_semaphore, dry_run=args.dry_run,
         )
 
     # Set up watchdog
     os.makedirs(SIGNAL_DIR, exist_ok=True)
-    handler = SignalCSVHandler(csv_path, on_csv_change, debounce_sec=2.0)
+    handler = SignalCSVHandler(csv_paths, on_csv_change, debounce_sec=2.0)
     observer = Observer()
     observer.schedule(handler, path=SIGNAL_DIR, recursive=False)
     observer.start()
-    log.info(f"Watchdog started - monitoring {csv_path}")
+    log.info("Watchdog started - monitoring " + ", ".join(csv_paths))
 
     # Initial check for existing signals
-    if os.path.exists(csv_path):
+    if any(os.path.exists(p) for p in csv_paths):
         log.info("Checking for existing unprocessed signals...")
         executed = process_new_signals(
-            csv_path, executed, trade_semaphore, dry_run=args.dry_run,
+            csv_paths, executed, trade_semaphore, dry_run=args.dry_run,
         )
 
     # Main loop

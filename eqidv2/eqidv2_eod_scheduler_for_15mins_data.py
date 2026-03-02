@@ -200,6 +200,7 @@ if hasattr(core, 'expected_last_stamp') and _orig_ticker_is_fresh is not None:
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 HARD_STOP = dtime(15, 50)  # exit after this
+FIRST_15M_CLOSE = dtime(9, 30)  # first completed 15m candle close timestamp
 DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_15M_MAX_WORKERS", "24"))
 DEFAULT_BUFFER_SEC = int(os.getenv("EQIDV2_15M_BUFFER_SEC", "6"))
 DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_15M_REFRESH_TOKENS", "0")).strip().lower() in {
@@ -445,6 +446,20 @@ def main() -> None:
 
         # Determine the slot we should process: last completed 15m boundary
         slot_end = _floor_to_15m(dt)
+
+        # With intraday_ts="end", there is no completed 15m candle at 09:15.
+        # Running this opening slot causes false stale-verification and heavy recovery churn.
+        if slot_end.time() < FIRST_15M_CLOSE:
+            if last_run_slot != slot_end:
+                print(
+                    f"[SKIP] Opening slot {slot_end.strftime('%H:%M')} has no completed 15m candle "
+                    "(intraday_ts=end). First actionable slot is 09:30."
+                )
+            last_run_slot = slot_end
+            nxt = _next_boundary(dt) + timedelta(seconds=int(args.buffer_sec))
+            time.sleep(max(2.0, (nxt - now_ist()).total_seconds()))
+            continue
+
         # Don't run until buffer has passed for this slot_end
         if dt < (slot_end + timedelta(seconds=int(args.buffer_sec))):
             wake = slot_end + timedelta(seconds=int(args.buffer_sec))

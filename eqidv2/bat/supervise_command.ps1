@@ -75,6 +75,49 @@ function Quote-CmdArg {
     return $Value
 }
 
+function Normalize-ArgumentList {
+    param([string[]]$Raw)
+    $items = @()
+    if ($null -eq $Raw) {
+        return $items
+    }
+
+    foreach ($arg in $Raw) {
+        if ($null -eq $arg) {
+            continue
+        }
+        $s = [string]$arg
+        $trimmed = $s.Trim()
+        if ($trimmed.Length -eq 0) {
+            continue
+        }
+
+        # Some .bat -> powershell invocations pass array-like text as one literal:
+        #   -u,path\to\script.py
+        #   @(-u,path\to\script.py)
+        # Normalize these into individual args.
+        $candidate = $trimmed
+        if ($candidate.StartsWith("@(") -and $candidate.EndsWith(")")) {
+            $candidate = $candidate.Substring(2, $candidate.Length - 3).Trim()
+        }
+
+        if ($candidate -match ",") {
+            $parts = @(
+                $candidate -split "," |
+                ForEach-Object { $_.Trim().Trim("'`"") } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            if ($parts.Count -gt 1) {
+                $items += $parts
+                continue
+            }
+        }
+
+        $items += $s
+    }
+    return $items
+}
+
 function Write-Heartbeat {
     param(
         [string]$State,
@@ -168,12 +211,13 @@ if ($SkipRunAfterCutoff -and (Is-AfterCutoff -HHmm $CutoffHHmm)) {
 
 $restartCount = 0
 $restartEvents = New-Object System.Collections.Generic.List[DateTime]
+$normalizedArgumentList = Normalize-ArgumentList -Raw $ArgumentList
 
 while ($true) {
     $runNo = $restartCount + 1
     $exe = Quote-CmdArg -Value $FilePath
     $argParts = @()
-    foreach ($arg in $ArgumentList) {
+    foreach ($arg in $normalizedArgumentList) {
         if ($null -eq $arg) { continue }
         $argParts += (Quote-CmdArg -Value ([string]$arg))
     }
