@@ -229,6 +229,27 @@ def _is_trading_time(dt: datetime) -> bool:
     t = dt.time()
     return (t >= MARKET_OPEN) and (t <= MARKET_CLOSE)
 
+def _is_trading_day(dt: datetime, holidays: set) -> bool:
+    if dt.weekday() >= 5:
+        return False
+    return dt.date() not in holidays
+
+def _next_trading_day_open(dt: datetime, holidays: set) -> datetime:
+    probe = dt
+    while True:
+        if _is_trading_day(probe, holidays):
+            return IST.localize(
+                datetime(
+                    probe.year,
+                    probe.month,
+                    probe.day,
+                    MARKET_OPEN.hour,
+                    MARKET_OPEN.minute,
+                    0,
+                )
+            )
+        probe = probe + timedelta(days=1)
+
 def _read_holidays_set() -> set:
     # Core exposes HOLIDAYS_FILE_DEFAULT fileciteturn36file2L54-L56
     hf = getattr(core, "HOLIDAYS_FILE_DEFAULT", "holidays.csv")
@@ -426,6 +447,8 @@ def main() -> None:
     print(f"       Max workers: {args.max_workers}")
     print(f"       Refresh tokens: {args.refresh_tokens}")
     print(f"       Process will exit at {HARD_STOP.strftime('%H:%M')} IST.")
+    holidays = _read_holidays_set()
+    print(f"       Holidays loaded: {len(holidays)}")
 
     last_run_slot: Optional[datetime] = None
 
@@ -434,6 +457,16 @@ def main() -> None:
         if dt.time() >= HARD_STOP:
             print("[DONE] Hard stop reached. Exiting.")
             return
+
+        if not _is_trading_day(dt, holidays):
+            nxt = _next_trading_day_open(dt + timedelta(days=1), holidays)
+            sleep_s = max(30.0, (nxt - dt).total_seconds())
+            print(
+                f"[WAIT] Non-trading day ({dt.strftime('%Y-%m-%d')}). "
+                f"Sleeping {int(min(sleep_s, 300))}s..."
+            )
+            time.sleep(min(sleep_s, 300))
+            continue
 
         if not _is_trading_time(dt):
             nxt = IST.localize(datetime(dt.year, dt.month, dt.day, MARKET_OPEN.hour, MARKET_OPEN.minute, 0))

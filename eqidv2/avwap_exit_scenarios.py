@@ -59,6 +59,8 @@ def _load_5m_bars(
         f"{ticker}.parquet",
         f"{ticker}_5min.parquet",
         f"{ticker}_stocks_indicators_5min.parquet",
+        f"{ticker}_1min.parquet",
+        f"{ticker}_stocks_indicators_1min.parquet",
     ):
         candidate = dir_5m / pattern
         if candidate.exists():
