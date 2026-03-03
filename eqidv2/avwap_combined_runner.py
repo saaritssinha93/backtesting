@@ -186,11 +186,21 @@ def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
         df = pd.read_parquet(p, engine=engine)
         if df.empty:
             return df
-        # Ensure datetime index/column
-        if "datetime" in df.columns:
-            df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
-        elif df.index.name == "datetime" or isinstance(df.index, pd.DatetimeIndex):
+        # Normalize common datetime column/index variants to a canonical "datetime".
+        dt_col = None
+        for cand in ("datetime", "date", "DateTime", "timestamp", "Timestamp"):
+            if cand in df.columns:
+                dt_col = cand
+                break
+
+        if dt_col is None and (df.index.name == "datetime" or isinstance(df.index, pd.DatetimeIndex)):
             df = df.reset_index()
+            dt_col = "datetime" if "datetime" in df.columns else None
+
+        if dt_col is not None and dt_col != "datetime":
+            df = df.rename(columns={dt_col: "datetime"})
+
+        if "datetime" in df.columns:
             df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
         return df
     except Exception:
@@ -276,6 +286,9 @@ def _resolve_exits_5min(
                 f"{ticker}{suffix_5m}",
                 f"{ticker}.parquet",
                 f"{ticker}_5min.parquet",
+                f"{ticker}_stocks_indicators_5min.parquet",
+                f"{ticker}_1min.parquet",
+                f"{ticker}_stocks_indicators_1min.parquet",
             ]:
                 fpath = dir_5m / pattern
                 if fpath.exists():

@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import tempfile
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -51,6 +54,9 @@ LONG_QUALITY_MIN: Optional[float] = float(LONG_QUALITY_MIN_RAW) if LONG_QUALITY_
 
 ROOT = Path(__file__).resolve().parent
 PENDING_STATE_FILE = ROOT / "logs" / "eqidv2_long_pending_state_v5_long.json"
+PENDING_STATE_WRITE_LOCK = threading.Lock()
+PENDING_JSON_WRITE_RETRIES = 5
+PENDING_JSON_WRITE_RETRY_BASE_SEC = 0.05
 
 
 # Keep original functions so wrapper can delegate safely.
@@ -104,10 +110,44 @@ def _to_ist_ts(x: Any) -> Optional[pd.Timestamp]:
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
     text = json.dumps(payload, ensure_ascii=False, indent=2)
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+
+    # Serialize local writes and use unique temp files to avoid WinError 32
+    # when scan + poll threads persist state concurrently.
+    with PENDING_STATE_WRITE_LOCK:
+        for attempt in range(1, PENDING_JSON_WRITE_RETRIES + 1):
+            fd = -1
+            tmp_path = ""
+            try:
+                fd, tmp_path = tempfile.mkstemp(
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    dir=str(path.parent),
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    fd = -1
+                    f.write(text)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, path)
+                return
+            except OSError as e:
+                win_err = int(getattr(e, "winerror", 0) or 0)
+                retryable = win_err in (5, 32)
+                if (not retryable) or attempt >= PENDING_JSON_WRITE_RETRIES:
+                    raise
+                time.sleep(PENDING_JSON_WRITE_RETRY_BASE_SEC * attempt)
+            finally:
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
 
 
 def _load_pending_state() -> Dict[str, Any]:
@@ -551,29 +591,46 @@ def _apply_v5_long_overrides() -> None:
 
 def main() -> None:
     _apply_v5_long_overrides()
-    print(
-        "[V5_LONG] LONG-only anti-chase enabled | "
-        f"limit_wait={LONG_LIMIT_WAIT_MIN}m "
-        f"limit_offset={LONG_LIMIT_OFFSET_PCT*100:.2f}% "
-        f"sl={LONG_STOP_PCT*100:.2f}% "
-        f"tgt={LONG_TARGET_PCT*100:.2f}% | "
-        f"stale_only_retry={STALE_ONLY_RETRY_ENABLED} | "
-        f"end_time={v2.END_TIME.strftime('%H:%M:%S')}",
-        flush=True,
+    argv_lower = {str(a).strip().lower() for a in sys.argv[1:]}
+    is_help_mode = ("-h" in argv_lower) or ("--help" in argv_lower)
+    is_replay_mode = ("--replay-date" in argv_lower)
+    should_start_pending_worker = (
+        LONG_PENDING_POLL_ENABLED
+        and (not is_help_mode)
+        and (not is_replay_mode)
     )
-    print(
-        "[V5_LONG] pending_poll="
-        f"{LONG_PENDING_POLL_ENABLED} "
-        f"(interval={LONG_PENDING_POLL_INTERVAL_SEC:.1f}s)",
-        flush=True,
-    )
-    if LONG_RSI_CAP is not None:
-        print(f"[V5_LONG] LONG_RSI_CAP={LONG_RSI_CAP}", flush=True)
-    if LONG_ADX_MIN is not None:
-        print(f"[V5_LONG] LONG_ADX_MIN={LONG_ADX_MIN}", flush=True)
-    if LONG_QUALITY_MIN is not None:
-        print(f"[V5_LONG] LONG_QUALITY_MIN={LONG_QUALITY_MIN}", flush=True)
-    poll_stop = _start_pending_poll_worker_v5_long()
+
+    if not is_help_mode:
+        print(
+            "[V5_LONG] LONG-only anti-chase enabled | "
+            f"limit_wait={LONG_LIMIT_WAIT_MIN}m "
+            f"limit_offset={LONG_LIMIT_OFFSET_PCT*100:.2f}% "
+            f"sl={LONG_STOP_PCT*100:.2f}% "
+            f"tgt={LONG_TARGET_PCT*100:.2f}% | "
+            f"stale_only_retry={STALE_ONLY_RETRY_ENABLED} | "
+            f"end_time={v2.END_TIME.strftime('%H:%M:%S')}",
+            flush=True,
+        )
+        print(
+            "[V5_LONG] pending_poll="
+            f"{LONG_PENDING_POLL_ENABLED} "
+            f"(interval={LONG_PENDING_POLL_INTERVAL_SEC:.1f}s)"
+            f" | worker_active={should_start_pending_worker}",
+            flush=True,
+        )
+        if LONG_RSI_CAP is not None:
+            print(f"[V5_LONG] LONG_RSI_CAP={LONG_RSI_CAP}", flush=True)
+        if LONG_ADX_MIN is not None:
+            print(f"[V5_LONG] LONG_ADX_MIN={LONG_ADX_MIN}", flush=True)
+        if LONG_QUALITY_MIN is not None:
+            print(f"[V5_LONG] LONG_QUALITY_MIN={LONG_QUALITY_MIN}", flush=True)
+
+    poll_stop: Optional[threading.Event] = None
+    if should_start_pending_worker:
+        poll_stop = _start_pending_poll_worker_v5_long()
+    elif (not is_help_mode) and LONG_PENDING_POLL_ENABLED and is_replay_mode:
+        print("[V5_LONG] pending worker skipped in replay mode.", flush=True)
+
     try:
         v2.main()
     finally:

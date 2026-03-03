@@ -130,6 +130,8 @@ def _load_5m_for_ticker(
         f"{ticker}.parquet",
         f"{ticker}_5min.parquet",
         f"{ticker}_stocks_indicators_5min.parquet",
+        f"{ticker}_1min.parquet",
+        f"{ticker}_stocks_indicators_1min.parquet",
     ]:
         p = dir_5m / pattern
         if p.exists():

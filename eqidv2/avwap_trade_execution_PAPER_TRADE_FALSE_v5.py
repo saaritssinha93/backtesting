@@ -237,6 +237,7 @@ def setup_kite_session() -> KiteConnect:
 
     sessions: List[KiteConnect] = []
     primary_user = "N/A"
+    primary_app = "N/A"
 
     for app_name, key_file, token_file in specs:
         if not (os.path.exists(key_file) and os.path.exists(token_file)):
@@ -262,14 +263,18 @@ def setup_kite_session() -> KiteConnect:
             client.set_access_token(access_token)
             profile = client.profile()
             user_name = profile.get("user_name", "N/A")
-            if app_name == "app1":
+            if primary_app == "N/A":
+                primary_app = app_name
                 primary_user = user_name
             sessions.append(client)
             log.info(f"[KITE] Session ready: {app_name} | user={user_name}")
         except Exception as e:
             if app_name == "app1":
-                log.error(f"Primary Kite session setup failed ({app_name}): {e}")
-                raise
+                log.warning(
+                    f"[KITE] Primary session setup failed ({app_name}): {e}. "
+                    "Continuing with fallback apps."
+                )
+                continue
             log.warning(f"[KITE] {app_name} disabled due to setup error: {e}")
 
     if not sessions:
@@ -282,7 +287,7 @@ def setup_kite_session() -> KiteConnect:
         kite_pool = list(sessions)
         kite_pool_rr_idx = 0
 
-    log.info(f"Kite primary session established. User: {primary_user}")
+    log.info(f"Kite primary session established: {primary_app} | user={primary_user}")
     log.info(f"[KITE] Session pool active apps: {len(sessions)}")
     return kite
 
