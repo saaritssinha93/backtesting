@@ -821,3 +821,511 @@ kiteconnect.exceptions.InputException: MIS orders are currently blocked for IRME
 2026-03-02 12:26:38,091 | INFO    | [LIVE] TARGET HIT: PAYTM @ 1047.4 -> cancelling SL 260302171274712
 2026-03-02 12:26:38,180 | INFO    | Cancelled order 260302171274712 (attempt 1)
 2026-03-02 12:26:38,201 | INFO    | [LIVE] RESULT SHORT PAYTM | TARGET | Entry=1060.2 Exit=1047.4 | P&L: Rs.+12.80 (+1.21%) | Day total: Rs.+26.17
+2026-03-02 12:28:23,586 | INFO    | =================================================================
+2026-03-02 12:28:23,586 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 12:28:23,586 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 12:28:23,586 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 12:28:23,586 | INFO    |   Max concurrent    : 0
+2026-03-02 12:28:23,586 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 12:28:23,586 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 12:28:23,586 | WARNING |   Risk limits       : DISABLED (no max-open / margin cap checks)
+2026-03-02 12:28:23,586 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 12:28:23,586 | INFO    | =================================================================
+2026-03-02 12:28:23,586 | INFO    | Establishing Kite session...
+2026-03-02 12:28:23,672 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 12:28:23,755 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 12:28:23,838 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 12:28:23,914 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 12:28:23,914 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 12:28:23,914 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 12:28:24,056 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 12:28:24,056 | INFO    | Loaded 36 previously executed signals.
+2026-03-02 12:28:24,056 | WARNING | [MIS] Loaded 1 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 12:28:24,085 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 12:28:24,100 | WARNING |   Trade worker cap   : DISABLED (unlimited concurrent workers)
+2026-03-02 12:28:24,169 | INFO    | [RESTORE] signals_today=36 executed=26 closed_today=9 open_restored=17 requeued_backlog=10 realized_trades=9 realized_total=Rs.+26.17 deployed_margin=Rs.2,118.49
+2026-03-02 12:28:24,232 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 12:28:24,233 | INFO    | [RESUME] Restoring trade LT-62d78161-110040: SELL GHCL qty=1 | SL=471.65 TGT=462.55
+2026-03-02 12:28:24,234 | INFO    | [RESUME] Restoring trade LT-76fcb622-111643: SELL VPRPL qty=1 | SL=42.3 TGT=41.5
+2026-03-02 12:28:24,234 | INFO    | [RESUME] Restoring trade LT-6ea0d0d5-111656: SELL BHARATRAS qty=1 | SL=1464.5 TGT=1436.15
+2026-03-02 12:28:24,235 | INFO    | [RESUME] Restoring trade LT-9960d4c6-113040: SELL GRAPHITE qty=1 | SL=703.25 TGT=689.6
+2026-03-02 12:28:24,236 | INFO    | [RESUME] Restoring trade LT-f3386e73-113053: SELL JAGRAN qty=1 | SL=62.8 TGT=61.58
+2026-03-02 12:28:24,237 | INFO    | [RESUME] Restoring trade LT-389f8b07-113151: SELL CONCOR qty=1 | SL=481.8 TGT=472.55
+2026-03-02 12:28:24,238 | INFO    | [RESUME] Restoring trade LT-6b5c949b-114555: SELL JBMA qty=1 | SL=531.95 TGT=521.65
+2026-03-02 12:28:24,238 | INFO    | [RESUME] Restoring trade LT-d145318f-114938: SELL AWL qty=1 | SL=181.45 TGT=177.94
+2026-03-02 12:28:24,239 | INFO    | [RESUME] Restoring trade LT-0b177613-114938: SELL JIOFIN qty=1 | SL=249.05 TGT=244.25
+2026-03-02 12:28:24,239 | INFO    | [RESUME] Restoring trade LT-13094cae-114938: SELL M&M qty=1 | SL=3323.4 TGT=3259.1
+2026-03-02 12:28:24,240 | INFO    | [RESUME] Restoring trade LT-fc6d2474-120039: SELL GNFC qty=1 | SL=445.55 TGT=436.95
+2026-03-02 12:28:24,241 | INFO    | [RESUME] Restoring trade LT-51a9e8fc-120054: SELL IRCON qty=1 | SL=137.74 TGT=135.07
+2026-03-02 12:28:24,241 | INFO    | [RESUME] Restoring trade LT-51ae09e7-120054: SELL IREDA qty=1 | SL=116.79 TGT=114.53
+2026-03-02 12:28:24,241 | INFO    | [RESUME] Restoring trade LT-f3901d38-120054: SELL IXIGO qty=1 | SL=164.54 TGT=161.36
+2026-03-02 12:28:24,242 | INFO    | [RESUME] Restoring trade LT-cf00d9aa-121648: SELL FORTIS qty=1 | SL=933.95 TGT=915.9
+2026-03-02 12:28:24,242 | INFO    | [RESUME] Restoring trade LT-ebeea82a-121802: SELL HAPPYFORGE qty=1 | SL=1294.7 TGT=1269.7
+2026-03-02 12:28:24,242 | INFO    | [RESUME] Restoring trade LT-319712d6-121925: SELL HFCL qty=1 | SL=66.34 TGT=65.06
+2026-03-02 12:28:24,242 | INFO    | [RESTORE] Resumed 17 open trade monitor(s).
+2026-03-02 12:28:24,242 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 12:28:24,242 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 12:28:24,260 | INFO    | [LIVE] Starting trade LT-8c548a2e-122824: SELL CONFIPET qty=1 | SL=30.23 TGT=29.64
+2026-03-02 12:28:24,260 | INFO    | [DISPATCH] Launched LIVE trade: SHORT CONFIPET @ 30.0 | reserved_margin=Rs.6.00 | ID=8c548a2e2357
+2026-03-02 12:28:24,260 | INFO    | [LIVE] Starting trade LT-788f010c-122824: SELL DPABHUSHAN qty=1 | SL=1161.65 TGT=1139.16
+2026-03-02 12:28:24,274 | INFO    | [DISPATCH] Launched LIVE trade: SHORT DPABHUSHAN @ 1153.0 | reserved_margin=Rs.230.60 | ID=788f010cedfc
+2026-03-02 12:28:24,274 | INFO    | [LIVE] Starting trade LT-6025707e-122824: SELL KPITTECH qty=1 | SL=755.78 TGT=741.15
+2026-03-02 12:28:24,290 | INFO    | [DISPATCH] Launched LIVE trade: SHORT KPITTECH @ 750.15 | reserved_margin=Rs.150.03 | ID=6025707ef617
+2026-03-02 12:28:24,290 | INFO    | [LIVE] Starting trade LT-3d3967e5-122824: SELL NUVAMA qty=1 | SL=1211.01 TGT=1187.58
+2026-03-02 12:28:24,317 | INFO    | [DISPATCH] Launched LIVE trade: SHORT NUVAMA @ 1202.0 | reserved_margin=Rs.240.40 | ID=3d3967e5e226
+2026-03-02 12:28:24,318 | INFO    | [LIVE] Starting trade LT-92642147-122824: SELL PFS qty=1 | SL=29.81 TGT=29.23
+2026-03-02 12:28:24,326 | INFO    | [LIVE] Entry order placed: SELL CONFIPET ID=260302171469966
+2026-03-02 12:28:24,332 | INFO    | [DISPATCH] Launched LIVE trade: SHORT PFS @ 29.59 | reserved_margin=Rs.5.92 | ID=92642147e144
+2026-03-02 12:28:24,333 | INFO    | [LIVE] Starting trade LT-cabde925-122824: SELL SWSOLAR qty=1 | SL=190.1 TGT=186.42
+2026-03-02 12:28:24,336 | INFO    | [DISPATCH] Launched LIVE trade: SHORT SWSOLAR @ 188.68 | reserved_margin=Rs.37.74 | ID=cabde9252acd
+2026-03-02 12:28:24,336 | INFO    | [LIVE] Starting trade LT-1d1b5e92-122824: SELL AZAD qty=1 | SL=1656.63 TGT=1624.57
+2026-03-02 12:28:24,352 | INFO    | [DISPATCH] Launched LIVE trade: SHORT AZAD @ 1644.3 | reserved_margin=Rs.328.86 | ID=1d1b5e922c97
+2026-03-02 12:28:24,352 | INFO    | [LIVE] Starting trade LT-627a47dd-122824: SELL BAYERCROP qty=1 | SL=4589.16 TGT=4500.34
+2026-03-02 12:28:24,368 | INFO    | [DISPATCH] Launched LIVE trade: SHORT BAYERCROP @ 4555.0 | reserved_margin=Rs.911.00 | ID=627a47dd5a90
+2026-03-02 12:28:24,368 | INFO    | [LIVE] Starting trade LT-4e62d789-122824: SELL IEX qty=1 | SL=122.19 TGT=119.82
+2026-03-02 12:28:24,384 | INFO    | [LIVE] Entry filled: CONFIPET @ 29.93
+2026-03-02 12:28:24,384 | INFO    | [LIVE] Entry order placed: SELL DPABHUSHAN ID=260302171469967
+2026-03-02 12:28:24,384 | INFO    | [DISPATCH] Launched LIVE trade: SHORT IEX @ 121.28 | reserved_margin=Rs.24.26 | ID=4e62d7899596
+2026-03-02 12:28:24,384 | INFO    | [LIVE] Starting trade LT-2e9a6ff4-122824: SELL KHAICHEM qty=1 | SL=55.36 TGT=54.29
+2026-03-02 12:28:24,400 | INFO    | [DISPATCH] Launched LIVE trade: SHORT KHAICHEM @ 54.95 | reserved_margin=Rs.10.99 | ID=2e9a6ff44e41
+2026-03-02 12:28:24,462 | INFO    | [LIVE] Entry filled: DPABHUSHAN @ 1150.1
+2026-03-02 12:28:24,462 | INFO    | [LIVE] Entry order placed: SELL NUVAMA ID=260302171469970
+2026-03-02 12:28:24,478 | INFO    | Dispatched 10 new trade(s). Active trades: 27
+2026-03-02 12:28:24,537 | INFO    | [LIVE] Entry order placed: SELL KPITTECH ID=260302171469973
+2026-03-02 12:28:24,611 | INFO    | [LIVE] Entry order placed: SELL BAYERCROP ID=260302171469976
+2026-03-02 12:28:24,680 | INFO    | [LIVE] Entry order placed: SELL PFS ID=260302171469977
+2026-03-02 12:28:24,680 | INFO    | [LIVE] Entry order placed: SELL SWSOLAR ID=260302171469978
+2026-03-02 12:28:24,756 | INFO    | [LIVE] Entry order placed: SELL AZAD ID=260302171469979
+2026-03-02 12:28:24,814 | INFO    | [LIVE] Entry order placed: SELL KHAICHEM ID=260302171469980
+2026-03-02 12:28:24,894 | INFO    | [LIVE] Entry filled: NUVAMA @ 1198.0
+2026-03-02 12:28:24,894 | INFO    | [LIVE] Entry order placed: SELL IEX ID=260302171469982
+2026-03-02 12:28:24,969 | INFO    | [LIVE] Entry filled: KPITTECH @ 748.0
+2026-03-02 12:28:24,969 | INFO    | [LIVE] Entry filled: BAYERCROP @ 4554.7
+2026-03-02 12:28:24,990 | INFO    | [LIVE] Exit legs placed for DPABHUSHAN: target_id=260302171469988 sl_id=260302171469990
+2026-03-02 12:28:24,993 | INFO    | [LIVE] Exit legs placed for CONFIPET: target_id=260302171469987 sl_id=260302171469989
+2026-03-02 12:28:25,041 | INFO    | [LIVE] Entry filled: PFS @ 29.3
+2026-03-02 12:28:25,041 | INFO    | [LIVE] Entry filled: SWSOLAR @ 188.41
+2026-03-02 12:28:25,041 | INFO    | [LIVE] Entry filled: AZAD @ 1646.0
+2026-03-02 12:28:25,042 | INFO    | [LIVE] Entry filled: KHAICHEM @ 54.72
+2026-03-02 12:28:25,043 | INFO    | [LIVE] Entry filled: IEX @ 121.62
+2026-03-02 12:28:25,063 | INFO    | [LIVE] Exit legs placed for NUVAMA: target_id=260302171470024 sl_id=260302171470031
+2026-03-02 12:28:25,149 | INFO    | [LIVE] Exit legs placed for KPITTECH: target_id=260302171470033 sl_id=260302171470041
+2026-03-02 12:28:25,156 | INFO    | [LIVE] Exit legs placed for BAYERCROP: target_id=260302171470030 sl_id=260302171470040
+2026-03-02 12:28:25,227 | INFO    | [LIVE] Exit legs placed for PFS: target_id=260302171470044 sl_id=260302171470055
+2026-03-02 12:28:25,243 | INFO    | [LIVE] Exit legs placed for AZAD: target_id=260302171470047 sl_id=260302171470063
+2026-03-02 12:28:25,243 | INFO    | [LIVE] Exit legs placed for KHAICHEM: target_id=260302171470049 sl_id=260302171470062
+2026-03-02 12:28:25,243 | INFO    | [LIVE] Exit legs placed for IEX: target_id=260302171470051 sl_id=260302171470064
+2026-03-02 12:28:25,259 | INFO    | [LIVE] Exit legs placed for SWSOLAR: target_id=260302171470046 sl_id=260302171470056
+2026-03-02 12:30:33,164 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:30:33,179 | INFO    | [LIVE] Starting trade LT-cc409559-123033: SELL ETERNAL qty=1 | SL=241.02 TGT=236.36
+2026-03-02 12:30:33,203 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ETERNAL @ 239.23 | reserved_margin=Rs.47.85 | ID=cc40955916ad
+2026-03-02 12:30:33,210 | INFO    | Dispatched 1 new trade(s). Active trades: 28
+2026-03-02 12:30:33,259 | INFO    | [LIVE] Entry order placed: SELL ETERNAL ID=260302171481976
+2026-03-02 12:30:33,329 | INFO    | [LIVE] Entry filled: ETERNAL @ 239.22
+2026-03-02 12:30:33,477 | INFO    | [LIVE] Exit legs placed for ETERNAL: target_id=260302171481988 sl_id=260302171481993
+2026-03-02 12:30:36,202 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:30:36,227 | INFO    | [LIVE] Starting trade LT-e7fedc57-123036: SELL GAIL qty=1 | SL=166.16 TGT=162.94
+2026-03-02 12:30:36,248 | INFO    | [DISPATCH] Launched LIVE trade: SHORT GAIL @ 164.92 | reserved_margin=Rs.32.98 | ID=e7fedc577322
+2026-03-02 12:30:36,255 | INFO    | Dispatched 1 new trade(s). Active trades: 29
+2026-03-02 12:30:36,297 | INFO    | [LIVE] Entry order placed: SELL GAIL ID=260302171482205
+2026-03-02 12:30:36,390 | INFO    | [LIVE] Entry filled: GAIL @ 164.9
+2026-03-02 12:30:36,542 | INFO    | [LIVE] Exit legs placed for GAIL: target_id=260302171482222 sl_id=260302171482224
+2026-03-02 12:30:44,226 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:30:44,255 | INFO    | [LIVE] Starting trade LT-84da0a78-123044: SELL HARSHA qty=1 | SL=362.45 TGT=355.43
+2026-03-02 12:30:44,304 | INFO    | [DISPATCH] Launched LIVE trade: SHORT HARSHA @ 359.75 | reserved_margin=Rs.71.95 | ID=84da0a7855b7
+2026-03-02 12:30:44,322 | INFO    | [LIVE] Entry order placed: SELL HARSHA ID=260302171482906
+2026-03-02 12:30:44,351 | INFO    | Dispatched 1 new trade(s). Active trades: 30
+2026-03-02 12:30:44,410 | INFO    | [LIVE] Entry filled: HARSHA @ 359.75
+2026-03-02 12:30:44,579 | INFO    | [LIVE] Exit legs placed for HARSHA: target_id=260302171482920 sl_id=260302171482925
+2026-03-02 12:30:57,821 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:30:57,838 | INFO    | [LIVE] Starting trade LT-621ee206-123057: SELL KAMATHOTEL qty=1 | SL=182.6 TGT=179.07
+2026-03-02 12:30:57,852 | INFO    | [DISPATCH] Launched LIVE trade: SHORT KAMATHOTEL @ 181.24 | reserved_margin=Rs.36.25 | ID=621ee206e8a6
+2026-03-02 12:30:57,858 | INFO    | Dispatched 1 new trade(s). Active trades: 31
+2026-03-02 12:30:57,909 | WARNING | [MIS] Marked KAMATHOTEL as MIS blocked/missing for today: MIS orders are currently blocked for KAMATHOTEL. Place a CNC order instead. [List of stocks](https://docs.google.com/spreadsheets/d/1fLTsNpFJPK349RTjs0GRSXJZD-5soCUkZt9eSMTJ2m4/...
+2026-03-02 12:30:57,909 | WARNING | [LIVE] Entry rejected for KAMATHOTEL: MIS blocked/missing. Reason: MIS orders are currently blocked for KAMATHOTEL. Place a CNC order instead. [List of stocks](https://docs.google.com/spreadsheets/d/1fLTsNpFJPK349RTjs0GRSXJZD-5soCUkZt9eSMTJ2m4/edit?usp=sharing) al...
+2026-03-02 12:30:57,935 | INFO    | [LIVE] RESULT SHORT KAMATHOTEL | ENTRY_REJECTED_MIS_BLOCKED_OR_MISSING | Entry=181.24 Exit=181.24 | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+26.17
+2026-03-02 12:31:24,758 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:31:24,774 | INFO    | [LIVE] Starting trade LT-d547c7a4-123124: SELL REDTAPE qty=1 | SL=113.39 TGT=111.2
+2026-03-02 12:31:24,790 | INFO    | [DISPATCH] Launched LIVE trade: SHORT REDTAPE @ 112.55 | reserved_margin=Rs.22.51 | ID=d547c7a4c557
+2026-03-02 12:31:24,790 | INFO    | Dispatched 1 new trade(s). Active trades: 31
+2026-03-02 12:31:24,836 | INFO    | [LIVE] Entry order placed: SELL REDTAPE ID=260302171485647
+2026-03-02 12:31:24,945 | INFO    | [LIVE] Entry filled: REDTAPE @ 112.4
+2026-03-02 12:31:25,103 | INFO    | [LIVE] Exit legs placed for REDTAPE: target_id=260302171485654 sl_id=260302171485658
+2026-03-02 12:31:47,086 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:31:47,109 | INFO    | [LIVE] Starting trade LT-ccf5d671-123147: SELL VRLLOG qty=1 | SL=269.76 TGT=264.54
+2026-03-02 12:31:47,122 | INFO    | [DISPATCH] Launched LIVE trade: SHORT VRLLOG @ 267.75 | reserved_margin=Rs.53.55 | ID=ccf5d6719636
+2026-03-02 12:31:47,122 | INFO    | Dispatched 1 new trade(s). Active trades: 32
+2026-03-02 12:31:47,183 | INFO    | [LIVE] Entry order placed: SELL VRLLOG ID=260302171486984
+2026-03-02 12:31:47,259 | INFO    | [LIVE] Entry filled: VRLLOG @ 267.45
+2026-03-02 12:31:47,399 | INFO    | [LIVE] Exit legs placed for VRLLOG: target_id=260302171486993 sl_id=260302171486996
+2026-03-02 12:31:51,702 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:31:51,728 | INFO    | [LIVE] Starting trade LT-d76caef4-123151: SELL ADANIENT qty=1 | SL=2104.57 TGT=2063.83
+2026-03-02 12:31:51,746 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ADANIENT @ 2088.9 | reserved_margin=Rs.417.78 | ID=d76caef49e9d
+2026-03-02 12:31:51,747 | INFO    | [LIVE] Starting trade LT-ed58168f-123151: SELL ADANIGREEN qty=1 | SL=898.64 TGT=881.25
+2026-03-02 12:31:51,757 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ADANIGREEN @ 891.95 | reserved_margin=Rs.178.39 | ID=ed58168ffb8f
+2026-03-02 12:31:51,757 | INFO    | Dispatched 2 new trade(s). Active trades: 34
+2026-03-02 12:31:51,802 | INFO    | [LIVE] Entry order placed: SELL ADANIENT ID=260302171487244
+2026-03-02 12:31:51,867 | INFO    | [LIVE] Entry filled: ADANIENT @ 2089.1
+2026-03-02 12:31:51,867 | INFO    | [LIVE] Entry order placed: SELL ADANIGREEN ID=260302171487246
+2026-03-02 12:31:51,978 | INFO    | [LIVE] Entry filled: ADANIGREEN @ 892.1
+2026-03-02 12:31:52,059 | INFO    | [LIVE] Exit legs placed for ADANIENT: target_id=260302171487254 sl_id=260302171487260
+2026-03-02 12:31:52,133 | INFO    | [LIVE] Exit legs placed for ADANIGREEN: target_id=260302171487262 sl_id=260302171487265
+2026-03-02 12:32:04,523 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:32:04,548 | INFO    | [LIVE] Starting trade LT-78bd09a7-123204: SELL CEMPRO qty=1 | SL=563.29 TGT=552.39
+2026-03-02 12:32:04,562 | INFO    | [DISPATCH] Launched LIVE trade: SHORT CEMPRO @ 559.1 | reserved_margin=Rs.111.82 | ID=78bd09a7a535
+2026-03-02 12:32:04,568 | INFO    | Dispatched 1 new trade(s). Active trades: 35
+2026-03-02 12:32:04,613 | INFO    | [LIVE] Entry order placed: SELL CEMPRO ID=260302171487963
+2026-03-02 12:32:04,686 | INFO    | [LIVE] Entry filled: CEMPRO @ 559.2
+2026-03-02 12:32:04,836 | INFO    | [LIVE] Exit legs placed for CEMPRO: target_id=260302171487976 sl_id=260302171487982
+2026-03-02 12:41:24,848 | INFO    | [LIVE] SL TRIGGERED: VRLLOG @ 269.6 -> cancelling Target 260302171486993
+2026-03-02 12:41:24,945 | INFO    | Cancelled order 260302171486993 (attempt 1)
+2026-03-02 12:41:24,966 | INFO    | [LIVE] RESULT SHORT VRLLOG | SL | Entry=267.45 Exit=269.6 | P&L: Rs.-2.15 (-0.80%) | Day total: Rs.+24.02
+2026-03-02 12:43:34,414 | INFO    | [LIVE] SL TRIGGERED: GRAPHITE @ 703.5 -> cancelling Target 260302171193601
+2026-03-02 12:43:34,501 | INFO    | Cancelled order 260302171193601 (attempt 1)
+2026-03-02 12:43:34,519 | INFO    | [LIVE] RESULT SHORT GRAPHITE | SL | Entry=698.0 Exit=703.5 | P&L: Rs.-5.50 (-0.79%) | Day total: Rs.+18.52
+2026-03-02 12:46:04,239 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:46:04,258 | INFO    | [LIVE] Starting trade LT-cbf7eccb-124604: SELL LT qty=1 | SL=4008.04 TGT=3930.46
+2026-03-02 12:46:04,273 | INFO    | [DISPATCH] Launched LIVE trade: SHORT LT @ 3978.2 | reserved_margin=Rs.795.64 | ID=cbf7eccba0a8
+2026-03-02 12:46:04,273 | INFO    | Dispatched 1 new trade(s). Active trades: 34
+2026-03-02 12:46:04,345 | INFO    | [LIVE] Entry order placed: SELL LT ID=260302171564330
+2026-03-02 12:46:04,423 | INFO    | [LIVE] Entry filled: LT @ 3978.0
+2026-03-02 12:46:04,586 | INFO    | [LIVE] Exit legs placed for LT: target_id=260302171564349 sl_id=260302171564355
+2026-03-02 12:46:16,511 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:46:16,540 | INFO    | [LIVE] Starting trade LT-11059266-124616: SELL ORIENTCEM qty=1 | SL=150.22 TGT=147.31
+2026-03-02 12:46:16,549 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ORIENTCEM @ 149.1 | reserved_margin=Rs.29.82 | ID=11059266bff5
+2026-03-02 12:46:16,555 | INFO    | Dispatched 1 new trade(s). Active trades: 35
+2026-03-02 12:46:16,611 | INFO    | [LIVE] Entry order placed: SELL ORIENTCEM ID=260302171565495
+2026-03-02 12:46:16,686 | INFO    | [LIVE] Entry filled: ORIENTCEM @ 149.15
+2026-03-02 12:46:16,843 | INFO    | [LIVE] Exit legs placed for ORIENTCEM: target_id=260302171565513 sl_id=260302171565517
+2026-03-02 12:46:21,352 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 12:46:21,381 | INFO    | [LIVE] Starting trade LT-2223f9a3-124621: SELL POONAWALLA qty=1 | SL=440.88 TGT=432.35
+2026-03-02 12:46:21,389 | INFO    | [DISPATCH] Launched LIVE trade: SHORT POONAWALLA @ 437.6 | reserved_margin=Rs.87.52 | ID=2223f9a3a2eb
+2026-03-02 12:46:21,403 | INFO    | Dispatched 1 new trade(s). Active trades: 36
+2026-03-02 12:46:21,449 | INFO    | [LIVE] Entry order placed: SELL POONAWALLA ID=260302171566110
+2026-03-02 12:46:21,523 | INFO    | [LIVE] Entry filled: POONAWALLA @ 438.6
+2026-03-02 12:46:21,677 | INFO    | [LIVE] Exit legs placed for POONAWALLA: target_id=260302171566151 sl_id=260302171566167
+2026-03-02 13:01:03,191 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:01:03,234 | INFO    | [LIVE] Starting trade LT-4c1a1295-130103: SELL LINDEINDIA qty=1 | SL=6664.11 TGT=6535.13
+2026-03-02 13:01:03,246 | INFO    | [DISPATCH] Launched LIVE trade: SHORT LINDEINDIA @ 6614.5 | reserved_margin=Rs.1,322.90 | ID=4c1a1295287b
+2026-03-02 13:01:03,252 | INFO    | Dispatched 1 new trade(s). Active trades: 37
+2026-03-02 13:01:03,306 | INFO    | [LIVE] Entry order placed: SELL LINDEINDIA ID=260302171634786
+2026-03-02 13:01:03,398 | INFO    | [LIVE] Entry filled: LINDEINDIA @ 6611.0
+2026-03-02 13:01:03,544 | INFO    | [LIVE] Exit legs placed for LINDEINDIA: target_id=260302171634799 sl_id=260302171634804
+2026-03-02 13:01:50,054 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:01:50,087 | INFO    | [LIVE] Starting trade LT-f231ef06-130150: SELL ABREL qty=1 | SL=1255.95 TGT=1231.64
+2026-03-02 13:01:50,103 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ABREL @ 1246.6 | reserved_margin=Rs.249.32 | ID=f231ef06e9b4
+2026-03-02 13:01:50,103 | INFO    | [LIVE] Starting trade LT-58d9b2bb-130150: SELL ADANIPORTS qty=1 | SL=1448.79 TGT=1420.74
+2026-03-02 13:01:50,120 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ADANIPORTS @ 1438.0 | reserved_margin=Rs.287.60 | ID=58d9b2bbb5c4
+2026-03-02 13:01:50,120 | INFO    | [LIVE] Starting trade LT-3c79986c-130150: SELL ADOR qty=1 | SL=1025.74 TGT=1005.88
+2026-03-02 13:01:50,133 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ADOR @ 1018.1 | reserved_margin=Rs.203.62 | ID=3c79986c3923
+2026-03-02 13:01:50,133 | INFO    | Dispatched 3 new trade(s). Active trades: 40
+2026-03-02 13:01:50,161 | INFO    | [LIVE] Entry order placed: SELL ABREL ID=260302171638066
+2026-03-02 13:01:50,239 | INFO    | [LIVE] Entry filled: ABREL @ 1245.5
+2026-03-02 13:01:50,240 | INFO    | [LIVE] Entry order placed: SELL ADANIPORTS ID=260302171638068
+2026-03-02 13:01:50,240 | INFO    | [LIVE] Entry order placed: SELL ADOR ID=260302171638073
+2026-03-02 13:01:50,321 | INFO    | [LIVE] Entry filled: ADANIPORTS @ 1437.6
+2026-03-02 13:01:50,321 | INFO    | [LIVE] Entry filled: ADOR @ 1020.0
+2026-03-02 13:01:50,399 | INFO    | [LIVE] Exit legs placed for ABREL: target_id=260302171638080 sl_id=260302171638087
+2026-03-02 13:01:50,477 | INFO    | [LIVE] Exit legs placed for ADANIPORTS: target_id=260302171638089 sl_id=260302171638096
+2026-03-02 13:01:50,493 | INFO    | [LIVE] Exit legs placed for ADOR: target_id=260302171638091 sl_id=260302171638097
+2026-03-02 13:02:04,118 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:02:04,163 | INFO    | [LIVE] Starting trade LT-6510d1d2-130204: SELL CHOLAFIN qty=1 | SL=1704.39 TGT=1671.4
+2026-03-02 13:02:04,166 | INFO    | [DISPATCH] Launched LIVE trade: SHORT CHOLAFIN @ 1691.7 | reserved_margin=Rs.338.34 | ID=6510d1d267b2
+2026-03-02 13:02:04,182 | INFO    | Dispatched 1 new trade(s). Active trades: 41
+2026-03-02 13:02:04,231 | INFO    | [LIVE] Entry order placed: SELL CHOLAFIN ID=260302171639544
+2026-03-02 13:02:04,305 | INFO    | [LIVE] Entry filled: CHOLAFIN @ 1691.2
+2026-03-02 13:02:04,472 | INFO    | [LIVE] Exit legs placed for CHOLAFIN: target_id=260302171639558 sl_id=260302171639561
+2026-03-02 13:02:09,530 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:02:09,563 | INFO    | [LIVE] Starting trade LT-e11b60ff-130209: SELL DMART qty=1 | SL=3777.92 TGT=3704.8
+2026-03-02 13:02:09,582 | INFO    | [DISPATCH] Launched LIVE trade: SHORT DMART @ 3749.8 | reserved_margin=Rs.749.96 | ID=e11b60ff26f0
+2026-03-02 13:02:09,585 | INFO    | Dispatched 1 new trade(s). Active trades: 42
+2026-03-02 13:02:09,630 | INFO    | [LIVE] Entry order placed: SELL DMART ID=260302171640074
+2026-03-02 13:02:09,715 | INFO    | [LIVE] Entry filled: DMART @ 3748.3
+2026-03-02 13:02:09,874 | INFO    | [LIVE] Exit legs placed for DMART: target_id=260302171640081 sl_id=260302171640089
+2026-03-02 13:05:58,152 | INFO    | [LIVE] SL TRIGGERED: CONFIPET @ 30.17 -> cancelling Target 260302171469987
+2026-03-02 13:05:58,235 | INFO    | Cancelled order 260302171469987 (attempt 1)
+2026-03-02 13:05:58,269 | INFO    | [LIVE] RESULT SHORT CONFIPET | SL | Entry=29.93 Exit=30.17 | P&L: Rs.-0.24 (-0.80%) | Day total: Rs.+18.28
+2026-03-02 13:16:23,963 | INFO    | [LIVE] SL TRIGGERED: ETERNAL @ 241.03 -> cancelling Target 260302171481988
+2026-03-02 13:16:24,045 | INFO    | Cancelled order 260302171481988 (attempt 1)
+2026-03-02 13:16:24,067 | INFO    | [LIVE] RESULT SHORT ETERNAL | SL | Entry=239.22 Exit=241.03 | P&L: Rs.-1.81 (-0.76%) | Day total: Rs.+16.47
+2026-03-02 13:16:25,621 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:16:25,668 | INFO    | [LIVE] Starting trade LT-e6355711-131625: SELL SHANKARA qty=1 | SL=106.4 TGT=104.34
+2026-03-02 13:16:25,685 | INFO    | [DISPATCH] Launched LIVE trade: SHORT SHANKARA @ 105.61 | reserved_margin=Rs.21.12 | ID=e63557110f42
+2026-03-02 13:16:25,692 | INFO    | Dispatched 1 new trade(s). Active trades: 41
+2026-03-02 13:16:25,736 | INFO    | [LIVE] Entry order placed: SELL SHANKARA ID=260302171687878
+2026-03-02 13:16:25,823 | INFO    | [LIVE] Entry filled: SHANKARA @ 105.64
+2026-03-02 13:16:25,979 | INFO    | [LIVE] Exit legs placed for SHANKARA: target_id=260302171687902 sl_id=260302171687906
+2026-03-02 13:21:28,103 | INFO    | [LIVE] TARGET HIT: JBMA @ 521.65 -> cancelling SL 260302171255103
+2026-03-02 13:21:28,196 | INFO    | Cancelled order 260302171255103 (attempt 1)
+2026-03-02 13:21:28,212 | INFO    | [LIVE] RESULT SHORT JBMA | TARGET | Entry=528.0 Exit=521.65 | P&L: Rs.+6.35 (+1.20%) | Day total: Rs.+22.82
+2026-03-02 13:30:52,962 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:30:53,011 | INFO    | [LIVE] Starting trade LT-7c0642c2-133053: SELL IOB qty=1 | SL=35.21 TGT=34.53
+2026-03-02 13:30:53,024 | INFO    | [DISPATCH] Launched LIVE trade: SHORT IOB @ 34.95 | reserved_margin=Rs.6.99 | ID=7c0642c269c1
+2026-03-02 13:30:53,031 | INFO    | Dispatched 1 new trade(s). Active trades: 41
+2026-03-02 13:30:53,082 | INFO    | [LIVE] Entry order placed: SELL IOB ID=260302171750038
+2026-03-02 13:30:53,170 | INFO    | [LIVE] Entry filled: IOB @ 34.95
+2026-03-02 13:30:53,328 | INFO    | [LIVE] Exit legs placed for IOB: target_id=260302171750055 sl_id=260302171750065
+2026-03-02 13:32:43,762 | INFO    | [LIVE] TARGET HIT: HFCL @ 65.06 -> cancelling SL 260302171429900
+2026-03-02 13:32:43,850 | INFO    | Cancelled order 260302171429900 (attempt 1)
+2026-03-02 13:32:43,867 | INFO    | [LIVE] RESULT SHORT HFCL | TARGET | Entry=65.85 Exit=65.06 | P&L: Rs.+0.79 (+1.20%) | Day total: Rs.+23.61
+2026-03-02 13:33:26,918 | INFO    | [LIVE] TARGET HIT: IRCON @ 135.07 -> cancelling SL 260302171331468
+2026-03-02 13:33:27,009 | INFO    | Cancelled order 260302171331468 (attempt 1)
+2026-03-02 13:33:27,030 | INFO    | [LIVE] RESULT SHORT IRCON | TARGET | Entry=136.71 Exit=135.07 | P&L: Rs.+1.64 (+1.20%) | Day total: Rs.+25.25
+2026-03-02 13:42:29,737 | INFO    | [LIVE] TARGET HIT: JIOFIN @ 244.25 -> cancelling SL 260302171274714
+2026-03-02 13:42:29,832 | INFO    | Cancelled order 260302171274714 (attempt 1)
+2026-03-02 13:42:29,851 | INFO    | [LIVE] RESULT SHORT JIOFIN | TARGET | Entry=247.2 Exit=244.25 | P&L: Rs.+2.95 (+1.19%) | Day total: Rs.+28.20
+2026-03-02 13:45:53,303 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:45:53,351 | INFO    | [LIVE] Starting trade LT-425828ff-134553: SELL IONEXCHANG qty=1 | SL=350.16 TGT=343.38
+2026-03-02 13:45:53,363 | INFO    | [DISPATCH] Launched LIVE trade: SHORT IONEXCHANG @ 347.55 | reserved_margin=Rs.69.51 | ID=425828ffff5d
+2026-03-02 13:45:53,384 | INFO    | Dispatched 1 new trade(s). Active trades: 39
+2026-03-02 13:45:53,425 | INFO    | [LIVE] Entry order placed: SELL IONEXCHANG ID=260302171821631
+2026-03-02 13:45:53,509 | INFO    | [LIVE] Entry filled: IONEXCHANG @ 347.55
+2026-03-02 13:45:53,676 | INFO    | [LIVE] Exit legs placed for IONEXCHANG: target_id=260302171821637 sl_id=260302171821642
+2026-03-02 13:45:58,538 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:45:58,565 | INFO    | [LIVE] Starting trade LT-d94da929-134558: SELL JSWINFRA qty=1 | SL=251.67 TGT=246.8
+2026-03-02 13:45:58,576 | INFO    | [DISPATCH] Launched LIVE trade: SHORT JSWINFRA @ 249.8 | reserved_margin=Rs.49.96 | ID=d94da929d936
+2026-03-02 13:45:58,577 | INFO    | [LIVE] Starting trade LT-4dc2f81d-134558: SELL KANSAINER qty=1 | SL=196.61 TGT=192.81
+2026-03-02 13:45:58,596 | INFO    | [DISPATCH] Launched LIVE trade: SHORT KANSAINER @ 195.15 | reserved_margin=Rs.39.03 | ID=4dc2f81df747
+2026-03-02 13:45:58,603 | INFO    | Dispatched 2 new trade(s). Active trades: 41
+2026-03-02 13:45:58,622 | INFO    | [LIVE] Entry order placed: SELL JSWINFRA ID=260302171821926
+2026-03-02 13:45:58,729 | INFO    | [LIVE] Entry filled: JSWINFRA @ 249.6
+2026-03-02 13:45:58,729 | INFO    | [LIVE] Entry order placed: SELL KANSAINER ID=260302171821932
+2026-03-02 13:45:58,821 | INFO    | [LIVE] Entry filled: KANSAINER @ 195.15
+2026-03-02 13:45:58,890 | INFO    | [LIVE] Exit legs placed for JSWINFRA: target_id=260302171821939 sl_id=260302171821947
+2026-03-02 13:45:58,993 | INFO    | [LIVE] Exit legs placed for KANSAINER: target_id=260302171821948 sl_id=260302171821953
+2026-03-02 13:46:10,131 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 13:46:10,178 | INFO    | [LIVE] Starting trade LT-8c010bbc-134610: SELL NAM-INDIA qty=1 | SL=904.74 TGT=887.22
+2026-03-02 13:46:10,196 | INFO    | [DISPATCH] Launched LIVE trade: SHORT NAM-INDIA @ 898.0 | reserved_margin=Rs.179.60 | ID=8c010bbcf46e
+2026-03-02 13:46:10,202 | INFO    | Dispatched 1 new trade(s). Active trades: 42
+2026-03-02 13:46:10,256 | INFO    | [LIVE] Entry order placed: SELL NAM-INDIA ID=260302171822770
+2026-03-02 13:46:10,336 | INFO    | [LIVE] Entry filled: NAM-INDIA @ 896.15
+2026-03-02 13:46:10,505 | INFO    | [LIVE] Exit legs placed for NAM-INDIA: target_id=260302171822790 sl_id=260302171822798
+2026-03-02 13:52:05,458 | INFO    | [LIVE] TARGET HIT: ADANIGREEN @ 881.4 -> cancelling SL 260302171487265
+2026-03-02 13:52:05,556 | INFO    | Cancelled order 260302171487265 (attempt 1)
+2026-03-02 13:52:05,576 | INFO    | [LIVE] RESULT SHORT ADANIGREEN | TARGET | Entry=892.1 Exit=881.4 | P&L: Rs.+10.70 (+1.20%) | Day total: Rs.+38.90
+2026-03-02 13:52:39,426 | INFO    | [LIVE] TARGET HIT: POONAWALLA @ 433.35 -> cancelling SL 260302171566167
+2026-03-02 13:52:39,503 | INFO    | Cancelled order 260302171566167 (attempt 1)
+2026-03-02 13:52:39,521 | INFO    | [LIVE] RESULT SHORT POONAWALLA | TARGET | Entry=438.6 Exit=433.35 | P&L: Rs.+5.25 (+1.20%) | Day total: Rs.+44.15
+2026-03-02 13:57:13,978 | INFO    | [LIVE] TARGET HIT: AZAD @ 1626.3 -> cancelling SL 260302171470063
+2026-03-02 13:57:14,061 | INFO    | Cancelled order 260302171470063 (attempt 1)
+2026-03-02 13:57:14,079 | INFO    | [LIVE] RESULT SHORT AZAD | TARGET | Entry=1646.0 Exit=1626.3 | P&L: Rs.+19.70 (+1.20%) | Day total: Rs.+63.85
+2026-03-02 13:57:23,224 | INFO    | [LIVE] TARGET HIT: BHARATRAS @ 1436.2 -> cancelling SL 260302171163885
+2026-03-02 13:57:23,324 | INFO    | Cancelled order 260302171163885 (attempt 1)
+2026-03-02 13:57:23,346 | INFO    | [LIVE] RESULT SHORT BHARATRAS | TARGET | Entry=1453.6 Exit=1436.2 | P&L: Rs.+17.40 (+1.20%) | Day total: Rs.+81.25
+2026-03-02 13:58:15,679 | INFO    | [LIVE] TARGET HIT: CEMPRO @ 552.5 -> cancelling SL 260302171487982
+2026-03-02 13:58:15,762 | INFO    | Cancelled order 260302171487982 (attempt 1)
+2026-03-02 13:58:15,774 | INFO    | [LIVE] RESULT SHORT CEMPRO | TARGET | Entry=559.2 Exit=552.5 | P&L: Rs.+6.70 (+1.20%) | Day total: Rs.+87.95
+2026-03-02 14:01:05,511 | INFO    | [LIVE] TARGET HIT: PFS @ 28.94 -> cancelling SL 260302171470055
+2026-03-02 14:01:05,591 | INFO    | Cancelled order 260302171470055 (attempt 1)
+2026-03-02 14:01:05,599 | INFO    | [LIVE] RESULT SHORT PFS | TARGET | Entry=29.3 Exit=28.94 | P&L: Rs.+0.36 (+1.23%) | Day total: Rs.+88.31
+2026-03-02 14:01:22,209 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 14:01:22,245 | INFO    | [LIVE] Starting trade LT-e4c8a0c5-140122: SELL RELIANCE qty=1 | SL=1353.07 TGT=1326.88
+2026-03-02 14:01:22,282 | INFO    | [DISPATCH] Launched LIVE trade: SHORT RELIANCE @ 1343.0 | reserved_margin=Rs.268.60 | ID=e4c8a0c5737b
+2026-03-02 14:01:22,288 | INFO    | Dispatched 1 new trade(s). Active trades: 37
+2026-03-02 14:01:22,336 | INFO    | [LIVE] Entry order placed: SELL RELIANCE ID=260302171918233
+2026-03-02 14:01:22,424 | INFO    | [LIVE] Entry filled: RELIANCE @ 1342.5
+2026-03-02 14:01:22,578 | INFO    | [LIVE] Exit legs placed for RELIANCE: target_id=260302171918248 sl_id=260302171918256
+2026-03-02 14:01:28,805 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 14:01:28,845 | INFO    | [LIVE] Starting trade LT-3a181dbf-140128: SELL SHYAMMETL qty=1 | SL=833.5 TGT=817.37
+2026-03-02 14:01:28,855 | INFO    | [DISPATCH] Launched LIVE trade: SHORT SHYAMMETL @ 827.3 | reserved_margin=Rs.165.46 | ID=3a181dbf3c14
+2026-03-02 14:01:28,857 | INFO    | Dispatched 1 new trade(s). Active trades: 38
+2026-03-02 14:01:28,921 | INFO    | [LIVE] Entry order placed: SELL SHYAMMETL ID=260302171919080
+2026-03-02 14:01:28,991 | INFO    | [LIVE] Entry filled: SHYAMMETL @ 827.3
+2026-03-02 14:01:29,152 | INFO    | [LIVE] Exit legs placed for SHYAMMETL: target_id=260302171919106 sl_id=260302171919114
+2026-03-02 14:03:33,649 | INFO    | [LIVE] SL TRIGGERED: IXIGO @ 164.61 -> cancelling Target 260302171331471
+2026-03-02 14:03:33,733 | INFO    | Cancelled order 260302171331471 (attempt 1)
+2026-03-02 14:03:33,755 | INFO    | [LIVE] RESULT SHORT IXIGO | SL | Entry=163.32 Exit=164.61 | P&L: Rs.-1.29 (-0.79%) | Day total: Rs.+87.02
+2026-03-02 14:03:52,183 | INFO    | [LIVE] SL TRIGGERED: LT @ 4007.9 -> cancelling Target 260302171564349
+2026-03-02 14:03:52,269 | INFO    | Cancelled order 260302171564349 (attempt 1)
+2026-03-02 14:03:52,278 | INFO    | [LIVE] RESULT SHORT LT | SL | Entry=3978.0 Exit=4007.9 | P&L: Rs.-29.90 (-0.75%) | Day total: Rs.+57.12
+2026-03-02 14:04:01,457 | INFO    | [LIVE] SL TRIGGERED: REDTAPE @ 113.46 -> cancelling Target 260302171485654
+2026-03-02 14:04:01,548 | INFO    | Cancelled order 260302171485654 (attempt 1)
+2026-03-02 14:04:01,566 | INFO    | [LIVE] RESULT SHORT REDTAPE | SL | Entry=112.4 Exit=113.46 | P&L: Rs.-1.06 (-0.94%) | Day total: Rs.+56.06
+2026-03-02 14:04:10,700 | INFO    | [LIVE] SL TRIGGERED: KHAICHEM @ 55.26 -> cancelling Target 260302171470049
+2026-03-02 14:04:10,788 | INFO    | Cancelled order 260302171470049 (attempt 1)
+2026-03-02 14:04:10,820 | INFO    | [LIVE] RESULT SHORT KHAICHEM | SL | Entry=54.72 Exit=55.26 | P&L: Rs.-0.54 (-0.99%) | Day total: Rs.+55.52
+2026-03-02 14:04:49,257 | INFO    | [LIVE] SL TRIGGERED: SHYAMMETL @ 833.7 -> cancelling Target 260302171919106
+2026-03-02 14:04:49,341 | INFO    | Cancelled order 260302171919106 (attempt 1)
+2026-03-02 14:04:49,372 | INFO    | [LIVE] RESULT SHORT SHYAMMETL | SL | Entry=827.3 Exit=833.7 | P&L: Rs.-6.40 (-0.77%) | Day total: Rs.+49.12
+2026-03-02 14:06:20,322 | INFO    | [LIVE] SL TRIGGERED: NAM-INDIA @ 903.1 -> cancelling Target 260302171822790
+2026-03-02 14:06:20,410 | INFO    | Cancelled order 260302171822790 (attempt 1)
+2026-03-02 14:06:20,433 | INFO    | [LIVE] RESULT SHORT NAM-INDIA | SL | Entry=896.15 Exit=903.1 | P&L: Rs.-6.95 (-0.78%) | Day total: Rs.+42.17
+2026-03-02 14:06:44,969 | INFO    | [LIVE] SL TRIGGERED: LINDEINDIA @ 6663.5 -> cancelling Target 260302171634799
+2026-03-02 14:06:45,067 | INFO    | Cancelled order 260302171634799 (attempt 1)
+2026-03-02 14:06:45,084 | INFO    | [LIVE] RESULT SHORT LINDEINDIA | SL | Entry=6611.0 Exit=6663.5 | P&L: Rs.-52.50 (-0.79%) | Day total: Rs.-10.33
+2026-03-02 14:08:09,729 | INFO    | [LIVE] SL TRIGGERED: RELIANCE @ 1352.5 -> cancelling Target 260302171918248
+2026-03-02 14:08:09,806 | INFO    | Cancelled order 260302171918248 (attempt 1)
+2026-03-02 14:08:09,830 | INFO    | [LIVE] RESULT SHORT RELIANCE | SL | Entry=1342.5 Exit=1352.5 | P&L: Rs.-10.00 (-0.74%) | Day total: Rs.-20.33
+2026-03-02 14:09:03,717 | INFO    | [LIVE] SL TRIGGERED: ADANIPORTS @ 1448.5 -> cancelling Target 260302171638089
+2026-03-02 14:09:03,718 | INFO    | [LIVE] SL TRIGGERED: ADOR @ 1029.9 -> cancelling Target 260302171638091
+2026-03-02 14:09:03,808 | INFO    | Cancelled order 260302171638089 (attempt 1)
+2026-03-02 14:09:03,821 | INFO    | [LIVE] RESULT SHORT ADANIPORTS | SL | Entry=1437.6 Exit=1448.5 | P&L: Rs.-10.90 (-0.76%) | Day total: Rs.-31.23
+2026-03-02 14:09:03,847 | INFO    | Cancelled order 260302171638091 (attempt 1)
+2026-03-02 14:09:03,868 | INFO    | [LIVE] RESULT SHORT ADOR | SL | Entry=1020.0 Exit=1029.9 | P&L: Rs.-9.90 (-0.97%) | Day total: Rs.-41.13
+2026-03-02 14:09:11,387 | INFO    | [LIVE] SL TRIGGERED: IONEXCHANG @ 350.65 -> cancelling Target 260302171821637
+2026-03-02 14:09:11,468 | INFO    | Cancelled order 260302171821637 (attempt 1)
+2026-03-02 14:09:11,486 | INFO    | [LIVE] RESULT SHORT IONEXCHANG | SL | Entry=347.55 Exit=350.65 | P&L: Rs.-3.10 (-0.89%) | Day total: Rs.-44.23
+2026-03-02 14:10:17,824 | INFO    | [LIVE] SL TRIGGERED: DMART @ 3776.9 -> cancelling Target 260302171640081
+2026-03-02 14:10:17,915 | INFO    | Cancelled order 260302171640081 (attempt 1)
+2026-03-02 14:10:17,932 | INFO    | [LIVE] RESULT SHORT DMART | SL | Entry=3748.3 Exit=3776.9 | P&L: Rs.-28.60 (-0.76%) | Day total: Rs.-72.83
+2026-03-02 14:11:16,541 | INFO    | [LIVE] SL TRIGGERED: M&M @ 3324.0 -> cancelling Target 260302171274713
+2026-03-02 14:11:16,632 | INFO    | Cancelled order 260302171274713 (attempt 1)
+2026-03-02 14:11:16,655 | INFO    | [LIVE] RESULT SHORT M&M | SL | Entry=3298.7 Exit=3324.0 | P&L: Rs.-25.30 (-0.77%) | Day total: Rs.-98.13
+2026-03-02 14:13:01,555 | INFO    | [LIVE] SL TRIGGERED: KPITTECH @ 753.75 -> cancelling Target 260302171470033
+2026-03-02 14:13:01,641 | INFO    | Cancelled order 260302171470033 (attempt 1)
+2026-03-02 14:13:01,662 | INFO    | [LIVE] RESULT SHORT KPITTECH | SL | Entry=748.0 Exit=753.75 | P&L: Rs.-5.75 (-0.77%) | Day total: Rs.-103.88
+2026-03-02 14:13:07,707 | INFO    | [LIVE] SL TRIGGERED: SWSOLAR @ 189.96 -> cancelling Target 260302171470046
+2026-03-02 14:13:07,813 | INFO    | Cancelled order 260302171470046 (attempt 1)
+2026-03-02 14:13:07,841 | INFO    | [LIVE] RESULT SHORT SWSOLAR | SL | Entry=188.41 Exit=189.96 | P&L: Rs.-1.55 (-0.82%) | Day total: Rs.-105.43
+2026-03-02 14:13:16,971 | INFO    | [LIVE] SL TRIGGERED: SHANKARA @ 106.56 -> cancelling Target 260302171687902
+2026-03-02 14:13:17,067 | INFO    | Cancelled order 260302171687902 (attempt 1)
+2026-03-02 14:13:17,089 | INFO    | [LIVE] RESULT SHORT SHANKARA | SL | Entry=105.64 Exit=106.56 | P&L: Rs.-0.92 (-0.87%) | Day total: Rs.-106.35
+2026-03-02 14:13:41,662 | INFO    | [LIVE] SL TRIGGERED: ADANIENT @ 2104.6 -> cancelling Target 260302171487254
+2026-03-02 14:13:41,752 | INFO    | Cancelled order 260302171487254 (attempt 1)
+2026-03-02 14:13:41,761 | INFO    | [LIVE] RESULT SHORT ADANIENT | SL | Entry=2089.1 Exit=2104.6 | P&L: Rs.-15.50 (-0.74%) | Day total: Rs.-121.85
+2026-03-02 14:20:23,256 | INFO    | [LIVE] SL TRIGGERED: KANSAINER @ 196.78 -> cancelling Target 260302171821948
+2026-03-02 14:20:23,335 | INFO    | Cancelled order 260302171821948 (attempt 1)
+2026-03-02 14:20:23,358 | INFO    | [LIVE] RESULT SHORT KANSAINER | SL | Entry=195.15 Exit=196.78 | P&L: Rs.-1.63 (-0.84%) | Day total: Rs.-123.48
+2026-03-02 14:35:01,466 | INFO    | [LIVE] SL TRIGGERED: ORIENTCEM @ 150.42 -> cancelling Target 260302171565513
+2026-03-02 14:35:01,562 | INFO    | Cancelled order 260302171565513 (attempt 1)
+2026-03-02 14:35:01,584 | INFO    | [LIVE] RESULT SHORT ORIENTCEM | SL | Entry=149.15 Exit=150.42 | P&L: Rs.-1.27 (-0.85%) | Day total: Rs.-124.75
+2026-03-02 14:35:23,071 | INFO    | [LIVE] SL TRIGGERED: JSWINFRA @ 251.45 -> cancelling Target 260302171821939
+2026-03-02 14:35:23,154 | INFO    | Cancelled order 260302171821939 (attempt 1)
+2026-03-02 14:35:23,185 | INFO    | [LIVE] RESULT SHORT JSWINFRA | SL | Entry=249.6 Exit=251.45 | P&L: Rs.-1.85 (-0.74%) | Day total: Rs.-126.60
+2026-03-02 14:35:35,469 | INFO    | [LIVE] SL TRIGGERED: CHOLAFIN @ 1704.5 -> cancelling Target 260302171639558
+2026-03-02 14:35:35,553 | INFO    | Cancelled order 260302171639558 (attempt 1)
+2026-03-02 14:35:35,574 | INFO    | [LIVE] RESULT SHORT CHOLAFIN | SL | Entry=1691.2 Exit=1704.5 | P&L: Rs.-13.30 (-0.79%) | Day total: Rs.-139.90
+2026-03-02 14:35:50,984 | INFO    | [LIVE] SL TRIGGERED: IOB @ 35.21 -> cancelling Target 260302171750055
+2026-03-02 14:35:51,087 | INFO    | Cancelled order 260302171750055 (attempt 1)
+2026-03-02 14:35:51,107 | INFO    | [LIVE] RESULT SHORT IOB | SL | Entry=34.95 Exit=35.21 | P&L: Rs.-0.26 (-0.74%) | Day total: Rs.-140.16
+2026-03-02 14:37:38,871 | INFO    | [LIVE] SL TRIGGERED: HAPPYFORGE @ 1300.4 -> cancelling Target 260302171421271
+2026-03-02 14:37:38,957 | INFO    | Cancelled order 260302171421271 (attempt 1)
+2026-03-02 14:37:38,975 | INFO    | [LIVE] RESULT SHORT HAPPYFORGE | SL | Entry=1285.1 Exit=1300.4 | P&L: Rs.-15.30 (-1.19%) | Day total: Rs.-155.46
+2026-03-02 14:37:45,045 | INFO    | [LIVE] SL TRIGGERED: FORTIS @ 933.95 -> cancelling Target 260302171413858
+2026-03-02 14:37:45,127 | INFO    | Cancelled order 260302171413858 (attempt 1)
+2026-03-02 14:37:45,146 | INFO    | [LIVE] RESULT SHORT FORTIS | SL | Entry=927.0 Exit=933.95 | P&L: Rs.-6.95 (-0.75%) | Day total: Rs.-162.41
+2026-03-02 14:44:14,260 | INFO    | [LIVE] SL TRIGGERED: JAGRAN @ 62.8 -> cancelling Target 260302171194774
+2026-03-02 14:44:14,340 | INFO    | Cancelled order 260302171194774 (attempt 1)
+2026-03-02 14:44:14,358 | INFO    | [LIVE] RESULT SHORT JAGRAN | SL | Entry=62.33 Exit=62.8 | P&L: Rs.-0.47 (-0.75%) | Day total: Rs.-162.88
+2026-03-02 14:49:45,318 | INFO    | [LIVE] SL TRIGGERED: GHCL @ 471.95 -> cancelling Target 260302171122750
+2026-03-02 14:49:45,396 | INFO    | Cancelled order 260302171122750 (attempt 1)
+2026-03-02 14:49:45,427 | INFO    | [LIVE] RESULT SHORT GHCL | SL | Entry=468.15 Exit=471.95 | P&L: Rs.-3.80 (-0.81%) | Day total: Rs.-166.68
+2026-03-02 14:58:08,940 | INFO    | [LIVE] SL TRIGGERED: ABREL @ 1255.0 -> cancelling Target 260302171638080
+2026-03-02 14:58:09,030 | INFO    | Cancelled order 260302171638080 (attempt 1)
+2026-03-02 14:58:09,051 | INFO    | [LIVE] RESULT SHORT ABREL | SL | Entry=1245.5 Exit=1255.0 | P&L: Rs.-9.50 (-0.76%) | Day total: Rs.-176.18
+2026-03-02 15:01:48,245 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-02 15:15:15,676 | INFO    | =================================================================
+2026-03-02 15:15:15,676 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 15:15:15,676 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 15:15:15,676 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 15:15:15,676 | INFO    |   Max concurrent    : 20
+2026-03-02 15:15:15,676 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 15:15:15,676 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 15:15:15,676 | INFO    |   Risk limits       : ENABLED (max_open=10, max_margin=Rs.500,000)
+2026-03-02 15:15:15,676 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 15:15:15,676 | INFO    | =================================================================
+2026-03-02 15:15:15,676 | INFO    | Establishing Kite session...
+2026-03-02 15:15:15,752 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 15:15:15,828 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 15:15:15,896 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 15:15:15,966 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 15:15:15,966 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 15:15:15,966 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 15:15:16,106 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 15:15:16,110 | INFO    | Loaded 62 previously executed signals.
+2026-03-02 15:15:16,110 | WARNING | [MIS] Loaded 2 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 15:15:16,152 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 15:15:16,177 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state VPRPL signal_id=76fcb622c40c (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state CONCOR signal_id=389f8b073d3d (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state AWL signal_id=d145318fa721 (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state GNFC signal_id=fc6d2474d99e (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state IREDA signal_id=51ae09e76712 (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state DPABHUSHAN signal_id=788f010cedfc (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state NUVAMA signal_id=3d3967e5e226 (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state BAYERCROP signal_id=627a47dd5a90 (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state IEX signal_id=4e62d7899596 (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state GAIL signal_id=e7fedc577322 (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,380 | WARNING | [RESTORE] Dropping stale tracked state HARSHA signal_id=84da0a7855b7 (expected_qty=-1, broker_qty=0).
+2026-03-02 15:15:16,486 | INFO    | [RESTORE] signals_today=62 executed=62 closed_today=62 open_restored=0 stale_dropped=11 requeued_backlog=0 realized_trades=51 realized_total=Rs.-176.18 deployed_margin=Rs.0.00
+2026-03-02 15:15:16,625 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 15:15:16,628 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 15:15:16,628 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 15:27:43,004 | INFO    | =================================================================
+2026-03-02 15:27:43,004 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 15:27:43,005 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 15:27:43,005 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 15:27:43,005 | INFO    |   Max concurrent    : 0
+2026-03-02 15:27:43,005 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 15:27:43,005 | INFO    |   Entry cutoff at   : 15:20:00 IST
+2026-03-02 15:27:43,005 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 15:27:43,005 | INFO    |   Risk limits       : ENABLED (max_open=10, max_margin=Rs.500,000)
+2026-03-02 15:27:43,005 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 15:27:43,005 | INFO    | =================================================================
+2026-03-02 15:27:43,005 | INFO    | Establishing Kite session...
+2026-03-02 15:27:43,090 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 15:27:43,157 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 15:27:43,226 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 15:27:43,309 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 15:27:43,309 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 15:27:43,309 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 15:27:43,441 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 15:27:43,441 | INFO    | Loaded 62 previously executed signals.
+2026-03-02 15:27:43,441 | WARNING | [MIS] Loaded 2 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 15:27:43,478 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 15:27:43,490 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 15:27:43,490 | WARNING |   Trade worker cap   : DISABLED (unlimited concurrent workers)
+2026-03-02 15:27:43,641 | INFO    | [RESTORE] signals_today=62 executed=51 closed_today=51 open_restored=0 stale_dropped=0 requeued_backlog=11 realized_trades=51 realized_total=Rs.-176.18 deployed_margin=Rs.0.00
+2026-03-02 15:27:43,774 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 15:27:43,789 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 15:27:43,789 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 15:27:43,789 | WARNING | [EOD.GLOBAL] entry cutoff reached at 15:20:00 IST; EOD flatten in progress
+2026-03-02 15:30:00,853 | INFO    | Market closed. All trades complete.
+2026-03-02 15:30:00,861 | INFO    | =======================================================
+2026-03-02 15:30:00,861 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-03-02 15:30:00,862 | INFO    |   Total trades : 51
+2026-03-02 15:30:00,862 | INFO    |   Wins         : 17
+2026-03-02 15:30:00,862 | INFO    |   Losses       : 31
+2026-03-02 15:30:00,862 | INFO    |   Win rate     : 33.3%
+2026-03-02 15:30:00,862 | INFO    |   Total P&L    : Rs.-176.18
+2026-03-02 15:30:00,862 | INFO    | =======================================================
+2026-03-02 15:30:00,862 | INFO    | Live trade executor stopped.
+2026-03-02 15:31:26,544 | INFO    | =================================================================
+2026-03-02 15:31:26,544 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-02 15:31:26,545 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-02 15:31:26,545 | INFO    |   Mode              : LIVE TRADING
+2026-03-02 15:31:26,545 | INFO    |   Max concurrent    : 0
+2026-03-02 15:31:26,545 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-02 15:31:26,545 | INFO    |   Entry cutoff at   : 15:20:00 IST
+2026-03-02 15:31:26,545 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-02 15:31:26,545 | INFO    |   Risk limits       : ENABLED (max_open=10, max_margin=Rs.500,000)
+2026-03-02 15:31:26,545 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-02 15:31:26,545 | INFO    | =================================================================
+2026-03-02 15:31:26,545 | INFO    | Establishing Kite session...
+2026-03-02 15:31:26,633 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-02 15:31:26,700 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-02 15:31:26,789 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-02 15:31:26,855 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-02 15:31:26,855 | INFO    | Kite primary session established. User: Saarit Shankar Sinha
+2026-03-02 15:31:26,855 | INFO    | [KITE] Session pool active apps: 4
+2026-03-02 15:31:26,981 | INFO    | [TICK] Loaded tick sizes for 9237 NSE symbols.
+2026-03-02 15:31:26,999 | INFO    | Loaded 51 previously executed signals.
+2026-03-02 15:31:26,999 | WARNING | [MIS] Loaded 2 symbol(s) already marked MIS blocked/missing today.
+2026-03-02 15:31:27,033 | INFO    | Signal CSV sources: signals_2026-03-02_v5_short.csv, signals_2026-03-02_v5_long.csv
+2026-03-02 15:31:27,054 | WARNING | [MIS] Hydrated 1 symbol(s) as MIS blocked/missing from today's trade CSV.
+2026-03-02 15:31:27,054 | WARNING |   Trade worker cap   : DISABLED (unlimited concurrent workers)
+2026-03-02 15:31:27,216 | INFO    | [RESTORE] signals_today=62 executed=51 closed_today=51 open_restored=0 stale_dropped=0 requeued_backlog=0 realized_trades=51 realized_total=Rs.-176.18 deployed_margin=Rs.0.00
+2026-03-02 15:31:27,363 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-02 15:31:27,365 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-02_v5_short.csv, live_signals\signals_2026-03-02_v5_long.csv
+2026-03-02 15:31:27,365 | INFO    | Checking for existing unprocessed signals...
+2026-03-02 15:31:27,365 | WARNING | [EOD.GLOBAL] entry cutoff reached at 15:20:00 IST; EOD flatten in progress
+2026-03-02 15:31:27,366 | INFO    | Market closed. All trades complete.
+2026-03-02 15:31:27,373 | INFO    | =======================================================
+2026-03-02 15:31:27,373 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-03-02 15:31:27,373 | INFO    |   Total trades : 51
+2026-03-02 15:31:27,373 | INFO    |   Wins         : 17
+2026-03-02 15:31:27,373 | INFO    |   Losses       : 31
+2026-03-02 15:31:27,373 | INFO    |   Win rate     : 33.3%
+2026-03-02 15:31:27,373 | INFO    |   Total P&L    : Rs.-176.18
+2026-03-02 15:31:27,373 | INFO    | =======================================================
+2026-03-02 15:31:27,373 | INFO    | Live trade executor stopped.

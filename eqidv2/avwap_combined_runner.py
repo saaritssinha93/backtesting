@@ -5,8 +5,8 @@ avwap_combined_runner_v2.py — AVWAP v11 COMBINED LONG + SHORT runner (refactor
 
 Changes from v1:
 1. All outputs saved to */algo_trading/outputs instead of */algo_trading/reports
-2. Entry signals still use 15-min data; exit/SL/target tracking uses 5-min data
-   from */stocks_indicators_5min_eq/ for higher resolution P&L
+2. Entry signals still use 15-min data; exit/SL/target tracking uses 1-min data
+   from */stocks_indicators_1min_eq/ for higher resolution P&L
 3. Significantly expanded charting suite with more detailed & analytical charts
 4. Normal Python imports (no importlib hacks)
 5. Unified Trade dataclass — both sides produce identical columns
@@ -142,17 +142,17 @@ DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 # Parallelism: set to 1 for serial, >1 for multi-process
 MAX_WORKERS = 4
 
-# 5-min data directory for exit resolution
+# 1-min data directory for exit resolution
 DIR_5MIN = None  # Will be resolved dynamically at runtime
 
 
 # ===========================================================================
-# 5-MINUTE DATA READER
+# 1-MINUTE DATA READER
 # ===========================================================================
 def _resolve_5min_dir() -> Path:
     """
-    Resolve the 5-min data directory relative to the algo_trading project root.
-    Looks for a directory named 'stocks_indicators_5min_eq' in the data path.
+    Resolve the 1-min data directory relative to the algo_trading project root.
+    Looks for a directory named 'stocks_indicators_1min_eq' in the data path.
     """
     _script_dir = Path(__file__).resolve().parent
     if _script_dir.name == "avwap_v11_refactored":
@@ -160,12 +160,12 @@ def _resolve_5min_dir() -> Path:
     else:
         _proj = _script_dir
 
-    # Common locations to search for 5-min data
+    # Common locations to search for 1-min data
     candidates = [
-        _proj / "data" / "stocks_indicators_5min_eq",
-        _proj / "stocks_indicators_5min_eq",
-        _proj.parent / "data" / "stocks_indicators_5min_eq",
-        _proj.parent / "stocks_indicators_5min_eq",
+        _proj / "data" / "stocks_indicators_1min_eq",
+        _proj / "stocks_indicators_1min_eq",
+        _proj.parent / "data" / "stocks_indicators_1min_eq",
+        _proj.parent / "stocks_indicators_1min_eq",
     ]
     for c in candidates:
         if c.is_dir():
@@ -198,7 +198,7 @@ def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
 
 
 def list_tickers_5m(dir_5m: Path, suffix: str = ".parquet") -> List[str]:
-    """List ticker symbols available in the 5-min data directory."""
+    """List ticker symbols available in the 1-min data directory."""
     if not dir_5m.is_dir():
         return []
     tickers = []
@@ -218,17 +218,17 @@ def _resolve_exits_5min(
     engine: str = "pyarrow",
 ) -> pd.DataFrame:
     """
-    Re-evaluate exit prices, exit times, and outcomes using 5-min data
+    Re-evaluate exit prices, exit times, and outcomes using 1-min data
     for higher-resolution SL/target tracking.
 
     Entry signals and entry prices remain from 15-min scanning.
-    Only the exit side is recalculated at 5-min granularity.
+    Only the exit side is recalculated at 1-min granularity.
     """
     if trades_df.empty:
         return trades_df
 
     if not dir_5m.is_dir():
-        print(f"[WARN] 5-min data directory not found: {dir_5m}")
+        print(f"[WARN] 1-min data directory not found: {dir_5m}")
         print("[WARN] Falling back to 15-min exit resolution.")
         return trades_df
 
@@ -243,7 +243,7 @@ def _resolve_exits_5min(
     required = {"ticker", "side", "entry_price", "entry_time_ist", "stop_price", "target_price"}
     if not required.issubset(set(df.columns)):
         missing = required - set(df.columns)
-        print(f"[WARN] Missing columns for 5-min resolution: {missing}")
+        print(f"[WARN] Missing columns for 1-min resolution: {missing}")
         return df
 
     # Convert timestamps
@@ -1355,7 +1355,7 @@ def main() -> None:
             print("=" * 70)
             print("AVWAP v11 COMBINED runner — LONG + SHORT (refactored v2)")
             print("  - Entry signals: 15-min data")
-            print("  - Exit resolution: 5-min data (stocks_indicators_5min_eq)")
+            print("  - Exit resolution: 1-min data (stocks_indicators_1min_eq)")
             print("  - Outputs: */algo_trading/outputs")
             print("  - Intraday leverage: "
                   f"SHORT={INTRADAY_LEVERAGE_SHORT}x | LONG={INTRADAY_LEVERAGE_LONG}x")
@@ -1363,14 +1363,14 @@ def main() -> None:
             print("    (unlevered price-return% is saved as pnl_pct_price)")
             print("=" * 70)
 
-            # Resolve 5-min data directory
+            # Resolve 1-min data directory
             dir_5m = _resolve_5min_dir()
-            print(f"[INFO] 5-min data directory: {dir_5m}")
+            print(f"[INFO] 1-min data directory: {dir_5m}")
             if dir_5m.is_dir():
                 n_files = len(list(dir_5m.glob("*.parquet")))
-                print(f"[INFO] 5-min parquet files found: {n_files}")
+                print(f"[INFO] 1-min parquet files found: {n_files}")
             else:
-                print("[WARN] 5-min data directory not found — will fall back to 15-min exits.")
+                print("[WARN] 1-min data directory not found — will fall back to 15-min exits.")
 
             short_cfg = default_short_config(
                 reports_dir=_outputs_dir,
@@ -1461,7 +1461,7 @@ def main() -> None:
                 return
 
             # ---- PHASE 2: Re-resolve exits using 5-min data ----
-            print("\n[PHASE 2] Re-resolving exits using 5-min data for higher precision...")
+            print("\n[PHASE 2] Re-resolving exits using 1-min data for higher precision...")
 
             # Determine 5-min file suffix by inspecting the directory
             suffix_5m = ".parquet"
@@ -1495,9 +1495,9 @@ def main() -> None:
             _print_signal_entry_lag_summary(combined)
 
             # --- Comprehensive metrics ---
-            print_metrics("SHORT (net of slippage+comm, 5-min exits)", compute_backtest_metrics(short_df))
-            print_metrics("LONG (net of slippage+comm, 5-min exits)", compute_backtest_metrics(long_df))
-            print_metrics("COMBINED (net of slippage+comm, 5-min exits)", compute_backtest_metrics(combined))
+            print_metrics("SHORT (net of slippage+comm, 1-min exits)", compute_backtest_metrics(short_df))
+            print_metrics("LONG (net of slippage+comm, 1-min exits)", compute_backtest_metrics(long_df))
+            print_metrics("COMBINED (net of slippage+comm, 1-min exits)", compute_backtest_metrics(combined))
 
             _print_notional_pnl(combined)
 

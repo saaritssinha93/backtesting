@@ -15,7 +15,7 @@ from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable, Dict, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
@@ -24,6 +24,10 @@ LOG_DIR = BASE_DIR / "logs"
 LIVE_SIGNAL_DIR = BASE_DIR / "live_signals"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 IST = ZoneInfo("Asia/Kolkata")
+OPEN_LIVE_TRADES_STATE_PATTERN = "open_live_trades_state_{}_v5.json"
+OPEN_PAPER_TRADES_STATE_PATTERN = "open_trades_state_{}_v5.json"
+KILL_SWITCH_LIVE_FILE = LIVE_SIGNAL_DIR / "kill_switch_false_v5.json"
+KILL_SWITCH_PAPER_FILE = LIVE_SIGNAL_DIR / "kill_switch_true_v5.json"
 
 LOG_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.log",
@@ -515,6 +519,92 @@ def iso_mtime(path: Path) -> Optional[str]:
         return None
 
 
+def _today_ist_str() -> str:
+    return dt.datetime.now(IST).date().isoformat()
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _kill_switch_scope_paths(scope: str, today_ist: str) -> tuple[Path, Path]:
+    if scope == "false_v5":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_LIVE_TRADES_STATE_PATTERN.format(today_ist),
+            KILL_SWITCH_LIVE_FILE,
+        )
+    if scope == "true_v5":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_PAPER_TRADES_STATE_PATTERN.format(today_ist),
+            KILL_SWITCH_PAPER_FILE,
+        )
+    raise ValueError(f"Unknown kill-switch scope: {scope}")
+
+
+def _load_open_positions(state_path: Path, today_ist: str) -> list[dict[str, object]]:
+    if not state_path.exists():
+        return []
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    if str(payload.get("date", "")).strip() != today_ist:
+        return []
+    rows = payload.get("open_trades", [])
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    if not isinstance(rows, list):
+        return []
+
+    out: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        signal_id = str(row.get("signal_id", "")).strip()
+        ticker = str(row.get("ticker", "")).strip().upper()
+        if not signal_id or not ticker:
+            continue
+        out.append(
+            {
+                "signal_id": signal_id,
+                "trade_id": str(row.get("trade_id", "")).strip(),
+                "ticker": ticker,
+                "side": str(row.get("side", "")).strip().upper(),
+                "quantity": _safe_int(row.get("quantity", 0), 0),
+                "entry_price": _safe_float(row.get("filled_price", row.get("entry_price", 0.0)), 0.0),
+                "stop_price": _safe_float(row.get("stop_price", 0.0), 0.0),
+                "target_price": _safe_float(row.get("target_price", 0.0), 0.0),
+                "entry_time": str(row.get("entry_time", "")).strip(),
+                "updated_at": str(row.get("updated_at", "")).strip(),
+            }
+        )
+
+    out.sort(key=lambda r: (str(r.get("ticker", "")), str(r.get("signal_id", ""))))
+    return out
+
+
+def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + f".{os.getpid()}.{id(payload)}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, path)
+
+
 class LogDashboardHandler(BaseHTTPRequestHandler):
     server_version = "EQIDV2LogDashboard/1.0"
 
@@ -543,6 +633,20 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             file_path, _ = resolve_log_target(name)
             body = tail_text(file_path, lines=lines)
             self._send_text(body)
+            return
+
+        self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if not self._authorized(params):
+            self._unauthorized()
+            return
+
+        if parsed.path == "/api/kill":
+            self._handle_kill_switch()
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
@@ -581,6 +685,142 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(b"Authentication required.")
+
+    def _read_json_body(self) -> Optional[dict[str, Any]]:
+        try:
+            raw_len = int(self.headers.get("Content-Length", "0") or "0")
+        except (TypeError, ValueError):
+            raw_len = 0
+        if raw_len <= 0:
+            return None
+        try:
+            body = self.rfile.read(raw_len)
+        except Exception:
+            return None
+        try:
+            parsed = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _handle_kill_switch(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            self._send_json(
+                {"ok": False, "message": "Invalid JSON payload."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        if not bool(payload.get("confirm", False)):
+            self._send_json(
+                {"ok": False, "message": "Confirmation checkbox is required."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        scope = str(payload.get("scope", "")).strip().lower()
+        mode = str(payload.get("mode", "")).strip().lower()
+        ticker = str(payload.get("ticker", "")).strip().upper()
+        if scope not in {"false_v5", "true_v5"}:
+            self._send_json(
+                {"ok": False, "message": "Invalid scope. Use false_v5 or true_v5."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if mode not in {"all", "ticker"}:
+            self._send_json(
+                {"ok": False, "message": "Invalid mode. Use all or ticker."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if mode == "ticker" and not ticker:
+            self._send_json(
+                {"ok": False, "message": "Ticker is required for ticker mode."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        today_ist = _today_ist_str()
+        try:
+            state_path, command_path = _kill_switch_scope_paths(scope, today_ist)
+        except ValueError:
+            self._send_json(
+                {"ok": False, "message": "Unknown scope."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        positions = _load_open_positions(state_path, today_ist)
+        if mode == "ticker":
+            positions = [p for p in positions if str(p.get("ticker", "")) == ticker]
+
+        target_signal_ids = sorted(
+            {
+                str(p.get("signal_id", "")).strip()
+                for p in positions
+                if str(p.get("signal_id", "")).strip()
+            }
+        )
+        target_tickers = sorted(
+            {
+                str(p.get("ticker", "")).strip().upper()
+                for p in positions
+                if str(p.get("ticker", "")).strip()
+            }
+        )
+
+        if not target_signal_ids:
+            label = ticker if ticker else "all symbols"
+            self._send_json(
+                {
+                    "ok": False,
+                    "message": f"No active trades found for {label} in {scope}.",
+                    "scope": scope,
+                    "mode": mode,
+                    "ticker": ticker,
+                }
+            )
+            return
+
+        now_ist = dt.datetime.now(IST)
+        command_id = f"KS-{scope}-{now_ist.strftime('%H%M%S%f')}"
+        command_payload: dict[str, object] = {
+            "date": today_ist,
+            "scope": scope,
+            "command_id": command_id,
+            "mode": mode,
+            "ticker": ticker,
+            "target_signal_ids": target_signal_ids,
+            "target_tickers": target_tickers,
+            "requested_at_ist": now_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+            "source": "dashboard",
+        }
+        try:
+            _atomic_write_json(command_path, command_payload)
+        except OSError as exc:
+            self._send_json(
+                {"ok": False, "message": f"Failed to write kill-switch command: {exc}"},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        target_label = ticker if (mode == "ticker" and ticker) else "ALL"
+        self._send_json(
+            {
+                "ok": True,
+                "message": (
+                    f"Kill switch queued for {len(target_signal_ids)} active trade(s) "
+                    f"({scope}, {target_label})."
+                ),
+                "scope": scope,
+                "mode": mode,
+                "ticker": ticker,
+                "command_id": command_id,
+                "target_signal_ids": target_signal_ids,
+                "target_tickers": target_tickers,
+            }
+        )
 
     def _send_html(self) -> None:
         api_token_json = json.dumps(getattr(self.server, "api_token", "") or "")
@@ -821,6 +1061,87 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       background: rgba(23, 61, 89, 0.9);
     }
 
+    .kill-shell {
+      margin: 8px 10px 4px;
+      padding: 8px;
+      border: 1px solid rgba(255, 107, 107, 0.35);
+      border-radius: 10px;
+      background: rgba(40, 13, 13, 0.55);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .kill-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .kill-confirm {
+      font-size: 11px;
+      color: #ffd7d7;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      user-select: none;
+    }
+
+    .kill-meta {
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    .kill-ticker {
+      min-width: 130px;
+      max-width: 220px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 4px 6px;
+      background: rgba(7, 16, 25, 0.9);
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .kill-btn {
+      border-radius: 8px;
+      font-size: 11px;
+      padding: 5px 8px;
+      box-shadow: none;
+      transform: none !important;
+    }
+
+    .kill-btn.kill-one {
+      border-color: rgba(255, 190, 92, 0.58);
+      background: linear-gradient(135deg, #ffbe5c, #ffd388);
+      color: #2f1d06;
+    }
+
+    .kill-btn.kill-all {
+      border-color: rgba(255, 107, 107, 0.66);
+      background: linear-gradient(135deg, #ff7f7f, #ffb0a6);
+      color: #2f0707;
+    }
+
+    .kill-btn:disabled,
+    .kill-ticker:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .kill-status {
+      font-size: 10px;
+      line-height: 1.25;
+      min-height: 1.2em;
+      color: #9cebcf;
+      overflow-wrap: anywhere;
+    }
+
+    .kill-status.err {
+      color: #ff9d9d;
+    }
+
     pre {
       margin: 0;
       padding: 11px;
@@ -1042,6 +1363,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const API_TOKEN = __API_TOKEN_JSON__;
     let FULLSCREEN_ID = "";
     const TABLE_SORT_STATE = {};
+    const KILL_CARD_SCOPE = {
+      "kite_trade": "false_v5",
+      "live_kite_trades_csv": "false_v5",
+      "paper_trade_v5": "true_v5",
+      "live_papertrade_result_csv_v5": "true_v5"
+    };
 
     function esc(s) {
       return (s || "")
@@ -1066,6 +1393,58 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (!status) return '<span class="pill">UNKNOWN</span>';
       if (status === "SUCCESS") return '<span class="pill ok">SUCCESS</span>';
       return `<span class="pill fail">${esc(status)}</span>`;
+    }
+
+    function killScopeForCard(cardId) {
+      return KILL_CARD_SCOPE[cardId] || "";
+    }
+
+    function uniqueSorted(arr) {
+      const seen = new Set();
+      const out = [];
+      for (const raw of (arr || [])) {
+        const v = String(raw || "").trim();
+        if (!v || seen.has(v)) continue;
+        seen.add(v);
+        out.push(v);
+      }
+      out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+      return out;
+    }
+
+    function renderKillControls(cardId, killSnapshot) {
+      const scope = killScopeForCard(cardId);
+      if (!scope) return "";
+      const scopeSnap = (killSnapshot && killSnapshot[scope]) ? killSnapshot[scope] : {};
+      const positions = Array.isArray(scopeSnap.positions) ? scopeSnap.positions : [];
+      const tickers = uniqueSorted(positions.map((p) => String((p && p.ticker) || "").toUpperCase()));
+      const noActive = positions.length === 0;
+      const options = tickers.length
+        ? tickers.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("")
+        : `<option value="">no active ticker</option>`;
+      const lastCmd = (scopeSnap && scopeSnap.last_command) ? scopeSnap.last_command : {};
+      const lastCmdId = String((lastCmd && lastCmd.command_id) || "").trim();
+      const lastCmdTs = String((lastCmd && lastCmd.requested_at_ist) || "").trim();
+      const lastCmdMeta = lastCmdId
+        ? `last_cmd=${lastCmdId}${lastCmdTs ? ` @ ${lastCmdTs}` : ""}`
+        : "last_cmd=none";
+      return `
+        <div class="kill-shell" data-kill-scope="${esc(scope)}" data-kill-card="${esc(cardId)}">
+          <div class="kill-row">
+            <label class="kill-confirm">
+              <input type="checkbox" class="kill-confirm-box" />
+              Confirm kill action
+            </label>
+            <span class="kill-meta">active=${positions.length} | ${esc(lastCmdMeta)}</span>
+          </div>
+          <div class="kill-row">
+            <select class="kill-ticker" ${noActive ? "disabled" : ""}>${options}</select>
+            <button type="button" class="kill-btn kill-one" ${tickers.length ? "" : "disabled"}>Kill Ticker</button>
+            <button type="button" class="kill-btn kill-all" ${noActive ? "disabled" : ""}>Kill All</button>
+          </div>
+          <div class="kill-status"></div>
+        </div>
+      `;
     }
 
     function parseNumberish(value) {
@@ -1236,6 +1615,76 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       });
     }
 
+    function wireKillSwitchControls() {
+      const roots = document.querySelectorAll('#cards .kill-shell');
+      roots.forEach((root) => {
+        const scope = root.getAttribute('data-kill-scope') || "";
+        const confirmBox = root.querySelector('.kill-confirm-box');
+        const tickerSel = root.querySelector('.kill-ticker');
+        const btnTicker = root.querySelector('.kill-one');
+        const btnAll = root.querySelector('.kill-all');
+        const statusEl = root.querySelector('.kill-status');
+        if (!scope || !confirmBox || !tickerSel || !btnTicker || !btnAll || !statusEl) return;
+
+        const setStatus = (msg, isErr) => {
+          statusEl.textContent = String(msg || "");
+          statusEl.classList.toggle('err', !!isErr);
+        };
+
+        const setBusy = (busy) => {
+          const on = !!busy;
+          btnTicker.disabled = on || btnTicker.hasAttribute('data-init-disabled');
+          btnAll.disabled = on || btnAll.hasAttribute('data-init-disabled');
+        };
+        if (btnTicker.disabled) btnTicker.setAttribute('data-init-disabled', '1');
+        if (btnAll.disabled) btnAll.setAttribute('data-init-disabled', '1');
+
+        async function fireKill(mode) {
+          if (!confirmBox.checked) {
+            setStatus("Tick confirmation checkbox first.", true);
+            return;
+          }
+          const ticker = mode === "ticker" ? String(tickerSel.value || "").trim().toUpperCase() : "";
+          if (mode === "ticker" && !ticker) {
+            setStatus("Select ticker first.", true);
+            return;
+          }
+          setBusy(true);
+          setStatus("Submitting kill switch...");
+          try {
+            const res = await fetch(apiUrl('/api/kill'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
+              body: JSON.stringify({
+                scope,
+                mode,
+                ticker,
+                confirm: true
+              })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data || !data.ok) {
+              const msg = (data && data.message) ? data.message : `HTTP ${res.status}`;
+              setStatus(msg, true);
+              return;
+            }
+            setStatus((data && data.message) ? data.message : "Kill switch queued.", false);
+            confirmBox.checked = false;
+            setTimeout(() => { loadNow(); }, 450);
+          } catch (err) {
+            const msg = (err && err.message) ? err.message : String(err);
+            setStatus(`Kill request failed: ${msg}`, true);
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        btnTicker.addEventListener('click', () => fireKill("ticker"));
+        btnAll.addEventListener('click', () => fireKill("all"));
+      });
+    }
+
     document.addEventListener('keydown', (ev) => {
       if (ev.key === "Escape" && FULLSCREEN_ID) {
         FULLSCREEN_ID = "";
@@ -1253,6 +1702,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
         const byId = {};
         for (const item of data.items) byId[item.id] = item;
+        const killSnapshot = data.kill_switch || {};
         const ordered = LOG_ORDER.concat(Object.keys(byId).filter((id) => !LOG_ORDER.includes(id)));
 
         const html = ordered.map((id, idx) => {
@@ -1264,6 +1714,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const isFs = FULLSCREEN_ID === id ? " is-fullscreen" : "";
           const toggleLabel = FULLSCREEN_ID === id ? "Minimize" : "Maximize";
           const toggleCls = FULLSCREEN_ID === id ? "card-toggle is-active" : "card-toggle";
+          const killControls = renderKillControls(it.id, killSnapshot);
           return `
             <div class="${cardCls}${isFs}" data-id="${esc(id)}" style="animation-delay:${Math.min(idx * 0.05, 0.55)}s">
               <div class="card-head">
@@ -1276,6 +1727,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                   <div>${statusBadge(status)}</div>
                 </div>
               </div>
+              ${killControls}
               <pre>${esc(it.tail || (it.exists ? "(empty)" : "(log file not found yet)"))}</pre>
             </div>
           `;
@@ -1284,6 +1736,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const cards = document.getElementById('cards');
         cards.innerHTML = html;
         wireCardControls();
+        wireKillSwitchControls();
         enhanceSortableTables();
         applyFullscreenState();
         cards.querySelectorAll('pre').forEach((preEl) => {
@@ -1676,10 +2129,39 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
+        kill_switch: dict[str, object] = {}
+        for scope in ("false_v5", "true_v5"):
+            state_path, command_path = _kill_switch_scope_paths(scope, today_ist)
+            positions = _load_open_positions(state_path, today_ist)
+            command_meta: dict[str, object] = {}
+            if command_path.exists():
+                try:
+                    raw_cmd = json.loads(command_path.read_text(encoding="utf-8", errors="replace"))
+                    if isinstance(raw_cmd, dict):
+                        command_meta = {
+                            "command_id": str(raw_cmd.get("command_id", "")).strip(),
+                            "mode": str(raw_cmd.get("mode", "")).strip().lower(),
+                            "ticker": str(raw_cmd.get("ticker", "")).strip().upper(),
+                            "requested_at_ist": str(raw_cmd.get("requested_at_ist", "")).strip(),
+                        }
+                except (OSError, json.JSONDecodeError):
+                    command_meta = {}
+
+            kill_switch[scope] = {
+                "state_file": str(Path("live_signals") / state_path.name),
+                "state_mtime": iso_mtime(state_path),
+                "positions": positions,
+                "positions_count": len(positions),
+                "command_file": str(Path("live_signals") / command_path.name),
+                "command_mtime": iso_mtime(command_path),
+                "last_command": command_meta,
+            }
+
         return {
             "server_time": dt.datetime.now().isoformat(sep=" ", timespec="seconds"),
             "log_dir": str(LOG_DIR),
             "items": items,
+            "kill_switch": kill_switch,
         }
 
     def _send_json(self, payload: Dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:

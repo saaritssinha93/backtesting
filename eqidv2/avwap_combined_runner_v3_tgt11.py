@@ -1,14 +1,16 @@
 ﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v3.py
-===========================
+avwap_combined_runner_v3_tgt11.py
+=================================
 
-Read-only-safe, new runner that keeps existing runners untouched and applies a
-LONG anti-chase entry model for backtesting:
+Read-only-safe, target-only variant of v3:
 
 - LONG entry model: limit retrace from signal price
 - Entry can be skipped if retrace limit is not hit within a wait window
 - LONG stop/target are rebuilt from executed entry price
+- Target override:
+  - SHORT target = 1.00%
+  - LONG target = 1.10%
 
 Default mode is LONG-focused (`RUN_SHORT_SIDE=False`) to evaluate long logic
 without changing any existing live/backtest scripts.
@@ -66,9 +68,10 @@ LONG_LIMIT_WAIT_MIN = 60
 LONG_LIMIT_OFFSET_PCT = -0.005      # buy at signal_entry * (1 - 0.5%)
 LONG_CHASE_CAP_PCT = 0.003          # used only for next_open_guard
 
-# LONG risk model (rebuilt from executed entry)
-LONG_STOP_PCT_V3 = 0.006            # 0.60%
-LONG_TARGET_PCT_V3 = 0.018          # 1.80%
+# Risk model (only target overrides vs v3)
+SHORT_TARGET_PCT_V3T = 0.010        # 1.00%
+LONG_STOP_PCT_V3T = 0.006           # 0.60%
+LONG_TARGET_PCT_V3T = 0.011         # 1.10%
 
 # Optional LONG signal filters (None means disabled)
 LONG_RSI_CAP: Optional[float] = None
@@ -351,8 +354,8 @@ def _apply_long_entry_model_v3(
             )
             continue
 
-        stop_price = round(entry_price * (1 - float(LONG_STOP_PCT_V3)), 2)
-        target_price = round(entry_price * (1 + float(LONG_TARGET_PCT_V3)), 2)
+        stop_price = round(entry_price * (1 - float(LONG_STOP_PCT_V3T)), 2)
+        target_price = round(entry_price * (1 + float(LONG_TARGET_PCT_V3T)), 2)
 
         row["entry_time_ist"] = entry_time
         row["entry_price"] = float(entry_price)
@@ -373,13 +376,13 @@ def _apply_long_entry_model_v3(
 
 
 def main() -> None:
-    _outputs_dir = _THIS_DIR / "outputs_v3"
+    _outputs_dir = _THIS_DIR / "outputs_v3_tgt11"
     _outputs_dir.mkdir(parents=True, exist_ok=True)
     _logs_dir = _THIS_DIR / "logs"
     _logs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
-    log_path = _outputs_dir / f"avwap_combined_runner_v3_{ts}.txt"
+    log_path = _outputs_dir / f"avwap_combined_runner_v3_tgt11_{ts}.txt"
 
     _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
     with open(log_path, "w", encoding="utf-8") as _log_fh:
@@ -388,7 +391,7 @@ def main() -> None:
 
         try:
             print("=" * 72)
-            print("AVWAP COMBINED RUNNER V3 (new file)")
+            print("AVWAP COMBINED RUNNER V3_TGT11 (new file)")
             print(f"[INFO] RUN_SHORT_SIDE={RUN_SHORT_SIDE} | RUN_LONG_SIDE={RUN_LONG_SIDE}")
             print(
                 "[INFO] LONG anti-chase: "
@@ -396,8 +399,9 @@ def main() -> None:
                 f"offset={LONG_LIMIT_OFFSET_PCT*100:.2f}%, chase_cap={LONG_CHASE_CAP_PCT*100:.2f}%"
             )
             print(
-                "[INFO] LONG risk: "
-                f"SL={LONG_STOP_PCT_V3*100:.2f}% | TGT={LONG_TARGET_PCT_V3*100:.2f}%"
+                "[INFO] Risk override: "
+                f"SHORT TGT={SHORT_TARGET_PCT_V3T*100:.2f}% | "
+                f"LONG SL={LONG_STOP_PCT_V3T*100:.2f}% | LONG TGT={LONG_TARGET_PCT_V3T*100:.2f}%"
             )
             print(f"[INFO] Output directory: {_outputs_dir}")
             print("=" * 72)
@@ -412,9 +416,10 @@ def main() -> None:
             short_cfg = default_short_config(reports_dir=_outputs_dir)
             long_cfg = default_long_config(
                 reports_dir=_outputs_dir,
-                stop_pct=LONG_STOP_PCT_V3,
-                target_pct=LONG_TARGET_PCT_V3,
+                stop_pct=LONG_STOP_PCT_V3T,
+                target_pct=LONG_TARGET_PCT_V3T,
             )
+            short_cfg.target_pct = float(SHORT_TARGET_PCT_V3T)
             short_cfg.enable_topn_per_day = False
             long_cfg.enable_topn_per_day = False
 
@@ -470,7 +475,7 @@ def main() -> None:
             if combined.empty:
                 print("[DONE] No trades after LONG anti-chase filtering.")
                 if not skip_df.empty:
-                    skip_csv = _outputs_dir / f"avwap_long_entry_skips_v3_{ts}.csv"
+                    skip_csv = _outputs_dir / f"avwap_long_entry_skips_v3_tgt11_{ts}.csv"
                     skip_df.to_csv(skip_csv, index=False)
                     print(f"[FILE SAVED] {skip_csv}")
                 return
@@ -486,43 +491,43 @@ def main() -> None:
                 print("[INFO] SHORT metrics skipped (no short trades).")
 
             if not long_df.empty:
-                print_metrics("LONG (1-min exits, anti-chase v3)", compute_backtest_metrics(long_df))
+                print_metrics("LONG (1-min exits, anti-chase v3_tgt11)", compute_backtest_metrics(long_df))
             else:
                 print("[INFO] LONG metrics skipped (no long trades).")
 
             print_metrics("COMBINED (1-min exits)", compute_backtest_metrics(combined))
             _print_notional_pnl(combined)
 
-            out_csv = _outputs_dir / f"avwap_longshort_trades_ALL_DAYS_v3_{ts}.csv"
+            out_csv = _outputs_dir / f"avwap_longshort_trades_ALL_DAYS_v3_tgt11_{ts}.csv"
             combined.to_csv(out_csv, index=False)
             print(f"[FILE SAVED] {out_csv}")
 
             if not long_df.empty:
-                out_long = _outputs_dir / f"avwap_long_trades_only_v3_{ts}.csv"
+                out_long = _outputs_dir / f"avwap_long_trades_only_v3_tgt11_{ts}.csv"
                 long_df.to_csv(out_long, index=False)
                 print(f"[FILE SAVED] {out_long}")
 
             if not skip_df.empty:
-                skip_csv = _outputs_dir / f"avwap_long_entry_skips_v3_{ts}.csv"
+                skip_csv = _outputs_dir / f"avwap_long_entry_skips_v3_tgt11_{ts}.csv"
                 skip_df.to_csv(skip_csv, index=False)
                 print(f"[FILE SAVED] {skip_csv}")
 
             print("\n[INFO] Generating charts...")
-            chart_dir_legacy = _outputs_dir / "charts_v3" / "legacy"
-            chart_dir_enhanced = _outputs_dir / "charts_v3" / "enhanced"
+            chart_dir_legacy = _outputs_dir / "charts_v3_tgt11" / "legacy"
+            chart_dir_enhanced = _outputs_dir / "charts_v3_tgt11" / "enhanced"
             chart_files_legacy = generate_backtest_charts(
                 combined,
                 short_df,
                 long_df,
                 save_dir=chart_dir_legacy,
-                ts_label=f"{ts}_v3",
+                ts_label=f"{ts}_v3_tgt11",
             )
             chart_files_enhanced = generate_enhanced_charts(
                 combined,
                 short_df,
                 long_df,
                 save_dir=chart_dir_enhanced,
-                ts_label=f"{ts}_v3",
+                ts_label=f"{ts}_v3_tgt11",
             )
             print(
                 f"[INFO] Charts generated: legacy={len(chart_files_legacy or [])}, "

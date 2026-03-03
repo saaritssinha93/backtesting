@@ -70,6 +70,7 @@ PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v5.log"
 EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper_v5.json")
 SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary_v5.json")
 OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}_v5.json"
+KILL_SWITCH_COMMAND_FILE = os.path.join(SIGNAL_DIR, "kill_switch_true_v5.json")
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -442,6 +443,9 @@ executed_lock = threading.Lock()
 active_positions: Dict[str, dict] = {}  # signal_id -> open position state
 active_positions_lock = threading.Lock()
 state_file_lock = threading.Lock()
+kill_switch_cache_lock = threading.Lock()
+kill_switch_cache_mtime: float = -1.0
+kill_switch_cache_payload: Optional[dict] = None
 daily_pnl: Dict[str, float] = {
     "total": 0.0,
     "wins": 0,
@@ -555,6 +559,62 @@ def _load_open_trades_state(today_str: Optional[str] = None) -> List[dict]:
         return out
     except Exception:
         return []
+
+
+def _load_kill_switch_command_cached() -> Optional[dict]:
+    global kill_switch_cache_mtime, kill_switch_cache_payload
+    path = Path(KILL_SWITCH_COMMAND_FILE)
+    try:
+        mtime = path.stat().st_mtime if path.exists() else -1.0
+    except OSError:
+        mtime = -1.0
+
+    with kill_switch_cache_lock:
+        if mtime == kill_switch_cache_mtime:
+            return dict(kill_switch_cache_payload) if isinstance(kill_switch_cache_payload, dict) else None
+
+    payload: Optional[dict] = None
+    if mtime >= 0:
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                today = _today_ist_str()
+                if str(raw.get("date", today)).strip() == today:
+                    payload = dict(raw)
+        except Exception:
+            payload = None
+
+    with kill_switch_cache_lock:
+        kill_switch_cache_mtime = mtime
+        kill_switch_cache_payload = dict(payload) if isinstance(payload, dict) else None
+        return dict(kill_switch_cache_payload) if isinstance(kill_switch_cache_payload, dict) else None
+
+
+def _get_kill_switch_for_trade(signal_id: str, ticker: str) -> Optional[dict]:
+    cmd = _load_kill_switch_command_cached()
+    if not cmd:
+        return None
+
+    target_ids_raw = cmd.get("target_signal_ids", [])
+    target_ids = {
+        str(x).strip()
+        for x in target_ids_raw
+        if str(x).strip()
+    } if isinstance(target_ids_raw, list) else set()
+    if target_ids:
+        if signal_id in target_ids:
+            return cmd
+        return None
+
+    mode = str(cmd.get("mode", "")).strip().lower()
+    if mode == "all":
+        return cmd
+    if mode == "ticker":
+        target_ticker = str(cmd.get("ticker", "")).strip().upper()
+        if target_ticker and target_ticker == str(ticker).strip().upper():
+            return cmd
+    return None
 
 
 def _release_capacity(signal_id: str) -> None:
@@ -884,9 +944,28 @@ def simulate_trade(
     outcome = "MONITORING"
     last_valid_ltp: Optional[float] = _safe_float(signal.get("last_ltp", 0.0), 0.0) or None
     ltp_miss_count = 0
+    last_kill_switch_command_id = ""
 
     while True:
         now_ist = datetime.now(IST)
+
+        kill_cmd = _get_kill_switch_for_trade(signal_id, ticker)
+        if kill_cmd:
+            cmd_id = str(kill_cmd.get("command_id", "")).strip() or "NO_CMD_ID"
+            if cmd_id != last_kill_switch_command_id:
+                last_kill_switch_command_id = cmd_id
+                ltp_now = get_ltp(ticker) if use_ltp else None
+                if ltp_now is not None and ltp_now > 0:
+                    last_valid_ltp = float(ltp_now)
+                exit_price = float(last_valid_ltp) if last_valid_ltp is not None else entry_price
+                outcome = "MANUAL_KILL_SWITCH"
+                req_ts = str(kill_cmd.get("requested_at_ist", "")).strip()
+                log.warning(
+                    f"[KILL] Kill switch exit for {side} {ticker} @ {exit_price:.2f} | "
+                    f"command_id={cmd_id} | signal_id={signal_id[:12]}"
+                    + (f" | requested_at={req_ts}" if req_ts else "")
+                )
+                break
 
         if now_ist >= forced_close_dt:
             ltp = get_ltp(ticker) if use_ltp else None
