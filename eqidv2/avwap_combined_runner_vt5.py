@@ -1,17 +1,11 @@
 ﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v3.py
-===========================
+avwap_combined_runner_vt5.py
+============================
 
-Read-only-safe, new runner that keeps existing runners untouched and applies a
-LONG anti-chase entry model for backtesting:
-
-- LONG entry model: limit retrace from signal price
-- Entry can be skipped if retrace limit is not hit within a wait window
-- LONG stop/target are rebuilt from executed entry price
-
-Default mode is LONG-focused (`RUN_SHORT_SIDE=False`) to evaluate long logic
-without changing any existing live/backtest scripts.
+Scenario VT5:
+- Derive timer from baseline backtest outcomes.
+- If trade stalls (insufficient progress toward target) by timer cutoff, exit.
 """
 
 from __future__ import annotations
@@ -45,11 +39,14 @@ from avwap_combined_runner import (  # noqa: E402
     _print_notional_pnl,
     _print_signal_entry_lag_summary,
     _resolve_5min_dir,
-    _resolve_exits_5min,
     _run_side_parallel,
     _sort_trades_for_output,
     generate_enhanced_charts,
     read_5m_parquet,
+)
+from avwap_exit_scenarios import (  # noqa: E402
+    calibrate_timer_params_5min,
+    resolve_exits_timer_stall_5min,
 )
 
 
@@ -373,13 +370,13 @@ def _apply_long_entry_model_v3(
 
 
 def main() -> None:
-    _outputs_dir = _THIS_DIR / "outputs_v3"
+    _outputs_dir = _THIS_DIR / "outputs_vt5"
     _outputs_dir.mkdir(parents=True, exist_ok=True)
     _logs_dir = _THIS_DIR / "logs"
     _logs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
-    log_path = _outputs_dir / f"avwap_combined_runner_v3_{ts}.txt"
+    log_path = _outputs_dir / f"avwap_combined_runner_vt5_{ts}.txt"
 
     _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
     with open(log_path, "w", encoding="utf-8") as _log_fh:
@@ -388,7 +385,7 @@ def main() -> None:
 
         try:
             print("=" * 72)
-            print("AVWAP COMBINED RUNNER V3 (new file)")
+            print("AVWAP COMBINED RUNNER VT5")
             print(f"[INFO] RUN_SHORT_SIDE={RUN_SHORT_SIDE} | RUN_LONG_SIDE={RUN_LONG_SIDE}")
             print(
                 "[INFO] LONG anti-chase: "
@@ -399,6 +396,7 @@ def main() -> None:
                 "[INFO] LONG risk: "
                 f"SL={LONG_STOP_PCT_V3*100:.2f}% | TGT={LONG_TARGET_PCT_V3*100:.2f}%"
             )
+            print("[INFO] VT5 exits: timer+stall model (timer calibrated from baseline outcomes).")
             print(f"[INFO] Output directory: {_outputs_dir}")
             print("=" * 72)
 
@@ -449,14 +447,44 @@ def main() -> None:
                     engine=long_cfg.parquet_engine,
                 )
 
-            print("\n[PHASE 3] Re-resolving exits on 1-min bars...")
+            timer_cfg = calibrate_timer_params_5min(
+                baseline_df=pd.concat([short_df, long_df], ignore_index=True),
+                dir_5m=dir_5m,
+                suffix_5m=suffix_5m,
+                engine=short_cfg.parquet_engine,
+            )
+            timer_min_by_side = timer_cfg.get("timer_min", {})
+            progress_ratio_min_by_side = timer_cfg.get("progress_ratio_min", {})
+            adverse_ratio_min_by_side = timer_cfg.get("adverse_ratio_min", {})
+            print(
+                "[VT5][CALIB] "
+                f"timer_min={timer_min_by_side} | "
+                f"progress_ratio_min={progress_ratio_min_by_side} | "
+                f"adverse_ratio_min(ref)={adverse_ratio_min_by_side}"
+            )
+
+            print("\n[PHASE 3] Re-resolving exits on 1-min bars (VT5 timer+stall)...")
             if not short_df.empty:
-                short_df = _resolve_exits_5min(
-                    short_df, dir_5m, suffix_5m=suffix_5m, engine=short_cfg.parquet_engine
+                short_df = resolve_exits_timer_stall_5min(
+                    short_df,
+                    dir_5m,
+                    timer_min_by_side=timer_min_by_side,
+                    progress_ratio_min_by_side=progress_ratio_min_by_side,
+                    require_adverse=False,
+                    adverse_ratio_min_by_side=adverse_ratio_min_by_side,
+                    suffix_5m=suffix_5m,
+                    engine=short_cfg.parquet_engine,
                 )
             if not long_df.empty:
-                long_df = _resolve_exits_5min(
-                    long_df, dir_5m, suffix_5m=suffix_5m, engine=long_cfg.parquet_engine
+                long_df = resolve_exits_timer_stall_5min(
+                    long_df,
+                    dir_5m,
+                    timer_min_by_side=timer_min_by_side,
+                    progress_ratio_min_by_side=progress_ratio_min_by_side,
+                    require_adverse=False,
+                    adverse_ratio_min_by_side=adverse_ratio_min_by_side,
+                    suffix_5m=suffix_5m,
+                    engine=long_cfg.parquet_engine,
                 )
 
             if not short_df.empty:
@@ -470,7 +498,7 @@ def main() -> None:
             if combined.empty:
                 print("[DONE] No trades after LONG anti-chase filtering.")
                 if not skip_df.empty:
-                    skip_csv = _outputs_dir / f"avwap_long_entry_skips_v3_{ts}.csv"
+                    skip_csv = _outputs_dir / f"avwap_long_entry_skips_vt5_{ts}.csv"
                     skip_df.to_csv(skip_csv, index=False)
                     print(f"[FILE SAVED] {skip_csv}")
                 return
@@ -481,48 +509,48 @@ def main() -> None:
             _print_signal_entry_lag_summary(combined)
 
             if not short_df.empty:
-                print_metrics("SHORT (1-min exits)", compute_backtest_metrics(short_df))
+                print_metrics("SHORT (VT5 timer+stall)", compute_backtest_metrics(short_df))
             else:
                 print("[INFO] SHORT metrics skipped (no short trades).")
 
             if not long_df.empty:
-                print_metrics("LONG (1-min exits, anti-chase v3)", compute_backtest_metrics(long_df))
+                print_metrics("LONG (VT5 timer+stall, anti-chase v3)", compute_backtest_metrics(long_df))
             else:
                 print("[INFO] LONG metrics skipped (no long trades).")
 
-            print_metrics("COMBINED (1-min exits)", compute_backtest_metrics(combined))
+            print_metrics("COMBINED (VT5 timer+stall)", compute_backtest_metrics(combined))
             _print_notional_pnl(combined)
 
-            out_csv = _outputs_dir / f"avwap_longshort_trades_ALL_DAYS_v3_{ts}.csv"
+            out_csv = _outputs_dir / f"avwap_longshort_trades_ALL_DAYS_vt5_{ts}.csv"
             combined.to_csv(out_csv, index=False)
             print(f"[FILE SAVED] {out_csv}")
 
             if not long_df.empty:
-                out_long = _outputs_dir / f"avwap_long_trades_only_v3_{ts}.csv"
+                out_long = _outputs_dir / f"avwap_long_trades_only_vt5_{ts}.csv"
                 long_df.to_csv(out_long, index=False)
                 print(f"[FILE SAVED] {out_long}")
 
             if not skip_df.empty:
-                skip_csv = _outputs_dir / f"avwap_long_entry_skips_v3_{ts}.csv"
+                skip_csv = _outputs_dir / f"avwap_long_entry_skips_vt5_{ts}.csv"
                 skip_df.to_csv(skip_csv, index=False)
                 print(f"[FILE SAVED] {skip_csv}")
 
             print("\n[INFO] Generating charts...")
-            chart_dir_legacy = _outputs_dir / "charts_v3" / "legacy"
-            chart_dir_enhanced = _outputs_dir / "charts_v3" / "enhanced"
+            chart_dir_legacy = _outputs_dir / "charts_vt5" / "legacy"
+            chart_dir_enhanced = _outputs_dir / "charts_vt5" / "enhanced"
             chart_files_legacy = generate_backtest_charts(
                 combined,
                 short_df,
                 long_df,
                 save_dir=chart_dir_legacy,
-                ts_label=f"{ts}_v3",
+                ts_label=f"{ts}_vt5",
             )
             chart_files_enhanced = generate_enhanced_charts(
                 combined,
                 short_df,
                 long_df,
                 save_dir=chart_dir_enhanced,
-                ts_label=f"{ts}_v3",
+                ts_label=f"{ts}_vt5",
             )
             print(
                 f"[INFO] Charts generated: legacy={len(chart_files_legacy or [])}, "

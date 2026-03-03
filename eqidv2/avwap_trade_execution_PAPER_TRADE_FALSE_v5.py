@@ -39,6 +39,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -79,6 +80,7 @@ EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_live_v5.json"
 MIS_REJECTED_SYMBOLS_FILE = os.path.join(SIGNAL_DIR, "mis_rejected_symbols_v5.json")
 SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary_v5.json")
 OPEN_TRADES_STATE_PATTERN = "open_live_trades_state_{}_v5.json"
+KILL_SWITCH_COMMAND_FILE = os.path.join(SIGNAL_DIR, "kill_switch_false_v5.json")
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -95,9 +97,13 @@ ORDER_BOOK_CACHE_TTL_SEC = float(os.getenv("EQIDV2_ORDER_BOOK_CACHE_TTL_SEC", "1
 ORDER_POLL_RATE_LIMIT_BACKOFF_SEC = float(
     os.getenv("EQIDV2_ORDER_POLL_RATE_LIMIT_BACKOFF_SEC", "2.0")
 )
+GLOBAL_EOD_SWEEP_INTERVAL_SEC = max(
+    1.0,
+    float(os.getenv("EQIDV2_GLOBAL_EOD_SWEEP_INTERVAL_SEC", "5.0")),
+)
 
 # Exposure limits
-RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "0")).strip().lower() in {
+RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "1")).strip().lower() in {
     "1",
     "true",
     "yes",
@@ -109,8 +115,9 @@ INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
 # Concurrency
 # 0 or negative means unlimited worker threads (no executor-side cap).
-MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_MAX_CONCURRENT_TRADES", "0"))
-DEFAULT_TICK_SIZE = 0.05
+MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_MAX_CONCURRENT_TRADES", "20"))
+# Conservative fallback so prices remain valid for common NSE 0.10/0.05 tick scripts.
+DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
 MAX_TICK_DECIMALS = 4
 
 # Trade log columns
@@ -369,12 +376,25 @@ def get_tick_size(ticker: str) -> float:
     return DEFAULT_TICK_SIZE
 
 
-def round_to_tick(price: float, tick: float = DEFAULT_TICK_SIZE) -> float:
-    """Round price to nearest tick size."""
+def round_to_tick(price: float, tick: float = DEFAULT_TICK_SIZE, mode: str = "nearest") -> float:
+    """
+    Round price to tick size.
+    mode:
+      - "nearest": nearest tick
+      - "up": ceil to next tick
+      - "down": floor to previous tick
+    """
     tick = float(tick) if tick else DEFAULT_TICK_SIZE
     if tick <= 0:
         tick = DEFAULT_TICK_SIZE
-    steps = round(float(price) / tick)
+    ratio = float(price) / tick
+    mode_key = str(mode or "nearest").strip().lower()
+    if mode_key == "up":
+        steps = math.ceil(ratio - 1e-12)
+    elif mode_key == "down":
+        steps = math.floor(ratio + 1e-12)
+    else:
+        steps = round(ratio)
     rounded = steps * tick
     tick_text = f"{tick:.8f}".rstrip("0").rstrip(".")
     decimals = len(tick_text.split(".")[1]) if "." in tick_text else 0
@@ -405,6 +425,49 @@ def _find_order_in_list(orders: Sequence[dict], order_id: str) -> Optional[dict]
     return None
 
 
+def _order_state_from_row(row: Optional[dict]) -> Dict[str, Any]:
+    row = row or {}
+    return {
+        "status": str(row.get("status", "")).strip().upper(),
+        "average_price": _safe_float(row.get("average_price", 0.0), 0.0),
+        "filled_quantity": _safe_int(row.get("filled_quantity", 0), 0),
+    }
+
+
+def _get_order_row(
+    order_id: str,
+    force_refresh: bool = False,
+    allow_history_fallback: bool = False,
+) -> Optional[dict]:
+    """
+    Fetch one order row by ID with optional history fallback.
+    """
+    try:
+        orders = _get_orders_snapshot(force_refresh=force_refresh)
+        row = _find_order_in_list(orders, order_id)
+        if row:
+            return row
+    except Exception as e:
+        if not _is_rate_limit_error(e):
+            log.warning(f"[LIVE] Order lookup failed for {order_id}: {e}")
+
+    if not allow_history_fallback:
+        return None
+
+    try:
+        reader = _next_kite_for_reads()
+        history = reader.order_history(order_id)
+        if isinstance(history, list) and history:
+            latest = history[-1]
+            if isinstance(latest, dict):
+                return latest
+    except Exception as e:
+        if not _is_rate_limit_error(e):
+            log.warning(f"[LIVE] Order history lookup failed for {order_id}: {e}")
+
+    return None
+
+
 def _get_orders_snapshot(force_refresh: bool = False) -> List[dict]:
     """
     Return a shared broker orderbook snapshot.
@@ -429,7 +492,7 @@ def _get_orders_snapshot(force_refresh: bool = False) -> List[dict]:
         if (not force_refresh) and cache_fresh:
             return list(orders_snapshot_cache)
 
-        if now < orders_snapshot_rate_limited_until and has_cache:
+        if (not force_refresh) and now < orders_snapshot_rate_limited_until and has_cache:
             return list(orders_snapshot_cache)
 
         try:
@@ -447,7 +510,7 @@ def _get_orders_snapshot(force_refresh: bool = False) -> List[dict]:
                     orders_snapshot_rate_limited_until,
                     now + max(0.5, ORDER_POLL_RATE_LIMIT_BACKOFF_SEC),
                 )
-                if has_cache:
+                if has_cache and (not force_refresh):
                     return list(orders_snapshot_cache)
             raise
 
@@ -478,12 +541,12 @@ def wait_for_fill(order_id: str, timeout_sec: int = FILL_WAIT_TIMEOUT_SEC) -> Op
     start = time.monotonic()
     while (time.monotonic() - start) < timeout_sec:
         try:
-            orders = _get_orders_snapshot(force_refresh=False)
-            row = _find_order_in_list(orders, order_id)
+            row = _get_order_row(order_id, force_refresh=False, allow_history_fallback=False)
             if row:
-                status = str(row.get("status", "")).upper()
+                state = _order_state_from_row(row)
+                status = state["status"]
                 if status == "COMPLETE":
-                    return float(row.get("average_price", 0) or 0)
+                    return float(state["average_price"] or 0.0)
                 if status in {"REJECTED", "CANCELLED"}:
                     log.warning(f"Order {order_id} status: {status}")
                     return None
@@ -497,14 +560,18 @@ def wait_for_fill(order_id: str, timeout_sec: int = FILL_WAIT_TIMEOUT_SEC) -> Op
                 log.warning(f"Error polling order {order_id}: {e}")
         time.sleep(ORDER_POLL_SEC)
 
-    # One final fresh check before declaring timeout.
+    # One final forced refresh check before declaring timeout.
     try:
-        orders = _get_orders_snapshot(force_refresh=True)
-        row = _find_order_in_list(orders, order_id)
+        row = _get_order_row(
+            order_id,
+            force_refresh=True,
+            allow_history_fallback=True,
+        )
         if row:
-            status = str(row.get("status", "")).upper()
+            state = _order_state_from_row(row)
+            status = state["status"]
             if status == "COMPLETE":
-                return float(row.get("average_price", 0) or 0)
+                return float(state["average_price"] or 0.0)
             if status in {"REJECTED", "CANCELLED"}:
                 log.warning(f"Order {order_id} status: {status}")
                 return None
@@ -527,39 +594,53 @@ def _place_exit_legs(
     Place target LIMIT + stop-loss SLM exit legs and return their order IDs.
     """
     tick_size = get_tick_size(ticker)
-    target_price = round_to_tick(target_price, tick=tick_size)
-    stop_price = round_to_tick(stop_price, tick=tick_size)
+    exit_side = str(exit_txn or "").upper()
+    if exit_side == "BUY":
+        target_mode = "up"
+        stop_mode = "up"
+    else:
+        target_mode = "down"
+        stop_mode = "down"
 
-    target_order_id = str(
-        kite.place_order(
-            variety=kite.VARIETY_REGULAR,
-            exchange=kite.EXCHANGE_NSE,
-            tradingsymbol=ticker,
-            transaction_type=exit_txn,
-            quantity=quantity,
-            product=kite.PRODUCT_MIS,
-            order_type=kite.ORDER_TYPE_LIMIT,
-            price=target_price,
-            validity=kite.VALIDITY_DAY,
-            tag="AVWAPTarget",
+    target_price = round_to_tick(target_price, tick=tick_size, mode=target_mode)
+    stop_price = round_to_tick(stop_price, tick=tick_size, mode=stop_mode)
+
+    target_order_id = ""
+    try:
+        target_order_id = str(
+            kite.place_order(
+                variety=kite.VARIETY_REGULAR,
+                exchange=kite.EXCHANGE_NSE,
+                tradingsymbol=ticker,
+                transaction_type=exit_txn,
+                quantity=quantity,
+                product=kite.PRODUCT_MIS,
+                order_type=kite.ORDER_TYPE_LIMIT,
+                price=target_price,
+                validity=kite.VALIDITY_DAY,
+                tag="AVWAPTarget",
+            )
         )
-    )
-    sl_order_id = str(
-        kite.place_order(
-            variety=kite.VARIETY_REGULAR,
-            exchange=kite.EXCHANGE_NSE,
-            tradingsymbol=ticker,
-            transaction_type=exit_txn,
-            quantity=quantity,
-            product=kite.PRODUCT_MIS,
-            order_type=kite.ORDER_TYPE_SLM,
-            trigger_price=stop_price,
-            validity=kite.VALIDITY_DAY,
-            tag="AVWAPStopLoss",
+        sl_order_id = str(
+            kite.place_order(
+                variety=kite.VARIETY_REGULAR,
+                exchange=kite.EXCHANGE_NSE,
+                tradingsymbol=ticker,
+                transaction_type=exit_txn,
+                quantity=quantity,
+                product=kite.PRODUCT_MIS,
+                order_type=kite.ORDER_TYPE_SLM,
+                trigger_price=stop_price,
+                validity=kite.VALIDITY_DAY,
+                tag="AVWAPStopLoss",
+            )
         )
-    )
-    _reset_orders_snapshot_cache()
-    return target_order_id, sl_order_id
+        _reset_orders_snapshot_cache()
+        return target_order_id, sl_order_id
+    except Exception:
+        if target_order_id:
+            cancel_order_safe(kite.VARIETY_REGULAR, target_order_id)
+        raise
 
 
 # ============================================================================
@@ -707,6 +788,11 @@ orders_snapshot_lock = threading.Lock()
 orders_snapshot_cache: List[Dict[str, Any]] = []
 orders_snapshot_ts_monotonic = 0.0
 orders_snapshot_rate_limited_until = 0.0
+kill_switch_cache_lock = threading.Lock()
+kill_switch_cache_mtime: float = -1.0
+kill_switch_cache_payload: Optional[Dict[str, Any]] = None
+global_eod_sweep_lock = threading.Lock()
+global_eod_last_sweep_ts = 0.0
 
 JSON_WRITE_RETRIES = 8
 JSON_WRITE_RETRY_BASE_SEC = 0.05
@@ -846,6 +932,63 @@ def _load_open_trades_state(today_str: str) -> Dict[str, Dict[str, Any]]:
     return restored
 
 
+def _load_kill_switch_command_cached() -> Optional[Dict[str, Any]]:
+    global kill_switch_cache_mtime, kill_switch_cache_payload
+    path = Path(KILL_SWITCH_COMMAND_FILE)
+    try:
+        mtime = path.stat().st_mtime if path.exists() else -1.0
+    except OSError:
+        mtime = -1.0
+
+    with kill_switch_cache_lock:
+        if mtime == kill_switch_cache_mtime:
+            return dict(kill_switch_cache_payload) if isinstance(kill_switch_cache_payload, dict) else None
+
+    payload: Optional[Dict[str, Any]] = None
+    if mtime >= 0:
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                today_str = datetime.now(IST).strftime("%Y-%m-%d")
+                cmd_date = str(raw.get("date", today_str)).strip() or today_str
+                if cmd_date == today_str:
+                    payload = dict(raw)
+        except Exception:
+            payload = None
+
+    with kill_switch_cache_lock:
+        kill_switch_cache_mtime = mtime
+        kill_switch_cache_payload = dict(payload) if isinstance(payload, dict) else None
+        return dict(kill_switch_cache_payload) if isinstance(kill_switch_cache_payload, dict) else None
+
+
+def _get_kill_switch_for_trade(signal_id: str, ticker: str) -> Optional[Dict[str, Any]]:
+    cmd = _load_kill_switch_command_cached()
+    if not cmd:
+        return None
+
+    target_ids_raw = cmd.get("target_signal_ids", [])
+    target_ids = {
+        str(x).strip()
+        for x in target_ids_raw
+        if str(x).strip()
+    } if isinstance(target_ids_raw, list) else set()
+    if target_ids:
+        if signal_id in target_ids:
+            return cmd
+        return None
+
+    mode = str(cmd.get("mode", "")).strip().lower()
+    if mode == "all":
+        return cmd
+    if mode == "ticker":
+        target_ticker = str(cmd.get("ticker", "")).strip().upper()
+        if target_ticker and target_ticker == str(ticker).strip().upper():
+            return cmd
+    return None
+
+
 def _set_dispatch_lockdown(reason: Optional[str]) -> None:
     global dispatch_lockdown_reason
     with dispatch_lockdown_lock:
@@ -866,6 +1009,136 @@ def _is_market_open_now(now_ist: Optional[datetime] = None) -> bool:
     ts = now_ist or datetime.now(IST)
     t = ts.time()
     return MARKET_OPEN <= t <= MARKET_CLOSE
+
+
+def _is_entry_window_open_now(now_ist: Optional[datetime] = None) -> bool:
+    """
+    New entries are allowed only until forced-close cutoff.
+    After cutoff, only position-closing actions are allowed.
+    """
+    ts = now_ist or datetime.now(IST)
+    t = ts.time()
+    return MARKET_OPEN <= t < FORCED_CLOSE_TIME
+
+
+def _global_eod_force_close_sweep(now_ist: Optional[datetime] = None) -> None:
+    """
+    Fail-safe EOD flattener:
+    - blocks new dispatch after 15:20
+    - cancels exit legs for tracked positions
+    - sends market close orders for any remaining tracked broker quantity
+    """
+    if kite is None:
+        return
+
+    ts = now_ist or datetime.now(IST)
+    if ts.time() < FORCED_CLOSE_TIME:
+        return
+
+    global global_eod_last_sweep_ts
+    now_mono = time.monotonic()
+    with global_eod_sweep_lock:
+        if (now_mono - global_eod_last_sweep_ts) < GLOBAL_EOD_SWEEP_INTERVAL_SEC:
+            return
+        global_eod_last_sweep_ts = now_mono
+
+    cutoff_reason = (
+        f"entry cutoff reached at {FORCED_CLOSE_TIME.strftime('%H:%M:%S')} IST; "
+        "EOD flatten in progress"
+    )
+    if not _get_dispatch_lockdown():
+        _set_dispatch_lockdown(cutoff_reason)
+        log.warning(f"[EOD.GLOBAL] {cutoff_reason}")
+
+    with active_positions_lock:
+        tracked_positions = [dict(v) for v in active_positions.values()]
+    if not tracked_positions:
+        return
+
+    broker_qty_map = _get_broker_mis_position_qty_map()
+    if broker_qty_map is None:
+        log.warning("[EOD.GLOBAL] Broker position snapshot unavailable; retrying sweep.")
+        return
+
+    # Aggregate expected per ticker to avoid over-closing when multiple signals
+    # map to the same symbol.
+    per_ticker: Dict[str, Dict[str, Any]] = {}
+    for pos in tracked_positions:
+        ticker = str(pos.get("ticker", "")).upper().strip()
+        side = str(pos.get("side", "")).upper().strip()
+        qty = int(_safe_int(pos.get("quantity", 0), 0))
+        if not ticker or qty <= 0 or side not in {"LONG", "SHORT"}:
+            continue
+        entry = per_ticker.setdefault(
+            ticker,
+            {
+                "expected_signed_qty": 0,
+                "target_order_ids": set(),
+                "sl_order_ids": set(),
+            },
+        )
+        entry["expected_signed_qty"] += qty if side == "LONG" else -qty
+
+        target_oid = str(pos.get("target_order_id", "")).strip()
+        sl_oid = str(pos.get("sl_order_id", "")).strip()
+        if target_oid:
+            entry["target_order_ids"].add(target_oid)
+        if sl_oid:
+            entry["sl_order_ids"].add(sl_oid)
+
+    for ticker, meta in sorted(per_ticker.items()):
+        for oid in sorted(meta["target_order_ids"]):
+            cancel_order_safe(kite.VARIETY_REGULAR, oid)
+        for oid in sorted(meta["sl_order_ids"]):
+            cancel_order_safe(kite.VARIETY_REGULAR, oid)
+
+        expected_signed_qty = int(meta["expected_signed_qty"])
+        broker_signed_qty = int(broker_qty_map.get(ticker, 0))
+        if expected_signed_qty == 0 or broker_signed_qty == 0:
+            continue
+
+        if (expected_signed_qty > 0 and broker_signed_qty < 0) or (
+            expected_signed_qty < 0 and broker_signed_qty > 0
+        ):
+            log.warning(
+                f"[EOD.GLOBAL] Skip {ticker}: direction mismatch "
+                f"(expected={expected_signed_qty}, broker={broker_signed_qty})."
+            )
+            continue
+
+        close_qty = min(abs(expected_signed_qty), abs(broker_signed_qty))
+        if close_qty <= 0:
+            continue
+
+        close_txn = kite.TRANSACTION_TYPE_BUY if broker_signed_qty < 0 else kite.TRANSACTION_TYPE_SELL
+        try:
+            close_order_id = kite.place_order(
+                variety=kite.VARIETY_REGULAR,
+                exchange=kite.EXCHANGE_NSE,
+                tradingsymbol=ticker,
+                transaction_type=close_txn,
+                quantity=int(close_qty),
+                product=kite.PRODUCT_MIS,
+                order_type=kite.ORDER_TYPE_MARKET,
+                validity=kite.VALIDITY_DAY,
+                tag="AVWAPEODGlobal",
+            )
+            _reset_orders_snapshot_cache()
+            fill_px = wait_for_fill(str(close_order_id), timeout_sec=12)
+            if fill_px and fill_px > 0:
+                log.warning(
+                    f"[EOD.GLOBAL] Flattened {ticker} qty={close_qty} @ {fill_px:.2f} "
+                    f"| order_id={close_order_id}"
+                )
+            else:
+                log.warning(
+                    f"[EOD.GLOBAL] Flatten order placed for {ticker} qty={close_qty} "
+                    f"| order_id={close_order_id} (fill pending/unconfirmed)"
+                )
+        except Exception as e:
+            log.error(
+                f"[EOD.GLOBAL] Flatten failed for {ticker} qty={close_qty}: {e}"
+            )
 
 
 def _check_risk_limits(signal: dict) -> Optional[str]:
@@ -990,6 +1263,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
     target_order_id = str(signal.get("target_order_id", "")).strip() if resume_mode else ""
     sl_order_id = str(signal.get("sl_order_id", "")).strip() if resume_mode else ""
     trade_closed = False
+    last_kill_switch_command_id = ""
 
     def _sync_active_position(stage: str) -> None:
         with active_positions_lock:
@@ -1017,6 +1291,77 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
             }
         _persist_open_trades_state()
 
+    def _force_market_close(tag: str, outcome: str, timeout_sec: int = 30) -> bool:
+        try:
+            close_order_id = kite.place_order(
+                variety=kite.VARIETY_REGULAR,
+                exchange=kite.EXCHANGE_NSE,
+                tradingsymbol=ticker,
+                transaction_type=exit_txn,
+                quantity=quantity,
+                product=kite.PRODUCT_MIS,
+                order_type=kite.ORDER_TYPE_MARKET,
+                validity=kite.VALIDITY_DAY,
+                tag=str(tag)[:20],
+            )
+            _reset_orders_snapshot_cache()
+            result.close_order_id = str(close_order_id)
+            close_price = wait_for_fill(close_order_id, timeout_sec=timeout_sec)
+            if close_price and close_price > 0:
+                result.exit_price = close_price
+                result.outcome = outcome
+                return True
+            log.error(
+                f"[LIVE] Market close unconfirmed for {ticker}; "
+                f"close_order_id={close_order_id}"
+            )
+            return False
+        except Exception as close_err:
+            log.error(f"[LIVE] Market close failed for {ticker}: {close_err}")
+            return False
+
+    def _check_kill_switch_and_close(stage: str) -> bool:
+        nonlocal trade_closed, last_kill_switch_command_id
+        cmd = _get_kill_switch_for_trade(signal_id, ticker)
+        if not cmd:
+            return False
+        cmd_id = str(cmd.get("command_id", "")).strip() or "NO_CMD_ID"
+        if cmd_id == last_kill_switch_command_id:
+            return False
+        last_kill_switch_command_id = cmd_id
+
+        mode = str(cmd.get("mode", "")).strip().lower() or "manual"
+        req_ts = str(cmd.get("requested_at_ist", "")).strip()
+        log.warning(
+            f"[KILL] Kill switch matched for {ticker} | signal_id={signal_id[:12]} | "
+            f"command_id={cmd_id} | mode={mode} | stage={stage}"
+            + (f" | requested_at={req_ts}" if req_ts else "")
+        )
+
+        if result.target_order_id:
+            cancel_order_safe(kite.VARIETY_REGULAR, result.target_order_id)
+        if result.sl_order_id:
+            cancel_order_safe(kite.VARIETY_REGULAR, result.sl_order_id)
+
+        if _force_market_close(
+            tag="AVWAPKillSwitch",
+            outcome="MANUAL_KILL_SWITCH",
+            timeout_sec=30,
+        ):
+            trade_closed = True
+            log.warning(
+                f"[KILL] Position closed via kill switch for {ticker} @ {result.exit_price} "
+                f"| close_order_id={result.close_order_id}"
+            )
+            return True
+
+        _sync_active_position("kill_switch_close_failed")
+        log.error(
+            f"[KILL] Kill switch close failed for {ticker}; keeping position tracked "
+            "for manual reconciliation."
+        )
+        return False
+
     try:
         if resume_mode:
             result.entry_order_id = str(signal.get("entry_order_id", "")).strip()
@@ -1037,16 +1382,36 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 capital_deployed[signal_id] = margin
             _sync_active_position("restored")
         else:
+            if datetime.now(IST) >= forced_close_dt:
+                result.outcome = "ENTRY_SKIPPED_AFTER_CUTOFF"
+                result.exit_price = signal_entry_price
+                trade_closed = True
+                log.warning(
+                    f"[LIVE] Skipping new entry for {ticker}: "
+                    f"cutoff {FORCED_CLOSE_TIME.strftime('%H:%M:%S')} IST already reached."
+                )
+                # No open position was created; proceed to finalization for audit row.
+                pass
             # ---- STEP 1: Place market entry ----
+            planned_qty = int(quantity)
             filled_price = 0.0
             entry_filled = False
+            filled_qty_total = 0
+            filled_notional_total = 0.0
             for entry_attempt in range(1, ENTRY_RETRY_ATTEMPTS + 1):
+                if trade_closed:
+                    break
+                remaining_qty = max(0, planned_qty - filled_qty_total)
+                if remaining_qty <= 0:
+                    entry_filled = True
+                    break
+
                 entry_order_id = kite.place_order(
                     variety=kite.VARIETY_REGULAR,
                     exchange=kite.EXCHANGE_NSE,
                     tradingsymbol=ticker,
                     transaction_type=entry_txn,
-                    quantity=quantity,
+                    quantity=remaining_qty,
                     product=kite.PRODUCT_MIS,
                     order_type=kite.ORDER_TYPE_MARKET,
                     validity=kite.VALIDITY_DAY,
@@ -1065,30 +1430,43 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
 
                 # ---- STEP 2: Wait for fill ----
                 filled_price = wait_for_fill(entry_order_id)
-                if filled_price and filled_price > 0:
-                    entry_filled = True
-                    break
-
                 status_upper = "UNKNOWN"
                 filled_qty = 0
                 avg_price = 0.0
-                try:
-                    latest_orders = _get_orders_snapshot(force_refresh=True)
-                    entry_row = _find_order_in_list(latest_orders, str(entry_order_id))
-                    if entry_row:
-                        status_upper = str(entry_row.get("status", "")).upper()
-                        filled_qty = _safe_int(entry_row.get("filled_quantity", 0), 0)
-                        avg_price = _safe_float(entry_row.get("average_price", 0.0), 0.0)
-                except Exception as status_err:
-                    if not _is_rate_limit_error(status_err):
-                        log.warning(
-                            f"[LIVE] Entry status check failed for {ticker} ID={entry_order_id}: {status_err}"
-                        )
+                entry_row = _get_order_row(
+                    str(entry_order_id),
+                    force_refresh=True,
+                    allow_history_fallback=True,
+                )
+                if entry_row:
+                    entry_state = _order_state_from_row(entry_row)
+                    status_upper = entry_state["status"]
+                    filled_qty = min(remaining_qty, int(entry_state["filled_quantity"]))
+                    avg_price = float(entry_state["average_price"])
+                    if status_upper == "COMPLETE" and filled_qty <= 0:
+                        filled_qty = remaining_qty
+                elif filled_price and filled_price > 0:
+                    status_upper = "COMPLETE"
+                    filled_qty = remaining_qty
+                    avg_price = float(filled_price)
 
-                if status_upper == "COMPLETE" and avg_price > 0:
-                    filled_price = avg_price
-                    entry_filled = True
-                    break
+                if filled_qty > 0:
+                    if avg_price <= 0:
+                        avg_price = float(
+                            filled_price if (filled_price and filled_price > 0) else signal_entry_price
+                        )
+                    filled_qty_total += int(filled_qty)
+                    filled_notional_total += float(avg_price) * int(filled_qty)
+                    remaining_after = max(0, planned_qty - filled_qty_total)
+                    if remaining_after > 0:
+                        log.warning(
+                            f"[LIVE][ENTRY.PARTIAL] {ticker}: "
+                            f"filled={filled_qty_total}/{planned_qty} "
+                            f"(last_fill_qty={filled_qty}, status={status_upper})"
+                        )
+                    else:
+                        entry_filled = True
+                        break
 
                 retryable_no_fill = (
                     filled_qty <= 0
@@ -1096,18 +1474,33 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 )
                 has_retry_left = entry_attempt < ENTRY_RETRY_ATTEMPTS
 
-                if retryable_no_fill and has_retry_left:
+                remaining_after = max(0, planned_qty - filled_qty_total)
+                if remaining_after > 0 and has_retry_left:
                     if status_upper not in {"CANCELLED"}:
                         cancel_order_safe(kite.VARIETY_REGULAR, str(entry_order_id))
-                    log.warning(
-                        f"[LIVE][ENTRY.RETRY] {ticker} entry not filled "
-                        f"(status={status_upper}, attempt={entry_attempt}/{ENTRY_RETRY_ATTEMPTS}). "
-                        "Retrying once."
-                    )
+                    if retryable_no_fill:
+                        log.warning(
+                            f"[LIVE][ENTRY.RETRY] {ticker} entry not filled "
+                            f"(status={status_upper}, attempt={entry_attempt}/{ENTRY_RETRY_ATTEMPTS}). "
+                            "Retrying once."
+                        )
+                    else:
+                        log.warning(
+                            f"[LIVE][ENTRY.RETRY] {ticker} partial fill "
+                            f"{filled_qty_total}/{planned_qty}; retrying leftover {remaining_after}."
+                        )
                     continue
 
                 if status_upper not in {"CANCELLED", "REJECTED", "COMPLETE"}:
                     cancel_order_safe(kite.VARIETY_REGULAR, str(entry_order_id))
+                if filled_qty_total > 0:
+                    log.warning(
+                        f"[LIVE][ENTRY.PARTIAL.ACCEPT] {ticker}: "
+                        f"proceeding with partial fill {filled_qty_total}/{planned_qty} "
+                        f"after {entry_attempt} attempt(s)."
+                    )
+                    entry_filled = True
+                    break
                 log.error(
                     f"[LIVE] Entry order {entry_order_id} not filled "
                     f"(status={status_upper}). Aborting trade."
@@ -1118,11 +1511,41 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 break
 
             if entry_filled:
-                result.filled_price = float(filled_price)
-                log.info(f"[LIVE] Entry filled: {ticker} @ {filled_price}")
+                if filled_qty_total <= 0:
+                    filled_qty_total = planned_qty
+                    filled_notional_total = float(
+                        (filled_price if (filled_price and filled_price > 0) else signal_entry_price)
+                        * planned_qty
+                    )
+                quantity = max(1, int(filled_qty_total))
+                result.quantity = quantity
+                result.filled_price = float(filled_notional_total / max(1, filled_qty_total))
+                if quantity < planned_qty:
+                    log.warning(
+                        f"[LIVE] Entry partial for {ticker}: qty={quantity}/{planned_qty} "
+                        f"avg={result.filled_price:.2f}"
+                    )
+                else:
+                    log.info(f"[LIVE] Entry filled: {ticker} @ {result.filled_price}")
+
+                # If entry fills at/after cutoff, flatten immediately and do not place exit legs.
+                if datetime.now(IST) >= forced_close_dt:
+                    log.warning(
+                        f"[LIVE] Entry for {ticker} filled at/after cutoff "
+                        f"{FORCED_CLOSE_TIME.strftime('%H:%M:%S')} IST; forcing immediate close."
+                    )
+                    if _force_market_close(
+                        tag="AVWAPCutoffClose",
+                        outcome="EOD_CLOSE_AFTER_CUTOFF",
+                        timeout_sec=30,
+                    ):
+                        trade_closed = True
+                    else:
+                        _sync_active_position("post_cutoff_entry_close_failed")
+                        return
 
                 # Register margin deployment (notional / leverage)
-                margin = (filled_price * quantity) / INTRADAY_LEVERAGE
+                margin = (result.filled_price * quantity) / INTRADAY_LEVERAGE
                 with capital_lock:
                     capital_deployed[signal_id] = margin
 
@@ -1131,13 +1554,13 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 if side == "SHORT":
                     sl_offset = abs(signal_stop - signal_entry_price)
                     tgt_offset = abs(signal_entry_price - signal_target)
-                    sl_price = round_to_tick(filled_price + sl_offset, tick=tick_size)
-                    tgt_price = round_to_tick(filled_price - tgt_offset, tick=tick_size)
+                    sl_price = round_to_tick(result.filled_price + sl_offset, tick=tick_size)
+                    tgt_price = round_to_tick(result.filled_price - tgt_offset, tick=tick_size)
                 else:
                     sl_offset = abs(signal_entry_price - signal_stop)
                     tgt_offset = abs(signal_target - signal_entry_price)
-                    sl_price = round_to_tick(filled_price - sl_offset, tick=tick_size)
-                    tgt_price = round_to_tick(filled_price + tgt_offset, tick=tick_size)
+                    sl_price = round_to_tick(result.filled_price - sl_offset, tick=tick_size)
+                    tgt_price = round_to_tick(result.filled_price + tgt_offset, tick=tick_size)
 
                 result.stop_price = sl_price
                 result.target_price = tgt_price
@@ -1184,38 +1607,17 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                         return
 
                     # New trade fallback: attempt immediate market close.
-                    try:
-                        close_order_id = kite.place_order(
-                            variety=kite.VARIETY_REGULAR,
-                            exchange=kite.EXCHANGE_NSE,
-                            tradingsymbol=ticker,
-                            transaction_type=exit_txn,
-                            quantity=quantity,
-                            product=kite.PRODUCT_MIS,
-                            order_type=kite.ORDER_TYPE_MARKET,
-                            validity=kite.VALIDITY_DAY,
-                            tag="AVWAPExitFailClose",
+                    if _force_market_close(
+                        tag="AVWAPExitFailClose",
+                        outcome="EXIT_SETUP_FAILED_FORCE_CLOSED",
+                        timeout_sec=30,
+                    ):
+                        trade_closed = True
+                        log.warning(
+                            f"[LIVE] Exit setup fallback close for {ticker}: "
+                            f"close_order_id={result.close_order_id} exit={result.exit_price}"
                         )
-                        _reset_orders_snapshot_cache()
-                        result.close_order_id = str(close_order_id)
-                        close_price = wait_for_fill(close_order_id, timeout_sec=30)
-                        if close_price and close_price > 0:
-                            result.exit_price = close_price
-                            result.outcome = "EXIT_SETUP_FAILED_FORCE_CLOSED"
-                            trade_closed = True
-                            log.warning(
-                                f"[LIVE] Exit setup fallback close for {ticker}: "
-                                f"close_order_id={close_order_id} exit={result.exit_price}"
-                            )
-                        else:
-                            log.error(
-                                f"[LIVE] Exit setup fallback close unconfirmed for {ticker}; "
-                                "keeping state for restart reconciliation."
-                            )
-                            _sync_active_position("exit_setup_failed_needs_reconcile")
-                            return
-                    except Exception as close_err:
-                        log.error(f"[LIVE] Exit setup fallback close failed for {ticker}: {close_err}")
+                    else:
                         _sync_active_position("exit_setup_failed_needs_reconcile")
                         return
             else:
@@ -1227,42 +1629,37 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
             while (not trade_closed) and result.target_order_id and result.sl_order_id:
                 now_ist = datetime.now(IST)
 
+                if _check_kill_switch_and_close(stage="monitor_loop"):
+                    break
+
                 if now_ist >= forced_close_dt:
                     log.info(f"[LIVE] EOD forced close for {ticker}")
                     cancel_order_safe(kite.VARIETY_REGULAR, result.target_order_id)
                     cancel_order_safe(kite.VARIETY_REGULAR, result.sl_order_id)
-                    try:
-                        close_order_id = kite.place_order(
-                            variety=kite.VARIETY_REGULAR,
-                            exchange=kite.EXCHANGE_NSE,
-                            tradingsymbol=ticker,
-                            transaction_type=exit_txn,
-                            quantity=quantity,
-                            product=kite.PRODUCT_MIS,
-                            order_type=kite.ORDER_TYPE_MARKET,
-                            validity=kite.VALIDITY_DAY,
-                            tag="AVWAPForceClose",
-                        )
-                        _reset_orders_snapshot_cache()
-                        result.close_order_id = str(close_order_id)
-                        close_price = wait_for_fill(close_order_id, timeout_sec=30)
-                        if close_price and close_price > 0:
-                            result.exit_price = close_price
-                            result.outcome = "EOD_CLOSE"
+                    broker_map = _get_broker_mis_position_qty_map()
+                    if broker_map is not None:
+                        broker_qty = int(broker_map.get(ticker, 0))
+                        expected_sign = -1 if side == "SHORT" else 1
+                        if broker_qty == 0 or (broker_qty * expected_sign) <= 0:
+                            result.exit_price = result.filled_price or signal_entry_price
+                            result.outcome = "EOD_FLAT_NO_FORCE_CLOSE"
                             trade_closed = True
-                            log.info(
-                                f"[LIVE] Forced close: {ticker} @ {result.exit_price} "
-                                f"ID={close_order_id}"
+                            log.warning(
+                                f"[LIVE] Skipping EOD force-close for {ticker}: "
+                                f"broker_qty={broker_qty} (already flat/opposite)."
                             )
-                        else:
-                            log.error(
-                                f"[LIVE] Forced close unconfirmed for {ticker}; "
-                                "keeping state for restart reconciliation."
-                            )
-                            _sync_active_position("forced_close_unconfirmed")
-                            return
-                    except Exception as e:
-                        log.error(f"[LIVE] Forced close failed for {ticker}: {e}")
+                            break
+                    if _force_market_close(
+                        tag="AVWAPForceClose",
+                        outcome="EOD_CLOSE",
+                        timeout_sec=30,
+                    ):
+                        trade_closed = True
+                        log.info(
+                            f"[LIVE] Forced close: {ticker} @ {result.exit_price} "
+                            f"ID={result.close_order_id}"
+                        )
+                    else:
                         _sync_active_position("forced_close_failed")
                         return
                     break
@@ -1284,16 +1681,22 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 sl_filled = False
                 target_fill_price = result.target_price
                 sl_fill_price = result.stop_price
+                target_status = ""
+                sl_status = ""
 
                 for o in orders:
                     oid = str(o.get("order_id", ""))
                     status = str(o.get("status", "")).upper()
-                    if oid == result.target_order_id and status == "COMPLETE":
-                        target_filled = True
-                        target_fill_price = float(o.get("average_price", result.target_price))
-                    if oid == result.sl_order_id and status == "COMPLETE":
-                        sl_filled = True
-                        sl_fill_price = float(o.get("average_price", result.stop_price))
+                    if oid == result.target_order_id:
+                        target_status = status
+                        if status == "COMPLETE":
+                            target_filled = True
+                            target_fill_price = float(o.get("average_price", result.target_price))
+                    if oid == result.sl_order_id:
+                        sl_status = status
+                        if status == "COMPLETE":
+                            sl_filled = True
+                            sl_fill_price = float(o.get("average_price", result.stop_price))
 
                 if target_filled:
                     log.info(
@@ -1316,6 +1719,32 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     result.outcome = "SL"
                     trade_closed = True
                     break
+
+                target_invalid = target_status in {"REJECTED", "CANCELLED"}
+                sl_invalid = sl_status in {"REJECTED", "CANCELLED"}
+                if target_invalid or sl_invalid:
+                    bad_legs = []
+                    if target_invalid:
+                        bad_legs.append(f"target={target_status}")
+                    if sl_invalid:
+                        bad_legs.append(f"sl={sl_status}")
+                    log.error(
+                        f"[LIVE] Exit leg invalid for {ticker}: {', '.join(bad_legs)}. "
+                        "Cancelling remaining legs and forcing market close."
+                    )
+                    if result.target_order_id:
+                        cancel_order_safe(kite.VARIETY_REGULAR, result.target_order_id)
+                    if result.sl_order_id:
+                        cancel_order_safe(kite.VARIETY_REGULAR, result.sl_order_id)
+                    if _force_market_close(
+                        tag="AVWAPLegFailClose",
+                        outcome="EXIT_LEG_INVALID_FORCE_CLOSED",
+                        timeout_sec=30,
+                    ):
+                        trade_closed = True
+                        break
+                    _sync_active_position("exit_leg_invalid_needs_reconcile")
+                    return
 
                 time.sleep(ORDER_POLL_SEC)
 
@@ -1358,30 +1787,37 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
     pnl_rs, pnl_pct = _calc_pnl(side, ep, xp, quantity)
     result.pnl_rs = round(pnl_rs, 2)
     result.pnl_pct = round(pnl_pct, 4)
+    try:
+        try:
+            _log_trade_result(result)
+        except Exception as csv_err:
+            log.error(f"[LIVE] Trade CSV write failed for {ticker}: {csv_err}")
+            log.error(traceback.format_exc())
 
-    _log_trade_result(result)
+        with daily_pnl_lock:
+            daily_pnl["total"] += result.pnl_rs
+            daily_pnl["trades"] += 1
+            if result.pnl_rs > 0:
+                daily_pnl["wins"] += 1
+            elif result.pnl_rs < 0:
+                daily_pnl["losses"] += 1
+            _save_summary()
+            day_total = float(daily_pnl["total"])
 
-    with daily_pnl_lock:
-        daily_pnl["total"] += result.pnl_rs
-        daily_pnl["trades"] += 1
-        if result.pnl_rs > 0:
-            daily_pnl["wins"] += 1
-        elif result.pnl_rs < 0:
-            daily_pnl["losses"] += 1
-        _save_summary()
-        day_total = float(daily_pnl["total"])
-
-    log.info(
-        f"[LIVE] RESULT {side} {ticker} | {result.outcome} | "
-        f"Entry={ep} Exit={xp} | "
-        f"P&L: Rs.{result.pnl_rs:+,.2f} ({result.pnl_pct:+.2f}%) | "
-        f"Day total: Rs.{day_total:+,.2f}"
-    )
-
-    _release_capacity(signal_id)
-    with active_positions_lock:
-        active_positions.pop(signal_id, None)
-    _persist_open_trades_state()
+        log.info(
+            f"[LIVE] RESULT {side} {ticker} | {result.outcome} | "
+            f"Entry={ep} Exit={xp} | "
+            f"P&L: Rs.{result.pnl_rs:+,.2f} ({result.pnl_pct:+.2f}%) | "
+            f"Day total: Rs.{day_total:+,.2f}"
+        )
+    finally:
+        _release_capacity(signal_id)
+        with active_positions_lock:
+            active_positions.pop(signal_id, None)
+        try:
+            _persist_open_trades_state()
+        except Exception as state_err:
+            log.error(f"[LIVE] Failed to persist open-trade cleanup state for {ticker}: {state_err}")
 
 
 def _log_trade_result(result: LiveTradeResult) -> None:
@@ -1660,6 +2096,38 @@ def _load_closed_ids_and_realized_summary(
     }
 
 
+def _get_broker_mis_position_qty_map() -> Optional[Dict[str, int]]:
+    """
+    Return broker MIS net quantity per symbol.
+    Returns None when broker positions cannot be fetched.
+    """
+    if kite is None:
+        return {}
+    try:
+        payload = kite.positions()
+    except Exception as e:
+        log.warning(f"[RESTORE] Could not fetch broker MIS positions snapshot: {e}")
+        return None
+
+    net_rows = payload.get("net", []) if isinstance(payload, dict) else []
+    if not isinstance(net_rows, list):
+        return {}
+
+    out: Dict[str, int] = {}
+    for row in net_rows:
+        ticker = str(row.get("tradingsymbol", "")).strip().upper()
+        if not ticker:
+            continue
+        product = str(row.get("product", "")).strip().upper()
+        if product and product != "MIS":
+            continue
+        qty = int(_safe_int(row.get("quantity", 0), 0))
+        if qty == 0:
+            continue
+        out[ticker] = out.get(ticker, 0) + qty
+    return out
+
+
 def _restore_intraday_runtime_state(
     signal_csv_paths: Sequence[str],
     trade_csv_path: str,
@@ -1691,8 +2159,10 @@ def _restore_intraday_runtime_state(
         _save_summary()
 
     raw_open_state = _load_open_trades_state(today_str)
+    broker_qty_map = _get_broker_mis_position_qty_map()
     restored_positions: Dict[str, Dict[str, Any]] = {}
     resume_signals: List[dict] = []
+    stale_restored: List[Dict[str, Any]] = []
 
     for sid, pos in raw_open_state.items():
         if sid in closed_ids:
@@ -1716,6 +2186,23 @@ def _restore_intraday_runtime_state(
             continue
         if qty <= 0 or filled_price <= 0 or stop_price <= 0 or target_price <= 0:
             continue
+        if broker_qty_map is not None:
+            expected_signed_qty = int(qty if side == "LONG" else -qty)
+            broker_qty = int(broker_qty_map.get(ticker, 0))
+            same_direction = (
+                (broker_qty > 0 and expected_signed_qty > 0)
+                or (broker_qty < 0 and expected_signed_qty < 0)
+            )
+            if broker_qty == 0 or (not same_direction) or abs(broker_qty) < abs(expected_signed_qty):
+                stale_restored.append(
+                    {
+                        "signal_id": sid,
+                        "ticker": ticker,
+                        "expected_qty": expected_signed_qty,
+                        "broker_qty": broker_qty,
+                    }
+                )
+                continue
 
         restored_positions[sid] = {
             "signal_id": sid,
@@ -1765,6 +2252,20 @@ def _restore_intraday_runtime_state(
                 "quality_score": _safe_float(base.get("quality_score", pos.get("quality_score", 0.0)), 0.0),
             }
         )
+
+    if stale_restored:
+        stale_ids = {str(x.get("signal_id", "")).strip() for x in stale_restored if str(x.get("signal_id", "")).strip()}
+        stale_tickers = {
+            str(x.get("ticker", "")).upper().strip() for x in stale_restored if str(x.get("ticker", "")).strip()
+        }
+        closed_ids.update(stale_ids)
+        traded_tickers.update(stale_tickers)
+        for row in stale_restored:
+            log.warning(
+                "[RESTORE] Dropping stale tracked state "
+                f"{row.get('ticker', '?')} signal_id={str(row.get('signal_id', ''))[:12]} "
+                f"(expected_qty={row.get('expected_qty', 0)}, broker_qty={row.get('broker_qty', 0)})."
+            )
 
     with active_positions_lock:
         active_positions.clear()
@@ -1816,6 +2317,7 @@ def _restore_intraday_runtime_state(
         "executed_loaded": float(len(executed)),
         "closed_today": float(len(closed_ids)),
         "open_restored": float(len(restored_positions)),
+        "stale_dropped": float(len(stale_restored)),
         "realized_trades": float(realized["realized_trades"]),
         "realized_total": float(realized["realized_total"]),
         "deployed_margin": float(deployed_margin),
@@ -1828,44 +2330,74 @@ def _detect_orphan_broker_positions() -> List[dict]:
     """
     Detect open MIS positions present at broker but not tracked by executor state.
     """
-    if kite is None:
-        return []
-    try:
-        payload = kite.positions()
-    except Exception as e:
-        log.warning(f"[RESTORE] Could not fetch broker positions for safety check: {e}")
-        return []
-
-    net_rows = payload.get("net", []) if isinstance(payload, dict) else []
-    if not isinstance(net_rows, list):
+    broker_qty_map = _get_broker_mis_position_qty_map()
+    if broker_qty_map is None:
         return []
 
     with active_positions_lock:
-        tracked = {
-            str(pos.get("ticker", "")).upper(): int(_safe_int(pos.get("quantity", 0), 0))
-            for pos in active_positions.values()
-        }
+        tracked: Dict[str, int] = {}
+        for pos in active_positions.values():
+            t = str(pos.get("ticker", "")).upper().strip()
+            if not t:
+                continue
+            signed_qty = int(
+                _safe_int(pos.get("quantity", 0), 0)
+                * (-1 if str(pos.get("side", "")).upper() == "SHORT" else 1)
+            )
+            tracked[t] = tracked.get(t, 0) + signed_qty
 
     orphans: List[dict] = []
-    for row in net_rows:
-        ticker = str(row.get("tradingsymbol", "")).upper()
-        product = str(row.get("product", "")).upper()
-        qty = int(_safe_int(row.get("quantity", 0), 0))
+    for ticker, qty in broker_qty_map.items():
         if qty == 0:
             continue
-        if product and product != "MIS":
-            continue
         tracked_qty = tracked.get(ticker)
-        if tracked_qty is None or abs(tracked_qty) != abs(qty):
+        if tracked_qty is None or tracked_qty != qty:
             orphans.append(
                 {
                     "ticker": ticker,
                     "quantity": qty,
-                    "product": product or "?",
-                    "average_price": _safe_float(row.get("average_price", 0.0), 0.0),
+                    "product": "MIS",
+                    "average_price": 0.0,
                 }
             )
     return orphans
+
+
+def _detect_stale_tracked_positions() -> List[dict]:
+    """
+    Detect tracked runtime positions that are absent/mismatched at broker.
+    """
+    broker_qty_map = _get_broker_mis_position_qty_map()
+    if broker_qty_map is None:
+        return []
+
+    stale: List[dict] = []
+    with active_positions_lock:
+        snapshot = [dict(v) for v in active_positions.values()]
+
+    for pos in snapshot:
+        sid = str(pos.get("signal_id", "")).strip()
+        ticker = str(pos.get("ticker", "")).upper().strip()
+        side = str(pos.get("side", "")).upper().strip()
+        qty = int(_safe_int(pos.get("quantity", 0), 0))
+        if not sid or not ticker or qty <= 0 or side not in {"LONG", "SHORT"}:
+            continue
+        expected_qty = qty if side == "LONG" else -qty
+        broker_qty = int(broker_qty_map.get(ticker, 0))
+        same_direction = (
+            (broker_qty > 0 and expected_qty > 0)
+            or (broker_qty < 0 and expected_qty < 0)
+        )
+        if broker_qty == 0 or (not same_direction) or abs(broker_qty) < abs(expected_qty):
+            stale.append(
+                {
+                    "signal_id": sid,
+                    "ticker": ticker,
+                    "expected_qty": expected_qty,
+                    "broker_qty": broker_qty,
+                }
+            )
+    return stale
 
 
 # ============================================================================
@@ -1976,7 +2508,8 @@ def _sanitize_today_trade_csv() -> Tuple[int, int]:
     keep_mask = []
     for _, row in df.iterrows():
         row_date = _signal_ist_date(row)
-        keep_mask.append(row_date == today_date if row_date is not None else False)
+        # Keep unparsable rows for safety; only drop rows that are positively stale.
+        keep_mask.append(row_date == today_date if row_date is not None else True)
 
     df_today = df[pd.Series(keep_mask, index=df.index)].copy()
     if "signal_id" in df_today.columns:
@@ -2192,7 +2725,7 @@ def process_new_signals(
         log.error(f"[SAFETY] New entries blocked: {lockdown}")
         return executed
 
-    if not _is_market_open_now():
+    if not _is_entry_window_open_now():
         return executed
 
     signals = read_signals_csv_multi(csv_paths)
@@ -2297,9 +2830,6 @@ def process_new_signals(
         with executed_lock:
             executed.add(signal_id)
             executed_changed = True
-        with closed_trades_lock:
-            closed_signal_ids_today.add(signal_id)
-            closed_tickers_today.add(ticker)
 
         ticker = signal.get("ticker", "?")
         side = signal.get("side", "?")
@@ -2310,6 +2840,9 @@ def process_new_signals(
                 f"[DRY-RUN] Would execute: {side} {ticker} @ {entry_p} | "
                 f"SL={signal.get('stop_price')} TGT={signal.get('target_price')}"
             )
+            with closed_trades_lock:
+                closed_signal_ids_today.add(signal_id)
+                closed_tickers_today.add(ticker)
             _release_capacity(signal_id)
             continue
 
@@ -2327,6 +2860,9 @@ def process_new_signals(
                 executed_changed = True
             log.error(f"[DISPATCH] Failed to launch trade thread for signal_id={sid[:12]}")
             continue
+        with closed_trades_lock:
+            closed_signal_ids_today.add(signal_id)
+            closed_tickers_today.add(ticker)
         _log_pending_signal_to_csv(signal, signal_id)
 
         log.info(
@@ -2413,6 +2949,7 @@ def main():
     log.info(f"  Mode              : {'DRY-RUN' if args.dry_run else 'LIVE TRADING'}")
     log.info(f"  Max concurrent    : {args.max_trades}")
     log.info(f"  Signal dir        : {os.path.abspath(SIGNAL_DIR)}/")
+    log.info(f"  Entry cutoff at   : {FORCED_CLOSE_TIME} IST")
     log.info(f"  Forced close at   : {FORCED_CLOSE_TIME} IST")
     if RISK_LIMITS_ENABLED:
         log.info(
@@ -2489,12 +3026,14 @@ def main():
             f"executed={int(restore_stats['executed_loaded'])} "
             f"closed_today={int(restore_stats['closed_today'])} "
             f"open_restored={int(restore_stats['open_restored'])} "
+            f"stale_dropped={int(restore_stats['stale_dropped'])} "
             f"requeued_backlog={int(restore_stats['requeued_backlog'])} "
             f"realized_trades={int(restore_stats['realized_trades'])} "
             f"realized_total=Rs.{restore_stats['realized_total']:+,.2f} "
             f"deployed_margin=Rs.{restore_stats['deployed_margin']:,.2f}"
         )
 
+        safety_reasons: List[str] = []
         orphan_positions = _detect_orphan_broker_positions()
         if orphan_positions:
             orphan_summary = ", ".join(
@@ -2504,8 +3043,7 @@ def main():
                 "orphan MIS broker positions detected; "
                 f"manual reconciliation required ({orphan_summary})"
             )
-            _set_dispatch_lockdown(reason)
-            log.error(f"[SAFETY] {reason}")
+            safety_reasons.append(reason)
             for orphan in orphan_positions:
                 log.error(
                     "[SAFETY] ORPHAN "
@@ -2513,6 +3051,51 @@ def main():
                     f"product={orphan.get('product', '?')} "
                     f"avg={_safe_float(orphan.get('average_price', 0.0), 0.0):.2f}"
                 )
+
+        stale_tracked = _detect_stale_tracked_positions()
+        if stale_tracked:
+            stale_ids = {str(x.get("signal_id", "")).strip() for x in stale_tracked if str(x.get("signal_id", "")).strip()}
+            stale_tickers = {
+                str(x.get("ticker", "")).upper().strip()
+                for x in stale_tracked
+                if str(x.get("ticker", "")).strip()
+            }
+            with active_positions_lock:
+                for sid in stale_ids:
+                    active_positions.pop(sid, None)
+            with capital_lock:
+                for sid in stale_ids:
+                    capital_deployed.pop(sid, None)
+            with closed_trades_lock:
+                closed_signal_ids_today.update(stale_ids)
+                closed_tickers_today.update(stale_tickers)
+            try:
+                _persist_open_trades_state()
+            except Exception as e:
+                log.error(f"[SAFETY] Failed to persist stale-state cleanup: {e}")
+            resume_signals = [
+                sig for sig in resume_signals
+                if str(sig.get("signal_id", "")).strip() not in stale_ids
+            ]
+            stale_summary = ", ".join(
+                f"{x.get('ticker', '?')}:{x.get('expected_qty', 0)}->{x.get('broker_qty', 0)}"
+                for x in stale_tracked
+            )
+            safety_reasons.append(
+                "stale tracked runtime positions dropped; "
+                f"manual reconciliation required ({stale_summary})"
+            )
+            for row in stale_tracked:
+                log.error(
+                    "[SAFETY] STALE "
+                    f"{row.get('ticker', '?')} signal_id={str(row.get('signal_id', ''))[:12]} "
+                    f"expected={row.get('expected_qty', 0)} broker={row.get('broker_qty', 0)}"
+                )
+
+        if safety_reasons:
+            reason = " | ".join(safety_reasons)
+            _set_dispatch_lockdown(reason)
+            log.error(f"[SAFETY] {reason}")
         else:
             log.info("[SAFETY] Broker MIS positions match restored runtime state.")
 
@@ -2551,6 +3134,9 @@ def main():
     try:
         while True:
             now = datetime.now(IST)
+
+            if not args.dry_run and now.time() >= FORCED_CLOSE_TIME:
+                _global_eod_force_close_sweep(now_ist=now)
 
             if now.time() > MARKET_CLOSE:
                 with active_trades_lock:
