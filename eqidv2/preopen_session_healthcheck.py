@@ -117,6 +117,10 @@ def _run_schtasks_query(task_name: str) -> Optional[str]:
     return proc.stdout or ""
 
 
+def _task_exists(task_name: str) -> bool:
+    return _run_schtasks_query(task_name) is not None
+
+
 def _extract_value(lines: List[str], prefix: str) -> str:
     prefix_l = prefix.lower()
     for ln in lines:
@@ -171,18 +175,27 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     # Core reachability.
     checks.append(check_http("http://127.0.0.1:8787/", timeout_sec=8.0))
 
+    unified_mode = _task_exists("EQIDV2_live_combined_csv_v5_unified_0900")
+
     # Scheduled tasks expected to have run by 09:05.
     preopen_tasks = [
         "EQIDV2_log_dashboard_start_0855",
-        "EQIDV2_eod_15mins_data_0900",
         "EQIDV2_live_combined_csv_v4_short_0900",
         "EQIDV2_live_combined_csv_v4_long_0900",
-        "EQIDV2_live_combined_csv_v5_short_0900",
-        "EQIDV2_live_combined_csv_v5_long_0900",
         "EQIDV2_avwap_paper_trade_v4_0900",
         "EQIDV2_avwap_paper_trade_v5_0900",
         "EQIDV2_authentication_v2_0900",
     ]
+    if unified_mode:
+        preopen_tasks.append("EQIDV2_live_combined_csv_v5_unified_0900")
+    else:
+        preopen_tasks.extend(
+            [
+                "EQIDV2_eod_15mins_data_0900",
+                "EQIDV2_live_combined_csv_v5_short_0900",
+                "EQIDV2_live_combined_csv_v5_long_0900",
+            ]
+        )
     for task in preopen_tasks:
         checks.append(check_task_ran_today(task))
 
@@ -203,22 +216,32 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             label="live_scanner_v4_long_log",
         )
     )
-    checks.append(
-        check_file_recent(
-            LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_short.log",
-            max_age_min=max_age_min,
-            required=True,
-            label="live_scanner_v5_short_log",
+    if unified_mode:
+        checks.append(
+            check_file_recent(
+                LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_unified.log",
+                max_age_min=max_age_min,
+                required=True,
+                label="live_scanner_v5_unified_log",
+            )
         )
-    )
-    checks.append(
-        check_file_recent(
-            LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_long.log",
-            max_age_min=max_age_min,
-            required=True,
-            label="live_scanner_v5_long_log",
+    else:
+        checks.append(
+            check_file_recent(
+                LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_short.log",
+                max_age_min=max_age_min,
+                required=True,
+                label="live_scanner_v5_short_log",
+            )
         )
-    )
+        checks.append(
+            check_file_recent(
+                LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_long.log",
+                max_age_min=max_age_min,
+                required=True,
+                label="live_scanner_v5_long_log",
+            )
+        )
 
     # Papertrade logs should be fresh.
     today = now_ist().strftime("%Y-%m-%d")

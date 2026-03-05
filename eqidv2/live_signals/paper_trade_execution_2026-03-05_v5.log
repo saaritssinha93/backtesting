@@ -1,0 +1,85 @@
+2026-03-05 09:00:04,805 | INFO    | =================================================================
+2026-03-05 09:00:04,805 | INFO    | AVWAP Paper Trade Executor Ã¢â‚¬â€ PAPER_TRADE = TRUE
+2026-03-05 09:00:04,805 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-03-05 09:00:04,805 | INFO    |   LTP polling     : Enabled
+2026-03-05 09:00:04,805 | INFO    |   Entry source    : ltp_on_signal
+2026-03-05 09:00:04,805 | INFO    |   Max concurrent  : 0
+2026-03-05 09:00:04,805 | INFO    |   Starting capital: Rs.1,000,000
+2026-03-05 09:00:04,805 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-05 09:00:04,805 | INFO    |   Forced close at : 15:20:00 IST
+2026-03-05 09:00:04,805 | WARNING |   Risk limits     : DISABLED (no max-open / margin cap checks)
+2026-03-05 09:00:04,805 | INFO    | =================================================================
+2026-03-05 09:00:04,805 | WARNING | [KITE.AUTH] Refreshing session due to: startup
+2026-03-05 09:00:05,740 | WARNING | Kite auth profile 'primary' failed (api_key.txt + access_token.txt): Incorrect `api_key` or `access_token`.
+2026-03-05 09:00:05,819 | WARNING | Kite auth profile 'secondary' failed (api_key2.txt + access_token2.txt): Incorrect `api_key` or `access_token`.
+2026-03-05 09:00:05,819 | WARNING | Kite session setup failed for all profiles: Incorrect `api_key` or `access_token`.
+2026-03-05 09:00:05,820 | WARNING | Kite session not available right now: all Kite auth profiles failed
+2026-03-05 09:00:05,820 | WARNING | LTP polling remains enabled; runtime will retry Kite session automatically.
+2026-03-05 09:00:05,820 | WARNING | LTP polling temporarily unavailable at startup (Kite session unavailable).
+2026-03-05 09:00:05,820 | WARNING | entry-price-source=ltp_on_signal and Kite LTP is unavailable now; fallback may be used until session recovers.
+2026-03-05 09:00:05,828 | INFO    | Loaded 0 previously executed signals.
+2026-03-05 09:00:05,828 | INFO    | Signal CSV sources: signals_2026-03-05_v5_short.csv, signals_2026-03-05_v5_long.csv
+2026-03-05 09:00:05,851 | INFO    | [RESTORE] signals_today=0 | executed_loaded=0 | closed_today=0 | open_restored=0 | restored_exact=0 | restored_reconstructed=0 | realized_trades=0 | realized_total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:05,864 | WARNING |   Simulation cap  : DISABLED (unlimited concurrent workers)
+2026-03-05 09:00:05,866 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-05_v5_short.csv, live_signals\signals_2026-03-05_v5_long.csv
+2026-03-05 09:00:05,867 | INFO    | startup | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:05,868 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:10,870 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:15,872 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:20,875 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:25,877 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:30,880 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:35,883 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:40,886 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:45,890 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:50,892 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:00:55,895 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:00,898 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:05,901 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:10,904 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:15,907 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:20,910 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:25,913 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:30,916 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:35,919 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:40,922 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:45,924 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:50,928 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:01:55,931 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:00,934 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:05,936 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:10,939 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:15,943 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:20,946 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:25,948 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:30,952 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:35,955 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:40,958 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:45,962 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:50,964 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:02:55,968 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:00,971 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:05,975 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:10,978 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:15,981 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:20,984 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:25,986 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:30,990 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:35,994 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:40,996 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:45,999 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:51,002 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:03:56,004 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:01,007 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:06,010 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:11,013 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:16,017 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:21,020 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:26,023 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:31,026 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:36,029 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:41,032 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:46,037 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:51,039 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:04:56,043 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-05 09:05:01,045 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00

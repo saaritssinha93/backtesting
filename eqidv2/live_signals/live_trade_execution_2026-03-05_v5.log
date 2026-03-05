@@ -1,0 +1,25 @@
+2026-03-05 09:05:02,535 | INFO    | =================================================================
+2026-03-05 09:05:02,535 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-05 09:05:02,535 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-05 09:05:02,535 | INFO    |   Mode              : LIVE TRADING
+2026-03-05 09:05:02,535 | INFO    |   Max concurrent    : 0
+2026-03-05 09:05:02,535 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-05 09:05:02,551 | INFO    |   Entry cutoff at   : 15:20:00 IST
+2026-03-05 09:05:02,551 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-05 09:05:02,551 | INFO    |   Risk limits       : ENABLED (max_open=10, max_margin=Rs.500,000)
+2026-03-05 09:05:02,551 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-05 09:05:02,551 | INFO    | =================================================================
+2026-03-05 09:05:02,551 | INFO    | Establishing Kite session...
+2026-03-05 09:05:02,632 | WARNING | [KITE] Primary session setup failed (app1): Incorrect `api_key` or `access_token`.. Continuing with fallback apps.
+2026-03-05 09:05:02,708 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-05 09:05:02,776 | WARNING | [KITE] app3 disabled due to setup error: Incorrect `api_key` or `access_token`.
+2026-03-05 09:05:02,856 | WARNING | [KITE] app4 disabled due to setup error: Incorrect `api_key` or `access_token`.
+2026-03-05 09:05:02,856 | INFO    | Kite primary session established: app2 | user=Saarit Shankar Sinha
+2026-03-05 09:05:02,856 | INFO    | [KITE] Session pool active apps: 1
+2026-03-05 09:05:02,973 | INFO    | [TICK] Loaded tick sizes for 9236 NSE symbols.
+2026-03-05 09:05:02,973 | INFO    | Loaded 0 previously executed signals.
+2026-03-05 09:05:02,973 | INFO    | Signal CSV sources: signals_2026-03-05_v5_short.csv, signals_2026-03-05_v5_long.csv
+2026-03-05 09:05:02,973 | WARNING |   Trade worker cap   : DISABLED (unlimited concurrent workers)
+2026-03-05 09:05:03,051 | INFO    | [RESTORE] signals_today=0 executed=0 closed_today=0 open_restored=0 stale_dropped=0 requeued_backlog=0 realized_trades=0 realized_total=Rs.+0.00 deployed_margin=Rs.0.00
+2026-03-05 09:05:03,114 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-05 09:05:03,114 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-05_v5_short.csv, live_signals\signals_2026-03-05_v5_long.csv
