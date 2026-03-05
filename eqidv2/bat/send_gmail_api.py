@@ -53,7 +53,11 @@ def _load_credentials(
             creds = None
 
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except Exception:
+            # Token can be revoked/expired server-side; force fresh interactive auth.
+            creds = None
 
     if not creds or not creds.valid:
         if not allow_interactive_auth:

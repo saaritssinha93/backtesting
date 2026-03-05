@@ -374,6 +374,103 @@ def _apply_long_entry_model_v3(
     return out_df, skip_df
 
 
+def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
+    """
+    Print a day-by-day P&L / win-rate table for the most recent `n_weeks` trading weeks.
+
+    Columns per row:
+      Date | L | S | Trades | Wins | Loss | Win% | SumPnL% | AvgPnL% | Rs.PnL | Outcomes
+    """
+    if df.empty or "trade_date" not in df.columns:
+        return
+
+    d = df.copy()
+    d["trade_date"] = pd.to_datetime(d["trade_date"], errors="coerce").dt.date
+    d = d.dropna(subset=["trade_date"])
+    if d.empty:
+        return
+
+    d["pnl_pct"] = pd.to_numeric(d.get("pnl_pct", 0), errors="coerce").fillna(0.0)
+    d["pnl_rs"]  = pd.to_numeric(d.get("pnl_rs", 0), errors="coerce").fillna(0.0)
+    d["side"]    = d["side"].astype(str).str.upper()
+    d["outcome"] = d.get("outcome", pd.Series("", index=d.index)).astype(str).str.upper()
+
+    # Keep only the last n_weeks*5 unique trading dates
+    all_dates = sorted(d["trade_date"].unique())
+    n_days = n_weeks * 5
+    recent_dates = all_dates[-n_days:] if len(all_dates) >= n_days else all_dates
+    d = d[d["trade_date"].isin(recent_dates)]
+    if d.empty:
+        return
+
+    hdr = (
+        f"{'Date':<12} {'L':>3} {'S':>3} {'Tot':>4} "
+        f"{'W':>4} {'L_':>4} {'Win%':>6} "
+        f"{'SumPnL%':>10} {'AvgPnL%':>10} {'Rs.PnL':>11} "
+        f"{'Outcomes'}"
+    )
+    sep = "-" * len(hdr)
+
+    print(f"\n{'='*72}")
+    print(f"  Day-wise Breakdown — last {n_weeks} weeks ({len(recent_dates)} trading days)")
+    print(f"{'='*72}")
+    print(hdr)
+    print(sep)
+
+    totals = dict(trades=0, longs=0, shorts=0, wins=0, losses=0,
+                  sum_pnl=0.0, sum_rs=0.0)
+
+    for dt in sorted(recent_dates):
+        day = d[d["trade_date"] == dt]
+        n      = len(day)
+        n_long = int((day["side"] == "LONG").sum())
+        n_short= int((day["side"] == "SHORT").sum())
+        wins   = int((day["pnl_pct"] > 0).sum())
+        losses = int((day["pnl_pct"] < 0).sum())
+        win_pct= wins / n * 100 if n else 0.0
+        sum_pnl= float(day["pnl_pct"].sum())
+        avg_pnl= float(day["pnl_pct"].mean()) if n else 0.0
+        sum_rs = float(day["pnl_rs"].sum())
+
+        # outcome mini-summary: T=target, S=sl, B=be, E=eod
+        oc = day["outcome"].value_counts()
+        oc_parts = []
+        for code, label in [("TARGET","T"), ("SL","S"), ("BE","B"), ("EOD","E")]:
+            if code in oc:
+                oc_parts.append(f"{label}:{oc[code]}")
+        oc_str = " ".join(oc_parts) if oc_parts else "-"
+
+        print(
+            f"{str(dt):<12} {n_long:>3} {n_short:>3} {n:>4} "
+            f"{wins:>4} {losses:>4} {win_pct:>5.0f}% "
+            f"{sum_pnl:>+10.2f}% {avg_pnl:>+10.2f}% "
+            f"{sum_rs:>+11,.0f}  "
+            f"{oc_str}"
+        )
+
+        totals["trades"] += n
+        totals["longs"]  += n_long
+        totals["shorts"] += n_short
+        totals["wins"]   += wins
+        totals["losses"] += losses
+        totals["sum_pnl"]+= sum_pnl
+        totals["sum_rs"] += sum_rs
+
+    # Summary row
+    print(sep)
+    t = totals
+    tw = t["wins"] / t["trades"] * 100 if t["trades"] else 0.0
+    avg_day_pnl = t["sum_pnl"] / len(recent_dates) if recent_dates else 0.0
+    print(
+        f"{'TOTAL':<12} {t['longs']:>3} {t['shorts']:>3} {t['trades']:>4} "
+        f"{t['wins']:>4} {t['losses']:>4} {tw:>5.0f}% "
+        f"{t['sum_pnl']:>+10.2f}% {avg_day_pnl:>+10.2f}% "
+        f"{t['sum_rs']:>+11,.0f}  "
+        f"(avg/day)"
+    )
+    print(f"{'='*72}\n")
+
+
 def main() -> None:
     _outputs_dir = _THIS_DIR / "outputs_v3"
     _outputs_dir.mkdir(parents=True, exist_ok=True)
@@ -494,6 +591,7 @@ def main() -> None:
 
             print_metrics("COMBINED (1-min exits)", compute_backtest_metrics(combined))
             _print_notional_pnl(combined)
+            _print_recent_daily_breakdown(combined, n_weeks=2)
 
             out_csv = _outputs_dir / f"avwap_longshort_trades_ALL_DAYS_v3_{ts}.csv"
             combined.to_csv(out_csv, index=False)

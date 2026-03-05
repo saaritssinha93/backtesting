@@ -31,6 +31,7 @@ KILL_SWITCH_PAPER_FILE = LIVE_SIGNAL_DIR / "kill_switch_true_v5.json"
 
 LOG_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.log",
+    "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.log",
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
     "live_combined_csv_v4_short": "eqidv2_live_combined_analyser_csv_v4_short.log",
@@ -47,6 +48,7 @@ LOG_IDS = tuple(LOG_FILES.keys()) + (
 
 STATUS_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.status",
+    "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.status",
     "live_combined_csv_v4_short": "eqidv2_live_combined_analyser_csv_v4_short.status",
     "live_combined_csv_v4_long": "eqidv2_live_combined_analyser_csv_v4_long.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
@@ -1317,9 +1319,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
   <script>
     const LOG_ORDER = [
-      "eod_15min_data",
-      "live_combined_csv_v5_short",
-      "live_combined_csv_v5_long",
+      "live_combined_csv_v5_unified",
       "live_signals_csv_v5_short",
       "live_signals_csv_v5_long",
       "live_kite_trades_csv",
@@ -1336,9 +1336,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "paper_trade_v4",
       "preopen_healthcheck",
       "authentication_v2",
-      "eod_1540_update"
+      "eod_1540_update",
+      "eod_15min_data",
+      "live_combined_csv_v5_short",
+      "live_combined_csv_v5_long"
     ];
     const LOG_TITLES = {
+      "live_combined_csv_v5_unified": "Live Unified V5 (Fetch+Short+Long)",
       "eod_15min_data": "Live Data Fetch (15mins)",
       "live_combined_csv_v4_short": "Live Analysis And Signal Generation V4 Short",
       "live_combined_csv_v4_long": "Live Analysis And Signal Generation V4 Long",
