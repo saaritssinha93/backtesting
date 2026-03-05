@@ -41,11 +41,13 @@ SHORT_SIGNAL_CSV_PATTERN = "signals_{}_v5_short.csv"
 LONG_SIGNAL_CSV_PATTERN = "signals_{}_v5_long.csv"
 UNIFIED_SIGNAL_CSV_PATTERN = "signals_{}_v5_unified.csv"
 
+SHORT_TARGET_PCT = float(os.getenv("EQIDV5_SHORT_TARGET_PCT", "0.009"))              # 0.9%
+
 # LONG anti-chase behavior (same defaults as v5_long wrapper)
 LONG_LIMIT_WAIT_MIN = int(os.getenv("EQIDV5_LONG_LIMIT_WAIT_MIN", "60"))
 LONG_LIMIT_OFFSET_PCT = float(os.getenv("EQIDV5_LONG_LIMIT_OFFSET_PCT", "-0.005"))  # -0.5%
 LONG_STOP_PCT = float(os.getenv("EQIDV5_LONG_STOP_PCT", "0.006"))                    # 0.6%
-LONG_TARGET_PCT = float(os.getenv("EQIDV5_LONG_TARGET_PCT", "0.018"))                # 1.8%
+LONG_TARGET_PCT = float(os.getenv("EQIDV5_LONG_TARGET_PCT", "0.011"))                # 1.1%
 
 LONG_RSI_CAP_RAW = os.getenv("EQIDV5_LONG_RSI_CAP", "").strip()
 LONG_ADX_MIN_RAW = os.getenv("EQIDV5_LONG_ADX_MIN", "").strip()
@@ -102,6 +104,14 @@ EMBED_15M_FETCH_REFRESH_TOKENS = _env_bool(
 EMBED_15M_FETCH_RESTART_DELAY_SEC = max(
     5.0,
     float(os.getenv("EQIDV5_UNIFIED_15M_FETCH_RESTART_DELAY_SEC", "20")),
+)
+EMBED_15M_FETCH_CLEAN_EXIT_RESTART_DELAY_SEC = max(
+    EMBED_15M_FETCH_RESTART_DELAY_SEC,
+    float(os.getenv("EQIDV5_UNIFIED_15M_FETCH_CLEAN_EXIT_RESTART_DELAY_SEC", "180")),
+)
+EMBED_15M_FETCH_SKIP_IF_EXTERNAL = _env_bool(
+    "EQIDV5_UNIFIED_15M_FETCH_SKIP_IF_EXTERNAL",
+    True,
 )
 EMBED_15M_FETCH_SCRIPT = ROOT / "eqidv2_eod_scheduler_for_15mins_data.py"
 
@@ -262,6 +272,35 @@ def _extract_stale_tickers(checks_df: pd.DataFrame) -> List[str]:
     tickers = checks_df.loc[mask, "ticker"].astype(str).str.strip().str.upper()
     tickers = tickers[tickers != ""]
     return sorted(set(tickers.tolist()))
+
+
+def _running_python_cmd_count(regex_pattern: str) -> int:
+    """
+    Best-effort Windows process counter for a python command-line regex.
+    Returns 0 on non-Windows or on detection failure.
+    """
+    if os.name != "nt":
+        return 0
+    try:
+        ps_cmd = (
+            "$p = Get-CimInstance Win32_Process | Where-Object { "
+            "$_.Name -ieq 'python.exe' -and $_.CommandLine -match "
+            f"{json.dumps(regex_pattern)}"
+            " }; if($p){($p | Measure-Object).Count}else{0}"
+        )
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=8,
+        )
+        if proc.returncode != 0:
+            return 0
+        out = (proc.stdout or "").strip()
+        return int(out) if out.isdigit() else 0
+    except Exception:
+        return 0
 
 
 # -----------------------------------------------------------------------------
@@ -611,14 +650,24 @@ class _Embedded15mFetcherSupervisor:
                 break
 
             self._restart_count += 1
+            delay_sec = float(EMBED_15M_FETCH_RESTART_DELAY_SEC)
+            reason = f"rc={rc}"
+            if int(rc) == 0:
+                # Clean exits can happen around market/holiday boundaries.
+                # Use a longer restart delay to avoid hot restart storms.
+                delay_sec = max(delay_sec, float(EMBED_15M_FETCH_CLEAN_EXIT_RESTART_DELAY_SEC))
+                now_ts = pd.Timestamp(v2.now_ist())
+                if not (v2.SESSION_START <= now_ts.time() <= v2.END_TIME):
+                    delay_sec = max(delay_sec, 300.0)
+                reason = f"clean_exit_rc={rc}"
             print(
-                f"[V5_UNIFIED 15M] exited rc={rc} | restarting in "
-                f"{EMBED_15M_FETCH_RESTART_DELAY_SEC:.0f}s (attempt={self._restart_count})",
+                f"[V5_UNIFIED 15M] exited {reason} | restarting in "
+                f"{delay_sec:.0f}s (attempt={self._restart_count})",
                 flush=True,
             )
             with self._lock:
                 self._proc = None
-            self._stop_event.wait(float(EMBED_15M_FETCH_RESTART_DELAY_SEC))
+            self._stop_event.wait(delay_sec)
 
     def start(self) -> bool:
         if not EMBED_15M_FETCH_SCRIPT.exists():
@@ -627,6 +676,16 @@ class _Embedded15mFetcherSupervisor:
                 flush=True,
             )
             return False
+
+        if EMBED_15M_FETCH_SKIP_IF_EXTERNAL:
+            external_cnt = _running_python_cmd_count(r"eqidv2_eod_scheduler_for_15mins_data\.py")
+            if external_cnt > 0:
+                print(
+                    f"[V5_UNIFIED 15M] external fetch already running "
+                    f"(count={external_cnt}) -> embedded fetch disabled for this run.",
+                    flush=True,
+                )
+                return False
 
         self._thread = threading.Thread(
             target=self._watchdog,
@@ -680,6 +739,8 @@ def _apply_v5_unified_overrides() -> None:
     # Enable per-ticker flush so SHORT rows are published immediately.
     v2.IMMEDIATE_SIGNAL_CSV_FLUSH = True
     v2.USE_KITE_LTP_FOR_SIGNAL_CSV = True
+    v2.SHORT_TARGET_PCT = float(SHORT_TARGET_PCT)
+    v2.LONG_TARGET_PCT = float(LONG_TARGET_PCT)
 
     # Explicitly keep both side strategy scanners active.
     v2.scan_short_one_day = _ORIG_SCAN_SHORT_ONE_DAY
@@ -793,6 +854,10 @@ def main() -> None:
             f"tgt={LONG_TARGET_PCT*100:.2f}% "
             f"| stale_only_retry={STALE_ONLY_RETRY_ENABLED} "
             f"| end_time={v2.END_TIME.strftime('%H:%M:%S')}",
+            flush=True,
+        )
+        print(
+            f"[V5_UNIFIED] short_target={SHORT_TARGET_PCT*100:.2f}%",
             flush=True,
         )
         print(

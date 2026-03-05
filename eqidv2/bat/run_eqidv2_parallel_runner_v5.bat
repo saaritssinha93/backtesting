@@ -32,6 +32,8 @@ set "EQIDV2_INITIAL_DELAY_SECONDS=10"
 set "EQIDV2_NUM_SCANS_PER_SLOT=3"
 set "EQIDV2_SCAN_INTERVAL_SECONDS=5"
 set "EQIDV5_STALE_ONLY_RETRY=1"
+set "EQIDV5_SHORT_TARGET_PCT=0.009"
+set "EQIDV5_LONG_TARGET_PCT=0.011"
 set "EQIDV5_LONG_PENDING_POLL_ENABLED=1"
 set "EQIDV5_LONG_PENDING_POLL_INTERVAL_SEC=5"
 
@@ -76,7 +78,7 @@ echo [INFO] Parallel runner covers: eod_15min_data + live_combined_v5_short + li
 echo [INFO] Outer restart loop: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
 echo [INFO] 15m env: max_workers=%EQIDV2_15M_MAX_WORKERS%, buffer_sec=%EQIDV2_15M_BUFFER_SEC%, refresh_tokens=%EQIDV2_15M_REFRESH_TOKENS%>>"%LOG_FILE%"
 echo [INFO] Scan tuning: initial_delay=%EQIDV2_INITIAL_DELAY_SECONDS%s, scans_per_slot=%EQIDV2_NUM_SCANS_PER_SLOT%, interval=%EQIDV2_SCAN_INTERVAL_SECONDS%s>>"%LOG_FILE%"
-echo [INFO] v5 tuning: stale_only_retry=%EQIDV5_STALE_ONLY_RETRY%, pending_poll=%EQIDV5_LONG_PENDING_POLL_ENABLED%, pending_poll_interval=%EQIDV5_LONG_PENDING_POLL_INTERVAL_SEC%s>>"%LOG_FILE%"
+echo [INFO] v5 tuning: stale_only_retry=%EQIDV5_STALE_ONLY_RETRY%, short_target_pct=%EQIDV5_SHORT_TARGET_PCT%, long_target_pct=%EQIDV5_LONG_TARGET_PCT%, pending_poll=%EQIDV5_LONG_PENDING_POLL_ENABLED%, pending_poll_interval=%EQIDV5_LONG_PENDING_POLL_INTERVAL_SEC%s>>"%LOG_FILE%"
 
 :RUN_LOOP
 "%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" >>"%LOG_FILE%" 2>&1

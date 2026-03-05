@@ -15,6 +15,7 @@ All shared infrastructure comes from avwap_common.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from typing import List, Optional
 
@@ -42,6 +43,7 @@ from avwap_v11_refactored.avwap_common import (
     trades_to_df,
     apply_topn_per_day,
     volume_filter_pass,
+    get_vix_scale,
 )
 
 
@@ -253,6 +255,15 @@ def scan_one_day(
     if len(df_day) < int(cfg.min_bars_for_scan):
         return []
 
+    # Apply VIX-dynamic scaling: replace cfg locally for this day only
+    _vix_scale = get_vix_scale(cfg, day_str)
+    if _vix_scale != 1.0:
+        cfg = dataclasses.replace(
+            cfg,
+            stop_pct=cfg.stop_pct * _vix_scale if cfg.vix_scale_sl else cfg.stop_pct,
+            target_pct=cfg.target_pct * _vix_scale if cfg.vix_scale_target else cfg.target_pct,
+        )
+
     trades: List[Trade] = []
     i = 2
 
@@ -343,6 +354,7 @@ def scan_one_day(
                 ema20_gap_atr_signal=ema_gap_atr,
                 atr_pct_signal=atr_pct,
                 quality_score=quality,
+                india_vix=float(cfg.vix_daily.get(day_str, 0.0)),
             ), exit_idx
 
         # ---------------------------------------------------------------

@@ -8,6 +8,8 @@ set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backte
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
+set "EQIDV5_SHORT_TARGET_PCT=0.009"
+set "EQIDV5_LONG_TARGET_PCT=0.011"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=avwap_trade_execution_PAPER_TRADE_TRUE_v5.py"
 set "MAX_TRADES=0"
@@ -35,6 +37,8 @@ echo [%DATE% %TIME%] START %SCRIPT_NAME%
 echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
 echo [INFO] Using daily log file: %LOG_FILE%
 echo [INFO] Using daily log file: %LOG_FILE%>>"%LOG_FILE%"
+echo [INFO] Target policy: short_target_pct=%EQIDV5_SHORT_TARGET_PCT%, long_target_pct=%EQIDV5_LONG_TARGET_PCT%
+echo [INFO] Target policy: short_target_pct=%EQIDV5_SHORT_TARGET_PCT%, long_target_pct=%EQIDV5_LONG_TARGET_PCT%>>"%LOG_FILE%"
 echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
 
 :RUN_LOOP

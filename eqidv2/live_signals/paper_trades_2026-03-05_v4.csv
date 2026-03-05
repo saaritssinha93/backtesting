@@ -1,0 +1,2 @@
+"trade_id","signal_id","signal_datetime","signal_entry_datetime_ist","entry_time","exit_time","ticker","side","setup","impulse_type","quantity","entry_price","exit_price","stop_price","target_price","outcome","pnl_rs","pnl_pct","quality_score","p_win","confidence_multiplier"
+"PT-0721cd18-120035","0721cd1839dfef21","2026-03-05 12:00:00+05:30","2026-03-05 12:00:00+05:30","2026-03-05 12:00:35+0530","2026-03-05 12:19:01+0530","GPIL","SHORT","A_MOD_BREAK_C1_LOW","MODERATE","1037","240.93","242.74","242.74","238.04","SL","-1876.97","-0.7513","0.7506","0.0","1.0"

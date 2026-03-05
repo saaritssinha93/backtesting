@@ -48,6 +48,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 STALE_ONLY_RETRY_ENABLED = _env_bool("EQIDV5_STALE_ONLY_RETRY", True)
+SHORT_TARGET_PCT = float(os.getenv("EQIDV5_SHORT_TARGET_PCT", "0.009"))  # 0.90%
 
 
 def _is_short_side(side_value: Any) -> bool:
@@ -154,6 +155,9 @@ def _apply_v5_short_overrides() -> None:
     # Keep Kite entry rebase logic available as in v2 defaults.
     v2.USE_KITE_LTP_FOR_SIGNAL_CSV = True
 
+    # V5 short target override for dashboard/live V5 sessions.
+    v2.SHORT_TARGET_PCT = float(SHORT_TARGET_PCT)
+
     # Compute only SHORT strategy internals in this process.
     v2.scan_short_one_day = _ORIG_SCAN_SHORT_ONE_DAY
     v2.scan_long_one_day = _scan_long_disabled
@@ -239,6 +243,7 @@ def main() -> None:
     _apply_v5_short_overrides()
     print(
         "[V5_SHORT] SHORT-only split enabled | immediate_flush=True | "
+        f"short_target={SHORT_TARGET_PCT*100:.2f}% | "
         f"stale_only_retry={STALE_ONLY_RETRY_ENABLED} | "
         "signal_csv=signals_YYYY-MM-DD_v5_short.csv",
         flush=True,

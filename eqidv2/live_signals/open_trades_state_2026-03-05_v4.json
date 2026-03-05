@@ -1,5 +1,20 @@
 {
   "date": "2026-03-05",
-  "open_trades": [],
-  "updated_at": "2026-03-05 09:00:05"
+  "open_trades": [
+    {
+      "trade_id": "PT-c0ebb4dc-114643",
+      "signal_id": "c0ebb4dc2eea06fb",
+      "ticker": "TBOTEK",
+      "side": "SHORT",
+      "quantity": 227,
+      "entry_price": 1091.45,
+      "stop_price": 1099.63,
+      "target_price": 1078.36,
+      "entry_time": "2026-03-05 11:46:43+0530",
+      "last_ltp": 1096.0,
+      "restored": false,
+      "last_ltp_time": "2026-03-05 12:18:56+0530"
+    }
+  ],
+  "updated_at": "2026-03-05 12:19:01"
 }

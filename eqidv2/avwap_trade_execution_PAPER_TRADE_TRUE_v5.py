@@ -83,6 +83,8 @@ LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
 # 0 or negative means unlimited worker threads (no executor-side cap).
 MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V5_MAX_CONCURRENT_TRADES", "0"))
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
+SHORT_TARGET_PCT = float(os.getenv("EQIDV5_SHORT_TARGET_PCT", "0.009"))  # 0.90%
+LONG_TARGET_PCT = float(os.getenv("EQIDV5_LONG_TARGET_PCT", "0.011"))    # 1.10%
 ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
 ENTRY_PRICE_SOURCE_DEFAULT = str(os.getenv("ENTRY_PRICE_SOURCE", "signal_bar")).strip().lower()
 if ENTRY_PRICE_SOURCE_DEFAULT not in ENTRY_PRICE_SOURCE_CHOICES:
@@ -1193,6 +1195,16 @@ def _normalize_signal(raw: dict) -> dict:
     else:
         sig["quantity"] = _safe_int(sig.get("quantity", 1), 1)
 
+    # Enforce V5 target policy from executor side as well:
+    # SHORT -> entry*(1-0.90%), LONG -> entry*(1+1.10%)
+    side = str(sig.get("side", "")).strip().upper()
+    entry = _safe_float(sig.get("entry_price", 0.0), 0.0)
+    if entry > 0 and side in {"SHORT", "LONG"}:
+        if side == "SHORT":
+            sig["target_price"] = round(entry * (1.0 - SHORT_TARGET_PCT), 2)
+        else:
+            sig["target_price"] = round(entry * (1.0 + LONG_TARGET_PCT), 2)
+
     return sig
 
 
@@ -1925,6 +1937,11 @@ def main():
     log.info(f"  Starting capital: Rs.{args.capital:,.0f}")
     log.info(f"  Signal dir      : {os.path.abspath(SIGNAL_DIR)}/")
     log.info(f"  Forced close at : {FORCED_CLOSE_TIME} IST")
+    log.info(
+        "  Target policy   : "
+        f"SHORT={SHORT_TARGET_PCT*100:.2f}% LONG={LONG_TARGET_PCT*100:.2f}% "
+        "(rebased from signal entry)"
+    )
     if RISK_LIMITS_ENABLED:
         log.info(
             f"  Risk limits     : ENABLED (max_open={MAX_OPEN_POSITIONS}, "

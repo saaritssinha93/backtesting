@@ -2,11 +2,10 @@
 """
 authentication_v2.py
 
-Design goals for test rollout:
-1) One browser login (request_token flow) per IST day.
-2) Use refresh_token to renew access_token at exact 15-minute slots:
-   09:15, 09:30, ... , 15:30 IST.
-3) Renewal path should be fast (single API call, no browser interaction).
+Design goals:
+1) Single auth pass per IST day (typically scheduler at ~08:55).
+2) Generate/reuse request/access tokens for all configured apps (1..4).
+3) No intraday 15-minute renewal loop in this script.
 
 Files used:
 - api_key.txt
@@ -566,109 +565,32 @@ def _renew_access_token_fast(kite: KiteConnect, api_secret: str, refresh_token: 
     return next_refresh
 
 
-def _slots_for_day(d: date) -> list[datetime]:
-    cur = IST.localize(datetime.combine(d, MARKET_OPEN))
-    end = IST.localize(datetime.combine(d, MARKET_CLOSE))
-    out = []
-    while cur <= end:
-        out.append(cur)
-        cur += timedelta(minutes=15)
-    return out
-
-
-def _sleep_until(target: datetime) -> None:
-    while True:
-        now = now_ist()
-        sec = (target - now).total_seconds()
-        if sec <= 0:
-            return
-        time.sleep(min(sec, 1.0))
-
-
 def run_slot_scheduler(parts: list[str], force_login: bool, test_now: bool, max_refresh: int) -> None:
-    api_secret = parts[1]
-    kite, refresh_token = _seed_session_for_today(parts, force_login=force_login)
-    renew_supported = bool(refresh_token)
-
-    if renew_supported:
-        print("[MODE] refresh-token mode enabled (fast renewal at each slot).", flush=True)
-    else:
-        print(
-            "[MODE] access-only fallback mode enabled (no refresh_token). "
-            "Each slot will validate/recover access_token.",
-            flush=True,
-        )
-
+    # Backward-compatible wrapper name retained intentionally.
+    # This script now runs only one auth pass and exits.
     if test_now:
-        if renew_supported:
-            refresh_token = _renew_access_token_fast(kite, api_secret, refresh_token, reason="test-now")
-        else:
-            if _access_token_is_valid(kite):
-                print("[TEST] access_token is valid; no renewal possible without refresh_token.", flush=True)
-            else:
-                print("[TEST] access_token invalid; running browser login fallback.", flush=True)
-                kite, refresh_token = _seed_session_for_today(parts, force_login=True)
-        print("[DONE] test-now completed.", flush=True)
-        return
+        print("[INFO] --test-now is legacy; single-pass mode is already active.", flush=True)
+    if max_refresh:
+        print("[INFO] --max-refresh is ignored in single-pass mode.", flush=True)
 
-    today = today_ist()
-    slots = _slots_for_day(today)
-    print(
-        f"[LIVE] auth_v2 scheduler started for {today} | slots={len(slots)} "
-        f"({slots[0].strftime('%H:%M')}..{slots[-1].strftime('%H:%M')} IST)",
-        flush=True,
-    )
-
-    runs = 0
-    for slot in slots:
-        now = now_ist()
-        if now > (slot + timedelta(seconds=SLOT_GRACE_SEC)):
-            continue
-        if now < slot:
-            print(f"[WAIT] next slot {slot.strftime('%H:%M:%S')}", flush=True)
-            _sleep_until(slot)
-
-        label = slot.strftime("%H:%M")
-        try:
-            if refresh_token:
-                refresh_token = _renew_access_token_fast(kite, api_secret, refresh_token, reason=f"slot-{label}")
-            else:
-                if _access_token_is_valid(kite):
-                    print(
-                        f"[KEEP ] slot={label} access_token valid "
-                        "(refresh_token unavailable).",
-                        flush=True,
-                    )
-                else:
-                    print(
-                        f"[WARN] slot={label} access_token invalid; "
-                        "running browser login fallback.",
-                        flush=True,
-                    )
-                    kite, refresh_token = _seed_session_for_today(parts, force_login=True)
-                    if refresh_token:
-                        print(
-                            f"[INFO] slot={label} refresh_token available after login; "
-                            "switching to fast-renew mode.",
-                            flush=True,
-                        )
-        except Exception as e:
-            print(f"[WARN] slot={label} token step failed ({e}); attempting relogin", flush=True)
-            kite, refresh_token = _seed_session_for_today(parts, force_login=True)
-
-        runs += 1
-        if max_refresh > 0 and runs >= max_refresh:
-            print(f"[DONE] max_refresh={max_refresh} reached.", flush=True)
-            return
-
-    print("[DONE] Reached end of slot schedule (15:30 IST).", flush=True)
+    _seed_session_for_today(parts, force_login=force_login)
+    print("[DONE] Single-pass auth completed for primary app.", flush=True)
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--force-login", action="store_true", help="Force browser login even if same-day state exists.")
-    p.add_argument("--test-now", action="store_true", help="Renew access token once immediately and exit.")
-    p.add_argument("--max-refresh", type=int, default=0, help="Stop after N slot renewals (0 means full day).")
+    p.add_argument(
+        "--test-now",
+        action="store_true",
+        help="Legacy flag (ignored): script already runs once and exits.",
+    )
+    p.add_argument(
+        "--max-refresh",
+        type=int,
+        default=0,
+        help="Legacy flag (ignored): intraday slot renewals are disabled.",
+    )
     return p.parse_args()
 
 

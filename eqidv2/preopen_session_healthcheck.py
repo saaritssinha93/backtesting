@@ -121,6 +121,14 @@ def _task_exists(task_name: str) -> bool:
     return _run_schtasks_query(task_name) is not None
 
 
+def _task_is_enabled(task_name: str) -> bool:
+    out = _run_schtasks_query(task_name)
+    if not out:
+        return False
+    state = _extract_value(out.splitlines(), "Scheduled Task State")
+    return state.strip().upper() == "ENABLED"
+
+
 def _extract_value(lines: List[str], prefix: str) -> str:
     prefix_l = prefix.lower()
     for ln in lines:
@@ -175,7 +183,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     # Core reachability.
     checks.append(check_http("http://127.0.0.1:8787/", timeout_sec=8.0))
 
-    unified_mode = _task_exists("EQIDV2_live_combined_csv_v5_unified_0900")
+    unified_mode = _task_is_enabled("EQIDV2_live_combined_csv_v5_unified_0900")
 
     # Scheduled tasks expected to have run by 09:05.
     preopen_tasks = [
