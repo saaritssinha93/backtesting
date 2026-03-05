@@ -142,6 +142,35 @@ DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 # Parallelism: set to 1 for serial, >1 for multi-process
 MAX_WORKERS = 4
 
+# ===========================================================================
+# TARGET TEST — Option 1: lower targets for more target hits
+# Set TEST_TARGET_OVERRIDE = True to run test; False to use defaults.
+# ===========================================================================
+TEST_TARGET_OVERRIDE   = False
+TEST_SHORT_TARGET_PCT  = 0.0090   # 0.90%  (default 1.20%)
+TEST_LONG_TARGET_PCT   = 0.0110   # 1.10%  (default 1.50%)
+
+# ===========================================================================
+# VIX DYNAMIC SCALING — set VIX_SCALE_ENABLED=True to scale SL/target with VIX
+# Set VIX_SCALE_ENABLED=False to use the old fixed stop_pct / target_pct (no VIX).
+# Requires india_vix.parquet in the project root (run fetch_india_vix.py once).
+#
+# Calibrated from data analysis on 132 trading days (Aug 2025 - Mar 2026):
+#   Actual VIX range = 9.15 - 21.14  |  Median = 11.41  |  Mean = 11.61
+#   Best zone: VIX 12.0-12.7 → Win=66.7%, AvgPnL=+1.26%  (scale 1.04-1.12x)
+#   Worst zone: VIX 11.1-11.9 → Win=57.9%, AvgPnL=+0.74% (scale ~1.0x, dead zone)
+#   Low VIX:  9.2-10.1 → Win=64.2%, AvgPnL=+1.19%       (scale 0.80-0.86x, tighter targets)
+#
+# Scale formula: clamp(india_vix / VIX_BASELINE, VIX_SCALE_MIN, VIX_SCALE_MAX)
+# With baseline=11.5: 36% of days scale DOWN, 31% neutral, 33% scale UP
+# ===========================================================================
+VIX_SCALE_ENABLED = True    # True = dynamic VIX scaling; False = old fixed behaviour
+VIX_BASELINE      = 11.5   # Actual median VIX of this dataset — neutral point
+VIX_SCALE_MIN     = 0.75   # Floor: VIX=8.6 → 0.75x  (SHORT TGT 1.2%→0.90%, SL 0.8%→0.60%)
+VIX_SCALE_MAX     = 1.50   # Cap:  VIX=17.25 → 1.50x (SHORT TGT 1.2%→1.80%, SL 0.8%→1.20%)
+VIX_SCALE_TARGET  = True   # scale target_pct
+VIX_SCALE_SL      = True   # scale stop_pct (keeps R:R ratio constant)
+
 # 1-min data directory for exit resolution
 DIR_5MIN = None  # Will be resolved dynamically at runtime
 
@@ -172,6 +201,25 @@ def _resolve_5min_dir() -> Path:
             return c
     # Fallback: return the first candidate (will be created/handled later)
     return candidates[0]
+
+
+def _load_india_vix(project_root: Path) -> dict:
+    """Load India VIX parquet → {date_str: float}.
+
+    Returns empty dict if VIX_SCALE_ENABLED=False or file not found.
+    Run fetch_india_vix.py once to create india_vix.parquet.
+    """
+    if not VIX_SCALE_ENABLED:
+        return {}
+    vix_path = project_root / "india_vix.parquet"
+    if not vix_path.exists():
+        print("[WARN] india_vix.parquet not found — VIX scaling disabled.")
+        print("       Run 'python fetch_india_vix.py' to generate it.")
+        return {}
+    df = pd.read_parquet(vix_path)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    vix_map = dict(zip(df["date"], df["india_vix"].astype(float)))
+    return vix_map
 
 
 def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
@@ -835,10 +883,13 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     if d.empty:
         return
 
-    d["pnl_pct"] = pd.to_numeric(d.get("pnl_pct", 0), errors="coerce").fillna(0.0)
-    d["pnl_rs"]  = pd.to_numeric(d.get("pnl_rs", 0), errors="coerce").fillna(0.0)
-    d["side"]    = d["side"].astype(str).str.upper()
-    d["outcome"] = d.get("outcome", pd.Series("", index=d.index)).astype(str).str.upper()
+    d["pnl_pct"]   = pd.to_numeric(d.get("pnl_pct", 0), errors="coerce").fillna(0.0)
+    d["pnl_rs"]    = pd.to_numeric(d.get("pnl_rs", 0), errors="coerce").fillna(0.0)
+    d["side"]      = d["side"].astype(str).str.upper()
+    d["outcome"]   = d.get("outcome", pd.Series("", index=d.index)).astype(str).str.upper()
+    _has_vix = "india_vix" in d.columns and d["india_vix"].astype(float).gt(0).any()
+    if _has_vix:
+        d["india_vix"] = pd.to_numeric(d["india_vix"], errors="coerce").fillna(0.0)
 
     # Keep only the last n_weeks*5 unique trading dates
     all_dates = sorted(d["trade_date"].unique())
@@ -848,17 +899,19 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     if d.empty:
         return
 
+    _vix_col = f"{'VIX':>5} " if _has_vix else ""
     hdr = (
         f"{'Date':<12} {'L':>3} {'S':>3} {'Tot':>4} "
         f"{'W':>4} {'L_':>4} {'Win%':>6} "
         f"{'SumPnL%':>10} {'AvgPnL%':>10} {'Rs.PnL':>11} "
-        f"{'Outcomes'}"
+        f"{_vix_col}{'Outcomes'}"
     )
-    sep = "-" * len(hdr)
+    _width = max(72, len(hdr))
+    sep = "-" * _width
 
-    print(f"\n{'='*72}")
+    print(f"\n{'='*_width}")
     print(f"  Day-wise Breakdown — last {n_weeks} weeks ({len(recent_dates)} trading days)")
-    print(f"{'='*72}")
+    print(f"{'='*_width}")
     print(hdr)
     print(sep)
 
@@ -885,12 +938,20 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
                 oc_parts.append(f"{label}:{oc[code]}")
         oc_str = " ".join(oc_parts) if oc_parts else "-"
 
+        # VIX: take first non-zero value for the day (it's a daily value)
+        if _has_vix:
+            _day_vix = day["india_vix"][day["india_vix"] > 0]
+            _vix_val = float(_day_vix.iloc[0]) if not _day_vix.empty else 0.0
+            _vix_str = f"{_vix_val:>5.1f} "
+        else:
+            _vix_str = ""
+
         print(
             f"{str(dt):<12} {n_long:>3} {n_short:>3} {n:>4} "
             f"{wins:>4} {losses:>4} {win_pct:>5.0f}% "
             f"{sum_pnl:>+10.2f}% {avg_pnl:>+10.2f}% "
             f"{sum_rs:>+11,.0f}  "
-            f"{oc_str}"
+            f"{_vix_str}{oc_str}"
         )
 
         totals["trades"] += n
@@ -906,14 +967,15 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     t = totals
     tw = t["wins"] / t["trades"] * 100 if t["trades"] else 0.0
     avg_day_pnl = t["sum_pnl"] / len(recent_dates) if recent_dates else 0.0
+    _total_vix_str = "  --- " if _has_vix else ""
     print(
         f"{'TOTAL':<12} {t['longs']:>3} {t['shorts']:>3} {t['trades']:>4} "
         f"{t['wins']:>4} {t['losses']:>4} {tw:>5.0f}% "
         f"{t['sum_pnl']:>+10.2f}% {avg_day_pnl:>+10.2f}% "
         f"{t['sum_rs']:>+11,.0f}  "
-        f"(avg/day)"
+        f"{_total_vix_str}(avg/day)"
     )
-    print(f"{'='*72}\n")
+    print(f"{'='*_width}\n")
 
 
 # ===========================================================================
@@ -1460,7 +1522,7 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = _project_root / "outputs"
+    _outputs_dir = _project_root / ("outputs_target_test" if TEST_TARGET_OVERRIDE else "outputs")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
@@ -1522,6 +1584,36 @@ def main() -> None:
                 long_cfg.use_time_windows = bool(FINAL_LONG_USE_TIME_WINDOWS)
                 short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
                 long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
+
+            if TEST_TARGET_OVERRIDE:
+                short_cfg.target_pct = TEST_SHORT_TARGET_PCT
+                long_cfg.target_pct  = TEST_LONG_TARGET_PCT
+                print(f"[TEST] Target override active: SHORT={TEST_SHORT_TARGET_PCT*100:.2f}%, "
+                      f"LONG={TEST_LONG_TARGET_PCT*100:.2f}%")
+
+            # --- VIX dynamic scaling ---
+            _vix_map = _load_india_vix(_project_root)
+            short_cfg.vix_scale_enabled = VIX_SCALE_ENABLED
+            long_cfg.vix_scale_enabled  = VIX_SCALE_ENABLED
+            if VIX_SCALE_ENABLED and _vix_map:
+                short_cfg.vix_daily       = _vix_map
+                short_cfg.vix_baseline    = VIX_BASELINE
+                short_cfg.vix_scale_min   = VIX_SCALE_MIN
+                short_cfg.vix_scale_max   = VIX_SCALE_MAX
+                short_cfg.vix_scale_target = VIX_SCALE_TARGET
+                short_cfg.vix_scale_sl    = VIX_SCALE_SL
+                long_cfg.vix_daily        = _vix_map
+                long_cfg.vix_baseline     = VIX_BASELINE
+                long_cfg.vix_scale_min    = VIX_SCALE_MIN
+                long_cfg.vix_scale_max    = VIX_SCALE_MAX
+                long_cfg.vix_scale_target = VIX_SCALE_TARGET
+                long_cfg.vix_scale_sl     = VIX_SCALE_SL
+                print(f"[VIX] Scaling ENABLED — {len(_vix_map)} daily values loaded. "
+                      f"baseline={VIX_BASELINE}, range=[{VIX_SCALE_MIN}x, {VIX_SCALE_MAX}x]")
+            elif VIX_SCALE_ENABLED:
+                print("[VIX] Scaling ENABLED but no VIX data — using fixed SL/target.")
+            else:
+                print("[VIX] Scaling DISABLED — fixed SL/target used (old behaviour).")
 
             print(
                 f"[INFO] SHORT config: SL={short_cfg.stop_pct*100:.1f}%, TGT={short_cfg.target_pct*100:.1f}%, "

@@ -40,7 +40,7 @@ import eqidv2_live_combined_analyser_csv_v2 as v2
 LONG_LIMIT_WAIT_MIN = int(os.getenv("EQIDV5_LONG_LIMIT_WAIT_MIN", "60"))
 LONG_LIMIT_OFFSET_PCT = float(os.getenv("EQIDV5_LONG_LIMIT_OFFSET_PCT", "-0.005"))  # -0.5%
 LONG_STOP_PCT = float(os.getenv("EQIDV5_LONG_STOP_PCT", "0.006"))                    # 0.6%
-LONG_TARGET_PCT = float(os.getenv("EQIDV5_LONG_TARGET_PCT", "0.018"))                # 1.8%
+LONG_TARGET_PCT = float(os.getenv("EQIDV5_LONG_TARGET_PCT", "0.011"))                # 1.1%
 
 # Optional signal-quality filters before putting LONG into pending queue.
 LONG_RSI_CAP_RAW = os.getenv("EQIDV5_LONG_RSI_CAP", "").strip()
@@ -508,6 +508,7 @@ def _apply_v5_long_overrides() -> None:
 
     # Keep Kite enabled because v5_long pending queue relies on LTP.
     v2.USE_KITE_LTP_FOR_SIGNAL_CSV = True
+    v2.LONG_TARGET_PCT = float(LONG_TARGET_PCT)
 
     # Compute only LONG strategy internals in this process.
     v2.scan_short_one_day = _scan_short_disabled

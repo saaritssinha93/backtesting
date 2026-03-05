@@ -1319,7 +1319,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
   <script>
     const LOG_ORDER = [
-      "live_combined_csv_v5_unified",
+      "eod_15min_data",
+      "live_combined_csv_v5_short",
+      "live_combined_csv_v5_long",
       "live_signals_csv_v5_short",
       "live_signals_csv_v5_long",
       "live_kite_trades_csv",
@@ -1337,9 +1339,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "preopen_healthcheck",
       "authentication_v2",
       "eod_1540_update",
-      "eod_15min_data",
-      "live_combined_csv_v5_short",
-      "live_combined_csv_v5_long"
+      "live_combined_csv_v5_unified"
     ];
     const LOG_TITLES = {
       "live_combined_csv_v5_unified": "Live Unified V5 (Fetch+Short+Long)",

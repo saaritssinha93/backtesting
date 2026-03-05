@@ -14,6 +14,7 @@ set "EQIDV2_SCAN_INTERVAL_SECONDS=5"
 set "EQIDV5_STALE_ONLY_RETRY=1"
 set "EQIDV5_LONG_PENDING_POLL_ENABLED=1"
 set "EQIDV5_LONG_PENDING_POLL_INTERVAL_SEC=5"
+set "EQIDV5_LONG_TARGET_PCT=0.011"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "ALERT_DIR=%LOG_DIR%\alerts"
 set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv_v5_long.py"
@@ -48,7 +49,7 @@ if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
 echo [%DATE% %TIME%] START %SCRIPT_NAME%
 echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
 echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
-echo [INFO] Scan tuning: initial_delay=%EQIDV2_INITIAL_DELAY_SECONDS%s, scans_per_slot=%EQIDV2_NUM_SCANS_PER_SLOT%, interval=%EQIDV2_SCAN_INTERVAL_SECONDS%s, stale_only_retry=%EQIDV5_STALE_ONLY_RETRY%, pending_poll=%EQIDV5_LONG_PENDING_POLL_ENABLED%, pending_poll_interval=%EQIDV5_LONG_PENDING_POLL_INTERVAL_SEC%s>>"%LOG_FILE%"
+echo [INFO] Scan tuning: initial_delay=%EQIDV2_INITIAL_DELAY_SECONDS%s, scans_per_slot=%EQIDV2_NUM_SCANS_PER_SLOT%, interval=%EQIDV2_SCAN_INTERVAL_SECONDS%s, stale_only_retry=%EQIDV5_STALE_ONLY_RETRY%, pending_poll=%EQIDV5_LONG_PENDING_POLL_ENABLED%, pending_poll_interval=%EQIDV5_LONG_PENDING_POLL_INTERVAL_SEC%s, long_target_pct=%EQIDV5_LONG_TARGET_PCT%>>"%LOG_FILE%"
 
 :RUN_LOOP
 "%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" >>"%LOG_FILE%" 2>&1

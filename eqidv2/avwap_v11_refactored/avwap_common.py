@@ -144,6 +144,18 @@ class StrategyConfig:
     enable_trailing_stop: bool = True
     trail_pct: float = 0.0030  # trail 0.30% from best favorable price after BE trigger
 
+    # VIX-dynamic SL/target scaling
+    # When vix_scale_enabled=True: stop_pct and target_pct are multiplied by
+    # clamp(india_vix / vix_baseline, vix_scale_min, vix_scale_max) each day.
+    # When vix_scale_enabled=False: fixed stop_pct/target_pct used (old behaviour).
+    vix_scale_enabled: bool = True  # master toggle — False = old fixed SL/target
+    vix_daily: dict = field(default_factory=dict)  # {date_str: float}
+    vix_baseline: float = 18.0    # VIX level where scale = 1.0x
+    vix_scale_min: float = 0.70   # floor multiplier (e.g. VIX=12.6 → 0.70x)
+    vix_scale_max: float = 1.80   # cap multiplier  (e.g. VIX=32.4 → 1.80x)
+    vix_scale_target: bool = True  # scale target_pct with VIX
+    vix_scale_sl: bool = True      # scale stop_pct with VIX
+
     # Top-N per day
     enable_topn_per_day: bool = True
     topn_per_day: int = 30
@@ -240,6 +252,25 @@ class Trade:
     ema20_gap_atr_signal: float = 0.0
     atr_pct_signal: float = 0.0
     quality_score: float = 0.0
+    india_vix: float = 0.0         # India VIX on this trade's date (0.0 if unavailable)
+
+
+def get_vix_scale(cfg: "StrategyConfig", day_str: str) -> float:
+    """Return the VIX-based multiplier for stop/target on a given date.
+
+    Returns 1.0 (no scaling) when:
+      - cfg.vix_scale_enabled is False  (master toggle OFF → old fixed behaviour)
+      - vix_daily dict is empty
+      - date is not found in vix_daily
+
+    Scale = clamp(india_vix / vix_baseline, vix_scale_min, vix_scale_max)
+    """
+    if not cfg.vix_scale_enabled:
+        return 1.0
+    if not cfg.vix_daily or day_str not in cfg.vix_daily:
+        return 1.0
+    vix = float(cfg.vix_daily[day_str])
+    return max(cfg.vix_scale_min, min(cfg.vix_scale_max, vix / cfg.vix_baseline))
 
 
 def trades_to_df(trades: List[Trade]) -> pd.DataFrame:
