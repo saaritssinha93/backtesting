@@ -1,0 +1,2 @@
+"signal_id","signal_datetime","received_time","detected_time_ist","logtime_ist","ticker","side","setup","impulse_type","entry_price","stop_price","target_price","quality_score","atr_pct","rsi","adx","quantity","signal_entry_datetime_ist","signal_bar_time_ist"
+"88b4ca975626f68d","2026-03-06 13:15:00+05:30","2026-03-06 13:16:29+0530","2026-03-06 13:16:29+0530","2026-03-06 13:16:29+0530","ROSSARI","SHORT","A_MOD_BREAK_C1_LOW","MODERATE","470.41","473.93","464.76","0.6032","0.004993","31.1","26.5","531","2026-03-06 13:15:00+05:30","2026-03-06 13:15:00+05:30"

@@ -44,6 +44,9 @@ from avwap_v11_refactored.avwap_common_v7_sweep import (
     apply_topn_per_day,
     volume_filter_pass,
     get_vix_scale,
+    has_recent_liquidity_sweep,
+    avwap_no_trade_zone_block,
+    market_regime_pass,
 )
 
 
@@ -275,6 +278,14 @@ def scan_one_day(
     if len(df_day) < int(cfg.min_bars_for_scan):
         return []
 
+    day_vix = float(cfg.vix_daily.get(day_str, 0.0)) if cfg.vix_daily else 0.0
+    if (
+        cfg.max_vix_for_entries > 0
+        and np.isfinite(day_vix)
+        and day_vix > cfg.max_vix_for_entries
+    ):
+        return []
+
     # Apply VIX-dynamic scaling: replace cfg locally for this day only
     _vix_scale = get_vix_scale(cfg, day_str)
     if _vix_scale != 1.0:
@@ -286,11 +297,23 @@ def scan_one_day(
 
     trades: List[Trade] = []
     i = 2
+    day_sl_count = 0
+    day_r_total = 0.0
+    cooldown_until_idx = -1
 
     tail_guard = 1 if cfg.allow_incomplete_tail else 3
     while i < len(df_day) - tail_guard:
         if len(trades) >= cfg.max_trades_per_ticker_per_day:
             break
+
+        if cfg.enable_risk_guardrails:
+            if i <= cooldown_until_idx:
+                i += 1
+                continue
+            if day_sl_count >= int(cfg.daily_loss_lock_sl_count):
+                break
+            if day_r_total <= float(cfg.daily_loss_lock_r_multiple):
+                break
 
         c1 = df_day.iloc[i]
 
@@ -300,6 +323,10 @@ def scan_one_day(
 
         impulse = classify_green_impulse(c1, cfg)
         if impulse == "":
+            i += 1
+            continue
+
+        if not market_regime_pass(c1["date"], "LONG", cfg):
             i += 1
             continue
 
@@ -320,6 +347,14 @@ def scan_one_day(
             continue
 
         if not _trend_filter_long(df_day, i, c1, cfg):
+            i += 1
+            continue
+
+        has_sweep_ctx = has_recent_liquidity_sweep(df_day, i, "LONG", cfg)
+        if not has_sweep_ctx:
+            i += 1
+            continue
+        if avwap_no_trade_zone_block(c1, impulse, has_sweep_ctx, cfg):
             i += 1
             continue
 
@@ -386,6 +421,17 @@ def scan_one_day(
                 exit_idx,
             )
 
+        def _register_trade_result(trade: Trade, exit_idx: int) -> None:
+            nonlocal day_sl_count, day_r_total, cooldown_until_idx
+            trades.append(trade)
+            risk_pct = max(cfg.stop_pct * 100.0, 1e-9)
+            day_r_total += float(trade.pnl_pct) / risk_pct
+            if str(trade.outcome).upper() == "SL":
+                day_sl_count += 1
+                cooldown_until_idx = max(
+                    cooldown_until_idx, int(exit_idx) + int(cfg.sl_cooldown_bars)
+                )
+
         # ---------------------------------------------------------------
         # SETUP A (MODERATE): break C1 high, or pullback + break C2 high
         # ---------------------------------------------------------------
@@ -422,9 +468,44 @@ def scan_one_day(
                 trade, exit_idx = _make_trade(
                     entry_idx, trigger, "A_MOD_BREAK_C1_HIGH", avwap_dist_atr
                 )
-                trades.append(trade)
+                _register_trade_result(trade, exit_idx)
                 i = exit_idx + 1
                 continue
+
+            # Option 3 (optional): continuation break above C1 close.
+            # This is a faster/frequent variant than strict C1-high break.
+            if cfg.enable_setup_a_close_continuation_break:
+                close_trigger = close1 + entry_buffer(close1, cfg)
+                lag3 = int(cfg.lag_bars_long_a_close_continuation_break)
+                entry_idx_3 = i + lag3 if lag3 >= 0 else (i + 1)
+                if entry_idx_3 < len(df_day) and float(df_day.at[entry_idx_3, "high"]) > close_trigger:
+                    entry_idx = entry_idx_3
+                    entry_ts = df_day.at[entry_idx, "date"]
+
+                    if not in_signal_window(entry_ts, cfg):
+                        i += 1
+                        continue
+                    if not _close_confirm_ok(entry_idx, close_trigger):
+                        i += 1
+                        continue
+                    if not _bars_left_ok(entry_idx):
+                        i += 1
+                        continue
+
+                    atr_entry = float(df_day.at[entry_idx, "ATR15"])
+                    ok_support, avwap_dist_atr = avwap_support_pass(
+                        df_day, i, entry_idx, atr_entry, cfg
+                    )
+                    if not ok_support:
+                        i += 1
+                        continue
+
+                    trade, exit_idx = _make_trade(
+                        entry_idx, close_trigger, "A_MOD_CLOSE_CONTINUATION_BREAK", avwap_dist_atr
+                    )
+                    _register_trade_result(trade, exit_idx)
+                    i = exit_idx + 1
+                    continue
 
             # Option 2 (optional): small red pullback C2 (above AVWAP), then break C2 high on C3
             # Controlled by cfg.enable_setup_a_pullback_c2_break (default False)
@@ -472,7 +553,7 @@ def scan_one_day(
                     trade, exit_idx = _make_trade(
                         entry_idx, trigger2, "A_PULLBACK_C2_THEN_BREAK_C2_HIGH", avwap_dist_atr
                     )
-                    trades.append(trade)
+                    _register_trade_result(trade, exit_idx)
                     i = exit_idx + 1
                     continue
 
@@ -560,10 +641,56 @@ def scan_one_day(
                     trade, exit_idx = _make_trade(
                         j, trigger, "B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK", avwap_dist_atr
                     )
-                    trades.append(trade)
+                    _register_trade_result(trade, exit_idx)
                     i = exit_idx + 1
                     entered = True
                     break
+
+            # Optional HUGE continuation setup: reclaim/break above C1 close.
+            if (not entered) and cfg.enable_setup_b_huge_c1_close_reclaim_break:
+                trigger_c1_close = close1 + entry_buffer(close1, cfg)
+                lag_reclaim = int(cfg.lag_bars_long_b_huge_c1_close_reclaim_break)
+                if lag_reclaim >= 0:
+                    j_fixed = i + lag_reclaim
+                    j_iter2 = [j_fixed] if ((i + 1) <= j_fixed < len(df_day)) else []
+                else:
+                    # Dynamic reclaim within a bounded lookahead to avoid very late-day entries.
+                    j_iter2 = range(i + 1, min(len(df_day), i + 7))
+
+                for j in j_iter2:
+                    tsj = df_day.at[j, "date"]
+                    if not in_signal_window(tsj, cfg):
+                        continue
+                    if not _bars_left_ok(j):
+                        continue
+
+                    closej = float(df_day.at[j, "close"])
+                    avwapj = (
+                        float(df_day.at[j, "AVWAP"])
+                        if np.isfinite(df_day.at[j, "AVWAP"])
+                        else np.nan
+                    )
+                    if np.isfinite(avwapj) and closej <= avwapj:
+                        continue
+
+                    if float(df_day.at[j, "high"]) > trigger_c1_close:
+                        if not _close_confirm_ok(j, trigger_c1_close):
+                            continue
+
+                        atr_entry = float(df_day.at[j, "ATR15"])
+                        ok_support, avwap_dist_atr = avwap_support_pass(
+                            df_day, i, j, atr_entry, cfg
+                        )
+                        if not ok_support:
+                            continue
+
+                        trade, exit_idx = _make_trade(
+                            j, trigger_c1_close, "B_HUGE_C1_CLOSE_RECLAIM_BREAK", avwap_dist_atr
+                        )
+                        _register_trade_result(trade, exit_idx)
+                        i = exit_idx + 1
+                        entered = True
+                        break
 
             if entered:
                 continue
@@ -606,7 +733,6 @@ def scan_all_days_for_ticker(
             all_trades.extend(trades)
 
     return all_trades
-
 
 # ===========================================================================
 # RUN ALL TICKERS (called by combined runner)

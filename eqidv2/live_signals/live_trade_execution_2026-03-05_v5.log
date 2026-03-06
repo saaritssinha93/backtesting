@@ -75,3 +75,14 @@
 2026-03-05 11:57:06,004 | INFO    | [RESTORE] signals_today=0 executed=0 closed_today=0 open_restored=0 stale_dropped=0 requeued_backlog=0 realized_trades=0 realized_total=Rs.+0.00 deployed_margin=Rs.0.00
 2026-03-05 11:57:06,089 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
 2026-03-05 11:57:06,091 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-05_v5_short.csv, live_signals\signals_2026-03-05_v5_long.csv
+2026-03-05 15:20:00,419 | WARNING | [EOD.GLOBAL] entry cutoff reached at 15:20:00 IST; EOD flatten in progress
+2026-03-05 15:30:00,706 | INFO    | Market closed. All trades complete.
+2026-03-05 15:30:00,707 | INFO    | =======================================================
+2026-03-05 15:30:00,707 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-03-05 15:30:00,707 | INFO    |   Total trades : 0
+2026-03-05 15:30:00,707 | INFO    |   Wins         : 0
+2026-03-05 15:30:00,707 | INFO    |   Losses       : 0
+2026-03-05 15:30:00,707 | INFO    |   Win rate     : 0.0%
+2026-03-05 15:30:00,707 | INFO    |   Total P&L    : Rs.+0.00
+2026-03-05 15:30:00,707 | INFO    | =======================================================
+2026-03-05 15:30:00,707 | INFO    | Live trade executor stopped.
