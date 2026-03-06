@@ -1,0 +1,19 @@
+{
+  "date": "2026-03-06",
+  "open_trades": [
+    {
+      "trade_id": "PT-88b4ca97-131621",
+      "signal_id": "88b4ca975626f68d",
+      "ticker": "ROSSARI",
+      "side": "SHORT",
+      "quantity": 534,
+      "entry_price": 467.17,
+      "stop_price": 470.35,
+      "target_price": 462.96,
+      "entry_time": "2026-03-06 13:16:21+0530",
+      "last_ltp": 0.0,
+      "restored": false
+    }
+  ],
+  "updated_at": "2026-03-06 13:16:21"
+}

@@ -1,0 +1,35 @@
+======================================================================
+AVWAP v11 COMBINED runner â€” LONG + SHORT (refactored v2)
+  - Entry signals: 15-min data
+  - Exit resolution: 1-min data (stocks_indicators_1min_eq)
+  - Outputs: */algo_trading/outputs
+  - Intraday leverage: SHORT=5.0x | LONG=5.0x
+  - P&L% reported = ROI% on *capital/margin* (levered)
+    (unlevered price-return% is saved as pnl_pct_price)
+======================================================================
+[INFO] 1-min data directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\stocks_indicators_1min_eq
+[INFO] 1-min parquet files found: 1041
+[PROFILE] Tighter-stops profile enabled: SHORT(SL=0.68%, TGT=0.90%), LONG(SL=0.58%, TGT=1.10%)
+[VIX] Scaling DISABLED — fixed SL/target used (old behaviour).
+[REGIME] Disabled: no market index parquet found in 15m data directory.
+[INFO] SHORT config: SL=0.7%, TGT=0.9%, slippage=5bps, comm=3bps
+[INFO] LONG  config: SL=0.6%, TGT=1.1%, slippage=5bps, comm=3bps
+[INFO] Lag bars SHORT: A_MOD=1, A_PULLBACK=2, B_HUGE=-1
+[INFO] Pack2 SHORT filters: enable_setup_B_HUGE=False | max_vix_for_entries=13.50
+[INFO] Lag bars LONG : A_MOD=1, A_PULLBACK=2, B_HUGE=-1
+[INFO] Final signal-window override -> True
+[INFO] SHORT windows: use_time_windows=True | 09:15-14:30
+[INFO] LONG  windows: use_time_windows=True | 09:15-14:30
+[INFO] Capital/margin per trade: SHORT=Rs.50,000 | LONG=Rs.100,000
+[INFO] Notional exposure per trade: SHORT=Rs.250,000 | LONG=Rs.500,000
+[INFO] Live parity: min_bars_left=0 -> True
+[INFO] Live parity: disable_topn_per_day -> True
+[INFO] Day loss guard: enabled=True | threshold=-3.00%
+[INFO] Parallelism: max_workers=4
+[INFO] Output directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs
+[INFO] Console log: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs\avwap_combined_runner_20260306_101810.txt
+----------------------------------------------------------------------
+
+[PHASE 1] Scanning for entry signals using 15-min data...
+[SHORT] Tickers found: 1041
+  [SHORT] scanned 100/1041 | trades=3

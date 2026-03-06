@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Compatibility launcher for V7 sweep runner.
 
@@ -16,3 +16,4 @@ from avwap_combined_runner_v7_sweep import main
 
 if __name__ == "__main__":
     main()
+

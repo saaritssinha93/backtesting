@@ -1,0 +1,27 @@
+{
+  "scenarios": 1,
+  "folds": 8,
+  "max_workers": 4,
+  "train_days": 45,
+  "test_days": 10,
+  "short_weight": 1.0,
+  "long_weight": 1.0,
+  "target_min_trades_per_day": 5.0,
+  "target_max_trades_per_day": 15.0,
+  "enable_day_loss_guard": true,
+  "day_loss_guard_pct": -3.0,
+  "enable_regime_filter": false,
+  "wf_test_summary": {
+    "score": 251.96838219338917,
+    "trades_per_day": 10.7,
+    "short_trades_per_day": 6.5875,
+    "long_trades_per_day": 4.1125,
+    "sum_pnl_pct": 1775.512230503443,
+    "profit_factor": 3.8939274979374368,
+    "max_drawdown_pct": 19.756162079288828,
+    "daily_win_pct": 90.0,
+    "short_sum_pnl_pct": 601.3894592405059,
+    "long_sum_pnl_pct": 1174.1227712629375,
+    "notional_pnl_rs": 1474817.5008831902
+  }
+}

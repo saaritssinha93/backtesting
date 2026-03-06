@@ -152,9 +152,9 @@ DAY_LOSS_GUARD_PCT = -6.0
 # TARGET TEST — Option 1: lower targets for more target hits
 # Set TEST_TARGET_OVERRIDE = True to run test; False to use defaults.
 # ===========================================================================
-TEST_TARGET_OVERRIDE   = False
-TEST_SHORT_TARGET_PCT  = 0.0080   # 0.90%  (default 1.20%)
-TEST_LONG_TARGET_PCT   = 0.010   # 1.10%  (default 1.50%)
+TEST_TARGET_OVERRIDE   = True
+TEST_SHORT_TARGET_PCT  = 0.0085   # 0.90%  (default 1.20%)
+TEST_LONG_TARGET_PCT   = 0.0110   # 1.10%  (default 1.50%)
 
 # ===========================================================================
 # VIX DYNAMIC SCALING — set VIX_SCALE_ENABLED=True to scale SL/target with VIX

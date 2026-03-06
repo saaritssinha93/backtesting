@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v2.py — AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
+avwap_combined_runner_v2.py â€” AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
 ==================================================================================
 
 Changes from v1:
@@ -9,11 +9,11 @@ Changes from v1:
    from */stocks_indicators_1min_eq/ for higher resolution P&L
 3. Significantly expanded charting suite with more detailed & analytical charts
 4. Normal Python imports (no importlib hacks)
-5. Unified Trade dataclass — both sides produce identical columns
+5. Unified Trade dataclass â€” both sides produce identical columns
 6. Parallel ticker scanning via ProcessPoolExecutor
 7. Slippage + commission model baked into P&L
 8. Comprehensive backtest metrics (Sharpe, Sortino, Calmar, drawdown, profit factor)
-9. All config via StrategyConfig dataclass — no module-level globals
+9. All config via StrategyConfig dataclass â€” no module-level globals
 10. Cash-constrained portfolio sim uses itertuples() instead of iterrows()
 
 Usage:
@@ -84,6 +84,7 @@ from avwap_v11_refactored.avwap_common_v7_sweep import (
     read_15m_parquet,
     list_tickers_15m,
     generate_backtest_charts,
+    build_market_regime_map,
 )
 from avwap_v11_refactored.avwap_short_strategy_v7_sweep import (
     scan_all_days_for_ticker as scan_short,
@@ -143,13 +144,26 @@ DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 MAX_WORKERS = 4
 
 # Pack-2 controls (requested tuning profile)
-PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE = False
-PACK2_SHORT_MAX_VIX_FOR_ENTRIES = 13.5
+PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE = True
+PACK2_SHORT_MAX_VIX_FOR_ENTRIES = 0.0
+
+# High-frequency balanced profile from optimizer:
+# outputs/v7_scenarios_hf_target_5_15.json -> hf_balanced_v1
+ENABLE_HF_BALANCED_V1_PROFILE = True
+
+# High-frequency profile from research:
+# "Tighter stops + day-loss guard -3.0%"
+ENABLE_TIGHTER_STOPS_PROFILE = True
+TIGHTER_SHORT_STOP_PCT = 0.0068
+TIGHTER_SHORT_TARGET_PCT = 0.0090
+TIGHTER_LONG_STOP_PCT = 0.0058
+TIGHTER_LONG_TARGET_PCT = 0.0110
+
 ENABLE_DAY_LOSS_GUARD = True
-DAY_LOSS_GUARD_PCT = -6.0
+DAY_LOSS_GUARD_PCT = -3.0
 
 # ===========================================================================
-# TARGET TEST � Option 1: lower targets for more target hits
+# TARGET TEST — Option 1: lower targets for more target hits
 # Set TEST_TARGET_OVERRIDE = True to run test; False to use defaults.
 # ===========================================================================
 TEST_TARGET_OVERRIDE   = False
@@ -157,7 +171,7 @@ TEST_SHORT_TARGET_PCT  = 0.0080   # 0.90%  (default 1.20%)
 TEST_LONG_TARGET_PCT   = 0.010   # 1.10%  (default 1.50%)
 
 # ===========================================================================
-# VIX DYNAMIC SCALING � set VIX_SCALE_ENABLED=True to scale SL/target with VIX
+# VIX DYNAMIC SCALING — set VIX_SCALE_ENABLED=True to scale SL/target with VIX
 # Set VIX_SCALE_ENABLED=False to use the old fixed stop_pct / target_pct (no VIX).
 # Requires india_vix.parquet in the project root (run fetch_india_vix.py once).
 #
@@ -171,7 +185,7 @@ TEST_LONG_TARGET_PCT   = 0.010   # 1.10%  (default 1.50%)
 # With baseline=11.5: 36% of days scale DOWN, 31% neutral, 33% scale UP
 # ===========================================================================
 VIX_SCALE_ENABLED = False    # True = dynamic VIX scaling; False = old fixed behaviour
-VIX_BASELINE      = 11.5   # Actual median VIX of this dataset � neutral point
+VIX_BASELINE      = 11.5   # Actual median VIX of this dataset — neutral point
 VIX_SCALE_MIN     = 0.75   # Floor: VIX=8.6 ? 0.75x  (SHORT TGT 1.2%?0.90%, SL 0.8%?0.60%)
 VIX_SCALE_MAX     = 1.50   # Cap:  VIX=17.25 ? 1.50x (SHORT TGT 1.2%?1.80%, SL 0.8%?1.20%)
 VIX_SCALE_TARGET  = True   # scale target_pct
@@ -210,7 +224,7 @@ def _resolve_5min_dir() -> Path:
 
 
 def _load_india_vix(project_root: Path) -> dict:
-    """Load India VIX parquet → {date_str: float}.
+    """Load India VIX parquet â†’ {date_str: float}.
 
     Returns empty dict if VIX_SCALE_ENABLED=False or file not found.
     Run fetch_india_vix.py once to create india_vix.parquet.
@@ -219,7 +233,7 @@ def _load_india_vix(project_root: Path) -> dict:
         return {}
     vix_path = project_root / "india_vix.parquet"
     if not vix_path.exists():
-        print("[WARN] india_vix.parquet not found — VIX scaling disabled.")
+        print("[WARN] india_vix.parquet not found â€” VIX scaling disabled.")
         print("       Run 'python fetch_india_vix.py' to generate it.")
         return {}
     df = pd.read_parquet(vix_path)
@@ -442,7 +456,7 @@ def _resolve_exits_5min(
 
 
 # ===========================================================================
-# WORKER FUNCTIONS (for parallel scanning — still uses 15-min for entry signals)
+# WORKER FUNCTIONS (for parallel scanning â€” still uses 15-min for entry signals)
 # ===========================================================================
 def _scan_one_ticker_short(args: Tuple[str, str, StrategyConfig]) -> List[dict]:
     """Scan one ticker on the SHORT side. Returns list of Trade dicts."""
@@ -968,7 +982,7 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     sep = "-" * _width
 
     print(f"\n{'='*_width}")
-    print(f"  Day-wise Breakdown — last {n_weeks} weeks ({len(recent_dates)} trading days)")
+    print(f"  Day-wise Breakdown â€” last {n_weeks} weeks ({len(recent_dates)} trading days)")
     print(f"{'='*_width}")
     print(hdr)
     print(sep)
@@ -1051,14 +1065,14 @@ def generate_enhanced_charts(
     Returns list of saved file paths.
 
     Charts generated:
-      1.  Cumulative P&L (combined, short, long) — line
+      1.  Cumulative P&L (combined, short, long) â€” line
       2.  Daily P&L bar chart (combined)
       3.  Drawdown curve (combined equity)
-      4.  Win rate by side — bar chart
+      4.  Win rate by side â€” bar chart
       5.  P&L distribution histogram (combined)
       6.  P&L distribution by side (overlay histograms)
-      7.  Outcome breakdown — pie chart (TARGET / SL / EOD)
-      8.  Outcome breakdown by side — grouped bar chart
+      7.  Outcome breakdown â€” pie chart (TARGET / SL / EOD)
+      8.  Outcome breakdown by side â€” grouped bar chart
       9.  Monthly P&L heatmap
       10. Weekday P&L analysis
       11. Hourly entry time distribution
@@ -1080,7 +1094,7 @@ def generate_enhanced_charts(
         from matplotlib.gridspec import GridSpec
         import matplotlib.ticker as mticker
     except ImportError:
-        print("[WARN] matplotlib not available — skipping chart generation.")
+        print("[WARN] matplotlib not available â€” skipping chart generation.")
         return []
 
     warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
@@ -1126,12 +1140,12 @@ def generate_enhanced_charts(
                     where=cum_pnl.values >= 0, alpha=0.15, color="#2563EB")
     ax.fill_between(range(len(cum_pnl)), cum_pnl.values, 0,
                     where=cum_pnl.values < 0, alpha=0.15, color="#DC2626")
-    ax.set_title("Cumulative P&L (Rs.) — Combined / Short / Long", fontsize=14, fontweight="bold")
+    ax.set_title("Cumulative P&L (Rs.) â€” Combined / Short / Long", fontsize=14, fontweight="bold")
     ax.set_xlabel("Trade #")
     ax.set_ylabel("Cumulative P&L (Rs.)")
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
     _save(fig, "01_cumulative_pnl")
 
     # ========== CHART 2: Daily P&L Bar Chart ==========
@@ -1145,7 +1159,7 @@ def generate_enhanced_charts(
         ax.set_xlabel("Trading Day")
         ax.set_ylabel("P&L (Rs.)")
         ax.grid(True, alpha=0.3, axis="y")
-        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
         # Show date labels for first, middle, last
         n = len(daily)
         tick_positions = [0, n // 4, n // 2, 3 * n // 4, n - 1] if n > 5 else list(range(n))
@@ -1165,14 +1179,14 @@ def generate_enhanced_charts(
         ax1.set_ylabel("Cumulative P&L (Rs.)")
         ax1.legend(fontsize=10)
         ax1.grid(True, alpha=0.3)
-        ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+        ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
 
         ax2.fill_between(range(len(drawdown)), drawdown.values, 0, color="#DC2626", alpha=0.4)
         ax2.plot(drawdown.values, color="#DC2626", linewidth=1)
         ax2.set_ylabel("Drawdown (Rs.)")
         ax2.set_xlabel("Trade #")
         ax2.grid(True, alpha=0.3)
-        ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+        ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
         plt.tight_layout()
         _save(fig, "03_drawdown_curve")
 
@@ -1216,7 +1230,7 @@ def generate_enhanced_charts(
         ax.axvline(pnl_vals.mean(), color="#DC2626", linestyle="--", linewidth=2, label=f"Mean: {pnl_vals.mean():.2f}%")
         ax.axvline(pnl_vals.median(), color="#F59E0B", linestyle="--", linewidth=2, label=f"Median: {pnl_vals.median():.2f}%")
         ax.axvline(0, color="grey", linewidth=1, linestyle="-")
-        ax.set_title("P&L Distribution (%) — All Trades", fontsize=14, fontweight="bold")
+        ax.set_title("P&L Distribution (%) â€” All Trades", fontsize=14, fontweight="bold")
         ax.set_xlabel("P&L (%)")
         ax.set_ylabel("Frequency")
         ax.legend(fontsize=11)
@@ -1228,11 +1242,11 @@ def generate_enhanced_charts(
     if not short_df.empty:
         s_pnl = _safe_col(short_df, "pnl_pct").dropna()
         if len(s_pnl) > 0:
-            ax.hist(s_pnl, bins=50, color="#DC2626", alpha=0.5, edgecolor="white", linewidth=0.3, label=f"Short (μ={s_pnl.mean():.2f}%)")
+            ax.hist(s_pnl, bins=50, color="#DC2626", alpha=0.5, edgecolor="white", linewidth=0.3, label=f"Short (Î¼={s_pnl.mean():.2f}%)")
     if not long_df.empty:
         l_pnl = _safe_col(long_df, "pnl_pct").dropna()
         if len(l_pnl) > 0:
-            ax.hist(l_pnl, bins=50, color="#16A34A", alpha=0.5, edgecolor="white", linewidth=0.3, label=f"Long (μ={l_pnl.mean():.2f}%)")
+            ax.hist(l_pnl, bins=50, color="#16A34A", alpha=0.5, edgecolor="white", linewidth=0.3, label=f"Long (Î¼={l_pnl.mean():.2f}%)")
     ax.axvline(0, color="grey", linewidth=1, linestyle="-")
     ax.set_title("P&L Distribution by Side (Overlay)", fontsize=14, fontweight="bold")
     ax.set_xlabel("P&L (%)")
@@ -1241,7 +1255,7 @@ def generate_enhanced_charts(
     ax.grid(True, alpha=0.3, axis="y")
     _save(fig, "06_pnl_distribution_by_side")
 
-    # ========== CHART 7: Outcome Breakdown — Pie Chart ==========
+    # ========== CHART 7: Outcome Breakdown â€” Pie Chart ==========
     if "outcome" in combined_sorted.columns:
         outcome_counts = combined_sorted["outcome"].value_counts()
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -1256,7 +1270,7 @@ def generate_enhanced_charts(
         ax.set_title("Trade Outcome Breakdown", fontsize=14, fontweight="bold")
         _save(fig, "07_outcome_pie")
 
-    # ========== CHART 8: Outcome Breakdown by Side — Grouped Bar ==========
+    # ========== CHART 8: Outcome Breakdown by Side â€” Grouped Bar ==========
     if "outcome" in combined_sorted.columns and "side" in combined_sorted.columns:
         cross = pd.crosstab(combined_sorted["outcome"], combined_sorted["side"])
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -1279,14 +1293,14 @@ def generate_enhanced_charts(
             bars = ax.bar(range(len(monthly)), monthly.values, color=colors_monthly, alpha=0.85, width=0.7)
             for bar, v in zip(bars, monthly.values):
                 ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + abs(monthly.values).max() * 0.02,
-                        f"₹{v:,.0f}", ha="center", va="bottom", fontsize=8, rotation=45)
+                        f"â‚¹{v:,.0f}", ha="center", va="bottom", fontsize=8, rotation=45)
             ax.set_xticks(range(len(monthly)))
             ax.set_xticklabels([str(m) for m in monthly.index], rotation=45, fontsize=9)
             ax.axhline(0, color="grey", linewidth=0.8, linestyle="--")
             ax.set_title("Monthly P&L (Rs.)", fontsize=14, fontweight="bold")
             ax.set_ylabel("P&L (Rs.)")
             ax.grid(True, alpha=0.3, axis="y")
-            ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+            ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
             _save(fig, "09_monthly_pnl")
         combined_sorted.drop(columns=["_month"], inplace=True, errors="ignore")
 
@@ -1304,7 +1318,7 @@ def generate_enhanced_charts(
             ax1.set_ylabel("P&L (Rs.)")
             ax1.grid(True, alpha=0.3, axis="y")
             ax1.tick_params(axis="x", rotation=30)
-            ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+            ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
 
             colors_wd2 = ["#16A34A" if v >= 0 else "#DC2626" for v in weekday_pnl["mean"].values]
             ax2.bar(weekday_pnl.index, weekday_pnl["mean"].values, color=colors_wd2, alpha=0.85)
@@ -1312,7 +1326,7 @@ def generate_enhanced_charts(
             ax2.set_ylabel("Avg P&L (Rs.)")
             ax2.grid(True, alpha=0.3, axis="y")
             ax2.tick_params(axis="x", rotation=30)
-            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
             plt.tight_layout()
             _save(fig, "10_weekday_pnl")
         combined_sorted.drop(columns=["_weekday"], inplace=True, errors="ignore")
@@ -1529,7 +1543,7 @@ def generate_enhanced_charts(
             ax2.set_xlabel("Hour (IST)")
             ax2.set_ylabel("Total P&L (Rs.)")
             ax2.grid(True, alpha=0.3, axis="y")
-            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"₹{x:,.0f}"))
+            ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"â‚¹{x:,.0f}"))
             plt.tight_layout()
             _save(fig, "19_avg_pnl_by_hour")
         combined_sorted.drop(columns=["_entry_hour"], inplace=True, errors="ignore")
@@ -1560,8 +1574,8 @@ def generate_enhanced_charts(
             ax.plot([0, max_val], [0, max_val * 2], "--", color="#F59E0B", linewidth=1, alpha=0.5, label="1:2 R:R")
             ax.axhline(0, color="grey", linewidth=0.8, linestyle="-")
             ax.set_title("Realized Risk vs Reward (per trade)", fontsize=14, fontweight="bold")
-            ax.set_xlabel("Risk (entry→stop distance)")
-            ax.set_ylabel("Reward (entry→exit distance)")
+            ax.set_xlabel("Risk (entryâ†’stop distance)")
+            ax.set_ylabel("Reward (entryâ†’exit distance)")
             ax.legend(fontsize=10)
             ax.grid(True, alpha=0.3)
             _save(fig, "20_risk_reward_scatter")
@@ -1594,7 +1608,7 @@ def main() -> None:
 
         try:
             print("=" * 70)
-            print("AVWAP v11 COMBINED runner — LONG + SHORT (refactored v2)")
+            print("AVWAP v11 COMBINED runner â€” LONG + SHORT (refactored v2)")
             print("  - Entry signals: 15-min data")
             print("  - Exit resolution: 1-min data (stocks_indicators_1min_eq)")
             print("  - Outputs: */algo_trading/outputs")
@@ -1611,7 +1625,7 @@ def main() -> None:
                 n_files = len(list(dir_5m.glob("*.parquet")))
                 print(f"[INFO] 1-min parquet files found: {n_files}")
             else:
-                print("[WARN] 1-min data directory not found — will fall back to 15-min exits.")
+                print("[WARN] 1-min data directory not found â€” will fall back to 15-min exits.")
 
             short_cfg = default_short_config(
                 reports_dir=_outputs_dir,
@@ -1619,6 +1633,48 @@ def main() -> None:
             long_cfg = default_long_config(
                 reports_dir=_outputs_dir,
             )
+
+            if ENABLE_TIGHTER_STOPS_PROFILE:
+                short_cfg.stop_pct = float(TIGHTER_SHORT_STOP_PCT)
+                short_cfg.target_pct = float(TIGHTER_SHORT_TARGET_PCT)
+                long_cfg.stop_pct = float(TIGHTER_LONG_STOP_PCT)
+                long_cfg.target_pct = float(TIGHTER_LONG_TARGET_PCT)
+                print(
+                    "[PROFILE] Tighter-stops profile enabled: "
+                    f"SHORT(SL={short_cfg.stop_pct*100:.2f}%, TGT={short_cfg.target_pct*100:.2f}%), "
+                    f"LONG(SL={long_cfg.stop_pct*100:.2f}%, TGT={long_cfg.target_pct*100:.2f}%)"
+                )
+
+            if ENABLE_HF_BALANCED_V1_PROFILE:
+                # Match optimizer winner profile exactly for 5-15 trades/day target.
+                short_cfg.enable_liquidity_sweep_filter = False
+                short_cfg.enable_avwap_no_trade_zone = False
+                short_cfg.adx_min = 20.0
+                short_cfg.adx_slope_min = 0.80
+                short_cfg.volume_min_ratio = 1.05
+                short_cfg.rsi_max_short = 58.0
+                short_cfg.stochk_max = 82.0
+                short_cfg.stop_pct = 0.0068
+                short_cfg.target_pct = 0.0090
+                short_cfg.be_trigger_pct = 0.0050
+                short_cfg.trail_pct = 0.0030
+
+                long_cfg.enable_liquidity_sweep_filter = False
+                long_cfg.enable_avwap_no_trade_zone = False
+                long_cfg.adx_min = 20.0
+                long_cfg.adx_slope_min = 0.60
+                long_cfg.volume_min_ratio = 1.05
+                long_cfg.rsi_min_long = 42.0
+                long_cfg.stochk_min = 20.0
+                long_cfg.stochk_max = 98.0
+                long_cfg.enable_setup_a_close_continuation_break = True
+                long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
+                long_cfg.stop_pct = 0.0058
+                long_cfg.target_pct = 0.0110
+                long_cfg.be_trigger_pct = 0.0055
+                long_cfg.trail_pct = 0.0030
+
+                print("[PROFILE] hf_balanced_v1 enabled (filters relaxed, risk tuned).")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
@@ -1670,12 +1726,24 @@ def main() -> None:
                 long_cfg.vix_scale_max    = VIX_SCALE_MAX
                 long_cfg.vix_scale_target = VIX_SCALE_TARGET
                 long_cfg.vix_scale_sl     = VIX_SCALE_SL
-                print(f"[VIX] Scaling ENABLED — {len(_vix_map)} daily values loaded. "
+                print(f"[VIX] Scaling ENABLED â€” {len(_vix_map)} daily values loaded. "
                       f"baseline={VIX_BASELINE}, range=[{VIX_SCALE_MIN}x, {VIX_SCALE_MAX}x]")
             elif VIX_SCALE_ENABLED:
-                print("[VIX] Scaling ENABLED but no VIX data — using fixed SL/target.")
+                print("[VIX] Scaling ENABLED but no VIX data â€” using fixed SL/target.")
             else:
                 print("[VIX] Scaling DISABLED — fixed SL/target used (old behaviour).")
+
+            regime_map, regime_source = build_market_regime_map(short_cfg)
+            if regime_map:
+                short_cfg.market_regime_map = regime_map
+                long_cfg.market_regime_map = regime_map
+                short_cfg.enable_market_regime_filter = True
+                long_cfg.enable_market_regime_filter = True
+                print(f"[REGIME] Enabled market-bias filter using {regime_source}: {len(regime_map)} bars mapped.")
+            else:
+                short_cfg.enable_market_regime_filter = False
+                long_cfg.enable_market_regime_filter = False
+                print("[REGIME] Disabled: no market index parquet found in 15m data directory.")
 
             print(
                 f"[INFO] SHORT config: SL={short_cfg.stop_pct*100:.1f}%, TGT={short_cfg.target_pct*100:.1f}%, "
@@ -1868,4 +1936,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
 

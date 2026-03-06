@@ -163,8 +163,16 @@ class StrategyConfig:
     # Setup toggles
     # Disable the moderate pullback-break setup for LONG by default (was a net drag in research)
     enable_setup_a_pullback_c2_break: bool = False
+    # Optional LONG expansion: after moderate green C1, allow continuation break
+    # above C1 close (faster/frequent variant than C1-high break).
+    enable_setup_a_close_continuation_break: bool = False
+    lag_bars_long_a_close_continuation_break: int = 1
     # SHORT huge failed-bounce setup toggle (Pack tuning can disable this quickly).
     enable_setup_b_huge_failed_bounce: bool = True
+    # Optional LONG expansion: after HUGE green C1, allow reclaim/continuation
+    # break above C1 close even when pullback-hold structure is absent.
+    enable_setup_b_huge_c1_close_reclaim_break: bool = False
+    lag_bars_long_b_huge_c1_close_reclaim_break: int = 2
 
     # Optional VIX regime gate. If > 0, skip entries on days where India VIX exceeds this.
     # Keep 0.0 to disable.
@@ -204,25 +212,21 @@ class StrategyConfig:
 
 
 def default_short_config(**overrides) -> StrategyConfig:
-    """Factory for the SHORT side with optimized v11 defaults.
-
-    Rationale:
-    - SL=0.75%: tighter SL cuts losers faster (was 1.0%, most losses happen quickly)
-    - TGT=1.2%: better R:R (1.6:1) captures more from momentum moves
-    - BE trigger 0.50%: gives trades more room to develop, reduces excessive BE exits
-    - Trail 0.30%: locks in partial gains instead of giving back to flat BE
-    - Continuous signal window: 09:15-14:30
-    - topn_per_day=10: allows more quality trades per day
-    """
+    """Factory for the SHORT side (V7 hf_balanced_v1 baseline)."""
     base = dict(
         side="SHORT",
-        stop_pct=0.0075,
+        stop_pct=0.0068,
         target_pct=0.0090,
         be_trigger_pct=0.0050,
         trail_pct=0.0030,
         mod_impulse_min_atr=0.45,
-        rsi_max_short=55.0,
-        stochk_max=75.0,
+        adx_min=20.0,
+        adx_slope_min=0.80,
+        volume_min_ratio=1.05,
+        rsi_max_short=58.0,
+        stochk_max=82.0,
+        enable_liquidity_sweep_filter=False,
+        enable_avwap_no_trade_zone=False,
         topn_per_day=10,
         signal_windows=[
             (dtime(9, 15, 0), dtime(14, 30, 0)),
@@ -233,26 +237,24 @@ def default_short_config(**overrides) -> StrategyConfig:
 
 
 def default_long_config(**overrides) -> StrategyConfig:
-    """Factory for the LONG side with optimized v11 defaults.
-
-    Rationale:
-    - SL=0.75%: tighter SL consistent with SHORT side
-    - TGT=1.5%: slightly reduced from 2.0% to increase hit-rate and trade count
-    - BE trigger 0.60%: wider trigger so fewer trades exit at flat BE
-    - ADX slope relaxed to 0.80: allows trending stocks that are steady (not just surging)
-    - topn_per_day=10: allows more quality trades per day
-    """
+    """Factory for the LONG side (V7 hf_balanced_v1 baseline)."""
     base = dict(
         side="LONG",
-        stop_pct=0.0060,
+        stop_pct=0.0058,
         target_pct=0.0110,
-        be_trigger_pct=0.0060,
+        be_trigger_pct=0.0055,
         trail_pct=0.0030,
-        adx_slope_min=0.80,
+        adx_min=20.0,
+        adx_slope_min=0.60,
         mod_impulse_min_atr=0.30,
-        rsi_min_long=45.0,
-        stochk_min=25.0,
-        stochk_max=95.0,
+        volume_min_ratio=1.05,
+        rsi_min_long=42.0,
+        stochk_min=20.0,
+        stochk_max=98.0,
+        enable_liquidity_sweep_filter=False,
+        enable_avwap_no_trade_zone=False,
+        enable_setup_a_close_continuation_break=True,
+        enable_setup_b_huge_c1_close_reclaim_break=True,
         topn_per_day=10,
     )
     base.update(overrides)

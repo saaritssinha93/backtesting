@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-avwap_short_strategy.py — SHORT side logic for AVWAP v11
+avwap_short_strategy.py â€” SHORT side logic for AVWAP v11
 ========================================================
 
 Only contains direction-specific code:
@@ -44,6 +44,9 @@ from avwap_v11_refactored.avwap_common_v7_sweep import (
     apply_topn_per_day,
     volume_filter_pass,
     get_vix_scale,
+    has_recent_liquidity_sweep,
+    avwap_no_trade_zone_block,
+    market_regime_pass,
 )
 
 
@@ -274,11 +277,23 @@ def scan_one_day(
 
     trades: List[Trade] = []
     i = 2
+    day_sl_count = 0
+    day_r_total = 0.0
+    cooldown_until_idx = -1
 
     tail_guard = 1 if cfg.allow_incomplete_tail else 3
     while i < len(df_day) - tail_guard:
         if len(trades) >= cfg.max_trades_per_ticker_per_day:
             break
+
+        if cfg.enable_risk_guardrails:
+            if i <= cooldown_until_idx:
+                i += 1
+                continue
+            if day_sl_count >= int(cfg.daily_loss_lock_sl_count):
+                break
+            if day_r_total <= float(cfg.daily_loss_lock_r_multiple):
+                break
 
         c1 = df_day.iloc[i]
         ts1 = c1["date"]
@@ -289,6 +304,10 @@ def scan_one_day(
 
         impulse = classify_red_impulse(c1, cfg)
         if impulse == "":
+            i += 1
+            continue
+
+        if not market_regime_pass(ts1, "SHORT", cfg):
             i += 1
             continue
 
@@ -309,6 +328,14 @@ def scan_one_day(
             continue
 
         if not _trend_filter_short(df_day, i, c1, cfg):
+            i += 1
+            continue
+
+        has_sweep_ctx = has_recent_liquidity_sweep(df_day, i, "SHORT", cfg)
+        if not has_sweep_ctx:
+            i += 1
+            continue
+        if avwap_no_trade_zone_block(c1, impulse, has_sweep_ctx, cfg):
             i += 1
             continue
 
@@ -365,6 +392,17 @@ def scan_one_day(
                 india_vix=float(cfg.vix_daily.get(day_str, 0.0)),
             ), exit_idx
 
+        def _register_trade_result(trade: Trade, exit_idx: int) -> None:
+            nonlocal day_sl_count, day_r_total, cooldown_until_idx
+            trades.append(trade)
+            risk_pct = max(cfg.stop_pct * 100.0, 1e-9)
+            day_r_total += float(trade.pnl_pct) / risk_pct
+            if str(trade.outcome).upper() == "SL":
+                day_sl_count += 1
+                cooldown_until_idx = max(
+                    cooldown_until_idx, int(exit_idx) + int(cfg.sl_cooldown_bars)
+                )
+
         # ---------------------------------------------------------------
         # SETUP A (MODERATE): break C1 low, or pullback + break C2 low
         # ---------------------------------------------------------------
@@ -388,7 +426,7 @@ def scan_one_day(
                     and avwap_distance_pass(df_day, entry_idx, cfg)
                 ):
                     trade, exit_idx = _make_trade(entry_idx, trigger1, "A_MOD_BREAK_C1_LOW")
-                    trades.append(trade)
+                    _register_trade_result(trade, exit_idx)
                     i = exit_idx + 1
                     continue
 
@@ -422,7 +460,7 @@ def scan_one_day(
                         trade, exit_idx = _make_trade(
                             entry_idx, trigger2, "A_PULLBACK_C2_THEN_BREAK_C2_LOW"
                         )
-                        trades.append(trade)
+                        _register_trade_result(trade, exit_idx)
                         i = exit_idx + 1
                         continue
 
@@ -497,7 +535,7 @@ def scan_one_day(
                         continue
 
                     trade, exit_idx = _make_trade(j, trigger_b, "B_HUGE_RED_FAILED_BOUNCE")
-                    trades.append(trade)
+                    _register_trade_result(trade, exit_idx)
                     i = exit_idx + 1
                     entered = True
                     break
@@ -570,4 +608,5 @@ def run_short_scan(cfg: Optional[StrategyConfig] = None) -> List[Trade]:
             print(f"  [SHORT] scanned {k}/{len(tickers)} | trades_so_far={len(all_trades)}")
 
     return all_trades
+
 

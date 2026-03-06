@@ -1,0 +1,28 @@
+{
+  "date": "2026-03-06",
+  "open_trades": [
+    {
+      "signal_id": "88b4ca975626f68d",
+      "trade_id": "LT-88b4ca97-131633",
+      "ticker": "ROSSARI",
+      "side": "SHORT",
+      "quantity": 1,
+      "entry_price": 467.5,
+      "filled_price": 467.45,
+      "stop_price": 470.95,
+      "target_price": 463.25,
+      "entry_order_id": "260306170882334",
+      "target_order_id": "260306170882347",
+      "sl_order_id": "260306170882353",
+      "entry_time": "2026-03-06 13:16:34+0530",
+      "signal_datetime": "2026-03-06 13:15:00+05:30",
+      "signal_entry_datetime_ist": "2026-03-06 13:15:00+05:30",
+      "setup": "A_MOD_BREAK_C1_LOW",
+      "impulse_type": "MODERATE",
+      "quality_score": 0.6032,
+      "stage": "exit_legs_placed",
+      "updated_at": "2026-03-06 13:16:34"
+    }
+  ],
+  "updated_at": "2026-03-06 13:16:34"
+}

@@ -209,6 +209,52 @@ DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_15M_REFRESH_TOKENS", "0")).strip(
     "yes",
     "on",
 }
+DEFAULT_ENABLE_OPENING_SLOT_FETCH = str(
+    os.getenv("EQIDV2_15M_ENABLE_OPENING_SLOT_FETCH", "1")
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+# ---------------------------------------------------------------------
+# Opening-slot expected stamp override:
+# For 09:15 slot we intentionally allow a "start-ts" snapshot fetch.
+# Core expected_last_stamp(start) normally resolves to 09:00 at 09:15,
+# which suppresses opening updates. We force expected to 09:15 for this slot.
+# ---------------------------------------------------------------------
+_orig_expected_last_stamp = getattr(core, "expected_last_stamp", None)
+
+def expected_last_stamp_opening_fix(mode: str, now_ist_dt: datetime, holidays: set, intraday_ts: str):
+    if _orig_expected_last_stamp is None:
+        raise RuntimeError("core.expected_last_stamp not found")
+
+    mode_l = str(mode).lower().strip()
+    ts_mode = str(intraday_ts).lower().strip()
+
+    if now_ist_dt.tzinfo is None:
+        now_ist_dt = IST.localize(now_ist_dt)
+
+    t = now_ist_dt.time()
+    in_opening_window = (MARKET_OPEN <= t < FIRST_15M_CLOSE)
+    if mode_l == "15min" and ts_mode == "start" and in_opening_window:
+        open_anchor = IST.localize(
+            datetime(
+                now_ist_dt.year,
+                now_ist_dt.month,
+                now_ist_dt.day,
+                MARKET_OPEN.hour,
+                MARKET_OPEN.minute,
+                0,
+            )
+        )
+        return {"kind": "ts", "value": open_anchor, "step_min": 15}
+
+    return _orig_expected_last_stamp(mode, now_ist_dt, holidays, intraday_ts)
+
+if _orig_expected_last_stamp is not None:
+    core.expected_last_stamp = expected_last_stamp_opening_fix
 
 
 def now_ist() -> datetime:
@@ -274,6 +320,8 @@ def _run_partition(
     report_dir: str,
     holidays: set,
     refresh_tokens: bool,
+    intraday_ts: str,
+    skip_if_fresh: bool,
 ) -> None:
     if not partition_tickers:
         print(f"[INFO] {partition_name}: no tickers assigned; skipping.")
@@ -292,8 +340,8 @@ def _run_partition(
         core.run_mode(
             mode,
             max_workers=max_workers,
-            skip_if_fresh=True,
-            intraday_ts="end",
+            skip_if_fresh=bool(skip_if_fresh),
+            intraday_ts=str(intraday_ts),
             holidays=holidays,
             report_dir=report_dir,
             refresh_tokens=refresh_tokens,
@@ -315,6 +363,8 @@ def _run_partition_worker(
     report_dir: str,
     holidays: set,
     refresh_tokens: bool,
+    intraday_ts: str,
+    skip_if_fresh: bool,
     result_queue,
 ) -> None:
     # Use stream-only logger in child process to avoid concurrent file truncation.
@@ -344,16 +394,32 @@ def _run_partition_worker(
             report_dir=report_dir,
             holidays=holidays,
             refresh_tokens=refresh_tokens,
+            intraday_ts=intraday_ts,
+            skip_if_fresh=skip_if_fresh,
         )
         result_queue.put((partition_name, True, ""))
     except Exception as e:
         result_queue.put((partition_name, False, str(e)))
 
-def run_update_15m_once(max_workers: int, report_dir: str, buffer_sec: int, refresh_tokens: bool) -> None:
+def run_update_15m_once(
+    max_workers: int,
+    report_dir: str,
+    buffer_sec: int,
+    refresh_tokens: bool,
+    opening_slot: bool = False,
+) -> None:
     holidays = _read_holidays_set()
     logger = core.logging.getLogger("stocks_fetcher")
     all_tickers, pre_token_map = core.load_stocks_universe(logger)
     token_map = {str(k).strip().upper(): int(v) for k, v in dict(pre_token_map).items()}
+
+    intraday_ts_mode = "start" if opening_slot else "end"
+    skip_if_fresh_mode = False if opening_slot else True
+    if opening_slot:
+        print(
+            "[INFO] Opening-slot mode active: intraday_ts=start, skip_if_fresh=False "
+            "(attempting 09:15 opening snapshot fetch)."
+        )
 
     app1_tickers, app2_tickers, app3_tickers, app4_tickers = _split_tickers_for_four_apps(all_tickers)
     app1_token_map = {t: token_map[t] for t in app1_tickers if t in token_map}
@@ -394,6 +460,8 @@ def run_update_15m_once(max_workers: int, report_dir: str, buffer_sec: int, refr
                 "report_dir": os.path.join(report_dir, pname),
                 "holidays": holidays,
                 "refresh_tokens": refresh_tokens,
+                "intraday_ts": intraday_ts_mode,
+                "skip_if_fresh": skip_if_fresh_mode,
                 "result_queue": result_queue,
             },
         )
@@ -429,6 +497,19 @@ def main() -> None:
     ap.add_argument("--refresh-tokens", dest="refresh_tokens", action="store_true", help="Force refresh kite instrument token cache.")
     ap.add_argument("--no-refresh-tokens", dest="refresh_tokens", action="store_false", help="Do not refresh kite instrument token cache.")
     ap.set_defaults(refresh_tokens=DEFAULT_REFRESH_TOKENS)
+    ap.add_argument(
+        "--enable-opening-slot-fetch",
+        dest="enable_opening_slot_fetch",
+        action="store_true",
+        help="Process 09:15 slot using opening snapshot mode.",
+    )
+    ap.add_argument(
+        "--disable-opening-slot-fetch",
+        dest="enable_opening_slot_fetch",
+        action="store_false",
+        help="Skip 09:15 slot (old behavior).",
+    )
+    ap.set_defaults(enable_opening_slot_fetch=DEFAULT_ENABLE_OPENING_SLOT_FETCH)
     ap.add_argument("--report-dir", default="reports/stocks_missing_reports")
     args = ap.parse_args()
 
@@ -446,6 +527,7 @@ def main() -> None:
     print(f"       Buffer after boundary: {args.buffer_sec}s")
     print(f"       Max workers: {args.max_workers}")
     print(f"       Refresh tokens: {args.refresh_tokens}")
+    print(f"       Opening slot fetch (09:15): {args.enable_opening_slot_fetch}")
     print(f"       Process will exit at {HARD_STOP.strftime('%H:%M')} IST.")
     holidays = _read_holidays_set()
     print(f"       Holidays loaded: {len(holidays)}")
@@ -480,13 +562,12 @@ def main() -> None:
         # Determine the slot we should process: last completed 15m boundary
         slot_end = _floor_to_15m(dt)
 
-        # With intraday_ts="end", there is no completed 15m candle at 09:15.
-        # Running this opening slot causes false stale-verification and heavy recovery churn.
-        if slot_end.time() < FIRST_15M_CLOSE:
+        opening_slot = slot_end.time() < FIRST_15M_CLOSE
+        if opening_slot and (not args.enable_opening_slot_fetch):
             if last_run_slot != slot_end:
                 print(
-                    f"[SKIP] Opening slot {slot_end.strftime('%H:%M')} has no completed 15m candle "
-                    "(intraday_ts=end). First actionable slot is 09:30."
+                    f"[SKIP] Opening slot {slot_end.strftime('%H:%M')} disabled by config. "
+                    "First actionable slot is 09:30."
                 )
             last_run_slot = slot_end
             nxt = _next_boundary(dt) + timedelta(seconds=int(args.buffer_sec))
@@ -505,13 +586,15 @@ def main() -> None:
             time.sleep(max(2.0, (nxt - now_ist()).total_seconds()))
             continue
 
-        print(f"[RUN ] Updating EQIDV2 15m for slot {slot_end.strftime('%H:%M')} at {dt.strftime('%Y-%m-%d %H:%M:%S%z')}")
+        tag = "OPEN" if opening_slot else "RUN "
+        print(f"[{tag}] Updating EQIDV2 15m for slot {slot_end.strftime('%H:%M')} at {dt.strftime('%Y-%m-%d %H:%M:%S%z')}")
         try:
             run_update_15m_once(
                 max_workers=int(args.max_workers),
                 report_dir=str(args.report_dir),
                 buffer_sec=int(args.buffer_sec),
                 refresh_tokens=bool(args.refresh_tokens),
+                opening_slot=bool(opening_slot),
             )
         except Exception as e:
             print(f"[ERROR] Update failed: {e}", file=sys.stderr)

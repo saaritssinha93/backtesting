@@ -1,0 +1,31 @@
+[
+  {
+    "name": "baseline",
+    "short_overrides": {},
+    "long_overrides": {}
+  },
+  {
+    "name": "freq_long_2",
+    "short_overrides": {},
+    "long_overrides": {
+      "enable_setup_a_close_continuation_break": true,
+      "lag_bars_long_a_close_continuation_break": 1,
+      "enable_setup_b_huge_c1_close_reclaim_break": true,
+      "lag_bars_long_b_huge_c1_close_reclaim_break": 2
+    }
+  },
+  {
+    "name": "quality_low_dd_2",
+    "short_overrides": {
+      "target_pct": 0.009,
+      "stop_pct": 0.0063,
+      "be_trigger_pct": 0.0045
+    },
+    "long_overrides": {
+      "target_pct": 0.011,
+      "stop_pct": 0.0053,
+      "be_trigger_pct": 0.0055,
+      "enable_setup_a_close_continuation_break": true
+    }
+  }
+]
