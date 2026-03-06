@@ -667,3 +667,5 @@
 2026-03-06 13:54:27,233 | INFO    | heartbeat | [LIVE.PNL] open=1 | tickers=ROSSARI=Rs.-363.12 | unrealized=Rs.-363.12 | realized=Rs.+0.00 | total=Rs.-363.12 | deployed_margin=Rs.49,893.76
 2026-03-06 13:54:32,235 | INFO    | heartbeat | [LIVE.PNL] open=1 | tickers=ROSSARI=Rs.-363.12 | unrealized=Rs.-363.12 | realized=Rs.+0.00 | total=Rs.-363.12 | deployed_margin=Rs.49,893.76
 2026-03-06 13:54:37,238 | INFO    | heartbeat | [LIVE.PNL] open=1 | tickers=ROSSARI=Rs.-363.12 | unrealized=Rs.-363.12 | realized=Rs.+0.00 | total=Rs.-363.12 | deployed_margin=Rs.49,893.76
+2026-03-06 13:54:42,241 | INFO    | heartbeat | [LIVE.PNL] open=1 | tickers=ROSSARI=Rs.-363.12 | unrealized=Rs.-363.12 | realized=Rs.+0.00 | total=Rs.-363.12 | deployed_margin=Rs.49,893.76
+2026-03-06 13:54:47,244 | INFO    | heartbeat | [LIVE.PNL] open=1 | tickers=ROSSARI=Rs.-363.12 | unrealized=Rs.-363.12 | realized=Rs.+0.00 | total=Rs.-363.12 | deployed_margin=Rs.49,893.76
