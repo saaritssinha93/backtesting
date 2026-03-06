@@ -31,3 +31,37 @@
 2026-03-06 13:16:34,108 | INFO    | [LIVE] Entry order placed: SELL ROSSARI ID=260306170882334
 2026-03-06 13:16:34,234 | INFO    | [LIVE] Entry filled: ROSSARI @ 467.45
 2026-03-06 13:16:34,392 | INFO    | [LIVE] Exit legs placed for ROSSARI: target_id=260306170882347 sl_id=260306170882353
+2026-03-06 14:16:51,125 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-06 15:16:51,286 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-06 15:20:00,032 | WARNING | [EOD.GLOBAL] entry cutoff reached at 15:20:00 IST; EOD flatten in progress
+2026-03-06 15:20:00,129 | INFO    | Cancelled order 260306170882347 (attempt 1)
+2026-03-06 15:20:00,190 | INFO    | Cancelled order 260306170882353 (attempt 1)
+2026-03-06 15:20:00,937 | INFO    | [LIVE] EOD forced close for ROSSARI
+2026-03-06 15:20:01,004 | WARNING | Cancel attempt 1/3 for 260306170882347: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:03,062 | WARNING | Cancel attempt 2/3 for 260306170882347: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:05,123 | WARNING | Cancel attempt 3/3 for 260306170882347: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:05,123 | ERROR   | FAILED to cancel order 260306170882347 after 3 attempts
+2026-03-06 15:20:05,188 | WARNING | Cancel attempt 1/3 for 260306170882353: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:05,289 | WARNING | Cancel attempt 1/3 for 260306170882347: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:07,248 | WARNING | Cancel attempt 2/3 for 260306170882353: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:07,358 | WARNING | Cancel attempt 2/3 for 260306170882347: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:09,377 | WARNING | Cancel attempt 3/3 for 260306170882353: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:09,377 | ERROR   | FAILED to cancel order 260306170882353 after 3 attempts
+2026-03-06 15:20:09,419 | WARNING | [LIVE] Skipping EOD force-close for ROSSARI: broker_qty=0 (already flat/opposite).
+2026-03-06 15:20:09,435 | INFO    | [LIVE] RESULT SHORT ROSSARI | EOD_FLAT_NO_FORCE_CLOSE | Entry=467.45 Exit=467.45 | P&L: Rs.+0.00 (+0.00%) | Day total: Rs.+0.00
+2026-03-06 15:20:09,498 | WARNING | Cancel attempt 3/3 for 260306170882347: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:09,498 | ERROR   | FAILED to cancel order 260306170882347 after 3 attempts
+2026-03-06 15:20:09,545 | WARNING | Cancel attempt 1/3 for 260306170882353: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:11,623 | WARNING | Cancel attempt 2/3 for 260306170882353: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:13,686 | WARNING | Cancel attempt 3/3 for 260306170882353: Order cannot be cancelled as it is being processed. Try later.
+2026-03-06 15:20:13,686 | ERROR   | FAILED to cancel order 260306170882353 after 3 attempts
+2026-03-06 15:30:00,020 | INFO    | Market closed. All trades complete.
+2026-03-06 15:30:00,037 | INFO    | =======================================================
+2026-03-06 15:30:00,037 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-03-06 15:30:00,037 | INFO    |   Total trades : 1
+2026-03-06 15:30:00,037 | INFO    |   Wins         : 0
+2026-03-06 15:30:00,037 | INFO    |   Losses       : 0
+2026-03-06 15:30:00,037 | INFO    |   Win rate     : 0.0%
+2026-03-06 15:30:00,037 | INFO    |   Total P&L    : Rs.+0.00
+2026-03-06 15:30:00,037 | INFO    | =======================================================
+2026-03-06 15:30:00,037 | INFO    | Live trade executor stopped.

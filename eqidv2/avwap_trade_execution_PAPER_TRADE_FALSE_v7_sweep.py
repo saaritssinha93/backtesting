@@ -1033,7 +1033,8 @@ def _global_eod_force_close_sweep(now_ist: Optional[datetime] = None) -> None:
     Fail-safe EOD flattener:
     - blocks new dispatch after 15:20
     - cancels exit legs for tracked positions
-    - sends market close orders for any remaining tracked broker quantity
+    - sends market close orders for any remaining broker MIS quantity
+      (including orphan/mismatched positions) to avoid overnight carry.
     """
     if kite is None:
         return
@@ -1057,15 +1058,13 @@ def _global_eod_force_close_sweep(now_ist: Optional[datetime] = None) -> None:
         _set_dispatch_lockdown(cutoff_reason)
         log.warning(f"[EOD.GLOBAL] {cutoff_reason}")
 
-    with active_positions_lock:
-        tracked_positions = [dict(v) for v in active_positions.values()]
-    if not tracked_positions:
-        return
-
     broker_qty_map = _get_broker_mis_position_qty_map()
     if broker_qty_map is None:
         log.warning("[EOD.GLOBAL] Broker position snapshot unavailable; retrying sweep.")
         return
+
+    with active_positions_lock:
+        tracked_positions = [dict(v) for v in active_positions.values()]
 
     # Aggregate expected per ticker to avoid over-closing when multiple signals
     # map to the same symbol.
@@ -1093,7 +1092,16 @@ def _global_eod_force_close_sweep(now_ist: Optional[datetime] = None) -> None:
         if sl_oid:
             entry["sl_order_ids"].add(sl_oid)
 
-    for ticker, meta in sorted(per_ticker.items()):
+    all_tickers = sorted(set(per_ticker.keys()) | set(broker_qty_map.keys()))
+    for ticker in all_tickers:
+        meta = per_ticker.get(
+            ticker,
+            {
+                "expected_signed_qty": 0,
+                "target_order_ids": set(),
+                "sl_order_ids": set(),
+            },
+        )
         for oid in sorted(meta["target_order_ids"]):
             cancel_order_safe(kite.VARIETY_REGULAR, oid)
         for oid in sorted(meta["sl_order_ids"]):
@@ -1101,19 +1109,24 @@ def _global_eod_force_close_sweep(now_ist: Optional[datetime] = None) -> None:
 
         expected_signed_qty = int(meta["expected_signed_qty"])
         broker_signed_qty = int(broker_qty_map.get(ticker, 0))
-        if expected_signed_qty == 0 or broker_signed_qty == 0:
+        if broker_signed_qty == 0:
             continue
 
-        if (expected_signed_qty > 0 and broker_signed_qty < 0) or (
+        if expected_signed_qty == 0:
+            log.warning(
+                f"[EOD.GLOBAL] Orphan broker MIS position detected for {ticker}: "
+                f"broker={broker_signed_qty}. Forcing flatten."
+            )
+        elif (expected_signed_qty > 0 and broker_signed_qty < 0) or (
             expected_signed_qty < 0 and broker_signed_qty > 0
         ):
             log.warning(
-                f"[EOD.GLOBAL] Skip {ticker}: direction mismatch "
-                f"(expected={expected_signed_qty}, broker={broker_signed_qty})."
+                f"[EOD.GLOBAL] Direction mismatch for {ticker} "
+                f"(expected={expected_signed_qty}, broker={broker_signed_qty}). "
+                "Forcing flatten using broker quantity."
             )
-            continue
 
-        close_qty = min(abs(expected_signed_qty), abs(broker_signed_qty))
+        close_qty = abs(broker_signed_qty)
         if close_qty <= 0:
             continue
 
