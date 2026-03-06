@@ -1,2 +1,0 @@
-scenario,score,trades_per_day,short_trades_per_day,long_trades_per_day,sum_pnl_pct,profit_factor,max_drawdown_pct,daily_win_pct,short_sum_pnl_pct,long_sum_pnl_pct,notional_pnl_rs
-hf_balanced_v1_verify,421.8045698806754,11.038167938931299,6.4961832061068705,4.541984732824427,3001.538525682632,3.761964657332451,33.64119715580085,92.36641221374046,777.1081827744678,2224.4303429081647,2612984.434295398
