@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Walk-forward side-weighted optimizer for AVWAP V7 sweep.
+Walk-forward side-weighted optimizer for AVWAP V11.
 
 What it does:
 1) Runs multiple parameter scenarios over full data (SHORT + LONG).
@@ -30,12 +30,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from avwap_combined_runner_v7_sweep import (
+from avwap_combined_runner_v11 import (
     _add_notional_pnl,
-    _apply_day_loss_guard,
     _run_side_parallel,
 )
-from avwap_v11_refactored.avwap_common_v7_sweep import (
+from avwap_v11_refactored.avwap_common_v11 import (
     StrategyConfig,
     build_market_regime_map,
     compute_backtest_metrics,
@@ -49,6 +48,49 @@ class ScenarioSpec:
     name: str
     short_overrides: Dict[str, Any]
     long_overrides: Dict[str, Any]
+
+
+def _apply_day_loss_guard(df: pd.DataFrame, threshold_pct: float) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """
+    Post-trade day-loss guard for optimizer experiments.
+    Keeps chronological trades per day until cumulative pnl_pct drops below threshold.
+    Remaining trades for that day are dropped.
+    """
+    if df.empty:
+        return df, {"blocked_trades": 0, "blocked_days": 0}
+
+    d = df.copy()
+    d["trade_date"] = pd.to_datetime(d.get("trade_date"), errors="coerce").dt.date
+    d = d.dropna(subset=["trade_date"]).copy()
+    if d.empty:
+        return d, {"blocked_trades": 0, "blocked_days": 0}
+
+    sort_cols = [c for c in ["trade_date", "entry_time_ist", "signal_time_ist", "ticker", "side"] if c in d.columns]
+    if sort_cols:
+        d = d.sort_values(sort_cols).reset_index(drop=True)
+    d["pnl_pct"] = pd.to_numeric(d.get("pnl_pct", 0.0), errors="coerce").fillna(0.0)
+
+    keep_idx: List[int] = []
+    blocked_trades = 0
+    blocked_days = 0
+    for _, g in d.groupby("trade_date", sort=False):
+        day_locked = False
+        day_pnl = 0.0
+        blocked_this_day = 0
+        for i, row in g.iterrows():
+            if day_locked:
+                blocked_this_day += 1
+                continue
+            keep_idx.append(i)
+            day_pnl += float(row["pnl_pct"])
+            if day_pnl <= threshold_pct:
+                day_locked = True
+        if blocked_this_day > 0:
+            blocked_days += 1
+            blocked_trades += blocked_this_day
+
+    out = d.loc[keep_idx].copy().reset_index(drop=True) if keep_idx else d.iloc[0:0].copy()
+    return out, {"blocked_trades": int(blocked_trades), "blocked_days": int(blocked_days)}
 
 
 def _default_scenarios() -> List[ScenarioSpec]:
@@ -313,8 +355,8 @@ def _iter_walkforward_splits(days: List[date], train_days: int, test_days: int) 
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Walk-forward side-weighted optimizer for AVWAP V7 sweep.")
-    ap.add_argument("--out-dir", type=str, default="outputs", help="Output directory for CSV/JSON artifacts.")
+    ap = argparse.ArgumentParser(description="Walk-forward side-weighted optimizer for AVWAP V11.")
+    ap.add_argument("--out-dir", type=str, default="outputs_v11", help="Output directory for CSV/JSON artifacts.")
     ap.add_argument("--max-workers", type=int, default=1, help="Workers per side scan. Use 1 for stable local runs.")
     ap.add_argument("--train-days", type=int, default=45, help="Walk-forward train window size.")
     ap.add_argument("--test-days", type=int, default=10, help="Walk-forward test window size.")
@@ -384,7 +426,7 @@ def main() -> int:
         )
 
     leaderboard = pd.DataFrame(leaderboard_rows).sort_values("score", ascending=False).reset_index(drop=True)
-    leaderboard_csv = out_dir / "v7_sweep_walkforward_leaderboard.csv"
+    leaderboard_csv = out_dir / "v11_walkforward_leaderboard.csv"
     leaderboard.to_csv(leaderboard_csv, index=False)
     print(f"\n[OK] Leaderboard saved: {leaderboard_csv}")
 
@@ -444,7 +486,7 @@ def main() -> int:
         )
 
     folds_df = pd.DataFrame(folds)
-    folds_csv = out_dir / "v7_sweep_walkforward_folds.csv"
+    folds_csv = out_dir / "v11_walkforward_folds.csv"
     folds_df.to_csv(folds_csv, index=False)
     print(f"[OK] Walk-forward folds saved: {folds_csv}")
 
@@ -471,7 +513,7 @@ def main() -> int:
         "enable_regime_filter": bool(args.enable_regime_filter),
         "wf_test_summary": wf_summary,
     }
-    summary_path = out_dir / "v7_sweep_walkforward_summary.json"
+    summary_path = out_dir / "v11_walkforward_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"[OK] Summary saved: {summary_path}")
 

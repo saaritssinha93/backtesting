@@ -1,6 +1,6 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v2.py â€” AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
+avwap_combined_runner_v2.py — AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
 ==================================================================================
 
 Changes from v1:
@@ -9,11 +9,11 @@ Changes from v1:
    from */stocks_indicators_1min_eq/ for higher resolution P&L
 3. Significantly expanded charting suite with more detailed & analytical charts
 4. Normal Python imports (no importlib hacks)
-5. Unified Trade dataclass â€” both sides produce identical columns
+5. Unified Trade dataclass — both sides produce identical columns
 6. Parallel ticker scanning via ProcessPoolExecutor
 7. Slippage + commission model baked into P&L
 8. Comprehensive backtest metrics (Sharpe, Sortino, Calmar, drawdown, profit factor)
-9. All config via StrategyConfig dataclass â€” no module-level globals
+9. All config via StrategyConfig dataclass — no module-level globals
 10. Cash-constrained portfolio sim uses itertuples() instead of iterrows()
 
 Usage:
@@ -86,10 +86,10 @@ from avwap_v11_refactored.avwap_common_v7_sweep import (
     generate_backtest_charts,
     build_market_regime_map,
 )
-from avwap_v11_refactored.avwap_short_strategy_v7_sweep import (
+from avwap_v11_refactored.avwap_short_strategy_v9_sweep import (
     scan_all_days_for_ticker as scan_short,
 )
-from avwap_v11_refactored.avwap_long_strategy_v7_sweep import (
+from avwap_v11_refactored.avwap_long_strategy_v9_sweep import (
     scan_all_days_for_ticker as scan_long,
 )
 
@@ -137,6 +137,15 @@ LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH = 1
 LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH = 2
 LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = -1
 
+
+# ---------------------------------------------------------------------------
+# V9 SWEEP SPECIFIC SETTINGS
+# ---------------------------------------------------------------------------
+# S5 profile: enable close-confirmation gate for cleaner entries.
+V9_REQUIRE_CLOSE_CONFIRM = True
+# HUGE scan cap is handled inside the v9 strategy files (pull_end+4).
+# ---------------------------------------------------------------------------
+
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 
@@ -145,19 +154,23 @@ MAX_WORKERS = 4
 
 # Pack-2 controls (requested tuning profile)
 PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE = True
-PACK2_SHORT_MAX_VIX_FOR_ENTRIES = 0.0
+PACK2_SHORT_MAX_VIX_FOR_ENTRIES = 13.0
+PACK2_LONG_MAX_VIX_FOR_ENTRIES = 13.0
 
 # High-frequency balanced profile from optimizer:
 # outputs/v7_scenarios_hf_target_5_15.json -> hf_balanced_v1
 ENABLE_HF_BALANCED_V1_PROFILE = True
 
 # High-frequency profile from research:
-# "Tighter stops"
+# "Tighter stops + day-loss guard -3.0%"
 ENABLE_TIGHTER_STOPS_PROFILE = True
 TIGHTER_SHORT_STOP_PCT = 0.0068
 TIGHTER_SHORT_TARGET_PCT = 0.0090
 TIGHTER_LONG_STOP_PCT = 0.0058
 TIGHTER_LONG_TARGET_PCT = 0.0110
+
+ENABLE_DAY_LOSS_GUARD = False
+DAY_LOSS_GUARD_PCT = -3.0
 
 # ===========================================================================
 # TARGET TEST — Option 1: lower targets for more target hits
@@ -221,7 +234,7 @@ def _resolve_5min_dir() -> Path:
 
 
 def _load_india_vix(project_root: Path) -> dict:
-    """Load India VIX parquet â†’ {date_str: float}.
+    """Load India VIX parquet → {date_str: float}.
 
     Returns empty dict if VIX_SCALE_ENABLED=False or file not found.
     Run fetch_india_vix.py once to create india_vix.parquet.
@@ -230,7 +243,7 @@ def _load_india_vix(project_root: Path) -> dict:
         return {}
     vix_path = project_root / "india_vix.parquet"
     if not vix_path.exists():
-        print("[WARN] india_vix.parquet not found â€” VIX scaling disabled.")
+        print("[WARN] india_vix.parquet not found — VIX scaling disabled.")
         print("       Run 'python fetch_india_vix.py' to generate it.")
         return {}
     df = pd.read_parquet(vix_path)
@@ -453,7 +466,7 @@ def _resolve_exits_5min(
 
 
 # ===========================================================================
-# WORKER FUNCTIONS (for parallel scanning â€” still uses 15-min for entry signals)
+# WORKER FUNCTIONS (for parallel scanning — still uses 15-min for entry signals)
 # ===========================================================================
 def _scan_one_ticker_short(args: Tuple[str, str, StrategyConfig]) -> List[dict]:
     """Scan one ticker on the SHORT side. Returns list of Trade dicts."""
@@ -734,6 +747,59 @@ def _print_signal_entry_lag_summary(df: pd.DataFrame) -> None:
     print(lag_summary.to_string(index=False))
 
 
+def _apply_day_loss_guard(
+    df: pd.DataFrame, threshold_pct: float
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Stop taking new entries for a day once cumulative day P&L% drops below threshold.
+
+    Note:
+      - Uses chronological entry order within each day.
+      - This is a strategy-level risk gate (not a trade-count cap).
+    """
+    if df.empty:
+        return df, {"blocked_trades": 0, "blocked_days": 0, "threshold_pct": threshold_pct}
+
+    if threshold_pct >= 0:
+        return df, {"blocked_trades": 0, "blocked_days": 0, "threshold_pct": threshold_pct}
+
+    d = df.copy()
+    d["trade_date"] = pd.to_datetime(d.get("trade_date"), errors="coerce").dt.date
+    d["entry_time_ist"] = pd.to_datetime(d.get("entry_time_ist"), errors="coerce")
+    d["pnl_pct"] = pd.to_numeric(d.get("pnl_pct", 0.0), errors="coerce").fillna(0.0)
+
+    keep_idx: List[int] = []
+    blocked_trades = 0
+    blocked_days = 0
+
+    sort_cols = [c for c in ["entry_time_ist", "ticker", "side"] if c in d.columns]
+    if not sort_cols:
+        sort_cols = [c for c in ["ticker", "side"] if c in d.columns]
+
+    for _, day_df in d.groupby("trade_date", sort=True):
+        day_df = day_df.sort_values(sort_cols)
+        day_cum = 0.0
+        day_blocked = False
+        for idx, row in day_df.iterrows():
+            if day_cum <= threshold_pct:
+                blocked_trades += 1
+                day_blocked = True
+                continue
+            keep_idx.append(idx)
+            day_cum += float(row["pnl_pct"])
+        if day_blocked:
+            blocked_days += 1
+
+    out = d.loc[keep_idx].copy()
+    out = _sort_trades_for_output(out)
+    return out, {
+        "blocked_trades": int(blocked_trades),
+        "blocked_days": int(blocked_days),
+        "threshold_pct": float(threshold_pct),
+    }
+
+
+
 # ===========================================================================
 # CASH-CONSTRAINED PORTFOLIO SIM (optimized with itertuples)
 # ===========================================================================
@@ -926,7 +992,7 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     sep = "-" * _width
 
     print(f"\n{'='*_width}")
-    print(f"  Day-wise Breakdown â€” last {n_weeks} weeks ({len(recent_dates)} trading days)")
+    print(f"  Day-wise Breakdown — last {n_weeks} weeks ({len(recent_dates)} trading days)")
     print(f"{'='*_width}")
     print(hdr)
     print(sep)
@@ -1009,14 +1075,14 @@ def generate_enhanced_charts(
     Returns list of saved file paths.
 
     Charts generated:
-      1.  Cumulative P&L (combined, short, long) â€” line
+      1.  Cumulative P&L (combined, short, long) — line
       2.  Daily P&L bar chart (combined)
       3.  Drawdown curve (combined equity)
-      4.  Win rate by side â€” bar chart
+      4.  Win rate by side — bar chart
       5.  P&L distribution histogram (combined)
       6.  P&L distribution by side (overlay histograms)
-      7.  Outcome breakdown â€” pie chart (TARGET / SL / EOD)
-      8.  Outcome breakdown by side â€” grouped bar chart
+      7.  Outcome breakdown — pie chart (TARGET / SL / EOD)
+      8.  Outcome breakdown by side — grouped bar chart
       9.  Monthly P&L heatmap
       10. Weekday P&L analysis
       11. Hourly entry time distribution
@@ -1038,7 +1104,7 @@ def generate_enhanced_charts(
         from matplotlib.gridspec import GridSpec
         import matplotlib.ticker as mticker
     except ImportError:
-        print("[WARN] matplotlib not available â€” skipping chart generation.")
+        print("[WARN] matplotlib not available — skipping chart generation.")
         return []
 
     warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
@@ -1084,7 +1150,7 @@ def generate_enhanced_charts(
                     where=cum_pnl.values >= 0, alpha=0.15, color="#2563EB")
     ax.fill_between(range(len(cum_pnl)), cum_pnl.values, 0,
                     where=cum_pnl.values < 0, alpha=0.15, color="#DC2626")
-    ax.set_title("Cumulative P&L (Rs.) â€” Combined / Short / Long", fontsize=14, fontweight="bold")
+    ax.set_title("Cumulative P&L (Rs.) — Combined / Short / Long", fontsize=14, fontweight="bold")
     ax.set_xlabel("Trade #")
     ax.set_ylabel("Cumulative P&L (Rs.)")
     ax.legend(fontsize=11)
@@ -1174,7 +1240,7 @@ def generate_enhanced_charts(
         ax.axvline(pnl_vals.mean(), color="#DC2626", linestyle="--", linewidth=2, label=f"Mean: {pnl_vals.mean():.2f}%")
         ax.axvline(pnl_vals.median(), color="#F59E0B", linestyle="--", linewidth=2, label=f"Median: {pnl_vals.median():.2f}%")
         ax.axvline(0, color="grey", linewidth=1, linestyle="-")
-        ax.set_title("P&L Distribution (%) â€” All Trades", fontsize=14, fontweight="bold")
+        ax.set_title("P&L Distribution (%) — All Trades", fontsize=14, fontweight="bold")
         ax.set_xlabel("P&L (%)")
         ax.set_ylabel("Frequency")
         ax.legend(fontsize=11)
@@ -1199,7 +1265,7 @@ def generate_enhanced_charts(
     ax.grid(True, alpha=0.3, axis="y")
     _save(fig, "06_pnl_distribution_by_side")
 
-    # ========== CHART 7: Outcome Breakdown â€” Pie Chart ==========
+    # ========== CHART 7: Outcome Breakdown — Pie Chart ==========
     if "outcome" in combined_sorted.columns:
         outcome_counts = combined_sorted["outcome"].value_counts()
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -1214,7 +1280,7 @@ def generate_enhanced_charts(
         ax.set_title("Trade Outcome Breakdown", fontsize=14, fontweight="bold")
         _save(fig, "07_outcome_pie")
 
-    # ========== CHART 8: Outcome Breakdown by Side â€” Grouped Bar ==========
+    # ========== CHART 8: Outcome Breakdown by Side — Grouped Bar ==========
     if "outcome" in combined_sorted.columns and "side" in combined_sorted.columns:
         cross = pd.crosstab(combined_sorted["outcome"], combined_sorted["side"])
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -1518,8 +1584,8 @@ def generate_enhanced_charts(
             ax.plot([0, max_val], [0, max_val * 2], "--", color="#F59E0B", linewidth=1, alpha=0.5, label="1:2 R:R")
             ax.axhline(0, color="grey", linewidth=0.8, linestyle="-")
             ax.set_title("Realized Risk vs Reward (per trade)", fontsize=14, fontweight="bold")
-            ax.set_xlabel("Risk (entryâ†’stop distance)")
-            ax.set_ylabel("Reward (entryâ†’exit distance)")
+            ax.set_xlabel("Risk (entry→stop distance)")
+            ax.set_ylabel("Reward (entry→exit distance)")
             ax.legend(fontsize=10)
             ax.grid(True, alpha=0.3)
             _save(fig, "20_risk_reward_scatter")
@@ -1538,11 +1604,11 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = _project_root / ("outputs_target_test" if TEST_TARGET_OVERRIDE else "outputs")
+    _outputs_dir = _project_root / ("outputs_target_test" if TEST_TARGET_OVERRIDE else "outputs_v9_sweep")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
-    log_path = _outputs_dir / f"avwap_combined_runner_{ts}.txt"
+    log_path = _outputs_dir / f"avwap_combined_runner_v9_{ts}.txt"
 
     # Tee all console output to outputs/*.txt
     _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
@@ -1552,7 +1618,7 @@ def main() -> None:
 
         try:
             print("=" * 70)
-            print("AVWAP v11 COMBINED runner â€” LONG + SHORT (refactored v2)")
+            print("AVWAP v11 COMBINED runner v9 sweep — LONG + SHORT (refactored v2)")
             print("  - Entry signals: 15-min data")
             print("  - Exit resolution: 1-min data (stocks_indicators_1min_eq)")
             print("  - Outputs: */algo_trading/outputs")
@@ -1569,7 +1635,7 @@ def main() -> None:
                 n_files = len(list(dir_5m.glob("*.parquet")))
                 print(f"[INFO] 1-min parquet files found: {n_files}")
             else:
-                print("[WARN] 1-min data directory not found â€” will fall back to 15-min exits.")
+                print("[WARN] 1-min data directory not found — will fall back to 15-min exits.")
 
             short_cfg = default_short_config(
                 reports_dir=_outputs_dir,
@@ -1577,6 +1643,11 @@ def main() -> None:
             long_cfg = default_long_config(
                 reports_dir=_outputs_dir,
             )
+
+            # V9: disable close-confirm - entries fire on bar high/low cross.
+            short_cfg.require_entry_close_confirm = V9_REQUIRE_CLOSE_CONFIRM
+            long_cfg.require_entry_close_confirm  = V9_REQUIRE_CLOSE_CONFIRM
+            print(f"[V9] require_entry_close_confirm={V9_REQUIRE_CLOSE_CONFIRM}")
 
             if ENABLE_TIGHTER_STOPS_PROFILE:
                 short_cfg.stop_pct = float(TIGHTER_SHORT_STOP_PCT)
@@ -1590,35 +1661,37 @@ def main() -> None:
                 )
 
             if ENABLE_HF_BALANCED_V1_PROFILE:
-                # Match optimizer winner profile exactly for 5-15 trades/day target.
+                # S5 profile: indicator-tight + balanced SL/TGT + VIX entry cap.
                 short_cfg.enable_liquidity_sweep_filter = False
                 short_cfg.enable_avwap_no_trade_zone = False
-                short_cfg.adx_min = 20.0
-                short_cfg.adx_slope_min = 0.80
-                short_cfg.volume_min_ratio = 1.05
-                short_cfg.rsi_max_short = 58.0
-                short_cfg.stochk_max = 82.0
-                short_cfg.stop_pct = 0.0065
+                short_cfg.adx_min = 24.0
+                short_cfg.adx_slope_min = 1.00
+                short_cfg.volume_min_ratio = 1.15
+                short_cfg.rsi_max_short = 55.0
+                short_cfg.stochk_max = 78.0
+                short_cfg.atr_pct_min = 0.0025
+                short_cfg.stop_pct = 0.0062
                 short_cfg.target_pct = 0.0090
                 short_cfg.be_trigger_pct = 0.0050
                 short_cfg.trail_pct = 0.0028
 
                 long_cfg.enable_liquidity_sweep_filter = False
                 long_cfg.enable_avwap_no_trade_zone = False
-                long_cfg.adx_min = 20.0
-                long_cfg.adx_slope_min = 0.60
-                long_cfg.volume_min_ratio = 1.05
-                long_cfg.rsi_min_long = 42.0
-                long_cfg.stochk_min = 20.0
-                long_cfg.stochk_max = 98.0
-                long_cfg.enable_setup_a_close_continuation_break = True
-                long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-                long_cfg.stop_pct = 0.0055
+                long_cfg.adx_min = 22.0
+                long_cfg.adx_slope_min = 0.85
+                long_cfg.volume_min_ratio = 1.15
+                long_cfg.rsi_min_long = 45.0
+                long_cfg.stochk_min = 25.0
+                long_cfg.stochk_max = 95.0
+                long_cfg.atr_pct_min = 0.0025
+                long_cfg.enable_setup_a_close_continuation_break = False
+                long_cfg.enable_setup_b_huge_c1_close_reclaim_break = False
+                long_cfg.stop_pct = 0.0050
                 long_cfg.target_pct = 0.0110
                 long_cfg.be_trigger_pct = 0.0055
                 long_cfg.trail_pct = 0.0028
 
-                print("[PROFILE] hf_balanced_v1 enabled (filters relaxed, risk tuned).")
+                print("[PROFILE] s5_indicator_tight_sl_tgt_balanced_vix13 enabled.")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
@@ -1628,6 +1701,7 @@ def main() -> None:
                 PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE
             )
             short_cfg.max_vix_for_entries = float(PACK2_SHORT_MAX_VIX_FOR_ENTRIES)
+            long_cfg.max_vix_for_entries = float(PACK2_LONG_MAX_VIX_FOR_ENTRIES)
             long_cfg.lag_bars_long_a_mod_break_c1_high = int(LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH)
             long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH)
             long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK)
@@ -1670,10 +1744,10 @@ def main() -> None:
                 long_cfg.vix_scale_max    = VIX_SCALE_MAX
                 long_cfg.vix_scale_target = VIX_SCALE_TARGET
                 long_cfg.vix_scale_sl     = VIX_SCALE_SL
-                print(f"[VIX] Scaling ENABLED â€” {len(_vix_map)} daily values loaded. "
+                print(f"[VIX] Scaling ENABLED — {len(_vix_map)} daily values loaded. "
                       f"baseline={VIX_BASELINE}, range=[{VIX_SCALE_MIN}x, {VIX_SCALE_MAX}x]")
             elif VIX_SCALE_ENABLED:
-                print("[VIX] Scaling ENABLED but no VIX data â€” using fixed SL/target.")
+                print("[VIX] Scaling ENABLED but no VIX data — using fixed SL/target.")
             else:
                 print("[VIX] Scaling DISABLED — fixed SL/target used (old behaviour).")
 
@@ -1709,6 +1783,12 @@ def main() -> None:
                 f"max_vix_for_entries={short_cfg.max_vix_for_entries:.2f}"
             )
             print(
+                "[INFO] LONG filters: "
+                f"max_vix_for_entries={long_cfg.max_vix_for_entries:.2f} | "
+                f"enable_close_cont={long_cfg.enable_setup_a_close_continuation_break} | "
+                f"enable_reclaim={long_cfg.enable_setup_b_huge_c1_close_reclaim_break}"
+            )
+            print(
                 "[INFO] Lag bars LONG : "
                 f"A_MOD={long_cfg.lag_bars_long_a_mod_break_c1_high}, "
                 f"A_PULLBACK={long_cfg.lag_bars_long_a_pullback_c2_break_c2_high}, "
@@ -1738,6 +1818,10 @@ def main() -> None:
             )
             print(f"[INFO] Live parity: min_bars_left=0 -> {FORCE_LIVE_PARITY_MIN_BARS_LEFT}")
             print(f"[INFO] Live parity: disable_topn_per_day -> {FORCE_LIVE_PARITY_DISABLE_TOPN}")
+            print(
+                f"[INFO] Day loss guard: enabled={ENABLE_DAY_LOSS_GUARD} | "
+                f"threshold={DAY_LOSS_GUARD_PCT:.2f}%"
+            )
             print(f"[INFO] Parallelism: max_workers={MAX_WORKERS}")
             print(f"[INFO] Output directory: {_outputs_dir}")
             print(f"[INFO] Console log: {log_path}")
@@ -1783,6 +1867,16 @@ def main() -> None:
             combined = pd.concat([short_df, long_df], ignore_index=True)
             combined = _add_notional_pnl(combined)
             combined = _sort_trades_for_output(combined)
+            if ENABLE_DAY_LOSS_GUARD:
+                combined, guard_stats = _apply_day_loss_guard(
+                    combined, float(DAY_LOSS_GUARD_PCT)
+                )
+                print(
+                    "[RISK] Day-loss guard applied: "
+                    f"threshold={guard_stats['threshold_pct']:.2f}% | "
+                    f"blocked_trades={guard_stats['blocked_trades']} | "
+                    f"blocked_days={guard_stats['blocked_days']}"
+                )
             short_df = _sort_trades_for_output(
                 combined[combined["side"].astype(str).str.upper().eq("SHORT")].copy()
             )
@@ -1808,7 +1902,7 @@ def main() -> None:
                 _print_day_side_mix(combined)
 
             # --- Save CSV ---
-            out_csv = _outputs_dir / f"avwap_longshort_trades_ALL_DAYS_{ts}.csv"
+            out_csv = _outputs_dir / f"avwap_longshort_trades_v9_ALL_DAYS_{ts}.csv"
             combined.to_csv(out_csv, index=False)
 
             # --- Generate Legacy Charts (from avwap_common) ---
@@ -1866,7 +1960,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 
 
