@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v2.py â€” AVWAP v11 COMBINED LONG + SHORT runner (refactored v2)
+avwap_combined_runner_v11.py - AVWAP v11 COMBINED LONG + SHORT runner (playbook profile)
 ==================================================================================
 
 Changes from v1:
@@ -69,7 +69,7 @@ _project_root = _this_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from avwap_v11_refactored.avwap_common_v7_sweep import (
+from avwap_v11_refactored.avwap_common_v11 import (
     IST,
     StrategyConfig,
     Trade,
@@ -86,10 +86,10 @@ from avwap_v11_refactored.avwap_common_v7_sweep import (
     generate_backtest_charts,
     build_market_regime_map,
 )
-from avwap_v11_refactored.avwap_short_strategy_v7_sweep import (
+from avwap_v11_refactored.avwap_short_strategy_v11 import (
     scan_all_days_for_ticker as scan_short,
 )
-from avwap_v11_refactored.avwap_long_strategy_v7_sweep import (
+from avwap_v11_refactored.avwap_long_strategy_v11 import (
     scan_all_days_for_ticker as scan_long,
 )
 
@@ -109,22 +109,24 @@ ENABLE_CASH_CONSTRAINED_PORTFOLIO_SIM = False
 
 # If True, force min_bars_left_after_entry=0 for BOTH sides (live-signal parity).
 # This makes entry counts comparable to eqidv2_* live/daily scanners.
-FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
+FORCE_LIVE_PARITY_MIN_BARS_LEFT = False
 
 # If True, disable Top-N pruning on both sides so runner output does not
 # unintentionally suppress one side on a given day versus live/daily scanners.
-FORCE_LIVE_PARITY_DISABLE_TOPN = True
+FORCE_LIVE_PARITY_DISABLE_TOPN = False
 
 # Final signal-window override (applied last in main()).
 # Edit these windows here to override defaults from avwap_common/default_*_config.
 FINAL_SIGNAL_WINDOW_OVERRIDE = True
 FINAL_SHORT_USE_TIME_WINDOWS = True
 FINAL_SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(14, 30, 0))
+    (dtime(9, 30, 0), dtime(12, 0, 0)),
+    (dtime(13, 30, 0), dtime(15, 15, 0)),
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(14, 30, 0))
+    (dtime(9, 30, 0), dtime(12, 0, 0)),
+    (dtime(13, 30, 0), dtime(15, 15, 0)),
 ]
 
 # Per-setup signal->entry lag (in 15-min bars).
@@ -143,29 +145,21 @@ DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 # Parallelism: set to 1 for serial, >1 for multi-process
 MAX_WORKERS = 4
 
-# Pack-2 controls (requested tuning profile)
+# Setup controls
 PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE = True
 PACK2_SHORT_MAX_VIX_FOR_ENTRIES = 0.0
+PACK2_LONG_MAX_VIX_FOR_ENTRIES = 0.0
 
-# High-frequency balanced profile from optimizer:
-# outputs/v7_scenarios_hf_target_5_15.json -> hf_balanced_v1
-ENABLE_HF_BALANCED_V1_PROFILE = True
-
-# High-frequency profile from research:
-# "Tighter stops"
-ENABLE_TIGHTER_STOPS_PROFILE = True
-TIGHTER_SHORT_STOP_PCT = 0.0068
-TIGHTER_SHORT_TARGET_PCT = 0.0090
-TIGHTER_LONG_STOP_PCT = 0.0058
-TIGHTER_LONG_TARGET_PCT = 0.0110
+# Playbook profile (derived from memory/m-7-3-2026-strategy.txt)
+ENABLE_PLAYBOOK_V11_PROFILE = True
 
 # ===========================================================================
 # TARGET TEST — Option 1: lower targets for more target hits
 # Set TEST_TARGET_OVERRIDE = True to run test; False to use defaults.
 # ===========================================================================
 TEST_TARGET_OVERRIDE   = False
-TEST_SHORT_TARGET_PCT  = 0.0080   # 0.90%  (default 1.20%)
-TEST_LONG_TARGET_PCT   = 0.010   # 1.10%  (default 1.50%)
+TEST_SHORT_TARGET_PCT  = 0.0110
+TEST_LONG_TARGET_PCT   = 0.0110
 
 # ===========================================================================
 # VIX DYNAMIC SCALING — set VIX_SCALE_ENABLED=True to scale SL/target with VIX
@@ -596,8 +590,10 @@ def _add_notional_pnl(df: pd.DataFrame) -> pd.DataFrame:
     # Capital/margin per trade (Rs.)
     if "position_size_rs" not in d.columns:
         d["position_size_rs"] = np.nan
-    d.loc[side_u.eq("SHORT") & d["position_size_rs"].isna(), "position_size_rs"] = float(POSITION_SIZE_RS_SHORT)
-    d.loc[~side_u.eq("SHORT") & d["position_size_rs"].isna(), "position_size_rs"] = float(POSITION_SIZE_RS_LONG)
+    d["position_size_rs"] = pd.to_numeric(d["position_size_rs"], errors="coerce")
+    size_missing = d["position_size_rs"].isna() | (d["position_size_rs"] <= 0)
+    d.loc[side_u.eq("SHORT") & size_missing, "position_size_rs"] = float(POSITION_SIZE_RS_SHORT)
+    d.loc[~side_u.eq("SHORT") & size_missing, "position_size_rs"] = float(POSITION_SIZE_RS_LONG)
     d["position_size_rs"] = pd.to_numeric(d["position_size_rs"], errors="coerce").fillna(0.0)
 
     # Leverage per trade
@@ -1538,7 +1534,7 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = _project_root / ("outputs_target_test" if TEST_TARGET_OVERRIDE else "outputs")
+    _outputs_dir = _project_root / ("outputs_v11_target_test" if TEST_TARGET_OVERRIDE else "outputs_v11")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
@@ -1552,7 +1548,7 @@ def main() -> None:
 
         try:
             print("=" * 70)
-            print("AVWAP v11 COMBINED runner â€” LONG + SHORT (refactored v2)")
+            print("AVWAP v11 COMBINED runner - LONG + SHORT (playbook_v11)")
             print("  - Entry signals: 15-min data")
             print("  - Exit resolution: 1-min data (stocks_indicators_1min_eq)")
             print("  - Outputs: */algo_trading/outputs")
@@ -1578,47 +1574,67 @@ def main() -> None:
                 reports_dir=_outputs_dir,
             )
 
-            if ENABLE_TIGHTER_STOPS_PROFILE:
-                short_cfg.stop_pct = float(TIGHTER_SHORT_STOP_PCT)
-                short_cfg.target_pct = float(TIGHTER_SHORT_TARGET_PCT)
-                long_cfg.stop_pct = float(TIGHTER_LONG_STOP_PCT)
-                long_cfg.target_pct = float(TIGHTER_LONG_TARGET_PCT)
-                print(
-                    "[PROFILE] Tighter-stops profile enabled: "
-                    f"SHORT(SL={short_cfg.stop_pct*100:.2f}%, TGT={short_cfg.target_pct*100:.2f}%), "
-                    f"LONG(SL={long_cfg.stop_pct*100:.2f}%, TGT={long_cfg.target_pct*100:.2f}%)"
-                )
-
-            if ENABLE_HF_BALANCED_V1_PROFILE:
-                # Match optimizer winner profile exactly for 5-15 trades/day target.
+            if ENABLE_PLAYBOOK_V11_PROFILE:
+                # Full playbook conversion: trend + reversal mode selector,
+                # sweep/reclaim gates, partial exits, risk-based sizing.
                 short_cfg.enable_liquidity_sweep_filter = False
-                short_cfg.enable_avwap_no_trade_zone = False
-                short_cfg.adx_min = 20.0
+                short_cfg.reversal_requires_sweep = True
+                short_cfg.enable_avwap_no_trade_zone = True
+                short_cfg.enable_mode_selector = True
+                short_cfg.enable_ema200_filter = True
+                short_cfg.require_vwap_side_persistence = True
+                short_cfg.vwap_side_lookback_bars = 5
+                short_cfg.vwap_side_min_count = 3
+                short_cfg.require_structure_filter = True
+                short_cfg.structure_lookback_bars = 30
+                short_cfg.adx_min = 22.0
                 short_cfg.adx_slope_min = 0.80
-                short_cfg.volume_min_ratio = 1.05
-                short_cfg.rsi_max_short = 58.0
-                short_cfg.stochk_max = 82.0
-                short_cfg.stop_pct = 0.0065
-                short_cfg.target_pct = 0.0090
-                short_cfg.be_trigger_pct = 0.0050
-                short_cfg.trail_pct = 0.0028
+                short_cfg.volume_min_ratio = 1.20
+                short_cfg.rsi_max_short = 55.0
+                short_cfg.stochk_max = 78.0
+                short_cfg.stop_pct = 0.0075
+                short_cfg.target_pct = 0.0110
+                short_cfg.be_trigger_pct = 0.0075
+                short_cfg.trail_pct = 0.0060
+                short_cfg.enable_partial_exit = True
+                short_cfg.partial_exit_fraction = 0.50
+                short_cfg.partial_target_fraction = 0.50
+                short_cfg.enable_risk_based_position_sizing = True
+                short_cfg.risk_per_trade_pct_of_capital = 0.0035
+                short_cfg.enable_topn_per_day = False
+                short_cfg.topn_per_day = 0
 
                 long_cfg.enable_liquidity_sweep_filter = False
-                long_cfg.enable_avwap_no_trade_zone = False
-                long_cfg.adx_min = 20.0
-                long_cfg.adx_slope_min = 0.60
-                long_cfg.volume_min_ratio = 1.05
-                long_cfg.rsi_min_long = 42.0
-                long_cfg.stochk_min = 20.0
-                long_cfg.stochk_max = 98.0
-                long_cfg.enable_setup_a_close_continuation_break = True
+                long_cfg.reversal_requires_sweep = True
+                long_cfg.enable_avwap_no_trade_zone = True
+                long_cfg.enable_mode_selector = True
+                long_cfg.enable_ema200_filter = True
+                long_cfg.require_vwap_side_persistence = True
+                long_cfg.vwap_side_lookback_bars = 5
+                long_cfg.vwap_side_min_count = 3
+                long_cfg.require_structure_filter = True
+                long_cfg.structure_lookback_bars = 30
+                long_cfg.adx_min = 22.0
+                long_cfg.adx_slope_min = 0.80
+                long_cfg.volume_min_ratio = 1.20
+                long_cfg.rsi_min_long = 45.0
+                long_cfg.stochk_min = 25.0
+                long_cfg.stochk_max = 95.0
+                long_cfg.enable_setup_a_close_continuation_break = False
                 long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-                long_cfg.stop_pct = 0.0055
+                long_cfg.stop_pct = 0.0075
                 long_cfg.target_pct = 0.0110
-                long_cfg.be_trigger_pct = 0.0055
-                long_cfg.trail_pct = 0.0028
+                long_cfg.be_trigger_pct = 0.0075
+                long_cfg.trail_pct = 0.0060
+                long_cfg.enable_partial_exit = True
+                long_cfg.partial_exit_fraction = 0.50
+                long_cfg.partial_target_fraction = 0.50
+                long_cfg.enable_risk_based_position_sizing = True
+                long_cfg.risk_per_trade_pct_of_capital = 0.0035
+                long_cfg.enable_topn_per_day = False
+                long_cfg.topn_per_day = 0
 
-                print("[PROFILE] hf_balanced_v1 enabled (filters relaxed, risk tuned).")
+                print("[PROFILE] playbook_v11 enabled (mode selector + sweep/reclaim + partial exits + risk sizing).")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
@@ -1628,6 +1644,7 @@ def main() -> None:
                 PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE
             )
             short_cfg.max_vix_for_entries = float(PACK2_SHORT_MAX_VIX_FOR_ENTRIES)
+            long_cfg.max_vix_for_entries = float(PACK2_LONG_MAX_VIX_FOR_ENTRIES)
             long_cfg.lag_bars_long_a_mod_break_c1_high = int(LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH)
             long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH)
             long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK)
