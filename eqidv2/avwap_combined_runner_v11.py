@@ -1575,32 +1575,37 @@ def main() -> None:
             )
 
             if ENABLE_PLAYBOOK_V11_PROFILE:
-                # Full playbook conversion: trend + reversal mode selector,
-                # sweep/reclaim gates, partial exits, risk-based sizing.
+                # Tuned V11 profile:
+                # keep the playbook core (mode selector, sweep/reclaim, partial exits,
+                # risk sizing, guardrails) but relax selected filters to target
+                # roughly 5-10 trades/day with stronger aggregate performance.
                 short_cfg.enable_liquidity_sweep_filter = False
                 short_cfg.reversal_requires_sweep = True
                 short_cfg.enable_avwap_no_trade_zone = True
                 short_cfg.enable_mode_selector = True
-                short_cfg.enable_ema200_filter = True
-                short_cfg.require_vwap_side_persistence = True
+                short_cfg.use_time_windows = False
+                short_cfg.min_bars_left_after_entry = 0
+                short_cfg.enable_ema200_filter = False
+                short_cfg.require_vwap_side_persistence = False
                 short_cfg.vwap_side_lookback_bars = 5
                 short_cfg.vwap_side_min_count = 3
-                short_cfg.require_structure_filter = True
+                short_cfg.require_structure_filter = False
                 short_cfg.structure_lookback_bars = 30
                 short_cfg.adx_min = 22.0
                 short_cfg.adx_slope_min = 0.80
                 short_cfg.volume_min_ratio = 1.20
                 short_cfg.rsi_max_short = 55.0
                 short_cfg.stochk_max = 78.0
-                short_cfg.stop_pct = 0.0075
-                short_cfg.target_pct = 0.0110
-                short_cfg.be_trigger_pct = 0.0075
-                short_cfg.trail_pct = 0.0060
+                short_cfg.stop_pct = 0.0062
+                short_cfg.target_pct = 0.0088
+                short_cfg.be_trigger_pct = 0.0042
+                short_cfg.trail_pct = 0.0023
                 short_cfg.enable_partial_exit = True
                 short_cfg.partial_exit_fraction = 0.50
                 short_cfg.partial_target_fraction = 0.50
                 short_cfg.enable_risk_based_position_sizing = True
                 short_cfg.risk_per_trade_pct_of_capital = 0.0035
+                short_cfg.max_trades_per_ticker_per_day = 2
                 short_cfg.enable_topn_per_day = False
                 short_cfg.topn_per_day = 0
 
@@ -1608,11 +1613,13 @@ def main() -> None:
                 long_cfg.reversal_requires_sweep = True
                 long_cfg.enable_avwap_no_trade_zone = True
                 long_cfg.enable_mode_selector = True
-                long_cfg.enable_ema200_filter = True
-                long_cfg.require_vwap_side_persistence = True
+                long_cfg.use_time_windows = False
+                long_cfg.min_bars_left_after_entry = 0
+                long_cfg.enable_ema200_filter = False
+                long_cfg.require_vwap_side_persistence = False
                 long_cfg.vwap_side_lookback_bars = 5
                 long_cfg.vwap_side_min_count = 3
-                long_cfg.require_structure_filter = True
+                long_cfg.require_structure_filter = False
                 long_cfg.structure_lookback_bars = 30
                 long_cfg.adx_min = 22.0
                 long_cfg.adx_slope_min = 0.80
@@ -1620,21 +1627,23 @@ def main() -> None:
                 long_cfg.rsi_min_long = 45.0
                 long_cfg.stochk_min = 25.0
                 long_cfg.stochk_max = 95.0
-                long_cfg.enable_setup_a_close_continuation_break = False
+                long_cfg.enable_setup_a_pullback_c2_break = True
+                long_cfg.enable_setup_a_close_continuation_break = True
                 long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-                long_cfg.stop_pct = 0.0075
-                long_cfg.target_pct = 0.0110
-                long_cfg.be_trigger_pct = 0.0075
-                long_cfg.trail_pct = 0.0060
+                long_cfg.stop_pct = 0.0056
+                long_cfg.target_pct = 0.0122
+                long_cfg.be_trigger_pct = 0.0055
+                long_cfg.trail_pct = 0.0025
                 long_cfg.enable_partial_exit = True
                 long_cfg.partial_exit_fraction = 0.50
                 long_cfg.partial_target_fraction = 0.50
                 long_cfg.enable_risk_based_position_sizing = True
                 long_cfg.risk_per_trade_pct_of_capital = 0.0035
+                long_cfg.max_trades_per_ticker_per_day = 2
                 long_cfg.enable_topn_per_day = False
                 long_cfg.topn_per_day = 0
 
-                print("[PROFILE] playbook_v11 enabled (mode selector + sweep/reclaim + partial exits + risk sizing).")
+                print("[PROFILE] playbook_v11 tuned profile enabled (mid-frequency, guarded, 5-10/day target).")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
@@ -1657,12 +1666,19 @@ def main() -> None:
                 short_cfg.enable_topn_per_day = False
                 long_cfg.enable_topn_per_day = False
 
-            # Apply final signal-window override LAST (takes precedence over all earlier config).
+            # Apply final signal-window override LAST for non-playbook runs.
+            # The tuned playbook profile intentionally disables windows.
             if FINAL_SIGNAL_WINDOW_OVERRIDE:
-                short_cfg.use_time_windows = bool(FINAL_SHORT_USE_TIME_WINDOWS)
-                long_cfg.use_time_windows = bool(FINAL_LONG_USE_TIME_WINDOWS)
-                short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
-                long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
+                if ENABLE_PLAYBOOK_V11_PROFILE:
+                    if short_cfg.use_time_windows:
+                        short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
+                    if long_cfg.use_time_windows:
+                        long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
+                else:
+                    short_cfg.use_time_windows = bool(FINAL_SHORT_USE_TIME_WINDOWS)
+                    long_cfg.use_time_windows = bool(FINAL_LONG_USE_TIME_WINDOWS)
+                    short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
+                    long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
 
             if TEST_TARGET_OVERRIDE:
                 short_cfg.target_pct = TEST_SHORT_TARGET_PCT
