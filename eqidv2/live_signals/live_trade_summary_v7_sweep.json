@@ -1,10 +1,10 @@
 {
-  "date": "2026-03-10",
+  "date": "2026-03-11",
   "mode": "LIVE",
-  "total_pnl_rs": 1.2,
-  "total_trades": 4,
+  "total_pnl_rs": -114.54,
+  "total_trades": 9,
   "wins": 2,
-  "losses": 1,
-  "win_rate_pct": 50.0,
-  "last_updated": "2026-03-10 15:20:09"
+  "losses": 7,
+  "win_rate_pct": 22.22,
+  "last_updated": "2026-03-11 14:42:01"
 }
