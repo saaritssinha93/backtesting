@@ -98,7 +98,7 @@ from avwap_v11_refactored.avwap_long_strategy_v9_sweep import (
 # RUNNER CONFIG (top-level orchestration settings)
 # ===========================================================================
 POSITION_SIZE_RS_SHORT = 50_000
-POSITION_SIZE_RS_LONG = 100_000
+POSITION_SIZE_RS_LONG = 50_000
 
 # Intraday leverage (margin). Position sizes above are *capital/margin per trade*.
 # Notional exposure = capital * leverage. Set leverage=1.0 to disable leverage effects.
@@ -163,7 +163,7 @@ ENABLE_HF_BALANCED_V1_PROFILE = True
 
 # High-frequency profile from research:
 # "Tighter stops + day-loss guard -3.0%"
-ENABLE_TIGHTER_STOPS_PROFILE = True
+ENABLE_TIGHTER_STOPS_PROFILE = False
 TIGHTER_SHORT_STOP_PCT = 0.0068
 TIGHTER_SHORT_TARGET_PCT = 0.0090
 TIGHTER_LONG_STOP_PCT = 0.0058
@@ -176,9 +176,9 @@ DAY_LOSS_GUARD_PCT = -3.0
 # TARGET TEST — Option 1: lower targets for more target hits
 # Set TEST_TARGET_OVERRIDE = True to run test; False to use defaults.
 # ===========================================================================
-TEST_TARGET_OVERRIDE   = False
+TEST_TARGET_OVERRIDE   = True
 TEST_SHORT_TARGET_PCT  = 0.0080   # 0.90%  (default 1.20%)
-TEST_LONG_TARGET_PCT   = 0.010   # 1.10%  (default 1.50%)
+TEST_LONG_TARGET_PCT   = 0.0090   # 1.10%  (default 1.50%)
 
 # ===========================================================================
 # VIX DYNAMIC SCALING — set VIX_SCALE_ENABLED=True to scale SL/target with VIX

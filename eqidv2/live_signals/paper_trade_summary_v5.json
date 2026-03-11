@@ -1,11 +1,11 @@
 {
-  "date": "2026-03-06",
-  "total_pnl_rs": 758.28,
-  "total_trades": 1,
-  "wins": 1,
+  "date": "2026-03-10",
+  "total_pnl_rs": 5490.46,
+  "total_trades": 2,
+  "wins": 2,
   "losses": 0,
-  "gross_profit_rs": 758.28,
+  "gross_profit_rs": 5490.46,
   "gross_loss_rs": 0.0,
   "win_rate_pct": 100.0,
-  "last_updated": "2026-03-06 15:20:00"
+  "last_updated": "2026-03-10 15:08:36"
 }

@@ -1,0 +1,118 @@
+2026-03-09 11:18:03,650 | INFO    | =================================================================
+2026-03-09 11:18:03,650 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-09 11:18:03,650 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-09 11:18:03,650 | INFO    |   Mode              : LIVE TRADING
+2026-03-09 11:18:03,650 | INFO    |   Max concurrent    : 0
+2026-03-09 11:18:03,650 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-09 11:18:03,650 | INFO    |   Entry cutoff at   : 15:20:00 IST
+2026-03-09 11:18:03,650 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-09 11:18:03,650 | INFO    |   Target policy     : SHORT=0.90% LONG=1.10% (rebased from signal entry)
+2026-03-09 11:18:03,650 | INFO    |   Risk limits       : ENABLED (max_open=10, max_margin=Rs.500,000)
+2026-03-09 11:18:03,650 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-09 11:18:03,650 | INFO    | =================================================================
+2026-03-09 11:18:03,650 | INFO    | Establishing Kite session...
+2026-03-09 11:18:03,733 | INFO    | [KITE] Session ready: app1 | user=Saarit Shankar Sinha
+2026-03-09 11:18:03,811 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-09 11:18:03,883 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-09 11:18:03,961 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-09 11:18:03,961 | INFO    | Kite primary session established: app1 | user=Saarit Shankar Sinha
+2026-03-09 11:18:03,961 | INFO    | [KITE] Session pool active apps: 4
+2026-03-09 11:18:04,091 | INFO    | [TICK] Loaded tick sizes for 9306 NSE symbols.
+2026-03-09 11:18:04,091 | INFO    | Loaded 0 previously executed signals.
+2026-03-09 11:18:04,091 | INFO    | Signal CSV sources: signals_2026-03-09_v7_sweep_short.csv, signals_2026-03-09_v7_sweep_long.csv
+2026-03-09 11:18:04,091 | WARNING |   Trade worker cap   : DISABLED (unlimited concurrent workers)
+2026-03-09 11:18:04,182 | INFO    | [RESTORE] signals_today=0 executed=0 closed_today=0 open_restored=0 stale_dropped=0 requeued_backlog=0 realized_trades=0 realized_total=Rs.+0.00 deployed_margin=Rs.0.00
+2026-03-09 11:18:04,308 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-09 11:18:04,312 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-09_v7_sweep_short.csv, live_signals\signals_2026-03-09_v7_sweep_long.csv
+2026-03-09 11:34:50,809 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 11:34:50,905 | INFO    | [LIVE] Starting trade LT-f67044f3-113450: SELL PUNJABCHEM qty=1 | SL=1036.9 TGT=1020.63
+2026-03-09 11:34:50,917 | INFO    | [DISPATCH] Launched LIVE trade: SHORT PUNJABCHEM @ 1029.9 | reserved_margin=Rs.205.98 | ID=f67044f3a4df
+2026-03-09 11:34:50,967 | INFO    | Dispatched 1 new trade(s). Active trades: 1
+2026-03-09 11:34:51,042 | INFO    | [LIVE] Entry order placed: SELL PUNJABCHEM ID=260309171002168
+2026-03-09 11:34:51,289 | INFO    | [LIVE] Entry filled: PUNJABCHEM @ 1029.8
+2026-03-09 11:34:51,448 | INFO    | [LIVE] Exit legs placed for PUNJABCHEM: target_id=260309171002195 sl_id=260309171002198
+2026-03-09 12:02:59,292 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 12:02:59,407 | INFO    | [LIVE] Starting trade LT-cf6c6892-120259: SELL JKCEMENT qty=1 | SL=5144.75 TGT=5064.01
+2026-03-09 12:02:59,426 | INFO    | [DISPATCH] Launched LIVE trade: SHORT JKCEMENT @ 5110.0 | reserved_margin=Rs.1,022.00 | ID=cf6c6892cf1a
+2026-03-09 12:02:59,440 | INFO    | Dispatched 1 new trade(s). Active trades: 2
+2026-03-09 12:02:59,476 | INFO    | [LIVE] Entry order placed: SELL JKCEMENT ID=260309171097950
+2026-03-09 12:02:59,622 | INFO    | [LIVE] Entry filled: JKCEMENT @ 5109.0
+2026-03-09 12:02:59,791 | INFO    | [LIVE] Exit legs placed for JKCEMENT: target_id=260309171097959 sl_id=260309171097963
+2026-03-09 12:16:26,948 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 12:16:26,948 | INFO    | [LIVE] Starting trade LT-0e259bb6-121626: SELL RAMCOCEM qty=1 | SL=1031.97 TGT=1015.77
+2026-03-09 12:16:26,968 | INFO    | [DISPATCH] Launched LIVE trade: SHORT RAMCOCEM @ 1025.0 | reserved_margin=Rs.205.00 | ID=0e259bb65a78
+2026-03-09 12:16:26,981 | INFO    | Dispatched 1 new trade(s). Active trades: 3
+2026-03-09 12:16:27,042 | INFO    | [LIVE] Entry order placed: SELL RAMCOCEM ID=260309171141505
+2026-03-09 12:16:27,181 | INFO    | [LIVE] Entry filled: RAMCOCEM @ 1024.3
+2026-03-09 12:16:27,337 | INFO    | [LIVE] Exit legs placed for RAMCOCEM: target_id=260309171141516 sl_id=260309171141520
+2026-03-09 12:17:17,072 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 12:17:17,095 | INFO    | [LIVE] Starting trade LT-8d5a95f1-121717: SELL DELTACORP qty=1 | SL=55.94 TGT=55.06
+2026-03-09 12:17:17,103 | INFO    | [DISPATCH] Launched LIVE trade: SHORT DELTACORP @ 55.56 | reserved_margin=Rs.11.11 | ID=8d5a95f1af68
+2026-03-09 12:17:17,103 | INFO    | Dispatched 1 new trade(s). Active trades: 4
+2026-03-09 12:17:17,167 | INFO    | [LIVE] Entry order placed: SELL DELTACORP ID=260309171143481
+2026-03-09 12:17:17,299 | INFO    | [LIVE] Entry filled: DELTACORP @ 55.51
+2026-03-09 12:17:17,430 | INFO    | [LIVE] Exit legs placed for DELTACORP: target_id=260309171143494 sl_id=260309171143500
+2026-03-09 12:26:28,870 | INFO    | [LIVE] TARGET HIT: RAMCOCEM @ 1015.1 -> cancelling SL 260309171141520
+2026-03-09 12:26:28,963 | INFO    | Cancelled order 260309171141520 (attempt 1)
+2026-03-09 12:26:28,980 | INFO    | [LIVE] RESULT SHORT RAMCOCEM | TARGET | Entry=1024.3 Exit=1015.1 | P&L: Rs.+9.20 (+0.90%) | Day total: Rs.+9.20
+2026-03-09 12:28:13,391 | INFO    | [LIVE] TARGET HIT: DELTACORP @ 55.01 -> cancelling SL 260309171143500
+2026-03-09 12:28:13,461 | INFO    | Cancelled order 260309171143500 (attempt 1)
+2026-03-09 12:28:13,493 | INFO    | [LIVE] RESULT SHORT DELTACORP | TARGET | Entry=55.51 Exit=55.01 | P&L: Rs.+0.50 (+0.90%) | Day total: Rs.+9.70
+2026-03-09 12:46:36,975 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 12:46:36,995 | INFO    | [LIVE] Starting trade LT-5394d81e-124636: SELL TVSSRICHAK qty=1 | SL=3478.49 TGT=3423.9
+2026-03-09 12:46:37,003 | INFO    | [DISPATCH] Launched LIVE trade: SHORT TVSSRICHAK @ 3455.0 | reserved_margin=Rs.691.00 | ID=5394d81e168d
+2026-03-09 12:46:37,012 | INFO    | Dispatched 1 new trade(s). Active trades: 3
+2026-03-09 12:46:37,056 | INFO    | [LIVE] Entry order placed: SELL TVSSRICHAK ID=260309171219851
+2026-03-09 12:46:37,199 | INFO    | [LIVE] Entry filled: TVSSRICHAK @ 3455.0
+2026-03-09 12:46:37,343 | INFO    | [LIVE] Exit legs placed for TVSSRICHAK: target_id=260309171219865 sl_id=260309171219868
+2026-03-09 12:58:25,717 | INFO    | [LIVE] SL TRIGGERED: TVSSRICHAK @ 3478.8 -> cancelling Target 260309171219865
+2026-03-09 12:58:25,803 | INFO    | Cancelled order 260309171219865 (attempt 1)
+2026-03-09 12:58:25,818 | INFO    | [LIVE] RESULT SHORT TVSSRICHAK | SL | Entry=3455.0 Exit=3478.8 | P&L: Rs.-23.80 (-0.69%) | Day total: Rs.-14.10
+2026-03-09 13:00:22,459 | INFO    | [LIVE] SL TRIGGERED: JKCEMENT @ 5143.0 -> cancelling Target 260309171097959
+2026-03-09 13:00:22,536 | INFO    | Cancelled order 260309171097959 (attempt 1)
+2026-03-09 13:00:22,557 | INFO    | [LIVE] RESULT SHORT JKCEMENT | SL | Entry=5109.0 Exit=5143.0 | P&L: Rs.-34.00 (-0.67%) | Day total: Rs.-48.10
+2026-03-09 13:46:41,884 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 14:02:05,671 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 14:02:05,735 | INFO    | [LIVE] Starting trade LT-1cff809a-140205: SELL MUFIN qty=1 | SL=102.3 TGT=100.7
+2026-03-09 14:02:05,750 | INFO    | [DISPATCH] Launched LIVE trade: SHORT MUFIN @ 101.61 | reserved_margin=Rs.20.32 | ID=1cff809a623e
+2026-03-09 14:02:05,762 | INFO    | Dispatched 1 new trade(s). Active trades: 2
+2026-03-09 14:02:05,809 | INFO    | [LIVE] Entry order placed: SELL MUFIN ID=260309171433751
+2026-03-09 14:02:05,947 | INFO    | [LIVE] Entry filled: MUFIN @ 101.71
+2026-03-09 14:02:06,102 | INFO    | [LIVE] Exit legs placed for MUFIN: target_id=260309171433760 sl_id=260309171433765
+2026-03-09 14:26:32,254 | INFO    | [LIVE] SL TRIGGERED: PUNJABCHEM @ 1040.8 -> cancelling Target 260309171002195
+2026-03-09 14:26:32,352 | INFO    | Cancelled order 260309171002195 (attempt 1)
+2026-03-09 14:26:32,371 | INFO    | [LIVE] RESULT SHORT PUNJABCHEM | SL | Entry=1029.8 Exit=1040.8 | P&L: Rs.-11.00 (-1.07%) | Day total: Rs.-59.10
+2026-03-09 14:31:44,039 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 14:31:44,065 | INFO    | [LIVE] Starting trade LT-d00588ec-143144: SELL JSL qty=1 | SL=712.41 TGT=701.23
+2026-03-09 14:31:44,078 | INFO    | [DISPATCH] Launched LIVE trade: SHORT JSL @ 707.6 | reserved_margin=Rs.141.52 | ID=d00588ecaa9a
+2026-03-09 14:31:44,087 | INFO    | Dispatched 1 new trade(s). Active trades: 2
+2026-03-09 14:31:44,136 | INFO    | [LIVE] Entry order placed: SELL JSL ID=260309171521683
+2026-03-09 14:31:44,301 | INFO    | [LIVE] Entry filled: JSL @ 707.95
+2026-03-09 14:31:44,463 | INFO    | [LIVE] Exit legs placed for JSL: target_id=260309171521690 sl_id=260309171521694
+2026-03-09 14:32:17,507 | INFO    | Signal CSV changed - processing new signals from v7_sweep_short + v7_sweep_long...
+2026-03-09 14:32:17,531 | INFO    | [LIVE] Starting trade LT-dc4ff5fc-143217: SELL PPL qty=1 | SL=188.86 TGT=185.89
+2026-03-09 14:32:17,543 | INFO    | [DISPATCH] Launched LIVE trade: SHORT PPL @ 187.58 | reserved_margin=Rs.37.52 | ID=dc4ff5fc2868
+2026-03-09 14:32:17,553 | INFO    | Dispatched 1 new trade(s). Active trades: 3
+2026-03-09 14:32:17,594 | INFO    | [LIVE] Entry order placed: SELL PPL ID=260309171524154
+2026-03-09 14:32:17,732 | INFO    | [LIVE] Entry filled: PPL @ 187.21
+2026-03-09 14:32:17,874 | INFO    | [LIVE] Exit legs placed for PPL: target_id=260309171524190 sl_id=260309171524194
+2026-03-09 14:41:02,414 | INFO    | [LIVE] SL TRIGGERED: JSL @ 712.95 -> cancelling Target 260309171521690
+2026-03-09 14:41:02,497 | INFO    | Cancelled order 260309171521690 (attempt 1)
+2026-03-09 14:41:02,518 | INFO    | [LIVE] RESULT SHORT JSL | SL | Entry=707.95 Exit=712.95 | P&L: Rs.-5.00 (-0.71%) | Day total: Rs.-64.10
+2026-03-09 14:48:22,384 | INFO    | [LIVE] SL TRIGGERED: PPL @ 188.0 -> cancelling Target 260309171524190
+2026-03-09 14:48:22,591 | INFO    | Cancelled order 260309171524190 (attempt 1)
+2026-03-09 14:48:22,608 | INFO    | [LIVE] RESULT SHORT PPL | SL | Entry=187.21 Exit=188.0 | P&L: Rs.-0.79 (-0.42%) | Day total: Rs.-64.89
+2026-03-09 14:48:59,267 | INFO    | [LIVE] SL TRIGGERED: MUFIN @ 102.68 -> cancelling Target 260309171433760
+2026-03-09 14:48:59,353 | INFO    | Cancelled order 260309171433760 (attempt 1)
+2026-03-09 14:48:59,376 | INFO    | [LIVE] RESULT SHORT MUFIN | SL | Entry=101.71 Exit=102.68 | P&L: Rs.-0.97 (-0.95%) | Day total: Rs.-65.86
+2026-03-09 15:20:00,759 | WARNING | [EOD.GLOBAL] entry cutoff reached at 15:20:00 IST; EOD flatten in progress
+2026-03-09 15:30:00,736 | INFO    | Market closed. All trades complete.
+2026-03-09 15:30:00,778 | INFO    | =======================================================
+2026-03-09 15:30:00,778 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-03-09 15:30:00,778 | INFO    |   Total trades : 8
+2026-03-09 15:30:00,778 | INFO    |   Wins         : 2
+2026-03-09 15:30:00,778 | INFO    |   Losses       : 6
+2026-03-09 15:30:00,780 | INFO    |   Win rate     : 25.0%
+2026-03-09 15:30:00,780 | INFO    |   Total P&L    : Rs.-65.86
+2026-03-09 15:30:00,780 | INFO    | =======================================================
+2026-03-09 15:30:00,780 | INFO    | Live trade executor stopped.

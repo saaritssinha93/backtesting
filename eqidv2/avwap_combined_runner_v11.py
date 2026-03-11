@@ -98,7 +98,7 @@ from avwap_v11_refactored.avwap_long_strategy_v11 import (
 # RUNNER CONFIG (top-level orchestration settings)
 # ===========================================================================
 POSITION_SIZE_RS_SHORT = 50_000
-POSITION_SIZE_RS_LONG = 100_000
+POSITION_SIZE_RS_LONG = 50_000
 
 # Intraday leverage (margin). Position sizes above are *capital/margin per trade*.
 # Notional exposure = capital * leverage. Set leverage=1.0 to disable leverage effects.
@@ -115,6 +115,7 @@ FORCE_LIVE_PARITY_MIN_BARS_LEFT = False
 # unintentionally suppress one side on a given day versus live/daily scanners.
 FORCE_LIVE_PARITY_DISABLE_TOPN = False
 
+'''
 # Final signal-window override (applied last in main()).
 # Edit these windows here to override defaults from avwap_common/default_*_config.
 FINAL_SIGNAL_WINDOW_OVERRIDE = True
@@ -129,6 +130,32 @@ FINAL_LONG_SIGNAL_WINDOWS = [
     (dtime(13, 30, 0), dtime(15, 15, 0)),
 ]
 
+# Final signal-window override (applied last in main()).
+# Edit these windows here to override defaults from avwap_common/default_*_config.
+FINAL_SIGNAL_WINDOW_OVERRIDE = True
+FINAL_SHORT_USE_TIME_WINDOWS = True
+FINAL_SHORT_SIGNAL_WINDOWS = [
+    (dtime(9, 15, 0), dtime(14, 00, 0))
+]
+FINAL_LONG_USE_TIME_WINDOWS = True
+FINAL_LONG_SIGNAL_WINDOWS = [
+    (dtime(9, 15, 0), dtime(14, 00, 0))
+]
+'''
+
+# Final signal-window override (applied last in main()).
+# Edit these windows here to override defaults from avwap_common/default_*_config.
+FINAL_SIGNAL_WINDOW_OVERRIDE = True
+FINAL_SHORT_USE_TIME_WINDOWS = True
+FINAL_SHORT_SIGNAL_WINDOWS = [
+    (dtime(9, 30, 0), dtime(11, 30, 0)),
+    (dtime(13, 00, 0), dtime(14, 15, 0)),
+]
+FINAL_LONG_USE_TIME_WINDOWS = True
+FINAL_LONG_SIGNAL_WINDOWS = [
+    (dtime(9, 30, 0), dtime(11, 30, 0)),
+    (dtime(13, 00, 0), dtime(14, 15, 0)),
+]
 # Per-setup signal->entry lag (in 15-min bars).
 # Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
 # HUGE setup: use -1 for legacy dynamic "first valid bar" behavior.
@@ -157,9 +184,9 @@ ENABLE_PLAYBOOK_V11_PROFILE = True
 # TARGET TEST — Option 1: lower targets for more target hits
 # Set TEST_TARGET_OVERRIDE = True to run test; False to use defaults.
 # ===========================================================================
-TEST_TARGET_OVERRIDE   = False
-TEST_SHORT_TARGET_PCT  = 0.0110
-TEST_LONG_TARGET_PCT   = 0.0110
+TEST_TARGET_OVERRIDE   = True
+TEST_SHORT_TARGET_PCT  = 0.0080
+TEST_LONG_TARGET_PCT   = 0.0090
 
 # ===========================================================================
 # VIX DYNAMIC SCALING — set VIX_SCALE_ENABLED=True to scale SL/target with VIX
@@ -1603,7 +1630,7 @@ def main() -> None:
                 short_cfg.enable_partial_exit = True
                 short_cfg.partial_exit_fraction = 0.50
                 short_cfg.partial_target_fraction = 0.50
-                short_cfg.enable_risk_based_position_sizing = True
+                short_cfg.enable_risk_based_position_sizing = False  # fixed Rs.50,000/trade via runner constant
                 short_cfg.risk_per_trade_pct_of_capital = 0.0035
                 short_cfg.max_trades_per_ticker_per_day = 2
                 short_cfg.enable_topn_per_day = False
@@ -1637,7 +1664,7 @@ def main() -> None:
                 long_cfg.enable_partial_exit = True
                 long_cfg.partial_exit_fraction = 0.50
                 long_cfg.partial_target_fraction = 0.50
-                long_cfg.enable_risk_based_position_sizing = True
+                long_cfg.enable_risk_based_position_sizing = False  # fixed Rs.50,000/trade via runner constant
                 long_cfg.risk_per_trade_pct_of_capital = 0.0035
                 long_cfg.max_trades_per_ticker_per_day = 2
                 long_cfg.enable_topn_per_day = False
@@ -1666,19 +1693,12 @@ def main() -> None:
                 short_cfg.enable_topn_per_day = False
                 long_cfg.enable_topn_per_day = False
 
-            # Apply final signal-window override LAST for non-playbook runs.
-            # The tuned playbook profile intentionally disables windows.
+            # Apply final signal-window override LAST across all profiles.
             if FINAL_SIGNAL_WINDOW_OVERRIDE:
-                if ENABLE_PLAYBOOK_V11_PROFILE:
-                    if short_cfg.use_time_windows:
-                        short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
-                    if long_cfg.use_time_windows:
-                        long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
-                else:
-                    short_cfg.use_time_windows = bool(FINAL_SHORT_USE_TIME_WINDOWS)
-                    long_cfg.use_time_windows = bool(FINAL_LONG_USE_TIME_WINDOWS)
-                    short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
-                    long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
+                short_cfg.use_time_windows = bool(FINAL_SHORT_USE_TIME_WINDOWS)
+                long_cfg.use_time_windows = bool(FINAL_LONG_USE_TIME_WINDOWS)
+                short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
+                long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
 
             if TEST_TARGET_OVERRIDE:
                 short_cfg.target_pct = TEST_SHORT_TARGET_PCT
@@ -1753,12 +1773,20 @@ def main() -> None:
             print(
                 "[INFO] SHORT windows: "
                 f"use_time_windows={short_cfg.use_time_windows} | "
-                + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in short_cfg.signal_windows])
+                + (
+                    ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in short_cfg.signal_windows])
+                    if short_cfg.use_time_windows
+                    else "disabled"
+                )
             )
             print(
                 "[INFO] LONG  windows: "
                 f"use_time_windows={long_cfg.use_time_windows} | "
-                + ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in long_cfg.signal_windows])
+                + (
+                    ", ".join([f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in long_cfg.signal_windows])
+                    if long_cfg.use_time_windows
+                    else "disabled"
+                )
             )
 
             short_notional = POSITION_SIZE_RS_SHORT * INTRADAY_LEVERAGE_SHORT

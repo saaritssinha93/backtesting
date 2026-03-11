@@ -97,7 +97,7 @@ from avwap_v11_refactored.avwap_long_strategy import (
 # RUNNER CONFIG (top-level orchestration settings)
 # ===========================================================================
 POSITION_SIZE_RS_SHORT = 50_000
-POSITION_SIZE_RS_LONG = 100_000
+POSITION_SIZE_RS_LONG = 50_000
 
 # Intraday leverage (margin). Position sizes above are *capital/margin per trade*.
 # Notional exposure = capital * leverage. Set leverage=1.0 to disable leverage effects.
@@ -147,8 +147,8 @@ MAX_WORKERS = 4
 # Set TEST_TARGET_OVERRIDE = True to run test; False to use defaults.
 # ===========================================================================
 TEST_TARGET_OVERRIDE   = False
-TEST_SHORT_TARGET_PCT  = 0.0090   # 0.90%  (default 1.20%)
-TEST_LONG_TARGET_PCT   = 0.0110   # 1.10%  (default 1.50%)
+TEST_SHORT_TARGET_PCT  = 0.0080   # 0.90%  (default 1.20%)
+TEST_LONG_TARGET_PCT   = 0.0090   # 1.10%  (default 1.50%)
 
 # ===========================================================================
 # VIX DYNAMIC SCALING — set VIX_SCALE_ENABLED=True to scale SL/target with VIX

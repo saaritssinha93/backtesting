@@ -1,0 +1,29 @@
+2026-03-09 10:39:51,148 | INFO    | =================================================================
+2026-03-09 10:39:51,148 | INFO    | AVWAP Paper Trade Executor Ã¢â‚¬â€ PAPER_TRADE = TRUE
+2026-03-09 10:39:51,149 | INFO    |   Mode            : SIMULATION (no real orders)
+2026-03-09 10:39:51,149 | INFO    |   LTP polling     : Enabled
+2026-03-09 10:39:51,149 | INFO    |   Entry source    : ltp_on_signal
+2026-03-09 10:39:51,149 | INFO    |   Max concurrent  : 0
+2026-03-09 10:39:51,149 | INFO    |   Starting capital: Rs.1,000,000
+2026-03-09 10:39:51,149 | INFO    |   Signal dir      : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-09 10:39:51,149 | INFO    |   Forced close at : 15:20:00 IST
+2026-03-09 10:39:51,149 | INFO    |   Target policy   : SHORT=0.90% LONG=1.10% (rebased from signal entry)
+2026-03-09 10:39:51,149 | WARNING |   Risk limits     : DISABLED (no max-open / margin cap checks)
+2026-03-09 10:39:51,149 | INFO    | =================================================================
+2026-03-09 10:39:51,149 | WARNING | [KITE.AUTH] Refreshing session due to: startup
+2026-03-09 10:39:53,050 | WARNING | Kite auth profile 'primary' failed (api_key.txt + access_token.txt): HTTPSConnectionPool(host='api.kite.trade', port=443): Max retries exceeded with url: /user/profile (Caused by NewConnectionError("HTTPSConnection(host='api.kite.trade', port=443): Failed to establish a new connection: [WinError 10013] An attempt was made to access a socket in a way forbidden by its access permissions"))
+2026-03-09 10:39:53,054 | WARNING | Kite auth profile 'secondary' failed (api_key2.txt + access_token2.txt): HTTPSConnectionPool(host='api.kite.trade', port=443): Max retries exceeded with url: /user/profile (Caused by NewConnectionError("HTTPSConnection(host='api.kite.trade', port=443): Failed to establish a new connection: [WinError 10013] An attempt was made to access a socket in a way forbidden by its access permissions"))
+2026-03-09 10:39:53,054 | WARNING | Kite session setup failed for all profiles: HTTPSConnectionPool(host='api.kite.trade', port=443): Max retries exceeded with url: /user/profile (Caused by NewConnectionError("HTTPSConnection(host='api.kite.trade', port=443): Failed to establish a new connection: [WinError 10013] An attempt was made to access a socket in a way forbidden by its access permissions"))
+2026-03-09 10:39:53,054 | WARNING | Kite session not available right now: all Kite auth profiles failed
+2026-03-09 10:39:53,054 | WARNING | LTP polling remains enabled; runtime will retry Kite session automatically.
+2026-03-09 10:39:53,054 | WARNING | LTP polling temporarily unavailable at startup (Kite session unavailable).
+2026-03-09 10:39:53,054 | WARNING | entry-price-source=ltp_on_signal and Kite LTP is unavailable now; fallback may be used until session recovers.
+2026-03-09 10:39:53,056 | INFO    | Loaded 0 previously executed signals.
+2026-03-09 10:39:53,056 | INFO    | Signal CSV sources: signals_2026-03-09_v7_sweep_short.csv, signals_2026-03-09_v7_sweep_long.csv
+2026-03-09 10:39:53,076 | INFO    | [RESTORE] signals_today=0 | executed_loaded=0 | closed_today=0 | open_restored=0 | restored_exact=0 | restored_reconstructed=0 | realized_trades=0 | realized_total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-09 10:39:53,087 | WARNING |   Simulation cap  : DISABLED (unlimited concurrent workers)
+2026-03-09 10:39:53,090 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-09_v7_sweep_short.csv, live_signals\signals_2026-03-09_v7_sweep_long.csv
+2026-03-09 10:39:53,090 | INFO    | startup | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-09 10:39:53,090 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-09 10:39:58,092 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00
+2026-03-09 10:40:03,094 | INFO    | heartbeat | [LIVE.PNL] open=0 | tickers=none | unrealized=Rs.+0.00 | realized=Rs.+0.00 | total=Rs.+0.00 | deployed_margin=Rs.0.00

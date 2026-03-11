@@ -1,0 +1,15 @@
+{
+  "date": "2026-03-09",
+  "scope": "true_v5",
+  "command_id": "KS-true_v5-111349106232",
+  "mode": "ticker",
+  "ticker": "MOL",
+  "target_signal_ids": [
+    "312d4ce6b2e45daa"
+  ],
+  "target_tickers": [
+    "MOL"
+  ],
+  "requested_at_ist": "2026-03-09 11:13:49+0530",
+  "source": "dashboard"
+}

@@ -1,0 +1,233 @@
+======================================================================
+AVWAP v11 COMBINED runner â€” LONG + SHORT (refactored v2)
+  - Entry signals: 15-min data
+  - Exit resolution: 1-min data (stocks_indicators_1min_eq)
+  - Outputs: */algo_trading/outputs
+  - Intraday leverage: SHORT=5.0x | LONG=5.0x
+  - P&L% reported = ROI% on *capital/margin* (levered)
+    (unlevered price-return% is saved as pnl_pct_price)
+======================================================================
+[INFO] 1-min data directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\stocks_indicators_1min_eq
+[INFO] 1-min parquet files found: 1041
+[PROFILE] Tighter-stops profile enabled: SHORT(SL=0.68%, TGT=0.90%), LONG(SL=0.58%, TGT=1.10%)
+[PROFILE] hf_balanced_v1 enabled (filters relaxed, risk tuned).
+[VIX] Scaling DISABLED — fixed SL/target used (old behaviour).
+[REGIME] Disabled: no market index parquet found in 15m data directory.
+[INFO] SHORT config: SL=0.7%, TGT=0.9%, slippage=5bps, comm=3bps
+[INFO] LONG  config: SL=0.5%, TGT=1.1%, slippage=5bps, comm=3bps
+[INFO] Lag bars SHORT: A_MOD=1, A_PULLBACK=2, B_HUGE=-1
+[INFO] Pack2 SHORT filters: enable_setup_B_HUGE=True | max_vix_for_entries=0.00
+[INFO] Lag bars LONG : A_MOD=1, A_PULLBACK=2, B_HUGE=-1
+[INFO] Final signal-window override -> True
+[INFO] SHORT windows: use_time_windows=True | 09:15-14:30
+[INFO] LONG  windows: use_time_windows=True | 09:15-14:30
+[INFO] Capital/margin per trade: SHORT=Rs.50,000 | LONG=Rs.100,000
+[INFO] Notional exposure per trade: SHORT=Rs.250,000 | LONG=Rs.500,000
+[INFO] Live parity: min_bars_left=0 -> True
+[INFO] Live parity: disable_topn_per_day -> True
+[INFO] Parallelism: max_workers=4
+[INFO] Output directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs
+[INFO] Console log: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs\avwap_combined_runner_20260309_102645.txt
+----------------------------------------------------------------------
+
+[PHASE 1] Scanning for entry signals using 15-min data...
+[SHORT] Tickers found: 1041
+  [SHORT] scanned 100/1041 | trades=145
+  [SHORT] scanned 200/1041 | trades=270
+  [SHORT] scanned 300/1041 | trades=414
+  [SHORT] scanned 400/1041 | trades=563
+  [SHORT] scanned 500/1041 | trades=719
+  [SHORT] scanned 600/1041 | trades=874
+  [SHORT] scanned 700/1041 | trades=1012
+  [SHORT] scanned 800/1041 | trades=1145
+  [SHORT] scanned 900/1041 | trades=1268
+  [SHORT] scanned 1000/1041 | trades=1416
+[LONG] Tickers found: 1041
+  [LONG] scanned 100/1041 | trades=70
+  [LONG] scanned 200/1041 | trades=133
+  [LONG] scanned 300/1041 | trades=206
+  [LONG] scanned 400/1041 | trades=282
+  [LONG] scanned 500/1041 | trades=345
+  [LONG] scanned 600/1041 | trades=398
+  [LONG] scanned 700/1041 | trades=452
+  [LONG] scanned 800/1041 | trades=502
+  [LONG] scanned 900/1041 | trades=557
+  [LONG] scanned 1000/1041 | trades=619
+
+[PHASE 2] Re-resolving exits using 1-min data for higher precision...
+  [SHORT] 1469 trades to re-resolve...
+[1MIN] Re-resolved exits for 1469/1469 trades using 1-min data.
+  [LONG] 646 trades to re-resolve...
+[1MIN] Re-resolved exits for 646/646 trades using 1-min data.
+[INFO] Day-side mix: both=111 | short_only=15 | long_only=6 | total_days=132
+
+[DEBUG] Signal->Entry lag by setup (minutes)
+[DEBUG] Rows=2115 | negative_lag_rows=0 | same_timestamp_rows=0
+ side                                 setup impulse_type  count  min  p50   mean   p90   max  p50_bars_15m
+ LONG                   A_MOD_BREAK_C1_HIGH     MODERATE    106 15.0 15.0  15.00  15.0  15.0           1.0
+ LONG        A_MOD_CLOSE_CONTINUATION_BREAK     MODERATE      3 15.0 15.0  15.00  15.0  15.0           1.0
+ LONG         B_HUGE_C1_CLOSE_RECLAIM_BREAK         HUGE    291 30.0 30.0  30.00  30.0  30.0           2.0
+ LONG B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK         HUGE    246 60.0 90.0 100.98 180.0 255.0           6.0
+SHORT                    A_MOD_BREAK_C1_LOW     MODERATE   1360 15.0 15.0  15.00  15.0  15.0           1.0
+SHORT       A_PULLBACK_C2_THEN_BREAK_C2_LOW     MODERATE     94 30.0 30.0  30.00  30.0  30.0           2.0
+SHORT              B_HUGE_RED_FAILED_BOUNCE         HUGE     15 60.0 90.0 110.00 204.0 225.0           6.0
+
+==================== SHORT (net of slippage+comm, 1-min exits) ====================
+Total trades                  : 1469
+Unique trade days             : 126
+TARGET hits                   : 770  | hit-rate  = 52.42%
+SL hits                       : 460  | sl-rate   = 31.31%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 239  | eod-rate  = 16.27%
+Avg PnL % (net, per trade)    : 0.6297%
+Sum PnL % (net, all trades)   : 925.0065%
+Avg PnL % (gross, per trade)  : 1.4297%
+Sum PnL % (gross, all trades) : 2100.2065%
+Profit factor                 : 1.450
+Avg winning trade             : 3.4092%
+Avg losing trade              : -3.4532%
+Max drawdown (cumul PnL %)    : 122.9345%
+Sharpe ratio (annualized)     : 2.830
+Sortino ratio (annualized)    : 8.262
+Calmar ratio                  : 7.524
+Max consecutive wins          : 30
+Max consecutive losses        : 23
+===================================================================================
+
+==================== LONG (net of slippage+comm, 1-min exits) ====================
+Total trades                  : 646
+Unique trade days             : 117
+TARGET hits                   : 346  | hit-rate  = 53.56%
+SL hits                       : 203  | sl-rate   = 31.42%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 97  | eod-rate  = 15.02%
+Avg PnL % (net, per trade)    : 1.4330%
+Sum PnL % (net, all trades)   : 925.7407%
+Avg PnL % (gross, per trade)  : 2.2330%
+Sum PnL % (gross, all trades) : 1442.5407%
+Profit factor                 : 2.181
+Avg winning trade             : 4.3279%
+Avg losing trade              : -3.1226%
+Max drawdown (cumul PnL %)    : 29.6281%
+Sharpe ratio (annualized)     : 6.004
+Sortino ratio (annualized)    : 23.364
+Calmar ratio                  : 31.245
+Max consecutive wins          : 11
+Max consecutive losses        : 7
+==================================================================================
+
+==================== COMBINED (net of slippage+comm, 1-min exits) ====================
+Total trades                  : 2115
+Unique trade days             : 132
+TARGET hits                   : 1116  | hit-rate  = 52.77%
+SL hits                       : 663  | sl-rate   = 31.35%
+BE exits                      : 0  | be-rate   = 0.00%
+EOD exits                     : 336  | eod-rate  = 15.89%
+Avg PnL % (net, per trade)    : 0.8751%
+Sum PnL % (net, all trades)   : 1850.7472%
+Avg PnL % (gross, per trade)  : 1.6751%
+Sum PnL % (gross, all trades) : 3542.7472%
+Profit factor                 : 1.652
+Avg winning trade             : 3.6952%
+Avg losing trade              : -3.3551%
+Max drawdown (cumul PnL %)    : 115.9345%
+Sharpe ratio (annualized)     : 3.826
+Sortino ratio (annualized)    : 12.034
+Calmar ratio                  : 15.964
+Max consecutive wins          : 31
+Max consecutive losses        : 23
+======================================================================================
+
+==================== NOTIONAL P&L SUMMARY (Rs.) ====================
+SHORT notional P&L            : Rs.462,503.26
+LONG  notional P&L            : Rs.925,740.71
+TOTAL notional P&L            : Rs.1,388,243.97
+=============================================================
+
+=====================================================================================
+  Day-wise Breakdown â€” last 2 weeks (10 trading days)
+=====================================================================================
+Date           L   S  Tot    W   L_   Win%    SumPnL%    AvgPnL%      Rs.PnL Outcomes
+-------------------------------------------------------------------------------------
+2026-02-20     0  10   10    4    6    40%      -7.90%      -0.79%      -3,948  T:3 S:5 E:2
+2026-02-23     3  15   18   11    7    61%     +18.03%      +1.00%      +9,907  T:9 S:4 E:5
+2026-02-24     3  27   30   23    7    77%     +59.65%      +1.99%     +36,877  T:22 S:5 E:3
+2026-02-25     5   9   14    9    5    64%     +16.55%      +1.18%      +7,650  T:9 S:5
+2026-02-26     4   6   10    6    4    60%     +11.79%      +1.18%     +15,294  T:6 S:3 E:1
+2026-02-27     2  12   14   10    4    71%     +24.51%      +1.75%      +8,707  T:10 S:3 E:1
+2026-03-02     0  28   28   15   13    54%      +2.85%      +0.10%      +1,425  T:15 S:13
+2026-03-04     0  19   19   10    9    53%      +5.00%      +0.26%      +2,502  T:10 S:7 E:2
+2026-03-05     1   9   10    3    7    30%     -16.25%      -1.62%      -5,775  T:3 S:7
+2026-03-06     3   5    8    4    4    50%      +0.10%      +0.01%      -5,275  T:4 S:4
+-------------------------------------------------------------------------------------
+TOTAL         21 140  161   95   66    59%    +114.35%     +11.43%     +67,364  (avg/day)
+=====================================================================================
+
+
+[INFO] Generating legacy backtest charts...
+[INFO] 8 legacy charts saved to C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs\charts\legacy/
+
+[INFO] Generating enhanced analysis charts...
+[CHARTS] Generated 21 charts in C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs\charts\enhanced/
+[INFO] 21 enhanced charts saved to C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs\charts\enhanced/
+  -> 01_cumulative_pnl_20260309_102645.png
+  -> 02_daily_pnl_20260309_102645.png
+  -> 03_drawdown_curve_20260309_102645.png
+  -> 04_win_rate_by_side_20260309_102645.png
+  -> 05_pnl_distribution_combined_20260309_102645.png
+  -> 06_pnl_distribution_by_side_20260309_102645.png
+  -> 07_outcome_pie_20260309_102645.png
+  -> 08_outcome_by_side_20260309_102645.png
+  -> 09_monthly_pnl_20260309_102645.png
+  -> 10_weekday_pnl_20260309_102645.png
+  -> 11_hourly_entry_distribution_20260309_102645.png
+  -> 12_rolling_sharpe_20260309_102645.png
+  -> 13_trade_duration_dist_20260309_102645.png
+  -> 14_top_winners_losers_20260309_102645.png
+  -> 15_cumulative_trade_count_20260309_102645.png
+  -> 16a_pnl_by_setup_20260309_102645.png
+  -> 16b_pnl_by_impulse_type_20260309_102645.png
+  -> 17_quality_score_vs_pnl_20260309_102645.png
+  -> 18_win_rate_by_month_20260309_102645.png
+  -> 19_avg_pnl_by_hour_20260309_102645.png
+  -> 20_risk_reward_scatter_20260309_102645.png
+
+[INFO] Total charts generated: 29
+
+=============== SAMPLE (first 30 rows) ===============
+trade_date     ticker  side                                 setup impulse_type  quality_score  entry_price  exit_price outcome   pnl_pct  pnl_pct_price  leverage  position_size_rs  notional_exposure_rs       pnl_rs
+2025-08-25   USHAMART  LONG         B_HUGE_C1_CLOSE_RECLAIM_BREAK         HUGE       9.481170   387.327450  387.600006     EOD -0.448158      -0.089632       5.0          100000.0              500000.0  -448.158033
+2025-08-26    GODIGIT SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.542989   362.127572  358.868424  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-26   RTNINDIA  LONG                   A_MOD_BREAK_C1_HIGH     MODERATE       7.594198    54.930001   55.534231  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-08-26   JSWINFRA SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.689870   298.240328  295.556165  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-26 METROPOLIS SHORT       A_PULLBACK_C2_THEN_BREAK_C2_LOW     MODERATE       0.704235  2136.772511 2150.661533      SL -4.050000      -0.810000       5.0           50000.0              250000.0 -2025.000000
+2025-08-26        MCX SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.953806  1542.691400 1536.000000     EOD  1.368742       0.273748       5.0           50000.0              250000.0   684.371119
+2025-08-26     RALLIS SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.960000   363.927200  366.292727      SL -4.050000      -0.810000       5.0           50000.0              250000.0 -2025.000000
+2025-08-26   SWANCORP SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.576905   464.507086  460.326522  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-26        UDS SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.629634   250.699850  248.443551  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-28       PDSL  LONG                   A_MOD_BREAK_C1_HIGH     MODERATE       6.152954   331.366248  335.011277  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-08-28    FIEMIND  LONG                   A_MOD_BREAK_C1_HIGH     MODERATE       7.923582  2145.429000 2169.028719  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-08-28    OLAELEC  LONG         B_HUGE_C1_CLOSE_RECLAIM_BREAK         HUGE       8.788984    53.780000   54.371580  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-08-28  DELTACORP  LONG         B_HUGE_C1_CLOSE_RECLAIM_BREAK         HUGE       5.574793    88.149998   89.119648  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-08-28  EDELWEISS  LONG         B_HUGE_C1_CLOSE_RECLAIM_BREAK         HUGE       8.123220   112.929997  114.172227  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-08-28 PNBHOUSING SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.751621   773.495294  766.533837  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-28      ABFRL SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.611612    79.850002   79.131352  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-28 BHARTIHEXA SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.723347  1777.044544 1761.051144  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-28   SHANKARA SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.742295   943.311300  934.821498  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-28       IGPL SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.677756   432.913400  432.000000     EOD  0.254945       0.050989       5.0           50000.0              250000.0   127.472700
+2025-08-28     JAGRAN SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.586624    70.860004   70.900002     EOD -1.082232      -0.216446       5.0           50000.0              250000.0  -541.115798
+2025-08-28 INDIASHLTR  LONG B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK         HUGE       7.333059   948.189600  958.619686  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-08-28    PRAJIND SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.449667   397.620472  395.950012     EOD  1.300571       0.260114       5.0           50000.0              250000.0   650.285457
+2025-08-29 MANAPPURAM SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.437232   261.047786  262.744597      SL -4.050000      -0.810000       5.0           50000.0              250000.0 -2025.000000
+2025-08-29   DEEPINDS  LONG                   A_MOD_BREAK_C1_HIGH     MODERATE       4.344443   545.909148  551.914148  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-08-29 GENUSPOWER SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.590045   329.334114  326.370107  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-08-29    CSBBANK SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.506126   367.176550  363.871961  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-09-01       SSWL  LONG                   A_MOD_BREAK_C1_HIGH     MODERATE       3.650002   217.839993  220.236233  TARGET  4.700000       0.940000       5.0          100000.0              500000.0  4700.000000
+2025-09-01        UBL SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.464394  1813.337211 1797.017176  TARGET  3.700000       0.740000       5.0           50000.0              250000.0  1850.000000
+2025-09-01        VBL SHORT                    A_MOD_BREAK_C1_LOW     MODERATE       0.668850   482.403500  485.539123      SL -4.050000      -0.810000       5.0           50000.0              250000.0 -2025.000000
+2025-09-01     COLPAL  LONG B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK         HUGE       6.642850  2369.473800 2358.000000     EOD -3.221170      -0.644234       5.0          100000.0              500000.0 -3221.170473
+
+[FILE SAVED] C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs\avwap_longshort_trades_ALL_DAYS_20260309_102645.csv
+[OUTPUTS DIR] C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs
+[CONSOLE LOG] C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs\avwap_combined_runner_20260309_102645.txt
+[DONE]
