@@ -119,8 +119,8 @@ MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_MAX_CONCURRENT_TRADES", "20"))
 # Conservative fallback so prices remain valid for common NSE 0.10/0.05 tick scripts.
 DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
 MAX_TICK_DECIMALS = 4
-SHORT_TARGET_PCT = float(os.getenv("EQIDV5_SHORT_TARGET_PCT", "0.009"))  # 0.90%
-LONG_TARGET_PCT = float(os.getenv("EQIDV5_LONG_TARGET_PCT", "0.011"))    # 1.10%
+SHORT_TARGET_PCT = float(os.getenv("EQIDV5_SHORT_TARGET_PCT", "0.008"))  # 0.80%
+LONG_TARGET_PCT = float(os.getenv("EQIDV5_LONG_TARGET_PCT", "0.009"))    # 0.90%
 
 # Trade log columns
 TRADE_LOG_COLUMNS = [
@@ -2458,7 +2458,7 @@ def _normalize_signal(raw: dict) -> dict:
             sig["quantity"] = _safe_int(sig.get("quantity", 1), 1)
 
     # Enforce V5 target policy from executor side as well:
-    # SHORT -> entry*(1-0.90%), LONG -> entry*(1+1.10%)
+    # SHORT -> entry*(1-0.80%), LONG -> entry*(1+0.90%)
     side = str(sig.get("side", "")).strip().upper()
     entry = _safe_float(sig.get("entry_price", 0.0), 0.0)
     if entry > 0 and side in {"SHORT", "LONG"}:

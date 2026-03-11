@@ -1,0 +1,33 @@
+{
+  "date": "2026-03-09",
+  "open_trades": [
+    {
+      "trade_id": "PT-4bc5038b-110141",
+      "signal_id": "4bc5038ba4719d2f",
+      "ticker": "TIMETECHNO",
+      "side": "SHORT",
+      "quantity": 1502,
+      "entry_price": 166.41,
+      "stop_price": 167.66,
+      "target_price": 164.41,
+      "entry_time": "2026-03-09 11:01:41+0530",
+      "last_ltp": 166.63,
+      "restored": false,
+      "last_ltp_time": "2026-03-09 11:34:39+0530"
+    },
+    {
+      "trade_id": "PT-f67044f3-113443",
+      "signal_id": "f67044f3a4df896c",
+      "ticker": "PUNJABCHEM",
+      "side": "SHORT",
+      "quantity": 242,
+      "entry_price": 1029.39,
+      "stop_price": 1037.11,
+      "target_price": 1017.04,
+      "entry_time": "2026-03-09 11:34:43+0530",
+      "last_ltp": 0.0,
+      "restored": false
+    }
+  ],
+  "updated_at": "2026-03-09 11:34:44"
+}
