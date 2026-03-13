@@ -109,7 +109,7 @@ RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "1")).strip().l
     "yes",
     "on",
 }
-MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "10"))             # max simultaneous open positions
+MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "999"))            # max simultaneous open positions
 MAX_CAPITAL_DEPLOYED_RS = float(os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "500000"))   # max total margin
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 

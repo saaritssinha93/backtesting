@@ -50,7 +50,7 @@ _project_root = _this_dir.parent if _this_dir.name == "avwap_v11_refactored" els
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from avwap_v11_refactored.avwap_common_v11 import (
+from avwap_v11_refactored.avwap_common_v11_regimefix import (
     IST, StrategyConfig, Trade, BacktestMetrics,
     default_short_config, default_long_config, now_ist,
     trades_to_df, apply_topn_per_day, compute_backtest_metrics,
@@ -63,7 +63,7 @@ from avwap_v11_refactored.avwap_short_strategy_v11 import (
 from avwap_v11_refactored.avwap_long_strategy_v9_sweep import (
     scan_all_days_for_ticker as scan_long,
 )
-from avwap_v11_refactored.avwap_common_v7_sweep import (
+from avwap_v11_refactored.avwap_common_v7_sweep_regimefix import (
     default_long_config as default_long_config_v9,
 )
 

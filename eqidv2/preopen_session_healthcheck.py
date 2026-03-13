@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-open health check for EQIDV2 live sessions (v5/v7)."""
+"""Pre-open health check for active EQIDV2 live sessions."""
 
 from __future__ import annotations
 
@@ -213,6 +213,7 @@ def check_task_enabled_state(
     status = _extract_value(lines, "Status")
     last_run = _extract_value(lines, "Last Run Time")
     next_run = _extract_value(lines, "Next Run Time")
+    start_date = _extract_value(lines, "Start Date")
 
     if state.upper() != "ENABLED":
         if inactive_ok:
@@ -230,6 +231,12 @@ def check_task_enabled_state(
     if not last_run.startswith(today_dmy):
         never_ran = last_run.startswith("30-11-1999") or last_run.startswith("N/A")
         if never_ran:
+            if start_date.startswith(today_dmy):
+                return CheckResult(
+                    label,
+                    "PASS",
+                    f"new task created today | first run pending | status={status or 'N/A'} | next_run={next_run or 'N/A'}",
+                )
             return CheckResult(
                 label,
                 "FAIL",
@@ -270,41 +277,24 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     # Core reachability.
     checks.append(check_http("http://127.0.0.1:8787/", timeout_sec=8.0))
 
-    unified_mode = _task_is_enabled("EQIDV2_live_combined_csv_v5_unified_0900")
-    parallel_v5_mode = _task_is_enabled("EQIDV2_parallel_runner_v5_0900")
-    v5_fetch_enabled = (not unified_mode) and (
-        _task_is_enabled("EQIDV2_eod_15mins_data_0900") or parallel_v5_mode
-    )
-    v5_short_enabled = (not unified_mode) and (
-        _task_is_enabled("EQIDV2_live_combined_csv_v5_short_0900") or parallel_v5_mode
-    )
-    v5_long_enabled = (not unified_mode) and (
-        _task_is_enabled("EQIDV2_live_combined_csv_v5_long_0900") or parallel_v5_mode
-    )
-    v5_paper_enabled = _task_is_enabled("EQIDV2_avwap_paper_trade_v5_0900")
-    v5_live_enabled = _task_is_enabled("EQIDV2_avwap_live_trade_v5_0905")
+    eod_15min_enabled = _task_is_enabled("EQIDV2_eod_15mins_data_0900")
     v7_short_enabled = _task_is_enabled("EQIDV2_live_combined_csv_v7_sweep_short_0900")
     v7_long_enabled = _task_is_enabled("EQIDV2_live_combined_csv_v7_sweep_long_0900")
     v7_paper_enabled = _task_is_enabled("EQIDV2_avwap_paper_trade_v7_sweep_0900")
     v7_live_enabled = _task_is_enabled("EQIDV2_avwap_live_trade_v7_sweep_0905")
+    v15_short_enabled = _task_is_enabled("EQIDV2_live_combined_csv_v15_short_0900")
+    v15_long_enabled = _task_is_enabled("EQIDV2_live_combined_csv_v15_long_0900")
+    v15_paper_enabled = _task_is_enabled("EQIDV2_avwap_paper_trade_v15_0900")
+    v15_live_enabled = _task_is_enabled("EQIDV2_avwap_live_trade_v15_0905")
     kite_export_enabled = _task_is_enabled("EQIDV2_kite_export_start_0915")
 
     # Scheduled tasks expected to have run by 09:05.
     preopen_tasks = [
         "EQIDV2_log_dashboard_start_0855",
-        "EQIDV2_avwap_paper_trade_v5_0900",
         "EQIDV2_authentication_v2_0900",
     ]
-    if unified_mode:
-        preopen_tasks.append("EQIDV2_live_combined_csv_v5_unified_0900")
-    else:
-        preopen_tasks.extend(
-            [
-                "EQIDV2_eod_15mins_data_0900",
-                "EQIDV2_live_combined_csv_v5_short_0900",
-                "EQIDV2_live_combined_csv_v5_long_0900",
-            ]
-        )
+    if eod_15min_enabled:
+        preopen_tasks.append("EQIDV2_eod_15mins_data_0900")
     for task in preopen_tasks:
         checks.append(check_task_ran_today(task))
 
@@ -337,8 +327,8 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_task_enabled_state(
-            "EQIDV2_avwap_live_trade_v5_0905",
-            "task_EQIDV2_avwap_live_trade_v5_0905",
+            "EQIDV2_avwap_live_trade_v7_sweep_0905",
+            "task_EQIDV2_avwap_live_trade_v7_sweep_0905",
             require_run_today=True,
             inactive_ok=True,
             inactive_detail="session not enabled",
@@ -346,8 +336,35 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_task_enabled_state(
-            "EQIDV2_avwap_live_trade_v7_sweep_0905",
-            "task_EQIDV2_avwap_live_trade_v7_sweep_0905",
+            "EQIDV2_live_combined_csv_v15_short_0900",
+            "task_EQIDV2_live_combined_csv_v15_short_0900",
+            require_run_today=True,
+            inactive_ok=True,
+            inactive_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_task_enabled_state(
+            "EQIDV2_live_combined_csv_v15_long_0900",
+            "task_EQIDV2_live_combined_csv_v15_long_0900",
+            require_run_today=True,
+            inactive_ok=True,
+            inactive_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_task_enabled_state(
+            "EQIDV2_avwap_paper_trade_v15_0900",
+            "task_EQIDV2_avwap_paper_trade_v15_0900",
+            require_run_today=True,
+            inactive_ok=True,
+            inactive_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_task_enabled_state(
+            "EQIDV2_avwap_live_trade_v15_0905",
+            "task_EQIDV2_avwap_live_trade_v15_0905",
             require_run_today=True,
             inactive_ok=True,
             inactive_detail="session not enabled",
@@ -378,34 +395,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             LOG_DIR / "eqidv2_eod_scheduler_for_15mins_data.log",
             max_age_min=max_age_min,
             label="eod_15min_data",
-            enabled=v5_fetch_enabled,
-            disabled_detail="session not enabled (unified or inactive mode)",
-        )
-    )
-    checks.append(
-        check_file_recent_if_enabled(
-            LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_short.log",
-            max_age_min=max_age_min,
-            label="live_combined_csv_v5_short",
-            enabled=v5_short_enabled,
-            disabled_detail="session not enabled (unified or inactive mode)",
-        )
-    )
-    checks.append(
-        check_file_recent_if_enabled(
-            LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_long.log",
-            max_age_min=max_age_min,
-            label="live_combined_csv_v5_long",
-            enabled=v5_long_enabled,
-            disabled_detail="session not enabled (unified or inactive mode)",
-        )
-    )
-    checks.append(
-        check_file_recent_if_enabled(
-            LOG_DIR / "eqidv2_live_combined_analyser_csv_v5_unified.log",
-            max_age_min=max_age_min,
-            label="live_combined_csv_v5_unified",
-            enabled=unified_mode,
+            enabled=eod_15min_enabled,
             disabled_detail="session not enabled",
         )
     )
@@ -429,10 +419,19 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_file_recent_if_enabled(
-            LIVE_SIGNAL_DIR / f"paper_trade_execution_{now_ist().strftime('%Y-%m-%d')}_v5.log",
+            LOG_DIR / "eqidv2_live_combined_analyser_csv_v15_short.log",
             max_age_min=max_age_min,
-            label="paper_trade_v5",
-            enabled=v5_paper_enabled,
+            label="live_combined_csv_v15_short",
+            enabled=v15_short_enabled,
+            disabled_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_file_recent_if_enabled(
+            LOG_DIR / "eqidv2_live_combined_analyser_csv_v15_long.log",
+            max_age_min=max_age_min,
+            label="live_combined_csv_v15_long",
+            enabled=v15_long_enabled,
             disabled_detail="session not enabled",
         )
     )
@@ -447,10 +446,10 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_file_recent_if_enabled(
-            LIVE_SIGNAL_DIR / f"live_trade_execution_{now_ist().strftime('%Y-%m-%d')}_v5.log",
+            LIVE_SIGNAL_DIR / f"paper_trade_execution_{now_ist().strftime('%Y-%m-%d')}_v15.log",
             max_age_min=max_age_min,
-            label="kite_trade",
-            enabled=v5_live_enabled,
+            label="paper_trade_v15",
+            enabled=v15_paper_enabled,
             disabled_detail="session not enabled",
         )
     )
@@ -460,6 +459,15 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             max_age_min=max_age_min,
             label="kite_trade_v7_sweep",
             enabled=v7_live_enabled,
+            disabled_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_file_recent_if_enabled(
+            LIVE_SIGNAL_DIR / f"live_trade_execution_{now_ist().strftime('%Y-%m-%d')}_v15.log",
+            max_age_min=max_age_min,
+            label="kite_trade_v15",
+            enabled=v15_live_enabled,
             disabled_detail="session not enabled",
         )
     )
@@ -499,50 +507,6 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     if include_optional_csv:
         checks.append(
             check_file_recent_if_enabled(
-                LIVE_SIGNAL_DIR / f"signals_{today}_v5_short.csv",
-                max_age_min=max_age_min,
-                label="live_signals_csv_v5_short",
-                enabled=v5_short_enabled,
-                disabled_detail="session not enabled (unified or inactive mode)",
-                required_when_enabled=False,
-                optional_warn_when_enabled=warn_optional_csv,
-            )
-        )
-        checks.append(
-            check_file_recent_if_enabled(
-                LIVE_SIGNAL_DIR / f"signals_{today}_v5_long.csv",
-                max_age_min=max_age_min,
-                label="live_signals_csv_v5_long",
-                enabled=v5_long_enabled,
-                disabled_detail="session not enabled (unified or inactive mode)",
-                required_when_enabled=False,
-                optional_warn_when_enabled=warn_optional_csv,
-            )
-        )
-        checks.append(
-            check_file_recent_if_enabled(
-                LIVE_SIGNAL_DIR / f"paper_trades_{today}_v5.csv",
-                max_age_min=max_age_min,
-                label="live_papertrade_result_csv_v5",
-                enabled=v5_paper_enabled,
-                disabled_detail="session not enabled",
-                required_when_enabled=False,
-                optional_warn_when_enabled=warn_optional_csv,
-            )
-        )
-        checks.append(
-            check_file_recent_if_enabled(
-                LIVE_SIGNAL_DIR / f"live_trades_{today}_v5.csv",
-                max_age_min=max_age_min,
-                label="live_kite_trades_csv",
-                enabled=v5_live_enabled,
-                disabled_detail="session not enabled",
-                required_when_enabled=False,
-                optional_warn_when_enabled=warn_optional_csv,
-            )
-        )
-        checks.append(
-            check_file_recent_if_enabled(
                 LIVE_SIGNAL_DIR / f"signals_{today}_v7_sweep_short.csv",
                 max_age_min=max_age_min,
                 label="live_signals_csv_v7_sweep_short",
@@ -580,6 +544,50 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
                 max_age_min=max_age_min,
                 label="live_kite_trades_csv_v7_sweep",
                 enabled=v7_live_enabled,
+                disabled_detail="session not enabled",
+                required_when_enabled=False,
+                optional_warn_when_enabled=warn_optional_csv,
+            )
+        )
+        checks.append(
+            check_file_recent_if_enabled(
+                LIVE_SIGNAL_DIR / f"signals_{today}_v15_short.csv",
+                max_age_min=max_age_min,
+                label="live_signals_csv_v15_short",
+                enabled=v15_short_enabled,
+                disabled_detail="session not enabled",
+                required_when_enabled=False,
+                optional_warn_when_enabled=warn_optional_csv,
+            )
+        )
+        checks.append(
+            check_file_recent_if_enabled(
+                LIVE_SIGNAL_DIR / f"signals_{today}_v15_long.csv",
+                max_age_min=max_age_min,
+                label="live_signals_csv_v15_long",
+                enabled=v15_long_enabled,
+                disabled_detail="session not enabled",
+                required_when_enabled=False,
+                optional_warn_when_enabled=warn_optional_csv,
+            )
+        )
+        checks.append(
+            check_file_recent_if_enabled(
+                LIVE_SIGNAL_DIR / f"paper_trades_{today}_v15.csv",
+                max_age_min=max_age_min,
+                label="live_papertrade_result_csv_v15",
+                enabled=v15_paper_enabled,
+                disabled_detail="session not enabled",
+                required_when_enabled=False,
+                optional_warn_when_enabled=warn_optional_csv,
+            )
+        )
+        checks.append(
+            check_file_recent_if_enabled(
+                LIVE_SIGNAL_DIR / f"live_trades_{today}_v15.csv",
+                max_age_min=max_age_min,
+                label="live_kite_trades_csv_v15",
+                enabled=v15_live_enabled,
                 disabled_detail="session not enabled",
                 required_when_enabled=False,
                 optional_warn_when_enabled=warn_optional_csv,

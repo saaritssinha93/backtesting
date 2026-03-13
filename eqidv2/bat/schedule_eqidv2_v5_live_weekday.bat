@@ -1,54 +1,6 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
-
-set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
-set "BAT_DIR=%BASE_DIR%\bat"
-
-set "LIVE_SHORT_BAT=%BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v5_short.bat"
-set "LIVE_LONG_BAT=%BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v5_long.bat"
-set "LIVE_EXEC_BAT=%BAT_DIR%\run_avwap_trade_execution_PAPER_TRADE_FALSE_v5.bat"
-
-set "TASK_LIVE_SHORT=EQIDV2_live_combined_csv_v5_short_0900"
-set "TASK_LIVE_LONG=EQIDV2_live_combined_csv_v5_long_0900"
-set "TASK_LIVE_EXEC=EQIDV2_avwap_live_trade_v5_0905"
-
-if not exist "%LIVE_SHORT_BAT%" (
-  echo [ERROR] Missing bat file: %LIVE_SHORT_BAT%
-  endlocal & exit /b 1
-)
-if not exist "%LIVE_LONG_BAT%" (
-  echo [ERROR] Missing bat file: %LIVE_LONG_BAT%
-  endlocal & exit /b 1
-)
-if not exist "%LIVE_EXEC_BAT%" (
-  echo [ERROR] Missing bat file: %LIVE_EXEC_BAT%
-  endlocal & exit /b 1
-)
-
-echo [INFO] Creating weekday V5 short live scanner task at 09:00 ...
-schtasks /Create /F /TN "%TASK_LIVE_SHORT%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 09:00 /TR "%LIVE_SHORT_BAT%"
-if errorlevel 1 (
-  echo [ERROR] Failed to create %TASK_LIVE_SHORT%
-  endlocal & exit /b 1
-)
-
-echo [INFO] Creating weekday V5 long live scanner task at 09:00 ...
-schtasks /Create /F /TN "%TASK_LIVE_LONG%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 09:00 /TR "%LIVE_LONG_BAT%"
-if errorlevel 1 (
-  echo [ERROR] Failed to create %TASK_LIVE_LONG%
-  endlocal & exit /b 1
-)
-
-echo [INFO] Creating weekday V5 LIVE trade executor task at 09:05 ...
-schtasks /Create /F /TN "%TASK_LIVE_EXEC%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 09:05 /TR "%LIVE_EXEC_BAT%"
-if errorlevel 1 (
-  echo [ERROR] Failed to create %TASK_LIVE_EXEC%
-  endlocal & exit /b 1
-)
-
-echo [INFO] Tasks created/updated successfully:
-echo        %TASK_LIVE_SHORT%  (Mon-Fri 09:00)
-echo        %TASK_LIVE_LONG%   (Mon-Fri 09:00)
-echo        %TASK_LIVE_EXEC%   (Mon-Fri 09:05)
-
-endlocal & exit /b 0
+setlocal
+echo [INFO] V5 live scheduling has been retired.
+echo [INFO] No V5 tasks will be created by this script.
+echo [INFO] Active live scheduling now uses newer versions only.
+endlocal & exit /b 1

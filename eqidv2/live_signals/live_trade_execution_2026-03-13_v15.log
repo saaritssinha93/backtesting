@@ -1,0 +1,26 @@
+2026-03-13 15:57:08,300 | INFO    | =================================================================
+2026-03-13 15:57:08,301 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-13 15:57:08,301 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-13 15:57:08,302 | INFO    |   Mode              : DRY-RUN
+2026-03-13 15:57:08,302 | INFO    |   Max concurrent    : 1
+2026-03-13 15:57:08,302 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-13 15:57:08,303 | INFO    |   Entry cutoff at   : 15:20:00 IST
+2026-03-13 15:57:08,303 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-13 15:57:08,303 | INFO    |   Target policy     : SHORT=1.07% LONG=1.10% (rebased from signal entry)
+2026-03-13 15:57:08,303 | INFO    |   Risk limits       : ENABLED (max_open=10, max_margin=Rs.500,000)
+2026-03-13 15:57:08,304 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-13 15:57:08,304 | INFO    | =================================================================
+2026-03-13 15:57:08,304 | INFO    | Loaded 0 previously executed signals.
+2026-03-13 15:57:08,304 | INFO    | Signal CSV sources: signals_2026-03-13_v15_short.csv, signals_2026-03-13_v15_long.csv
+2026-03-13 15:57:08,305 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-13_v15_short.csv, live_signals\signals_2026-03-13_v15_long.csv
+2026-03-13 15:57:08,306 | INFO    | Checking for existing unprocessed signals...
+2026-03-13 15:57:08,306 | INFO    | Market closed. All trades complete.
+2026-03-13 15:57:08,314 | INFO    | =======================================================
+2026-03-13 15:57:08,315 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-03-13 15:57:08,315 | INFO    |   Total trades : 0
+2026-03-13 15:57:08,315 | INFO    |   Wins         : 0
+2026-03-13 15:57:08,315 | INFO    |   Losses       : 0
+2026-03-13 15:57:08,315 | INFO    |   Win rate     : 0.0%
+2026-03-13 15:57:08,315 | INFO    |   Total P&L    : Rs.+0.00
+2026-03-13 15:57:08,315 | INFO    | =======================================================
+2026-03-13 15:57:08,316 | INFO    | Live trade executor stopped.

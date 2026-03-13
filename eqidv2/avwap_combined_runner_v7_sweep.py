@@ -69,7 +69,7 @@ _project_root = _this_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from avwap_v11_refactored.avwap_common_v7_sweep import (
+from avwap_v11_refactored.avwap_common_v7_sweep_regimefix import (
     IST,
     StrategyConfig,
     Trade,

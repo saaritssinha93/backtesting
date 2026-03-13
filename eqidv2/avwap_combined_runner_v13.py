@@ -69,7 +69,7 @@ _project_root = _this_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from avwap_v11_refactored.avwap_common_v11 import (
+from avwap_v11_refactored.avwap_common_v11_v13 import (
     IST,
     StrategyConfig,
     Trade,
@@ -92,7 +92,7 @@ from avwap_v11_refactored.avwap_short_strategy_v11 import (
 from avwap_v11_refactored.avwap_long_strategy_v9_sweep import (
     scan_all_days_for_ticker as scan_long,
 )
-from avwap_v11_refactored.avwap_common_v7_sweep import (
+from avwap_v11_refactored.avwap_common_v7_sweep_v13 import (
     default_long_config as default_long_config_v9,
 )
 
@@ -151,7 +151,7 @@ FINAL_LONG_SIGNAL_WINDOWS = [
 FINAL_SIGNAL_WINDOW_OVERRIDE = True
 FINAL_SHORT_USE_TIME_WINDOWS = True
 FINAL_SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(14, 30, 0))
+    (dtime(9, 15, 0), dtime(15, 0, 0))
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
@@ -166,7 +166,8 @@ SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW = 2
 SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE = -1
 LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH = 1
 LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH = 2
-LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = -1
+# Set high to effectively disable the weak HUGE pullback-hold long setup in V13.
+LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = 999
 
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
@@ -175,7 +176,8 @@ DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 MAX_WORKERS = 4
 
 # Setup controls
-PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE = True
+# Disable the weak short HUGE failed-bounce branch in V13.
+PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE = False
 PACK2_SHORT_MAX_VIX_FOR_ENTRIES = 0.0
 PACK2_LONG_MAX_VIX_FOR_ENTRIES = 0.0
 
@@ -222,6 +224,56 @@ VIX_SCALE_SL      = True   # scale stop_pct (keeps R:R ratio constant)
 
 # 1-min data directory for exit resolution
 DIR_5MIN = None  # Will be resolved dynamically at runtime
+
+
+# ===========================================================================
+# DATA DIRECTORY RESOLUTION
+# ===========================================================================
+def _resolve_15m_dir() -> Path:
+    """
+    Resolve the 15-min parquet directory across the repo layouts used here.
+
+    Prefer the first directory that actually contains matching parquet files.
+    This avoids accidentally binding to an empty sibling folder when the
+    populated dataset lives under `eqidv2/stocks_indicators_15min_eq`.
+    """
+    _script_dir = Path(__file__).resolve().parent
+    if _script_dir.name == "avwap_v11_refactored":
+        _proj = _script_dir.parent
+    else:
+        _proj = _script_dir
+
+    candidates = [
+        _proj / "stocks_indicators_15min_eq",
+        _proj.parent / "stocks_indicators_15min_eq",
+        Path.cwd() / "stocks_indicators_15min_eq",
+    ]
+
+    ranked: List[Tuple[int, Path]] = []
+    seen: set[str] = set()
+    for cand in candidates:
+        cand_abs = cand.resolve()
+        key = str(cand_abs).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        file_count = 0
+        if cand_abs.is_dir():
+            file_count = sum(1 for _ in cand_abs.glob("*_stocks_indicators_15min.parquet"))
+        ranked.append((file_count, cand_abs))
+
+    if not ranked:
+        return candidates[0].resolve()
+
+    best_count, best_path = max(ranked, key=lambda item: (item[0], -len(str(item[1]))))
+    if best_count > 0:
+        return best_path
+
+    for _, cand_abs in ranked:
+        if cand_abs.is_dir():
+            return cand_abs
+
+    return ranked[0][1]
 
 
 # ===========================================================================
@@ -1688,6 +1740,15 @@ def main() -> None:
             print("    (unlevered price-return% is saved as pnl_pct_price)")
             print("=" * 70)
 
+            # Resolve 15-min data directory
+            dir_15m = _resolve_15m_dir()
+            print(f"[INFO] 15-min data directory: {dir_15m}")
+            if dir_15m.is_dir():
+                n_files_15m = len(list(dir_15m.glob("*_stocks_indicators_15min.parquet")))
+                print(f"[INFO] 15-min parquet files found: {n_files_15m}")
+            else:
+                print("[WARN] 15-min data directory not found.")
+
             # Resolve 1-min data directory
             dir_5m = _resolve_5min_dir()
             print(f"[INFO] 1-min data directory: {dir_5m}")
@@ -1704,15 +1765,16 @@ def main() -> None:
             long_cfg = default_long_config_v9(
                 reports_dir=_outputs_dir,
             )
+            short_cfg.dir_15m = str(dir_15m)
+            long_cfg.dir_15m = str(dir_15m)
 
             if ENABLE_PLAYBOOK_V11_PROFILE:
-                # Tuned V11 profile:
-                # keep the playbook core (mode selector, sweep/reclaim, partial exits,
-                # risk sizing, guardrails) but relax selected filters to target
-                # roughly 5-10 trades/day with stronger aggregate performance.
+                # Frequency-focused V13 profile:
+                # loosen the stronger short branches enough to lift participation,
+                # while keeping the weaker long add-ons disabled for quality.
                 short_cfg.enable_liquidity_sweep_filter = False
                 short_cfg.reversal_requires_sweep = True
-                short_cfg.enable_avwap_no_trade_zone = True
+                short_cfg.enable_avwap_no_trade_zone = False
                 short_cfg.enable_mode_selector = True
                 short_cfg.use_time_windows = False
                 short_cfg.min_bars_left_after_entry = 0
@@ -1722,11 +1784,11 @@ def main() -> None:
                 short_cfg.vwap_side_min_count = 3
                 short_cfg.require_structure_filter = False
                 short_cfg.structure_lookback_bars = 30
-                short_cfg.adx_min = 22.0
-                short_cfg.adx_slope_min = 0.80
-                short_cfg.volume_min_ratio = 1.20
-                short_cfg.rsi_max_short = 55.0
-                short_cfg.stochk_max = 78.0
+                short_cfg.adx_min = 17.0
+                short_cfg.adx_slope_min = 0.40
+                short_cfg.volume_min_ratio = 0.95
+                short_cfg.rsi_max_short = 62.0
+                short_cfg.stochk_max = 90.0
                 short_cfg.stop_pct = 0.0058
                 short_cfg.target_pct = 0.0090
                 short_cfg.be_trigger_pct = 0.0042
@@ -1736,33 +1798,35 @@ def main() -> None:
                 short_cfg.partial_target_fraction = 0.50
                 short_cfg.enable_risk_based_position_sizing = False  # fixed Rs.50,000/trade via runner constant
                 short_cfg.risk_per_trade_pct_of_capital = 0.0035
-                short_cfg.max_trades_per_ticker_per_day = 2
+                short_cfg.max_trades_per_ticker_per_day = 5
                 short_cfg.enable_topn_per_day = False
                 short_cfg.topn_per_day = 0
 
-                # V12 LONG: backend-validated max-profit exit profile
-                long_cfg.require_entry_close_confirm = True   # V9's close-confirm gate
+                # Long side kept loose enough for higher participation, but
+                # the weakest add-on setups are rolled back for better quality.
+                long_cfg.require_entry_close_confirm = True
                 long_cfg.enable_liquidity_sweep_filter = False
                 long_cfg.enable_avwap_no_trade_zone = False
-                long_cfg.adx_min = 20.0
-                long_cfg.adx_slope_min = 0.85
-                long_cfg.volume_min_ratio = 1.05
-                long_cfg.rsi_min_long = 42.0
-                long_cfg.stochk_min = 25.0
+                long_cfg.adx_min = 17.0
+                long_cfg.adx_slope_min = 0.50
+                long_cfg.volume_min_ratio = 0.95
+                long_cfg.rsi_min_long = 38.0
+                long_cfg.stochk_min = 15.0
                 long_cfg.stochk_max = 95.0
                 long_cfg.atr_pct_min = 0.0025
                 long_cfg.enable_setup_a_close_continuation_break = False
-                long_cfg.enable_setup_b_huge_c1_close_reclaim_break = False
+                long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
                 long_cfg.stop_pct = 0.0040
                 long_cfg.target_pct = 0.0100
                 long_cfg.be_trigger_pct = 0.0055
                 long_cfg.trail_pct = 0.0028
                 long_cfg.min_bars_left_after_entry = 0
                 long_cfg.max_vix_for_entries = 13.0
+                long_cfg.max_trades_per_ticker_per_day = 4
                 long_cfg.enable_topn_per_day = False
                 long_cfg.topn_per_day = 0
 
-                print("[PROFILE] V13: playbook_v11 SHORT + V9 s5 LONG with close-confirm gate.")
+                print("[PROFILE] V13: expanded SHORT participation + cleaned-up LONG profile.")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)

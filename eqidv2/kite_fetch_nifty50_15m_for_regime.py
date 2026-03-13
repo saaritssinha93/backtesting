@@ -154,10 +154,12 @@ def resolve_index_token(
         tsym_n = _norm(str(row.get("tradingsymbol") or ""))
         name_n = _norm(str(row.get("name") or ""))
         seg = str(row.get("segment") or "").upper()
-        s0 = 0 if tsym_n == _norm("NIFTY50") else 1
-        s1 = 0 if name_n == _norm("NIFTY 50") else 1
-        s2 = 0 if "INDICES" in seg else 1
-        return (s0, s1, s2)
+        s_pref_tsym = 0 if tsym_n == pref else 1
+        s_pref_name = 0 if name_n == pref else 1
+        s_nifty50_tsym = 0 if tsym_n == _norm("NIFTY50") else 1
+        s_nifty50_name = 0 if name_n == _norm("NIFTY 50") else 1
+        s_indices = 0 if "INDICES" in seg else 1
+        return (s_pref_tsym, s_pref_name, s_nifty50_tsym, s_nifty50_name, s_indices)
 
     pick = sorted(candidates, key=_score)[0]
     token = int(pick["instrument_token"])
