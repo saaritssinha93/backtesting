@@ -1,0 +1,56 @@
+======================================================================
+AVWAP v11 COMBINED runner â€” LONG + SHORT (refactored v2)
+  - Entry signals: 15-min data
+  - Exit resolution: 1-min data (stocks_indicators_1min_eq)
+  - Outputs: */algo_trading/outputs
+  - Intraday leverage: SHORT=5.0x | LONG=5.0x
+  - P&L% reported = ROI% on *capital/margin* (levered)
+    (unlevered price-return% is saved as pnl_pct_price)
+======================================================================
+[INFO] 1-min data directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\stocks_indicators_1min_eq
+[INFO] 1-min parquet files found: 1041
+[PROFILE] Tighter-stops profile enabled: SHORT(SL=0.68%, TGT=0.90%), LONG(SL=0.58%, TGT=1.10%)
+[PROFILE] hf_balanced_v1 enabled (filters relaxed, risk tuned).
+[VIX] Scaling DISABLED — fixed SL/target used (old behaviour).
+[REGIME] Enabled market-bias filter using NIFTY50: 3379 bars mapped.
+[INFO] SHORT config: SL=0.7%, TGT=0.9%, slippage=5bps, comm=3bps
+[INFO] LONG  config: SL=0.5%, TGT=1.1%, slippage=5bps, comm=3bps
+[INFO] Lag bars SHORT: A_MOD=1, A_PULLBACK=2, B_HUGE=-1
+[INFO] Pack2 SHORT filters: enable_setup_B_HUGE=True | max_vix_for_entries=0.00
+[INFO] Lag bars LONG : A_MOD=1, A_PULLBACK=2, B_HUGE=-1
+[INFO] Final signal-window override -> True
+[INFO] SHORT windows: use_time_windows=True | 09:15-14:30
+[INFO] LONG  windows: use_time_windows=True | 09:15-14:30
+[INFO] Capital/margin per trade: SHORT=Rs.50,000 | LONG=Rs.50,000
+[INFO] Notional exposure per trade: SHORT=Rs.250,000 | LONG=Rs.250,000
+[INFO] Live parity: min_bars_left=0 -> True
+[INFO] Live parity: disable_topn_per_day -> True
+[INFO] Parallelism: max_workers=4
+[INFO] Output directory: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs
+[INFO] Console log: C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\outputs\avwap_combined_runner_20260312_102604.txt
+----------------------------------------------------------------------
+
+[PHASE 1] Scanning for entry signals using 15-min data...
+[SHORT] Tickers found: 1045
+  [SHORT] scanned 100/1045 | trades=0
+  [SHORT] scanned 200/1045 | trades=0
+  [SHORT] scanned 300/1045 | trades=0
+  [SHORT] scanned 400/1045 | trades=0
+  [SHORT] scanned 500/1045 | trades=0
+  [SHORT] scanned 600/1045 | trades=0
+  [SHORT] scanned 700/1045 | trades=0
+  [SHORT] scanned 800/1045 | trades=0
+  [SHORT] scanned 900/1045 | trades=0
+  [SHORT] scanned 1000/1045 | trades=0
+[LONG] Tickers found: 1045
+  [LONG] scanned 100/1045 | trades=0
+  [LONG] scanned 200/1045 | trades=0
+  [LONG] scanned 300/1045 | trades=0
+  [LONG] scanned 400/1045 | trades=0
+  [LONG] scanned 500/1045 | trades=0
+  [LONG] scanned 600/1045 | trades=0
+  [LONG] scanned 700/1045 | trades=0
+  [LONG] scanned 800/1045 | trades=0
+  [LONG] scanned 900/1045 | trades=0
+  [LONG] scanned 1000/1045 | trades=0
+[DONE] No trades found.

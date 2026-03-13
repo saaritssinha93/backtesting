@@ -1,0 +1,72 @@
+2026-03-12 09:05:03,637 | INFO    | =================================================================
+2026-03-12 09:05:03,637 | INFO    | AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE
+2026-03-12 09:05:03,637 | INFO    |   ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***
+2026-03-12 09:05:03,637 | INFO    |   Mode              : LIVE TRADING
+2026-03-12 09:05:03,637 | INFO    |   Max concurrent    : 0
+2026-03-12 09:05:03,637 | INFO    |   Signal dir        : C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\live_signals/
+2026-03-12 09:05:03,640 | INFO    |   Entry cutoff at   : 15:20:00 IST
+2026-03-12 09:05:03,640 | INFO    |   Forced close at   : 15:20:00 IST
+2026-03-12 09:05:03,640 | INFO    |   Target policy     : SHORT=0.80% LONG=0.90% (rebased from signal entry)
+2026-03-12 09:05:03,640 | INFO    |   Risk limits       : ENABLED (max_open=10, max_margin=Rs.500,000)
+2026-03-12 09:05:03,640 | WARNING |   Quantity override : FORCE_ENTRY_QUANTITY=1 (all NEW entries)
+2026-03-12 09:05:03,640 | INFO    | =================================================================
+2026-03-12 09:05:03,640 | INFO    | Establishing Kite session...
+2026-03-12 09:05:03,918 | WARNING | [KITE] Primary session setup failed (app1): Incorrect `api_key` or `access_token`.. Continuing with fallback apps.
+2026-03-12 09:05:04,088 | INFO    | [KITE] Session ready: app2 | user=Saarit Shankar Sinha
+2026-03-12 09:05:04,629 | INFO    | [KITE] Session ready: app3 | user=Saarit Shankar Sinha
+2026-03-12 09:05:04,859 | INFO    | [KITE] Session ready: app4 | user=Saarit Shankar Sinha
+2026-03-12 09:05:04,859 | INFO    | Kite primary session established: app2 | user=Saarit Shankar Sinha
+2026-03-12 09:05:04,859 | INFO    | [KITE] Session pool active apps: 3
+2026-03-12 09:05:05,210 | INFO    | [TICK] Loaded tick sizes for 9284 NSE symbols.
+2026-03-12 09:05:05,214 | INFO    | Loaded 0 previously executed signals.
+2026-03-12 09:05:05,224 | INFO    | Signal CSV sources: signals_2026-03-12_v5_short.csv, signals_2026-03-12_v5_long.csv
+2026-03-12 09:05:05,224 | WARNING |   Trade worker cap   : DISABLED (unlimited concurrent workers)
+2026-03-12 09:05:05,309 | INFO    | [RESTORE] signals_today=0 executed=0 closed_today=0 open_restored=0 stale_dropped=0 requeued_backlog=0 realized_trades=0 realized_total=Rs.+0.00 deployed_margin=Rs.0.00
+2026-03-12 09:05:05,439 | INFO    | [SAFETY] Broker MIS positions match restored runtime state.
+2026-03-12 09:05:05,439 | INFO    | Watchdog started - monitoring live_signals\signals_2026-03-12_v5_short.csv, live_signals\signals_2026-03-12_v5_long.csv
+2026-03-12 10:41:41,791 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-12 10:41:42,084 | INFO    | [LIVE] Starting trade LT-c570d3e3-104142: SELL MAPMYINDIA qty=1 | SL=963.08 TGT=948.26
+2026-03-12 10:41:42,158 | INFO    | [DISPATCH] Launched LIVE trade: SHORT MAPMYINDIA @ 955.91 | reserved_margin=Rs.191.18 | ID=c570d3e38671
+2026-03-12 10:41:42,232 | INFO    | Dispatched 1 new trade(s). Active trades: 1
+2026-03-12 10:41:42,286 | INFO    | [LIVE] Entry order placed: SELL MAPMYINDIA ID=260312170699792
+2026-03-12 10:41:42,434 | INFO    | [LIVE] Entry filled: MAPMYINDIA @ 955.0
+2026-03-12 10:41:42,615 | INFO    | [LIVE] Exit legs placed for MAPMYINDIA: target_id=260312170699811 sl_id=260312170699822
+2026-03-12 11:00:27,262 | INFO    | [LIVE] SL TRIGGERED: MAPMYINDIA @ 962.7 -> cancelling Target 260312170699811
+2026-03-12 11:00:27,356 | INFO    | Cancelled order 260312170699811 (attempt 1)
+2026-03-12 11:00:27,453 | INFO    | [LIVE] RESULT SHORT MAPMYINDIA | SL | Entry=955.0 Exit=962.7 | P&L: Rs.-7.70 (-0.81%) | Day total: Rs.-7.70
+2026-03-12 11:02:11,372 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-12 11:02:11,404 | INFO    | [LIVE] Starting trade LT-f24d89ac-110211: SELL ASHOKLEY qty=1 | SL=180.42 TGT=177.65
+2026-03-12 11:02:11,427 | INFO    | [DISPATCH] Launched LIVE trade: SHORT ASHOKLEY @ 179.08 | reserved_margin=Rs.35.82 | ID=f24d89acd52f
+2026-03-12 11:02:11,439 | INFO    | Dispatched 1 new trade(s). Active trades: 1
+2026-03-12 11:02:11,487 | INFO    | [LIVE] Entry order placed: SELL ASHOKLEY ID=260312170799980
+2026-03-12 11:02:11,623 | INFO    | [LIVE] Entry filled: ASHOKLEY @ 179.04
+2026-03-12 11:02:11,786 | INFO    | [LIVE] Exit legs placed for ASHOKLEY: target_id=260312170800007 sl_id=260312170800014
+2026-03-12 12:02:21,937 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-12 12:38:59,111 | INFO    | [LIVE] TARGET HIT: ASHOKLEY @ 177.61 -> cancelling SL 260312170800014
+2026-03-12 12:38:59,198 | INFO    | Cancelled order 260312170800014 (attempt 1)
+2026-03-12 12:38:59,210 | INFO    | [LIVE] RESULT SHORT ASHOKLEY | TARGET | Entry=179.04 Exit=177.61 | P&L: Rs.+1.43 (+0.80%) | Day total: Rs.-6.27
+2026-03-12 13:02:59,243 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-12 13:59:35,987 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-12 13:59:36,014 | INFO    | [LIVE] Starting trade LT-8a6c56ac-135936: BUY AARTIIND qty=1 | SL=449.9 TGT=456.69
+2026-03-12 13:59:36,027 | INFO    | [DISPATCH] Launched LIVE trade: LONG AARTIIND @ 452.62 | reserved_margin=Rs.90.52 | ID=8a6c56ac89f8
+2026-03-12 13:59:36,036 | INFO    | Dispatched 1 new trade(s). Active trades: 1
+2026-03-12 13:59:36,125 | INFO    | [LIVE] Entry order placed: BUY AARTIIND ID=260312171543865
+2026-03-12 13:59:36,446 | INFO    | [LIVE] Entry filled: AARTIIND @ 452.45
+2026-03-12 13:59:36,602 | INFO    | [LIVE] Exit legs placed for AARTIIND: target_id=260312171543886 sl_id=260312171543896
+2026-03-12 14:03:59,200 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-12 14:07:41,337 | INFO    | [LIVE] SL TRIGGERED: AARTIIND @ 449.6 -> cancelling Target 260312171543886
+2026-03-12 14:07:41,415 | INFO    | Cancelled order 260312171543886 (attempt 1)
+2026-03-12 14:07:41,436 | INFO    | [LIVE] RESULT LONG AARTIIND | SL | Entry=452.45 Exit=449.6 | P&L: Rs.-2.85 (-0.63%) | Day total: Rs.-9.12
+2026-03-12 14:59:59,197 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-12 15:04:59,188 | INFO    | Signal CSV changed - processing new signals from v5_short + v5_long...
+2026-03-12 15:20:00,535 | WARNING | [EOD.GLOBAL] entry cutoff reached at 15:20:00 IST; EOD flatten in progress
+2026-03-12 15:30:00,814 | INFO    | Market closed. All trades complete.
+2026-03-12 15:30:00,824 | INFO    | =======================================================
+2026-03-12 15:30:00,824 | INFO    | DAILY LIVE TRADE SUMMARY
+2026-03-12 15:30:00,824 | INFO    |   Total trades : 3
+2026-03-12 15:30:00,824 | INFO    |   Wins         : 1
+2026-03-12 15:30:00,824 | INFO    |   Losses       : 2
+2026-03-12 15:30:00,824 | INFO    |   Win rate     : 33.3%
+2026-03-12 15:30:00,824 | INFO    |   Total P&L    : Rs.-9.12
+2026-03-12 15:30:00,824 | INFO    | =======================================================
+2026-03-12 15:30:00,824 | INFO    | Live trade executor stopped.
