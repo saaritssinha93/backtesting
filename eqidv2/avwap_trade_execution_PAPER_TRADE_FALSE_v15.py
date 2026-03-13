@@ -3,7 +3,11 @@
 avwap_trade_execution_PAPER_TRADE_FALSE_v15.py - Live Trade Executor (Zerodha Real, V15)
 ========================================================================================
 
+<<<<<<< HEAD
 Watches the daily V15 signal CSVs and places REAL orders on Zerodha via KiteConnect.
+=======
+Watches the daily V5 signal CSVs and places REAL orders on Zerodha via KiteConnect.
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
 
 For each new signal:
   1. Places a MARKET entry order (MIS product for intraday)
@@ -109,7 +113,11 @@ RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "1")).strip().l
     "yes",
     "on",
 }
+<<<<<<< HEAD
 MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "999"))            # max simultaneous open positions
+=======
+MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "10"))             # max simultaneous open positions
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
 MAX_CAPITAL_DEPLOYED_RS = float(os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "500000"))   # max total margin
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
@@ -2457,7 +2465,11 @@ def _normalize_signal(raw: dict) -> dict:
         else:
             sig["quantity"] = _safe_int(sig.get("quantity", 1), 1)
 
+<<<<<<< HEAD
 # Enforce V15 target policy from executor side as well:
+=======
+    # Enforce V5 target policy from executor side as well:
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
     # SHORT -> entry*(1-0.90%), LONG -> entry*(1+1.10%)
     side = str(sig.get("side", "")).strip().upper()
     entry = _safe_float(sig.get("entry_price", 0.0), 0.0)
@@ -2957,7 +2969,11 @@ class SignalCSVHandler(FileSystemEventHandler):
 # ============================================================================
 def main():
     parser = argparse.ArgumentParser(
+<<<<<<< HEAD
         description="AVWAP Live Trade Executor V15 (Zerodha Real Orders)"
+=======
+        description="AVWAP Live Trade Executor V5 (Zerodha Real Orders)"
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
     )
     parser.add_argument(
         "--max-trades", type=int, default=MAX_CONCURRENT_TRADES,
@@ -2974,7 +2990,11 @@ def main():
     _set_dispatch_lockdown(None)
 
     log.info("=" * 65)
+<<<<<<< HEAD
     log.info("AVWAP Live Trade Executor V15 - PAPER_TRADE = FALSE")
+=======
+    log.info("AVWAP Live Trade Executor V5 - PAPER_TRADE = FALSE")
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
     log.info("  ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***")
     log.info(f"  Mode              : {'DRY-RUN' if args.dry_run else 'LIVE TRADING'}")
     log.info(f"  Max concurrent    : {args.max_trades}")

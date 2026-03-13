@@ -286,7 +286,10 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     v15_long_enabled = _task_is_enabled("EQIDV2_live_combined_csv_v15_long_0900")
     v15_paper_enabled = _task_is_enabled("EQIDV2_avwap_paper_trade_v15_0900")
     v15_live_enabled = _task_is_enabled("EQIDV2_avwap_live_trade_v15_0905")
+<<<<<<< HEAD
     v15_nifty_enabled = _task_is_enabled("EQIDV2_nifty_guard_fetch_v15_0910")
+=======
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
     kite_export_enabled = _task_is_enabled("EQIDV2_kite_export_start_0915")
     now_local = now_ist()
     v15_nifty_log_due = now_local.time() >= dt.time(9, 10)
@@ -341,6 +344,36 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
         check_task_enabled_state(
             "EQIDV2_live_combined_csv_v15_short_0900",
             "task_EQIDV2_live_combined_csv_v15_short_0900",
+<<<<<<< HEAD
+=======
+            require_run_today=True,
+            inactive_ok=True,
+            inactive_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_task_enabled_state(
+            "EQIDV2_live_combined_csv_v15_long_0900",
+            "task_EQIDV2_live_combined_csv_v15_long_0900",
+            require_run_today=True,
+            inactive_ok=True,
+            inactive_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_task_enabled_state(
+            "EQIDV2_avwap_paper_trade_v15_0900",
+            "task_EQIDV2_avwap_paper_trade_v15_0900",
+            require_run_today=True,
+            inactive_ok=True,
+            inactive_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_task_enabled_state(
+            "EQIDV2_avwap_live_trade_v15_0905",
+            "task_EQIDV2_avwap_live_trade_v15_0905",
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
             require_run_today=True,
             inactive_ok=True,
             inactive_detail="session not enabled",
@@ -435,6 +468,18 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             max_age_min=max_age_min,
             label="live_combined_csv_v15_short",
             enabled=v15_short_enabled,
+<<<<<<< HEAD
+=======
+            disabled_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_file_recent_if_enabled(
+            LOG_DIR / "eqidv2_live_combined_analyser_csv_v15_long.log",
+            max_age_min=max_age_min,
+            label="live_combined_csv_v15_long",
+            enabled=v15_long_enabled,
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
             disabled_detail="session not enabled",
         )
     )
@@ -467,7 +512,11 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_file_recent_if_enabled(
+<<<<<<< HEAD
             LIVE_SIGNAL_DIR / f"paper_trade_execution_{now_local.strftime('%Y-%m-%d')}_v15.log",
+=======
+            LIVE_SIGNAL_DIR / f"paper_trade_execution_{now_ist().strftime('%Y-%m-%d')}_v15.log",
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
             max_age_min=max_age_min,
             label="paper_trade_v15",
             enabled=v15_paper_enabled,
@@ -485,7 +534,11 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_file_recent_if_enabled(
+<<<<<<< HEAD
             LIVE_SIGNAL_DIR / f"live_trade_execution_{now_local.strftime('%Y-%m-%d')}_v15.log",
+=======
+            LIVE_SIGNAL_DIR / f"live_trade_execution_{now_ist().strftime('%Y-%m-%d')}_v15.log",
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
             max_age_min=max_age_min,
             label="kite_trade_v15",
             enabled=v15_live_enabled,

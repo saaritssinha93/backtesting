@@ -96,6 +96,7 @@ DEFAULT_POSITION_SIZE = 50_000
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
 # Exposure limits
+<<<<<<< HEAD
 # Keep paper defaults aligned with the real v15 executor unless explicitly overridden.
 RISK_LIMITS_ENABLED = str(
     os.getenv(
@@ -103,11 +104,16 @@ RISK_LIMITS_ENABLED = str(
         os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "1"),
     )
 ).strip().lower() in {
+=======
+# Disabled by default for now (no max-open / margin cap checks).
+RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_PAPER_V15_ENABLE_RISK_LIMITS", "0")).strip().lower() in {
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
     "1",
     "true",
     "yes",
     "on",
 }
+<<<<<<< HEAD
 MAX_OPEN_POSITIONS = int(
     os.getenv(
         "EQIDV2_PAPER_V15_MAX_OPEN_POSITIONS",
@@ -120,6 +126,10 @@ MAX_CAPITAL_DEPLOYED_RS = float(
         os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "500000"),
     )
 )
+=======
+MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_PAPER_V15_MAX_OPEN_POSITIONS", "10"))
+MAX_CAPITAL_DEPLOYED_RS = float(os.getenv("EQIDV2_PAPER_V15_MAX_CAPITAL_DEPLOYED_RS", "500000"))
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
 
 # Paper trade log columns
 TRADE_LOG_COLUMNS = [

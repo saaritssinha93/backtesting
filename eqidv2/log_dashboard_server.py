@@ -80,7 +80,10 @@ STATUS_FILES: Dict[str, str] = {
     "live_combined_csv_v7_sweep_long": "eqidv2_live_combined_analyser_csv_v7_sweep_long.status",
     "live_combined_csv_v15_short": "eqidv2_live_combined_analyser_csv_v15_short.status",
     "live_combined_csv_v15_long": "eqidv2_live_combined_analyser_csv_v15_long.status",
+<<<<<<< HEAD
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15.status",
+=======
+>>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.status",
 }
 
