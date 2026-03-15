@@ -7,12 +7,12 @@ EQIDV2 LIVE Scanner V15 SHORT (short-only split pipeline)
 =========================================================
 
 Wrapper over:
-    eqidv2_live_combined_analyser_csv_v2.py
+    eqidv2_live_combined_analyser_csv_v15.py
 
 Goals:
-1. Keep base v2 untouched.
+1. Keep shared base files untouched.
 2. Emit only SHORT signals.
-3. Preserve v2-style immediate CSV flush behavior for SHORT.
+3. Preserve immediate CSV flush behavior for SHORT.
 4. Isolate all outputs/state with `v15_short` suffix.
 """
 
@@ -27,15 +27,15 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-import eqidv2_live_combined_analyser_csv_v2 as v2
+import eqidv2_live_combined_analyser_csv_v15 as v2
 import avwap_combined_runner_v15 as v15_runner
-from avwap_v11_refactored.avwap_common_v11_v14 import (
+from avwap_v11_refactored.avwap_common_v11_v15 import (
     default_short_config as v15_default_short_config,
     in_session as v15_in_session,
     prepare_indicators as v15_prepare_indicators,
     compute_day_avwap as v15_compute_day_avwap,
 )
-from avwap_v11_refactored.avwap_common_v7_sweep_v14 import (
+from avwap_v11_refactored.avwap_common_v7_sweep_v15 import (
     default_long_config as v15_default_long_config,
 )
 from avwap_v11_refactored.avwap_short_strategy_v11 import (
@@ -65,7 +65,8 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 STALE_ONLY_RETRY_ENABLED = _env_bool("EQIDV15_STALE_ONLY_RETRY", True)
-SHORT_TARGET_PCT = float(os.getenv("EQIDV15_SHORT_TARGET_PCT", "0.01075"))  # 1.075%
+SHORT_STOP_PCT = float(os.getenv("EQIDV15_SHORT_STOP_PCT", "0.0066"))      # 0.66%
+SHORT_TARGET_PCT = float(os.getenv("EQIDV15_SHORT_TARGET_PCT", "0.011"))  # 1.10%
 
 _NIFTY_CONTEXT_MODE_MAP: Dict[str, str] = {}
 _NIFTY_CONTEXT_RET_MAP: Dict[str, float] = {}
@@ -274,16 +275,17 @@ def _apply_v15_short_overrides() -> None:
 
     v2.STATE_FILE = ROOT / "logs" / "eqidv2_avwap_live_state_v11_v15_short.json"
     v2.SIGNAL_CSV_PATTERN = "signals_{}_v15_short.csv"
-    v2.END_TIME = v2.dtime(14, 40)
-    v2.SESSION_END = v2.dtime(14, 40, 0)
+    v2.END_TIME = v2.dtime(15, 0)
+    v2.SESSION_END = v2.dtime(15, 0, 0)
 
     # Keep v2-style per-ticker immediate flush for SHORT.
     v2.IMMEDIATE_SIGNAL_CSV_FLUSH = True
 
-    # Keep Kite entry rebase logic available as in v2 defaults.
-    v2.USE_KITE_LTP_FOR_SIGNAL_CSV = True
+    # Keep model entry/SL/TGT intact in the signal CSV for backtest/live parity.
+    v2.USE_KITE_LTP_FOR_SIGNAL_CSV = False
 
-    # V15 short target override for live V15 sessions.
+    # V15 short stop/target override for live V15 sessions.
+    v2.SHORT_STOP_PCT = float(SHORT_STOP_PCT)
     v2.SHORT_TARGET_PCT = float(SHORT_TARGET_PCT)
 
     # Compute only SHORT strategy internals in this process.
@@ -373,6 +375,7 @@ def main() -> None:
     _refresh_v15_nifty_context()
     print(
         "[V15_SHORT] SHORT-only split enabled | immediate_flush=True | "
+        f"short_stop={SHORT_STOP_PCT*100:.2f}% | "
         f"short_target={SHORT_TARGET_PCT*100:.2f}% | "
         f"stale_only_retry={STALE_ONLY_RETRY_ENABLED} | "
         f"nifty_context={'on' if bool(getattr(v15_runner, 'NIFTY_CONTEXT_ENABLED', False)) else 'off'} | "

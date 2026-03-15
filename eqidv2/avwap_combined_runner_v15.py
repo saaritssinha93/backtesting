@@ -41,7 +41,7 @@ import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
-from datetime import time as dtime
+from datetime import datetime, time as dtime
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
@@ -80,7 +80,7 @@ _project_root = _this_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from avwap_v11_refactored.avwap_common_v11_v14 import (
+from avwap_v11_refactored.avwap_common_v11_v15 import (
     IST,
     StrategyConfig,
     Trade,
@@ -103,7 +103,7 @@ from avwap_v11_refactored.avwap_short_strategy_v11 import (
 from avwap_v11_refactored.avwap_long_strategy_v9_sweep import (
     scan_all_days_for_ticker as scan_long,
 )
-from avwap_v11_refactored.avwap_common_v7_sweep_v14 import (
+from avwap_v11_refactored.avwap_common_v7_sweep_v15 import (
     default_long_config as default_long_config_v9,
 )
 
@@ -168,6 +168,7 @@ FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
     (dtime(9, 15, 0), dtime(14, 30, 0))
 ]
+V15_EOD_EXIT_TIME = dtime(15, 20, 0)
 
 # Per-setup signal->entry lag (in 15-min bars).
 # Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
@@ -218,8 +219,114 @@ NIFTY_RS_BOTH_MODE_THRESHOLD_PCT = 0.08        # half the directional threshold
 # TARGET TEST — disabled in V12 (each side uses its own calibrated targets)
 # ===========================================================================
 TEST_TARGET_OVERRIDE   = True
-TEST_SHORT_TARGET_PCT  = 0.01075
+TEST_SHORT_TARGET_PCT  = 0.01100
 TEST_LONG_TARGET_PCT   = 0.01100
+
+
+def apply_live_parity_profile(
+    short_cfg: StrategyConfig,
+    long_cfg: StrategyConfig,
+) -> Tuple[StrategyConfig, StrategyConfig]:
+    """
+    Apply the tuned v15 runner profile to existing configs.
+
+    Live wrappers call into the shared live parity builder, which starts from the
+    default strategy configs. This helper ports the same v15 tuning block used in
+    the backtest runner so live signal generation stays aligned with v15.
+    """
+    if ENABLE_PLAYBOOK_V11_PROFILE:
+        short_cfg.enable_liquidity_sweep_filter = False
+        short_cfg.reversal_requires_sweep = True
+        short_cfg.enable_avwap_no_trade_zone = False
+        short_cfg.enable_mode_selector = True
+        short_cfg.use_time_windows = False
+        short_cfg.min_bars_left_after_entry = 0
+        short_cfg.enable_ema200_filter = False
+        short_cfg.require_vwap_side_persistence = False
+        short_cfg.vwap_side_lookback_bars = 5
+        short_cfg.vwap_side_min_count = 3
+        short_cfg.require_structure_filter = False
+        short_cfg.structure_lookback_bars = 30
+        short_cfg.adx_min = 17.0
+        short_cfg.adx_slope_min = 0.40
+        short_cfg.volume_min_ratio = 0.95
+        short_cfg.rsi_max_short = 62.0
+        short_cfg.stochk_max = 90.0
+        short_cfg.stop_pct = 0.0084
+        short_cfg.target_pct = 0.01100
+        short_cfg.be_trigger_pct = 0.0042
+        short_cfg.trail_pct = 0.0023
+        short_cfg.enable_partial_exit = True
+        short_cfg.partial_exit_fraction = 0.50
+        short_cfg.partial_target_fraction = 0.50
+        short_cfg.enable_risk_based_position_sizing = False
+        short_cfg.risk_per_trade_pct_of_capital = 0.0035
+        short_cfg.max_trades_per_ticker_per_day = 5
+        short_cfg.enable_topn_per_day = False
+        short_cfg.topn_per_day = 0
+
+        long_cfg.require_entry_close_confirm = True
+        long_cfg.enable_liquidity_sweep_filter = False
+        long_cfg.enable_avwap_no_trade_zone = False
+        long_cfg.adx_min = 17.0
+        long_cfg.adx_slope_min = 0.50
+        long_cfg.volume_min_ratio = 0.95
+        long_cfg.rsi_min_long = 38.0
+        long_cfg.stochk_min = 15.0
+        long_cfg.stochk_max = 95.0
+        long_cfg.atr_pct_min = 0.0025
+        long_cfg.enable_setup_a_close_continuation_break = False
+        long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
+        long_cfg.stop_pct = 0.0075
+        long_cfg.target_pct = 0.0110
+        long_cfg.be_trigger_pct = 0.0055
+        long_cfg.trail_pct = 0.0028
+        long_cfg.min_bars_left_after_entry = 0
+        long_cfg.max_vix_for_entries = 13.0
+        long_cfg.max_trades_per_ticker_per_day = 4
+        long_cfg.enable_topn_per_day = False
+        long_cfg.topn_per_day = 0
+
+    short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
+    short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = int(
+        SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW
+    )
+    short_cfg.lag_bars_short_b_huge_failed_bounce = int(SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE)
+    short_cfg.enable_setup_b_huge_failed_bounce = bool(
+        PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE
+    )
+    short_cfg.max_vix_for_entries = float(PACK2_SHORT_MAX_VIX_FOR_ENTRIES)
+    long_cfg.max_vix_for_entries = float(PACK2_LONG_MAX_VIX_FOR_ENTRIES)
+    long_cfg.lag_bars_long_a_mod_break_c1_high = int(LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH)
+    long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(
+        LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH
+    )
+    long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(
+        LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK
+    )
+
+    if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
+        short_cfg.min_bars_left_after_entry = 0
+        long_cfg.min_bars_left_after_entry = 0
+
+    if FORCE_LIVE_PARITY_DISABLE_TOPN:
+        short_cfg.enable_topn_per_day = False
+        long_cfg.enable_topn_per_day = False
+
+    if FINAL_SIGNAL_WINDOW_OVERRIDE:
+        short_cfg.use_time_windows = bool(FINAL_SHORT_USE_TIME_WINDOWS)
+        long_cfg.use_time_windows = bool(FINAL_LONG_USE_TIME_WINDOWS)
+        short_cfg.signal_windows = list(FINAL_SHORT_SIGNAL_WINDOWS)
+        long_cfg.signal_windows = list(FINAL_LONG_SIGNAL_WINDOWS)
+
+    if TEST_TARGET_OVERRIDE:
+        short_cfg.target_pct = TEST_SHORT_TARGET_PCT
+        long_cfg.target_pct = TEST_LONG_TARGET_PCT
+
+    short_cfg.market_regime_tickers = tuple(NIFTY_CONTEXT_TICKERS)
+    long_cfg.market_regime_tickers = tuple(NIFTY_CONTEXT_TICKERS)
+
+    return short_cfg, long_cfg
 
 # ===========================================================================
 # VIX DYNAMIC SCALING — set VIX_SCALE_ENABLED=True to scale SL/target with VIX
@@ -304,6 +411,26 @@ def _resolve_15m_dir() -> Path:
             return cand_abs
 
     return ranked[0][1]
+
+
+def _fmt_pct_exact(value: float) -> str:
+    """Format tuned percentage values without hiding precision via rounding."""
+    txt = f"{value * 100:.3f}".rstrip("0").rstrip(".")
+    return f"{txt}%"
+
+
+def _describe_regime_source_availability(cfg: StrategyConfig) -> Tuple[List[str], List[str]]:
+    """Return (found_tickers, missing_tickers) for configured regime parquet aliases."""
+    found: List[str] = []
+    missing: List[str] = []
+    base_dir = Path(cfg.dir_15m)
+    for ticker in tuple(cfg.market_regime_tickers or ()):
+        p = base_dir / f"{ticker}{cfg.end_15m}"
+        if p.exists():
+            found.append(str(ticker))
+        else:
+            missing.append(str(ticker))
+    return found, missing
 
 
 # ===========================================================================
@@ -545,6 +672,7 @@ def _resolve_exits_5min(
     dir_5m: Path,
     suffix_5m: str = ".parquet",
     engine: str = "pyarrow",
+    eod_exit_time: Optional[dtime] = None,
 ) -> pd.DataFrame:
     """
     Re-evaluate exit prices, exit times, and outcomes using 1-min data
@@ -582,8 +710,125 @@ def _resolve_exits_5min(
 
     # Cache 1-min data per ticker to avoid re-reads
     _cache_5m: Dict[str, pd.DataFrame] = {}
+    _cache_15m: Dict[str, pd.DataFrame] = {}
+    dir_15m = _resolve_15m_dir()
+
+    def _resolve_from_bars(
+        bars: pd.DataFrame,
+        side_val: str,
+        stop_val: float,
+        target_val: float,
+        resolution_prefix: str,
+    ) -> Optional[Dict[str, Any]]:
+        if bars is None or bars.empty:
+            return None
+
+        base_exit_price = None
+        base_exit_time = None
+        base_outcome = None
+        pess_exit_price = None
+        pess_exit_time = None
+        pess_outcome = None
+        opt_exit_price = None
+        opt_exit_time = None
+        opt_outcome = None
+        exit_resolution_case = ""
+        exit_bar_ambiguous = False
+        stop_fill_penalty_applied = False
+
+        time_col = "datetime" if "datetime" in bars.columns else "date"
+        high_col = "high" if "high" in bars.columns else "High"
+        low_col = "low" if "low" in bars.columns else "Low"
+        close_col = "close" if "close" in bars.columns else "Close"
+
+        for _, bar in bars.iterrows():
+            bar_high = float(bar.get(high_col, np.nan))
+            bar_low = float(bar.get(low_col, np.nan))
+            bar_time = bar[time_col]
+
+            if np.isnan(bar_high) or np.isnan(bar_low):
+                continue
+
+            if side_val == "SHORT":
+                stop_hit = bar_high >= stop_val
+                target_hit = bar_low <= target_val
+            else:
+                stop_hit = bar_low <= stop_val
+                target_hit = bar_high >= target_val
+
+            if stop_hit and target_hit:
+                exit_resolution_case = f"{resolution_prefix}_AMBIGUOUS_BOTH_IN_BAR"
+                exit_bar_ambiguous = True
+                base_exit_price = stop_val
+                base_exit_time = bar_time
+                base_outcome = "SL"
+                pess_exit_price = _apply_stop_exit_slippage(side_val, stop_val)
+                pess_exit_time = bar_time
+                pess_outcome = "SL"
+                opt_exit_price = target_val
+                opt_exit_time = bar_time
+                opt_outcome = "TARGET"
+                stop_fill_penalty_applied = True
+                break
+            if stop_hit:
+                stressed_stop_price = _apply_stop_exit_slippage(side_val, stop_val)
+                exit_resolution_case = f"{resolution_prefix}_STOP_ONLY"
+                base_exit_price = stop_val
+                base_exit_time = bar_time
+                base_outcome = "SL"
+                pess_exit_price = stressed_stop_price
+                pess_exit_time = bar_time
+                pess_outcome = "SL"
+                opt_exit_price = stressed_stop_price
+                opt_exit_time = bar_time
+                opt_outcome = "SL"
+                stop_fill_penalty_applied = True
+                break
+            if target_hit:
+                exit_resolution_case = f"{resolution_prefix}_TARGET_ONLY"
+                base_exit_price = target_val
+                base_exit_time = bar_time
+                base_outcome = "TARGET"
+                pess_exit_price = target_val
+                pess_exit_time = bar_time
+                pess_outcome = "TARGET"
+                opt_exit_price = target_val
+                opt_exit_time = bar_time
+                opt_outcome = "TARGET"
+                break
+
+        if base_exit_price is None:
+            last_bar = bars.iloc[-1]
+            eod_exit_price = float(last_bar.get(close_col, entry_price))
+            eod_exit_time_val = last_bar[time_col]
+            exit_resolution_case = f"{resolution_prefix}_EOD_CLOSE"
+            base_exit_price = eod_exit_price
+            base_exit_time = eod_exit_time_val
+            base_outcome = "EOD"
+            pess_exit_price = eod_exit_price
+            pess_exit_time = eod_exit_time_val
+            pess_outcome = "EOD"
+            opt_exit_price = eod_exit_price
+            opt_exit_time = eod_exit_time_val
+            opt_outcome = "EOD"
+
+        return {
+            "base_exit_price": base_exit_price,
+            "base_exit_time": base_exit_time,
+            "base_outcome": base_outcome,
+            "pess_exit_price": pess_exit_price,
+            "pess_exit_time": pess_exit_time,
+            "pess_outcome": pess_outcome,
+            "opt_exit_price": opt_exit_price,
+            "opt_exit_time": opt_exit_time,
+            "opt_outcome": opt_outcome,
+            "exit_resolution_case": exit_resolution_case,
+            "exit_bar_ambiguous": bool(exit_bar_ambiguous),
+            "stop_fill_penalty_applied": bool(stop_fill_penalty_applied),
+        }
 
     updated_rows = 0
+    fallback_rows = 0
     total_rows = len(df)
 
     for idx in df.index:
@@ -618,144 +863,60 @@ def _resolve_exits_5min(
                 _cache_5m[ticker] = pd.DataFrame()
 
         df_5m = _cache_5m[ticker]
-        if df_5m.empty:
-            continue
-
         # Get the trade date for EOD cutoff
         trade_date = pd.Timestamp(entry_time).normalize()
+        eod_cutoff = None
+        if eod_exit_time is not None:
+            eod_cutoff = IST.localize(datetime.combine(trade_date.date(), eod_exit_time))
 
-        # Filter 1-min bars after entry time and on the same day
-        mask = (df_5m["datetime"] > entry_time) & (df_5m["datetime"].dt.normalize() == trade_date)
-        bars = df_5m.loc[mask].sort_values("datetime")
+        resolved = None
+        if not df_5m.empty:
+            mask = (df_5m["datetime"] > entry_time) & (df_5m["datetime"].dt.normalize() == trade_date)
+            if eod_cutoff is not None:
+                mask = mask & (df_5m["datetime"] <= eod_cutoff)
+            bars = df_5m.loc[mask].sort_values("datetime")
+            resolved = _resolve_from_bars(bars, side, stop_price, target_price, "1MIN")
 
-        if bars.empty:
+        if resolved is None:
+            if ticker not in _cache_15m:
+                fpath_15m = dir_15m / f"{ticker}_stocks_indicators_15min.parquet"
+                if fpath_15m.exists():
+                    _cache_15m[ticker] = read_15m_parquet(str(fpath_15m), engine)
+                else:
+                    _cache_15m[ticker] = pd.DataFrame()
+
+            df_15m = _cache_15m[ticker]
+            if not df_15m.empty:
+                time_col = "date"
+                mask_15m = (df_15m[time_col] > entry_time) & (df_15m[time_col].dt.normalize() == trade_date)
+                if eod_cutoff is not None:
+                    mask_15m = mask_15m & (df_15m[time_col] <= eod_cutoff)
+                bars_15m = df_15m.loc[mask_15m].sort_values(time_col)
+                if bars_15m.empty and eod_cutoff is not None:
+                    same_day = df_15m.loc[
+                        (df_15m[time_col].dt.normalize() == trade_date)
+                        & (df_15m[time_col] <= eod_cutoff)
+                    ].sort_values(time_col)
+                    bars_15m = same_day.tail(1)
+                resolved = _resolve_from_bars(bars_15m, side, stop_price, target_price, "15M_FALLBACK")
+                if resolved is not None:
+                    fallback_rows += 1
+
+        if resolved is None:
             continue
 
-        # Walk through 1-min bars to find first SL or target hit.
-        base_exit_price = None
-        base_exit_time = None
-        base_outcome = None
-        pess_exit_price = None
-        pess_exit_time = None
-        pess_outcome = None
-        opt_exit_price = None
-        opt_exit_time = None
-        opt_outcome = None
-        exit_resolution_case = ""
-        exit_bar_ambiguous = False
-        stop_fill_penalty_applied = False
-
-        for _, bar in bars.iterrows():
-            bar_high = float(bar.get("high", bar.get("High", np.nan)))
-            bar_low = float(bar.get("low", bar.get("Low", np.nan)))
-            bar_close = float(bar.get("close", bar.get("Close", np.nan)))
-            bar_time = bar["datetime"]
-
-            if np.isnan(bar_high) or np.isnan(bar_low):
-                continue
-
-            if side == "SHORT":
-                stop_hit = bar_high >= stop_price
-                target_hit = bar_low <= target_price
-                if stop_hit and target_hit:
-                    exit_resolution_case = "AMBIGUOUS_BOTH_IN_BAR"
-                    exit_bar_ambiguous = True
-                    base_exit_price = stop_price
-                    base_exit_time = bar_time
-                    base_outcome = "SL"
-                    pess_exit_price = _apply_stop_exit_slippage(side, stop_price)
-                    pess_exit_time = bar_time
-                    pess_outcome = "SL"
-                    opt_exit_price = target_price
-                    opt_exit_time = bar_time
-                    opt_outcome = "TARGET"
-                    stop_fill_penalty_applied = True
-                    break
-                if stop_hit:
-                    exit_resolution_case = "STOP_ONLY"
-                    base_exit_price = stop_price
-                    base_exit_time = bar_time
-                    base_outcome = "SL"
-                    stressed_stop_price = _apply_stop_exit_slippage(side, stop_price)
-                    pess_exit_price = stressed_stop_price
-                    pess_exit_time = bar_time
-                    pess_outcome = "SL"
-                    opt_exit_price = stressed_stop_price
-                    opt_exit_time = bar_time
-                    opt_outcome = "SL"
-                    stop_fill_penalty_applied = True
-                    break
-                if target_hit:
-                    exit_resolution_case = "TARGET_ONLY"
-                    base_exit_price = target_price
-                    base_exit_time = bar_time
-                    base_outcome = "TARGET"
-                    pess_exit_price = target_price
-                    pess_exit_time = bar_time
-                    pess_outcome = "TARGET"
-                    opt_exit_price = target_price
-                    opt_exit_time = bar_time
-                    opt_outcome = "TARGET"
-                    break
-            else:  # LONG
-                stop_hit = bar_low <= stop_price
-                target_hit = bar_high >= target_price
-                if stop_hit and target_hit:
-                    exit_resolution_case = "AMBIGUOUS_BOTH_IN_BAR"
-                    exit_bar_ambiguous = True
-                    base_exit_price = stop_price
-                    base_exit_time = bar_time
-                    base_outcome = "SL"
-                    pess_exit_price = _apply_stop_exit_slippage(side, stop_price)
-                    pess_exit_time = bar_time
-                    pess_outcome = "SL"
-                    opt_exit_price = target_price
-                    opt_exit_time = bar_time
-                    opt_outcome = "TARGET"
-                    stop_fill_penalty_applied = True
-                    break
-                if stop_hit:
-                    exit_resolution_case = "STOP_ONLY"
-                    base_exit_price = stop_price
-                    base_exit_time = bar_time
-                    base_outcome = "SL"
-                    stressed_stop_price = _apply_stop_exit_slippage(side, stop_price)
-                    pess_exit_price = stressed_stop_price
-                    pess_exit_time = bar_time
-                    pess_outcome = "SL"
-                    opt_exit_price = stressed_stop_price
-                    opt_exit_time = bar_time
-                    opt_outcome = "SL"
-                    stop_fill_penalty_applied = True
-                    break
-                if target_hit:
-                    exit_resolution_case = "TARGET_ONLY"
-                    base_exit_price = target_price
-                    base_exit_time = bar_time
-                    base_outcome = "TARGET"
-                    pess_exit_price = target_price
-                    pess_exit_time = bar_time
-                    pess_outcome = "TARGET"
-                    opt_exit_price = target_price
-                    opt_exit_time = bar_time
-                    opt_outcome = "TARGET"
-                    break
-
-        # If neither SL nor target hit, exit at EOD close of last bar
-        if base_exit_price is None:
-            last_bar = bars.iloc[-1]
-            eod_exit_price = float(last_bar.get("close", last_bar.get("Close", entry_price)))
-            eod_exit_time = last_bar["datetime"]
-            exit_resolution_case = "EOD_CLOSE"
-            base_exit_price = eod_exit_price
-            base_exit_time = eod_exit_time
-            base_outcome = "EOD"
-            pess_exit_price = eod_exit_price
-            pess_exit_time = eod_exit_time
-            pess_outcome = "EOD"
-            opt_exit_price = eod_exit_price
-            opt_exit_time = eod_exit_time
-            opt_outcome = "EOD"
+        base_exit_price = resolved["base_exit_price"]
+        base_exit_time = resolved["base_exit_time"]
+        base_outcome = resolved["base_outcome"]
+        pess_exit_price = resolved["pess_exit_price"]
+        pess_exit_time = resolved["pess_exit_time"]
+        pess_outcome = resolved["pess_outcome"]
+        opt_exit_price = resolved["opt_exit_price"]
+        opt_exit_time = resolved["opt_exit_time"]
+        opt_outcome = resolved["opt_outcome"]
+        exit_resolution_case = resolved["exit_resolution_case"]
+        exit_bar_ambiguous = bool(resolved["exit_bar_ambiguous"])
+        stop_fill_penalty_applied = bool(resolved["stop_fill_penalty_applied"])
 
         # Apply slippage + commission (read from existing columns or use defaults)
         slippage_pct = float(df.at[idx, "slippage_pct"]) if "slippage_pct" in df.columns and pd.notna(
@@ -815,7 +976,10 @@ def _resolve_exits_5min(
 
         updated_rows += 1
 
-    print(f"[1MIN] Re-resolved exits for {updated_rows}/{total_rows} trades using 1-min data.")
+    print(
+        f"[1MIN] Re-resolved exits for {updated_rows}/{total_rows} trades using 1-min data."
+        + (f" 15m_fallback={fallback_rows}." if fallback_rows else "")
+    )
     return df
 
 
@@ -2222,6 +2386,8 @@ def main() -> None:
             )
             short_cfg.dir_15m = str(dir_15m)
             long_cfg.dir_15m = str(dir_15m)
+            short_cfg.market_regime_tickers = tuple(NIFTY_CONTEXT_TICKERS)
+            long_cfg.market_regime_tickers = tuple(NIFTY_CONTEXT_TICKERS)
 
             if ENABLE_PLAYBOOK_V11_PROFILE:
                 # Frequency-focused V14 base profile:
@@ -2244,8 +2410,8 @@ def main() -> None:
                 short_cfg.volume_min_ratio = 0.95
                 short_cfg.rsi_max_short = 62.0
                 short_cfg.stochk_max = 90.0
-                short_cfg.stop_pct = 0.0066
-                short_cfg.target_pct = 0.01075
+                short_cfg.stop_pct = 0.0084
+                short_cfg.target_pct = 0.01100
                 short_cfg.be_trigger_pct = 0.0042
                 short_cfg.trail_pct = 0.0023
                 short_cfg.enable_partial_exit = True
@@ -2281,7 +2447,7 @@ def main() -> None:
                 long_cfg.enable_topn_per_day = False
                 long_cfg.topn_per_day = 0
 
-                print("[PROFILE] V14: expanded SHORT participation + cleaned-up LONG profile.")
+                print("[PROFILE] V15: expanded SHORT participation + cleaned-up LONG profile.")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
@@ -2314,8 +2480,11 @@ def main() -> None:
             if TEST_TARGET_OVERRIDE:
                 short_cfg.target_pct = TEST_SHORT_TARGET_PCT
                 long_cfg.target_pct  = TEST_LONG_TARGET_PCT
-                print(f"[TEST] Target override active: SHORT={TEST_SHORT_TARGET_PCT*100:.2f}%, "
-                      f"LONG={TEST_LONG_TARGET_PCT*100:.2f}%")
+                print(
+                    "[TEST] Target override active: "
+                    f"SHORT={_fmt_pct_exact(TEST_SHORT_TARGET_PCT)}, "
+                    f"LONG={_fmt_pct_exact(TEST_LONG_TARGET_PCT)}"
+                )
 
             # --- VIX dynamic scaling ---
             _vix_map = _load_india_vix(_project_root)
@@ -2351,14 +2520,26 @@ def main() -> None:
             else:
                 short_cfg.enable_market_regime_filter = False
                 long_cfg.enable_market_regime_filter = False
-                print("[REGIME] Disabled: no market index parquet found in 15m data directory.")
+                regime_found, regime_missing = _describe_regime_source_availability(short_cfg)
+                if regime_found:
+                    print(
+                        "[REGIME] Disabled: market index parquet found but no usable regime map was built. "
+                        f"Found={','.join(regime_found)}"
+                    )
+                else:
+                    print(
+                        "[REGIME] Disabled: no market index parquet found in 15m data directory. "
+                        f"Checked={','.join(regime_missing)}"
+                    )
 
             print(
-                f"[INFO] SHORT config: SL={short_cfg.stop_pct*100:.1f}%, TGT={short_cfg.target_pct*100:.1f}%, "
+                f"[INFO] SHORT config: SL={_fmt_pct_exact(short_cfg.stop_pct)}, "
+                f"TGT={_fmt_pct_exact(short_cfg.target_pct)}, "
                 f"slippage={short_cfg.slippage_pct*10000:.0f}bps, comm={short_cfg.commission_pct*10000:.0f}bps"
             )
             print(
-                f"[INFO] LONG  config: SL={long_cfg.stop_pct*100:.1f}%, TGT={long_cfg.target_pct*100:.1f}%, "
+                f"[INFO] LONG  config: SL={_fmt_pct_exact(long_cfg.stop_pct)}, "
+                f"TGT={_fmt_pct_exact(long_cfg.target_pct)}, "
                 f"slippage={long_cfg.slippage_pct*10000:.0f}bps, comm={long_cfg.commission_pct*10000:.0f}bps"
             )
             print(
@@ -2407,6 +2588,11 @@ def main() -> None:
             )
             print(
                 f"[INFO] Notional exposure per trade: SHORT=Rs.{short_notional:,.0f} | LONG=Rs.{long_notional:,.0f}"
+            )
+            print(
+                "[INFO] Final reported exit policy: TARGET / SL / EOD only | "
+                f"EOD cutoff={V15_EOD_EXIT_TIME.strftime('%H:%M')} | "
+                "15m/1m fallback removes residual BE outcomes"
             )
             print(f"[INFO] Live parity: min_bars_left=0 -> {FORCE_LIVE_PARITY_MIN_BARS_LEFT}")
             print(f"[INFO] Live parity: disable_topn_per_day -> {FORCE_LIVE_PARITY_DISABLE_TOPN}")
@@ -2472,11 +2658,23 @@ def main() -> None:
 
             if not short_df.empty:
                 print(f"  [SHORT] {len(short_df)} trades to re-resolve...")
-                short_df = _resolve_exits_5min(short_df, dir_5m, suffix_5m, short_cfg.parquet_engine)
+                short_df = _resolve_exits_5min(
+                    short_df,
+                    dir_5m,
+                    suffix_5m,
+                    short_cfg.parquet_engine,
+                    eod_exit_time=V15_EOD_EXIT_TIME,
+                )
 
             if not long_df.empty:
                 print(f"  [LONG] {len(long_df)} trades to re-resolve...")
-                long_df = _resolve_exits_5min(long_df, dir_5m, suffix_5m, long_cfg.parquet_engine)
+                long_df = _resolve_exits_5min(
+                    long_df,
+                    dir_5m,
+                    suffix_5m,
+                    long_cfg.parquet_engine,
+                    eod_exit_time=V15_EOD_EXIT_TIME,
+                )
 
             # ---- Apply leverage-aware P&L (capital ROI + notional rupees) ----
             if not short_df.empty:
@@ -2503,8 +2701,14 @@ def main() -> None:
             print_metrics("LONG (net of slippage+comm, 1-min exits)", compute_backtest_metrics(long_df))
             print_metrics("COMBINED (net of slippage+comm, 1-min exits)", compute_backtest_metrics(combined))
             if EXIT_REALISM_BAND_ENABLED:
-                print("\n[EXIT_REALISM] Legacy 1-min base remains the main output unless "
-                      "EXIT_REALISM_USE_STRESSED_BASE=True.")
+                primary_variant = (
+                    "pessimistic stressed path" if EXIT_REALISM_USE_STRESSED_BASE
+                    else "legacy 1-min base path"
+                )
+                print(
+                    "\n[EXIT_REALISM] Primary reported path: "
+                    f"{primary_variant} (use_stressed_base={EXIT_REALISM_USE_STRESSED_BASE})."
+                )
                 _print_exit_realism_band("SHORT", short_df)
                 _print_exit_realism_band("LONG", long_df)
                 _print_exit_realism_band("COMBINED", combined)

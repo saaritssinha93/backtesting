@@ -83,7 +83,7 @@ LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
 # 0 or negative means unlimited worker threads (no executor-side cap).
 MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V15_MAX_CONCURRENT_TRADES", "0"))
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
-SHORT_TARGET_PCT = float(os.getenv("EQIDV15_SHORT_TARGET_PCT", "0.01075"))  # 1.075%
+SHORT_TARGET_PCT = float(os.getenv("EQIDV15_SHORT_TARGET_PCT", "0.011"))    # 1.10%
 LONG_TARGET_PCT = float(os.getenv("EQIDV15_LONG_TARGET_PCT", "0.011"))       # 1.10%
 ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
 ENTRY_PRICE_SOURCE_DEFAULT = str(os.getenv("ENTRY_PRICE_SOURCE", "signal_bar")).strip().lower()
@@ -96,7 +96,6 @@ DEFAULT_POSITION_SIZE = 50_000
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
 # Exposure limits
-<<<<<<< HEAD
 # Keep paper defaults aligned with the real v15 executor unless explicitly overridden.
 RISK_LIMITS_ENABLED = str(
     os.getenv(
@@ -104,16 +103,11 @@ RISK_LIMITS_ENABLED = str(
         os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "1"),
     )
 ).strip().lower() in {
-=======
-# Disabled by default for now (no max-open / margin cap checks).
-RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_PAPER_V15_ENABLE_RISK_LIMITS", "0")).strip().lower() in {
->>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
     "1",
     "true",
     "yes",
     "on",
 }
-<<<<<<< HEAD
 MAX_OPEN_POSITIONS = int(
     os.getenv(
         "EQIDV2_PAPER_V15_MAX_OPEN_POSITIONS",
@@ -126,10 +120,9 @@ MAX_CAPITAL_DEPLOYED_RS = float(
         os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "500000"),
     )
 )
-=======
-MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_PAPER_V15_MAX_OPEN_POSITIONS", "10"))
-MAX_CAPITAL_DEPLOYED_RS = float(os.getenv("EQIDV2_PAPER_V15_MAX_CAPITAL_DEPLOYED_RS", "500000"))
->>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
+
+# Keep v15 paper sizing locked to 1 share just like the real v15 executor.
+FORCE_ENTRY_QUANTITY: Optional[int] = 1
 
 # Paper trade log columns
 TRADE_LOG_COLUMNS = [
@@ -1210,8 +1203,9 @@ def _normalize_signal(raw: dict) -> dict:
     if not sig.get("signal_datetime"):
         sig["signal_datetime"] = sig.get("signal_entry_datetime_ist", "")
 
-    # Compute quantity if missing (generator does not emit one)
-    if "quantity" not in sig or pd.isna(sig.get("quantity")):
+    if FORCE_ENTRY_QUANTITY is not None:
+        sig["quantity"] = max(1, int(FORCE_ENTRY_QUANTITY))
+    elif "quantity" not in sig or pd.isna(sig.get("quantity")):
         entry = _safe_float(sig.get("entry_price", 0), 0.0)
         if entry > 0:
             sig["quantity"] = max(1, int(DEFAULT_POSITION_SIZE / entry))

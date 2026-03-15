@@ -301,13 +301,13 @@ def _refine_grid(scored: pd.DataFrame, side: str) -> Tuple[List[float], List[flo
     if side == "SHORT":
         sl_step = 0.0002
         tgt_step = 0.00025
-        sl_lo, sl_hi = 0.0046, 0.0084
-        tgt_lo, tgt_hi = 0.0070, 0.0120
+        sl_lo, sl_hi = 0.0050, 0.0084
+        tgt_lo, tgt_hi = 0.0090, 0.0130
     else:
         sl_step = 0.0002
         tgt_step = 0.00025
-        sl_lo, sl_hi = 0.0028, 0.0064
-        tgt_lo, tgt_hi = 0.0075, 0.0125
+        sl_lo, sl_hi = 0.0045, 0.0092
+        tgt_lo, tgt_hi = 0.0090, 0.0130
     for row in seeds.itertuples(index=False):
         for delta in (-2, -1, 0, 1, 2):
             sl_vals.add(round(min(sl_hi, max(sl_lo, row.stop_pct + (delta * sl_step))), 6))
@@ -366,9 +366,6 @@ def _configure_exact_runner(
     l_sl: float,
     l_tgt: float,
     out_dir: Path,
-    *,
-    long_be_trigger_pct: float | None = None,
-    long_trail_pct: float | None = None,
 ):
     short_cfg = base.default_short_config(reports_dir=out_dir)
     long_cfg = base.default_long_config_v9(reports_dir=out_dir)
@@ -376,81 +373,14 @@ def _configure_exact_runner(
     dir_15m = base._resolve_15m_dir()
     short_cfg.dir_15m = str(dir_15m)
     long_cfg.dir_15m = str(dir_15m)
+    short_cfg.market_regime_tickers = tuple(base.NIFTY_CONTEXT_TICKERS)
+    long_cfg.market_regime_tickers = tuple(base.NIFTY_CONTEXT_TICKERS)
 
-    if base.ENABLE_PLAYBOOK_V11_PROFILE:
-        short_cfg.enable_liquidity_sweep_filter = False
-        short_cfg.reversal_requires_sweep = True
-        short_cfg.enable_avwap_no_trade_zone = False
-        short_cfg.enable_mode_selector = True
-        short_cfg.use_time_windows = False
-        short_cfg.min_bars_left_after_entry = 0
-        short_cfg.enable_ema200_filter = False
-        short_cfg.require_vwap_side_persistence = False
-        short_cfg.vwap_side_lookback_bars = 5
-        short_cfg.vwap_side_min_count = 3
-        short_cfg.require_structure_filter = False
-        short_cfg.structure_lookback_bars = 30
-        short_cfg.adx_min = 17.0
-        short_cfg.adx_slope_min = 0.40
-        short_cfg.volume_min_ratio = 0.95
-        short_cfg.rsi_max_short = 62.0
-        short_cfg.stochk_max = 90.0
-        short_cfg.stop_pct = float(s_sl)
-        short_cfg.target_pct = float(s_tgt)
-        short_cfg.be_trigger_pct = 0.0042
-        short_cfg.trail_pct = 0.0023
-        short_cfg.enable_partial_exit = True
-        short_cfg.partial_exit_fraction = 0.50
-        short_cfg.partial_target_fraction = 0.50
-        short_cfg.enable_risk_based_position_sizing = False
-        short_cfg.risk_per_trade_pct_of_capital = 0.0035
-        short_cfg.max_trades_per_ticker_per_day = 5
-        short_cfg.enable_topn_per_day = False
-        short_cfg.topn_per_day = 0
-
-        long_cfg.require_entry_close_confirm = True
-        long_cfg.enable_liquidity_sweep_filter = False
-        long_cfg.enable_avwap_no_trade_zone = False
-        long_cfg.adx_min = 17.0
-        long_cfg.adx_slope_min = 0.50
-        long_cfg.volume_min_ratio = 0.95
-        long_cfg.rsi_min_long = 38.0
-        long_cfg.stochk_min = 15.0
-        long_cfg.stochk_max = 95.0
-        long_cfg.atr_pct_min = 0.0025
-        long_cfg.enable_setup_a_close_continuation_break = False
-        long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-        long_cfg.stop_pct = float(l_sl)
-        long_cfg.target_pct = float(l_tgt)
-        long_cfg.be_trigger_pct = 0.0055 if long_be_trigger_pct is None else float(long_be_trigger_pct)
-        long_cfg.trail_pct = 0.0028 if long_trail_pct is None else float(long_trail_pct)
-        long_cfg.min_bars_left_after_entry = 0
-        long_cfg.max_vix_for_entries = 13.0
-        long_cfg.max_trades_per_ticker_per_day = 4
-        long_cfg.enable_topn_per_day = False
-        long_cfg.topn_per_day = 0
-
-    short_cfg.lag_bars_short_a_mod_break_c1_low = int(base.SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
-    short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = int(base.SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW)
-    short_cfg.lag_bars_short_b_huge_failed_bounce = int(base.SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE)
-    short_cfg.enable_setup_b_huge_failed_bounce = bool(base.PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE)
-    short_cfg.max_vix_for_entries = float(base.PACK2_SHORT_MAX_VIX_FOR_ENTRIES)
-    long_cfg.max_vix_for_entries = float(base.PACK2_LONG_MAX_VIX_FOR_ENTRIES)
-    long_cfg.lag_bars_long_a_mod_break_c1_high = int(base.LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH)
-    long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(base.LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH)
-    long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(base.LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK)
-
-    if base.FORCE_LIVE_PARITY_MIN_BARS_LEFT:
-        short_cfg.min_bars_left_after_entry = 0
-        long_cfg.min_bars_left_after_entry = 0
-    if base.FORCE_LIVE_PARITY_DISABLE_TOPN:
-        short_cfg.enable_topn_per_day = False
-        long_cfg.enable_topn_per_day = False
-    if base.FINAL_SIGNAL_WINDOW_OVERRIDE:
-        short_cfg.use_time_windows = bool(base.FINAL_SHORT_USE_TIME_WINDOWS)
-        long_cfg.use_time_windows = bool(base.FINAL_LONG_USE_TIME_WINDOWS)
-        short_cfg.signal_windows = list(base.FINAL_SHORT_SIGNAL_WINDOWS)
-        long_cfg.signal_windows = list(base.FINAL_LONG_SIGNAL_WINDOWS)
+    short_cfg, long_cfg = base.apply_live_parity_profile(short_cfg, long_cfg)
+    short_cfg.stop_pct = float(s_sl)
+    short_cfg.target_pct = float(s_tgt)
+    long_cfg.stop_pct = float(l_sl)
+    long_cfg.target_pct = float(l_tgt)
 
     vix_map = base._load_india_vix(ROOT)
     short_cfg.vix_scale_enabled = base.VIX_SCALE_ENABLED
@@ -489,9 +419,6 @@ def _run_exact_pair(
     l_sl: float,
     l_tgt: float,
     label: str,
-    *,
-    long_be_trigger_pct: float | None = None,
-    long_trail_pct: float | None = None,
 ) -> Dict[str, object]:
     run_dir = OUT_DIR / label
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -501,8 +428,6 @@ def _run_exact_pair(
         l_sl,
         l_tgt,
         run_dir,
-        long_be_trigger_pct=long_be_trigger_pct,
-        long_trail_pct=long_trail_pct,
     )
     dir_1m = base._resolve_5min_dir()
 
@@ -530,10 +455,22 @@ def _run_exact_pair(
                     suffix = sf.suffix
                     break
         if not short_df.empty:
-            short_df = base._resolve_exits_5min(short_df, dir_1m, suffix, short_cfg.parquet_engine)
+            short_df = base._resolve_exits_5min(
+                short_df,
+                dir_1m,
+                suffix,
+                short_cfg.parquet_engine,
+                eod_exit_time=base.V15_EOD_EXIT_TIME,
+            )
             short_df = base._add_notional_pnl(base._sort_trades_for_output(short_df))
         if not long_df.empty:
-            long_df = base._resolve_exits_5min(long_df, dir_1m, suffix, long_cfg.parquet_engine)
+            long_df = base._resolve_exits_5min(
+                long_df,
+                dir_1m,
+                suffix,
+                long_cfg.parquet_engine,
+                eod_exit_time=base.V15_EOD_EXIT_TIME,
+            )
             long_df = base._add_notional_pnl(base._sort_trades_for_output(long_df))
 
     combined = pd.concat([short_df, long_df], ignore_index=True)
@@ -557,8 +494,6 @@ def _run_exact_pair(
             "short_target_pct": round(s_tgt, 6),
             "long_stop_pct": round(l_sl, 6),
             "long_target_pct": round(l_tgt, 6),
-            "long_be_trigger_pct": round(float(long_cfg.be_trigger_pct), 6),
-            "long_trail_pct": round(float(long_cfg.trail_pct), 6),
             "regime_source": regime_source,
         },
     }
@@ -577,10 +512,10 @@ def main() -> None:
     short_paths = _build_trade_paths(trades[trades["side"].astype(str).str.upper().eq("SHORT")].copy(), cache)
     long_paths = _build_trade_paths(trades[trades["side"].astype(str).str.upper().eq("LONG")].copy(), cache)
 
-    short_sl_broad = _grid_values(0.0048, 0.0080, 0.0004)
-    short_tgt_broad = _grid_values(0.0075, 0.0115, 0.0005)
-    long_sl_broad = _grid_values(0.0030, 0.0060, 0.0005)
-    long_tgt_broad = _grid_values(0.0080, 0.0120, 0.0005)
+    short_sl_broad = _grid_values(0.0050, 0.0082, 0.0004)
+    short_tgt_broad = _grid_values(0.0090, 0.0125, 0.0005)
+    long_sl_broad = _grid_values(0.0045, 0.0090, 0.0005)
+    long_tgt_broad = _grid_values(0.0090, 0.0125, 0.0005)
 
     short_broad, short_detail = _run_side_grid(short_paths, short_sl_broad, short_tgt_broad)
     long_broad, long_detail = _run_side_grid(long_paths, long_sl_broad, long_tgt_broad)

@@ -8,7 +8,7 @@ set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backte
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
-set "EQIDV15_SHORT_TARGET_PCT=0.01075"
+set "EQIDV15_SHORT_TARGET_PCT=0.011"
 set "EQIDV15_LONG_TARGET_PCT=0.011"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=avwap_trade_execution_PAPER_TRADE_TRUE_v15.py"
@@ -42,7 +42,7 @@ echo [INFO] Target policy: short_target_pct=%EQIDV15_SHORT_TARGET_PCT%, long_tar
 echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
 
 :RUN_LOOP
-"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --entry-price-source ltp_on_signal --max-trades %MAX_TRADES% >>"%LOG_FILE%" 2>&1
+"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --max-trades %MAX_TRADES% >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)
