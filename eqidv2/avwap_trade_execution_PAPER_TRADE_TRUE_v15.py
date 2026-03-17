@@ -50,6 +50,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
+from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
 
 try:
     from watchdog.observers import Observer
@@ -63,7 +64,7 @@ except ImportError:
 # ============================================================================
 IST = pytz.timezone("Asia/Kolkata")
 
-SIGNAL_DIR = "live_signals"
+SIGNAL_DIR = str(RUNTIME_LIVE_SIGNALS_DIR)
 SIGNAL_CSV_PATTERNS = ("signals_{}_v15_short.csv", "signals_{}_v15_long.csv")
 PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v15.csv"
 PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v15.log"
@@ -86,7 +87,7 @@ SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 SHORT_TARGET_PCT = float(os.getenv("EQIDV15_SHORT_TARGET_PCT", "0.011"))    # 1.10%
 LONG_TARGET_PCT = float(os.getenv("EQIDV15_LONG_TARGET_PCT", "0.011"))       # 1.10%
 ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
-ENTRY_PRICE_SOURCE_DEFAULT = str(os.getenv("ENTRY_PRICE_SOURCE", "signal_bar")).strip().lower()
+ENTRY_PRICE_SOURCE_DEFAULT = str(os.getenv("ENTRY_PRICE_SOURCE", "ltp_on_signal")).strip().lower()
 if ENTRY_PRICE_SOURCE_DEFAULT not in ENTRY_PRICE_SOURCE_CHOICES:
     ENTRY_PRICE_SOURCE_DEFAULT = "signal_bar"
 
@@ -1637,9 +1638,10 @@ def _restore_intraday_runtime_state(
             margin = float(pos["entry_price"] * pos["quantity"] / INTRADAY_LEVERAGE)
             capital_deployed[sid] = margin
 
-    # Keep executed state aligned: remove closed IDs, include all restored open IDs.
+    # Keep closed signal_ids blocked for the full trading day so a restart
+    # cannot re-dispatch older rows that are still present in today's signal CSVs.
     with executed_lock:
-        executed.difference_update(closed_ids)
+        executed.update(closed_ids)
         executed.update(restored_positions.keys())
 
     _persist_open_trades_state()

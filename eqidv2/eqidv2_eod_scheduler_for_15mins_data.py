@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import pytz
+from eqidv2_runtime_paths import DATA_15M_DIR as RUNTIME_DATA_15M_DIR
+from eqidv2_runtime_paths import REPORTS_DIR as RUNTIME_REPORTS_DIR
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -510,7 +512,10 @@ def main() -> None:
         help="Skip 09:15 slot (old behavior).",
     )
     ap.set_defaults(enable_opening_slot_fetch=DEFAULT_ENABLE_OPENING_SLOT_FETCH)
-    ap.add_argument("--report-dir", default="reports/stocks_missing_reports")
+    ap.add_argument(
+        "--report-dir",
+        default=str(RUNTIME_REPORTS_DIR / "stocks_missing_reports"),
+    )
     args = ap.parse_args()
 
     # Ensure core INFO logs (including timing/verification summaries) are emitted.
@@ -522,7 +527,7 @@ def main() -> None:
 
     print("[LIVE] EQIDV2 15m scheduler started.")
     print(f"       Using EQIDV2_DIR: {EQIDV2_DIR}")
-    print(f"       Output dir (15m): {getattr(core, 'DIRS', {}).get('15min', {}).get('out', 'stocks_indicators_15min_eq')}")
+    print(f"       Output dir (15m): {getattr(core, 'DIRS', {}).get('15min', {}).get('out', str(RUNTIME_DATA_15M_DIR))}")
     print(f"       Runs every 15 mins between {MARKET_OPEN.strftime('%H:%M')} and {MARKET_CLOSE.strftime('%H:%M')} IST (trading days).")
     print(f"       Buffer after boundary: {args.buffer_sec}s")
     print(f"       Max workers: {args.max_workers}")

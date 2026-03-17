@@ -52,6 +52,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
+from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
 
 try:
     from kiteconnect import KiteConnect
@@ -71,7 +72,7 @@ except ImportError:
 # ============================================================================
 IST = pytz.timezone("Asia/Kolkata")
 
-SIGNAL_DIR = "live_signals"
+SIGNAL_DIR = str(RUNTIME_LIVE_SIGNALS_DIR)
 SIGNAL_CSV_PATTERNS = ("signals_{}_v15_short.csv", "signals_{}_v15_long.csv")
 TRADE_LOG_PATTERN = "live_trades_{}_v15.csv"
 LIVE_TRADE_EXEC_LOG_PATTERN = "live_trade_execution_{}_v15.log"
@@ -819,6 +820,15 @@ def _safe_int(value: object, default: int = 1) -> int:
         return int(default)
 
 
+def _clean_order_id(value: object) -> str:
+    text = str(value if value is not None else "").strip()
+    if not text or text.lower() == "nan":
+        return ""
+    if text.endswith(".0") and text[:-2].isdigit():
+        return text[:-2]
+    return text
+
+
 def _calc_pnl(side: str, entry_price: float, exit_price: float, qty: int) -> Tuple[float, float]:
     if side.upper() == "SHORT":
         pnl_rs = (entry_price - exit_price) * qty
@@ -1310,6 +1320,18 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
             }
         _persist_open_trades_state()
 
+    def _publish_open_trade_state(outcome: str = "OPEN") -> None:
+        """
+        Reflect an actively open, already-filled trade in the CSV/dashboard.
+        This row is later replaced in-place by the terminal trade result.
+        """
+        result.outcome = str(outcome or "OPEN")
+        result.exit_time = ""
+        result.exit_price = 0.0
+        result.pnl_rs = 0.0
+        result.pnl_pct = 0.0
+        _log_trade_result(result)
+
     def _force_market_close(tag: str, outcome: str, timeout_sec: int = 30) -> bool:
         try:
             close_order_id = kite.place_order(
@@ -1581,9 +1603,9 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     sl_price = round_to_tick(result.filled_price - sl_offset, tick=tick_size)
                     tgt_price = round_to_tick(result.filled_price + tgt_offset, tick=tick_size)
 
-                result.stop_price = sl_price
-                result.target_price = tgt_price
-                _sync_active_position("entry_filled")
+                    result.stop_price = sl_price
+                    result.target_price = tgt_price
+                    _sync_active_position("entry_filled")
 
         # No open position to monitor
         if trade_closed:
@@ -1605,6 +1627,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     result.target_order_id = target_order_id
                     result.sl_order_id = sl_order_id
                     _sync_active_position("exit_legs_placed")
+                    _publish_open_trade_state("OPEN")
                     if resume_mode:
                         log.info(
                             f"[RESUME] Rebuilt exit legs for {ticker}: "
@@ -1643,6 +1666,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 result.target_order_id = target_order_id
                 result.sl_order_id = sl_order_id
                 _sync_active_position("monitoring")
+                _publish_open_trade_state("OPEN")
 
             # ---- STEP 5: Monitor until target/SL/forced close ----
             while (not trade_closed) and result.target_order_id and result.sl_order_id:
@@ -2115,6 +2139,38 @@ def _load_closed_ids_and_realized_summary(
     }
 
 
+def _load_non_terminal_trade_rows(
+    trade_csv_path: str,
+    today_date: date,
+) -> Dict[str, Dict[str, Any]]:
+    rows_by_signal: Dict[str, Dict[str, Any]] = {}
+    if not os.path.exists(trade_csv_path) or os.path.getsize(trade_csv_path) <= 0:
+        return rows_by_signal
+
+    try:
+        df = pd.read_csv(
+            trade_csv_path,
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            on_bad_lines="warn",
+            engine="python",
+        )
+        if df.empty:
+            return rows_by_signal
+        for row in df.to_dict("records"):
+            row_date = _signal_ist_date(row)
+            if row_date is not None and row_date != today_date:
+                continue
+            sid = str(row.get("signal_id", "")).strip()
+            outcome = str(row.get("outcome", "")).strip().upper()
+            if sid and outcome in NON_TERMINAL_OUTCOMES:
+                rows_by_signal[sid] = dict(row)
+    except Exception as e:
+        log.warning(f"[RESTORE] Could not parse non-terminal live trade rows: {e}")
+
+    return rows_by_signal
+
+
 def _get_broker_mis_position_qty_map() -> Optional[Dict[str, int]]:
     """
     Return broker MIS net quantity per symbol.
@@ -2145,6 +2201,97 @@ def _get_broker_mis_position_qty_map() -> Optional[Dict[str, int]]:
             continue
         out[ticker] = out.get(ticker, 0) + qty
     return out
+
+
+def _order_time_to_csv_str(row: Optional[dict]) -> str:
+    row = row or {}
+    for key in ("exchange_timestamp", "exchange_update_timestamp", "order_timestamp"):
+        value = row.get(key)
+        if isinstance(value, datetime):
+            ts = value if value.tzinfo else IST.localize(value)
+            return ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S%z")
+        if isinstance(value, str) and value.strip():
+            raw = value.strip()
+            for parser in (datetime.fromisoformat,):
+                try:
+                    parsed = parser(raw)
+                    ts = parsed if parsed.tzinfo else IST.localize(parsed)
+                    return ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S%z")
+                except Exception:
+                    continue
+            if len(raw) == 19:
+                try:
+                    parsed = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+                    return IST.localize(parsed).strftime("%Y-%m-%d %H:%M:%S%z")
+                except Exception:
+                    pass
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z")
+
+
+def _order_has_tag(row: Optional[dict], wanted_tag: str) -> bool:
+    if not row or not wanted_tag:
+        return False
+    wanted = str(wanted_tag).strip().upper()
+    if not wanted:
+        return False
+    tag = str(row.get("tag", "")).strip().upper()
+    if tag == wanted:
+        return True
+    tags = row.get("tags", [])
+    if isinstance(tags, list):
+        return any(str(x).strip().upper() == wanted for x in tags)
+    return False
+
+
+def _is_live_order_status(status: str) -> bool:
+    return str(status or "").strip().upper() not in {"", "COMPLETE", "CANCELLED", "REJECTED"}
+
+
+def _pick_latest_tagged_order(
+    orders: Sequence[dict],
+    ticker: str,
+    wanted_tag: str,
+    transaction_type: str,
+) -> Optional[dict]:
+    ticker = str(ticker or "").strip().upper()
+    wanted_tag = str(wanted_tag or "").strip().upper()
+    transaction_type = str(transaction_type or "").strip().upper()
+    if not ticker or not wanted_tag or not transaction_type:
+        return None
+
+    matches: List[dict] = []
+    for row in orders:
+        if str(row.get("tradingsymbol", "")).strip().upper() != ticker:
+            continue
+        if str(row.get("transaction_type", "")).strip().upper() != transaction_type:
+            continue
+        if not _order_has_tag(row, wanted_tag):
+            continue
+        matches.append(row)
+
+    if not matches:
+        return None
+
+    def _sort_key(row: dict) -> Tuple[str, str]:
+        ts = (
+            str(row.get("exchange_update_timestamp", "")).strip()
+            or str(row.get("exchange_timestamp", "")).strip()
+            or str(row.get("order_timestamp", "")).strip()
+        )
+        return ts, str(row.get("order_id", "")).strip()
+
+    matches.sort(key=_sort_key)
+    return matches[-1]
+
+
+def _close_outcome_from_order(row: Optional[dict]) -> str:
+    if _order_has_tag(row, "AVWAPKILLSWITCH"):
+        return "MANUAL_KILL_SWITCH"
+    if _order_has_tag(row, "AVWAPFORCECLOSE") or _order_has_tag(row, "AVWAPCUTOFFCLOSE"):
+        return "EOD_CLOSE"
+    if _order_has_tag(row, "AVWAPEXITFAILCLOSE"):
+        return "EXIT_SETUP_FAILED_FORCE_CLOSED"
+    return "BROKER_CLOSE_RESTORED"
 
 
 def _restore_intraday_runtime_state(
@@ -2178,12 +2325,35 @@ def _restore_intraday_runtime_state(
         _save_summary()
 
     raw_open_state = _load_open_trades_state(today_str)
+    non_terminal_trade_rows = _load_non_terminal_trade_rows(
+        trade_csv_path=trade_csv_path,
+        today_date=today_date,
+    )
+    restore_candidates: Dict[str, Dict[str, Any]] = {
+        sid: dict(row) for sid, row in non_terminal_trade_rows.items()
+    }
+    for sid, pos in raw_open_state.items():
+        merged = dict(restore_candidates.get(sid, {}))
+        merged.update(pos)
+        restore_candidates[sid] = merged
+
     broker_qty_map = _get_broker_mis_position_qty_map()
+    try:
+        orders_snapshot = _get_orders_snapshot(force_refresh=True)
+    except Exception as e:
+        if not _is_rate_limit_error(e):
+            log.warning(f"[RESTORE] Could not fetch broker order snapshot: {e}")
+        orders_snapshot = []
+
     restored_positions: Dict[str, Dict[str, Any]] = {}
     resume_signals: List[dict] = []
     stale_restored: List[Dict[str, Any]] = []
+    reconciled_realized_total = 0.0
+    reconciled_realized_trades = 0
+    reconciled_realized_wins = 0
+    reconciled_realized_losses = 0
 
-    for sid, pos in raw_open_state.items():
+    for sid, pos in restore_candidates.items():
         if sid in closed_ids:
             continue
 
@@ -2195,33 +2365,148 @@ def _restore_intraday_runtime_state(
         filled_price = _safe_float(pos.get("filled_price", entry_price), entry_price)
         stop_price = _safe_float(pos.get("stop_price", base.get("stop_price", 0.0)), 0.0)
         target_price = _safe_float(pos.get("target_price", base.get("target_price", 0.0)), 0.0)
-        entry_order_id = str(pos.get("entry_order_id", "")).strip()
-        target_order_id = str(pos.get("target_order_id", "")).strip()
-        sl_order_id = str(pos.get("sl_order_id", "")).strip()
+        entry_order_id = _clean_order_id(pos.get("entry_order_id", ""))
+        target_order_id = _clean_order_id(pos.get("target_order_id", ""))
+        sl_order_id = _clean_order_id(pos.get("sl_order_id", ""))
+        close_order_id = _clean_order_id(pos.get("close_order_id", ""))
         trade_id = str(pos.get("trade_id", "")).strip() or f"RESTORE-{sid[:8]}"
         entry_time = str(pos.get("entry_time", "")).strip()
 
         if not ticker or side not in {"LONG", "SHORT"}:
             continue
-        if qty <= 0 or filled_price <= 0 or stop_price <= 0 or target_price <= 0:
+        if qty <= 0 or stop_price <= 0 or target_price <= 0:
             continue
-        if broker_qty_map is not None:
-            expected_signed_qty = int(qty if side == "LONG" else -qty)
-            broker_qty = int(broker_qty_map.get(ticker, 0))
-            same_direction = (
-                (broker_qty > 0 and expected_signed_qty > 0)
-                or (broker_qty < 0 and expected_signed_qty < 0)
+
+        entry_txn = "BUY" if side == "LONG" else "SELL"
+        exit_txn = "SELL" if side == "LONG" else "BUY"
+
+        if not entry_order_id:
+            discovered = _pick_latest_tagged_order(orders_snapshot, ticker, "AVWAPENTRY", entry_txn)
+            if discovered:
+                entry_order_id = str(discovered.get("order_id", "")).strip()
+        if not target_order_id:
+            discovered = _pick_latest_tagged_order(orders_snapshot, ticker, "AVWAPTARGET", exit_txn)
+            if discovered:
+                target_order_id = str(discovered.get("order_id", "")).strip()
+        if not sl_order_id:
+            discovered = _pick_latest_tagged_order(orders_snapshot, ticker, "AVWAPSTOPLOSS", exit_txn)
+            if discovered:
+                sl_order_id = str(discovered.get("order_id", "")).strip()
+        if not close_order_id:
+            for close_tag in ("AVWAPFORCECLOSE", "AVWAPCUTOFFCLOSE", "AVWAPKILLSWITCH", "AVWAPEXITFAILCLOSE"):
+                discovered = _pick_latest_tagged_order(orders_snapshot, ticker, close_tag, exit_txn)
+                if discovered:
+                    close_order_id = str(discovered.get("order_id", "")).strip()
+                    break
+
+        entry_row = _get_order_row(entry_order_id, force_refresh=True, allow_history_fallback=True) if entry_order_id else None
+        target_row = _get_order_row(target_order_id, force_refresh=False, allow_history_fallback=True) if target_order_id else None
+        sl_row = _get_order_row(sl_order_id, force_refresh=False, allow_history_fallback=True) if sl_order_id else None
+        close_row = _get_order_row(close_order_id, force_refresh=False, allow_history_fallback=True) if close_order_id else None
+        entry_state = _order_state_from_row(entry_row)
+        target_state = _order_state_from_row(target_row)
+        sl_state = _order_state_from_row(sl_row)
+        close_state = _order_state_from_row(close_row)
+
+        if entry_state["filled_quantity"] > 0:
+            qty = max(qty, int(entry_state["filled_quantity"]))
+        if filled_price <= 0 and entry_state["average_price"] > 0:
+            filled_price = float(entry_state["average_price"])
+        if entry_price <= 0:
+            entry_price = float(filled_price if filled_price > 0 else entry_state["average_price"])
+        if filled_price <= 0:
+            filled_price = float(entry_price)
+        if not entry_time:
+            entry_time = _order_time_to_csv_str(entry_row)
+
+        terminal_outcome = ""
+        terminal_exit_price = 0.0
+        terminal_exit_row: Optional[dict] = None
+
+        if target_state["status"] == "COMPLETE" and target_state["filled_quantity"] > 0:
+            terminal_outcome = "TARGET"
+            terminal_exit_price = float(target_state["average_price"] or target_price)
+            terminal_exit_row = target_row
+        elif sl_state["status"] == "COMPLETE" and sl_state["filled_quantity"] > 0:
+            terminal_outcome = "SL"
+            terminal_exit_price = float(sl_state["average_price"] or stop_price)
+            terminal_exit_row = sl_row
+        elif close_state["status"] == "COMPLETE" and close_state["filled_quantity"] > 0:
+            terminal_outcome = _close_outcome_from_order(close_row)
+            terminal_exit_price = float(close_state["average_price"] or filled_price or entry_price)
+            terminal_exit_row = close_row
+        elif entry_state["status"] in {"REJECTED", "CANCELLED"} and entry_state["filled_quantity"] <= 0:
+            terminal_outcome = "ENTRY_FAILED"
+            terminal_exit_price = float(entry_price)
+            terminal_exit_row = entry_row
+
+        if terminal_outcome:
+            pnl_rs, pnl_pct = _calc_pnl(side, float(filled_price or entry_price), terminal_exit_price, int(qty))
+            restored_result = LiveTradeResult(
+                trade_id=trade_id,
+                signal_id=sid,
+                signal_datetime=str(base.get("signal_datetime", pos.get("signal_datetime", ""))),
+                signal_entry_datetime_ist=str(
+                    base.get("signal_entry_datetime_ist", pos.get("signal_entry_datetime_ist", ""))
+                ),
+                entry_time=entry_time,
+                exit_time=_order_time_to_csv_str(terminal_exit_row),
+                ticker=ticker,
+                side=side,
+                setup=str(base.get("setup", pos.get("setup", ""))),
+                impulse_type=str(base.get("impulse_type", pos.get("impulse_type", ""))),
+                quantity=int(qty),
+                entry_price=float(entry_price or filled_price),
+                filled_price=float(filled_price or entry_price),
+                exit_price=float(terminal_exit_price),
+                stop_price=float(stop_price),
+                target_price=float(target_price),
+                outcome=terminal_outcome,
+                pnl_rs=float(pnl_rs),
+                pnl_pct=float(pnl_pct),
+                entry_order_id=entry_order_id,
+                target_order_id=target_order_id,
+                sl_order_id=sl_order_id,
+                close_order_id=close_order_id,
+                quality_score=_safe_float(base.get("quality_score", pos.get("quality_score", 0.0)), 0.0),
             )
-            if broker_qty == 0 or (not same_direction) or abs(broker_qty) < abs(expected_signed_qty):
-                stale_restored.append(
-                    {
-                        "signal_id": sid,
-                        "ticker": ticker,
-                        "expected_qty": expected_signed_qty,
-                        "broker_qty": broker_qty,
-                    }
-                )
-                continue
+            _log_trade_result(restored_result)
+            closed_ids.add(sid)
+            traded_tickers.add(ticker)
+            reconciled_realized_total += float(pnl_rs)
+            reconciled_realized_trades += 1
+            if pnl_rs > 0:
+                reconciled_realized_wins += 1
+            elif pnl_rs < 0:
+                reconciled_realized_losses += 1
+            log.info(
+                f"[RESTORE] Reconciled {ticker} signal_id={sid[:12]} as {terminal_outcome} "
+                f"@ {terminal_exit_price:.2f}."
+            )
+            continue
+
+        expected_signed_qty = int(qty if side == "LONG" else -qty)
+        broker_qty = int(broker_qty_map.get(ticker, 0)) if broker_qty_map is not None else expected_signed_qty
+        same_direction = (
+            (broker_qty > 0 and expected_signed_qty > 0)
+            or (broker_qty < 0 and expected_signed_qty < 0)
+        )
+        live_exit_orders = _is_live_order_status(target_state["status"]) or _is_live_order_status(sl_state["status"])
+        should_restore_open = bool(
+            (broker_qty_map is None)
+            or (same_direction and abs(broker_qty) >= abs(expected_signed_qty))
+            or live_exit_orders
+        )
+        if not should_restore_open:
+            stale_restored.append(
+                {
+                    "signal_id": sid,
+                    "ticker": ticker,
+                    "expected_qty": expected_signed_qty,
+                    "broker_qty": broker_qty,
+                }
+            )
+            continue
 
         restored_positions[sid] = {
             "signal_id": sid,
@@ -2236,6 +2521,7 @@ def _restore_intraday_runtime_state(
             "entry_order_id": entry_order_id,
             "target_order_id": target_order_id,
             "sl_order_id": sl_order_id,
+            "close_order_id": close_order_id,
             "entry_time": entry_time,
             "signal_datetime": str(base.get("signal_datetime", pos.get("signal_datetime", ""))),
             "signal_entry_datetime_ist": str(
@@ -2261,6 +2547,7 @@ def _restore_intraday_runtime_state(
                 "entry_order_id": entry_order_id,
                 "target_order_id": target_order_id,
                 "sl_order_id": sl_order_id,
+                "close_order_id": close_order_id,
                 "entry_time": entry_time,
                 "signal_datetime": str(base.get("signal_datetime", pos.get("signal_datetime", ""))),
                 "signal_entry_datetime_ist": str(
@@ -2271,6 +2558,17 @@ def _restore_intraday_runtime_state(
                 "quality_score": _safe_float(base.get("quality_score", pos.get("quality_score", 0.0)), 0.0),
             }
         )
+
+    realized["realized_total"] = float(realized["realized_total"] + reconciled_realized_total)
+    realized["realized_trades"] = float(realized["realized_trades"] + reconciled_realized_trades)
+    realized["realized_wins"] = float(realized["realized_wins"] + reconciled_realized_wins)
+    realized["realized_losses"] = float(realized["realized_losses"] + reconciled_realized_losses)
+    with daily_pnl_lock:
+        daily_pnl["total"] = float(realized["realized_total"])
+        daily_pnl["trades"] = int(realized["realized_trades"])
+        daily_pnl["wins"] = int(realized["realized_wins"])
+        daily_pnl["losses"] = int(realized["realized_losses"])
+        _save_summary()
 
     if stale_restored:
         stale_ids = {str(x.get("signal_id", "")).strip() for x in stale_restored if str(x.get("signal_id", "")).strip()}
@@ -2408,6 +2706,26 @@ def _detect_stale_tracked_positions() -> List[dict]:
             or (broker_qty < 0 and expected_qty < 0)
         )
         if broker_qty == 0 or (not same_direction) or abs(broker_qty) < abs(expected_qty):
+            target_order_id = _clean_order_id(pos.get("target_order_id", ""))
+            sl_order_id = _clean_order_id(pos.get("sl_order_id", ""))
+            close_order_id = _clean_order_id(pos.get("close_order_id", ""))
+            target_state = _order_state_from_row(
+                _get_order_row(target_order_id, force_refresh=False, allow_history_fallback=True)
+            ) if target_order_id else {}
+            sl_state = _order_state_from_row(
+                _get_order_row(sl_order_id, force_refresh=False, allow_history_fallback=True)
+            ) if sl_order_id else {}
+            close_state = _order_state_from_row(
+                _get_order_row(close_order_id, force_refresh=False, allow_history_fallback=True)
+            ) if close_order_id else {}
+            if (
+                _is_live_order_status(target_state.get("status", ""))
+                or _is_live_order_status(sl_state.get("status", ""))
+                or str(target_state.get("status", "")).upper() == "COMPLETE"
+                or str(sl_state.get("status", "")).upper() == "COMPLETE"
+                or str(close_state.get("status", "")).upper() == "COMPLETE"
+            ):
+                continue
             stale.append(
                 {
                     "signal_id": sid,

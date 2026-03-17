@@ -8,6 +8,7 @@ set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backte
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
+set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=eqidv2_eod_scheduler_for_15mins_data.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_15mins_data.log"

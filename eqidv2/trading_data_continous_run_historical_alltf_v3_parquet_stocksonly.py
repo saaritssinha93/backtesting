@@ -56,6 +56,10 @@ import numpy as np
 import pandas as pd
 import pytz
 from kiteconnect import KiteConnect, exceptions as kexc
+from eqidv2_runtime_paths import CACHE_15M_DIR
+from eqidv2_runtime_paths import CACHE_5MIN_DIR
+from eqidv2_runtime_paths import DATA_15M_DIR
+from eqidv2_runtime_paths import runtime_dir
 
 # ========= GLOBAL CONFIG =========
 
@@ -63,8 +67,8 @@ IST_TZ = pytz.timezone("Asia/Kolkata")
 
 # Directories (only intraday)
 DIRS = {
-    "5min":   {"cache": "stocks_cache_5min_eq",   "out": "stocks_indicators_5min_eq"},
-    "15min":  {"cache": "stocks_cache_15min_eq",  "out": "stocks_indicators_15min_eq"},
+    "5min":   {"cache": str(CACHE_5MIN_DIR),  "out": str(runtime_dir("stocks_indicators_5min_eq"))},
+    "15min":  {"cache": str(CACHE_15M_DIR),   "out": str(DATA_15M_DIR)},
 }
 for cfg in DIRS.values():
     os.makedirs(cfg["cache"], exist_ok=True)

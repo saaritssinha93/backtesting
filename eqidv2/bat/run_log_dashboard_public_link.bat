@@ -27,21 +27,20 @@ set "EMAIL_TO=%LOG_DASH_EMAIL_TO%"
 if "%EMAIL_TO%"=="" set "EMAIL_TO=saaritssinha93@gmail.com,dragontastic007@gmail.com"
 set "EMAIL_FROM=%LOG_DASH_EMAIL_FROM%"
 if "%EMAIL_FROM%"=="" set "EMAIL_FROM=saaritssinha93@gmail.com"
+set "SMTP_USER=%LOG_DASH_SMTP_USER%"
+if "%SMTP_USER%"=="" set "SMTP_USER=%EMAIL_FROM%"
+set "SMTP_APP_PASSWORD=%LOG_DASH_SMTP_APP_PASSWORD%"
+if "%SMTP_APP_PASSWORD%"=="" set "SMTP_APP_PASSWORD=%LOG_DASH_PASS%"
+set "SMTP_SERVER=%LOG_DASH_SMTP_SERVER%"
+if "%SMTP_SERVER%"=="" set "SMTP_SERVER=smtp.gmail.com"
+set "SMTP_PORT=%LOG_DASH_SMTP_PORT%"
+if "%SMTP_PORT%"=="" set "SMTP_PORT=587"
 set "EMAIL_SEND_MODE=%LOG_DASH_EMAIL_SEND_MODE%"
-if "%EMAIL_SEND_MODE%"=="" set "EMAIL_SEND_MODE=gmail_api_only"
+if "%EMAIL_SEND_MODE%"=="" set "EMAIL_SEND_MODE=gmail_api_then_smtp"
 set "EMAIL_SUBJECT_PREFIX=%LOG_DASH_EMAIL_SUBJECT_PREFIX%"
 if "%EMAIL_SUBJECT_PREFIX%"=="" set "EMAIL_SUBJECT_PREFIX=EQIDV2 Dashboard URL"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-
-if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
-if "%LOG_DASH_PASS%"=="" if not "%LOG_DASH_SMTP_APP_PASSWORD%"=="" set "LOG_DASH_PASS=%LOG_DASH_SMTP_APP_PASSWORD%"
-if "%LOG_DASH_PASS%"=="" (
-  echo [ERROR] LOG_DASH_PASS is not set.
-  echo [ERROR] LOG_DASH_SMTP_APP_PASSWORD fallback is also empty.
-  echo Example: set LOG_DASH_PASS=your_strong_password
-  endlocal & exit /b 2
-)
 
 for %%I in (cloudflared.exe) do set "CF_BIN=%%~$PATH:I"
 if not defined CF_BIN if exist "C:\Program Files (x86)\cloudflared\cloudflared.exe" set "CF_BIN=C:\Program Files (x86)\cloudflared\cloudflared.exe"
@@ -80,6 +79,8 @@ echo Email send mode: %EMAIL_SEND_MODE%
 echo Gmail credentials file: %GMAIL_CREDENTIALS_FILE%
 echo Gmail token file: %GMAIL_TOKEN_FILE%
 echo Gmail interactive auth: %GMAIL_INTERACTIVE_AUTH%
+echo SMTP user: %SMTP_USER%
+echo SMTP server: %SMTP_SERVER%:%SMTP_PORT%
 echo Python exe: %PYTHON_EXE%
 echo Latest URL file: %LATEST_URL_FILE%
 echo [INFO] Using protocol=http2 and edge-ip-version=4 for better stability on restrictive networks.
@@ -87,7 +88,11 @@ echo [INFO] Using protocol=http2 and edge-ip-version=4 for better stability on r
 :RUN_TUNNEL
 set "EMAIL_FROM_ARG=%EMAIL_FROM%"
 if "%EMAIL_FROM_ARG%"=="" set "EMAIL_FROM_ARG=__EMPTY__"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%BAT_DIR%\run_log_dashboard_public_link_capture.ps1" -CloudflaredPath "%CF_BIN%" -DashUrl "%DASH_URL%" -LogFile "%LOG_FILE%" -LatestUrlFile "%LATEST_URL_FILE%" -PythonExe "%PYTHON_EXE%" -GmailApiScript "%GMAIL_API_SCRIPT%" -GmailCredentialsFile "%GMAIL_CREDENTIALS_FILE%" -GmailTokenFile "%GMAIL_TOKEN_FILE%" -GmailInteractiveAuth "%GMAIL_INTERACTIVE_AUTH%" -EmailTo "%EMAIL_TO%" -EmailFrom "%EMAIL_FROM_ARG%" -EmailSendMode "%EMAIL_SEND_MODE%" -EmailSubjectPrefix "%EMAIL_SUBJECT_PREFIX%"
+set "SMTP_USER_ARG=%SMTP_USER%"
+if "%SMTP_USER_ARG%"=="" set "SMTP_USER_ARG=__EMPTY__"
+set "SMTP_APP_PASSWORD_ARG=%SMTP_APP_PASSWORD%"
+if "%SMTP_APP_PASSWORD_ARG%"=="" set "SMTP_APP_PASSWORD_ARG=__EMPTY__"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%BAT_DIR%\run_log_dashboard_public_link_capture.ps1" -CloudflaredPath "%CF_BIN%" -DashUrl "%DASH_URL%" -LogFile "%LOG_FILE%" -LatestUrlFile "%LATEST_URL_FILE%" -PythonExe "%PYTHON_EXE%" -GmailApiScript "%GMAIL_API_SCRIPT%" -GmailCredentialsFile "%GMAIL_CREDENTIALS_FILE%" -GmailTokenFile "%GMAIL_TOKEN_FILE%" -GmailInteractiveAuth "%GMAIL_INTERACTIVE_AUTH%" -EmailTo "%EMAIL_TO%" -EmailFrom "%EMAIL_FROM_ARG%" -EmailSendMode "%EMAIL_SEND_MODE%" -EmailSubjectPrefix "%EMAIL_SUBJECT_PREFIX%" -SmtpUser "%SMTP_USER_ARG%" -SmtpAppPassword "%SMTP_APP_PASSWORD_ARG%" -SmtpServer "%SMTP_SERVER%" -SmtpPort %SMTP_PORT%
 set "CF_EXIT=%ERRORLEVEL%"
 
 if "%CF_EXIT%"=="0" (

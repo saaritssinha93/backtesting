@@ -8,9 +8,18 @@ set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backte
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
-set "EQIDV2_INITIAL_DELAY_SECONDS=10"
+set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
+set "EQIDV2_INITIAL_DELAY_SECONDS=0"
 set "EQIDV2_NUM_SCANS_PER_SLOT=3"
 set "EQIDV2_SCAN_INTERVAL_SECONDS=5"
+set "EQIDV2_BLOCK_PARALLEL_SCAN_ENABLED=1"
+set "EQIDV2_SCAN_BLOCK_SIZE=75"
+set "EQIDV2_SCAN_MAX_WORKERS=8"
+set "EQIDV2_SLOT_READY_POLL_ENABLED=1"
+set "EQIDV2_SLOT_READY_MAX_WAIT_SECONDS=4"
+set "EQIDV2_SLOT_READY_POLL_SECONDS=2"
+set "EQIDV2_SLOT_READY_SAMPLE_SIZE=16"
+set "EQIDV2_SLOT_READY_MIN_FRESH_RATIO=0.50"
 set "EQIDV15_STALE_ONLY_RETRY=1"
 set "EQIDV15_SHORT_STOP_PCT=0.0066"
 set "EQIDV15_SHORT_TARGET_PCT=0.011"
@@ -20,6 +29,10 @@ set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv_v15_short.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v15_short.log"
 set "ALERT_LOG=%ALERT_DIR%\CRITICAL_eqidv2_live_combined_analyser_csv_v15_short.log"
 set "STATUS_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v15_short.status"
+set "HEARTBEAT_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v15_short.heartbeat"
+set "EQIDV2_RUNTIME_STATUS_FILE=%STATUS_FILE%"
+set "EQIDV2_RUNTIME_HEARTBEAT_FILE=%HEARTBEAT_FILE%"
+set "EQIDV2_RUNTIME_SCRIPT_NAME=%SCRIPT_NAME%"
 set "END_CUTOFF_HHMM=1540"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
@@ -48,7 +61,14 @@ if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
 echo [%DATE% %TIME%] START %SCRIPT_NAME%
 echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
 echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
-echo [INFO] Scan tuning: initial_delay=%EQIDV2_INITIAL_DELAY_SECONDS%s, scans_per_slot=%EQIDV2_NUM_SCANS_PER_SLOT%, interval=%EQIDV2_SCAN_INTERVAL_SECONDS%s, stale_only_retry=%EQIDV15_STALE_ONLY_RETRY%, short_stop_pct=%EQIDV15_SHORT_STOP_PCT%, short_target_pct=%EQIDV15_SHORT_TARGET_PCT%>>"%LOG_FILE%"
+echo [INFO] Scan tuning: initial_delay=%EQIDV2_INITIAL_DELAY_SECONDS%s, scans_per_slot=%EQIDV2_NUM_SCANS_PER_SLOT%, interval=%EQIDV2_SCAN_INTERVAL_SECONDS%s, block_parallel=%EQIDV2_BLOCK_PARALLEL_SCAN_ENABLED%, block_size=%EQIDV2_SCAN_BLOCK_SIZE%, max_workers=%EQIDV2_SCAN_MAX_WORKERS%, ready_poll=%EQIDV2_SLOT_READY_POLL_ENABLED%, ready_max_wait=%EQIDV2_SLOT_READY_MAX_WAIT_SECONDS%s, ready_poll_s=%EQIDV2_SLOT_READY_POLL_SECONDS%s, ready_sample=%EQIDV2_SLOT_READY_SAMPLE_SIZE%, ready_ratio=%EQIDV2_SLOT_READY_MIN_FRESH_RATIO%, stale_only_retry=%EQIDV15_STALE_ONLY_RETRY%, short_stop_pct=%EQIDV15_SHORT_STOP_PCT%, short_target_pct=%EQIDV15_SHORT_TARGET_PCT%>>"%LOG_FILE%"
+for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm:ss"') do set "RUN_TS=%%a"
+>"%STATUS_FILE%" echo status=RUNNING
+>>"%STATUS_FILE%" echo script=%SCRIPT_NAME%
+>>"%STATUS_FILE%" echo ts=!RUN_TS!
+>>"%STATUS_FILE%" echo restart_count=!RESTART_COUNT!
+>>"%STATUS_FILE%" echo cutoff_hhmm=%END_CUTOFF_HHMM%
+>>"%STATUS_FILE%" echo log_file=%LOG_FILE%
 
 :RUN_LOOP
 "%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" >>"%LOG_FILE%" 2>&1

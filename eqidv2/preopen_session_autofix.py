@@ -19,30 +19,47 @@ BAT_DIR = BASE_DIR / "bat"
 LOG_DIR = BASE_DIR / "logs"
 HEALTHCHECK_SCRIPT = BASE_DIR / "preopen_session_healthcheck.py"
 HEALTHCHECK_JSON = LOG_DIR / "preopen_session_healthcheck_latest.json"
+V15_SHORT_SHARD_IDS = tuple(f"{idx:02d}" for idx in range(1, 11))
+V15_LONG_SHARD_IDS = tuple(f"{idx:02d}" for idx in range(1, 11))
 
 TASK_TO_BAT: Dict[str, Path] = {
     "EQIDV2_log_dashboard_start_0855": BAT_DIR / "run_log_dashboard_public_link_scheduled.bat",
-    "EQIDV2_eod_15mins_data_0900": BAT_DIR / "run_eqidv2_eod_scheduler_for_15mins_data.bat",
+    "EQIDV2_eod_15mins_data_0900": BAT_DIR / "run_eqidv2_eod_scheduler_for_15mins_data_live_minimal.bat",
     "EQIDV2_authentication_v2_0900": BAT_DIR / "run_authentication_v2.bat",
-    "EQIDV2_live_combined_csv_v15_short_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v15_short.bat",
-    "EQIDV2_live_combined_csv_v15_long_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v15_long.bat",
+    **{
+        f"EQIDV2_live_combined_csv_v15_short_s{shard_id}_0900": (
+            BAT_DIR / f"run_eqidv2_live_combined_analyser_csv_v15_short_shard_{shard_id}.bat"
+        )
+        for shard_id in V15_SHORT_SHARD_IDS
+    },
+    **{
+        f"EQIDV2_live_combined_csv_v15_long_s{shard_id}_0900": (
+            BAT_DIR / f"run_eqidv2_live_combined_analyser_csv_v15_long_shard_{shard_id}.bat"
+        )
+        for shard_id in V15_LONG_SHARD_IDS
+    },
     "EQIDV2_avwap_paper_trade_v15_0900": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v15.bat",
     "EQIDV2_avwap_live_trade_v15_0905": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_FALSE_v15.bat",
-<<<<<<< HEAD
-    "EQIDV2_nifty_guard_fetch_v15_0910": BAT_DIR / "run_nifty_guard_fetcher_v15.bat",
-=======
->>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
+    "EQIDV2_nifty_guard_fetch_v15_0915": BAT_DIR / "run_nifty_guard_fetcher_v15.bat",
 }
 
 FAIL_CHECK_TO_BAT: Dict[str, Path] = {
-    "live_combined_csv_v15_short": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v15_short.bat",
-    "live_combined_csv_v15_long": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v15_long.bat",
+    "eod_15min_data": BAT_DIR / "run_eqidv2_eod_scheduler_for_15mins_data_live_minimal.bat",
+    **{
+        f"live_combined_csv_v15_short_s{shard_id}": (
+            BAT_DIR / f"run_eqidv2_live_combined_analyser_csv_v15_short_shard_{shard_id}.bat"
+        )
+        for shard_id in V15_SHORT_SHARD_IDS
+    },
+    **{
+        f"live_combined_csv_v15_long_s{shard_id}": (
+            BAT_DIR / f"run_eqidv2_live_combined_analyser_csv_v15_long_shard_{shard_id}.bat"
+        )
+        for shard_id in V15_LONG_SHARD_IDS
+    },
     "paper_trade_v15": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v15.bat",
     "kite_trade_v15": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_FALSE_v15.bat",
-<<<<<<< HEAD
     "nifty_guard_fetch_v15": BAT_DIR / "run_nifty_guard_fetcher_v15.bat",
-=======
->>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
 }
 
 

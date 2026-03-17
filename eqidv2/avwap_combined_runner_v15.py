@@ -48,6 +48,10 @@ from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 
+from eqidv2_runtime_paths import DATA_15M_DIR as RUNTIME_DATA_15M_DIR
+from eqidv2_runtime_paths import DATA_1MIN_DIR as RUNTIME_DATA_1MIN_DIR
+from eqidv2_runtime_paths import runtime_dir
+
 # ===========================================================================
 # CONSOLE OUTPUT TEE (stdout/stderr -> console + outputs/*.txt)
 # ===========================================================================
@@ -381,6 +385,7 @@ def _resolve_15m_dir() -> Path:
         _proj = _script_dir
 
     candidates = [
+        RUNTIME_DATA_15M_DIR,
         _proj / "stocks_indicators_15min_eq",
         _proj.parent / "stocks_indicators_15min_eq",
         Path.cwd() / "stocks_indicators_15min_eq",
@@ -449,6 +454,7 @@ def _resolve_5min_dir() -> Path:
 
     # Common locations to search for 1-min data
     candidates = [
+        RUNTIME_DATA_1MIN_DIR,
         _proj / "data" / "stocks_indicators_1min_eq",
         _proj / "stocks_indicators_1min_eq",
         _proj.parent / "data" / "stocks_indicators_1min_eq",
@@ -2335,7 +2341,7 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = _project_root / "outputs_v15"
+    _outputs_dir = runtime_dir("outputs_v15")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")

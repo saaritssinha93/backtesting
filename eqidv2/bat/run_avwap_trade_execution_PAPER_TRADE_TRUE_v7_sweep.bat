@@ -8,6 +8,7 @@ set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backte
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
+set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
 set "EQIDV7_SWEEP_SHORT_TARGET_PCT=0.009"
 set "EQIDV7_SWEEP_LONG_TARGET_PCT=0.011"
 set "LOG_DIR=%BASE_DIR%\logs"

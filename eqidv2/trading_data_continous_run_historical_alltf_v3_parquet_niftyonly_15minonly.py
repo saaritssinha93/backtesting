@@ -6,7 +6,7 @@ This is a thin wrapper around the stock-only 15m fetcher so that:
 - timestamps are identical
 - incremental updates behave the same way
 - indicators/parquet layout match the stock dataset
-- outputs land in stocks_indicators_15min_eq for v13/v14 runners
+- outputs land in the runtime 15m parquet folder for v7/v15 runners
 
 Examples:
     python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_15minonly.py
@@ -51,7 +51,7 @@ from trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_15minonly
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Fetch/update 15m NIFTY parquet(s) in stocks_indicators_15min_eq."
+        description=f"Fetch/update 15m NIFTY parquet(s) in {OUT_DIR}."
     )
     p.add_argument(
         "--symbol",

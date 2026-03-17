@@ -29,6 +29,9 @@ import pandas as pd
 
 import eqidv2_live_combined_analyser_csv_v15 as v2
 import avwap_combined_runner_v15 as v15_runner
+from eqidv2_runtime_paths import DATA_15M_DIR as RUNTIME_DATA_15M_DIR
+from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
+from eqidv2_runtime_paths import report_subdir, runtime_dir
 from avwap_v11_refactored.avwap_common_v11_v15 import (
     default_short_config as v15_default_short_config,
 )
@@ -299,11 +302,15 @@ def _apply_v15_long_overrides() -> None:
     """Patch v2 module-level config/functions to isolate v15_long behavior."""
     _apply_v15_strategy_engine_overrides()
 
-    v2.REPORTS_DIR = ROOT / "reports" / "eqidv2_reports_v15_long"
+    v2.DIR_15M = str(RUNTIME_DATA_15M_DIR)
+    v2.LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
+    v2.LIVE_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
+
+    v2.REPORTS_DIR = report_subdir("eqidv2_reports_v15_long")
     v2.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    v2.OUT_CHECKS_DIR = ROOT / "out_eqidv2_live_checks_15m_v15_long"
-    v2.OUT_SIGNALS_DIR = ROOT / "out_eqidv2_live_signals_15m_v15_long"
+    v2.OUT_CHECKS_DIR = runtime_dir("out_eqidv2_live_checks_15m_v15_long")
+    v2.OUT_SIGNALS_DIR = runtime_dir("out_eqidv2_live_signals_15m_v15_long")
     v2.OUT_CHECKS_DIR.mkdir(parents=True, exist_ok=True)
     v2.OUT_SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -53,6 +53,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
+from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
 
 try:
     from kiteconnect import KiteConnect
@@ -72,7 +73,7 @@ except ImportError:
 # ============================================================================
 IST = pytz.timezone("Asia/Kolkata")
 
-SIGNAL_DIR = "live_signals"
+SIGNAL_DIR = str(RUNTIME_LIVE_SIGNALS_DIR)
 SIGNAL_CSV_PATTERNS = ("signals_{}_v7_sweep_short.csv", "signals_{}_v7_sweep_long.csv")
 TRADE_LOG_PATTERN = "live_trades_{}_v7_sweep.csv"
 LIVE_TRADE_EXEC_LOG_PATTERN = "live_trade_execution_{}_v7_sweep.log"

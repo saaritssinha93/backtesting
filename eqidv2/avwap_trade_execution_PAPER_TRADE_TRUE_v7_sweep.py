@@ -50,6 +50,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
+from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
 
 try:
     from watchdog.observers import Observer
@@ -63,7 +64,7 @@ except ImportError:
 # ============================================================================
 IST = pytz.timezone("Asia/Kolkata")
 
-SIGNAL_DIR = "live_signals"
+SIGNAL_DIR = str(RUNTIME_LIVE_SIGNALS_DIR)
 SIGNAL_CSV_PATTERNS = ("signals_{}_v7_sweep_short.csv", "signals_{}_v7_sweep_long.csv")
 PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v7_sweep.csv"
 PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v7_sweep.log"

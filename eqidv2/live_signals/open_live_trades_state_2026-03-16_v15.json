@@ -1,0 +1,50 @@
+{
+  "date": "2026-03-16",
+  "open_trades": [
+    {
+      "signal_id": "8842ad2e634a43f6",
+      "trade_id": "LT-8842ad2e-121745",
+      "ticker": "BIGBLOC",
+      "side": "SHORT",
+      "quantity": 1,
+      "entry_price": 49.7,
+      "filled_price": 49.53,
+      "stop_price": 50.12,
+      "target_price": 49.15,
+      "entry_order_id": "260316171060311",
+      "target_order_id": "260316171060323",
+      "sl_order_id": "260316171060328",
+      "entry_time": "2026-03-16 12:17:45+0530",
+      "signal_datetime": "2026-03-16 12:15:00+05:30",
+      "signal_entry_datetime_ist": "2026-03-16 12:15:00+05:30",
+      "setup": "A_MOD_BREAK_C1_LOW",
+      "impulse_type": "MODERATE",
+      "quality_score": 0.22,
+      "stage": "exit_legs_placed",
+      "updated_at": "2026-03-16 12:17:46"
+    },
+    {
+      "signal_id": "ca90e4a981dbc83c",
+      "trade_id": "LT-ca90e4a9-130114",
+      "ticker": "FINEORG",
+      "side": "SHORT",
+      "quantity": 1,
+      "entry_price": 4279.14,
+      "filled_price": 4253.4,
+      "stop_price": 4315.1,
+      "target_price": 4232.1,
+      "entry_order_id": "260316171200415",
+      "target_order_id": "260316171200422",
+      "sl_order_id": "260316171200424",
+      "entry_time": "2026-03-16 13:01:14+0530",
+      "signal_datetime": "2026-03-16 13:00:00+05:30",
+      "signal_entry_datetime_ist": "2026-03-16 13:00:00+05:30",
+      "setup": "A_MOD_BREAK_C1_LOW",
+      "impulse_type": "MODERATE",
+      "quality_score": 0.1336,
+      "stage": "exit_legs_placed",
+      "updated_at": "2026-03-16 13:01:14"
+    }
+  ],
+  "updated_at": "2026-03-16 13:01:14"
+}

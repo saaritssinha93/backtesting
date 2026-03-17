@@ -13,7 +13,7 @@ Key design goals:
 - Fairness (doesn't over-call the API; respects pacing)
 
 Outputs (Parquet):
-- stocks_indicators_15min_eq / <TICKER>_stocks_indicators_15min.parquet
+- runtime 15m folder / <TICKER>_stocks_indicators_15min.parquet
 
 Usage:
     python trading_data_continous_run_historical_15m_only_parquet.py
@@ -23,7 +23,7 @@ Options:
     --intraday-ts end|start         # store candle timestamps as end (recommended) or start
     --holidays-file nse_holidays.csv
     --refresh-tokens                # refresh token cache
-    --report-dir reports/stocks_missing_reports
+    --report-dir <runtime reports>/stocks_missing_reports
     --print-missing-rows --print-missing-rows-max 5
 """
 
@@ -44,6 +44,8 @@ import numpy as np
 import pandas as pd
 import pytz
 from kiteconnect import KiteConnect, exceptions as kexc
+from eqidv2_runtime_paths import DATA_15M_DIR
+from eqidv2_runtime_paths import REPORTS_DIR as RUNTIME_REPORTS_DIR
 
 
 # =======================
@@ -56,7 +58,7 @@ MODE = "15min"
 INTERVAL = "15minute"
 STEP_MIN = 15
 
-OUT_DIR = "stocks_indicators_15min_eq"
+OUT_DIR = str(DATA_15M_DIR)
 os.makedirs(OUT_DIR, exist_ok=True)
 
 VALID_MODES = ("15min",)
@@ -950,7 +952,10 @@ def parse_args():
     p.add_argument("--refresh-tokens", action="store_true")
     p.add_argument("--no-migrate-csv", action="store_true")
     p.add_argument("--delete-legacy-csv", action="store_true")
-    p.add_argument("--report-dir", default="reports/stocks_missing_reports")
+    p.add_argument(
+        "--report-dir",
+        default=str(RUNTIME_REPORTS_DIR / "stocks_missing_reports"),
+    )
     p.add_argument("--print-missing-rows", action="store_true")
     p.add_argument("--print-missing-rows-max", type=int, default=5)
     return p.parse_args()

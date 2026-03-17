@@ -37,6 +37,10 @@ from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 
+from eqidv2_runtime_paths import DATA_15M_DIR as RUNTIME_DATA_15M_DIR
+from eqidv2_runtime_paths import DATA_1MIN_DIR as RUNTIME_DATA_1MIN_DIR
+from eqidv2_runtime_paths import runtime_dir
+
 # ===========================================================================
 # CONSOLE OUTPUT TEE (stdout/stderr -> console + outputs/*.txt)
 # ===========================================================================
@@ -195,6 +199,28 @@ DIR_5MIN = None  # Will be resolved dynamically at runtime
 # ===========================================================================
 # 1-MINUTE DATA READER
 # ===========================================================================
+def _resolve_15m_dir() -> Path:
+    """
+    Resolve the 15-min data directory, preferring the SSD runtime copy first.
+    """
+    _script_dir = Path(__file__).resolve().parent
+    if _script_dir.name == "avwap_v11_refactored":
+        _proj = _script_dir.parent
+    else:
+        _proj = _script_dir
+
+    candidates = [
+        RUNTIME_DATA_15M_DIR,
+        _proj / "stocks_indicators_15min_eq",
+        _proj.parent / "stocks_indicators_15min_eq",
+        Path.cwd() / "stocks_indicators_15min_eq",
+    ]
+    for c in candidates:
+        if c.is_dir():
+            return c
+    return candidates[0]
+
+
 def _resolve_5min_dir() -> Path:
     """
     Resolve the 1-min data directory relative to the algo_trading project root.
@@ -208,6 +234,7 @@ def _resolve_5min_dir() -> Path:
 
     # Common locations to search for 1-min data
     candidates = [
+        RUNTIME_DATA_1MIN_DIR,
         _proj / "data" / "stocks_indicators_1min_eq",
         _proj / "stocks_indicators_1min_eq",
         _proj.parent / "data" / "stocks_indicators_1min_eq",
@@ -1538,7 +1565,7 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = _project_root / ("outputs_target_test" if TEST_TARGET_OVERRIDE else "outputs")
+    _outputs_dir = runtime_dir("outputs_target_test" if TEST_TARGET_OVERRIDE else "outputs")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
@@ -1562,6 +1589,14 @@ def main() -> None:
             print("    (unlevered price-return% is saved as pnl_pct_price)")
             print("=" * 70)
 
+            dir_15m = _resolve_15m_dir()
+            print(f"[INFO] 15-min data directory: {dir_15m}")
+            if dir_15m.is_dir():
+                n_15m_files = len(list(dir_15m.glob("*.parquet")))
+                print(f"[INFO] 15-min parquet files found: {n_15m_files}")
+            else:
+                print("[WARN] 15-min data directory not found.")
+
             # Resolve 1-min data directory
             dir_5m = _resolve_5min_dir()
             print(f"[INFO] 1-min data directory: {dir_5m}")
@@ -1577,6 +1612,8 @@ def main() -> None:
             long_cfg = default_long_config(
                 reports_dir=_outputs_dir,
             )
+            short_cfg.dir_15m = str(dir_15m)
+            long_cfg.dir_15m = str(dir_15m)
 
             if ENABLE_TIGHTER_STOPS_PROFILE:
                 short_cfg.stop_pct = float(TIGHTER_SHORT_STOP_PCT)

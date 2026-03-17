@@ -27,7 +27,11 @@ param(
     [string]$EmailTo = "",
     [string]$EmailFrom = "",
     [string]$EmailSendMode = "gmail_api_only",
-    [string]$EmailSubjectPrefix = "EQIDV2 Dashboard URL"
+    [string]$EmailSubjectPrefix = "EQIDV2 Dashboard URL",
+    [string]$SmtpUser = "",
+    [string]$SmtpAppPassword = "",
+    [string]$SmtpServer = "smtp.gmail.com",
+    [int]$SmtpPort = 587
 )
 
 $ErrorActionPreference = "Continue"
@@ -46,6 +50,8 @@ function Normalize-EmailSendMode {
     $m = ("" + $Mode).Trim().ToLowerInvariant()
     switch ($m) {
         "gmail_api_only" { return "gmail_api_only" }
+        "gmail_api_then_smtp" { return "gmail_api_then_smtp" }
+        "smtp_only" { return "smtp_only" }
         "link_only" { return "link_only" }
         default { return "gmail_api_only" }
     }
@@ -121,6 +127,67 @@ $(Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz")
     return @{ ok = $false; reason = "exit=$exitCode output=$outText" }
 }
 
+function Send-UrlBySmtp {
+    param(
+        [string]$Url,
+        [string]$To,
+        [string]$From,
+        [string]$User,
+        [string]$AppPassword,
+        [string]$Server,
+        [int]$Port,
+        [string]$SubjectPrefix
+    )
+
+    $toAddr = ("" + $To).Trim()
+    if ([string]::IsNullOrWhiteSpace($toAddr)) {
+        return @{ ok = $false; reason = "Missing LOG_DASH_EMAIL_TO." }
+    }
+
+    $fromAddr = ("" + $From).Trim()
+    if ([string]::IsNullOrWhiteSpace($fromAddr)) {
+        $fromAddr = ("" + $User).Trim()
+    }
+    if ([string]::IsNullOrWhiteSpace($fromAddr)) {
+        return @{ ok = $false; reason = "Missing LOG_DASH_EMAIL_FROM (or LOG_DASH_SMTP_USER as sender)." }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($User) -or [string]::IsNullOrWhiteSpace($AppPassword)) {
+        return @{ ok = $false; reason = "Missing LOG_DASH_SMTP_USER or LOG_DASH_SMTP_APP_PASSWORD." }
+    }
+
+    $subjectBase = ("" + $SubjectPrefix).Trim()
+    if ([string]::IsNullOrWhiteSpace($subjectBase)) { $subjectBase = "EQIDV2 Dashboard URL" }
+    $subject = "$subjectBase - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
+    $body = @"
+EQIDV2 dashboard URL generated.
+
+URL:
+$Url
+
+Generated at:
+$(Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz")
+"@
+
+    try {
+        $secure = ConvertTo-SecureString $AppPassword -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential($User, $secure)
+        $recipients = $toAddr -split '\s*,\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        Send-MailMessage -SmtpServer $Server -Port $Port -UseSsl -Credential $cred -From $fromAddr -To $recipients -Subject $subject -Body $body -BodyAsHtml:$false
+        return @{ ok = $true; reason = "" }
+    }
+    catch {
+        $reason = $_.Exception.Message
+        try {
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $reason = $_.ErrorDetails.Message
+            }
+        }
+        catch {}
+        return @{ ok = $false; reason = $reason }
+    }
+}
+
 try {
     $logDir = Split-Path -Parent $LogFile
     if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
@@ -129,6 +196,8 @@ try {
 
     if ($EmailTo -eq "__EMPTY__") { $EmailTo = "" }
     if ($EmailFrom -eq "__EMPTY__") { $EmailFrom = "" }
+    if ($SmtpUser -eq "__EMPTY__") { $SmtpUser = "" }
+    if ($SmtpAppPassword -eq "__EMPTY__") { $SmtpAppPassword = "" }
 
     $sendMode = Normalize-EmailSendMode $EmailSendMode
     $allowInteractive = Parse-BoolLike $GmailInteractiveAuth
@@ -150,7 +219,7 @@ try {
             Set-Content -Path $LatestUrlFile -Value $url -Encoding utf8
             Write-LogLine "[INFO] Public URL saved: $url" $LogFile
 
-            if ($sendMode -eq "gmail_api_only") {
+            if ($sendMode -eq "gmail_api_only" -or $sendMode -eq "gmail_api_then_smtp") {
                 $send = Send-UrlByGmailApi -Url $url -To $emailToResolved -From $EmailFrom -SubjectPrefix $EmailSubjectPrefix -PythonPath $PythonExe -ScriptPath $GmailApiScript -CredentialsPath $GmailCredentialsFile -TokenPath $GmailTokenFile -AllowInteractiveAuth $allowInteractive
                 if ($send.ok) {
                     if ([string]::IsNullOrWhiteSpace($send.reason)) {
@@ -160,6 +229,21 @@ try {
                     }
                 } else {
                     Write-LogLine "[ERROR] Gmail API email send failed: $($send.reason)" $LogFile
+                    if ($sendMode -eq "gmail_api_then_smtp") {
+                        $smtpSend = Send-UrlBySmtp -Url $url -To $emailToResolved -From $EmailFrom -User $SmtpUser -AppPassword $SmtpAppPassword -Server $SmtpServer -Port $SmtpPort -SubjectPrefix $EmailSubjectPrefix
+                        if ($smtpSend.ok) {
+                            Write-LogLine "[INFO] SMTP fallback email sent successfully to $emailToResolved via ${SmtpServer}:$SmtpPort." $LogFile
+                        } else {
+                            Write-LogLine "[ERROR] SMTP fallback email send failed: $($smtpSend.reason)" $LogFile
+                        }
+                    }
+                }
+            } elseif ($sendMode -eq "smtp_only") {
+                $smtpSend = Send-UrlBySmtp -Url $url -To $emailToResolved -From $EmailFrom -User $SmtpUser -AppPassword $SmtpAppPassword -Server $SmtpServer -Port $SmtpPort -SubjectPrefix $EmailSubjectPrefix
+                if ($smtpSend.ok) {
+                    Write-LogLine "[INFO] SMTP email sent successfully to $emailToResolved via ${SmtpServer}:$SmtpPort." $LogFile
+                } else {
+                    Write-LogLine "[ERROR] SMTP email send failed: $($smtpSend.reason)" $LogFile
                 }
             } else {
                 Write-LogLine "[INFO] Email send mode link_only: URL was generated but email was skipped." $LogFile

@@ -18,10 +18,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
+from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
-LIVE_SIGNAL_DIR = BASE_DIR / "live_signals"
+LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 IST = ZoneInfo("Asia/Kolkata")
 OPEN_LIVE_TRADES_STATE_PATTERN_V5 = "open_live_trades_state_{}_v5.json"
@@ -36,29 +37,49 @@ KILL_SWITCH_LIVE_FILE_V7_SWEEP = LIVE_SIGNAL_DIR / "kill_switch_false_v7_sweep.j
 KILL_SWITCH_PAPER_FILE_V7_SWEEP = LIVE_SIGNAL_DIR / "kill_switch_true_v7_sweep.json"
 KILL_SWITCH_LIVE_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_false_v15.json"
 KILL_SWITCH_PAPER_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_true_v15.json"
+V15_SHORT_SHARD_IDS: Tuple[str, ...] = tuple(f"{idx:02d}" for idx in range(1, 11))
+V15_LONG_SHARD_IDS: Tuple[str, ...] = tuple(f"{idx:02d}" for idx in range(1, 11))
 HIDDEN_CARD_IDS = {
     "live_combined_csv_v5_unified",
     "live_combined_csv_v5_short",
     "live_combined_csv_v5_long",
+    "live_combined_csv_v7_sweep_short",
+    "live_combined_csv_v7_sweep_long",
     "live_signals_csv_v5_short",
     "live_signals_csv_v5_long",
+    "live_signals_csv_v7_sweep_short",
+    "live_signals_csv_v7_sweep_long",
     "paper_trade_v5",
+    "paper_trade_v7_sweep",
     "live_papertrade_result_csv_v5",
+    "live_papertrade_result_csv_v7_sweep",
     "kite_trade",
     "live_kite_trades_csv",
+    "kite_trade_v7_sweep",
+    "live_kite_trades_csv_v7_sweep",
 }
 
 LOG_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.log",
     "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.log",
-    "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data.log",
+    "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data_live_minimal.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.log",
     "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.log",
     "live_combined_csv_v7_sweep_long": "eqidv2_live_combined_analyser_csv_v7_sweep_long.log",
-    "live_combined_csv_v15_short": "eqidv2_live_combined_analyser_csv_v15_short.log",
-    "live_combined_csv_v15_long": "eqidv2_live_combined_analyser_csv_v15_long.log",
+    **{
+        f"live_combined_csv_v15_short_s{shard_id}": (
+            f"eqidv2_live_combined_analyser_csv_v15_short_shard_{shard_id}.log"
+        )
+        for shard_id in V15_SHORT_SHARD_IDS
+    },
+    **{
+        f"live_combined_csv_v15_long_s{shard_id}": (
+            f"eqidv2_live_combined_analyser_csv_v15_long_shard_{shard_id}.log"
+        )
+        for shard_id in V15_LONG_SHARD_IDS
+    },
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.log",
 }
 LOG_IDS = tuple(LOG_FILES.keys()) + (
@@ -78,13 +99,26 @@ STATUS_FILES: Dict[str, str] = {
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
     "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.status",
     "live_combined_csv_v7_sweep_long": "eqidv2_live_combined_analyser_csv_v7_sweep_long.status",
-    "live_combined_csv_v15_short": "eqidv2_live_combined_analyser_csv_v15_short.status",
-    "live_combined_csv_v15_long": "eqidv2_live_combined_analyser_csv_v15_long.status",
-<<<<<<< HEAD
+    **{
+        f"live_combined_csv_v15_short_s{shard_id}": (
+            f"eqidv2_live_combined_analyser_csv_v15_short_shard_{shard_id}.status"
+        )
+        for shard_id in V15_SHORT_SHARD_IDS
+    },
+    **{
+        f"live_combined_csv_v15_long_s{shard_id}": (
+            f"eqidv2_live_combined_analyser_csv_v15_long_shard_{shard_id}.status"
+        )
+        for shard_id in V15_LONG_SHARD_IDS
+    },
+    "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.status",
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15.status",
-=======
->>>>>>> 94583cfbafe03d746a5f5791ba11f970e6f28711
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.status",
+}
+
+HEARTBEAT_FILES: Dict[str, str] = {
+    "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
+    "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15.heartbeat",
 }
 
 
@@ -262,6 +296,46 @@ def parse_status_file(path: Path) -> Dict[str, str]:
     except OSError:
         return {}
     return out
+
+
+def merge_runtime_status(status: Dict[str, str], heartbeat: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(status or {})
+    if not heartbeat:
+        return merged
+
+    hb_state = str(heartbeat.get("state", "")).strip().upper()
+    if hb_state:
+        merged["heartbeat_state"] = hb_state
+        merged["heartbeat_ts_utc"] = str(heartbeat.get("ts_utc", "")).strip()
+        merged["heartbeat_idle_sec"] = str(heartbeat.get("idle_sec", "")).strip()
+        merged["heartbeat_note"] = str(heartbeat.get("note", "")).strip()
+        if hb_state in {"RUNNING", "RESTARTING", "COOLDOWN"}:
+            merged["status"] = hb_state
+        elif "status" not in merged:
+            merged["status"] = hb_state
+    return merged
+
+
+def infer_scanner_runtime_status(key: str, path: Path, status: Dict[str, str]) -> Dict[str, str]:
+    if not key.startswith("live_combined_csv_"):
+        return dict(status or {})
+
+    merged = dict(status or {})
+    current = str(merged.get("status", "")).strip().upper()
+    if current in {"RUNNING", "RESTARTING", "COOLDOWN"}:
+        return merged
+    if not path.exists():
+        return merged
+    try:
+        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, tz=IST)
+    except OSError:
+        return merged
+    now = dt.datetime.now(IST)
+    age_min = max(0.0, (now - mtime).total_seconds() / 60.0)
+    if mtime.date() == now.date() and age_min <= 20.0:
+        merged["status"] = "RUNNING"
+        merged["derived_status"] = f"log_fresh_{age_min:.1f}m"
+    return merged
 
 
 def tail_text(path: Path, lines: int = 80, max_bytes: int = 120_000) -> str:
@@ -1100,6 +1174,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     .card.is-ok::before { background: var(--ok); }
+    .card.is-warn::before { background: var(--warn); }
     .card.is-bad::before { background: var(--bad); }
     .card.is-fullscreen::before { background: var(--accent); }
 
@@ -1153,6 +1228,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       color: #06251a;
       border-color: rgba(15, 207, 154, 0.5);
       background: rgba(15, 207, 154, 0.92);
+    }
+
+    .pill.warn {
+      color: #3d2200;
+      border-color: rgba(255, 190, 92, 0.55);
+      background: rgba(255, 190, 92, 0.95);
     }
 
     .pill.fail {
@@ -1451,16 +1532,26 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const LOG_ORDER = [
       "eod_15min_data",
       "nifty_guard_fetch_v15",
-      "live_combined_csv_v7_sweep_short",
-      "live_combined_csv_v7_sweep_long",
-      "live_signals_csv_v7_sweep_short",
-      "live_signals_csv_v7_sweep_long",
-      "live_kite_trades_csv_v7_sweep",
-      "kite_trade_v7_sweep",
-      "paper_trade_v7_sweep",
-      "live_papertrade_result_csv_v7_sweep",
-      "live_combined_csv_v15_short",
-      "live_combined_csv_v15_long",
+      "live_combined_csv_v15_short_s01",
+      "live_combined_csv_v15_short_s02",
+      "live_combined_csv_v15_short_s03",
+      "live_combined_csv_v15_short_s04",
+      "live_combined_csv_v15_short_s05",
+      "live_combined_csv_v15_short_s06",
+      "live_combined_csv_v15_short_s07",
+      "live_combined_csv_v15_short_s08",
+      "live_combined_csv_v15_short_s09",
+      "live_combined_csv_v15_short_s10",
+      "live_combined_csv_v15_long_s01",
+      "live_combined_csv_v15_long_s02",
+      "live_combined_csv_v15_long_s03",
+      "live_combined_csv_v15_long_s04",
+      "live_combined_csv_v15_long_s05",
+      "live_combined_csv_v15_long_s06",
+      "live_combined_csv_v15_long_s07",
+      "live_combined_csv_v15_long_s08",
+      "live_combined_csv_v15_long_s09",
+      "live_combined_csv_v15_long_s10",
       "live_signals_csv_v15_short",
       "live_signals_csv_v15_long",
       "live_kite_trades_csv_v15",
@@ -1475,26 +1566,36 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     ];
     const LOG_TITLES = {
       "eod_15min_data": "Live Data Fetch (15mins)",
-      "live_combined_csv_v7_sweep_short": "Live Analysis And Signal Generation V7 Sweep Short",
-      "live_combined_csv_v7_sweep_long": "Live Analysis And Signal Generation V7 Sweep Long",
-      "live_combined_csv_v15_short": "Live Analysis And Signal Generation V15 Short",
-      "live_combined_csv_v15_long": "Live Analysis And Signal Generation V15 Long",
+      "live_combined_csv_v15_short_s01": "Live V15 Short 01",
+      "live_combined_csv_v15_short_s02": "Live V15 Short 02",
+      "live_combined_csv_v15_short_s03": "Live V15 Short 03",
+      "live_combined_csv_v15_short_s04": "Live V15 Short 04",
+      "live_combined_csv_v15_short_s05": "Live V15 Short 05",
+      "live_combined_csv_v15_short_s06": "Live V15 Short 06",
+      "live_combined_csv_v15_short_s07": "Live V15 Short 07",
+      "live_combined_csv_v15_short_s08": "Live V15 Short 08",
+      "live_combined_csv_v15_short_s09": "Live V15 Short 09",
+      "live_combined_csv_v15_short_s10": "Live V15 Short 10",
+      "live_combined_csv_v15_long_s01": "Live Long V15 01",
+      "live_combined_csv_v15_long_s02": "Live Long V15 02",
+      "live_combined_csv_v15_long_s03": "Live Long V15 03",
+      "live_combined_csv_v15_long_s04": "Live Long V15 04",
+      "live_combined_csv_v15_long_s05": "Live Long V15 05",
+      "live_combined_csv_v15_long_s06": "Live Long V15 06",
+      "live_combined_csv_v15_long_s07": "Live Long V15 07",
+      "live_combined_csv_v15_long_s08": "Live Long V15 08",
+      "live_combined_csv_v15_long_s09": "Live Long V15 09",
+      "live_combined_csv_v15_long_s10": "Live Long V15 10",
       "nifty_guard_fetch_v15": "NIFTY Fetch V15",
-      "live_signals_csv_v7_sweep_short": "Live Entries CSV V7 Sweep Short",
-      "live_signals_csv_v7_sweep_long": "Live Entries CSV V7 Sweep Long",
       "live_signals_csv_v15_short": "Live Entries CSV V15 Short",
       "live_signals_csv_v15_long": "Live Entries CSV V15 Long",
-      "live_papertrade_result_csv_v7_sweep": "Live Papertrade Result CSV V7 Sweep",
       "live_papertrade_result_csv_v15": "Live Papertrade Result CSV V15",
-      "live_kite_trades_csv_v7_sweep": "Live Kite Trades CSV V7 Sweep",
       "live_kite_trades_csv_v15": "Live Kite Trades CSV V15",
       "kite_holdings_today_csv": "Kite Holdings (Today)",
       "kite_positions_day_today_csv": "Kite Positions (Daily, Today)",
       "authentication_v2": "Auth_V2",
-      "paper_trade_v7_sweep": "Papertrade Runner View V7 Sweep",
       "paper_trade_v15": "Papertrade Runner View V15",
       "preopen_healthcheck": "Preopen Healthcheck 09:05",
-      "kite_trade_v7_sweep": "Live Kite Trades Log V7 Sweep",
       "kite_trade_v15": "Live Kite Trades Log V15",
       "eod_1540_update": "Live EOD Data Fetch"
     };
@@ -1502,10 +1603,6 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     let FULLSCREEN_ID = "";
     const TABLE_SORT_STATE = {};
     const KILL_CARD_SCOPE = {
-      "kite_trade_v7_sweep": "false_v7_sweep",
-      "live_kite_trades_csv_v7_sweep": "false_v7_sweep",
-      "paper_trade_v7_sweep": "true_v7_sweep",
-      "live_papertrade_result_csv_v7_sweep": "true_v7_sweep",
       "kite_trade_v15": "false_v15",
       "live_kite_trades_csv_v15": "false_v15",
       "paper_trade_v15": "true_v15",
@@ -1532,9 +1629,20 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     function statusBadge(status) {
-      if (!status) return '<span class="pill">UNKNOWN</span>';
-      if (status === "SUCCESS") return '<span class="pill ok">SUCCESS</span>';
-      return `<span class="pill fail">${esc(status)}</span>`;
+      const s = String(status || "").toUpperCase();
+      if (!s) return '<span class="pill">UNKNOWN</span>';
+      if (s === "SUCCESS" || s === "RUNNING") return `<span class="pill ok">${esc(s)}</span>`;
+      if (s === "RESTARTING" || s === "COOLDOWN") return `<span class="pill warn">${esc(s)}</span>`;
+      if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF") return `<span class="pill">${esc(s)}</span>`;
+      return `<span class="pill fail">${esc(s)}</span>`;
+    }
+
+    function cardStatusClass(status) {
+      const s = String(status || "").toUpperCase();
+      if (s === "SUCCESS" || s === "RUNNING") return "card is-ok";
+      if (s === "RESTARTING" || s === "COOLDOWN") return "card is-warn";
+      if (s) return "card is-bad";
+      return "card";
     }
 
     function killScopeForCard(cardId) {
@@ -1852,7 +1960,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const status = it.status && it.status.status ? it.status.status : "";
           const mtime = it.mtime || "-";
           const size = it.size_bytes || 0;
-          const cardCls = status === "SUCCESS" ? "card is-ok" : (status ? "card is-bad" : "card");
+          const cardCls = cardStatusClass(status);
           const isFs = FULLSCREEN_ID === id ? " is-fullscreen" : "";
           const toggleLabel = FULLSCREEN_ID === id ? "Minimize" : "Maximize";
           const toggleCls = FULLSCREEN_ID === id ? "card-toggle is-active" : "card-toggle";
@@ -1916,6 +2024,10 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         for key in LOG_IDS:
             path, file_name = resolve_log_target(key)
             status = parse_status_file(LOG_DIR / STATUS_FILES[key]) if key in STATUS_FILES else {}
+            heartbeat = parse_status_file(LOG_DIR / HEARTBEAT_FILES[key]) if key in HEARTBEAT_FILES else {}
+            if heartbeat:
+                status = merge_runtime_status(status, heartbeat)
+            status = infer_scanner_runtime_status(key, path, status)
             try:
                 size = path.stat().st_size if path.exists() else 0
             except OSError:

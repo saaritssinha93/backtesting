@@ -90,6 +90,9 @@ OUT_SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 STATE_DIR = ROOT / "logs"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = STATE_DIR / "eqidv2_avwap_live_state_v11_v2.json"
+RUNTIME_STATUS_FILE_ENV = "EQIDV2_RUNTIME_STATUS_FILE"
+RUNTIME_HEARTBEAT_FILE_ENV = "EQIDV2_RUNTIME_HEARTBEAT_FILE"
+RUNTIME_SCRIPT_NAME_ENV = "EQIDV2_RUNTIME_SCRIPT_NAME"
 
 PARQUET_ENGINE = "pyarrow"
 
@@ -1521,6 +1524,47 @@ def _fmt_ist_dt(ts: datetime) -> str:
     return ts.astimezone(IST).isoformat(sep=" ", timespec="seconds")
 
 
+def _runtime_path_from_env(env_name: str) -> Optional[Path]:
+    raw = os.getenv(env_name)
+    if not raw:
+        return None
+    return Path(raw).expanduser()
+
+
+def _runtime_script_name() -> str:
+    return os.getenv(RUNTIME_SCRIPT_NAME_ENV, Path(__file__).name)
+
+
+def _write_runtime_kv(path: Optional[Path], **fields: Any) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = "".join(f"{key}={value}\n" for key, value in fields.items() if value is not None)
+    path.write_text(payload, encoding="utf-8")
+
+
+def _touch_runtime_status(status: str, **extra: Any) -> None:
+    _write_runtime_kv(
+        _runtime_path_from_env(RUNTIME_STATUS_FILE_ENV),
+        status=status,
+        script=_runtime_script_name(),
+        pid=os.getpid(),
+        ts=now_ist().strftime("%Y-%m-%d_%H:%M:%S"),
+        **extra,
+    )
+
+
+def _touch_runtime_heartbeat(state: str = "RUNNING", **extra: Any) -> None:
+    _write_runtime_kv(
+        _runtime_path_from_env(RUNTIME_HEARTBEAT_FILE_ENV),
+        state=state,
+        script=_runtime_script_name(),
+        pid=os.getpid(),
+        ts=now_ist().strftime("%Y-%m-%d_%H:%M:%S"),
+        **extra,
+    )
+
+
 def _next_trading_day_start(now: datetime, holidays: set) -> datetime:
     """Return next trading day's START_TIME in IST."""
     probe = now.astimezone(IST).date() + timedelta(days=1)
@@ -2227,6 +2271,9 @@ def main() -> None:
         run_replay_for_date(args.replay_date, args.replay_out_csv)
         return
 
+    _touch_runtime_status("RUNNING", phase="BOOT")
+    _touch_runtime_heartbeat("RUNNING", phase="BOOT")
+
     print("[LIVE] EQIDV2 CSV v2 (15m) | strict current 15m slot only")
     print(f"[INFO] DIR_15M={DIR_15M} | tickers={len(list_tickers_15m())}")
     print(f"[INFO] SHORT: SL={SHORT_STOP_PCT*100:.2f}%, TGT={SHORT_TARGET_PCT*100:.2f}%, ADX>={SHORT_ADX_MIN}, RSI<={SHORT_RSI_MAX}, StochK<={SHORT_STOCHK_MAX}")
@@ -2270,29 +2317,41 @@ def main() -> None:
 
     while True:
         now = now_ist()
+        _touch_runtime_status("RUNNING", phase="LOOP")
+        _touch_runtime_heartbeat("RUNNING", phase="LOOP")
         if now.time() >= HARD_STOP_TIME:
+            _touch_runtime_status("STOPPED_AFTER_CUTOFF", phase="HARD_STOP")
+            _touch_runtime_heartbeat("STOPPED", phase="HARD_STOP")
             print("[STOP] Hard-stop reached for today. Exiting.")
             return
 
         if not is_trading_day_safe(now.date(), holidays):
             nxt = _next_trading_day_start(now, holidays)
+            _touch_runtime_status("RUNNING", phase="SLEEP_NON_TRADING_DAY", next_wake=_fmt_ist_dt(nxt))
+            _touch_runtime_heartbeat("RUNNING", phase="SLEEP_NON_TRADING_DAY", next_wake=_fmt_ist_dt(nxt))
             print(f"[SKIP] Not a trading day ({now.date()}). Sleeping until {_fmt_ist_dt(nxt)}.")
             _sleep_until(nxt)
             continue
 
         slot = _next_slot_after(now)
         if slot.date() != now.date():
+            _touch_runtime_status("RUNNING", phase="SLEEP_TOMORROW_SLOT", next_slot=slot.strftime("%Y-%m-%d %H:%M:%S%z"))
+            _touch_runtime_heartbeat("RUNNING", phase="SLEEP_TOMORROW_SLOT", next_slot=slot.strftime("%Y-%m-%d %H:%M:%S%z"))
             print(f"[WAIT] Next slot is tomorrow {slot}. Sleeping.")
             _sleep_until(slot)
             continue
 
         if now < slot:
+            _touch_runtime_status("RUNNING", phase="WAIT_SLOT", next_slot=slot.strftime("%Y-%m-%d %H:%M:%S%z"))
+            _touch_runtime_heartbeat("RUNNING", phase="WAIT_SLOT", next_slot=slot.strftime("%Y-%m-%d %H:%M:%S%z"))
             print(f"[WAIT] Sleeping until slot {slot.strftime('%Y-%m-%d %H:%M:%S%z')}")
             _sleep_until(slot)
 
         now = now_ist()
         if now.time() > END_TIME:
             nxt = _next_trading_day_start(now, holidays)
+            _touch_runtime_status("RUNNING", phase="SLEEP_NEXT_TRADING_DAY", next_wake=_fmt_ist_dt(nxt))
+            _touch_runtime_heartbeat("RUNNING", phase="SLEEP_NEXT_TRADING_DAY", next_wake=_fmt_ist_dt(nxt))
             print(f"[DONE] Past END_TIME. Sleeping until {_fmt_ist_dt(nxt)}.")
             _sleep_until(nxt)
             continue
@@ -2328,6 +2387,8 @@ def main() -> None:
                 past_end_reached = True
                 break
             if now.time() >= HARD_STOP_TIME:
+                _touch_runtime_status("STOPPED_AFTER_CUTOFF", phase="HARD_STOP")
+                _touch_runtime_heartbeat("STOPPED", phase="HARD_STOP")
                 print("[STOP] Hard-stop reached mid-slot. Exiting.")
                 return
             if now >= slot_budget_end:
@@ -2339,9 +2400,13 @@ def main() -> None:
                 break
 
             scan_started = now_ist()
+            _touch_runtime_status("RUNNING", phase="SCAN", slot=slot.strftime("%H:%M"), scan=label)
+            _touch_runtime_heartbeat("RUNNING", phase="SCAN", slot=slot.strftime("%H:%M"), scan=label)
             print(f"[RUN ] Slot {slot.strftime('%H:%M')} | scan {label} ({scan_idx+1}/{NUM_SCANS_PER_SLOT}) at {scan_started.strftime('%H:%M:%S')}")
             run_one_scan(run_tag=label)
             scan_finished = now_ist()
+            _touch_runtime_status("RUNNING", phase="SCAN_DONE", slot=slot.strftime("%H:%M"), scan=label)
+            _touch_runtime_heartbeat("RUNNING", phase="SCAN_DONE", slot=slot.strftime("%H:%M"), scan=label)
             scan_elapsed = (scan_finished - scan_started).total_seconds()
             if scan_elapsed >= float(SCAN_OVERRUN_WARN_SECONDS):
                 print(
@@ -2373,6 +2438,8 @@ def main() -> None:
 
         if past_end_reached:
             nxt = _next_trading_day_start(now_ist(), holidays)
+            _touch_runtime_status("RUNNING", phase="SLEEP_NEXT_TRADING_DAY", next_wake=_fmt_ist_dt(nxt))
+            _touch_runtime_heartbeat("RUNNING", phase="SLEEP_NEXT_TRADING_DAY", next_wake=_fmt_ist_dt(nxt))
             print(f"[DONE] Past END_TIME. Sleeping until {_fmt_ist_dt(nxt)}.")
             _sleep_until(nxt)
             continue
