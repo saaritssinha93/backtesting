@@ -3,6 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
 set "BAT_DIR=%BASE_DIR%\bat"
+set "TASK_HARDENER=%BAT_DIR%\harden_scheduled_task.ps1"
 set "START_BAT=%BAT_DIR%\run_log_dashboard_public_link.bat"
 set "START_SCHEDULED_BAT=%BAT_DIR%\run_log_dashboard_public_link_scheduled.bat"
 set "STOP_BAT=%BAT_DIR%\run_log_dashboard_stop.bat"
@@ -15,6 +16,10 @@ if "%LOG_DASH_PASS%"=="" (
   echo [WARN] LOG_DASH_PASS is not set in this shell.
   echo [WARN] Ensure the scheduled task has LOG_DASH_PASS configured at runtime.
 )
+if not exist "%TASK_HARDENER%" (
+  echo [ERROR] Missing PowerShell helper: %TASK_HARDENER%
+  endlocal & exit /b 1
+)
 
 set "TR_START=%START_SCHEDULED_BAT%"
 set "TR_STOP=cmd /c \"call %STOP_BAT%\""
@@ -25,11 +30,21 @@ if errorlevel 1 (
   echo [ERROR] Failed to create %TASK_START%
   endlocal & exit /b 1
 )
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_START%"
+if errorlevel 1 (
+  echo [ERROR] Failed to harden %TASK_START%
+  endlocal & exit /b 1
+)
 
 echo [INFO] Creating weekday dashboard STOP task at 16:15 ...
 schtasks /Create /F /TN "%TASK_STOP%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:15 /TR "%TR_STOP%"
 if errorlevel 1 (
   echo [ERROR] Failed to create %TASK_STOP%
+  endlocal & exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_STOP%"
+if errorlevel 1 (
+  echo [ERROR] Failed to harden %TASK_STOP%
   endlocal & exit /b 1
 )
 

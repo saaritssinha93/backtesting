@@ -166,7 +166,7 @@ FINAL_LONG_SIGNAL_WINDOWS = [
 FINAL_SIGNAL_WINDOW_OVERRIDE = True
 FINAL_SHORT_USE_TIME_WINDOWS = True
 FINAL_SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(15, 0, 0))
+    (dtime(9, 15, 0), dtime(14, 30, 0))
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
@@ -223,8 +223,8 @@ NIFTY_RS_BOTH_MODE_THRESHOLD_PCT = 0.08        # half the directional threshold
 # TARGET TEST — disabled in V12 (each side uses its own calibrated targets)
 # ===========================================================================
 TEST_TARGET_OVERRIDE   = True
-TEST_SHORT_TARGET_PCT  = 0.01100
-TEST_LONG_TARGET_PCT   = 0.01100
+TEST_SHORT_TARGET_PCT  = 0.00900
+TEST_LONG_TARGET_PCT   = 0.00900
 
 
 def apply_live_parity_profile(

@@ -78,6 +78,9 @@ for cfg in DIRS.values():
 
 VALID_MODES = ("5min", "15min")
 DEFAULT_MAX_WORKERS = 6
+DEFAULT_FETCH_RETRY_BASE_SEC = float(os.getenv("EQIDV2_FETCH_RETRY_BASE_SEC", "0.8"))
+DEFAULT_FETCH_RATE_LIMIT_BACKOFF_BASE_SEC = float(os.getenv("EQIDV2_FETCH_RATE_LIMIT_BACKOFF_BASE_SEC", "2.0"))
+DEFAULT_FETCH_PACE_SEC = float(os.getenv("EQIDV2_FETCH_PACE_SEC", "0.50"))
 
 # Market timing (IST)
 MARKET_OPEN_TIME = time(9, 15)
@@ -86,7 +89,8 @@ MARKET_CLOSE_TIME_INTRADAY = time(15, 30)      # last intraday candle end (5m/15
 # Candle-end timestamps for intraday
 DEFAULT_INTRADAY_TIMESTAMP = "end"  # "end" or "start"
 
-# Incremental fetch warmup bars (to re-stabilize indicators near the tail)
+# Incremental fetch warmup bars (retained only for compatibility/documentation).
+# The live 5-minute and 15-minute flows are intentionally append-only.
 WARMUP_BARS = {
     "5min":  600,
     "15min": 400,
@@ -569,8 +573,17 @@ def fetch_historical_generic(
     chunk = timedelta(days=chunk_days)
     frames = []
 
-    MAX_RETRIES = 3
-    SLEEP_BETWEEN_CALLS = 0.35
+    MAX_RETRIES = 4
+    SLEEP_BETWEEN_CALLS = DEFAULT_FETCH_PACE_SEC
+
+    def _is_rate_limited_error(ex: Exception) -> bool:
+        text = str(ex).strip().lower()
+        return (
+            "too many requests" in text
+            or "rate limit" in text
+            or "http 429" in text
+            or " 429 " in f" {text} "
+        )
 
     while s < end:
         e = min(s + chunk, end)
@@ -592,10 +605,16 @@ def fetch_historical_generic(
                 frames.append(df)
                 break
             except (kexc.NetworkException, kexc.DataException, kexc.TokenException, kexc.InputException) as ex:
+                backoff_sec = DEFAULT_FETCH_RETRY_BASE_SEC * (2 ** (attempt - 1))
+                if _is_rate_limited_error(ex):
+                    backoff_sec = max(
+                        backoff_sec,
+                        DEFAULT_FETCH_RATE_LIMIT_BACKOFF_BASE_SEC * (2 ** (attempt - 1)),
+                    )
                 if attempt == MAX_RETRIES:
                     logger.warning("Failed chunk %s â†’ %s (%s): %s", s, e, interval, ex)
                 else:
-                    _time.sleep(1.0 * attempt)
+                    _time.sleep(backoff_sec)
             finally:
                 _time.sleep(SLEEP_BETWEEN_CALLS)
 
@@ -841,14 +860,73 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
     except Exception:
         return pd.DataFrame()
 
-def _incremental_start_from_existing(mode: str, out_path: str, default_start: datetime) -> datetime:
-    existing_path = _resolve_existing_store_path(out_path)
-    if not os.path.exists(existing_path):
-        return default_start
+def _mode_step_minutes(mode: str) -> int | None:
+    return {"5min": 5, "15min": 15}.get(mode)
 
-    last_ts = _read_last_ts_from_store(existing_path)
+def _coerce_ist_datetime(value) -> pd.Timestamp | None:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is None:
+        return ts.tz_localize(IST_TZ)
+    return ts.tz_convert(IST_TZ)
+
+def _resolve_current_slot_window(
+    mode: str,
+    intraday_ts: str,
+    expected_spec: dict,
+    default_start: datetime,
+    default_end: datetime,
+) -> tuple[datetime, datetime, pd.Timestamp | None]:
+    step_min = _mode_step_minutes(mode)
+    if step_min is None or expected_spec.get("kind") != "ts":
+        return default_start, default_end, None
+
+    slot_target_ts = _coerce_ist_datetime(expected_spec.get("value"))
+    if slot_target_ts is None:
+        return default_start, default_end, None
+
+    step_td = timedelta(minutes=step_min)
+    intraday_kind = intraday_ts.lower()
+
+    if intraday_kind == "end":
+        fetch_start = max(default_start, (slot_target_ts - step_td).to_pydatetime())
+        fetch_end = min(default_end, slot_target_ts.to_pydatetime())
+    else:
+        fetch_start = max(default_start, slot_target_ts.to_pydatetime())
+        fetch_end = min(default_end, (slot_target_ts + step_td).to_pydatetime())
+
+    return fetch_start, fetch_end, slot_target_ts
+
+def _incremental_start_from_existing(
+    mode: str,
+    out_path: str,
+    default_start: datetime,
+    last_ts: pd.Timestamp | datetime | None = None,
+) -> datetime:
+    existing_path = _resolve_existing_store_path(out_path)
+    if last_ts is None:
+        if not os.path.exists(existing_path):
+            return default_start
+        last_ts = _read_last_ts_from_store(existing_path)
     if last_ts is None:
         return default_start
+
+    if isinstance(last_ts, pd.Timestamp):
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.tz_localize(IST_TZ)
+        else:
+            last_ts = last_ts.tz_convert(IST_TZ)
+        last_ts = last_ts.to_pydatetime()
+    elif last_ts.tzinfo is None:
+        last_ts = IST_TZ.localize(last_ts)
+    else:
+        last_ts = last_ts.astimezone(IST_TZ)
+
+    step_min = _mode_step_minutes(mode)
+    if step_min is not None:
+        # Fallback path only. Live intraday slot fetches are resolved in process_ticker.
+        return max(default_start, last_ts + timedelta(minutes=step_min))
 
     warm = int(WARMUP_BARS.get(mode, 0))
     if warm <= 0:
@@ -856,16 +934,10 @@ def _incremental_start_from_existing(mode: str, out_path: str, default_start: da
 
     if mode == "5min":
         back = timedelta(minutes=5 * warm)
-    elif mode == "15min":
-        back = timedelta(minutes=15 * warm)
     else:
         back = timedelta(days=30)
 
-    s = (last_ts - back)
-    s = s.to_pydatetime() if isinstance(s, pd.Timestamp) else s
-    if s.tzinfo is None:
-        s = IST_TZ.localize(s)
-    return max(default_start, s)
+    return max(default_start, last_ts - back)
 
 
 # ========= PER-SYMBOL PIPELINE =========
@@ -1184,24 +1256,49 @@ def process_ticker(
                             load_existing_secs, fetch_secs, indicators_secs, persist_secs,
                             _time.perf_counter() - t_total0)
 
-    inc_start = _incremental_start_from_existing(mode, out_path, start_dt_ist)
-    if inc_start >= end_dt_ist:
+    t_load0 = _time.perf_counter()
+    existing = _load_existing_ohlc(out_path, intraday_ts, mode)
+    load_existing_secs = _time.perf_counter() - t_load0
+
+    if not existing.empty:
+        existing_last_ts = pd.to_datetime(existing["date"], errors="coerce").dropna().max()
+        if pd.notna(existing_last_ts):
+            if existing_last_ts.tzinfo is None:
+                last_before_ts = existing_last_ts.tz_localize(IST_TZ)
+            else:
+                last_before_ts = existing_last_ts.tz_convert(IST_TZ)
+
+    slot_fetch_start, slot_fetch_end, slot_target_ts = _resolve_current_slot_window(
+        mode,
+        intraday_ts,
+        exp,
+        start_dt_ist,
+        end_dt_ist,
+    )
+
+    if slot_target_ts is not None and last_before_ts is not None and last_before_ts >= slot_target_ts:
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                             exp_str, 0, None, None, None,
                             load_existing_secs, fetch_secs, indicators_secs, persist_secs,
                             _time.perf_counter() - t_total0)
 
-    t_load0 = _time.perf_counter()
-    existing = _load_existing_ohlc(out_path, intraday_ts, mode)
-    load_existing_secs = _time.perf_counter() - t_load0
+    inc_start = slot_fetch_start if slot_target_ts is not None else _incremental_start_from_existing(mode, out_path, start_dt_ist, last_before_ts)
+    fetch_end_dt = slot_fetch_end if slot_target_ts is not None else end_dt_ist
+
+    if inc_start >= fetch_end_dt:
+        return UpdateReport(mode, ticker, "noop", out_path, existed_before,
+                            last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
+                            exp_str, 0, None, None, None,
+                            load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                            _time.perf_counter() - t_total0)
 
     try:
         t_fetch0 = _time.perf_counter()
         if mode == "5min":
-            fetched = fetch_historical_5min_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
+            fetched = fetch_historical_5min_df(kite, token, inc_start, fetch_end_dt, logger, intraday_ts)
         elif mode == "15min":
-            fetched = fetch_historical_15min_df(kite, token, inc_start, end_dt_ist, logger, intraday_ts)
+            fetched = fetch_historical_15min_df(kite, token, inc_start, fetch_end_dt, logger, intraday_ts)
         else:
             return UpdateReport(mode, ticker, "failed", out_path, existed_before,
                                 last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
@@ -1224,14 +1321,54 @@ def process_ticker(
                             load_existing_secs, fetch_secs, indicators_secs, persist_secs,
                             _time.perf_counter() - t_total0)
 
+    if slot_target_ts is not None:
+        fetched = fetched[fetched["date"] == slot_target_ts].reset_index(drop=True)
+        if fetched.empty:
+            return UpdateReport(mode, ticker, "noop", out_path, existed_before,
+                                last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
+                                exp_str, 0, None, None, None,
+                                load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                                _time.perf_counter() - t_total0)
+
+    if mode in {"5min", "15min"} and last_before_ts is not None:
+        overlap = fetched[fetched["date"] <= last_before_ts].copy()
+        if not overlap.empty:
+            overlap_first = pd.to_datetime(overlap["date"], errors="coerce").dropna().min()
+            overlap_last = pd.to_datetime(overlap["date"], errors="coerce").dropna().max()
+            logger.info(
+                "[%s] %s ignoring %d overlapping historical row(s) <= %s | overlap_range=%s -> %s",
+                mode.upper(),
+                ticker,
+                len(overlap),
+                last_before_ts.strftime("%Y-%m-%d %H:%M:%S"),
+                overlap_first.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(overlap_first) else "n/a",
+                overlap_last.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(overlap_last) else "n/a",
+            )
+            fetched = fetched[fetched["date"] > last_before_ts].reset_index(drop=True)
+
+        if fetched.empty:
+            return UpdateReport(mode, ticker, "noop", out_path, existed_before,
+                                last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
+                                exp_str, 0, None, None, None,
+                                load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                                _time.perf_counter() - t_total0)
+
     merged = fetched
     if not existing.empty:
-        merged = (
-            pd.concat([existing, fetched], ignore_index=True)
-              .drop_duplicates(subset="date", keep="last")
-              .sort_values("date")
-              .reset_index(drop=True)
-        )
+        if mode in {"5min", "15min"}:
+            merged = (
+                pd.concat([existing, fetched], ignore_index=True)
+                  .drop_duplicates(subset="date", keep="first")
+                  .sort_values("date")
+                  .reset_index(drop=True)
+            )
+        else:
+            merged = (
+                pd.concat([existing, fetched], ignore_index=True)
+                  .drop_duplicates(subset="date", keep="last")
+                  .sort_values("date")
+                  .reset_index(drop=True)
+            )
 
     try:
         t_ind0 = _time.perf_counter()

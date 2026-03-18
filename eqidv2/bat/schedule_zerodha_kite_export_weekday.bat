@@ -3,6 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
 set "BAT_DIR=%BASE_DIR%\bat"
+set "TASK_HARDENER=%BAT_DIR%\harden_scheduled_task.ps1"
 set "START_BAT=%BAT_DIR%\run_zerodha_kite_export_scheduler.bat"
 set "STOP_BAT=%BAT_DIR%\run_zerodha_kite_export_stop.bat"
 
@@ -12,10 +13,20 @@ set "TASK_STOP=EQIDV2_kite_export_stop_1535"
 set "TR_START=cmd /c \"call %START_BAT%\""
 set "TR_STOP=cmd /c \"call %STOP_BAT%\""
 
+if not exist "%TASK_HARDENER%" (
+  echo [ERROR] Missing PowerShell helper: %TASK_HARDENER%
+  endlocal & exit /b 1
+)
+
 echo [INFO] Creating weekday Kite export START task at 09:15 ...
 schtasks /Create /F /TN "%TASK_START%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 09:15 /TR "%TR_START%"
 if errorlevel 1 (
   echo [ERROR] Failed to create %TASK_START%
+  endlocal & exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_START%"
+if errorlevel 1 (
+  echo [ERROR] Failed to harden %TASK_START%
   endlocal & exit /b 1
 )
 
@@ -23,6 +34,11 @@ echo [INFO] Creating weekday Kite export STOP task at 15:35 ...
 schtasks /Create /F /TN "%TASK_STOP%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 15:35 /TR "%TR_STOP%"
 if errorlevel 1 (
   echo [ERROR] Failed to create %TASK_STOP%
+  endlocal & exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_STOP%"
+if errorlevel 1 (
+  echo [ERROR] Failed to harden %TASK_STOP%
   endlocal & exit /b 1
 )
 

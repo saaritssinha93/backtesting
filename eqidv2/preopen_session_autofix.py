@@ -24,6 +24,7 @@ V15_LONG_SHARD_IDS = tuple(f"{idx:02d}" for idx in range(1, 11))
 
 TASK_TO_BAT: Dict[str, Path] = {
     "EQIDV2_log_dashboard_start_0855": BAT_DIR / "run_log_dashboard_public_link_scheduled.bat",
+    "EQIDV2_eod_5mins_data_0900": BAT_DIR / "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
     "EQIDV2_eod_15mins_data_0900": BAT_DIR / "run_eqidv2_eod_scheduler_for_15mins_data_live_minimal.bat",
     "EQIDV2_authentication_v2_0900": BAT_DIR / "run_authentication_v2.bat",
     **{
@@ -44,6 +45,7 @@ TASK_TO_BAT: Dict[str, Path] = {
 }
 
 FAIL_CHECK_TO_BAT: Dict[str, Path] = {
+    "eod_5min_data": BAT_DIR / "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
     "eod_15min_data": BAT_DIR / "run_eqidv2_eod_scheduler_for_15mins_data_live_minimal.bat",
     **{
         f"live_combined_csv_v15_short_s{shard_id}": (

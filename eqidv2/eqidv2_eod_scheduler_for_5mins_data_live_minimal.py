@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-eqidv2_eod_scheduler_for_15mins_data_live_minimal.py
-==================================================
-Live-only 15-minute scheduler using the minimal indicator fetch core.
+eqidv2_eod_scheduler_for_5mins_data_live_minimal.py
+=================================================
+Live-only 5-minute scheduler using the minimal indicator fetch core.
 
 Why this exists:
 - keeps the original scheduler/core intact
 - computes only the indicator set used by the live/backtest v7/v15 path
-- reduces 15m slot compute and parquet payload without changing session names
+- adds a dedicated 5m live fetch session without disturbing the 15m path
 
 Inherited fixes from the base scheduler:
 
@@ -17,17 +17,17 @@ Inherited fixes from the base scheduler:
    This scheduler monkey-patches core.load_stocks_universe to IGNORE such "small-value" token maps
    and force a real token fetch via kite.instruments().
 
-2) The old scheduler ran too close to the 15m boundary (buffer=7s). Kite can lag a bit.
+2) The old scheduler ran too close to the candle boundary. Kite can lag a bit.
    This version runs exactly once per slot and uses a configurable buffer
-   (default 1s; override via --buffer-sec / EQIDV2_15M_BUFFER_SEC).
+   (default 2s; override via --buffer-sec / EQIDV2_5M_BUFFER_SEC).
 
 3) The old scheduler referenced core.HOLIDAYS_FILE (not present). Core exposes HOLIDAYS_FILE_DEFAULT.
 
 Run:
-    python eqidv2_eod_scheduler_for_15mins_data_live_minimal.py
+    python eqidv2_eod_scheduler_for_5mins_data_live_minimal.py
 
 Optional:
-    python eqidv2_eod_scheduler_for_15mins_data_live_minimal.py --buffer-sec 75 --max-workers 24
+    python eqidv2_eod_scheduler_for_5mins_data_live_minimal.py --buffer-sec 20 --max-workers 16
     The scheduler treats --max-workers as a total worker budget across all 4 app partitions.
 """
 
@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import pytz
-from eqidv2_runtime_paths import DATA_15M_DIR as RUNTIME_DATA_15M_DIR
+from eqidv2_runtime_paths import DATA_5M_DIR as RUNTIME_DATA_5M_DIR
 from eqidv2_runtime_paths import REPORTS_DIR as RUNTIME_REPORTS_DIR
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -172,7 +172,7 @@ core.load_stocks_universe = load_stocks_universe_fixed
 # ---------------------------------------------------------------------
 # IMPORTANT FIX: core.ticker_is_fresh() has a +/- one-step tolerance that can
 # wrongly treat a file that is ONE candle behind as "fresh".
-# For 15m, that makes updates happen every 30 minutes (it skips every alternate slot).
+# For 5m, that can make updates happen every 10 minutes (it skips every alternate slot).
 # So we patch it to be STRICT: last_ts must be >= expected_ts (minus a tiny tol).
 # ---------------------------------------------------------------------
 _orig_ticker_is_fresh = getattr(core, 'ticker_is_fresh', None)
@@ -207,18 +207,18 @@ if hasattr(core, 'expected_last_stamp') and _orig_ticker_is_fresh is not None:
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 35)  # keep scheduler alive long enough to process the 15:30 close bar
 HARD_STOP = dtime(15, 50)  # exit after this
-FIRST_15M_CLOSE = dtime(9, 30)  # first completed 15m candle close timestamp
-DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_15M_MAX_WORKERS", "24"))
-DEFAULT_MAX_WORKERS_PER_APP = int(os.getenv("EQIDV2_15M_MAX_WORKERS_PER_APP", "6"))
-DEFAULT_BUFFER_SEC = int(os.getenv("EQIDV2_15M_BUFFER_SEC", "1"))
-DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_15M_REFRESH_TOKENS", "0")).strip().lower() in {
+FIRST_5M_CLOSE = dtime(9, 20)  # first completed 5m candle close timestamp
+DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_5M_MAX_WORKERS", "16"))
+DEFAULT_MAX_WORKERS_PER_APP = int(os.getenv("EQIDV2_5M_MAX_WORKERS_PER_APP", "4"))
+DEFAULT_BUFFER_SEC = int(os.getenv("EQIDV2_5M_BUFFER_SEC", "2"))
+DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_5M_REFRESH_TOKENS", "0")).strip().lower() in {
     "1",
     "true",
     "yes",
     "on",
 }
 DEFAULT_ENABLE_OPENING_SLOT_FETCH = str(
-    os.getenv("EQIDV2_15M_ENABLE_OPENING_SLOT_FETCH", "1")
+    os.getenv("EQIDV2_5M_ENABLE_OPENING_SLOT_FETCH", "1")
 ).strip().lower() in {
     "1",
     "true",
@@ -229,7 +229,7 @@ DEFAULT_ENABLE_OPENING_SLOT_FETCH = str(
 # ---------------------------------------------------------------------
 # Opening-slot expected stamp override:
 # For 09:15 slot we intentionally allow a "start-ts" snapshot fetch.
-# Core expected_last_stamp(start) normally resolves to 09:00 at 09:15,
+# Core expected_last_stamp(start) normally resolves to 09:10 at 09:15,
 # which suppresses opening updates. We force expected to 09:15 for this slot.
 # ---------------------------------------------------------------------
 _orig_expected_last_stamp = getattr(core, "expected_last_stamp", None)
@@ -245,8 +245,8 @@ def expected_last_stamp_opening_fix(mode: str, now_ist_dt: datetime, holidays: s
         now_ist_dt = IST.localize(now_ist_dt)
 
     t = now_ist_dt.time()
-    in_opening_window = (MARKET_OPEN <= t < FIRST_15M_CLOSE)
-    if mode_l == "15min" and ts_mode == "start" and in_opening_window:
+    in_opening_window = (MARKET_OPEN <= t < FIRST_5M_CLOSE)
+    if mode_l == "5min" and ts_mode == "start" and in_opening_window:
         open_anchor = IST.localize(
             datetime(
                 now_ist_dt.year,
@@ -257,7 +257,7 @@ def expected_last_stamp_opening_fix(mode: str, now_ist_dt: datetime, holidays: s
                 0,
             )
         )
-        return {"kind": "ts", "value": open_anchor, "step_min": 15}
+        return {"kind": "ts", "value": open_anchor, "step_min": 5}
 
     return _orig_expected_last_stamp(mode, now_ist_dt, holidays, intraday_ts)
 
@@ -268,16 +268,16 @@ if _orig_expected_last_stamp is not None:
 def now_ist() -> datetime:
     return datetime.now(IST)
 
-def _floor_to_15m(dt: datetime) -> datetime:
+def _floor_to_5m(dt: datetime) -> datetime:
     # dt is tz-aware
-    minute = (dt.minute // 15) * 15
+    minute = (dt.minute // 5) * 5
     return dt.replace(minute=minute, second=0, microsecond=0)
 
 def _next_boundary(dt: datetime) -> datetime:
-    flo = _floor_to_15m(dt)
+    flo = _floor_to_5m(dt)
     if dt == flo:
-        return flo + timedelta(minutes=15)
-    return flo + timedelta(minutes=15)
+        return flo + timedelta(minutes=5)
+    return flo + timedelta(minutes=5)
 
 def _is_trading_time(dt: datetime) -> bool:
     t = dt.time()
@@ -416,7 +416,7 @@ def _run_partition_worker(
     except Exception as e:
         result_queue.put((partition_name, False, str(e)))
 
-def run_update_15m_once(
+def run_update_5m_once(
     max_workers: int,
     max_workers_per_app: int,
     report_dir: str,
@@ -444,7 +444,7 @@ def run_update_15m_once(
     app4_token_map = {t: token_map[t] for t in app4_tickers if t in token_map}
 
     print(
-        "[INFO] 15min split:",
+        "[INFO] 5min split:",
         f"app1={len(app1_tickers)} tickers (api_key.txt/access_token.txt),",
         f"app2={len(app2_tickers)} tickers (request_token2.txt/access_token2.txt),",
         f"app3={len(app3_tickers)} tickers (request_token3.txt/access_token3.txt),",
@@ -467,7 +467,7 @@ def run_update_15m_once(
     )
 
     print(
-        "[INFO] 15min worker budget:",
+        "[INFO] 5min worker budget:",
         f"total={max_workers},",
         f"active_apps={active_partition_count},",
         f"per_app_cap={max_workers_per_app},",
@@ -479,7 +479,7 @@ def run_update_15m_once(
         proc = ctx.Process(
             target=_run_partition_worker,
             args=(
-                "15min",
+                "5min",
                 pname,
                 ptickers,
                 ptoken_map,
@@ -553,7 +553,7 @@ def main() -> None:
     ap.set_defaults(enable_opening_slot_fetch=DEFAULT_ENABLE_OPENING_SLOT_FETCH)
     ap.add_argument(
         "--report-dir",
-        default=str(RUNTIME_REPORTS_DIR / "stocks_missing_reports"),
+        default=str(RUNTIME_REPORTS_DIR / "stocks_missing_reports_5m"),
     )
     args = ap.parse_args()
 
@@ -564,10 +564,10 @@ def main() -> None:
     except Exception as e:
         print(f"[WARN] Failed to initialize stocks_fetcher logger: {e}")
 
-    print("[LIVE] EQIDV2 15m scheduler started.")
+    print("[LIVE] EQIDV2 5m scheduler started.")
     print(f"       Using EQIDV2_DIR: {EQIDV2_DIR}")
-    print(f"       Output dir (15m): {getattr(core, 'DIRS', {}).get('15min', {}).get('out', str(RUNTIME_DATA_15M_DIR))}")
-    print(f"       Runs every 15 mins between {MARKET_OPEN.strftime('%H:%M')} and {MARKET_CLOSE.strftime('%H:%M')} IST (trading days).")
+    print(f"       Output dir (5m): {getattr(core, 'DIRS', {}).get('5min', {}).get('out', str(RUNTIME_DATA_5M_DIR))}")
+    print(f"       Runs every 5 mins between {MARKET_OPEN.strftime('%H:%M')} and {MARKET_CLOSE.strftime('%H:%M')} IST (trading days).")
     print(f"       Buffer after boundary: {args.buffer_sec}s")
     print(f"       Max workers (total budget): {args.max_workers}")
     print(f"       Max workers per app cap: {args.max_workers_per_app}")
@@ -604,15 +604,15 @@ def main() -> None:
             time.sleep(min(sleep_s, 300))
             continue
 
-        # Determine the slot we should process: last completed 15m boundary
-        slot_end = _floor_to_15m(dt)
+        # Determine the slot we should process: last completed 5m boundary
+        slot_end = _floor_to_5m(dt)
 
-        opening_slot = slot_end.time() < FIRST_15M_CLOSE
+        opening_slot = slot_end.time() < FIRST_5M_CLOSE
         if opening_slot and (not args.enable_opening_slot_fetch):
             if last_run_slot != slot_end:
                 print(
                     f"[SKIP] Opening slot {slot_end.strftime('%H:%M')} disabled by config. "
-                    "First actionable slot is 09:30."
+                    "First actionable slot is 09:20."
                 )
             last_run_slot = slot_end
             nxt = _next_boundary(dt) + timedelta(seconds=int(args.buffer_sec))
@@ -632,9 +632,9 @@ def main() -> None:
             continue
 
         tag = "OPEN" if opening_slot else "RUN "
-        print(f"[{tag}] Updating EQIDV2 15m for slot {slot_end.strftime('%H:%M')} at {dt.strftime('%Y-%m-%d %H:%M:%S%z')}")
+        print(f"[{tag}] Updating EQIDV2 5m for slot {slot_end.strftime('%H:%M')} at {dt.strftime('%Y-%m-%d %H:%M:%S%z')}")
         try:
-            run_update_15m_once(
+            run_update_5m_once(
                 max_workers=int(args.max_workers),
                 max_workers_per_app=int(args.max_workers_per_app),
                 report_dir=str(args.report_dir),

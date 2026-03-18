@@ -6,6 +6,9 @@ from pathlib import Path
 
 RUNTIME_ROOT = Path(os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2"))
 
+DATA_5M_DIR = Path(
+    os.getenv("EQIDV2_DATA_5M_DIR", str(RUNTIME_ROOT / "stocks_indicators_5min_eq"))
+)
 DATA_15M_DIR = Path(
     os.getenv("EQIDV2_DATA_15M_DIR", str(RUNTIME_ROOT / "stocks_indicators_15min_eq"))
 )
@@ -34,6 +37,7 @@ def report_subdir(name: str) -> Path:
 
 for _path in (
     RUNTIME_ROOT,
+    DATA_5M_DIR,
     DATA_15M_DIR,
     DATA_1MIN_DIR,
     REPORTS_DIR,

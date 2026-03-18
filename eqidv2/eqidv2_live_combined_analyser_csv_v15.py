@@ -163,6 +163,7 @@ HARD_STOP_TIME = dtime(15, 40)
 # 15-min boundary.  We delay the first scan and run multiple attempts so at least
 # one scan sees fully-updated data.
 INITIAL_DELAY_SECONDS = _env_int("EQIDV2_INITIAL_DELAY_SECONDS", 5, min_value=0)
+SLOT_START_OFFSET_SECONDS = _env_int("EQIDV2_SLOT_START_OFFSET_SECONDS", INITIAL_DELAY_SECONDS, min_value=0)
 NUM_SCANS_PER_SLOT = _env_int("EQIDV2_NUM_SCANS_PER_SLOT", 5, min_value=1)
 SCAN_INTERVAL_SECONDS = _env_int("EQIDV2_SCAN_INTERVAL_SECONDS", 15, min_value=0)
 BLOCK_PARALLEL_SCAN_ENABLED = _env_bool("EQIDV2_BLOCK_PARALLEL_SCAN_ENABLED", True)
@@ -813,14 +814,19 @@ def _last_bar_for_ticker_ist(ticker: str) -> pd.Timestamp:
 
 
 def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool, float, float, int]:
+    delay_target = slot + timedelta(seconds=SLOT_START_OFFSET_SECONDS)
+    now = now_ist()
+    if now < delay_target:
+        wait_secs = (delay_target - now).total_seconds()
+        print(
+            f"[WAIT] Delaying {wait_secs:.0f}s for shard slot offset "
+            f"(until {delay_target.strftime('%H:%M:%S')})"
+        )
+        time.sleep(max(0, wait_secs))
+
     if not SLOT_READY_POLL_ENABLED:
-        delay_target = slot + timedelta(seconds=INITIAL_DELAY_SECONDS)
-        now = now_ist()
-        if now < delay_target:
-            wait_secs = (delay_target - now).total_seconds()
-            print(f"[WAIT] Delaying {wait_secs:.0f}s for data fetch to complete (until {delay_target.strftime('%H:%M:%S')})")
-            time.sleep(max(0, wait_secs))
-        return False, 0.0, float(max(0, (delay_target - now).total_seconds() if now < delay_target else 0.0)), 0
+        waited = max(0.0, (delay_target - now).total_seconds() if now < delay_target else 0.0)
+        return False, 0.0, float(waited), 0
 
     max_wait = max(0, int(SLOT_READY_MAX_WAIT_SECONDS))
     poll_secs = max(1, int(SLOT_READY_POLL_SECONDS))
@@ -828,7 +834,7 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
     if not sample or max_wait <= 0:
         return False, 0.0, 0.0, len(sample)
 
-    deadline = slot + timedelta(seconds=max_wait)
+    deadline = delay_target + timedelta(seconds=max_wait)
     started = now_ist()
     target_slot = pd.Timestamp(slot).tz_convert(IST) if pd.Timestamp(slot).tzinfo else pd.Timestamp(slot).tz_localize(IST)
     last_ratio = 0.0
@@ -2565,7 +2571,11 @@ def main() -> None:
     print(f"[INFO] UPDATE_15M_BEFORE_CHECK={UPDATE_15M_BEFORE_CHECK}")
     print(f"[INFO] SLOT_LOOKBACK_COUNT={SLOT_LOOKBACK_COUNT}")
     print(f"[INFO] STARTUP_BACKFILL={RUN_STARTUP_BACKFILL and (not args.no_startup_backfill)}")
-    print(f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s")
+    print(
+        f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, "
+        f"slot_start_offset={SLOT_START_OFFSET_SECONDS}s, "
+        f"scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s"
+    )
     print(
         f"[INFO] Immediate CSV flush={IMMEDIATE_SIGNAL_CSV_FLUSH} | "
         f"slot_scan_budget={SLOT_SCAN_BUDGET_SECONDS}s | overrun_warn={SCAN_OVERRUN_WARN_SECONDS}s"
