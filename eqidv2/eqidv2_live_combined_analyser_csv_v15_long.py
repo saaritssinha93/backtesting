@@ -68,7 +68,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 STALE_ONLY_RETRY_ENABLED = _env_bool("EQIDV15_STALE_ONLY_RETRY", True)
 LONG_STOP_PCT = float(os.getenv("EQIDV15_LONG_STOP_PCT", "0.0075"))
-LONG_TARGET_PCT = float(os.getenv("EQIDV15_LONG_TARGET_PCT", "0.011"))
+LONG_TARGET_PCT = float(os.getenv("EQIDV15_LONG_TARGET_PCT", "0.0095"))
 
 LONG_RSI_CAP_RAW = os.getenv("EQIDV15_LONG_RSI_CAP", "").strip()
 LONG_ADX_MIN_RAW = os.getenv("EQIDV15_LONG_ADX_MIN", "").strip()
@@ -132,7 +132,13 @@ def _passes_v15_nifty_context(signal: Any) -> bool:
         rs_thresh = float(v15_runner.NIFTY_RS_THRESHOLD_PCT)
         apply_rs = True
     elif bool(getattr(v15_runner, "NIFTY_RS_BOTH_MODE_ENABLED", False)):
-        rs_thresh = float(v15_runner.NIFTY_RS_BOTH_MODE_THRESHOLD_PCT)
+        rs_thresh = float(
+            getattr(
+                v15_runner,
+                "NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT",
+                getattr(v15_runner, "NIFTY_RS_BOTH_MODE_THRESHOLD_PCT", 0.0),
+            )
+        )
         apply_rs = True
     else:
         rs_thresh = 0.0

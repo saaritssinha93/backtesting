@@ -67,9 +67,39 @@ def _env_bool(name: str, default: bool) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _build_effective_v15_short_cfg():
+    short_cfg = v15_default_short_config()
+    long_cfg = v15_default_long_config()
+    apply_profile = getattr(v15_runner, "apply_live_parity_profile", None)
+    if callable(apply_profile):
+        short_cfg, _ = apply_profile(short_cfg, long_cfg)
+    market_regime_tickers = tuple(
+        getattr(
+            v15_runner,
+            "NIFTY_CONTEXT_TICKERS",
+            getattr(short_cfg, "market_regime_tickers", ()),
+        ) or ()
+    )
+    if market_regime_tickers:
+        short_cfg.market_regime_tickers = market_regime_tickers
+    short_cfg.dir_15m = str(v15_runner._resolve_15m_dir())
+    return short_cfg
+
+
 STALE_ONLY_RETRY_ENABLED = _env_bool("EQIDV15_STALE_ONLY_RETRY", True)
-SHORT_STOP_PCT = float(os.getenv("EQIDV15_SHORT_STOP_PCT", "0.0066"))      # 0.66%
-SHORT_TARGET_PCT = float(os.getenv("EQIDV15_SHORT_TARGET_PCT", "0.011"))  # 1.10%
+_DEFAULT_V15_SHORT_CFG = _build_effective_v15_short_cfg()
+SHORT_STOP_PCT = float(
+    os.getenv(
+        "EQIDV15_SHORT_STOP_PCT",
+        str(float(getattr(_DEFAULT_V15_SHORT_CFG, "stop_pct", 0.0075))),
+    )
+)
+SHORT_TARGET_PCT = float(
+    os.getenv(
+        "EQIDV15_SHORT_TARGET_PCT",
+        str(float(getattr(_DEFAULT_V15_SHORT_CFG, "target_pct", 0.0095))),
+    )
+)
 
 _NIFTY_CONTEXT_MODE_MAP: Dict[str, str] = {}
 _NIFTY_CONTEXT_RET_MAP: Dict[str, float] = {}
@@ -90,8 +120,7 @@ def _refresh_v15_nifty_context() -> None:
         _NIFTY_STOCK_RET_CACHE = {}
         return
 
-    cfg = v15_default_short_config()
-    cfg.dir_15m = str(v15_runner._resolve_15m_dir())
+    cfg = _build_effective_v15_short_cfg()
     mode_map, ret_map, src, _counts = v15_runner._build_nifty_intraday_context(cfg)
     _NIFTY_CONTEXT_MODE_MAP = dict(mode_map or {})
     _NIFTY_CONTEXT_RET_MAP = dict(ret_map or {})
@@ -125,7 +154,13 @@ def _passes_v15_nifty_context(signal: Any) -> bool:
         rs_thresh = float(v15_runner.NIFTY_RS_THRESHOLD_PCT)
         apply_rs = True
     elif bool(getattr(v15_runner, "NIFTY_RS_BOTH_MODE_ENABLED", False)):
-        rs_thresh = float(v15_runner.NIFTY_RS_BOTH_MODE_THRESHOLD_PCT)
+        rs_thresh = float(
+            getattr(
+                v15_runner,
+                "NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT",
+                getattr(v15_runner, "NIFTY_RS_BOTH_MODE_THRESHOLD_PCT", 0.0),
+            )
+        )
         apply_rs = True
     else:
         rs_thresh = 0.0

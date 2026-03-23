@@ -108,6 +108,7 @@ class StrategyConfig:
     opening_range_wide_threshold_pct: float = 1.60
     gap_reversal_threshold_pct: float = 0.90
     opening_vwap_flip_threshold: int = 2
+    min_opening_range_width_pct: float = 0.0
 
     # --- Trend filter (Option A) ---
     adx_min: float = 25.0
@@ -139,12 +140,14 @@ class StrategyConfig:
     avwap_min_consec_closes: int = 2
     avwap_mode: str = "any"         # "any" or "both"
     avwap_dist_atr_mult: float = 0.25
+    signal_avwap_dist_atr_max: float = 0.0
 
     # --- Quality upgrades ---
     max_trades_per_ticker_per_day: int = 1
     require_entry_close_confirm: bool = True
     min_bars_left_after_entry: int = 4
     min_bars_for_scan: int = 7
+    entry_time_cutoff: Optional[dtime] = None
 
     # --- Signal->Entry lag controls (in 15-min bars) ---
     # These control (entry_time_ist - signal_time_ist) per setup.
@@ -158,6 +161,10 @@ class StrategyConfig:
     # Live-only option: allow evaluating setups even with incomplete tail bars.
     # Keep False by default to preserve existing backtest behavior.
     allow_incomplete_tail: bool = False
+    # Live-parity option: ignore prev_close when selecting the day mode.
+    # V15 live parity scans only evaluate the current day slice, so gap-driven
+    # reversal mode should not depend on the previous day's close there.
+    use_prev_close_for_day_mode: bool = True
 
     # Breakeven
     enable_breakeven: bool = True

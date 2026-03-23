@@ -52,7 +52,14 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
+import avwap_combined_runner_v15 as v15_runner
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
+from avwap_v11_refactored.avwap_common_v11_v15 import (
+    default_short_config as v15_default_short_config,
+)
+from avwap_v11_refactored.avwap_common_v7_sweep_v15 import (
+    default_long_config as v15_default_long_config,
+)
 
 try:
     from kiteconnect import KiteConnect
@@ -119,8 +126,42 @@ MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_MAX_CONCURRENT_TRADES", "20"))
 # Conservative fallback so prices remain valid for common NSE 0.10/0.05 tick scripts.
 DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
 MAX_TICK_DECIMALS = 4
-SHORT_TARGET_PCT = float(os.getenv("EQIDV15_SHORT_TARGET_PCT", "0.011"))    # 1.10%
-LONG_TARGET_PCT = float(os.getenv("EQIDV15_LONG_TARGET_PCT", "0.011"))       # 1.10%
+
+
+def _build_effective_v15_executor_cfgs():
+    short_cfg = v15_default_short_config()
+    long_cfg = v15_default_long_config()
+    apply_profile = getattr(v15_runner, "apply_live_parity_profile", None)
+    if callable(apply_profile):
+        short_cfg, long_cfg = apply_profile(short_cfg, long_cfg)
+    return short_cfg, long_cfg
+
+
+_EFFECTIVE_V15_SHORT_CFG, _EFFECTIVE_V15_LONG_CFG = _build_effective_v15_executor_cfgs()
+SHORT_STOP_PCT = float(
+    os.getenv(
+        "EQIDV15_SHORT_STOP_PCT",
+        str(float(getattr(_EFFECTIVE_V15_SHORT_CFG, "stop_pct", 0.0084))),
+    )
+)
+LONG_STOP_PCT = float(
+    os.getenv(
+        "EQIDV15_LONG_STOP_PCT",
+        str(float(getattr(_EFFECTIVE_V15_LONG_CFG, "stop_pct", 0.0075))),
+    )
+)
+SHORT_TARGET_PCT = float(
+    os.getenv(
+        "EQIDV15_SHORT_TARGET_PCT",
+        str(float(getattr(_EFFECTIVE_V15_SHORT_CFG, "target_pct", 0.0090))),
+    )
+)
+LONG_TARGET_PCT = float(
+    os.getenv(
+        "EQIDV15_LONG_TARGET_PCT",
+        str(float(getattr(_EFFECTIVE_V15_LONG_CFG, "target_pct", 0.0090))),
+    )
+)
 
 # Trade log columns
 TRADE_LOG_COLUMNS = [
@@ -178,11 +219,10 @@ _SIGNAL_COL_MAP = {
     "conf_mult":      "confidence_multiplier",
 }
 
-# Default position size for quantity calculation
-DEFAULT_POSITION_SIZE = 50_000
-# Temporary safety override: force all NEW entries to quantity=1.
-# Set to None to use CSV quantity / computed fallback sizing.
-FORCE_ENTRY_QUANTITY: Optional[int] = 1
+# Fallback margin capital when the signal row omits quantity.
+DEFAULT_POSITION_SIZE = float(os.getenv("EQIDV15_DEFAULT_POSITION_SIZE_RS", "50000"))
+# Leave unset so quantity is taken from the signal row when present.
+FORCE_ENTRY_QUANTITY: Optional[int] = None
 
 # ============================================================================
 # LOGGING
@@ -1590,22 +1630,43 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 with capital_lock:
                     capital_deployed[signal_id] = margin
 
-                # Recalculate SL/target based on actual fill price
+                # Recalculate SL/target from the actual fill price using the
+                # intended signal-side stop/target multipliers.
                 tick_size = get_tick_size(ticker)
+                signal_stop_mult = (
+                    float(signal_stop / signal_entry_price)
+                    if signal_entry_price > 0 and signal_stop > 0
+                    else None
+                )
+                signal_target_mult = (
+                    float(signal_target / signal_entry_price)
+                    if signal_entry_price > 0 and signal_target > 0
+                    else None
+                )
                 if side == "SHORT":
-                    sl_offset = abs(signal_stop - signal_entry_price)
-                    tgt_offset = abs(signal_entry_price - signal_target)
-                    sl_price = round_to_tick(result.filled_price + sl_offset, tick=tick_size)
-                    tgt_price = round_to_tick(result.filled_price - tgt_offset, tick=tick_size)
+                    stop_mult = signal_stop_mult if signal_stop_mult and signal_stop_mult > 1.0 else (1.0 + SHORT_STOP_PCT)
+                    target_mult = signal_target_mult if signal_target_mult and signal_target_mult < 1.0 else (1.0 - SHORT_TARGET_PCT)
                 else:
-                    sl_offset = abs(signal_entry_price - signal_stop)
-                    tgt_offset = abs(signal_target - signal_entry_price)
-                    sl_price = round_to_tick(result.filled_price - sl_offset, tick=tick_size)
-                    tgt_price = round_to_tick(result.filled_price + tgt_offset, tick=tick_size)
+                    stop_mult = signal_stop_mult if signal_stop_mult and signal_stop_mult < 1.0 else (1.0 - LONG_STOP_PCT)
+                    target_mult = signal_target_mult if signal_target_mult and signal_target_mult > 1.0 else (1.0 + LONG_TARGET_PCT)
 
-                    result.stop_price = sl_price
-                    result.target_price = tgt_price
-                    _sync_active_position("entry_filled")
+                old_stop = float(result.stop_price)
+                old_target = float(result.target_price)
+                result.stop_price = float(round_to_tick(result.filled_price * stop_mult, tick=tick_size))
+                result.target_price = float(round_to_tick(result.filled_price * target_mult, tick=tick_size))
+                if old_stop > 0 and old_target > 0:
+                    if (
+                        abs(result.stop_price - old_stop) >= (tick_size / 2.0)
+                        or abs(result.target_price - old_target) >= (tick_size / 2.0)
+                    ):
+                        log.info(
+                            f"[LIVE][ENTRY.REBASE] ticker={ticker} | side={side} | "
+                            f"signal_id={signal_id[:12]} | signal_entry={signal_entry_price:.2f} | "
+                            f"entry_exec={result.filled_price:.2f} | "
+                            f"sl:{old_stop:.2f}->{result.stop_price:.2f} | "
+                            f"tgt:{old_target:.2f}->{result.target_price:.2f}"
+                        )
+                _sync_active_position("entry_filled")
 
         # No open position to monitor
         if trade_closed:
@@ -2743,7 +2804,8 @@ def _detect_stale_tracked_positions() -> List[dict]:
 def _normalize_signal(raw: dict) -> dict:
     """
     Map signal-generator CSV column names to the names the executor expects.
-    Also computes/enforces quantity.
+    Preserve signal quantity/SL/target when present so execution stays aligned
+    with the scanner output. Backfill missing values from executor defaults.
     """
     sig = {}
     for k, v in raw.items():
@@ -2761,27 +2823,30 @@ def _normalize_signal(raw: dict) -> dict:
     if not sig.get("signal_datetime"):
         sig["signal_datetime"] = sig.get("signal_entry_datetime_ist", "")
 
+    signal_quantity = _safe_int(sig.get("quantity", 0), 0)
     if FORCE_ENTRY_QUANTITY is not None:
         sig["quantity"] = max(1, int(FORCE_ENTRY_QUANTITY))
+    elif signal_quantity > 0:
+        sig["quantity"] = int(signal_quantity)
     else:
-        # Compute quantity if missing.
-        if "quantity" not in sig or pd.isna(sig.get("quantity")):
-            entry = _safe_float(sig.get("entry_price", 0), 0.0)
-            if entry > 0:
-                sig["quantity"] = max(1, int(DEFAULT_POSITION_SIZE / entry))
-            else:
-                sig["quantity"] = 1
+        entry = _safe_float(sig.get("entry_price", 0), 0.0)
+        if entry > 0:
+            notional = float(DEFAULT_POSITION_SIZE) * float(INTRADAY_LEVERAGE)
+            sig["quantity"] = max(1, int(notional / entry))
         else:
-            sig["quantity"] = _safe_int(sig.get("quantity", 1), 1)
+            sig["quantity"] = 1
 
-# Enforce V15 target policy from executor side as well:
-    # SHORT -> entry*(1-0.90%), LONG -> entry*(1+1.10%)
+    # Keep signal SL/target when supplied; only backfill missing fields.
     side = str(sig.get("side", "")).strip().upper()
     entry = _safe_float(sig.get("entry_price", 0.0), 0.0)
-    if entry > 0 and side in {"SHORT", "LONG"}:
+    stop_price = _safe_float(sig.get("stop_price", 0.0), 0.0)
+    target_price = _safe_float(sig.get("target_price", 0.0), 0.0)
+    if entry > 0 and side in {"SHORT", "LONG"} and (stop_price <= 0 or target_price <= 0):
         if side == "SHORT":
+            sig["stop_price"] = round(entry * (1.0 + SHORT_STOP_PCT), 2)
             sig["target_price"] = round(entry * (1.0 - SHORT_TARGET_PCT), 2)
         else:
+            sig["stop_price"] = round(entry * (1.0 - LONG_STOP_PCT), 2)
             sig["target_price"] = round(entry * (1.0 + LONG_TARGET_PCT), 2)
 
     return sig
@@ -3299,9 +3364,18 @@ def main():
     log.info(f"  Entry cutoff at   : {FORCED_CLOSE_TIME} IST")
     log.info(f"  Forced close at   : {FORCED_CLOSE_TIME} IST")
     log.info(
-        "  Target policy     : "
-        f"SHORT={SHORT_TARGET_PCT*100:.2f}% LONG={LONG_TARGET_PCT*100:.2f}% "
-        "(rebased from signal entry)"
+        "  Entry sizing      : "
+        "signal quantity preferred | "
+        f"fallback margin=Rs.{DEFAULT_POSITION_SIZE:,.0f}/signal | "
+        f"MIS={INTRADAY_LEVERAGE:.1f}x | "
+        f"notional≈Rs.{DEFAULT_POSITION_SIZE * INTRADAY_LEVERAGE:,.0f}"
+    )
+    log.info(
+        "  SL/Target policy  : "
+        "signal prices preferred | "
+        f"SHORT=SL {SHORT_STOP_PCT*100:.2f}% / TGT {SHORT_TARGET_PCT*100:.2f}% | "
+        f"LONG=SL {LONG_STOP_PCT*100:.2f}% / TGT {LONG_TARGET_PCT*100:.2f}% "
+        "(fallback profile; rebased from actual fill)"
     )
     if RISK_LIMITS_ENABLED:
         log.info(
@@ -3310,11 +3384,6 @@ def main():
         )
     else:
         log.warning("  Risk limits       : DISABLED (no max-open / margin cap checks)")
-    if FORCE_ENTRY_QUANTITY is not None:
-        log.warning(
-            f"  Quantity override : FORCE_ENTRY_QUANTITY={FORCE_ENTRY_QUANTITY} "
-            "(all NEW entries)"
-        )
     log.info("=" * 65)
 
     if not args.dry_run:

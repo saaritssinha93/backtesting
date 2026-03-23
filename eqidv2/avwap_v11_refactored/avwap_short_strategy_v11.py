@@ -373,6 +373,11 @@ def scan_one_day(
         cfg=cfg,
         prev_close=prev_close,
     )
+    if (
+        float(getattr(cfg, "min_opening_range_width_pct", 0.0)) > 0
+        and float(opening_range_width_pct) < float(cfg.min_opening_range_width_pct)
+    ):
+        return []
 
     trades: List[Trade] = []
     i = 2
@@ -462,11 +467,29 @@ def scan_one_day(
         avwap_dist_atr = (avwap1 - close1) / atr1
         ema_gap_atr = (ema20 - close1) / atr1
         quality = compute_quality_score_short(adx1, avwap_dist_atr, ema_gap_atr, impulse)
+        if (
+            float(getattr(cfg, "signal_avwap_dist_atr_max", 0.0)) > 0
+            and np.isfinite(avwap_dist_atr)
+            and avwap_dist_atr > float(cfg.signal_avwap_dist_atr_max)
+        ):
+            i += 1
+            continue
 
         low1 = float(c1["low"])
 
         def _bars_left_ok(eidx: int) -> bool:
             return (len(df_day) - 1 - eidx) >= cfg.min_bars_left_after_entry
+
+        def _entry_time_ok(ts: pd.Timestamp) -> bool:
+            cutoff = getattr(cfg, "entry_time_cutoff", None)
+            if cutoff is None:
+                return True
+            ts_pd = pd.Timestamp(ts)
+            if ts_pd.tzinfo is None:
+                ts_pd = ts_pd.tz_localize(IST)
+            else:
+                ts_pd = ts_pd.tz_convert(IST)
+            return ts_pd.timetz().replace(tzinfo=None) < cutoff
 
         def _close_confirm_ok(eidx: int, trigger: float) -> bool:
             if not cfg.require_entry_close_confirm:
@@ -546,6 +569,7 @@ def scan_one_day(
 
                 if (
                     in_signal_window(entry_ts, cfg)
+                    and _entry_time_ok(entry_ts)
                     and _bars_left_ok(entry_idx)
                     and _close_confirm_ok(entry_idx, trigger1)
                     and avwap_rejection_pass(df_day, i, entry_idx, cfg)
@@ -578,6 +602,7 @@ def scan_one_day(
 
                     if (
                         in_signal_window(entry_ts, cfg)
+                        and _entry_time_ok(entry_ts)
                         and _bars_left_ok(entry_idx)
                         and _close_confirm_ok(entry_idx, trigger2)
                         and avwap_rejection_pass(df_day, i, entry_idx, cfg)
@@ -644,6 +669,8 @@ def scan_one_day(
                 tsj = df_day.at[j, "date"]
                 if not in_signal_window(tsj, cfg):
                     continue
+                if not _entry_time_ok(tsj):
+                    continue
                 if not _bars_left_ok(j):
                     continue
 
@@ -705,7 +732,10 @@ def scan_all_days_for_ticker(
                 prev_close = float(pd.to_numeric(df_day["close"], errors="coerce").iloc[-1])
             continue
         df_day["AVWAP"] = compute_day_avwap(df_day)
-        trades = scan_one_day(ticker, df_day, str(day_val), cfg, prev_close=prev_close)
+        prev_close_for_day = (
+            prev_close if bool(getattr(cfg, "use_prev_close_for_day_mode", True)) else None
+        )
+        trades = scan_one_day(ticker, df_day, str(day_val), cfg, prev_close=prev_close_for_day)
         if trades:
             all_trades.extend(trades)
         prev_close = float(pd.to_numeric(df_day["close"], errors="coerce").iloc[-1])

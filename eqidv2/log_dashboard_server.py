@@ -62,7 +62,6 @@ HIDDEN_CARD_IDS = {
 LOG_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.log",
     "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.log",
-    "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.log",
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data_live_minimal.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
@@ -1531,7 +1530,6 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
   <script>
     const LOG_ORDER = [
-      "eod_5min_data",
       "eod_15min_data",
       "nifty_guard_fetch_v15",
       "live_combined_csv_v15_short_s01",
@@ -1567,7 +1565,6 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_1540_update"
     ];
     const LOG_TITLES = {
-      "eod_5min_data": "Live Data Fetch (5mins)",
       "eod_15min_data": "Live Data Fetch (15mins)",
       "live_combined_csv_v15_short_s01": "Live V15 Short 01",
       "live_combined_csv_v15_short_s02": "Live V15 Short 02",

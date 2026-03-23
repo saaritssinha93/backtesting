@@ -50,7 +50,14 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import pytz
+import avwap_combined_runner_v15 as v15_runner
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
+from avwap_v11_refactored.avwap_common_v11_v15 import (
+    default_short_config as v15_default_short_config,
+)
+from avwap_v11_refactored.avwap_common_v7_sweep_v15 import (
+    default_long_config as v15_default_long_config,
+)
 
 try:
     from watchdog.observers import Observer
@@ -84,8 +91,42 @@ LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
 # 0 or negative means unlimited worker threads (no executor-side cap).
 MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V15_MAX_CONCURRENT_TRADES", "0"))
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
-SHORT_TARGET_PCT = float(os.getenv("EQIDV15_SHORT_TARGET_PCT", "0.011"))    # 1.10%
-LONG_TARGET_PCT = float(os.getenv("EQIDV15_LONG_TARGET_PCT", "0.011"))       # 1.10%
+
+
+def _build_effective_v15_executor_cfgs():
+    short_cfg = v15_default_short_config()
+    long_cfg = v15_default_long_config()
+    apply_profile = getattr(v15_runner, "apply_live_parity_profile", None)
+    if callable(apply_profile):
+        short_cfg, long_cfg = apply_profile(short_cfg, long_cfg)
+    return short_cfg, long_cfg
+
+
+_EFFECTIVE_V15_SHORT_CFG, _EFFECTIVE_V15_LONG_CFG = _build_effective_v15_executor_cfgs()
+SHORT_STOP_PCT = float(
+    os.getenv(
+        "EQIDV15_SHORT_STOP_PCT",
+        str(float(getattr(_EFFECTIVE_V15_SHORT_CFG, "stop_pct", 0.0084))),
+    )
+)
+LONG_STOP_PCT = float(
+    os.getenv(
+        "EQIDV15_LONG_STOP_PCT",
+        str(float(getattr(_EFFECTIVE_V15_LONG_CFG, "stop_pct", 0.0075))),
+    )
+)
+SHORT_TARGET_PCT = float(
+    os.getenv(
+        "EQIDV15_SHORT_TARGET_PCT",
+        str(float(getattr(_EFFECTIVE_V15_SHORT_CFG, "target_pct", 0.0090))),
+    )
+)
+LONG_TARGET_PCT = float(
+    os.getenv(
+        "EQIDV15_LONG_TARGET_PCT",
+        str(float(getattr(_EFFECTIVE_V15_LONG_CFG, "target_pct", 0.0090))),
+    )
+)
 ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
 ENTRY_PRICE_SOURCE_DEFAULT = str(os.getenv("ENTRY_PRICE_SOURCE", "ltp_on_signal")).strip().lower()
 if ENTRY_PRICE_SOURCE_DEFAULT not in ENTRY_PRICE_SOURCE_CHOICES:
@@ -93,7 +134,8 @@ if ENTRY_PRICE_SOURCE_DEFAULT not in ENTRY_PRICE_SOURCE_CHOICES:
 
 # Default capital
 DEFAULT_START_CAPITAL = 1_000_000
-DEFAULT_POSITION_SIZE = 50_000
+# Fallback margin capital when the signal row omits quantity.
+DEFAULT_POSITION_SIZE = float(os.getenv("EQIDV15_DEFAULT_POSITION_SIZE_RS", "50000"))
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
 # Exposure limits
@@ -122,8 +164,8 @@ MAX_CAPITAL_DEPLOYED_RS = float(
     )
 )
 
-# Keep v15 paper sizing locked to 1 share just like the real v15 executor.
-FORCE_ENTRY_QUANTITY: Optional[int] = 1
+# Leave unset so quantity is taken from the signal row when present.
+FORCE_ENTRY_QUANTITY: Optional[int] = None
 
 # Paper trade log columns
 TRADE_LOG_COLUMNS = [
@@ -1186,7 +1228,8 @@ def _save_summary() -> None:
 def _normalize_signal(raw: dict) -> dict:
     """
     Map signal-generator CSV column names to the names the executor expects.
-    Also computes a quantity from DEFAULT_POSITION_SIZE when the CSV has none.
+    Preserve signal quantity/SL/target when present so simulation stays aligned
+    with the scanner output. Backfill missing values from executor defaults.
     """
     sig = {}
     for k, v in raw.items():
@@ -1204,25 +1247,30 @@ def _normalize_signal(raw: dict) -> dict:
     if not sig.get("signal_datetime"):
         sig["signal_datetime"] = sig.get("signal_entry_datetime_ist", "")
 
+    signal_quantity = _safe_int(sig.get("quantity", 0), 0)
     if FORCE_ENTRY_QUANTITY is not None:
         sig["quantity"] = max(1, int(FORCE_ENTRY_QUANTITY))
-    elif "quantity" not in sig or pd.isna(sig.get("quantity")):
+    elif signal_quantity > 0:
+        sig["quantity"] = int(signal_quantity)
+    else:
         entry = _safe_float(sig.get("entry_price", 0), 0.0)
         if entry > 0:
-            sig["quantity"] = max(1, int(DEFAULT_POSITION_SIZE / entry))
+            notional = float(DEFAULT_POSITION_SIZE) * float(INTRADAY_LEVERAGE)
+            sig["quantity"] = max(1, int(notional / entry))
         else:
             sig["quantity"] = 1
-    else:
-        sig["quantity"] = _safe_int(sig.get("quantity", 1), 1)
 
-    # Enforce V15 target policy from executor side as well:
-    # SHORT -> entry*(1-0.90%), LONG -> entry*(1+1.10%)
+    # Keep signal SL/target when supplied; only backfill missing fields.
     side = str(sig.get("side", "")).strip().upper()
     entry = _safe_float(sig.get("entry_price", 0.0), 0.0)
-    if entry > 0 and side in {"SHORT", "LONG"}:
+    stop_price = _safe_float(sig.get("stop_price", 0.0), 0.0)
+    target_price = _safe_float(sig.get("target_price", 0.0), 0.0)
+    if entry > 0 and side in {"SHORT", "LONG"} and (stop_price <= 0 or target_price <= 0):
         if side == "SHORT":
+            sig["stop_price"] = round(entry * (1.0 + SHORT_STOP_PCT), 2)
             sig["target_price"] = round(entry * (1.0 - SHORT_TARGET_PCT), 2)
         else:
+            sig["stop_price"] = round(entry * (1.0 - LONG_STOP_PCT), 2)
             sig["target_price"] = round(entry * (1.0 + LONG_TARGET_PCT), 2)
 
     return sig
@@ -1959,9 +2007,18 @@ def main():
     log.info(f"  Signal dir      : {os.path.abspath(SIGNAL_DIR)}/")
     log.info(f"  Forced close at : {FORCED_CLOSE_TIME} IST")
     log.info(
-        "  Target policy   : "
-        f"SHORT={SHORT_TARGET_PCT*100:.2f}% LONG={LONG_TARGET_PCT*100:.2f}% "
-        "(rebased from signal entry)"
+        "  Entry sizing    : "
+        "signal quantity preferred | "
+        f"fallback margin=Rs.{DEFAULT_POSITION_SIZE:,.0f}/signal | "
+        f"MIS={INTRADAY_LEVERAGE:.1f}x | "
+        f"notional≈Rs.{DEFAULT_POSITION_SIZE * INTRADAY_LEVERAGE:,.0f}"
+    )
+    log.info(
+        "  SL/Target policy: "
+        "signal prices preferred | "
+        f"SHORT=SL {SHORT_STOP_PCT*100:.2f}% / TGT {SHORT_TARGET_PCT*100:.2f}% | "
+        f"LONG=SL {LONG_STOP_PCT*100:.2f}% / TGT {LONG_TARGET_PCT*100:.2f}% "
+        "(fallback profile; rebased from actual fill)"
     )
     if RISK_LIMITS_ENABLED:
         log.info(

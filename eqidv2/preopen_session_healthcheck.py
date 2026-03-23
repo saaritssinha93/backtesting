@@ -394,7 +394,6 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     # Core reachability.
     checks.append(check_http("http://127.0.0.1:8787/", timeout_sec=8.0))
 
-    eod_5min_enabled = _task_is_enabled("EQIDV2_eod_5mins_data_0900")
     eod_15min_enabled = _task_is_enabled("EQIDV2_eod_15mins_data_0900")
     v15_short_enabled_map = {
         shard_id: _task_is_enabled(task_name)
@@ -418,8 +417,6 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
         "EQIDV2_log_dashboard_start_0855",
         "EQIDV2_authentication_v2_0900",
     ]
-    if eod_5min_enabled:
-        preopen_tasks.append("EQIDV2_eod_5mins_data_0900")
     if eod_15min_enabled:
         preopen_tasks.append("EQIDV2_eod_15mins_data_0900")
     for task in preopen_tasks:
@@ -488,15 +485,6 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             LOG_DIR / "authentication_v2_runner.status",
             label="authentication_v2",
             allowed_statuses={"SUCCESS"},
-        )
-    )
-    checks.append(
-        check_file_recent_if_enabled(
-            LOG_DIR / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.log",
-            max_age_min=max_age_min,
-            label="eod_5min_data",
-            enabled=eod_5min_enabled,
-            disabled_detail="session not enabled",
         )
     )
     checks.append(

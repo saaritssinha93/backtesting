@@ -211,6 +211,7 @@ FIRST_5M_CLOSE = dtime(9, 20)  # first completed 5m candle close timestamp
 DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_5M_MAX_WORKERS", "16"))
 DEFAULT_MAX_WORKERS_PER_APP = int(os.getenv("EQIDV2_5M_MAX_WORKERS_PER_APP", "4"))
 DEFAULT_BUFFER_SEC = int(os.getenv("EQIDV2_5M_BUFFER_SEC", "2"))
+DEFAULT_QUARTER_HOUR_BUFFER_SEC = int(os.getenv("EQIDV2_5M_QUARTER_HOUR_BUFFER_SEC", "75"))
 DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_5M_REFRESH_TOKENS", "0")).strip().lower() in {
     "1",
     "true",
@@ -278,6 +279,12 @@ def _next_boundary(dt: datetime) -> datetime:
     if dt == flo:
         return flo + timedelta(minutes=5)
     return flo + timedelta(minutes=5)
+
+
+def _slot_buffer_seconds(slot_end: datetime, base_buffer_sec: int, quarter_hour_buffer_sec: int) -> int:
+    if int(slot_end.minute) % 15 == 0:
+        return max(int(base_buffer_sec), int(quarter_hour_buffer_sec))
+    return int(base_buffer_sec)
 
 def _is_trading_time(dt: datetime) -> bool:
     t = dt.time()
@@ -535,6 +542,12 @@ def main() -> None:
         help="Hard cap for workers inside each app partition.",
     )
     ap.add_argument("--buffer-sec", type=int, default=DEFAULT_BUFFER_SEC, help="How long after boundary to run (Kite can lag).")
+    ap.add_argument(
+        "--quarter-hour-buffer-sec",
+        type=int,
+        default=DEFAULT_QUARTER_HOUR_BUFFER_SEC,
+        help="How long after :00/:15/:30/:45 boundaries to run 5-minute slots to avoid colliding with the 15-minute fetch.",
+    )
     ap.add_argument("--refresh-tokens", dest="refresh_tokens", action="store_true", help="Force refresh kite instrument token cache.")
     ap.add_argument("--no-refresh-tokens", dest="refresh_tokens", action="store_false", help="Do not refresh kite instrument token cache.")
     ap.set_defaults(refresh_tokens=DEFAULT_REFRESH_TOKENS)
@@ -569,6 +582,7 @@ def main() -> None:
     print(f"       Output dir (5m): {getattr(core, 'DIRS', {}).get('5min', {}).get('out', str(RUNTIME_DATA_5M_DIR))}")
     print(f"       Runs every 5 mins between {MARKET_OPEN.strftime('%H:%M')} and {MARKET_CLOSE.strftime('%H:%M')} IST (trading days).")
     print(f"       Buffer after boundary: {args.buffer_sec}s")
+    print(f"       Quarter-hour buffer after boundary: {args.quarter_hour_buffer_sec}s")
     print(f"       Max workers (total budget): {args.max_workers}")
     print(f"       Max workers per app cap: {args.max_workers_per_app}")
     print(f"       Refresh tokens: {args.refresh_tokens}")
@@ -620,8 +634,13 @@ def main() -> None:
             continue
 
         # Don't run until buffer has passed for this slot_end
-        if dt < (slot_end + timedelta(seconds=int(args.buffer_sec))):
-            wake = slot_end + timedelta(seconds=int(args.buffer_sec))
+        slot_buffer_sec = _slot_buffer_seconds(
+            slot_end,
+            int(args.buffer_sec),
+            int(args.quarter_hour_buffer_sec),
+        )
+        if dt < (slot_end + timedelta(seconds=slot_buffer_sec)):
+            wake = slot_end + timedelta(seconds=slot_buffer_sec)
             time.sleep(max(1.0, (wake - dt).total_seconds()))
             continue
 
@@ -632,13 +651,18 @@ def main() -> None:
             continue
 
         tag = "OPEN" if opening_slot else "RUN "
+        if slot_buffer_sec != int(args.buffer_sec):
+            print(
+                f"[INFO] Quarter-hour slot {slot_end.strftime('%H:%M')} using staggered buffer "
+                f"{slot_buffer_sec}s (base={int(args.buffer_sec)}s)."
+            )
         print(f"[{tag}] Updating EQIDV2 5m for slot {slot_end.strftime('%H:%M')} at {dt.strftime('%Y-%m-%d %H:%M:%S%z')}")
         try:
             run_update_5m_once(
                 max_workers=int(args.max_workers),
                 max_workers_per_app=int(args.max_workers_per_app),
                 report_dir=str(args.report_dir),
-                buffer_sec=int(args.buffer_sec),
+                buffer_sec=slot_buffer_sec,
                 refresh_tokens=bool(args.refresh_tokens),
                 opening_slot=bool(opening_slot),
             )

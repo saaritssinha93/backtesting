@@ -208,8 +208,8 @@ MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 35)  # keep scheduler alive long enough to process the 15:30 close bar
 HARD_STOP = dtime(15, 50)  # exit after this
 FIRST_15M_CLOSE = dtime(9, 30)  # first completed 15m candle close timestamp
-DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_15M_MAX_WORKERS", "24"))
-DEFAULT_MAX_WORKERS_PER_APP = int(os.getenv("EQIDV2_15M_MAX_WORKERS_PER_APP", "6"))
+DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_15M_MAX_WORKERS", "32"))
+DEFAULT_MAX_WORKERS_PER_APP = int(os.getenv("EQIDV2_15M_MAX_WORKERS_PER_APP", "8"))
 DEFAULT_BUFFER_SEC = int(os.getenv("EQIDV2_15M_BUFFER_SEC", "1"))
 DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_15M_REFRESH_TOKENS", "0")).strip().lower() in {
     "1",

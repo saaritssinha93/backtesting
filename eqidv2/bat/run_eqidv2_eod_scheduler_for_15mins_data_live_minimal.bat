@@ -13,7 +13,9 @@ set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=eqidv2_eod_scheduler_for_15mins_data_live_minimal.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_15mins_data_live_minimal.log"
 set "MAX_WORKERS=%EQIDV2_15M_MAX_WORKERS%"
-if "%MAX_WORKERS%"=="" set "MAX_WORKERS=24"
+if "%MAX_WORKERS%"=="" set "MAX_WORKERS=32"
+set "MAX_WORKERS_PER_APP=%EQIDV2_15M_MAX_WORKERS_PER_APP%"
+if "%MAX_WORKERS_PER_APP%"=="" set "MAX_WORKERS_PER_APP=8"
 set "BUFFER_SEC=%EQIDV2_15M_BUFFER_SEC%"
 if "%BUFFER_SEC%"=="" set "BUFFER_SEC=1"
 set "REFRESH_TOKENS_ARG="
@@ -38,10 +40,10 @@ if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
 echo [%DATE% %TIME%] START %SCRIPT_NAME%
 echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
 echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
-echo [INFO] Runtime args: --max-workers %MAX_WORKERS% --buffer-sec %BUFFER_SEC% %REFRESH_TOKENS_ARG%>>"%LOG_FILE%"
+echo [INFO] Runtime args: --max-workers %MAX_WORKERS% --max-workers-per-app %MAX_WORKERS_PER_APP% --buffer-sec %BUFFER_SEC% %REFRESH_TOKENS_ARG%>>"%LOG_FILE%"
 
 :RUN_LOOP
-"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --max-workers %MAX_WORKERS% --buffer-sec %BUFFER_SEC% %REFRESH_TOKENS_ARG% >>"%LOG_FILE%" 2>&1
+"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --max-workers %MAX_WORKERS% --max-workers-per-app %MAX_WORKERS_PER_APP% --buffer-sec %BUFFER_SEC% %REFRESH_TOKENS_ARG% >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)

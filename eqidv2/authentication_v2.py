@@ -172,6 +172,14 @@ def _resolve_totp(secret: str) -> Tuple[str, str]:
             time.sleep(0.5)
 
     try:
+        otp = TOTP(secret).now()
+        otp = _extract_otp(otp)
+        if otp:
+            return otp, "pyotp_secret"
+    except Exception:
+        pass
+
+    try:
         out = subprocess.check_output(
             'powershell -NoProfile -Command "Get-Clipboard"',
             shell=True,
@@ -184,7 +192,7 @@ def _resolve_totp(secret: str) -> Tuple[str, str]:
     except Exception:
         pass
 
-    return TOTP(secret).now(), "pyotp_secret"
+    raise RuntimeError("Could not resolve a valid TOTP from command, file, pyotp_secret, or clipboard.")
 
 
 def _find_first(

@@ -1544,6 +1544,8 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
     # Build configs used by backtest runner parity.
     short_cfg = default_short_config()
     long_cfg = default_long_config()
+    short_cfg.dir_15m = str(DIR_15M)
+    long_cfg.dir_15m = str(DIR_15M)
     short_cfg.use_time_windows = bool(SHORT_USE_TIME_WINDOWS)
     short_cfg.signal_windows = list(SHORT_SIGNAL_WINDOWS)
     long_cfg.use_time_windows = bool(LONG_USE_TIME_WINDOWS)
@@ -1620,6 +1622,32 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
             if force_disable_topn:
                 short_cfg.enable_topn_per_day = False
                 long_cfg.enable_topn_per_day = False
+
+        market_regime_tickers = tuple(
+            getattr(
+                _runner_cfg,
+                "NIFTY_CONTEXT_TICKERS",
+                getattr(short_cfg, "market_regime_tickers", ()),
+            ) or ()
+        )
+        if market_regime_tickers:
+            short_cfg.market_regime_tickers = market_regime_tickers
+            long_cfg.market_regime_tickers = market_regime_tickers
+
+        build_regime_map = getattr(_runner_cfg, "build_market_regime_map", None)
+        if callable(build_regime_map):
+            try:
+                regime_map, _regime_source = build_regime_map(short_cfg)
+            except Exception:
+                regime_map, _regime_source = {}, ""
+            if regime_map:
+                short_cfg.market_regime_map = dict(regime_map)
+                long_cfg.market_regime_map = dict(regime_map)
+                short_cfg.enable_market_regime_filter = True
+                long_cfg.enable_market_regime_filter = True
+            else:
+                short_cfg.enable_market_regime_filter = False
+                long_cfg.enable_market_regime_filter = False
 
     short_cfg.allow_incomplete_tail = bool(ALLOW_INCOMPLETE_TAIL_IN_LIVE)
     long_cfg.allow_incomplete_tail = bool(ALLOW_INCOMPLETE_TAIL_IN_LIVE)
@@ -2500,6 +2528,10 @@ def run_replay_for_date(date_str: str, out_csv: Optional[str] = None) -> pd.Data
                         "sl_price": float(s.sl_price),
                         "target_price": float(s.target_price),
                         "quality_score": float(s.score),
+                        "adx": _safe_float(getattr(s, "diagnostics", {}).get("adx", np.nan)),
+                        "rsi": _safe_float(getattr(s, "diagnostics", {}).get("rsi", np.nan)),
+                        "stochk": _safe_float(getattr(s, "diagnostics", {}).get("stochk", np.nan)),
+                        "atr_pct": _safe_float(getattr(s, "diagnostics", {}).get("atr_pct", np.nan)),
                         "signal_id": signal_id,
                     }
                 )

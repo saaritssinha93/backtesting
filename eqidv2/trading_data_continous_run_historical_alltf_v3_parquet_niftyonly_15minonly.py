@@ -164,10 +164,8 @@ def _incremental_start(out_path: str, base_start_dt):
     else:
         last_ts = last_ts.tz_convert(IST_TZ)
 
-    # Re-fetch a short warmup tail to stabilize indicators near the merge edge.
-    warmup = pd.Timedelta(minutes=15 * 400)
-    inc = max(base_start_dt, last_ts - warmup)
-    return inc
+    # Keep the NIFTY guard append-only so it fills only the next missing slot.
+    return max(base_start_dt, last_ts + pd.Timedelta(minutes=STEP_MIN))
 
 
 def _normalize_fetch_start(dt_obj, holidays: set):
@@ -194,12 +192,36 @@ def _normalize_fetch_start(dt_obj, holidays: set):
     return _round_down_session_anchored(dt_obj.to_pydatetime(), STEP_MIN)
 
 
+def _nifty_is_exactly_fresh(out_path: str, now_ist: datetime, holidays: set, intraday_ts: str) -> bool:
+    existing_path = _resolve_existing_store_path(out_path)
+    if not Path(existing_path).exists():
+        return False
+
+    last_ts = _read_last_ts_from_store(existing_path)
+    if last_ts is None:
+        return False
+
+    last_ts = pd.Timestamp(last_ts)
+    if last_ts.tzinfo is None:
+        last_ts = last_ts.tz_localize(IST_TZ)
+    else:
+        last_ts = last_ts.tz_convert(IST_TZ)
+
+    exp_ts = pd.Timestamp(expected_last_stamp(now_ist, holidays, intraday_ts))
+    if exp_ts.tzinfo is None:
+        exp_ts = exp_ts.tz_localize(IST_TZ)
+    else:
+        exp_ts = exp_ts.tz_convert(IST_TZ)
+
+    return last_ts >= (exp_ts - pd.Timedelta(seconds=1))
+
+
 def _merge_fetch(existing: pd.DataFrame, fetched: pd.DataFrame) -> pd.DataFrame:
     if existing.empty:
         return fetched.copy()
     return (
         pd.concat([existing, fetched], ignore_index=True)
-        .drop_duplicates(subset="date", keep="last")
+        .drop_duplicates(subset="date", keep="first")
         .sort_values("date")
         .reset_index(drop=True)
     )
@@ -231,11 +253,13 @@ def main() -> int:
     primary_alias = aliases[0]
     primary_out = str(Path(OUT_DIR) / f"{primary_alias}_stocks_indicators_15min.parquet")
 
-    if (not args.no_skip) and ticker_is_fresh(primary_out, now_ist, holidays, args.intraday_ts):
+    if (not args.no_skip) and _nifty_is_exactly_fresh(primary_out, now_ist, holidays, args.intraday_ts):
         logger.info("%s already fresh. Skipping fetch.", primary_alias)
         return 0
 
     inc_start = _normalize_fetch_start(_incremental_start(primary_out, start_dt), holidays)
+    if inc_start >= end_dt:
+        inc_start = end_dt - timedelta(minutes=STEP_MIN)
     logger.info("Fetch window: %s -> %s", inc_start, end_dt)
     existing = _load_existing_ohlc(primary_out, args.intraday_ts)
     fetched = fetch_historical_15min_df(kite, token, inc_start, end_dt, logger, args.intraday_ts)
