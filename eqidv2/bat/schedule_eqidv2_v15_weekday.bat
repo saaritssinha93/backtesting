@@ -20,19 +20,6 @@ if not exist "%TASK_HARDENER%" (
   echo [ERROR] Missing PowerShell helper: %TASK_HARDENER%
   endlocal & exit /b 1
 )
-
-for %%S in (01 02 03 04 05 06 07 08 09 10) do (
-  if not exist "%BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v15_short_shard_%%S.bat" (
-    echo [ERROR] Missing bat file: %BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v15_short_shard_%%S.bat
-    endlocal & exit /b 1
-  )
-)
-for %%S in (01 02 03 04 05 06 07 08 09 10) do (
-  if not exist "%BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v15_long_shard_%%S.bat" (
-    echo [ERROR] Missing bat file: %BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v15_long_shard_%%S.bat
-    endlocal & exit /b 1
-  )
-)
 if not exist "%PAPER_BAT%" (
   echo [ERROR] Missing bat file: %PAPER_BAT%
   endlocal & exit /b 1
@@ -51,18 +38,8 @@ schtasks /Delete /F /TN "%LEGACY_TASK_LIVE_SHORT%" >nul 2>&1
 
 for %%S in (01 02 03 04 05 06 07 08 09 10) do (
   set "TASK_LIVE_SHORT=EQIDV2_live_combined_csv_v15_short_s%%S_0900"
-  set "LIVE_SHORT_BAT=%BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v15_short_shard_%%S.bat"
-  echo [INFO] Creating weekday V15 short live scanner shard %%S task at 09:00 ...
-  schtasks /Create /F /TN "!TASK_LIVE_SHORT!" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 09:00 /TR "!LIVE_SHORT_BAT!"
-  if errorlevel 1 (
-    echo [ERROR] Failed to create !TASK_LIVE_SHORT!
-    endlocal & exit /b 1
-  )
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "!TASK_LIVE_SHORT!"
-  if errorlevel 1 (
-    echo [ERROR] Failed to harden !TASK_LIVE_SHORT!
-    endlocal & exit /b 1
-  )
+  echo [INFO] Removing weekday V15 short live scanner shard %%S task if present ...
+  schtasks /Delete /F /TN "!TASK_LIVE_SHORT!" >nul 2>&1
 )
 
 echo [INFO] Removing legacy single V15 long live scanner task if present ...
@@ -70,18 +47,8 @@ schtasks /Delete /F /TN "%LEGACY_TASK_LIVE_LONG%" >nul 2>&1
 
 for %%S in (01 02 03 04 05 06 07 08 09 10) do (
   set "TASK_LIVE_LONG=EQIDV2_live_combined_csv_v15_long_s%%S_0900"
-  set "LIVE_LONG_BAT=%BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v15_long_shard_%%S.bat"
-  echo [INFO] Creating weekday V15 long live scanner shard %%S task at 09:00 ...
-  schtasks /Create /F /TN "!TASK_LIVE_LONG!" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 09:00 /TR "!LIVE_LONG_BAT!"
-  if errorlevel 1 (
-    echo [ERROR] Failed to create !TASK_LIVE_LONG!
-    endlocal & exit /b 1
-  )
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "!TASK_LIVE_LONG!"
-  if errorlevel 1 (
-    echo [ERROR] Failed to harden !TASK_LIVE_LONG!
-    endlocal & exit /b 1
-  )
+  echo [INFO] Removing weekday V15 long live scanner shard %%S task if present ...
+  schtasks /Delete /F /TN "!TASK_LIVE_LONG!" >nul 2>&1
 )
 
 echo [INFO] Creating weekday V15 unified papertrade task at 09:00 ...
@@ -121,12 +88,8 @@ if errorlevel 1 (
 )
 
 echo [INFO] Tasks created/updated successfully:
-for %%S in (01 02 03 04 05 06 07 08 09 10) do (
-  echo        EQIDV2_live_combined_csv_v15_short_s%%S_0900  (Mon-Fri 09:00)
-)
-for %%S in (01 02 03 04 05 06 07 08 09 10) do (
-  echo        EQIDV2_live_combined_csv_v15_long_s%%S_0900   (Mon-Fri 09:00)
-)
+echo        V15 short shard scheduling removed
+echo        V15 long shard scheduling removed
 echo        %TASK_PAPER%       (Mon-Fri 09:00)
 echo        %TASK_NIFTY%       (Mon-Fri 09:15)
 echo        %TASK_STOP%        (Mon-Fri 16:15)

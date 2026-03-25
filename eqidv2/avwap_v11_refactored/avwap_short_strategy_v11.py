@@ -51,6 +51,7 @@ from avwap_v11_refactored.avwap_common_v11 import (
     swing_structure_pass,
     compute_risk_position_size_rs,
     select_day_mode,
+    prepare_session_bars_for_scan,
 )
 
 
@@ -709,19 +710,15 @@ def scan_one_day(
 def scan_all_days_for_ticker(
     ticker: str, df_full: pd.DataFrame, cfg: StrategyConfig
 ) -> List[Trade]:
-    if df_full.empty:
-        return []
+    df = prepare_session_bars_for_scan(df_full, cfg)
+    return scan_all_days_for_ticker_prepared(ticker, df, cfg)
 
-    for c in ["open", "high", "low", "close"]:
-        if c not in df_full.columns:
-            return []
 
-    df = df_full[df_full["date"].apply(lambda ts: in_session(ts, cfg))].copy()
+def scan_all_days_for_ticker_prepared(
+    ticker: str, df: pd.DataFrame, cfg: StrategyConfig
+) -> List[Trade]:
     if df.empty:
         return []
-
-    df = df.sort_values("date").reset_index(drop=True)
-    df = prepare_indicators(df, cfg)
 
     all_trades: List[Trade] = []
     prev_close: Optional[float] = None
@@ -731,7 +728,6 @@ def scan_all_days_for_ticker(
             if len(df_day):
                 prev_close = float(pd.to_numeric(df_day["close"], errors="coerce").iloc[-1])
             continue
-        df_day["AVWAP"] = compute_day_avwap(df_day)
         prev_close_for_day = (
             prev_close if bool(getattr(cfg, "use_prev_close_for_day_mode", True)) else None
         )

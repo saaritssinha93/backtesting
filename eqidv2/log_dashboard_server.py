@@ -29,14 +29,14 @@ OPEN_LIVE_TRADES_STATE_PATTERN_V5 = "open_live_trades_state_{}_v5.json"
 OPEN_PAPER_TRADES_STATE_PATTERN_V5 = "open_trades_state_{}_v5.json"
 OPEN_LIVE_TRADES_STATE_PATTERN_V7_SWEEP = "open_live_trades_state_{}_v7_sweep.json"
 OPEN_PAPER_TRADES_STATE_PATTERN_V7_SWEEP = "open_trades_state_{}_v7_sweep.json"
-OPEN_LIVE_TRADES_STATE_PATTERN_V15 = "open_live_trades_state_{}_v15.json"
-OPEN_PAPER_TRADES_STATE_PATTERN_V15 = "open_trades_state_{}_v15.json"
+OPEN_LIVE_TRADES_STATE_PATTERN_V15 = "open_live_trades_state_{}_v15_new.json"
+OPEN_PAPER_TRADES_STATE_PATTERN_V15 = "open_trades_state_{}_v15_new.json"
 KILL_SWITCH_LIVE_FILE_V5 = LIVE_SIGNAL_DIR / "kill_switch_false_v5.json"
 KILL_SWITCH_PAPER_FILE_V5 = LIVE_SIGNAL_DIR / "kill_switch_true_v5.json"
 KILL_SWITCH_LIVE_FILE_V7_SWEEP = LIVE_SIGNAL_DIR / "kill_switch_false_v7_sweep.json"
 KILL_SWITCH_PAPER_FILE_V7_SWEEP = LIVE_SIGNAL_DIR / "kill_switch_true_v7_sweep.json"
-KILL_SWITCH_LIVE_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_false_v15.json"
-KILL_SWITCH_PAPER_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_true_v15.json"
+KILL_SWITCH_LIVE_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_false_v15_new.json"
+KILL_SWITCH_PAPER_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_true_v15_new.json"
 V15_SHORT_SHARD_IDS: Tuple[str, ...] = tuple(f"{idx:02d}" for idx in range(1, 11))
 V15_LONG_SHARD_IDS: Tuple[str, ...] = tuple(f"{idx:02d}" for idx in range(1, 11))
 HIDDEN_CARD_IDS = {
@@ -57,6 +57,11 @@ HIDDEN_CARD_IDS = {
     "live_kite_trades_csv",
     "kite_trade_v7_sweep",
     "live_kite_trades_csv_v7_sweep",
+    "live_signals_csv_v15_short",
+    "live_signals_csv_v15_long",
+    "eod_1540_update",
+    *{f"live_combined_csv_v15_short_s{shard_id}" for shard_id in V15_SHORT_SHARD_IDS},
+    *{f"live_combined_csv_v15_long_s{shard_id}" for shard_id in V15_LONG_SHARD_IDS},
 }
 
 LOG_FILES: Dict[str, str] = {
@@ -68,19 +73,8 @@ LOG_FILES: Dict[str, str] = {
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.log",
     "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.log",
     "live_combined_csv_v7_sweep_long": "eqidv2_live_combined_analyser_csv_v7_sweep_long.log",
-    **{
-        f"live_combined_csv_v15_short_s{shard_id}": (
-            f"eqidv2_live_combined_analyser_csv_v15_short_shard_{shard_id}.log"
-        )
-        for shard_id in V15_SHORT_SHARD_IDS
-    },
-    **{
-        f"live_combined_csv_v15_long_s{shard_id}": (
-            f"eqidv2_live_combined_analyser_csv_v15_long_shard_{shard_id}.log"
-        )
-        for shard_id in V15_LONG_SHARD_IDS
-    },
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.log",
+    "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.log",
 }
 LOG_IDS = tuple(LOG_FILES.keys()) + (
     "paper_trade_v5",
@@ -99,26 +93,16 @@ STATUS_FILES: Dict[str, str] = {
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
     "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.status",
     "live_combined_csv_v7_sweep_long": "eqidv2_live_combined_analyser_csv_v7_sweep_long.status",
-    **{
-        f"live_combined_csv_v15_short_s{shard_id}": (
-            f"eqidv2_live_combined_analyser_csv_v15_short_shard_{shard_id}.status"
-        )
-        for shard_id in V15_SHORT_SHARD_IDS
-    },
-    **{
-        f"live_combined_csv_v15_long_s{shard_id}": (
-            f"eqidv2_live_combined_analyser_csv_v15_long_shard_{shard_id}.status"
-        )
-        for shard_id in V15_LONG_SHARD_IDS
-    },
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.status",
-    "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15.status",
+    "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.status",
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.status",
+    "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.status",
 }
 
 HEARTBEAT_FILES: Dict[str, str] = {
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
-    "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15.heartbeat",
+    "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
+    "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.heartbeat",
 }
 
 
@@ -178,21 +162,21 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         return LOG_DIR / legacy_name, legacy_name
 
     if name == "paper_trade_v15":
-        runtime_name = f"paper_trade_execution_{today_ist}_v15.log"
+        runtime_name = f"paper_trade_execution_{today_ist}_v15_new.log"
         runtime_path = LIVE_SIGNAL_DIR / runtime_name
         if runtime_path.exists():
             return runtime_path, str(Path("live_signals") / runtime_name)
-        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*_v15.log")
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*_v15_new.log")
         if latest_runtime is not None:
             return latest_runtime, str(Path("live_signals") / latest_runtime.name)
-        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v15_{today_ist}.log"
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v15_new_{today_ist}.log"
         today_path = LOG_DIR / today_name
         if today_path.exists():
             return today_path, today_name
-        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v15_*.log")
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v15_new_*.log")
         if latest is not None:
             return latest, latest.name
-        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v15.log"
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v15_new.log"
         return LOG_DIR / legacy_name, legacy_name
 
     if name == "kite_trade":
@@ -239,21 +223,21 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         return LOG_DIR / legacy_name, legacy_name
 
     if name == "kite_trade_v15":
-        runtime_name = f"live_trade_execution_{today_ist}_v15.log"
+        runtime_name = f"live_trade_execution_{today_ist}_v15_new.log"
         runtime_path = LIVE_SIGNAL_DIR / runtime_name
         if runtime_path.exists():
             return runtime_path, str(Path("live_signals") / runtime_name)
-        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "live_trade_execution_*_v15.log")
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "live_trade_execution_*_v15_new.log")
         if latest_runtime is not None:
             return latest_runtime, str(Path("live_signals") / latest_runtime.name)
-        today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_v15_{today_ist}.log"
+        today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_v15_new_{today_ist}.log"
         today_path = LOG_DIR / today_name
         if today_path.exists():
             return today_path, today_name
-        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_FALSE_v15_*.log")
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new_*.log")
         if latest is not None:
             return latest, latest.name
-        legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE_v15.log"
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.log"
         return LOG_DIR / legacy_name, legacy_name
 
     if name == "preopen_healthcheck":
@@ -1532,28 +1516,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const LOG_ORDER = [
       "eod_15min_data",
       "nifty_guard_fetch_v15",
-      "live_combined_csv_v15_short_s01",
-      "live_combined_csv_v15_short_s02",
-      "live_combined_csv_v15_short_s03",
-      "live_combined_csv_v15_short_s04",
-      "live_combined_csv_v15_short_s05",
-      "live_combined_csv_v15_short_s06",
-      "live_combined_csv_v15_short_s07",
-      "live_combined_csv_v15_short_s08",
-      "live_combined_csv_v15_short_s09",
-      "live_combined_csv_v15_short_s10",
-      "live_combined_csv_v15_long_s01",
-      "live_combined_csv_v15_long_s02",
-      "live_combined_csv_v15_long_s03",
-      "live_combined_csv_v15_long_s04",
-      "live_combined_csv_v15_long_s05",
-      "live_combined_csv_v15_long_s06",
-      "live_combined_csv_v15_long_s07",
-      "live_combined_csv_v15_long_s08",
-      "live_combined_csv_v15_long_s09",
-      "live_combined_csv_v15_long_s10",
-      "live_signals_csv_v15_short",
-      "live_signals_csv_v15_long",
+      "live_combined_csv_v15_new_persistent",
+      "live_signals_csv_v15_new_short",
+      "live_signals_csv_v15_new_long",
       "live_kite_trades_csv_v15",
       "kite_trade_v15",
       "paper_trade_v15",
@@ -1566,29 +1531,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     ];
     const LOG_TITLES = {
       "eod_15min_data": "Live Data Fetch (15mins)",
-      "live_combined_csv_v15_short_s01": "Live V15 Short 01",
-      "live_combined_csv_v15_short_s02": "Live V15 Short 02",
-      "live_combined_csv_v15_short_s03": "Live V15 Short 03",
-      "live_combined_csv_v15_short_s04": "Live V15 Short 04",
-      "live_combined_csv_v15_short_s05": "Live V15 Short 05",
-      "live_combined_csv_v15_short_s06": "Live V15 Short 06",
-      "live_combined_csv_v15_short_s07": "Live V15 Short 07",
-      "live_combined_csv_v15_short_s08": "Live V15 Short 08",
-      "live_combined_csv_v15_short_s09": "Live V15 Short 09",
-      "live_combined_csv_v15_short_s10": "Live V15 Short 10",
-      "live_combined_csv_v15_long_s01": "Live Long V15 01",
-      "live_combined_csv_v15_long_s02": "Live Long V15 02",
-      "live_combined_csv_v15_long_s03": "Live Long V15 03",
-      "live_combined_csv_v15_long_s04": "Live Long V15 04",
-      "live_combined_csv_v15_long_s05": "Live Long V15 05",
-      "live_combined_csv_v15_long_s06": "Live Long V15 06",
-      "live_combined_csv_v15_long_s07": "Live Long V15 07",
-      "live_combined_csv_v15_long_s08": "Live Long V15 08",
-      "live_combined_csv_v15_long_s09": "Live Long V15 09",
-      "live_combined_csv_v15_long_s10": "Live Long V15 10",
+      "live_combined_csv_v15_new_persistent": "Live combined (short +long) V15 new persistent scanner",
       "nifty_guard_fetch_v15": "NIFTY Fetch V15",
-      "live_signals_csv_v15_short": "Live Entries CSV V15 Short",
-      "live_signals_csv_v15_long": "Live Entries CSV V15 Long",
+      "live_signals_csv_v15_new_short": "Live Entries CSV V15 Short New",
+      "live_signals_csv_v15_new_long": "Live Entries CSV V15 Long",
       "live_papertrade_result_csv_v15": "Live Papertrade Result CSV V15",
       "live_kite_trades_csv_v15": "Live Kite Trades CSV V15",
       "kite_holdings_today_csv": "Kite Holdings (Today)",
@@ -2165,57 +2111,57 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
-        # Dynamic card: today's live signal CSV V15 short.
-        live_csv_name_v15_short = f"signals_{today_ist}_v15_short.csv"
-        live_csv_path_v15_short = LIVE_SIGNAL_DIR / live_csv_name_v15_short
+        # Dynamic card: today's live signal CSV V15_NEW short.
+        live_csv_name_v15_new_short = f"signals_{today_ist}_v15_new_short.csv"
+        live_csv_path_v15_new_short = LIVE_SIGNAL_DIR / live_csv_name_v15_new_short
         try:
-            live_size_v15_short = (
-                live_csv_path_v15_short.stat().st_size if live_csv_path_v15_short.exists() else 0
+            live_size_v15_new_short = (
+                live_csv_path_v15_new_short.stat().st_size if live_csv_path_v15_new_short.exists() else 0
             )
         except OSError:
-            live_size_v15_short = 0
-        live_entries_tail_v15_short = _format_csv_projection(
-            live_csv_path_v15_short,
+            live_size_v15_new_short = 0
+        live_entries_tail_v15_new_short = _format_csv_projection(
+            live_csv_path_v15_new_short,
             live_entries_cols,
             limit_rows=5000,
             time_only_cols={"signal_datetime", "detected_time_ist"},
         )
         items.append(
             {
-                "id": "live_signals_csv_v15_short",
-                "file_name": str(Path("live_signals") / live_csv_name_v15_short),
-                "exists": live_csv_path_v15_short.exists(),
-                "mtime": iso_mtime(live_csv_path_v15_short),
-                "size_bytes": live_size_v15_short,
+                "id": "live_signals_csv_v15_new_short",
+                "file_name": str(Path("live_signals") / live_csv_name_v15_new_short),
+                "exists": live_csv_path_v15_new_short.exists(),
+                "mtime": iso_mtime(live_csv_path_v15_new_short),
+                "size_bytes": live_size_v15_new_short,
                 "status": {},
-                "tail": live_entries_tail_v15_short,
+                "tail": live_entries_tail_v15_new_short,
             }
         )
 
-        # Dynamic card: today's live signal CSV V15 long.
-        live_csv_name_v15_long = f"signals_{today_ist}_v15_long.csv"
-        live_csv_path_v15_long = LIVE_SIGNAL_DIR / live_csv_name_v15_long
+        # Dynamic card: today's live signal CSV V15_NEW long.
+        live_csv_name_v15_new_long = f"signals_{today_ist}_v15_new_long.csv"
+        live_csv_path_v15_new_long = LIVE_SIGNAL_DIR / live_csv_name_v15_new_long
         try:
-            live_size_v15_long = (
-                live_csv_path_v15_long.stat().st_size if live_csv_path_v15_long.exists() else 0
+            live_size_v15_new_long = (
+                live_csv_path_v15_new_long.stat().st_size if live_csv_path_v15_new_long.exists() else 0
             )
         except OSError:
-            live_size_v15_long = 0
-        live_entries_tail_v15_long = _format_csv_projection(
-            live_csv_path_v15_long,
+            live_size_v15_new_long = 0
+        live_entries_tail_v15_new_long = _format_csv_projection(
+            live_csv_path_v15_new_long,
             live_entries_cols,
             limit_rows=5000,
             time_only_cols={"signal_datetime", "detected_time_ist"},
         )
         items.append(
             {
-                "id": "live_signals_csv_v15_long",
-                "file_name": str(Path("live_signals") / live_csv_name_v15_long),
-                "exists": live_csv_path_v15_long.exists(),
-                "mtime": iso_mtime(live_csv_path_v15_long),
-                "size_bytes": live_size_v15_long,
+                "id": "live_signals_csv_v15_new_long",
+                "file_name": str(Path("live_signals") / live_csv_name_v15_new_long),
+                "exists": live_csv_path_v15_new_long.exists(),
+                "mtime": iso_mtime(live_csv_path_v15_new_long),
+                "size_bytes": live_size_v15_new_long,
                 "status": {},
-                "tail": live_entries_tail_v15_long,
+                "tail": live_entries_tail_v15_new_long,
             }
         )
 
@@ -2282,7 +2228,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         )
 
         # Dynamic card: today's paper trade results CSV V15.
-        paper_trade_csv_name_v15 = f"paper_trades_{today_ist}_v15.csv"
+        paper_trade_csv_name_v15 = f"paper_trades_{today_ist}_v15_new.csv"
         paper_trade_csv_path_v15 = LIVE_SIGNAL_DIR / paper_trade_csv_name_v15
         try:
             paper_trade_size_v15 = (
@@ -2384,7 +2330,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         )
 
         # Dynamic card: today's live Kite trades CSV V15.
-        live_kite_trade_csv_name_v15 = f"live_trades_{today_ist}_v15.csv"
+        live_kite_trade_csv_name_v15 = f"live_trades_{today_ist}_v15_new.csv"
         live_kite_trade_csv_path_v15 = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_v15
         try:
             live_kite_trade_size_v15 = (

@@ -1,7 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v15.py - AVWAP v15 COMBINED runner: V11 SHORT + V9 LONG (hybrid)
-==================================================================================
+avwap_combined_runner_v15_5min.py - AVWAP v15 COMBINED runner on 5-minute signals
+===================================================================================
 
 Changes from v14:
 1. NIFTY_CONTEXT_OR_END_TIME: 10:15 -> 9:30  (15-min opening range for earlier live participation)
@@ -17,8 +17,8 @@ Changes from v14:
    short entries meaningfully stricter where V15 was taking too many weak fades.
 
 Earlier changes inherited from v14:
-1. All outputs saved to outputs_v15/
-2. Entry signals: 15-min data; exits: 1-min data (stocks_indicators_1min_eq)
+1. All outputs saved to outputs_v15_5min/
+2. Entry signals: 5-min data; exits: 1-min data (stocks_indicators_1min_eq)
 3. Expanded charting suite
 4. Normal Python imports (no importlib hacks)
 5. Unified Trade dataclass -- both sides produce identical columns
@@ -49,7 +49,7 @@ from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 
-from eqidv2_runtime_paths import DATA_15M_DIR as RUNTIME_DATA_15M_DIR
+from eqidv2_runtime_paths import DATA_5M_DIR as RUNTIME_DATA_5M_DIR
 from eqidv2_runtime_paths import DATA_1MIN_DIR as RUNTIME_DATA_1MIN_DIR
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
 from eqidv2_runtime_paths import runtime_dir
@@ -140,7 +140,8 @@ FORCE_LIVE_PARITY_DISABLE_TOPN = True
 
 # If True, replace the current IST trading day's backtest entries with the
 # exact V15 live-slot replay path used by the live shard scanners.
-SYNC_CURRENT_DAY_WITH_LIVE_PARITY = True
+# Disable for the 5-minute variant because live replay inputs are 15-minute.
+SYNC_CURRENT_DAY_WITH_LIVE_PARITY = False
 
 '''
 # Final signal-window override (applied last in main()).
@@ -183,7 +184,7 @@ FINAL_LONG_SIGNAL_WINDOWS = [
 ]
 V15_EOD_EXIT_TIME = dtime(15, 20, 0)
 
-# Per-setup signal->entry lag (in 15-min bars).
+# Per-setup signal->entry lag (in 5-min bars for this runner).
 # Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
 # HUGE setup: use -1 for legacy dynamic "first valid bar" behavior.
 SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW = 1
@@ -219,8 +220,8 @@ NIFTY_CONTEXT_TICKERS: Tuple[str, ...] = (
     "NIFTY_50",
     "NIFTY",
 )
-NIFTY_CONTEXT_OR_END_TIME = dtime(9, 30, 0)    # v15: 15-min OR (was 10:15)
-NIFTY_CONTEXT_CONFIRM_TIME = dtime(9, 30, 0)   # v15: confirm at 09:30 (was 10:30)
+NIFTY_CONTEXT_OR_END_TIME = dtime(9, 30, 0)    # v15_5min: confirm at the same clock time on 5-min bars
+NIFTY_CONTEXT_CONFIRM_TIME = dtime(9, 30, 0)   # v15_5min: confirm at 09:30
 NIFTY_CONTEXT_MIN_DAYMOVE_PCT = 0.35           # v15: raised from 0.20 to filter noise
 NIFTY_RS_FILTER_ENABLED = True
 NIFTY_RS_LOOKBACK_BARS = 4                     # v15: 60-min window (was 3 bars/45min)
@@ -413,7 +414,7 @@ def _latest_parquet_date_value(parquet_path: Path) -> int:
 
 def _score_15m_dir(cand_abs: Path) -> Tuple[int, int]:
     """
-    Score a 15-minute data directory by (freshness, file_count).
+    Score a 5-minute signal-data directory by (freshness, file_count).
 
     Freshness is based on actual parquet market timestamps, not only file count,
     so the runner prefers the runtime directory when a stale local copy exists.
@@ -421,7 +422,7 @@ def _score_15m_dir(cand_abs: Path) -> Tuple[int, int]:
     if not cand_abs.is_dir():
         return (-1, 0)
 
-    parquet_files = list(cand_abs.glob("*_stocks_indicators_15min.parquet"))
+    parquet_files = list(cand_abs.glob("*_stocks_indicators_5min.parquet"))
     file_count = len(parquet_files)
     if file_count <= 0:
         return (-1, 0)
@@ -429,7 +430,7 @@ def _score_15m_dir(cand_abs: Path) -> Tuple[int, int]:
     freshness = -1
     sample_paths: List[Path] = []
     for ticker in NIFTY_CONTEXT_TICKERS:
-        p = cand_abs / f"{ticker}_stocks_indicators_15min.parquet"
+        p = cand_abs / f"{ticker}_stocks_indicators_5min.parquet"
         if p.exists():
             sample_paths.append(p)
 
@@ -450,7 +451,7 @@ def _score_15m_dir(cand_abs: Path) -> Tuple[int, int]:
 
 def _resolve_15m_dir() -> Path:
     """
-    Resolve the 15-min parquet directory across the repo layouts used here.
+    Resolve the 5-min signal parquet directory across the repo layouts used here.
 
     Prefer the freshest valid dataset, not merely the directory with the most
     files, so stale local snapshots do not override the active runtime store.
@@ -462,10 +463,10 @@ def _resolve_15m_dir() -> Path:
         _proj = _script_dir
 
     candidates = [
-        RUNTIME_DATA_15M_DIR,
-        _proj / "stocks_indicators_15min_eq",
-        _proj.parent / "stocks_indicators_15min_eq",
-        Path.cwd() / "stocks_indicators_15min_eq",
+        RUNTIME_DATA_5M_DIR,
+        _proj / "stocks_indicators_5min_eq",
+        _proj.parent / "stocks_indicators_5min_eq",
+        Path.cwd() / "stocks_indicators_5min_eq",
     ]
 
     ranked: List[Tuple[int, int, int, Path]] = []
@@ -759,7 +760,7 @@ def _resolve_exits_5min(
     Re-evaluate exit prices, exit times, and outcomes using 1-min data
     for higher-resolution SL/target tracking.
 
-    Entry signals and entry prices remain from 15-min scanning.
+    Entry signals and entry prices remain from 5-min scanning.
     Only the exit side is recalculated at 1-min granularity.
     """
     if trades_df.empty:
@@ -767,7 +768,7 @@ def _resolve_exits_5min(
 
     if not dir_5m.is_dir():
         print(f"[WARN] 1-min data directory not found: {dir_5m}")
-        print("[WARN] Falling back to 15-min exit resolution.")
+        print("[WARN] Falling back to 5-min exit resolution.")
         return trades_df
 
     df = trades_df.copy()
@@ -960,7 +961,7 @@ def _resolve_exits_5min(
 
         if resolved is None:
             if ticker not in _cache_15m:
-                fpath_15m = dir_15m / f"{ticker}_stocks_indicators_15min.parquet"
+                fpath_15m = dir_15m / f"{ticker}_stocks_indicators_5min.parquet"
                 if fpath_15m.exists():
                     _cache_15m[ticker] = read_15m_parquet(str(fpath_15m), engine)
                 else:
@@ -979,7 +980,7 @@ def _resolve_exits_5min(
                         & (df_15m[time_col] <= eod_cutoff)
                     ].sort_values(time_col)
                     bars_15m = same_day.tail(1)
-                resolved = _resolve_from_bars(bars_15m, side, stop_price, target_price, "15M_FALLBACK")
+                resolved = _resolve_from_bars(bars_15m, side, stop_price, target_price, "5M_FALLBACK")
                 if resolved is not None:
                     fallback_rows += 1
 
@@ -1059,13 +1060,13 @@ def _resolve_exits_5min(
 
     print(
         f"[1MIN] Re-resolved exits for {updated_rows}/{total_rows} trades using 1-min data."
-        + (f" 15m_fallback={fallback_rows}." if fallback_rows else "")
+        + (f" 5m_fallback={fallback_rows}." if fallback_rows else "")
     )
     return df
 
 
 # ===========================================================================
-# WORKER FUNCTIONS (for parallel scanning â€” still uses 15-min for entry signals)
+# WORKER FUNCTIONS (for parallel scanning â€” uses 5-min for entry signals)
 # ===========================================================================
 def _scan_one_ticker_short(args: Tuple[str, str, StrategyConfig]) -> List[dict]:
     """Scan one ticker on the SHORT side. Returns list of Trade dicts."""
@@ -1355,7 +1356,7 @@ def _infer_signal_time_from_entry(entry_ts: Any, side: str, setup: str) -> pd.Ti
     lag_bars = _lag_bars_for_setup(side, setup)
     if lag_bars < 0 or lag_bars > 16:
         lag_bars = 0
-    return ts - pd.Timedelta(minutes=15 * lag_bars)
+    return ts - pd.Timedelta(minutes=5 * lag_bars)
 
 
 def _convert_live_replay_rows_to_backtest_df(replay_df: pd.DataFrame, side: str) -> pd.DataFrame:
@@ -2251,7 +2252,7 @@ def _build_daily_breakdown_df(
 
 def _recent_trading_dates_from_runtime(n_days: int) -> List[Any]:
     """
-    Infer the latest trading days from runtime 15-minute market-data coverage.
+    Infer the latest trading days from runtime 5-minute market-data coverage.
 
     Prefer the configured NIFTY context aliases, because they are expected to
     have continuous market-day coverage even when strategy trade output is empty.
@@ -2264,7 +2265,7 @@ def _recent_trading_dates_from_runtime(n_days: int) -> List[Any]:
     candidates = list(NIFTY_CONTEXT_TICKERS)
 
     try:
-        extra = list_tickers_15m(str(dir_15m), "_stocks_indicators_15min.parquet")
+        extra = list_tickers_15m(str(dir_15m), "_stocks_indicators_5min.parquet")
         for ticker in extra:
             if ticker not in candidates:
                 candidates.append(ticker)
@@ -2273,7 +2274,7 @@ def _recent_trading_dates_from_runtime(n_days: int) -> List[Any]:
 
     for ticker in candidates:
         try:
-            p = dir_15m / f"{ticker}_stocks_indicators_15min.parquet"
+            p = dir_15m / f"{ticker}_stocks_indicators_5min.parquet"
             if not p.exists():
                 continue
             df_idx = read_15m_parquet(str(p), "pyarrow")
@@ -2913,7 +2914,7 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = runtime_dir("outputs_v15")
+    _outputs_dir = runtime_dir("outputs_v15_5min")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
@@ -2927,8 +2928,8 @@ def main() -> None:
 
         try:
             print("=" * 70)
-            print("AVWAP v15 COMBINED runner — V11 SHORT + V9 LONG (hybrid)")
-            print("  - Entry signals: 15-min data")
+            print("AVWAP v15_5min COMBINED runner — V11 SHORT + V9 LONG (hybrid)")
+            print("  - Entry signals: 5-min data")
             print("  - Exit resolution: 1-min data (stocks_indicators_1min_eq)")
             print("  - Outputs: */algo_trading/outputs")
             print("  - Intraday leverage: "
@@ -2937,14 +2938,14 @@ def main() -> None:
             print("    (unlevered price-return% is saved as pnl_pct_price)")
             print("=" * 70)
 
-            # Resolve 15-min data directory
+            # Resolve 5-min signal data directory
             dir_15m = _resolve_15m_dir()
-            print(f"[INFO] 15-min data directory: {dir_15m}")
+            print(f"[INFO] 5-min signal data directory: {dir_15m}")
             if dir_15m.is_dir():
-                n_files_15m = len(list(dir_15m.glob("*_stocks_indicators_15min.parquet")))
-                print(f"[INFO] 15-min parquet files found: {n_files_15m}")
+                n_files_15m = len(list(dir_15m.glob("*_stocks_indicators_5min.parquet")))
+                print(f"[INFO] 5-min parquet files found: {n_files_15m}")
             else:
-                print("[WARN] 15-min data directory not found.")
+                print("[WARN] 5-min signal data directory not found.")
 
             # Resolve 1-min data directory
             dir_5m = _resolve_5min_dir()
@@ -2953,7 +2954,7 @@ def main() -> None:
                 n_files = len(list(dir_5m.glob("*.parquet")))
                 print(f"[INFO] 1-min parquet files found: {n_files}")
             else:
-                print("[WARN] 1-min data directory not found â€” will fall back to 15-min exits.")
+                print("[WARN] 1-min data directory not found â€” will fall back to 5-min exits.")
 
             short_cfg = default_short_config(
                 reports_dir=_outputs_dir,
@@ -2964,6 +2965,8 @@ def main() -> None:
             )
             short_cfg.dir_15m = str(dir_15m)
             long_cfg.dir_15m = str(dir_15m)
+            short_cfg.end_15m = "_stocks_indicators_5min.parquet"
+            long_cfg.end_15m = "_stocks_indicators_5min.parquet"
             short_cfg.market_regime_tickers = tuple(NIFTY_CONTEXT_TICKERS)
             long_cfg.market_regime_tickers = tuple(NIFTY_CONTEXT_TICKERS)
 
@@ -3114,7 +3117,7 @@ def main() -> None:
                     )
                 else:
                     print(
-                        "[REGIME] Disabled: no market index parquet found in 15m data directory. "
+                        "[REGIME] Disabled: no market index parquet found in 5m data directory. "
                         f"Checked={','.join(regime_missing)}"
                     )
 
@@ -3187,7 +3190,7 @@ def main() -> None:
             print(
                 "[INFO] Final reported exit policy: TARGET / SL / EOD only | "
                 f"EOD cutoff={V15_EOD_EXIT_TIME.strftime('%H:%M')} | "
-                "15m/1m fallback removes residual BE outcomes"
+                "5m/1m fallback removes residual BE outcomes"
             )
             print(f"[INFO] Live parity: min_bars_left=0 -> {FORCE_LIVE_PARITY_MIN_BARS_LEFT}")
             print(f"[INFO] Live parity: disable_topn_per_day -> {FORCE_LIVE_PARITY_DISABLE_TOPN}")
@@ -3202,8 +3205,8 @@ def main() -> None:
             print(f"[INFO] Console log: {log_path}")
             print("-" * 70)
 
-            # ---- PHASE 1: Scan for entry signals using 15-min data ----
-            print("\n[PHASE 1] Scanning for entry signals using 15-min data...")
+            # ---- PHASE 1: Scan for entry signals using 5-min data ----
+            print("\n[PHASE 1] Scanning for entry signals using 5-min data...")
             short_df, long_df = _run_both_parallel(short_cfg, long_cfg, MAX_WORKERS)
 
             if NIFTY_CONTEXT_ENABLED:
@@ -3321,9 +3324,9 @@ def main() -> None:
                 _print_day_side_mix(combined)
 
             # --- Save CSV ---
-            out_csv = _outputs_dir / f"avwap_longshort_trades_v15_ALL_DAYS_{ts}.csv"
+            out_csv = _outputs_dir / f"avwap_longshort_trades_v15_5min_ALL_DAYS_{ts}.csv"
             combined.to_csv(out_csv, index=False)
-            out_daywise_csv = _outputs_dir / f"avwap_daywise_breakdown_v15_ALL_DAYS_{ts}.csv"
+            out_daywise_csv = _outputs_dir / f"avwap_daywise_breakdown_v15_5min_ALL_DAYS_{ts}.csv"
             _build_daily_breakdown_df(combined, include_total=True).to_csv(out_daywise_csv, index=False)
 
             # --- Generate Legacy Charts (from avwap_common) ---

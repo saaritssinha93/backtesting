@@ -698,6 +698,63 @@ def prepare_indicators(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
     return out
 
 
+def prepare_session_bars_for_scan(
+    df_full: pd.DataFrame,
+    cfg: StrategyConfig,
+) -> pd.DataFrame:
+    """
+    Shared pre-scan preparation used by combined runners.
+
+    This is intentionally side-agnostic:
+    - keeps only in-session rows using a vectorized time mask
+    - sorts once
+    - prepares indicators once
+    - computes daily AVWAP once
+
+    SHORT and LONG scanners can then reuse the same prepared frame instead of
+    repeating the entire pipeline separately.
+    """
+    if df_full.empty:
+        return pd.DataFrame()
+
+    required = {"date", "open", "high", "low", "close"}
+    if not required.issubset(set(df_full.columns)):
+        return pd.DataFrame()
+
+    dt = pd.to_datetime(df_full["date"], errors="coerce")
+    if getattr(dt.dt, "tz", None) is None:
+        dt = dt.dt.tz_localize("UTC")
+    dt = dt.dt.tz_convert(IST)
+
+    local_time = dt.dt.time
+    mask = (local_time >= cfg.session_start) & (local_time <= cfg.session_end)
+    if not bool(mask.any()):
+        return pd.DataFrame(columns=df_full.columns)
+
+    df = df_full.loc[mask].copy()
+    if df.empty:
+        return df
+
+    df["date"] = dt.loc[mask]
+    df = df.sort_values("date").reset_index(drop=True)
+    df = prepare_indicators(df, cfg)
+    if df.empty:
+        return df
+
+    per_day: List[pd.DataFrame] = []
+    for _, g in df.groupby("day", sort=True):
+        if g.empty:
+            continue
+        g2 = g.copy().reset_index(drop=True)
+        g2["AVWAP"] = compute_day_avwap(g2)
+        per_day.append(g2)
+
+    if not per_day:
+        return df.iloc[0:0].copy()
+
+    return pd.concat(per_day, ignore_index=True)
+
+
 # ===========================================================================
 # INDICATOR MICRO-CHECKS (used in signal validation)
 # ===========================================================================

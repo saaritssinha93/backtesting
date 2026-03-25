@@ -81,6 +81,13 @@ DEFAULT_MAX_WORKERS = 6
 DEFAULT_FETCH_RETRY_BASE_SEC = float(os.getenv("EQIDV2_FETCH_RETRY_BASE_SEC", "0.8"))
 DEFAULT_FETCH_RATE_LIMIT_BACKOFF_BASE_SEC = float(os.getenv("EQIDV2_FETCH_RATE_LIMIT_BACKOFF_BASE_SEC", "2.0"))
 DEFAULT_FETCH_PACE_SEC = float(os.getenv("EQIDV2_FETCH_PACE_SEC", "0.50"))
+DEFAULT_LOG_UPDATED_TICKERS = str(os.getenv("EQIDV2_LOG_UPDATED_TICKERS", "0")).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_LOG_UPDATED_TICKERS_TOP_N = max(0, int(os.getenv("EQIDV2_LOG_UPDATED_TICKERS_TOP_N", "8")))
+DEFAULT_SAVE_NEW_ROWS_REPORTS = str(os.getenv("EQIDV2_SAVE_NEW_ROWS_REPORTS", "0")).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_VERIFY_SAMPLE_SIZE = max(0, int(os.getenv("EQIDV2_VERIFY_SAMPLE_SIZE", "0")))
+DEFAULT_LOG_INDICATOR_QUALITY = str(os.getenv("EQIDV2_LOG_INDICATOR_QUALITY", "0")).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_DOWNCAST_NUMERIC = str(os.getenv("EQIDV2_DOWNCAST_NUMERIC", "0")).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_PARQUET_COMPRESSION = str(os.getenv("EQIDV2_PARQUET_COMPRESSION", "none")).strip().lower()
 
 # Market timing (IST)
 MARKET_OPEN_TIME = time(9, 15)
@@ -615,8 +622,9 @@ def fetch_historical_generic(
                     logger.warning("Failed chunk %s â†’ %s (%s): %s", s, e, interval, ex)
                 else:
                     _time.sleep(backoff_sec)
-            finally:
-                _time.sleep(SLEEP_BETWEEN_CALLS)
+
+        if SLEEP_BETWEEN_CALLS > 0 and e < end:
+            _time.sleep(SLEEP_BETWEEN_CALLS)
 
         s = e + step_td
 
@@ -823,7 +831,8 @@ def _finalize_and_save(df: pd.DataFrame, out_path: str):
 
     if ext == ".parquet":
         _ensure_parquet_engine()
-        df.to_parquet(out_path, engine="pyarrow", index=False, compression="snappy")
+        compression = None if DEFAULT_PARQUET_COMPRESSION in {"", "none", "off", "false", "0"} else DEFAULT_PARQUET_COMPRESSION
+        df.to_parquet(out_path, engine="pyarrow", index=False, compression=compression)
         return
 
     df.to_csv(out_path, index=False)
@@ -1064,6 +1073,31 @@ def verify_mode_outputs(
     if failed:
         logger.warning("[%s][VERIFY] Failed=%d | sample=%s", mode.upper(), len(failed), ", ".join(failed[:20]))
     return ok, failed
+
+def _sample_verify_symbols(symbols: list[str], sample_size: int) -> list[str]:
+    if sample_size <= 0 or len(symbols) <= sample_size:
+        return list(symbols)
+    ordered = sorted({str(sym).strip().upper() for sym in symbols if str(sym).strip()})
+    if len(ordered) <= sample_size:
+        return ordered
+    if sample_size == 1:
+        return [ordered[-1]]
+    picks: list[str] = []
+    last_idx = len(ordered) - 1
+    for i in range(sample_size):
+        idx = round(i * last_idx / (sample_size - 1))
+        sym = ordered[idx]
+        if not picks or picks[-1] != sym:
+            picks.append(sym)
+    if len(picks) < sample_size:
+        seen = set(picks)
+        for sym in ordered:
+            if sym in seen:
+                continue
+            picks.append(sym)
+            if len(picks) >= sample_size:
+                break
+    return picks[:sample_size]
 
 
 def _extract_failed_tickers(verify_failed: list[str], all_symbols: list[str]) -> list[str]:
@@ -1373,8 +1407,10 @@ def process_ticker(
     try:
         t_ind0 = _time.perf_counter()
         merged = _compute_common_features(merged, mode)
-        merged = _downcast_numeric_columns(merged)
-        _log_indicator_quality(logger, ticker, mode, merged)
+        if DEFAULT_DOWNCAST_NUMERIC:
+            merged = _downcast_numeric_columns(merged)
+        if DEFAULT_LOG_INDICATOR_QUALITY:
+            _log_indicator_quality(logger, ticker, mode, merged)
         indicators_secs = _time.perf_counter() - t_ind0
 
         t_persist0 = _time.perf_counter()
@@ -1402,7 +1438,7 @@ def process_ticker(
             new_last = nl.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(nl) else None
 
         new_rows_path = None
-        if new_rows_count > 0:
+        if new_rows_count > 0 and DEFAULT_SAVE_NEW_ROWS_REPORTS:
             rep_dir = os.path.join(report_dir, "missing_rows", mode)
             _safe_mkdir(rep_dir)
             new_rows_path = os.path.join(rep_dir, f"{ticker}_missing_rows_{mode}.parquet")
@@ -1602,25 +1638,34 @@ def run_mode(
 
     if updated_reports:
         logger.info("[%s] Updated symbols: %d", mode.upper(), len(updated_reports))
-        for r in sorted(updated_reports, key=lambda x: x.ticker):
-            logger.info(
-                "[%s] %s %s | last_before=%s | expected=%s | new_rows=%d | new_range=%s -> %s | "
-                "timing_s(load=%.2f,fetch=%.2f,ind=%.2f,persist=%.2f,total=%.2f) | new_rows_store=%s",
-                mode.upper(),
-                r.ticker,
-                r.status,
-                r.last_before,
-                r.expected,
-                r.new_rows_count,
-                r.new_first,
-                r.new_last,
-                r.load_existing_secs,
-                r.fetch_secs,
-                r.indicators_secs,
-                r.persist_secs,
-                r.total_secs,
-                r.new_rows_path
-            )
+        if DEFAULT_LOG_UPDATED_TICKERS:
+            for r in sorted(updated_reports, key=lambda x: x.ticker):
+                logger.info(
+                    "[%s] %s %s | last_before=%s | expected=%s | new_rows=%d | new_range=%s -> %s | "
+                    "timing_s(load=%.2f,fetch=%.2f,ind=%.2f,persist=%.2f,total=%.2f) | new_rows_store=%s",
+                    mode.upper(),
+                    r.ticker,
+                    r.status,
+                    r.last_before,
+                    r.expected,
+                    r.new_rows_count,
+                    r.new_first,
+                    r.new_last,
+                    r.load_existing_secs,
+                    r.fetch_secs,
+                    r.indicators_secs,
+                    r.persist_secs,
+                    r.total_secs,
+                    r.new_rows_path
+                )
+        else:
+            slowest = sorted(updated_reports, key=lambda x: x.total_secs, reverse=True)[:DEFAULT_LOG_UPDATED_TICKERS_TOP_N]
+            if slowest:
+                logger.info(
+                    "[%s] Slowest updated symbols sample: %s",
+                    mode.upper(),
+                    ", ".join(f"{r.ticker}:{r.total_secs:.2f}s" for r in slowest),
+                )
     else:
         logger.info("[%s] No new rows were appended (everything ended up noop).", mode.upper())
 
@@ -1645,13 +1690,21 @@ def run_mode(
         logger.info("[%s][TIMING] per_ticker_sum_s load=%.2f fetch=%.2f ind=%.2f persist=%.2f total=%.2f",
                     mode.upper(), sum_load, sum_fetch, sum_ind, sum_persist, sum_total)
 
+    verify_symbols = _sample_verify_symbols(syms, DEFAULT_VERIFY_SAMPLE_SIZE)
+    if len(verify_symbols) != len(syms):
+        logger.info(
+            "[%s][VERIFY] Fast sample enabled: checking %d/%d symbols",
+            mode.upper(),
+            len(verify_symbols),
+            len(syms),
+        )
     t_verify0 = _time.perf_counter()
-    ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+    ok_count, verify_failed = verify_mode_outputs(mode, verify_symbols, verify_expected_ts, logger)
     verify_secs = _time.perf_counter() - t_verify0
     logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
                 mode.upper(),
                 verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
-                ok_count, len(syms), len(verify_failed), verify_secs)
+                ok_count, len(verify_symbols), len(verify_failed), verify_secs)
 
     recovery_secs = 0.0
     verify_post_secs = 0.0
@@ -1659,7 +1712,7 @@ def run_mode(
         recovery_secs = _recover_verify_failures(
             mode=mode,
             verify_failed=verify_failed,
-            all_symbols=syms,
+            all_symbols=verify_symbols,
             expected_ts_ist=verify_expected_ts,
             kite=kite,
             token_map=token_map,
@@ -1680,7 +1733,7 @@ def run_mode(
         logger.info("[%s][VERIFY][POST] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
                     mode.upper(),
                     verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
-                    ok_count, len(syms), len(verify_failed), verify_post_secs)
+                    ok_count, len(verify_symbols), len(verify_failed), verify_post_secs)
 
     if recovery_secs > 0.0:
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=%.2fs | verify_pre=%.2fs | recover=%.2fs | verify_post=%.2fs | total=%.2fs",

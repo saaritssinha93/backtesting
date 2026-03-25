@@ -50,6 +50,50 @@ from avwap_v11_refactored.avwap_common_v7_sweep import (
 )
 
 
+def _prepare_session_bars_for_scan(
+    df_full: pd.DataFrame,
+    cfg: StrategyConfig,
+) -> pd.DataFrame:
+    if df_full.empty:
+        return pd.DataFrame()
+
+    required = {"date", "open", "high", "low", "close"}
+    if not required.issubset(set(df_full.columns)):
+        return pd.DataFrame()
+
+    dt = pd.to_datetime(df_full["date"], errors="coerce")
+    if getattr(dt.dt, "tz", None) is None:
+        dt = dt.dt.tz_localize("UTC")
+    dt = dt.dt.tz_convert(IST)
+
+    local_time = dt.dt.time
+    mask = (local_time >= cfg.session_start) & (local_time <= cfg.session_end)
+    if not bool(mask.any()):
+        return pd.DataFrame(columns=df_full.columns)
+
+    df = df_full.loc[mask].copy()
+    if df.empty:
+        return df
+
+    df["date"] = dt.loc[mask]
+    df = df.sort_values("date").reset_index(drop=True)
+    df = prepare_indicators(df, cfg)
+    if df.empty:
+        return df
+
+    per_day: List[pd.DataFrame] = []
+    for _, g in df.groupby("day", sort=True):
+        if g.empty:
+            continue
+        g2 = g.copy().reset_index(drop=True)
+        g2["AVWAP"] = compute_day_avwap(g2)
+        per_day.append(g2)
+
+    if not per_day:
+        return df.iloc[0:0].copy()
+    return pd.concat(per_day, ignore_index=True)
+
+
 # ===========================================================================
 # IMPULSE CLASSIFICATION (GREEN CANDLES)
 # ===========================================================================
@@ -708,26 +752,21 @@ def scan_one_day(
 def scan_all_days_for_ticker(
     ticker: str, df_full: pd.DataFrame, cfg: StrategyConfig
 ) -> List[Trade]:
-    if df_full.empty:
-        return []
+    df = _prepare_session_bars_for_scan(df_full, cfg)
+    return scan_all_days_for_ticker_prepared(ticker, df, cfg)
 
-    for c in ["open", "high", "low", "close"]:
-        if c not in df_full.columns:
-            return []
 
-    df = df_full[df_full["date"].apply(lambda ts: in_session(ts, cfg))].copy()
+def scan_all_days_for_ticker_prepared(
+    ticker: str, df: pd.DataFrame, cfg: StrategyConfig
+) -> List[Trade]:
     if df.empty:
         return []
-
-    df = df.sort_values("date").reset_index(drop=True)
-    df = prepare_indicators(df, cfg)
 
     all_trades: List[Trade] = []
     for day_val, df_day in df.groupby("day", sort=True):
         df_day = df_day.copy().reset_index(drop=True)
         if len(df_day) < int(cfg.min_bars_for_scan):
             continue
-        df_day["AVWAP"] = compute_day_avwap(df_day)
         trades = scan_one_day(ticker, df_day, str(day_val), cfg)
         if trades:
             all_trades.extend(trades)
@@ -759,4 +798,3 @@ def run_long_scan(cfg: Optional[StrategyConfig] = None) -> List[Trade]:
             print(f"  [LONG] scanned {k}/{len(tickers)} | trades_so_far={len(all_trades)}")
 
     return all_trades
-

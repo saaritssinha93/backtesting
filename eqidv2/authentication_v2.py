@@ -4,7 +4,7 @@ authentication_v2.py
 
 Design goals:
 1) Single auth pass per IST day (typically scheduler at ~08:55).
-2) Generate/reuse request/access tokens for all configured apps (1..4).
+2) Generate/reuse request/access tokens for all configured apps (1..8).
 3) No intraday 15-minute renewal loop in this script.
 
 Files used:
@@ -12,6 +12,10 @@ Files used:
 - api_key2.txt (optional second Kite app)
 - api_key3.txt (optional third Kite app)
 - api_key4.txt (optional fourth Kite app)
+- api_key5.txt (optional fifth Kite app)
+- api_key6.txt (optional sixth Kite app)
+- api_key7.txt (optional seventh Kite app)
+- api_key8.txt (optional eighth Kite app)
 - request_token.txt
 - access_token.txt
 - request_token2.txt
@@ -20,6 +24,14 @@ Files used:
 - access_token3.txt
 - request_token4.txt
 - access_token4.txt
+- request_token5.txt
+- access_token5.txt
+- request_token6.txt
+- access_token6.txt
+- request_token7.txt
+- access_token7.txt
+- request_token8.txt
+- access_token8.txt
 - refresh_token.txt
 - auth_v2_state.json
 """
@@ -63,6 +75,10 @@ API_KEY_FILE = ROOT / "api_key.txt"
 API_KEY2_FILE = ROOT / "api_key2.txt"
 API_KEY3_FILE = ROOT / "api_key3.txt"
 API_KEY4_FILE = ROOT / "api_key4.txt"
+API_KEY5_FILE = ROOT / "api_key5.txt"
+API_KEY6_FILE = ROOT / "api_key6.txt"
+API_KEY7_FILE = ROOT / "api_key7.txt"
+API_KEY8_FILE = ROOT / "api_key8.txt"
 REQUEST_TOKEN_FILE = ROOT / "request_token.txt"
 ACCESS_TOKEN_FILE = ROOT / "access_token.txt"
 REQUEST_TOKEN2_FILE = ROOT / "request_token2.txt"
@@ -71,6 +87,14 @@ REQUEST_TOKEN3_FILE = ROOT / "request_token3.txt"
 ACCESS_TOKEN3_FILE = ROOT / "access_token3.txt"
 REQUEST_TOKEN4_FILE = ROOT / "request_token4.txt"
 ACCESS_TOKEN4_FILE = ROOT / "access_token4.txt"
+REQUEST_TOKEN5_FILE = ROOT / "request_token5.txt"
+ACCESS_TOKEN5_FILE = ROOT / "access_token5.txt"
+REQUEST_TOKEN6_FILE = ROOT / "request_token6.txt"
+ACCESS_TOKEN6_FILE = ROOT / "access_token6.txt"
+REQUEST_TOKEN7_FILE = ROOT / "request_token7.txt"
+ACCESS_TOKEN7_FILE = ROOT / "access_token7.txt"
+REQUEST_TOKEN8_FILE = ROOT / "request_token8.txt"
+ACCESS_TOKEN8_FILE = ROOT / "access_token8.txt"
 REFRESH_TOKEN_FILE = ROOT / "refresh_token.txt"
 STATE_FILE = ROOT / "auth_v2_state.json"
 
@@ -78,16 +102,28 @@ SECONDARY_API_KEY_FILES = {
     2: API_KEY2_FILE,
     3: API_KEY3_FILE,
     4: API_KEY4_FILE,
+    5: API_KEY5_FILE,
+    6: API_KEY6_FILE,
+    7: API_KEY7_FILE,
+    8: API_KEY8_FILE,
 }
 SECONDARY_REQUEST_TOKEN_FILES = {
     2: REQUEST_TOKEN2_FILE,
     3: REQUEST_TOKEN3_FILE,
     4: REQUEST_TOKEN4_FILE,
+    5: REQUEST_TOKEN5_FILE,
+    6: REQUEST_TOKEN6_FILE,
+    7: REQUEST_TOKEN7_FILE,
+    8: REQUEST_TOKEN8_FILE,
 }
 SECONDARY_ACCESS_TOKEN_FILES = {
     2: ACCESS_TOKEN2_FILE,
     3: ACCESS_TOKEN3_FILE,
     4: ACCESS_TOKEN4_FILE,
+    5: ACCESS_TOKEN5_FILE,
+    6: ACCESS_TOKEN6_FILE,
+    7: ACCESS_TOKEN7_FILE,
+    8: ACCESS_TOKEN8_FILE,
 }
 
 MARKET_OPEN = dtime(9, 15)
@@ -605,7 +641,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     parts = _read_key_secret()
-    for app_idx in (2, 3, 4):
+    for app_idx in (2, 3, 4, 5, 6, 7, 8):
         try:
             _seed_additional_session_for_today(
                 primary_parts=parts,

@@ -15,8 +15,8 @@ For each new signal:
 Concurrent trades run in parallel threads (up to MAX_CONCURRENT_TRADES).
 
 Output:
-  - live_signals/live_trades_YYYY-MM-DD_v15.csv   (detailed trade log)
-  - live_signals/live_trade_summary_v15.json       (running P&L summary)
+  - live_signals/live_trades_YYYY-MM-DD_v15_new.csv   (detailed trade log)
+  - live_signals/live_trade_summary_v15_new.json      (running P&L summary)
 
 Safety features:
   - Signal deduplication via signal_id tracking
@@ -80,14 +80,14 @@ except ImportError:
 IST = pytz.timezone("Asia/Kolkata")
 
 SIGNAL_DIR = str(RUNTIME_LIVE_SIGNALS_DIR)
-SIGNAL_CSV_PATTERNS = ("signals_{}_v15_short.csv", "signals_{}_v15_long.csv")
-TRADE_LOG_PATTERN = "live_trades_{}_v15.csv"
-LIVE_TRADE_EXEC_LOG_PATTERN = "live_trade_execution_{}_v15.log"
-EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_live_v15.json")
-MIS_REJECTED_SYMBOLS_FILE = os.path.join(SIGNAL_DIR, "mis_rejected_symbols_v15.json")
-SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary_v15.json")
-OPEN_TRADES_STATE_PATTERN = "open_live_trades_state_{}_v15.json"
-KILL_SWITCH_COMMAND_FILE = os.path.join(SIGNAL_DIR, "kill_switch_false_v15.json")
+SIGNAL_CSV_PATTERNS = ("signals_{}_v15_new_short.csv", "signals_{}_v15_new_long.csv")
+TRADE_LOG_PATTERN = "live_trades_{}_v15_new.csv"
+LIVE_TRADE_EXEC_LOG_PATTERN = "live_trade_execution_{}_v15_new.log"
+EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_live_v15_new.json")
+MIS_REJECTED_SYMBOLS_FILE = os.path.join(SIGNAL_DIR, "mis_rejected_symbols_v15_new.json")
+SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary_v15_new.json")
+OPEN_TRADES_STATE_PATTERN = "open_live_trades_state_{}_v15_new.json"
+KILL_SWITCH_COMMAND_FILE = os.path.join(SIGNAL_DIR, "kill_switch_false_v15_new.json")
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -220,7 +220,12 @@ _SIGNAL_COL_MAP = {
 }
 
 # Fallback margin capital when the signal row omits quantity.
-DEFAULT_POSITION_SIZE = float(os.getenv("EQIDV15_DEFAULT_POSITION_SIZE_RS", "50000"))
+DEFAULT_POSITION_SIZE = float(
+    os.getenv(
+        "EQIDV15_NEW_DEFAULT_POSITION_SIZE_RS",
+        os.getenv("EQIDV15_DEFAULT_POSITION_SIZE_RS", "20000"),
+    )
+)
 # Leave unset so quantity is taken from the signal row when present.
 FORCE_ENTRY_QUANTITY: Optional[int] = None
 

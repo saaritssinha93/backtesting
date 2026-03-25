@@ -23,14 +23,7 @@ LOG_DIR = BASE_DIR / "logs"
 LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
 BAT_DIR = BASE_DIR / "bat"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
-V15_SHORT_SHARD_IDS = tuple(f"{idx:02d}" for idx in range(1, 11))
-V15_SHORT_SHARD_TASKS = tuple(
-    f"EQIDV2_live_combined_csv_v15_short_s{shard_id}_0900" for shard_id in V15_SHORT_SHARD_IDS
-)
-V15_LONG_SHARD_IDS = tuple(f"{idx:02d}" for idx in range(1, 11))
-V15_LONG_SHARD_TASKS = tuple(
-    f"EQIDV2_live_combined_csv_v15_long_s{shard_id}_0900" for shard_id in V15_LONG_SHARD_IDS
-)
+V15_NEW_TASK = "EQIDV2_live_combined_csv_v15_new_0900"
 
 
 @dataclass
@@ -395,16 +388,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     checks.append(check_http("http://127.0.0.1:8787/", timeout_sec=8.0))
 
     eod_15min_enabled = _task_is_enabled("EQIDV2_eod_15mins_data_0900")
-    v15_short_enabled_map = {
-        shard_id: _task_is_enabled(task_name)
-        for shard_id, task_name in zip(V15_SHORT_SHARD_IDS, V15_SHORT_SHARD_TASKS)
-    }
-    v15_short_enabled = any(v15_short_enabled_map.values())
-    v15_long_enabled_map = {
-        shard_id: _task_is_enabled(task_name)
-        for shard_id, task_name in zip(V15_LONG_SHARD_IDS, V15_LONG_SHARD_TASKS)
-    }
-    v15_long_enabled = any(v15_long_enabled_map.values())
+    v15_new_enabled = _task_is_enabled(V15_NEW_TASK)
     v15_paper_enabled = _task_is_enabled("EQIDV2_avwap_paper_trade_v15_0900")
     v15_live_enabled = _task_is_enabled("EQIDV2_avwap_live_trade_v15_0905")
     v15_nifty_enabled = _task_is_enabled("EQIDV2_nifty_guard_fetch_v15_0915")
@@ -422,26 +406,15 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     for task in preopen_tasks:
         checks.append(check_task_ran_today(task))
 
-    for shard_id, task_name in zip(V15_SHORT_SHARD_IDS, V15_SHORT_SHARD_TASKS):
-        checks.append(
-            check_task_enabled_state(
-                task_name,
-                f"task_{task_name}",
-                require_run_today=True,
-                inactive_ok=True,
-                inactive_detail="session not enabled",
-            )
+    checks.append(
+        check_task_enabled_state(
+            V15_NEW_TASK,
+            f"task_{V15_NEW_TASK}",
+            require_run_today=True,
+            inactive_ok=True,
+            inactive_detail="session not enabled",
         )
-    for shard_id, task_name in zip(V15_LONG_SHARD_IDS, V15_LONG_SHARD_TASKS):
-        checks.append(
-            check_task_enabled_state(
-                task_name,
-                f"task_{task_name}",
-                require_run_today=True,
-                inactive_ok=True,
-                inactive_detail="session not enabled",
-            )
-        )
+    )
     checks.append(
         check_task_enabled_state(
             "EQIDV2_avwap_paper_trade_v15_0900",
@@ -496,26 +469,15 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             disabled_detail="session not enabled",
         )
     )
-    for shard_id in V15_SHORT_SHARD_IDS:
-        checks.append(
-            check_file_recent_if_enabled(
-                LOG_DIR / f"eqidv2_live_combined_analyser_csv_v15_short_shard_{shard_id}.log",
-                max_age_min=max_age_min,
-                label=f"live_combined_csv_v15_short_s{shard_id}",
-                enabled=v15_short_enabled_map[shard_id],
-                disabled_detail="session not enabled",
-            )
+    checks.append(
+        check_file_recent_if_enabled(
+            LOG_DIR / "eqidv2_live_combined_analyser_csv_v15_new_persistent.log",
+            max_age_min=max_age_min,
+            label="live_combined_csv_v15_new_persistent",
+            enabled=v15_new_enabled,
+            disabled_detail="session not enabled",
         )
-    for shard_id in V15_LONG_SHARD_IDS:
-        checks.append(
-            check_file_recent_if_enabled(
-                LOG_DIR / f"eqidv2_live_combined_analyser_csv_v15_long_shard_{shard_id}.log",
-                max_age_min=max_age_min,
-                label=f"live_combined_csv_v15_long_s{shard_id}",
-                enabled=v15_long_enabled_map[shard_id],
-                disabled_detail="session not enabled",
-            )
-        )
+    )
     checks.append(
         check_file_recent_if_enabled(
             LOG_DIR / "nifty_guard_fetcher_v15.log",
@@ -527,7 +489,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_file_recent_if_enabled(
-            LIVE_SIGNAL_DIR / f"paper_trade_execution_{now_local.strftime('%Y-%m-%d')}_v15.log",
+            LIVE_SIGNAL_DIR / f"paper_trade_execution_{now_local.strftime('%Y-%m-%d')}_v15_new.log",
             max_age_min=max_age_min,
             label="paper_trade_v15",
             enabled=v15_paper_enabled,
@@ -536,9 +498,9 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_supervised_runtime_if_enabled(
-            LIVE_SIGNAL_DIR / f"live_trade_execution_{now_local.strftime('%Y-%m-%d')}_v15.log",
-            LOG_DIR / "avwap_trade_execution_PAPER_TRADE_FALSE_v15.status",
-            LOG_DIR / "avwap_trade_execution_PAPER_TRADE_FALSE_v15.heartbeat",
+            LIVE_SIGNAL_DIR / f"live_trade_execution_{now_local.strftime('%Y-%m-%d')}_v15_new.log",
+            LOG_DIR / "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.status",
+            LOG_DIR / "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
             max_age_min=max_age_min,
             label="kite_trade_v15",
             enabled=v15_live_enabled,
@@ -581,10 +543,10 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     if include_optional_csv:
         checks.append(
             check_file_recent_if_enabled(
-                LIVE_SIGNAL_DIR / f"signals_{today}_v15_short.csv",
+                LIVE_SIGNAL_DIR / f"signals_{today}_v15_new_short.csv",
                 max_age_min=max_age_min,
-                label="live_signals_csv_v15_short",
-                enabled=v15_short_enabled,
+                label="live_signals_csv_v15_new_short",
+                enabled=v15_new_enabled,
                 disabled_detail="session not enabled",
                 required_when_enabled=False,
                 optional_warn_when_enabled=warn_optional_csv,
@@ -592,10 +554,10 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
         )
         checks.append(
             check_file_recent_if_enabled(
-                LIVE_SIGNAL_DIR / f"signals_{today}_v15_long.csv",
+                LIVE_SIGNAL_DIR / f"signals_{today}_v15_new_long.csv",
                 max_age_min=max_age_min,
-                label="live_signals_csv_v15_long",
-                enabled=v15_long_enabled,
+                label="live_signals_csv_v15_new_long",
+                enabled=v15_new_enabled,
                 disabled_detail="session not enabled",
                 required_when_enabled=False,
                 optional_warn_when_enabled=warn_optional_csv,
@@ -603,7 +565,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
         )
         checks.append(
             check_file_recent_if_enabled(
-                LIVE_SIGNAL_DIR / f"paper_trades_{today}_v15.csv",
+                LIVE_SIGNAL_DIR / f"paper_trades_{today}_v15_new.csv",
                 max_age_min=max_age_min,
                 label="live_papertrade_result_csv_v15",
                 enabled=v15_paper_enabled,
@@ -614,7 +576,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
         )
         checks.append(
             check_file_recent_if_enabled(
-                LIVE_SIGNAL_DIR / f"live_trades_{today}_v15.csv",
+                LIVE_SIGNAL_DIR / f"live_trades_{today}_v15_new.csv",
                 max_age_min=max_age_min,
                 label="live_kite_trades_csv_v15",
                 enabled=v15_live_enabled,

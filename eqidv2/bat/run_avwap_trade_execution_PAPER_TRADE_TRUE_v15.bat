@@ -23,7 +23,7 @@ set /a RESTART_COUNT=0
 
 for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"') do set "TODAY_IST=%%a"
 if not defined TODAY_IST set "TODAY_IST=%DATE%"
-set "LOG_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_TRUE_v15_%TODAY_IST%.log"
+set "LOG_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_TRUE_v15_new_%TODAY_IST%.log"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

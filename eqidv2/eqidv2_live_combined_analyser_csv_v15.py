@@ -97,6 +97,8 @@ OUT_SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 STATE_DIR = ROOT / "logs"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = STATE_DIR / "eqidv2_avwap_live_state_v11_v2.json"
+SLOT_READY_MARKER_DIR = runtime_dir("slot_ready_15m")
+SLOT_READY_MARKER_DIR.mkdir(parents=True, exist_ok=True)
 RUNTIME_STATUS_FILE_ENV = "EQIDV2_RUNTIME_STATUS_FILE"
 RUNTIME_HEARTBEAT_FILE_ENV = "EQIDV2_RUNTIME_HEARTBEAT_FILE"
 RUNTIME_SCRIPT_NAME_ENV = "EQIDV2_RUNTIME_SCRIPT_NAME"
@@ -164,16 +166,22 @@ HARD_STOP_TIME = dtime(15, 40)
 # one scan sees fully-updated data.
 INITIAL_DELAY_SECONDS = _env_int("EQIDV2_INITIAL_DELAY_SECONDS", 5, min_value=0)
 SLOT_START_OFFSET_SECONDS = _env_int("EQIDV2_SLOT_START_OFFSET_SECONDS", INITIAL_DELAY_SECONDS, min_value=0)
+POST_READY_STAGGER_SECONDS = _env_int("EQIDV2_POST_READY_STAGGER_SECONDS", 0, min_value=0)
 NUM_SCANS_PER_SLOT = _env_int("EQIDV2_NUM_SCANS_PER_SLOT", 5, min_value=1)
 SCAN_INTERVAL_SECONDS = _env_int("EQIDV2_SCAN_INTERVAL_SECONDS", 15, min_value=0)
 BLOCK_PARALLEL_SCAN_ENABLED = _env_bool("EQIDV2_BLOCK_PARALLEL_SCAN_ENABLED", True)
 SCAN_BLOCK_SIZE = _env_int("EQIDV2_SCAN_BLOCK_SIZE", 100, min_value=1)
 SCAN_MAX_WORKERS = _env_int("EQIDV2_SCAN_MAX_WORKERS", 6, min_value=1)
+SLOT_READY_MARKER_ENABLED = _env_bool("EQIDV2_SLOT_READY_MARKER_ENABLED", True)
 SLOT_READY_POLL_ENABLED = _env_bool("EQIDV2_SLOT_READY_POLL_ENABLED", True)
 SLOT_READY_MAX_WAIT_SECONDS = _env_int("EQIDV2_SLOT_READY_MAX_WAIT_SECONDS", INITIAL_DELAY_SECONDS, min_value=0)
 SLOT_READY_POLL_SECONDS = _env_int("EQIDV2_SLOT_READY_POLL_SECONDS", 2, min_value=1)
 SLOT_READY_SAMPLE_SIZE = _env_int("EQIDV2_SLOT_READY_SAMPLE_SIZE", 16, min_value=1)
 SLOT_READY_MIN_FRESH_RATIO = float(os.getenv("EQIDV2_SLOT_READY_MIN_FRESH_RATIO", "0.60"))
+SLOT_READY_MARKER_PREFER = _env_bool("EQIDV2_SLOT_READY_MARKER_PREFER", True)
+SLOT_READY_MARKER_MIN_RATIO = float(
+    os.getenv("EQIDV2_SLOT_READY_MARKER_MIN_RATIO", str(SLOT_READY_MIN_FRESH_RATIO))
+)
 
 # Guardrail: don't allow one slot cycle to run indefinitely.
 SLOT_SCAN_BUDGET_SECONDS = _env_int("EQIDV2_SLOT_SCAN_BUDGET_SECONDS", 13 * 60, min_value=60)
@@ -181,6 +189,7 @@ SCAN_OVERRUN_WARN_SECONDS = _env_int("EQIDV2_SCAN_OVERRUN_WARN_SECONDS", 180, mi
 
 # Emit rows into live signal CSV during scan, not only at scan-end.
 IMMEDIATE_SIGNAL_CSV_FLUSH = _env_bool("EQIDV2_IMMEDIATE_SIGNAL_CSV_FLUSH", True)
+WRITE_RUN_PARQUETS = _env_bool("EQIDV2_WRITE_RUN_PARQUETS", True)
 
 # Update flag: set True to call eqidv2 core.run_mode("15min") before each scan
 UPDATE_15M_BEFORE_CHECK = False
@@ -813,6 +822,40 @@ def _last_bar_for_ticker_ist(ticker: str) -> pd.Timestamp:
     return ts.floor("min")
 
 
+def _slot_ready_marker_path(slot: datetime) -> Path:
+    slot_ts = pd.Timestamp(slot)
+    if slot_ts.tzinfo is None:
+        slot_ts = slot_ts.tz_localize(IST)
+    else:
+        slot_ts = slot_ts.tz_convert(IST)
+    return SLOT_READY_MARKER_DIR / f"slot_{slot_ts.strftime('%Y%m%d_%H%M')}.json"
+
+
+def _read_slot_ready_marker(slot: datetime) -> Optional[Dict[str, Any]]:
+    path = _slot_ready_marker_path(slot)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _apply_post_ready_stagger(slot: datetime, *, reason: str) -> None:
+    stagger = max(0, int(POST_READY_STAGGER_SECONDS))
+    if stagger <= 0:
+        return
+    print(
+        f"[WAIT] Post-ready stagger {stagger}s for slot {pd.Timestamp(slot).strftime('%H:%M')} "
+        f"(reason={reason})",
+        flush=True,
+    )
+    time.sleep(float(stagger))
+
+
 def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool, float, float, int]:
     delay_target = slot + timedelta(seconds=SLOT_START_OFFSET_SECONDS)
     now = now_ist()
@@ -824,30 +867,57 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
         )
         time.sleep(max(0, wait_secs))
 
-    if not SLOT_READY_POLL_ENABLED:
+    wait_on_marker = bool(SLOT_READY_MARKER_ENABLED)
+    wait_on_freshness = bool(SLOT_READY_POLL_ENABLED)
+    if not wait_on_marker and not wait_on_freshness:
         waited = max(0.0, (delay_target - now).total_seconds() if now < delay_target else 0.0)
         return False, 0.0, float(waited), 0
 
     max_wait = max(0, int(SLOT_READY_MAX_WAIT_SECONDS))
     poll_secs = max(1, int(SLOT_READY_POLL_SECONDS))
     sample = _sample_tickers_for_slot_ready(tickers, SLOT_READY_SAMPLE_SIZE)
-    if not sample or max_wait <= 0:
+    if max_wait <= 0:
         return False, 0.0, 0.0, len(sample)
 
     deadline = delay_target + timedelta(seconds=max_wait)
     started = now_ist()
     target_slot = pd.Timestamp(slot).tz_convert(IST) if pd.Timestamp(slot).tzinfo else pd.Timestamp(slot).tz_localize(IST)
     last_ratio = 0.0
+    marker_seen = False
+    marker_ratio = 0.0
+    marker_source = "marker"
     while True:
+        if wait_on_marker:
+            marker_payload = _read_slot_ready_marker(slot)
+            if marker_payload is not None:
+                marker_seen = True
+                try:
+                    marker_ratio = float(marker_payload.get("fresh_ratio", 0.0))
+                except Exception:
+                    marker_ratio = 0.0
+                marker_source = str(marker_payload.get("source", "marker") or "marker")
+                if marker_ratio >= float(SLOT_READY_MARKER_MIN_RATIO) and bool(SLOT_READY_MARKER_PREFER):
+                    waited = (now_ist() - started).total_seconds()
+                    print(
+                        f"[WAIT] Slot ready marker accepted after {waited:.1f}s "
+                        f"(source={marker_source}, ratio={marker_ratio:.2f}, "
+                        f"min_ratio={float(SLOT_READY_MARKER_MIN_RATIO):.2f}, "
+                        f"slot={target_slot.strftime('%H:%M')})",
+                        flush=True,
+                    )
+                    _apply_post_ready_stagger(slot, reason="marker")
+                    return True, marker_ratio, waited, 0
+
         fresh = 0
         checked = 0
-        for ticker in sample:
-            last_bar = _last_bar_for_ticker_ist(ticker)
-            if pd.isna(last_bar):
-                continue
-            checked += 1
-            if last_bar >= target_slot:
-                fresh += 1
+        if wait_on_freshness and sample:
+            for ticker in sample:
+                last_bar = _last_bar_for_ticker_ist(ticker)
+                if pd.isna(last_bar):
+                    continue
+                checked += 1
+                if last_bar >= target_slot:
+                    fresh += 1
         ratio = (fresh / checked) if checked > 0 else 0.0
         last_ratio = ratio
         if checked > 0 and ratio >= float(SLOT_READY_MIN_FRESH_RATIO):
@@ -857,7 +927,17 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
                 f"(fresh={fresh}/{checked}, ratio={ratio:.2f}, target>={target_slot.strftime('%H:%M')})",
                 flush=True,
             )
+            _apply_post_ready_stagger(slot, reason="freshness")
             return True, ratio, waited, checked
+        if marker_seen and (not wait_on_freshness or checked <= 0):
+            waited = (now_ist() - started).total_seconds()
+            print(
+                f"[WAIT] Slot ready marker detected after {waited:.1f}s "
+                f"(source={marker_source}, ratio={marker_ratio:.2f}, slot={target_slot.strftime('%H:%M')})",
+                flush=True,
+            )
+            _apply_post_ready_stagger(slot, reason="marker")
+            return True, marker_ratio, waited, checked
 
         now = now_ist()
         if now >= deadline:
@@ -867,11 +947,13 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
                 f"(fresh_ratio={ratio:.2f}, checked={checked}, target>={target_slot.strftime('%H:%M')})",
                 flush=True,
             )
+            _apply_post_ready_stagger(slot, reason="timeout")
             return False, ratio, waited, checked
 
         sleep_secs = min(float(poll_secs), max(0.0, (deadline - now).total_seconds()))
         if sleep_secs <= 0:
             waited = (now - started).total_seconds()
+            _apply_post_ready_stagger(slot, reason="timeout")
             return False, last_ratio, waited, checked
         time.sleep(sleep_secs)
 
@@ -891,6 +973,36 @@ def _persist_signal_rows_to_state(state: Dict[str, Any], signal_rows: List[Dict[
         else:
             bar_ts = bar_ts.tz_convert(IST)
         mark_signal(state, ticker, side, str(bar_ts.date()))
+
+
+def _save_run_parquets(
+    checks_df: pd.DataFrame,
+    signals_df: pd.DataFrame,
+    run_tag: str,
+    checks_dir: Optional[Path] = None,
+    signals_dir: Optional[Path] = None,
+    suffix: str = "",
+) -> Tuple[Path, Path]:
+    ts = now_ist().strftime("%Y%m%d_%H%M%S")
+    day_folder = now_ist().strftime("%Y%m%d")
+    out_checks_day = Path(checks_dir or OUT_CHECKS_DIR) / day_folder
+    out_signals_day = Path(signals_dir or OUT_SIGNALS_DIR) / day_folder
+    out_checks_day.mkdir(parents=True, exist_ok=True)
+    out_signals_day.mkdir(parents=True, exist_ok=True)
+
+    suffix_clean = str(suffix or "")
+    if suffix_clean and (not suffix_clean.startswith("_")):
+        suffix_clean = "_" + suffix_clean
+
+    checks_path = out_checks_day / f"checks_{ts}_{run_tag}{suffix_clean}.parquet"
+    signals_path = out_signals_day / f"signals_{ts}_{run_tag}{suffix_clean}.parquet"
+
+    _require_pyarrow()
+    (checks_df if checks_df is not None else pd.DataFrame()).to_parquet(checks_path, index=False, engine=PARQUET_ENGINE)
+    (signals_df if signals_df is not None else pd.DataFrame()).to_parquet(signals_path, index=False, engine=PARQUET_ENGINE)
+    print(f"[SAVED] {checks_path}")
+    print(f"[SAVED] {signals_path}")
+    return checks_path, signals_path
 
 
 def _scan_ticker_block(
@@ -1382,6 +1494,190 @@ def _current_15m_slot_start_ist() -> pd.Timestamp:
     return _to_ist_ts(flo)
 
 
+_LIVE_PARITY_REGIME_CACHE: Dict[Tuple[str, str, Tuple[str, ...], str], Tuple[Dict[str, int], str]] = {}
+_LIVE_PARITY_REGIME_CACHE_MAX_KEYS = 32
+_LIVE_PARITY_MIN_NONZERO_VOLUME_RATIO = 0.25
+_LIVE_PARITY_MIN_NON_NEUTRAL_RATIO = 0.03
+
+
+def _market_regime_key(ts: Any, runner_cfg: Optional[Any] = None) -> str:
+    key_fn = getattr(runner_cfg, "_ts_to_key_local", None)
+    if callable(key_fn):
+        try:
+            return str(key_fn(pd.Timestamp(ts)))
+        except Exception:
+            pass
+    ts_pd = pd.Timestamp(ts)
+    if ts_pd.tzinfo is None:
+        ts_pd = ts_pd.tz_localize("UTC")
+    return ts_pd.tz_convert(IST).isoformat()
+
+
+def _trim_df_to_target_slot(df: pd.DataFrame, target_slot_ist: Optional[pd.Timestamp]) -> pd.DataFrame:
+    if df is None or df.empty or target_slot_ist is None:
+        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    target_slot = _to_ist_ts(target_slot_ist).floor("min")
+    df_out = df.copy()
+    if "date_ist" not in df_out.columns:
+        if "date" not in df_out.columns:
+            return df_out
+        df_out["date_ist"] = df_out["date"].apply(_to_ist_ts)
+    if "day" not in df_out.columns:
+        df_out["day"] = pd.to_datetime(df_out["date_ist"]).dt.date
+
+    date_ist = pd.to_datetime(df_out["date_ist"])
+    mask = (df_out["day"] < target_slot.date()) | (
+        (df_out["day"] == target_slot.date()) & (date_ist.dt.floor("min") <= target_slot)
+    )
+    return df_out.loc[mask].copy()
+
+
+def _build_market_regime_map_upto_slot(
+    cfg: Any,
+    target_slot_ist: Optional[pd.Timestamp],
+    runner_cfg: Optional[Any] = None,
+) -> Tuple[Dict[str, int], str]:
+    if target_slot_ist is None:
+        return {}, ""
+
+    target_slot = _to_ist_ts(target_slot_ist).floor("min")
+    tickers = tuple(getattr(cfg, "market_regime_tickers", ()) or ())
+    engine = getattr(cfg, "parquet_engine", PARQUET_ENGINE)
+
+    for ticker_found in tickers:
+        try:
+            p = Path(cfg.dir_15m) / f"{ticker_found}{getattr(cfg, 'end_15m', END_15M)}"
+            if not p.exists():
+                continue
+
+            df_idx = pd.read_parquet(str(p), engine=engine)
+            df_idx = normalize_dates(df_idx)
+            if df_idx.empty or "date" not in df_idx.columns:
+                continue
+
+            df_idx = df_idx[df_idx["date"].apply(lambda ts: ref_in_session(ts, cfg))].copy()
+            if df_idx.empty:
+                continue
+
+            df_idx = _trim_df_to_target_slot(df_idx, target_slot)
+            if df_idx.empty:
+                continue
+
+            df_idx = ref_prepare_indicators(df_idx.sort_values("date").reset_index(drop=True), cfg)
+            if df_idx.empty or "day" not in df_idx.columns:
+                continue
+
+            per_day: List[pd.DataFrame] = []
+            for _, g in df_idx.groupby("day", sort=True):
+                g2 = g.copy().reset_index(drop=True)
+                g2["AVWAP"] = ref_compute_day_avwap(g2)
+                per_day.append(g2)
+            if not per_day:
+                continue
+
+            idx = pd.concat(per_day, ignore_index=True)
+
+            if "volume" in idx.columns:
+                volume = pd.to_numeric(idx["volume"], errors="coerce").fillna(0.0)
+                if float((volume > 0).mean()) < _LIVE_PARITY_MIN_NONZERO_VOLUME_RATIO:
+                    continue
+
+            close = pd.to_numeric(idx["close"], errors="coerce")
+            ema20 = pd.to_numeric(
+                idx["EMA20"] if "EMA20" in idx.columns else idx.get("EMA_20", np.nan),
+                errors="coerce",
+            )
+            avwap = pd.to_numeric(idx["AVWAP"], errors="coerce")
+            rsi = pd.to_numeric(
+                idx["RSI15"] if "RSI15" in idx.columns else idx.get("RSI", np.nan),
+                errors="coerce",
+            )
+
+            long_bias = (close > ema20) & (close > avwap) & (rsi > 50.0)
+            short_bias = (close < ema20) & (close < avwap) & (rsi < 50.0)
+            bias = np.where(long_bias, 1, np.where(short_bias, -1, 0))
+            if float(np.mean(bias != 0)) < _LIVE_PARITY_MIN_NON_NEUTRAL_RATIO:
+                continue
+
+            out: Dict[str, int] = {}
+            for ts, b in zip(idx["date"], bias):
+                if pd.isna(ts):
+                    continue
+                out[_market_regime_key(ts, runner_cfg)] = int(b)
+            if out:
+                return out, str(ticker_found)
+        except Exception:
+            continue
+
+    return {}, ""
+
+
+def _market_regime_cache_key(
+    cfg: Any,
+    target_slot_ist: Optional[pd.Timestamp],
+    runner_cfg: Optional[Any] = None,
+) -> Tuple[str, str, Tuple[str, ...], str]:
+    tickers = tuple(getattr(cfg, "market_regime_tickers", ()) or ())
+    slot_key = ""
+    if target_slot_ist is not None:
+        slot_key = _to_ist_ts(target_slot_ist).floor("min").isoformat()
+    return (
+        str(getattr(runner_cfg, "__file__", type(runner_cfg).__name__ if runner_cfg is not None else "")),
+        str(getattr(cfg, "dir_15m", DIR_15M)),
+        tickers,
+        slot_key,
+    )
+
+
+def _seed_cached_market_regime_map(
+    cfg: Any,
+    target_slot_ist: Optional[pd.Timestamp],
+    regime_map: Optional[Dict[str, int]],
+    regime_source: str = "",
+    runner_cfg: Optional[Any] = None,
+) -> None:
+    cache_key = _market_regime_cache_key(cfg, target_slot_ist, runner_cfg)
+    _LIVE_PARITY_REGIME_CACHE[cache_key] = (dict(regime_map or {}), str(regime_source or ""))
+    while len(_LIVE_PARITY_REGIME_CACHE) > _LIVE_PARITY_REGIME_CACHE_MAX_KEYS:
+        _LIVE_PARITY_REGIME_CACHE.pop(next(iter(_LIVE_PARITY_REGIME_CACHE)))
+
+
+def _get_cached_market_regime_map(
+    cfg: Any,
+    target_slot_ist: Optional[pd.Timestamp],
+    runner_cfg: Optional[Any] = None,
+    build_regime_map: Optional[Any] = None,
+) -> Tuple[Dict[str, int], str]:
+    cache_key = _market_regime_cache_key(cfg, target_slot_ist, runner_cfg)
+    slot_key = str(cache_key[-1] or "")
+
+    cached = _LIVE_PARITY_REGIME_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached[0]), str(cached[1])
+
+    regime_map: Dict[str, int] = {}
+    regime_source = ""
+    if target_slot_ist is not None:
+        regime_map, regime_source = _build_market_regime_map_upto_slot(cfg, target_slot_ist, runner_cfg)
+    elif callable(build_regime_map):
+        try:
+            regime_map, regime_source = build_regime_map(cfg)
+        except Exception:
+            regime_map, regime_source = {}, ""
+
+    _LIVE_PARITY_REGIME_CACHE[cache_key] = (dict(regime_map or {}), str(regime_source or ""))
+    while len(_LIVE_PARITY_REGIME_CACHE) > _LIVE_PARITY_REGIME_CACHE_MAX_KEYS:
+        _LIVE_PARITY_REGIME_CACHE.pop(next(iter(_LIVE_PARITY_REGIME_CACHE)))
+
+    if regime_source:
+        print(
+            f"[PARITY REGIME] slot={slot_key or 'FULL'} source={regime_source} keys={len(regime_map)}",
+            flush=True,
+        )
+    return dict(regime_map or {}), str(regime_source or "")
+
+
 def _latest_entry_signals_for_ticker(
     ticker: str,
     df_raw: pd.DataFrame,
@@ -1458,8 +1754,12 @@ def _latest_entry_signals_for_ticker(
         return signals, checks
 
     # Same parity source used by v3 row-by-row script.
-    df_upto_target = df[df["day"] <= target_day].copy()
-    all_sigs = _all_day_runner_parity_signals_for_ticker(ticker, df_upto_target)
+    df_upto_target = _trim_df_to_target_slot(df, target_slot)
+    all_sigs = _all_day_runner_parity_signals_for_ticker(
+        ticker,
+        df_upto_target,
+        target_slot_ist=target_slot,
+    )
     if not all_sigs:
         checks.append({"ticker": ticker, "side": "SHORT", "bar_time_ist": str(target_slot), "signal": False})
         checks.append({"ticker": ticker, "side": "LONG", "bar_time_ist": str(target_slot), "signal": False})
@@ -1528,12 +1828,20 @@ def _latest_entry_signals_for_ticker(
     return signals, checks
 
 
-def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.DataFrame):
+def _all_day_runner_parity_signals_for_ticker(
+    ticker: str,
+    df_upto_target: pd.DataFrame,
+    target_slot_ist: Optional[pd.Timestamp] = None,
+):
     """Generate parity signals for the latest day present in `df_upto_target`."""
     if df_upto_target is None or df_upto_target.empty:
         return []
 
     df = normalize_dates(df_upto_target)
+    if df.empty:
+        return []
+
+    df = _trim_df_to_target_slot(df, target_slot_ist)
     if df.empty:
         return []
 
@@ -1635,19 +1943,22 @@ def _all_day_runner_parity_signals_for_ticker(ticker: str, df_upto_target: pd.Da
             long_cfg.market_regime_tickers = market_regime_tickers
 
         build_regime_map = getattr(_runner_cfg, "build_market_regime_map", None)
+        regime_map: Dict[str, int] = {}
         if callable(build_regime_map):
-            try:
-                regime_map, _regime_source = build_regime_map(short_cfg)
-            except Exception:
-                regime_map, _regime_source = {}, ""
-            if regime_map:
-                short_cfg.market_regime_map = dict(regime_map)
-                long_cfg.market_regime_map = dict(regime_map)
-                short_cfg.enable_market_regime_filter = True
-                long_cfg.enable_market_regime_filter = True
-            else:
-                short_cfg.enable_market_regime_filter = False
-                long_cfg.enable_market_regime_filter = False
+            regime_map, _regime_source = _get_cached_market_regime_map(
+                short_cfg,
+                target_slot_ist=target_slot_ist,
+                runner_cfg=_runner_cfg,
+                build_regime_map=build_regime_map,
+            )
+        if regime_map:
+            short_cfg.market_regime_map = dict(regime_map)
+            long_cfg.market_regime_map = dict(regime_map)
+            short_cfg.enable_market_regime_filter = True
+            long_cfg.enable_market_regime_filter = True
+        else:
+            short_cfg.enable_market_regime_filter = False
+            long_cfg.enable_market_regime_filter = False
 
     short_cfg.allow_incomplete_tail = bool(ALLOW_INCOMPLETE_TAIL_IN_LIVE)
     long_cfg.allow_incomplete_tail = bool(ALLOW_INCOMPLETE_TAIL_IN_LIVE)
@@ -2437,23 +2748,8 @@ def run_one_scan(run_tag: str = "A") -> Tuple[pd.DataFrame, pd.DataFrame]:
             keep.append(df_side)
         signals_df = pd.concat(keep, ignore_index=True) if keep else signals_df
 
-    ts = now_ist().strftime("%Y%m%d_%H%M%S")
-    day_folder = now_ist().strftime("%Y%m%d")
-
-    out_checks_day = OUT_CHECKS_DIR / day_folder
-    out_signals_day = OUT_SIGNALS_DIR / day_folder
-    out_checks_day.mkdir(parents=True, exist_ok=True)
-    out_signals_day.mkdir(parents=True, exist_ok=True)
-
-    checks_path = out_checks_day / f"checks_{ts}_{run_tag}.parquet"
-    signals_path = out_signals_day / f"signals_{ts}_{run_tag}.parquet"
-
-    _require_pyarrow()
-    checks_df.to_parquet(checks_path, index=False, engine=PARQUET_ENGINE)
-    signals_df.to_parquet(signals_path, index=False, engine=PARQUET_ENGINE)
-
-    print(f"[SAVED] {checks_path}")
-    print(f"[SAVED] {signals_path}")
+    if WRITE_RUN_PARQUETS:
+        _save_run_parquets(checks_df, signals_df, run_tag)
 
     # Bridge: write signals to CSV for trade executors
     if immediate_flush_enabled:
@@ -2606,6 +2902,7 @@ def main() -> None:
     print(
         f"[INFO] Timing: initial_delay={INITIAL_DELAY_SECONDS}s, "
         f"slot_start_offset={SLOT_START_OFFSET_SECONDS}s, "
+        f"post_ready_stagger={POST_READY_STAGGER_SECONDS}s, "
         f"scans_per_slot={NUM_SCANS_PER_SLOT}, interval={SCAN_INTERVAL_SECONDS}s"
     )
     print(
@@ -2618,7 +2915,8 @@ def main() -> None:
         flush=True,
     )
     print(
-        f"[INFO] Slot-ready polling={SLOT_READY_POLL_ENABLED} | max_wait={SLOT_READY_MAX_WAIT_SECONDS}s | "
+        f"[INFO] Slot-ready marker={SLOT_READY_MARKER_ENABLED} | "
+        f"polling={SLOT_READY_POLL_ENABLED} | max_wait={SLOT_READY_MAX_WAIT_SECONDS}s | "
         f"poll={SLOT_READY_POLL_SECONDS}s | sample={SLOT_READY_SAMPLE_SIZE} | "
         f"min_fresh_ratio={SLOT_READY_MIN_FRESH_RATIO:.2f}",
         flush=True,

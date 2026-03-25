@@ -16,8 +16,8 @@ For each new signal:
   4. Appends results to a daily paper trade log CSV
 
 Output:
-  - live_signals/paper_trades_YYYY-MM-DD.csv  (detailed trade log)
-  - live_signals/paper_trade_summary.json       (running P&L summary)
+  - live_signals/paper_trades_YYYY-MM-DD_v15_new.csv   (detailed trade log)
+  - live_signals/paper_trade_summary_v15_new.json      (running P&L summary)
 
 Features:
   - Watchdog-based CSV monitoring for instant reaction
@@ -72,13 +72,13 @@ except ImportError:
 IST = pytz.timezone("Asia/Kolkata")
 
 SIGNAL_DIR = str(RUNTIME_LIVE_SIGNALS_DIR)
-SIGNAL_CSV_PATTERNS = ("signals_{}_v15_short.csv", "signals_{}_v15_long.csv")
-PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v15.csv"
-PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v15.log"
-EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper_v15.json")
-SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary_v15.json")
-OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}_v15.json"
-KILL_SWITCH_COMMAND_FILE = os.path.join(SIGNAL_DIR, "kill_switch_true_v15.json")
+SIGNAL_CSV_PATTERNS = ("signals_{}_v15_new_short.csv", "signals_{}_v15_new_long.csv")
+PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_v15_new.csv"
+PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_v15_new.log"
+EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_paper_v15_new.json")
+SUMMARY_FILE = os.path.join(SIGNAL_DIR, "paper_trade_summary_v15_new.json")
+OPEN_TRADES_STATE_PATTERN = "open_trades_state_{}_v15_new.json"
+KILL_SWITCH_COMMAND_FILE = os.path.join(SIGNAL_DIR, "kill_switch_true_v15_new.json")
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -135,7 +135,12 @@ if ENTRY_PRICE_SOURCE_DEFAULT not in ENTRY_PRICE_SOURCE_CHOICES:
 # Default capital
 DEFAULT_START_CAPITAL = 1_000_000
 # Fallback margin capital when the signal row omits quantity.
-DEFAULT_POSITION_SIZE = float(os.getenv("EQIDV15_DEFAULT_POSITION_SIZE_RS", "50000"))
+DEFAULT_POSITION_SIZE = float(
+    os.getenv(
+        "EQIDV15_NEW_DEFAULT_POSITION_SIZE_RS",
+        os.getenv("EQIDV15_DEFAULT_POSITION_SIZE_RS", "20000"),
+    )
+)
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
 # Exposure limits

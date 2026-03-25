@@ -13,13 +13,13 @@ set "EQIDV15_LONG_TARGET_PCT=0.0095"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=avwap_trade_execution_PAPER_TRADE_FALSE_v15.py"
 set "MAX_TRADES=0"
-set "STATUS_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_FALSE_v15.status"
-set "HEARTBEAT_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_FALSE_v15.heartbeat"
+set "STATUS_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.status"
+set "HEARTBEAT_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat"
 set "SUPERVISOR_PS1=%BASE_DIR%\bat\supervise_command.ps1"
 
 for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"') do set "TODAY_IST=%%a"
 if not defined TODAY_IST set "TODAY_IST=%DATE%"
-set "LOG_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_FALSE_v15_%TODAY_IST%.log"
+set "LOG_FILE=%LOG_DIR%\avwap_trade_execution_PAPER_TRADE_FALSE_v15_new_%TODAY_IST%.log"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

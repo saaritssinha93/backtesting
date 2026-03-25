@@ -28,16 +28,18 @@ Run:
 
 Optional:
     python eqidv2_eod_scheduler_for_15mins_data_live_minimal.py --buffer-sec 75 --max-workers 24
-    The scheduler treats --max-workers as a total worker budget across all 4 app partitions.
+    The scheduler treats --max-workers as a total worker budget across all 8 app partitions.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import multiprocessing as mp
 import os
 import sys
 import time
+import threading
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
@@ -45,6 +47,7 @@ from typing import Callable, Optional
 import pytz
 from eqidv2_runtime_paths import DATA_15M_DIR as RUNTIME_DATA_15M_DIR
 from eqidv2_runtime_paths import REPORTS_DIR as RUNTIME_REPORTS_DIR
+from eqidv2_runtime_paths import runtime_dir
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -90,14 +93,14 @@ def setup_kite_session_from_eqidv2_dir():
 
 def _setup_kite_session_n_from_eqidv2_dir(app_idx: int):
     """
-    Additional app session (app2/app3/app4):
+    Additional app session (app2/app3/app4/app5/app6/app7/app8):
     - request_tokenN.txt is validated for presence (operational sanity check)
     - access_tokenN.txt is used for auth
     - api_keyN.txt is preferred; fallback to api_key.txt if absent
     """
     from kiteconnect import KiteConnect  # imported here to avoid import costs on module import
 
-    if app_idx not in (2, 3, 4):
+    if app_idx not in (2, 3, 4, 5, 6, 7, 8):
         raise ValueError(f"Unsupported app index: {app_idx}")
 
     request_token_n = EQIDV2_DIR / f"request_token{app_idx}.txt"
@@ -130,6 +133,18 @@ def setup_kite_session3_from_eqidv2_dir():
 
 def setup_kite_session4_from_eqidv2_dir():
     return _setup_kite_session_n_from_eqidv2_dir(4)
+
+def setup_kite_session5_from_eqidv2_dir():
+    return _setup_kite_session_n_from_eqidv2_dir(5)
+
+def setup_kite_session6_from_eqidv2_dir():
+    return _setup_kite_session_n_from_eqidv2_dir(6)
+
+def setup_kite_session7_from_eqidv2_dir():
+    return _setup_kite_session_n_from_eqidv2_dir(7)
+
+def setup_kite_session8_from_eqidv2_dir():
+    return _setup_kite_session_n_from_eqidv2_dir(8)
 
 core.setup_kite_session = setup_kite_session_from_eqidv2_dir
 
@@ -208,9 +223,18 @@ MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 35)  # keep scheduler alive long enough to process the 15:30 close bar
 HARD_STOP = dtime(15, 50)  # exit after this
 FIRST_15M_CLOSE = dtime(9, 30)  # first completed 15m candle close timestamp
-DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_15M_MAX_WORKERS", "32"))
+DEFAULT_MAX_WORKERS = int(os.getenv("EQIDV2_15M_MAX_WORKERS", "64"))
 DEFAULT_MAX_WORKERS_PER_APP = int(os.getenv("EQIDV2_15M_MAX_WORKERS_PER_APP", "8"))
 DEFAULT_BUFFER_SEC = int(os.getenv("EQIDV2_15M_BUFFER_SEC", "1"))
+DEFAULT_READY_MARKER_ENABLED = str(os.getenv("EQIDV2_15M_READY_MARKER_ENABLED", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+DEFAULT_READY_MARKER_SAMPLE_SIZE = int(os.getenv("EQIDV2_15M_READY_MARKER_SAMPLE_SIZE", "24"))
+DEFAULT_READY_MARKER_POLL_SECONDS = float(os.getenv("EQIDV2_15M_READY_MARKER_POLL_SECONDS", "1"))
+DEFAULT_READY_MARKER_MIN_FRESH_RATIO = float(os.getenv("EQIDV2_15M_READY_MARKER_MIN_FRESH_RATIO", "0.70"))
 DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_15M_REFRESH_TOKENS", "0")).strip().lower() in {
     "1",
     "true",
@@ -225,6 +249,13 @@ DEFAULT_ENABLE_OPENING_SLOT_FETCH = str(
     "yes",
     "on",
 }
+EXCLUDED_15M_TICKERS = {
+    "SHANKARA",
+}
+
+_UNIVERSE_CACHE_LOCK = threading.Lock()
+_UNIVERSE_CACHE_PAYLOAD: Optional[dict] = None
+_UNIVERSE_CACHE_SIGNATURE: Optional[tuple] = None
 
 # ---------------------------------------------------------------------
 # Opening-slot expected stamp override:
@@ -263,6 +294,139 @@ def expected_last_stamp_opening_fix(mode: str, now_ist_dt: datetime, holidays: s
 
 if _orig_expected_last_stamp is not None:
     core.expected_last_stamp = expected_last_stamp_opening_fix
+
+
+READY_MARKER_DIR = runtime_dir("slot_ready_15m")
+READY_MARKER_DIR.mkdir(parents=True, exist_ok=True)
+END_15M = "_stocks_indicators_15min.parquet"
+
+
+def _sample_tickers_for_ready_marker(tickers: list[str], sample_size: int) -> list[str]:
+    uniq = sorted({str(t).strip().upper() for t in tickers if str(t).strip()})
+    if not uniq:
+        return []
+    size = min(max(1, int(sample_size)), len(uniq))
+    if size >= len(uniq):
+        return uniq
+    if size == 1:
+        return [uniq[len(uniq) // 2]]
+    step = max(1.0, (len(uniq) - 1) / float(size - 1))
+    picks: list[str] = []
+    for idx in range(size):
+        pos = int(round(idx * step))
+        pos = max(0, min(len(uniq) - 1, pos))
+        picks.append(uniq[pos])
+    return sorted(set(picks))
+
+
+def _slot_ready_marker_path(slot_end: datetime) -> Path:
+    slot_ts = slot_end if slot_end.tzinfo is not None else IST.localize(slot_end)
+    slot_ts = slot_ts.astimezone(IST)
+    return READY_MARKER_DIR / f"slot_{slot_ts.strftime('%Y%m%d_%H%M')}.json"
+
+
+def _last_15m_bar_for_ticker_ist(ticker: str) -> Optional[datetime]:
+    out_path = str(RUNTIME_DATA_15M_DIR / f"{str(ticker).strip().upper()}{END_15M}")
+    try:
+        existing_path = core._resolve_existing_store_path(out_path)
+        if not os.path.exists(existing_path):
+            return None
+        last_ts = core._read_last_ts_from_store(existing_path)
+    except Exception:
+        return None
+    if last_ts is None:
+        return None
+    if getattr(last_ts, "tzinfo", None) is None:
+        return core.IST_TZ.localize(last_ts)
+    return last_ts.tz_convert(core.IST_TZ)
+
+
+def _publish_slot_ready_marker(
+    slot_end: datetime,
+    *,
+    fresh: int,
+    checked: int,
+    ratio: float,
+    source: str,
+) -> None:
+    path = _slot_ready_marker_path(slot_end)
+    payload = {
+        "slot_ist": slot_end.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S%z"),
+        "published_at_ist": now_ist().strftime("%Y-%m-%d %H:%M:%S%z"),
+        "fresh_count": int(fresh),
+        "checked_count": int(checked),
+        "fresh_ratio": float(ratio),
+        "source": str(source),
+    }
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def _watch_and_publish_slot_ready_marker(
+    slot_end: datetime,
+    sample_tickers: list[str],
+    *,
+    poll_seconds: float,
+    min_fresh_ratio: float,
+    stop_event: threading.Event,
+) -> None:
+    if not sample_tickers:
+        return
+    target_slot = slot_end.astimezone(IST)
+    published = False
+    while not stop_event.is_set():
+        fresh = 0
+        checked = 0
+        for ticker in sample_tickers:
+            last_ts = _last_15m_bar_for_ticker_ist(ticker)
+            if last_ts is None:
+                continue
+            checked += 1
+            if last_ts >= target_slot:
+                fresh += 1
+        ratio = (fresh / checked) if checked > 0 else 0.0
+        if checked > 0 and ratio >= float(min_fresh_ratio):
+            _publish_slot_ready_marker(
+                slot_end,
+                fresh=fresh,
+                checked=checked,
+                ratio=ratio,
+                source="watcher",
+            )
+            print(
+                f"[READY] Published 15m slot marker for {target_slot.strftime('%Y-%m-%d %H:%M:%S%z')} "
+                f"via watcher (fresh={fresh}/{checked}, ratio={ratio:.2f})"
+            )
+            published = True
+            break
+        stop_event.wait(max(0.25, float(poll_seconds)))
+
+    if published:
+        return
+
+    fresh = 0
+    checked = 0
+    for ticker in sample_tickers:
+        last_ts = _last_15m_bar_for_ticker_ist(ticker)
+        if last_ts is None:
+            continue
+        checked += 1
+        if last_ts >= target_slot:
+            fresh += 1
+    ratio = (fresh / checked) if checked > 0 else 0.0
+    if checked > 0 and ratio >= float(min_fresh_ratio):
+        _publish_slot_ready_marker(
+            slot_end,
+            fresh=fresh,
+            checked=checked,
+            ratio=ratio,
+            source="final",
+        )
+        print(
+            f"[READY] Published 15m slot marker for {target_slot.strftime('%Y-%m-%d %H:%M:%S%z')} "
+            f"after worker completion (fresh={fresh}/{checked}, ratio={ratio:.2f})"
+        )
 
 
 def now_ist() -> datetime:
@@ -312,10 +476,18 @@ def _read_holidays_set() -> set:
     except Exception:
         return set()
 
-def _split_tickers_for_four_apps(tickers: list[str]) -> tuple[list[str], list[str], list[str], list[str]]:
+def _split_tickers_for_eight_apps(tickers: list[str]) -> list[list[str]]:
     ordered = sorted({str(t).strip().upper() for t in tickers if str(t).strip()})
-    q = len(ordered) // 4
-    return ordered[:q], ordered[q:(2 * q)], ordered[(2 * q):(3 * q)], ordered[(3 * q):]
+    app_count = 8
+    base_size, remainder = divmod(len(ordered), app_count)
+    partitions: list[list[str]] = []
+    start = 0
+    for idx in range(app_count):
+        size = base_size + (1 if idx < remainder else 0)
+        end = start + size
+        partitions.append(ordered[start:end])
+        start = end
+    return partitions
 
 def _partition_worker_budget(total_budget: int, active_partitions: int, per_app_cap: int) -> int:
     total_budget = max(1, int(total_budget))
@@ -323,6 +495,74 @@ def _partition_worker_budget(total_budget: int, active_partitions: int, per_app_
     per_app_cap = max(1, int(per_app_cap))
     workers_per_partition = (total_budget + active_partitions - 1) // active_partitions
     return max(1, min(per_app_cap, workers_per_partition))
+
+def _universe_cache_signature() -> tuple:
+    candidate_paths = (
+        EQIDV2_DIR / "filtered_stocks_MIS.py",
+        EQIDV2_DIR / "stocks_tickers.txt",
+        SCRIPT_DIR / "stocks_tickers.txt",
+    )
+    mtimes: list[tuple[str, Optional[int]]] = []
+    for path in candidate_paths:
+        try:
+            mtimes.append((str(path), int(path.stat().st_mtime_ns)))
+        except FileNotFoundError:
+            mtimes.append((str(path), None))
+    return (tuple(sorted(EXCLUDED_15M_TICKERS)), tuple(mtimes))
+
+def _build_universe_cache_payload(logger) -> dict:
+    all_tickers, pre_token_map = core.load_stocks_universe(logger)
+    token_map = {str(k).strip().upper(): int(v) for k, v in dict(pre_token_map).items()}
+    excluded = sorted({ticker for ticker in all_tickers if str(ticker).strip().upper() in EXCLUDED_15M_TICKERS})
+    if excluded:
+        all_tickers = [ticker for ticker in all_tickers if str(ticker).strip().upper() not in EXCLUDED_15M_TICKERS]
+        token_map = {
+            ticker: token
+            for ticker, token in token_map.items()
+            if str(ticker).strip().upper() not in EXCLUDED_15M_TICKERS
+        }
+    app_partitions = _split_tickers_for_eight_apps(all_tickers)
+    app_token_maps = [
+        {ticker: token_map[ticker] for ticker in app_tickers if ticker in token_map}
+        for app_tickers in app_partitions
+    ]
+    return {
+        "all_tickers": list(all_tickers),
+        "excluded": list(excluded),
+        "app_partitions": [list(part) for part in app_partitions],
+        "app_token_maps": [dict(part_map) for part_map in app_token_maps],
+    }
+
+def _get_or_build_universe_cache(logger) -> dict:
+    global _UNIVERSE_CACHE_PAYLOAD, _UNIVERSE_CACHE_SIGNATURE
+    signature = _universe_cache_signature()
+    with _UNIVERSE_CACHE_LOCK:
+        if _UNIVERSE_CACHE_PAYLOAD is not None and _UNIVERSE_CACHE_SIGNATURE == signature:
+            logger.info(
+                "[15MIN] Universe cache hit: tickers=%d excluded=%d",
+                len(_UNIVERSE_CACHE_PAYLOAD["all_tickers"]),
+                len(_UNIVERSE_CACHE_PAYLOAD["excluded"]),
+            )
+            return {
+                "all_tickers": list(_UNIVERSE_CACHE_PAYLOAD["all_tickers"]),
+                "excluded": list(_UNIVERSE_CACHE_PAYLOAD["excluded"]),
+                "app_partitions": [list(part) for part in _UNIVERSE_CACHE_PAYLOAD["app_partitions"]],
+                "app_token_maps": [dict(part_map) for part_map in _UNIVERSE_CACHE_PAYLOAD["app_token_maps"]],
+            }
+        payload = _build_universe_cache_payload(logger)
+        _UNIVERSE_CACHE_PAYLOAD = payload
+        _UNIVERSE_CACHE_SIGNATURE = signature
+        logger.info(
+            "[15MIN] Universe cache rebuilt: tickers=%d excluded=%d",
+            len(payload["all_tickers"]),
+            len(payload["excluded"]),
+        )
+        return {
+            "all_tickers": list(payload["all_tickers"]),
+            "excluded": list(payload["excluded"]),
+            "app_partitions": [list(part) for part in payload["app_partitions"]],
+            "app_token_maps": [dict(part_map) for part_map in payload["app_token_maps"]],
+        }
 
 def _run_partition(
     mode: str,
@@ -396,6 +636,10 @@ def _run_partition_worker(
         "app2": setup_kite_session2_from_eqidv2_dir,
         "app3": setup_kite_session3_from_eqidv2_dir,
         "app4": setup_kite_session4_from_eqidv2_dir,
+        "app5": setup_kite_session5_from_eqidv2_dir,
+        "app6": setup_kite_session6_from_eqidv2_dir,
+        "app7": setup_kite_session7_from_eqidv2_dir,
+        "app8": setup_kite_session8_from_eqidv2_dir,
     }
     setup_fn = setup_fn_map.get(setup_kind, setup_kite_session_from_eqidv2_dir)
     try:
@@ -423,11 +667,23 @@ def run_update_15m_once(
     buffer_sec: int,
     refresh_tokens: bool,
     opening_slot: bool = False,
+    slot_end: Optional[datetime] = None,
+    ready_marker_enabled: bool = DEFAULT_READY_MARKER_ENABLED,
+    ready_marker_sample_size: int = DEFAULT_READY_MARKER_SAMPLE_SIZE,
+    ready_marker_poll_seconds: float = DEFAULT_READY_MARKER_POLL_SECONDS,
+    ready_marker_min_fresh_ratio: float = DEFAULT_READY_MARKER_MIN_FRESH_RATIO,
 ) -> None:
     holidays = _read_holidays_set()
     logger = core.logging.getLogger("stocks_fetcher")
-    all_tickers, pre_token_map = core.load_stocks_universe(logger)
-    token_map = {str(k).strip().upper(): int(v) for k, v in dict(pre_token_map).items()}
+    universe_cache = _get_or_build_universe_cache(logger)
+    all_tickers = list(universe_cache["all_tickers"])
+    excluded = list(universe_cache["excluded"])
+    if excluded:
+        print(
+            "[INFO] 15min exclusions active:",
+            f"excluded={len(excluded)}",
+            f"tickers={','.join(excluded)}",
+        )
 
     intraday_ts_mode = "start" if opening_slot else "end"
     skip_if_fresh_mode = False if opening_slot else True
@@ -437,27 +693,26 @@ def run_update_15m_once(
             "(attempting 09:15 opening snapshot fetch)."
         )
 
-    app1_tickers, app2_tickers, app3_tickers, app4_tickers = _split_tickers_for_four_apps(all_tickers)
-    app1_token_map = {t: token_map[t] for t in app1_tickers if t in token_map}
-    app2_token_map = {t: token_map[t] for t in app2_tickers if t in token_map}
-    app3_token_map = {t: token_map[t] for t in app3_tickers if t in token_map}
-    app4_token_map = {t: token_map[t] for t in app4_tickers if t in token_map}
+    app_partitions = [list(part) for part in universe_cache["app_partitions"]]
+    app_token_maps = [dict(part_map) for part_map in universe_cache["app_token_maps"]]
 
     print(
         "[INFO] 15min split:",
-        f"app1={len(app1_tickers)} tickers (api_key.txt/access_token.txt),",
-        f"app2={len(app2_tickers)} tickers (request_token2.txt/access_token2.txt),",
-        f"app3={len(app3_tickers)} tickers (request_token3.txt/access_token3.txt),",
-        f"app4={len(app4_tickers)} tickers (request_token4.txt/access_token4.txt)",
+        f"app1={len(app_partitions[0])} tickers (api_key.txt/access_token.txt),",
+        f"app2={len(app_partitions[1])} tickers (request_token2.txt/access_token2.txt),",
+        f"app3={len(app_partitions[2])} tickers (request_token3.txt/access_token3.txt),",
+        f"app4={len(app_partitions[3])} tickers (request_token4.txt/access_token4.txt),",
+        f"app5={len(app_partitions[4])} tickers (request_token5.txt/access_token5.txt),",
+        f"app6={len(app_partitions[5])} tickers (request_token6.txt/access_token6.txt),",
+        f"app7={len(app_partitions[6])} tickers (request_token7.txt/access_token7.txt),",
+        f"app8={len(app_partitions[7])} tickers (request_token8.txt/access_token8.txt)",
     )
 
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue()
     partitions = [
-        ("app1", app1_tickers, app1_token_map),
-        ("app2", app2_tickers, app2_token_map),
-        ("app3", app3_tickers, app3_token_map),
-        ("app4", app4_tickers, app4_token_map),
+        (f"app{idx}", app_partitions[idx - 1], app_token_maps[idx - 1])
+        for idx in range(1, 9)
     ]
     active_partition_count = sum(1 for _, ptickers, _ in partitions if ptickers)
     partition_max_workers = _partition_worker_budget(
@@ -473,6 +728,29 @@ def run_update_15m_once(
         f"per_app_cap={max_workers_per_app},",
         f"effective_per_app={partition_max_workers}",
     )
+
+    marker_stop_event: Optional[threading.Event] = None
+    marker_thread: Optional[threading.Thread] = None
+    if bool(ready_marker_enabled) and slot_end is not None:
+        ready_sample = _sample_tickers_for_ready_marker(all_tickers, ready_marker_sample_size)
+        print(
+            "[INFO] Ready marker tuning:",
+            f"sample={len(ready_sample)},",
+            f"poll_s={float(ready_marker_poll_seconds):.1f},",
+            f"min_ratio={float(ready_marker_min_fresh_ratio):.2f}",
+        )
+        marker_stop_event = threading.Event()
+        marker_thread = threading.Thread(
+            target=_watch_and_publish_slot_ready_marker,
+            args=(slot_end, ready_sample),
+            kwargs={
+                "poll_seconds": float(ready_marker_poll_seconds),
+                "min_fresh_ratio": float(ready_marker_min_fresh_ratio),
+                "stop_event": marker_stop_event,
+            },
+            daemon=True,
+        )
+        marker_thread.start()
 
     workers: list[tuple[str, object]] = []
     for pname, ptickers, ptoken_map in partitions:
@@ -503,6 +781,11 @@ def run_update_15m_once(
     for _, proc in workers:
         proc.join()
 
+    if marker_stop_event is not None:
+        marker_stop_event.set()
+    if marker_thread is not None:
+        marker_thread.join(timeout=2.0)
+
     result_map: dict[str, tuple[bool, str]] = {}
     for _ in workers:
         try:
@@ -526,7 +809,7 @@ def main() -> None:
         "--max-workers",
         type=int,
         default=DEFAULT_MAX_WORKERS,
-        help="Total worker budget across all 4 app partitions.",
+        help="Total worker budget across all 8 app partitions.",
     )
     ap.add_argument(
         "--max-workers-per-app",
@@ -535,6 +818,22 @@ def main() -> None:
         help="Hard cap for workers inside each app partition.",
     )
     ap.add_argument("--buffer-sec", type=int, default=DEFAULT_BUFFER_SEC, help="How long after boundary to run (Kite can lag).")
+    ap.add_argument(
+        "--ready-marker-enabled",
+        dest="ready_marker_enabled",
+        action="store_true",
+        help="Publish a per-slot readiness marker once sampled 15m parquet files look fresh enough.",
+    )
+    ap.add_argument(
+        "--no-ready-marker-enabled",
+        dest="ready_marker_enabled",
+        action="store_false",
+        help="Disable readiness marker publishing.",
+    )
+    ap.set_defaults(ready_marker_enabled=DEFAULT_READY_MARKER_ENABLED)
+    ap.add_argument("--ready-marker-sample-size", type=int, default=DEFAULT_READY_MARKER_SAMPLE_SIZE)
+    ap.add_argument("--ready-marker-poll-seconds", type=float, default=DEFAULT_READY_MARKER_POLL_SECONDS)
+    ap.add_argument("--ready-marker-min-fresh-ratio", type=float, default=DEFAULT_READY_MARKER_MIN_FRESH_RATIO)
     ap.add_argument("--refresh-tokens", dest="refresh_tokens", action="store_true", help="Force refresh kite instrument token cache.")
     ap.add_argument("--no-refresh-tokens", dest="refresh_tokens", action="store_false", help="Do not refresh kite instrument token cache.")
     ap.set_defaults(refresh_tokens=DEFAULT_REFRESH_TOKENS)
@@ -571,11 +870,27 @@ def main() -> None:
     print(f"       Buffer after boundary: {args.buffer_sec}s")
     print(f"       Max workers (total budget): {args.max_workers}")
     print(f"       Max workers per app cap: {args.max_workers_per_app}")
+    print(
+        "       Ready marker:",
+        f"enabled={args.ready_marker_enabled}, sample={args.ready_marker_sample_size}, "
+        f"poll={float(args.ready_marker_poll_seconds):.1f}s, "
+        f"min_ratio={float(args.ready_marker_min_fresh_ratio):.2f}",
+    )
     print(f"       Refresh tokens: {args.refresh_tokens}")
     print(f"       Opening slot fetch (09:15): {args.enable_opening_slot_fetch}")
     print(f"       Process will exit at {HARD_STOP.strftime('%H:%M')} IST.")
     holidays = _read_holidays_set()
     print(f"       Holidays loaded: {len(holidays)}")
+    try:
+        logger = core.logging.getLogger("stocks_fetcher")
+        universe_cache = _get_or_build_universe_cache(logger)
+        print(
+            "[INFO] Prewarmed 15min universe cache:",
+            f"tickers={len(universe_cache['all_tickers'])},",
+            f"excluded={len(universe_cache['excluded'])}",
+        )
+    except Exception as e:
+        print(f"[WARN] Failed to prewarm 15min universe cache: {e}")
 
     last_run_slot: Optional[datetime] = None
 
@@ -641,6 +956,11 @@ def main() -> None:
                 buffer_sec=int(args.buffer_sec),
                 refresh_tokens=bool(args.refresh_tokens),
                 opening_slot=bool(opening_slot),
+                slot_end=slot_end,
+                ready_marker_enabled=bool(args.ready_marker_enabled),
+                ready_marker_sample_size=int(args.ready_marker_sample_size),
+                ready_marker_poll_seconds=float(args.ready_marker_poll_seconds),
+                ready_marker_min_fresh_ratio=float(args.ready_marker_min_fresh_ratio),
             )
         except Exception as e:
             print(f"[ERROR] Update failed: {e}", file=sys.stderr)
