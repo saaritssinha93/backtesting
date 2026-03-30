@@ -178,8 +178,13 @@ FINAL_SHORT_SIGNAL_WINDOWS = [
     (dtime(9, 15, 0), dtime(14, 30, 0))
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
+# v15 LONG recovery sweep (2026-03-26):
+# Once LONG is constrained to A_MOD only with RS>=2.0%, RSI>=55, quality>=4.0,
+# and AVWAP distance>=0.5 ATR, the broad 09:15-14:30 window outperformed the
+# earlier 3-zone carve-out by roughly doubling high-quality long participation
+# while keeping PF/avg pnl very strong.
 FINAL_LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(14, 30, 0))
+    (dtime(9, 15, 0), dtime(14, 30, 0)),
 ]
 V15_EOD_EXIT_TIME = dtime(15, 20, 0)
 
@@ -194,6 +199,21 @@ LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH = 2
 # Set high to effectively disable the weak HUGE pullback-hold long setup in V14.
 LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = 999
 LONG_LAG_BARS_B_HUGE_C1_CLOSE_RECLAIM_BREAK = 2
+
+# --- Realistic entry price modes (backtest) ---
+# Set LONG_ENTRY_AT_BAR_CLOSE=True to use the confirmation bar's CLOSE as entry price.
+# This makes the backtest match live bar-close scanner behaviour (signal fires ~30s after
+# bar closes → LTP ≈ bar close, not the model trigger price).
+# Set LONG_ENTRY_AT_NEXT_OPEN=True to use the NEXT bar's OPEN (takes priority).
+# LONG_MAX_ENTRY_SLIP_PCT: skip any trade where the realistic entry price deviates
+# more than this fraction above the model trigger (0.0 = disabled).
+LONG_ENTRY_AT_BAR_CLOSE: bool = False
+LONG_ENTRY_AT_NEXT_OPEN: bool = False
+# v15 IMPROVED: skip any LONG entry where live fill is >0.30% above signal price.
+# 25-03-2026 post-mortem: APARINDS filled at +0.88% above signal → immediate SL.
+# B_HUGE signals on fast-moving stocks routinely slip 0.5-1.0% by fill time,
+# erasing the R:R entirely before the trade even starts.
+LONG_MAX_ENTRY_SLIP_PCT: float = 0.003
 
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
@@ -227,7 +247,12 @@ NIFTY_RS_LOOKBACK_BARS = 4                     # v15: 60-min window (was 3 bars/
 NIFTY_RS_THRESHOLD_PCT = 0.20                  # v15: raised from 0.15 (above round-trip cost)
 # v15 NEW: apply BOTH-mode RS filtering with a moderately strict short threshold.
 NIFTY_RS_BOTH_MODE_ENABLED = True
-NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 0.08
+# v15 IMPROVED: raised to 2.0 — 303-trade analysis:
+# RS <2.0% = 14–39% win across all buckets (junk). RS ≥ 2.0% = 80.8% win.
+# At 2.0% threshold: A_MOD signals that survive = 100% win rate in window.
+# B_HUGE signals that survive (RS≥2.0) = 77–80% win, matches A_MOD quality.
+# Trade-off: fewer signals, but every entry has genuine stock-vs-market strength.
+NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 2.0
 NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT = 0.80
 # Backward-compatibility alias for older live-parity callers that still expect
 # one shared BOTH-mode threshold constant.
@@ -244,6 +269,30 @@ V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX = 2.10
 TEST_TARGET_OVERRIDE   = True
 TEST_SHORT_TARGET_PCT  = 0.00900
 TEST_LONG_TARGET_PCT   = 0.00900
+
+# Primary v15 LONG focus: keep only the strongest setup from the latest run
+# and apply the recovery-sweep compromise that restored long participation
+# without giving up the strong long-side PF / avg pnl profile.
+V15_LONG_FOCUS_A_MOD_BREAK_C1_HIGH_ONLY = True
+V15_LONG_PRIMARY_QUALITY_MIN = 4.0
+V15_LONG_PRIMARY_SIGNAL_AVWAP_DIST_ATR_MIN = 0.5
+
+
+def _apply_v15_primary_long_focus(long_cfg: StrategyConfig) -> None:
+    if not V15_LONG_FOCUS_A_MOD_BREAK_C1_HIGH_ONLY:
+        return
+
+    long_cfg.enable_setup_a_pullback_c2_break = False
+    long_cfg.enable_setup_a_close_continuation_break = False
+    long_cfg.enable_setup_b_huge_c1_close_reclaim_break = False
+    long_cfg.quality_score_min = max(
+        float(getattr(long_cfg, "quality_score_min", 0.0)),
+        float(V15_LONG_PRIMARY_QUALITY_MIN),
+    )
+    long_cfg.signal_avwap_dist_atr_min = max(
+        float(getattr(long_cfg, "signal_avwap_dist_atr_min", 0.0)),
+        float(V15_LONG_PRIMARY_SIGNAL_AVWAP_DIST_ATR_MIN),
+    )
 
 
 def apply_live_parity_profile(
@@ -295,16 +344,24 @@ def apply_live_parity_profile(
         long_cfg.require_entry_close_confirm = True
         long_cfg.enable_liquidity_sweep_filter = False
         long_cfg.enable_avwap_no_trade_zone = False
-        long_cfg.adx_min = 17.0
+        # v15 LONG recovery sweep: 20 was the best trade-count compromise while
+        # preserving elite long PF once A_MOD-only + RS>=2.0% was enforced.
+        long_cfg.adx_min = 20.0
         long_cfg.adx_slope_min = 0.50
         long_cfg.volume_min_ratio = 0.95
-        long_cfg.rsi_min_long = 38.0
+        # Recovery sweep result: RSI>=55 restored participation safely; RSI>=50
+        # let too many softer continuation attempts through.
+        long_cfg.rsi_min_long = 55.0
         long_cfg.stochk_min = 15.0
         long_cfg.stochk_max = 95.0
         long_cfg.atr_pct_min = 0.0025
-        long_cfg.enable_setup_a_close_continuation_break = False
+        long_cfg.enable_setup_a_close_continuation_break = True
+        # v15 IMPROVED: B_HUGE re-enabled but gated by RS≥2.0% (above).
+        # B_HUGE raw = 55.6% win. B_HUGE with RS≥2.0% = 77–80% win (matches A_MOD).
+        # RS≥2.0% means stock is genuinely outperforming Nifty → the huge candle is
+        # real momentum, not a random pump that reverses immediately.
         long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-        long_cfg.stop_pct = 0.0075
+        long_cfg.stop_pct = 0.0077          # rank-1 SL from bar-close entry search
         long_cfg.target_pct = 0.0110
         long_cfg.be_trigger_pct = 0.0055
         long_cfg.trail_pct = 0.0028
@@ -313,6 +370,8 @@ def apply_live_parity_profile(
         long_cfg.max_trades_per_ticker_per_day = 4
         long_cfg.enable_topn_per_day = False
         long_cfg.topn_per_day = 0
+        long_cfg.signal_avwap_dist_atr_min = 0.5
+        long_cfg.quality_score_min = 4.0
 
     short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
     short_cfg.lag_bars_short_a_pullback_c2_break_c2_low = int(
@@ -331,6 +390,13 @@ def apply_live_parity_profile(
     long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(
         LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK
     )
+    long_cfg.lag_bars_long_b_huge_c1_close_reclaim_break = int(
+        LONG_LAG_BARS_B_HUGE_C1_CLOSE_RECLAIM_BREAK
+    )
+    long_cfg.entry_at_bar_close = bool(LONG_ENTRY_AT_BAR_CLOSE)
+    long_cfg.entry_at_next_open = bool(LONG_ENTRY_AT_NEXT_OPEN)
+    long_cfg.max_entry_slip_pct = float(LONG_MAX_ENTRY_SLIP_PCT)
+    _apply_v15_primary_long_focus(long_cfg)
 
     if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
         short_cfg.min_bars_left_after_entry = 0
@@ -3006,22 +3072,19 @@ def main() -> None:
                 short_cfg.min_opening_range_width_pct = V15_SHORT_MIN_OPENING_RANGE_WIDTH_PCT
                 short_cfg.signal_avwap_dist_atr_max = V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX
 
-                # Long side: use the current balanced backtest profile selected
-                # from the 1/2-bar lag sweep while keeping the rest of v15 intact.
+                # Long side: keep the strongest setup family and tighten the
+                # signal-quality gates around it.
                 long_cfg.require_entry_close_confirm = True
                 long_cfg.enable_liquidity_sweep_filter = False
                 long_cfg.enable_avwap_no_trade_zone = False
-                long_cfg.adx_min = 17.0
+                long_cfg.adx_min = 20.0          # recovery sweep winner for trade-count vs PF
                 long_cfg.adx_slope_min = 0.50
                 long_cfg.volume_min_ratio = 0.95
-                long_cfg.rsi_min_long = 38.0
+                long_cfg.rsi_min_long = 55.0     # recovery sweep winner for long quality vs count
                 long_cfg.stochk_min = 15.0
                 long_cfg.stochk_max = 95.0
                 long_cfg.atr_pct_min = 0.0025
-                long_cfg.enable_setup_a_pullback_c2_break = True
-                long_cfg.enable_setup_a_close_continuation_break = True
-                long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-                long_cfg.stop_pct = 0.0075
+                long_cfg.stop_pct = 0.0077       # rank-1 SL from bar-close entry search
                 long_cfg.target_pct = 0.0110
                 long_cfg.be_trigger_pct = 0.0055
                 long_cfg.trail_pct = 0.0028
@@ -3030,8 +3093,10 @@ def main() -> None:
                 long_cfg.max_trades_per_ticker_per_day = 4
                 long_cfg.enable_topn_per_day = False
                 long_cfg.topn_per_day = 0
+                long_cfg.signal_avwap_dist_atr_min = 0.5
+                long_cfg.quality_score_min = 4.0
 
-                print("[PROFILE] V15: expanded SHORT participation + balanced LONG backtest participation.")
+                print("[PROFILE] V15: expanded SHORT participation + A_MOD_BREAK_C1_HIGH-first LONG focus.")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
@@ -3047,6 +3112,7 @@ def main() -> None:
             long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = 1
             long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK)
             long_cfg.lag_bars_long_b_huge_c1_close_reclaim_break = 2
+            _apply_v15_primary_long_focus(long_cfg)
 
             if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
                 short_cfg.min_bars_left_after_entry = 0
@@ -3154,6 +3220,12 @@ def main() -> None:
                 f"B_HUGE_HOLD={long_cfg.lag_bars_long_b_huge_pullback_hold_break}, "
                 f"B_RECLAIM={long_cfg.lag_bars_long_b_huge_c1_close_reclaim_break}"
             )
+            if V15_LONG_FOCUS_A_MOD_BREAK_C1_HIGH_ONLY:
+                print(
+                    "[INFO] LONG setup focus: A_MOD_BREAK_C1_HIGH only | "
+                    f"quality_score>={V15_LONG_PRIMARY_QUALITY_MIN:.1f} | "
+                    f"signal_avwap_dist_atr>={V15_LONG_PRIMARY_SIGNAL_AVWAP_DIST_ATR_MIN:.1f}"
+                )
             print(
                 f"[INFO] Final signal-window override -> {FINAL_SIGNAL_WINDOW_OVERRIDE}"
             )

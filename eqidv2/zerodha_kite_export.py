@@ -88,13 +88,46 @@ def read_access_token(path: Path = ACCESS_TOKEN_TXT) -> str:
     return token
 
 
-def setup_kite_session() -> KiteConnect:
-    api_key = read_api_key()
-    access_token = read_access_token()
+def _credential_specs() -> list[tuple[str, Path, Path]]:
+    specs: list[tuple[str, Path, Path]] = []
+    for idx in range(1, 9):
+        suffix = "" if idx == 1 else str(idx)
+        app_name = f"app{idx}"
+        key_path = BASE_DIR / f"api_key{suffix}.txt"
+        token_path = BASE_DIR / f"access_token{suffix}.txt"
+        specs.append((app_name, key_path, token_path))
+    return specs
 
-    kite = KiteConnect(api_key=api_key)
-    kite.set_access_token(access_token)
-    return kite
+
+def setup_kite_session() -> KiteConnect:
+    last_error: Optional[Exception] = None
+    for app_name, key_path, token_path in _credential_specs():
+        if not (key_path.exists() and token_path.exists()):
+            continue
+        try:
+            api_key = read_api_key(key_path)
+            access_token = read_access_token(token_path)
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(access_token)
+            profile = kite.profile()
+            user_name = str(profile.get("user_name", "N/A"))
+            _print(f"[KITE] Session ready: {app_name} | user={user_name}")
+            return kite
+        except Exception as exc:
+            last_error = exc
+            if app_name == "app1":
+                _print(
+                    f"[KITE] Primary session setup failed ({app_name}): {exc}. "
+                    "Continuing with fallback apps."
+                )
+            else:
+                _print(f"[KITE] {app_name} disabled due to setup error: {exc}")
+
+    if last_error is not None:
+        raise RuntimeError(
+            f"No valid Kite sessions available for exporter. Last error: {last_error}"
+        ) from last_error
+    raise RuntimeError("No Kite credential files found for exporter.")
 
 
 def fetch_holdings_df(kite: KiteConnect) -> pd.DataFrame:

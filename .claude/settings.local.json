@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls eqidv2/avwap_v11_refactored/avwap_common*)",
+      "Bash(ls -d /c/Users/Saarit/OneDrive/Desktop/Trading/backtesting/eqidv2/backtesting/eqidv2/outputs*)",
+      "Read(//c/TradingData/**)",
+      "Bash(find . -name *5min* -name *.csv)"
+    ]
+  }
+}

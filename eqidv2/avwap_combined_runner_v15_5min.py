@@ -3,6 +3,17 @@
 avwap_combined_runner_v15_5min.py - AVWAP v15 COMBINED runner on 5-minute signals
 ===================================================================================
 
+RUN 3 OPTIMIZED CONFIG (2026-03-26) — Current canonical backtest state
+-----------------------------------------------------------------------
+Results: 160 trades | Day-win 72.9% | PF=1.84 | Sharpe=4.78 | Max DD=33.2%
+         LONG  54 trades, 70.4% win, PF=2.63, Sharpe=7.61, Max DD=10.2%
+         SHORT 106 trades, 67.9% win, PF=1.59, Sharpe=3.62, Max DD=31.1%
+
+Run 3 changes vs Run 2:
+  - short_cfg.adx_min: 22 → 28  (ADX 22-28 dead zone: 47-53% win)
+  - NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT: 0.80 → 1.00  (RS <-2% = 33% win, squeeze risk)
+  - long_cfg.quality_score_min: 0 → 5.0  (QS 8+ = 50% win; sweet spot QS 6-7 = 100% win)
+
 Changes from v14:
 1. NIFTY_CONTEXT_OR_END_TIME: 10:15 -> 9:30  (15-min opening range for earlier live participation)
 2. NIFTY_CONTEXT_CONFIRM_TIME: 10:30 -> 9:30 (context can activate as soon as that OR is complete)
@@ -11,8 +22,8 @@ Changes from v14:
 5. NIFTY_RS_THRESHOLD_PCT: 0.15 -> 0.20       (above round-trip cost, genuine RS edge)
 6. NIFTY_RS_BOTH_MODE_ENABLED = True (NEW)    (apply RS filter in BOTH mode too)
 7. BOTH-mode RS is now side-specific:
-   LONG  requires >= 0.08%
-   SHORT requires <= -0.80%
+   LONG  requires >= 1.5%  (Run 2: raised from 0.08% — RS 1.5-2% ≈75% win)
+   SHORT requires <= -1.00%  (Run 3: raised from -0.80% — targets -1% to -0.5% sweet spot)
    Rationale: keep neutral-day long participation relatively open, while making
    short entries meaningfully stricter where V15 was taking too many weak fades.
 
@@ -176,11 +187,15 @@ FINAL_LONG_SIGNAL_WINDOWS = [
 FINAL_SIGNAL_WINDOW_OVERRIDE = True
 FINAL_SHORT_USE_TIME_WINDOWS = True
 FINAL_SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(14, 30, 0))
+    (dtime(9, 15, 0), dtime(11, 0, 0)),    # morning: 60-70% win (9:xx=60.8%, 10:xx=70.6%)
+    (dtime(12, 0, 0), dtime(13, 30, 0)),   # Run5: 12:xx=80% win, 13:00-13:30=83% win; entry_cutoff=13:30 gates tail
+    # Excluded: 11:00-12:00 (25% win — dead zone), 13:30+ (25% win — cut by entry_cutoff)
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(14, 30, 0))
+    (dtime(9, 15, 0), dtime(11, 0, 0)),    # Run4: extended 09:15-10:30 → 09:15-11:00 (10:30-11:00 added for volume)
+    (dtime(12, 0, 0), dtime(15, 0, 0)),    # Run4: combined midday+afternoon 12:00-15:00 (was 13:00-14:15 + gap at 12:xx)
+    # Excluded: 11:00-12:00 (keep the 1-hr mid-morning gap for longs)
 ]
 V15_EOD_EXIT_TIME = dtime(15, 20, 0)
 
@@ -200,7 +215,7 @@ PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
 
 # Parallelism: set to 1 for serial, >1 for multi-process
-MAX_WORKERS = 4
+MAX_WORKERS = 1   # serial mode — avoids Windows ProcessPoolExecutor spawn crash
 
 # Setup controls
 # Disable the weak short HUGE failed-bounce branch in V14.
@@ -228,14 +243,14 @@ NIFTY_RS_LOOKBACK_BARS = 4                     # v15: 60-min window (was 3 bars/
 NIFTY_RS_THRESHOLD_PCT = 0.20                  # v15: raised from 0.15 (above round-trip cost)
 # v15 NEW: apply BOTH-mode RS filtering with a moderately strict short threshold.
 NIFTY_RS_BOTH_MODE_ENABLED = True
-NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 0.08
-NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT = 0.80
+NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 1.0    # v15_5min Run4: lowered 1.5→1.0 — opens RS 1.0-1.5% zone to increase long volume
+NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT = 1.00   # v15_5min Run5: restored 0.80→1.00 — RS -3 to -2 = 20% win (squeeze), RS -2 to -1.5 = erratic
 # Backward-compatibility alias for older live-parity callers that still expect
 # one shared BOTH-mode threshold constant.
 NIFTY_RS_BOTH_MODE_THRESHOLD_PCT = NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT
 
 # Strict Wave 2 short-quality gates.
-V15_SHORT_ENTRY_CUTOFF = dtime(13, 15, 0)
+V15_SHORT_ENTRY_CUTOFF = dtime(13, 30, 0)   # v15_5min Run5: 13:30 cutoff — 13:30-45 = 25% win (bad), 13:00-13:30 = 83% win (keep)
 V15_SHORT_MIN_OPENING_RANGE_WIDTH_PCT = 1.00
 V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX = 2.10
 
@@ -272,7 +287,7 @@ def apply_live_parity_profile(
         short_cfg.vwap_side_min_count = 3
         short_cfg.require_structure_filter = False
         short_cfg.structure_lookback_bars = 30
-        short_cfg.adx_min = 17.0
+        short_cfg.adx_min = 28.0              # v15_5min Run5: restored 28 — ADX 22-28 dead zone: 25-45% win confirmed in Run4 data
         short_cfg.adx_slope_min = 0.40
         short_cfg.volume_min_ratio = 0.95
         short_cfg.rsi_max_short = 62.0
@@ -286,7 +301,7 @@ def apply_live_parity_profile(
         short_cfg.partial_target_fraction = 0.50
         short_cfg.enable_risk_based_position_sizing = False
         short_cfg.risk_per_trade_pct_of_capital = 0.0035
-        short_cfg.max_trades_per_ticker_per_day = 5
+        short_cfg.max_trades_per_ticker_per_day = 6   # Run4: raised 5→6 for volume
         short_cfg.enable_topn_per_day = False
         short_cfg.topn_per_day = 0
         short_cfg.entry_time_cutoff = V15_SHORT_ENTRY_CUTOFF
@@ -296,22 +311,23 @@ def apply_live_parity_profile(
         long_cfg.require_entry_close_confirm = True
         long_cfg.enable_liquidity_sweep_filter = False
         long_cfg.enable_avwap_no_trade_zone = False
-        long_cfg.adx_min = 17.0
+        long_cfg.adx_min = 22.0              # v15_5min: raised from 17 — 22 confirmed optimal in sweep
         long_cfg.adx_slope_min = 0.50
         long_cfg.volume_min_ratio = 0.95
-        long_cfg.rsi_min_long = 38.0
+        long_cfg.rsi_min_long = 50.0         # v15_5min: raised from 38 — RSI<50=low win, RSI≥50=76%+ win
+        long_cfg.quality_score_min = 4.0     # v15_5min Run4: lowered 5.0→4.0 — QS 4-5 = 85.7% win (was wrongly excluded)
         long_cfg.stochk_min = 15.0
         long_cfg.stochk_max = 95.0
         long_cfg.atr_pct_min = 0.0025
-        long_cfg.enable_setup_a_close_continuation_break = False
+        long_cfg.enable_setup_a_close_continuation_break = True  # v15_5min: fixed (was False, inconsistent with main)
         long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-        long_cfg.stop_pct = 0.0075
+        long_cfg.stop_pct = 0.0070           # v15_5min: tightened from 0.0075 — sltgt sweep best=0.70%
         long_cfg.target_pct = 0.0110
         long_cfg.be_trigger_pct = 0.0055
         long_cfg.trail_pct = 0.0028
         long_cfg.min_bars_left_after_entry = 0
         long_cfg.max_vix_for_entries = 13.0
-        long_cfg.max_trades_per_ticker_per_day = 4
+        long_cfg.max_trades_per_ticker_per_day = 5   # Run4: raised 4→5 for volume
         long_cfg.enable_topn_per_day = False
         long_cfg.topn_per_day = 0
 
@@ -2988,7 +3004,7 @@ def main() -> None:
                 short_cfg.vwap_side_min_count = 3
                 short_cfg.require_structure_filter = False
                 short_cfg.structure_lookback_bars = 30
-                short_cfg.adx_min = 17.0
+                short_cfg.adx_min = 28.0              # v15_5min Run5: restored 28 — ADX 22-28 dead zone: 25-45% win confirmed in Run4 data
                 short_cfg.adx_slope_min = 0.40
                 short_cfg.volume_min_ratio = 0.95
                 short_cfg.rsi_max_short = 62.0
@@ -3002,35 +3018,35 @@ def main() -> None:
                 short_cfg.partial_target_fraction = 0.50
                 short_cfg.enable_risk_based_position_sizing = False  # fixed Rs.50,000/trade via runner constant
                 short_cfg.risk_per_trade_pct_of_capital = 0.0035
-                short_cfg.max_trades_per_ticker_per_day = 5
+                short_cfg.max_trades_per_ticker_per_day = 6   # Run4: raised 5→6 for volume
                 short_cfg.enable_topn_per_day = False
                 short_cfg.topn_per_day = 0
                 short_cfg.entry_time_cutoff = V15_SHORT_ENTRY_CUTOFF
                 short_cfg.min_opening_range_width_pct = V15_SHORT_MIN_OPENING_RANGE_WIDTH_PCT
                 short_cfg.signal_avwap_dist_atr_max = V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX
 
-                # Long side: use the current balanced backtest profile selected
-                # from the 1/2-bar lag sweep while keeping the rest of v15 intact.
+                # Long side: optimized profile from 15min analysis (2026-03-26)
                 long_cfg.require_entry_close_confirm = True
                 long_cfg.enable_liquidity_sweep_filter = False
                 long_cfg.enable_avwap_no_trade_zone = False
-                long_cfg.adx_min = 17.0
+                long_cfg.adx_min = 22.0              # v15_5min: raised from 17 — 22 confirmed optimal in sweep
                 long_cfg.adx_slope_min = 0.50
                 long_cfg.volume_min_ratio = 0.95
-                long_cfg.rsi_min_long = 38.0
+                long_cfg.rsi_min_long = 50.0         # v15_5min: raised from 38 — RSI<50=low win, RSI≥50=76%+ win
+                long_cfg.quality_score_min = 4.0     # v15_5min Run4: lowered 5.0→4.0 — QS 4-5 = 85.7% win (was wrongly excluded)
                 long_cfg.stochk_min = 15.0
                 long_cfg.stochk_max = 95.0
                 long_cfg.atr_pct_min = 0.0025
                 long_cfg.enable_setup_a_pullback_c2_break = True
                 long_cfg.enable_setup_a_close_continuation_break = True
                 long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-                long_cfg.stop_pct = 0.0075
+                long_cfg.stop_pct = 0.0070           # v15_5min: tightened from 0.0075 — sltgt sweep best=0.70%
                 long_cfg.target_pct = 0.0110
                 long_cfg.be_trigger_pct = 0.0055
                 long_cfg.trail_pct = 0.0028
                 long_cfg.min_bars_left_after_entry = 0
                 long_cfg.max_vix_for_entries = 13.0
-                long_cfg.max_trades_per_ticker_per_day = 4
+                long_cfg.max_trades_per_ticker_per_day = 5   # Run4: raised 4→5 for volume
                 long_cfg.enable_topn_per_day = False
                 long_cfg.topn_per_day = 0
 

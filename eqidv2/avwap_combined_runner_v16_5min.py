@@ -1,23 +1,44 @@
 ﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v16.py - AVWAP v16 COMBINED runner: V11 SHORT + V9 LONG (baseline scaffold)
-==================================================================================
+avwap_combined_runner_v16_5min.py - AVWAP v16 COMBINED runner on 5-minute signals
+===================================================================================
+
+V16 DESIGN PHILOSOPHY — Acceptance/Retest Continuation (not pure breakout-chasing)
+------------------------------------------------------------------------------------
+V16 keeps the V15 backbone but adds anti-exhaustion filters that block entries
+when momentum is already stretched. The central premise:
+  "Don't buy exhausted strength. Don't sell exhausted weakness."
+
+V16 NEW FILTERS vs V15 (implemented as post-scan quality gates):
+  1. SHORT rsi_dead_zone = 35-40 — RSI 35-40 = 38.5% win dead zone; RSI<35 = 67%+ win (kept)
+  2. LONG  quality_score: block QS 7.5-8.0 (50% win dead zone) + QS>10.0 (30% win exhausted)
+         — allows QS 8.0-10.0 (75% win, confirmed V15R3 data)
+  3. LONG  avwap_dist_atr_max = 3.0 — dist 2.5-3.0 = 92% win (allowed); 3.0+ = 50% win (blocked)
+  4. max_trades_per_ticker: LONG 3→5, SHORT 4→6 (raised for higher volume)
+  5. DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False (allow both sides for volume)
+  6. Nifty RS BOTH-mode threshold: 1.00% → 0.75% — RS -0.75 to -1.0 bucket = 76% win (25T in data)
+
+V16 INHERITS from V15 Run 5 (best quality config):
+  - SHORT ADX ≥ 28, RS threshold 1.00%, entry cutoff 13:30
+  - LONG  ADX ≥ 22, RSI ≥ 50, quality_score_min = 4.0
+  - Signal windows: SHORT 09:15-11:00, 12:00-13:30 | LONG 09:15-11:00, 12:00-15:00
 
 Changes from v14:
-1. NIFTY_CONTEXT_OR_END_TIME: 10:15 -> 9:45  (30-min standard Indian market OR)
-2. NIFTY_CONTEXT_CONFIRM_TIME: 10:30 -> 10:00 (45-min session -- gap fills largely done)
+1. NIFTY_CONTEXT_OR_END_TIME: 10:15 -> 9:30  (15-min opening range for earlier live participation)
+2. NIFTY_CONTEXT_CONFIRM_TIME: 10:30 -> 9:30 (context can activate as soon as that OR is complete)
 3. NIFTY_CONTEXT_MIN_DAYMOVE_PCT: 0.20 -> 0.35 (filter noise-level NIFTY moves)
 4. NIFTY_RS_LOOKBACK_BARS: 3 -> 4             (60-min RS window, more stable signal)
 5. NIFTY_RS_THRESHOLD_PCT: 0.15 -> 0.20       (above round-trip cost, genuine RS edge)
-6. NIFTY_RS_BOTH_MODE_ENABLED = True (NEW)    (apply relaxed RS filter in BOTH mode too)
-7. NIFTY_RS_BOTH_MODE_THRESHOLD_PCT = 0.08    (half the directional threshold)
-   Rationale: BOTH mode (previously blind/unfiltered) now requires stock to
-   outperform/underperform NIFTY by >=0.08% -- removes weakest counter-trend signals
-   without aggressively cutting neutral-day trade volume.
+6. NIFTY_RS_BOTH_MODE_ENABLED = True (NEW)    (apply RS filter in BOTH mode too)
+7. BOTH-mode RS is now side-specific:
+   LONG  requires >= 1.5%  (Run 2: raised from 0.08% — RS 1.5-2% ≈75% win)
+   SHORT requires <= -1.00%  (Run 3: raised from -0.80% — targets -1% to -0.5% sweet spot)
+   Rationale: keep neutral-day long participation relatively open, while making
+   short entries meaningfully stricter where V15 was taking too many weak fades.
 
 Earlier changes inherited from v14:
-1. All outputs saved to outputs_v16/
-2. Entry signals: 15-min data; exits: 1-min data (stocks_indicators_1min_eq)
+1. All outputs saved to outputs_v16_5min/
+2. Entry signals: 5-min data; exits: 1-min data (stocks_indicators_1min_eq)
 3. Expanded charting suite
 4. Normal Python imports (no importlib hacks)
 5. Unified Trade dataclass -- both sides produce identical columns
@@ -49,7 +70,6 @@ import numpy as np
 import pandas as pd
 
 from eqidv2_runtime_paths import DATA_5M_DIR as RUNTIME_DATA_5M_DIR
-from eqidv2_runtime_paths import DATA_15M_DIR as RUNTIME_DATA_15M_DIR
 from eqidv2_runtime_paths import DATA_1MIN_DIR as RUNTIME_DATA_1MIN_DIR
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
 from eqidv2_runtime_paths import runtime_dir
@@ -86,7 +106,7 @@ _project_root = _this_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from avwap_v11_refactored.avwap_common_v11_v16 import (
+from avwap_v11_refactored.avwap_common_v11_v15 import (
     IST,
     StrategyConfig,
     Trade,
@@ -102,14 +122,17 @@ from avwap_v11_refactored.avwap_common_v11_v16 import (
     list_tickers_15m,
     generate_backtest_charts,
     build_market_regime_map,
+    prepare_session_bars_for_scan,
 )
 from avwap_v11_refactored.avwap_short_strategy_v11 import (
     scan_all_days_for_ticker as scan_short,
+    scan_all_days_for_ticker_prepared as scan_short_prepared,
 )
 from avwap_v11_refactored.avwap_long_strategy_v9_sweep import (
     scan_all_days_for_ticker as scan_long,
+    scan_all_days_for_ticker_prepared as scan_long_prepared,
 )
-from avwap_v11_refactored.avwap_common_v7_sweep_v16 import (
+from avwap_v11_refactored.avwap_common_v7_sweep_v15 import (
     default_long_config as default_long_config_v9,
 )
 
@@ -135,8 +158,9 @@ FORCE_LIVE_PARITY_MIN_BARS_LEFT = True
 # unintentionally suppress one side on a given day versus live/daily scanners.
 FORCE_LIVE_PARITY_DISABLE_TOPN = True
 
-# Keep disabled for the initial V16 backtesting scaffold until separate V16
-# live scanners exist. Historical/backtest logic remains fully usable.
+# If True, replace the current IST trading day's backtest entries with the
+# exact V15 live-slot replay path used by the live shard scanners.
+# Disable for the 5-minute variant because live replay inputs are 15-minute.
 SYNC_CURRENT_DAY_WITH_LIVE_PARITY = False
 
 '''
@@ -172,20 +196,21 @@ FINAL_LONG_SIGNAL_WINDOWS = [
 FINAL_SIGNAL_WINDOW_OVERRIDE = True
 FINAL_SHORT_USE_TIME_WINDOWS = True
 FINAL_SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(14, 30, 0))
+    (dtime(9, 15, 0), dtime(11, 0, 0)),    # morning: 60-70% win (9:xx=60.8%, 10:xx=70.6%)
+    (dtime(12, 0, 0), dtime(13, 30, 0)),   # Run5: 12:xx=80% win, 13:00-13:30=83% win; entry_cutoff=13:30 gates tail
+    # Excluded: 11:00-12:00 (25% win — dead zone), 13:30+ (25% win — cut by entry_cutoff)
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(14, 30, 0))
+    (dtime(9, 15, 0), dtime(11, 0, 0)),    # Run4: extended 09:15-10:30 → 09:15-11:00 (10:30-11:00 added for volume)
+    (dtime(12, 0, 0), dtime(15, 0, 0)),    # Run4: combined midday+afternoon 12:00-15:00 (was 13:00-14:15 + gap at 12:xx)
+    # Excluded: 11:00-12:00 (keep the 1-hr mid-morning gap for longs)
 ]
 V15_EOD_EXIT_TIME = dtime(15, 20, 0)
-V16_EOD_EXIT_TIME = V15_EOD_EXIT_TIME
 
-# Per-setup signal->entry lag for V16 5-minute execution.
-# Signal detection stays on 15-minute structure, but entry timing is rebuilt on
-# 5-minute bars after the 15-minute signal is known.
-# Example: signal at 10:30 and lag=1 -> enter on 10:35 bar; lag=2 -> 10:40 bar.
-# HUGE setup: use -1 for bounded dynamic "first valid 5-minute bar" behavior.
+# Per-setup signal->entry lag (in 5-min bars for this runner).
+# Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
+# HUGE setup: use -1 for legacy dynamic "first valid bar" behavior.
 SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW = 1
 SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW = 2
 SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE = -1
@@ -196,14 +221,14 @@ LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK = 999
 LONG_LAG_BARS_B_HUGE_C1_CLOSE_RECLAIM_BREAK = 2
 
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
-DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False
+DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False   # V16 Run3: allow both sides (volume increase)
 
 # Parallelism: set to 1 for serial, >1 for multi-process
-MAX_WORKERS = 4
+MAX_WORKERS = 1   # serial mode — avoids Windows ProcessPoolExecutor spawn crash
 
 # Setup controls
 # Disable the weak short HUGE failed-bounce branch in V14.
-PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE = False
+PACK2_ENABLE_SHORT_SETUP_B_HUGE_FAILED_BOUNCE = True   # V16 Run6: enabled — adds HUGE failed bounce shorts
 PACK2_SHORT_MAX_VIX_FOR_ENTRIES = 0.0
 PACK2_LONG_MAX_VIX_FOR_ENTRIES = 0.0
 
@@ -219,40 +244,104 @@ NIFTY_CONTEXT_TICKERS: Tuple[str, ...] = (
     "NIFTY_50",
     "NIFTY",
 )
-NIFTY_CONTEXT_OR_END_TIME = dtime(9, 45, 0)    # v15: 30-min OR (was 10:15)
-NIFTY_CONTEXT_CONFIRM_TIME = dtime(10, 0, 0)   # v15: confirm at 10:00 (was 10:30)
+NIFTY_CONTEXT_OR_END_TIME = dtime(9, 30, 0)    # v15_5min: confirm at the same clock time on 5-min bars
+NIFTY_CONTEXT_CONFIRM_TIME = dtime(9, 30, 0)   # v15_5min: confirm at 09:30
 NIFTY_CONTEXT_MIN_DAYMOVE_PCT = 0.35           # v15: raised from 0.20 to filter noise
 NIFTY_RS_FILTER_ENABLED = True
 NIFTY_RS_LOOKBACK_BARS = 4                     # v15: 60-min window (was 3 bars/45min)
 NIFTY_RS_THRESHOLD_PCT = 0.20                  # v15: raised from 0.15 (above round-trip cost)
-# v15 NEW: apply a relaxed RS filter even in BOTH mode (previously blind/unfiltered)
+# v15 NEW: apply BOTH-mode RS filtering with a moderately strict short threshold.
 NIFTY_RS_BOTH_MODE_ENABLED = True
-NIFTY_RS_BOTH_MODE_THRESHOLD_PCT = 0.08        # half the directional threshold
+NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 1.0    # V16 Run7: canonical — RS 0.75-1.0 for longs killed day-win (89%→64%)
+NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT = 0.75  # V16 Run3: relaxed 1.00→0.75 — RS -0.75 to -1.0 = 76% win (25T in V15R3 data)
+# Backward-compatibility alias for older live-parity callers that still expect
+# one shared BOTH-mode threshold constant.
+NIFTY_RS_BOTH_MODE_THRESHOLD_PCT = NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT
 
-# V16: keep the existing 15-minute strategy as the candidate generator, then
-# require a supportive 5-minute entry bar before the trade is allowed through.
-V16_5M_LAG_ENTRY_ENABLED = True
-V16_5M_DYNAMIC_MAX_BARS = 4
-V16_5M_ENTRY_PRICE_SOURCE = "close"
-V16_5M_ENTRY_FILTER_ENABLED = True
-V16_5M_REQUIRE_ENTRY_BAR = True
-V16_5M_LOOKBACK_BARS = 4
-V16_5M_MIN_ADX = 18.0
-V16_5M_RANGE_FLOOR_MULT = 0.45
-V16_5M_EMA20_TOL_PCT = 0.15
-V16_5M_SHORT_CLOSE_LOCATION_MAX = 0.45
-V16_5M_LONG_CLOSE_LOCATION_MIN = 0.30
-V16_5M_LONG_CLOSE_LOCATION_MIN_B_HUGE = 0.20
-V16_5M_SHORT_RSI_MAX = 60.0
-V16_5M_LONG_RSI_MIN = 42.0
-V16_5M_PREV_CLOSE_MEAN_TOL_PCT = 0.10
+# Strict Wave 2 short-quality gates.
+V15_SHORT_ENTRY_CUTOFF = dtime(13, 30, 0)   # v15_5min Run5: 13:30 cutoff — 13:30-45 = 25% win (bad), 13:00-13:30 = 83% win (keep)
+V15_SHORT_MIN_OPENING_RANGE_WIDTH_PCT = 1.00
+V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX = 2.10
+
+# ===========================================================================
+# V16 ANTI-EXHAUSTION POST-SCAN FILTERS
+# Applied after Nifty RS filter, before portfolio simulation.
+# These are the core V16 additions over V15.
+# ===========================================================================
+# SHORT RSI dead zone: specifically 35-40 (38.5% win) — NOT all RSI<40 (RSI<35 = 66.7% win, keep!)
+V16_SHORT_RSI_DEAD_ZONE_LO  = 35.0  # block RSI >= 35 ...
+V16_SHORT_RSI_DEAD_ZONE_HI  = 40.0  # ... and RSI < 40  (dead zone only, NOT all RSI<40)
+# LONG QS: two-band filter — block the 7.5-8.0 dead zone (50% win) AND the >10.0 exhausted zone (30% win)
+# QS 8.0-10.0 is ALLOWED (75% win confirmed in V15R3 data — Run2 incorrectly blocked all QS>7.5)
+V16_LONG_QS_DEAD_LO         = 7.5   # start of QS dead zone (50% win)
+V16_LONG_QS_DEAD_HI         = 8.0   # end of dead zone — QS 8.0-10.0 = 75% win (allow through)
+V16_LONG_QS_ABS_MAX         = 10.0  # absolute cap — QS 10+ = 30% win (exhausted momentum)
+V16_LONG_AVWAP_DIST_ATR_MAX = 3.0   # V16 Run7: canonical — dist 2.5-3.0 ATR = 92% win; 3.0+ = degraded
+V16_SHORT_RS_EXHAUSTION_CAP = -2.0  # RS exhaustion guard applied via NIFTY_RS threshold
+
+
+def _apply_v16_post_scan_filters(
+    short_df: pd.DataFrame,
+    long_df: pd.DataFrame,
+) -> tuple:
+    """
+    V16 anti-exhaustion post-scan filters.
+    Applied AFTER Nifty context filter, BEFORE portfolio sim.
+
+    SHORT: blocks ONLY RSI 35-40 dead zone (38.5% win) — keeps RSI<35 (66.7% win) and RSI>40 (75%+ win)
+    LONG:  quality_score two-band filter:
+             block QS 7.5-8.0 (50% win dead zone)
+             allow QS 8.0-10.0 (75% win — was wrongly blocked in Run2)
+             block QS > 10.0  (30% win exhausted momentum zone)
+    LONG:  avwap_dist_atr cap ≤ 3.0 (dist 2.5-3.0 = 92% win allowed; 3.0+ = 50% win blocked)
+    """
+    short_before = len(short_df)
+    long_before  = len(long_df)
+
+    # --- SHORT: block ONLY the RSI 35-40 dead zone (not all RSI<40) ---
+    short_rsi_removed = 0
+    if not short_df.empty and "rsi_signal" in short_df.columns:
+        rsi_col = pd.to_numeric(short_df["rsi_signal"], errors="coerce").fillna(-1.0)
+        mask_dead_rsi = (rsi_col >= V16_SHORT_RSI_DEAD_ZONE_LO) & (rsi_col < V16_SHORT_RSI_DEAD_ZONE_HI)
+        short_rsi_removed = int(mask_dead_rsi.sum())
+        short_df = short_df[~mask_dead_rsi].copy()
+
+    # --- LONG: quality score two-band filter ---
+    # Block QS 7.5-8.0 (50% win dead zone) AND QS>10.0 (30% win exhausted zone)
+    # Allow QS 8.0-10.0 (75% win — V15R3 confirmed: QS 8-9 = 75%, QS 9-10 = 75%)
+    long_qs_removed = 0
+    if not long_df.empty and "quality_score" in long_df.columns:
+        qs_col = pd.to_numeric(long_df["quality_score"], errors="coerce").fillna(0.0)
+        mask_bad_qs = (
+            ((qs_col > V16_LONG_QS_DEAD_LO) & (qs_col <= V16_LONG_QS_DEAD_HI))
+            | (qs_col > V16_LONG_QS_ABS_MAX)
+        )
+        long_qs_removed = int(mask_bad_qs.sum())
+        long_df = long_df[~mask_bad_qs].copy()
+
+    # --- LONG: AVWAP distance cap (anti-chase) ---
+    long_dist_removed = 0
+    if not long_df.empty and "avwap_dist_atr_signal" in long_df.columns:
+        dist_col = pd.to_numeric(long_df["avwap_dist_atr_signal"], errors="coerce").fillna(0.0)
+        mask_too_far = (dist_col > 0) & (dist_col > V16_LONG_AVWAP_DIST_ATR_MAX)
+        long_dist_removed = int(mask_too_far.sum())
+        long_df = long_df[~mask_too_far].copy()
+
+    print(
+        f"[V16_FILTER] SHORT: {short_before}→{len(short_df)} "
+        f"(-{short_rsi_removed} RSI {V16_SHORT_RSI_DEAD_ZONE_LO:.0f}-{V16_SHORT_RSI_DEAD_ZONE_HI:.0f} dead zone) | "
+        f"LONG: {long_before}→{len(long_df)} "
+        f"(-{long_qs_removed} QS {V16_LONG_QS_DEAD_LO:.1f}-{V16_LONG_QS_DEAD_HI:.1f}dead+QS>{V16_LONG_QS_ABS_MAX:.0f}, -{long_dist_removed} dist>{V16_LONG_AVWAP_DIST_ATR_MAX:.1f}ATR)"
+    )
+    return short_df, long_df
+
 
 # ===========================================================================
 # TARGET TEST — disabled in V12 (each side uses its own calibrated targets)
 # ===========================================================================
 TEST_TARGET_OVERRIDE   = True
-TEST_SHORT_TARGET_PCT  = 0.00900
-TEST_LONG_TARGET_PCT   = 0.00900
+TEST_SHORT_TARGET_PCT  = 0.00750   # V16 Run7: reduced 0.90%→0.75% (test easier target, DD impact)
+TEST_LONG_TARGET_PCT   = 0.00750   # V16 Run7: reduced 0.90%→0.75%
 
 
 def apply_live_parity_profile(
@@ -271,6 +360,7 @@ def apply_live_parity_profile(
         short_cfg.reversal_requires_sweep = True
         short_cfg.enable_avwap_no_trade_zone = False
         short_cfg.enable_mode_selector = True
+        short_cfg.use_prev_close_for_day_mode = False
         short_cfg.use_time_windows = False
         short_cfg.min_bars_left_after_entry = 0
         short_cfg.enable_ema200_filter = False
@@ -279,43 +369,50 @@ def apply_live_parity_profile(
         short_cfg.vwap_side_min_count = 3
         short_cfg.require_structure_filter = False
         short_cfg.structure_lookback_bars = 30
-        short_cfg.adx_min = 17.0
+        short_cfg.adx_min = 28.0              # v15_5min Run5: restored 28 — ADX 22-28 dead zone: 25-45% win confirmed in Run4 data
         short_cfg.adx_slope_min = 0.40
-        short_cfg.volume_min_ratio = 0.95
+        short_cfg.volume_min_ratio = 0.80   # V16 Run7: canonical — 0.80 scanner sensitivity
+        short_cfg.mod_impulse_min_atr = 0.30  # V16 Run6: relaxed 0.45→0.30 — matches LONG, more C1 qualify
+        short_cfg.avwap_min_consec_closes = 1  # V16 Run6: relaxed 2→1 — 1 close below AVWAP sufficient
         short_cfg.rsi_max_short = 62.0
         short_cfg.stochk_max = 90.0
         short_cfg.stop_pct = 0.0084
         short_cfg.target_pct = 0.01100
         short_cfg.be_trigger_pct = 0.0042
         short_cfg.trail_pct = 0.0023
-        short_cfg.enable_partial_exit = True
+        short_cfg.enable_partial_exit = False  # V16: no partial exits — SL/TARGET/EOD only
         short_cfg.partial_exit_fraction = 0.50
         short_cfg.partial_target_fraction = 0.50
         short_cfg.enable_risk_based_position_sizing = False
         short_cfg.risk_per_trade_pct_of_capital = 0.0035
-        short_cfg.max_trades_per_ticker_per_day = 5
+        short_cfg.max_trades_per_ticker_per_day = 6   # V16 Run3: raised 4→6 for volume increase
         short_cfg.enable_topn_per_day = False
         short_cfg.topn_per_day = 0
+        short_cfg.entry_time_cutoff = V15_SHORT_ENTRY_CUTOFF
+        short_cfg.min_opening_range_width_pct = V15_SHORT_MIN_OPENING_RANGE_WIDTH_PCT
+        short_cfg.signal_avwap_dist_atr_max = V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX
 
         long_cfg.require_entry_close_confirm = True
         long_cfg.enable_liquidity_sweep_filter = False
         long_cfg.enable_avwap_no_trade_zone = False
-        long_cfg.adx_min = 17.0
+        long_cfg.adx_min = 22.0              # v15_5min: raised from 17 — 22 confirmed optimal in sweep
         long_cfg.adx_slope_min = 0.50
-        long_cfg.volume_min_ratio = 0.95
-        long_cfg.rsi_min_long = 38.0
+        long_cfg.volume_min_ratio = 0.80   # V16 Run7: canonical — 0.80 scanner sensitivity
+        long_cfg.avwap_min_consec_closes = 1  # V16 Run6: relaxed 2→1 — 1 close above AVWAP sufficient
+        long_cfg.rsi_min_long = 50.0         # v15_5min: raised from 38 — RSI<50=low win, RSI≥50=76%+ win
+        long_cfg.quality_score_min = 4.0     # v15_5min Run4: lowered 5.0→4.0 — QS 4-5 = 85.7% win (was wrongly excluded)
         long_cfg.stochk_min = 15.0
         long_cfg.stochk_max = 95.0
         long_cfg.atr_pct_min = 0.0025
-        long_cfg.enable_setup_a_close_continuation_break = False
+        long_cfg.enable_setup_a_close_continuation_break = True  # v15_5min: fixed (was False, inconsistent with main)
         long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-        long_cfg.stop_pct = 0.0075
+        long_cfg.stop_pct = 0.0070           # v15_5min: tightened from 0.0075 — sltgt sweep best=0.70%
         long_cfg.target_pct = 0.0110
         long_cfg.be_trigger_pct = 0.0055
         long_cfg.trail_pct = 0.0028
         long_cfg.min_bars_left_after_entry = 0
         long_cfg.max_vix_for_entries = 13.0
-        long_cfg.max_trades_per_ticker_per_day = 4
+        long_cfg.max_trades_per_ticker_per_day = 5   # V16 Run3: raised 3→5 for volume increase
         long_cfg.enable_topn_per_day = False
         long_cfg.topn_per_day = 0
 
@@ -398,13 +495,67 @@ STOP_EXIT_EXTRA_SLIPPAGE_BPS = 3.0
 # ===========================================================================
 # DATA DIRECTORY RESOLUTION
 # ===========================================================================
+def _latest_parquet_date_value(parquet_path: Path) -> int:
+    """Return the latest parquet `date` timestamp as an integer nanosecond value."""
+    try:
+        df = pd.read_parquet(parquet_path, columns=["date"])
+        if df.empty or "date" not in df.columns:
+            return -1
+        max_dt = pd.to_datetime(df["date"], errors="coerce").max()
+        if pd.isna(max_dt):
+            return -1
+        if getattr(max_dt, "tzinfo", None) is None:
+            max_dt = max_dt.tz_localize(IST)
+        else:
+            max_dt = max_dt.tz_convert(IST)
+        return int(max_dt.value)
+    except Exception:
+        return -1
+
+
+def _score_15m_dir(cand_abs: Path) -> Tuple[int, int]:
+    """
+    Score a 5-minute signal-data directory by (freshness, file_count).
+
+    Freshness is based on actual parquet market timestamps, not only file count,
+    so the runner prefers the runtime directory when a stale local copy exists.
+    """
+    if not cand_abs.is_dir():
+        return (-1, 0)
+
+    parquet_files = list(cand_abs.glob("*_stocks_indicators_5min.parquet"))
+    file_count = len(parquet_files)
+    if file_count <= 0:
+        return (-1, 0)
+
+    freshness = -1
+    sample_paths: List[Path] = []
+    for ticker in NIFTY_CONTEXT_TICKERS:
+        p = cand_abs / f"{ticker}_stocks_indicators_5min.parquet"
+        if p.exists():
+            sample_paths.append(p)
+
+    if not sample_paths:
+        sample_paths = parquet_files[: min(3, file_count)]
+
+    for sample_path in sample_paths:
+        freshness = max(freshness, _latest_parquet_date_value(sample_path))
+
+    if freshness < 0:
+        try:
+            freshness = max(int(p.stat().st_mtime_ns) for p in sample_paths)
+        except Exception:
+            freshness = -1
+
+    return (freshness, file_count)
+
+
 def _resolve_15m_dir() -> Path:
     """
-    Resolve the 15-min parquet directory across the repo layouts used here.
+    Resolve the 5-min signal parquet directory across the repo layouts used here.
 
-    Prefer the first directory that actually contains matching parquet files.
-    This avoids accidentally binding to an empty sibling folder when the
-    populated dataset lives under `eqidv2/stocks_indicators_15min_eq`.
+    Prefer the freshest valid dataset, not merely the directory with the most
+    files, so stale local snapshots do not override the active runtime store.
     """
     _script_dir = Path(__file__).resolve().parent
     if _script_dir.name == "avwap_v11_refactored":
@@ -413,37 +564,35 @@ def _resolve_15m_dir() -> Path:
         _proj = _script_dir
 
     candidates = [
-        RUNTIME_DATA_15M_DIR,
-        _proj / "stocks_indicators_15min_eq",
-        _proj.parent / "stocks_indicators_15min_eq",
-        Path.cwd() / "stocks_indicators_15min_eq",
+        RUNTIME_DATA_5M_DIR,
+        _proj / "stocks_indicators_5min_eq",
+        _proj.parent / "stocks_indicators_5min_eq",
+        Path.cwd() / "stocks_indicators_5min_eq",
     ]
 
-    ranked: List[Tuple[int, Path]] = []
+    ranked: List[Tuple[int, int, int, Path]] = []
     seen: set[str] = set()
-    for cand in candidates:
+    for idx, cand in enumerate(candidates):
         cand_abs = cand.resolve()
         key = str(cand_abs).lower()
         if key in seen:
             continue
         seen.add(key)
-        file_count = 0
-        if cand_abs.is_dir():
-            file_count = sum(1 for _ in cand_abs.glob("*_stocks_indicators_15min.parquet"))
-        ranked.append((file_count, cand_abs))
+        freshness, file_count = _score_15m_dir(cand_abs)
+        ranked.append((freshness, file_count, -idx, cand_abs))
 
     if not ranked:
         return candidates[0].resolve()
 
-    best_count, best_path = max(ranked, key=lambda item: (item[0], -len(str(item[1]))))
-    if best_count > 0:
+    best_freshness, best_count, _, best_path = max(ranked, key=lambda item: (item[0], item[1], item[2]))
+    if best_count > 0 or best_freshness >= 0:
         return best_path
 
-    for _, cand_abs in ranked:
+    for _, _, _, cand_abs in ranked:
         if cand_abs.is_dir():
             return cand_abs
 
-    return ranked[0][1]
+    return ranked[0][3]
 
 
 def _fmt_pct_exact(value: float) -> str:
@@ -467,9 +616,9 @@ def _describe_regime_source_availability(cfg: StrategyConfig) -> Tuple[List[str]
 
 
 # ===========================================================================
-# INTRADAY DATA READERS
+# 1-MINUTE DATA READER
 # ===========================================================================
-def _resolve_1min_dir() -> Path:
+def _resolve_5min_dir() -> Path:
     """
     Resolve the 1-min data directory relative to the algo_trading project root.
     Looks for a directory named 'stocks_indicators_1min_eq' in the data path.
@@ -495,34 +644,6 @@ def _resolve_1min_dir() -> Path:
     return candidates[0]
 
 
-def _resolve_entry_5m_dir() -> Path:
-    """
-    Resolve the 5-min entry-validation directory relative to the project root.
-    """
-    _script_dir = Path(__file__).resolve().parent
-    if _script_dir.name == "avwap_v11_refactored":
-        _proj = _script_dir.parent
-    else:
-        _proj = _script_dir
-
-    candidates = [
-        RUNTIME_DATA_5M_DIR,
-        _proj / "data" / "stocks_indicators_5min_eq",
-        _proj / "stocks_indicators_5min_eq",
-        _proj.parent / "data" / "stocks_indicators_5min_eq",
-        _proj.parent / "stocks_indicators_5min_eq",
-    ]
-    for c in candidates:
-        if c.is_dir():
-            return c
-    return candidates[0]
-
-
-def _resolve_5min_dir() -> Path:
-    """Backward-compatible alias for the 5-min entry-data resolver."""
-    return _resolve_entry_5m_dir()
-
-
 def _load_india_vix(project_root: Path) -> dict:
     """Load India VIX parquet â†’ {date_str: float}.
 
@@ -544,7 +665,7 @@ def _load_india_vix(project_root: Path) -> dict:
 
 def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
     """
-    Read an intraday parquet file for a ticker and normalize its timestamp column.
+    Read a 5-minute parquet file for a ticker.
     Returns empty DataFrame if file not found or read fails.
     """
     try:
@@ -570,16 +691,6 @@ def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
 
         if "datetime" in df.columns:
             df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
-            try:
-                if getattr(df["datetime"].dt, "tz", None) is None:
-                    df["datetime"] = df["datetime"].dt.tz_localize(IST)
-                else:
-                    df["datetime"] = df["datetime"].dt.tz_convert(IST)
-            except Exception:
-                pass
-            df = df.dropna(subset=["datetime"]).sort_values("datetime").drop_duplicates(
-                subset=["datetime"], keep="last"
-            ).reset_index(drop=True)
         return df
     except Exception:
         return pd.DataFrame()
@@ -750,7 +861,7 @@ def _resolve_exits_5min(
     Re-evaluate exit prices, exit times, and outcomes using 1-min data
     for higher-resolution SL/target tracking.
 
-    Entry signals and entry prices remain from 15-min scanning.
+    Entry signals and entry prices remain from 5-min scanning.
     Only the exit side is recalculated at 1-min granularity.
     """
     if trades_df.empty:
@@ -758,7 +869,7 @@ def _resolve_exits_5min(
 
     if not dir_5m.is_dir():
         print(f"[WARN] 1-min data directory not found: {dir_5m}")
-        print("[WARN] Falling back to 15-min exit resolution.")
+        print("[WARN] Falling back to 5-min exit resolution.")
         return trades_df
 
     df = trades_df.copy()
@@ -951,7 +1062,7 @@ def _resolve_exits_5min(
 
         if resolved is None:
             if ticker not in _cache_15m:
-                fpath_15m = dir_15m / f"{ticker}_stocks_indicators_15min.parquet"
+                fpath_15m = dir_15m / f"{ticker}_stocks_indicators_5min.parquet"
                 if fpath_15m.exists():
                     _cache_15m[ticker] = read_15m_parquet(str(fpath_15m), engine)
                 else:
@@ -970,7 +1081,7 @@ def _resolve_exits_5min(
                         & (df_15m[time_col] <= eod_cutoff)
                     ].sort_values(time_col)
                     bars_15m = same_day.tail(1)
-                resolved = _resolve_from_bars(bars_15m, side, stop_price, target_price, "15M_FALLBACK")
+                resolved = _resolve_from_bars(bars_15m, side, stop_price, target_price, "5M_FALLBACK")
                 if resolved is not None:
                     fallback_rows += 1
 
@@ -1050,13 +1161,13 @@ def _resolve_exits_5min(
 
     print(
         f"[1MIN] Re-resolved exits for {updated_rows}/{total_rows} trades using 1-min data."
-        + (f" 15m_fallback={fallback_rows}." if fallback_rows else "")
+        + (f" 5m_fallback={fallback_rows}." if fallback_rows else "")
     )
     return df
 
 
 # ===========================================================================
-# WORKER FUNCTIONS (for parallel scanning â€” still uses 15-min for entry signals)
+# WORKER FUNCTIONS (for parallel scanning â€” uses 5-min for entry signals)
 # ===========================================================================
 def _scan_one_ticker_short(args: Tuple[str, str, StrategyConfig]) -> List[dict]:
     """Scan one ticker on the SHORT side. Returns list of Trade dicts."""
@@ -1076,6 +1187,33 @@ def _scan_one_ticker_long(args: Tuple[str, str, StrategyConfig]) -> List[dict]:
         return []
     trades = scan_long(ticker, df, cfg)
     return [asdict(t) for t in trades]
+
+
+def _scan_one_ticker_both(
+    args: Tuple[str, str, StrategyConfig, StrategyConfig, bool]
+) -> Tuple[List[dict], List[dict]]:
+    """
+    Scan one ticker for SHORT + LONG together.
+
+    The expensive parquet read, session filtering, indicator preparation, and
+    per-day AVWAP build are shared once whenever both sides are compatible.
+    """
+    ticker, path, short_cfg, long_cfg, share_prep = args
+    df = read_15m_parquet(path, short_cfg.parquet_engine)
+    if df.empty:
+        return [], []
+
+    if share_prep:
+        df_prepared = prepare_session_bars_for_scan(df, short_cfg)
+        if df_prepared.empty:
+            return [], []
+        short_trades = scan_short_prepared(ticker, df_prepared, short_cfg)
+        long_trades = scan_long_prepared(ticker, df_prepared, long_cfg)
+    else:
+        short_trades = scan_short(ticker, df, short_cfg)
+        long_trades = scan_long(ticker, df, long_cfg)
+
+    return [asdict(t) for t in short_trades], [asdict(t) for t in long_trades]
 
 
 # ===========================================================================
@@ -1155,11 +1293,136 @@ def _run_side_parallel(
     return out
 
 
+def _finalize_side_scan_df(out: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
+    if out.empty:
+        return out
+
+    out = apply_topn_per_day(out, cfg)
+
+    for c in ["signal_time_ist", "entry_time_ist", "exit_time_ist"]:
+        if c in out.columns:
+            out[c] = pd.to_datetime(out[c], errors="coerce")
+
+    sort_cols = [c for c in ["trade_date", "ticker", "entry_time_ist"] if c in out.columns]
+    if sort_cols:
+        out = out.sort_values(sort_cols).reset_index(drop=True)
+    return out
+
+
+def _configs_share_combined_scan_prep(
+    short_cfg: StrategyConfig,
+    long_cfg: StrategyConfig,
+) -> bool:
+    keys = (
+        "dir_15m",
+        "end_15m",
+        "parquet_engine",
+        "session_start",
+        "session_end",
+    )
+    return all(getattr(short_cfg, key) == getattr(long_cfg, key) for key in keys)
+
+
+def _run_both_parallel(
+    short_cfg: StrategyConfig,
+    long_cfg: StrategyConfig,
+    max_workers: int = MAX_WORKERS,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Scan all tickers once and generate both SHORT and LONG entries.
+
+    This avoids reading the same parquet and rebuilding the same indicators twice
+    for every ticker during v15 backtests.
+    """
+    tickers = list_tickers_15m(short_cfg.dir_15m, short_cfg.end_15m)
+    print(f"[COMBINED] Tickers found: {len(tickers)}")
+
+    share_prep = _configs_share_combined_scan_prep(short_cfg, long_cfg)
+    if not share_prep:
+        print("[COMBINED] Configs differ on scan-prep inputs; falling back to side-specific prep inside each worker.")
+
+    task_args = [
+        (
+            t,
+            os.path.join(short_cfg.dir_15m, f"{t}{short_cfg.end_15m}"),
+            short_cfg,
+            long_cfg,
+            share_prep,
+        )
+        for t in tickers
+    ]
+
+    short_dicts: List[dict] = []
+    long_dicts: List[dict] = []
+    scan_errors: List[Tuple[str, str]] = []
+
+    if max_workers <= 1:
+        for k, args in enumerate(task_args, 1):
+            try:
+                short_rows, long_rows = _scan_one_ticker_both(args)
+                short_dicts.extend(short_rows)
+                long_dicts.extend(long_rows)
+            except Exception as exc:
+                scan_errors.append((args[0], str(exc)))
+            if k % 50 == 0:
+                print(
+                    f"  [COMBINED] scanned {k}/{len(tickers)} | "
+                    f"short_trades={len(short_dicts)} | long_trades={len(long_dicts)}"
+                )
+    else:
+        done_count = 0
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_scan_one_ticker_both, a): a[0] for a in task_args}
+            for future in as_completed(futures):
+                done_count += 1
+                try:
+                    short_rows, long_rows = future.result()
+                    short_dicts.extend(short_rows)
+                    long_dicts.extend(long_rows)
+                except Exception as exc:
+                    ticker = futures[future]
+                    scan_errors.append((ticker, str(exc)))
+
+                if done_count % 100 == 0:
+                    print(
+                        f"  [COMBINED] scanned {done_count}/{len(tickers)} | "
+                        f"short_trades={len(short_dicts)} | long_trades={len(long_dicts)}"
+                    )
+
+    if scan_errors:
+        print(
+            f"  [COMBINED] {len(scan_errors)} ticker(s) skipped (bad/missing data): "
+            f"{', '.join(t for t, _ in scan_errors)}"
+        )
+
+    short_df = _finalize_side_scan_df(pd.DataFrame(short_dicts), short_cfg)
+    long_df = _finalize_side_scan_df(pd.DataFrame(long_dicts), long_cfg)
+    return short_df, long_df
+
+
 def _trade_date_mask(df: pd.DataFrame, date_str: str) -> pd.Series:
     if df is None or df.empty or "trade_date" not in df.columns:
         return pd.Series(False, index=df.index if df is not None else pd.Index([]))
     trade_dates = pd.to_datetime(df["trade_date"], errors="coerce")
     return trade_dates.dt.strftime("%Y-%m-%d").eq(str(date_str))
+
+
+def _coerce_ist_timestamp(value: Any) -> pd.Timestamp:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        return pd.NaT
+    ts = pd.Timestamp(ts)
+    if ts.tzinfo is None:
+        return ts.tz_localize(IST)
+    return ts.tz_convert(IST)
+
+
+def _normalize_ist_series(values: Any) -> pd.Series:
+    if isinstance(values, pd.Series):
+        ser = values.copy()
+    else:
+        ser = pd.Series(values)
+    return ser.apply(_coerce_ist_timestamp)
 
 
 def _lag_bars_for_setup(side: str, setup: str) -> int:
@@ -1194,7 +1457,7 @@ def _infer_signal_time_from_entry(entry_ts: Any, side: str, setup: str) -> pd.Ti
     lag_bars = _lag_bars_for_setup(side, setup)
     if lag_bars < 0 or lag_bars > 16:
         lag_bars = 0
-    return ts - pd.Timedelta(minutes=15 * lag_bars)
+    return ts - pd.Timedelta(minutes=5 * lag_bars)
 
 
 def _convert_live_replay_rows_to_backtest_df(replay_df: pd.DataFrame, side: str) -> pd.DataFrame:
@@ -1202,6 +1465,9 @@ def _convert_live_replay_rows_to_backtest_df(replay_df: pd.DataFrame, side: str)
         return pd.DataFrame()
 
     d = replay_df.copy()
+    # Live signal CSVs use `stop_price`; normalize it for the backtest schema.
+    if "sl_price" not in d.columns and "stop_price" in d.columns:
+        d["sl_price"] = d["stop_price"]
     entry_col = "signal_entry_datetime_ist" if "signal_entry_datetime_ist" in d.columns else "signal_bar_time_ist"
     entry_source = d[entry_col] if entry_col in d.columns else pd.Series(pd.NaT, index=d.index)
     d["entry_time_ist"] = _normalize_ist_series(entry_source)
@@ -1262,6 +1528,21 @@ def _load_live_parity_replay_df(side: str, date_str: str) -> pd.DataFrame:
     if side_u not in {"SHORT", "LONG"}:
         return pd.DataFrame()
 
+    side_l = side_u.lower()
+    csv_candidates = [
+        RUNTIME_LIVE_SIGNALS_DIR / f"signals_{date_str}_v15_new_{side_l}.csv",
+        RUNTIME_LIVE_SIGNALS_DIR / f"signals_{date_str}_v15_{side_l}.csv",
+    ]
+    for csv_path in csv_candidates:
+        try:
+            if csv_path.exists():
+                csv_df = pd.read_csv(csv_path)
+                if csv_df is not None and not csv_df.empty:
+                    print(f"[LIVE_PARITY] Using signal CSV for {side_u} {date_str}: {csv_path.name}")
+                    return csv_df
+        except Exception as exc:
+            print(f"[LIVE_PARITY] WARN: unable to read {csv_path.name}: {exc}")
+
     try:
         if side_u == "SHORT":
             import eqidv2_live_combined_analyser_csv_v15_short as replay_mod
@@ -1291,8 +1572,11 @@ def _should_sync_side_with_live_parity(df: pd.DataFrame, side: str, date_str: st
         return True
 
     side_u = str(side or "").strip().lower()
-    side_csv = RUNTIME_LIVE_SIGNALS_DIR / f"signals_{date_str}_v16_{side_u}.csv"
-    return side_csv.exists()
+    side_csv_candidates = (
+        RUNTIME_LIVE_SIGNALS_DIR / f"signals_{date_str}_v15_new_{side_u}.csv",
+        RUNTIME_LIVE_SIGNALS_DIR / f"signals_{date_str}_v15_{side_u}.csv",
+    )
+    return any(p.exists() for p in side_csv_candidates)
 
 
 def _replace_current_day_with_live_parity(
@@ -1340,583 +1624,6 @@ def _replace_current_day_with_live_parity(
         f"SHORT {old_short}->{len(replay_short)} | LONG {old_long}->{len(replay_long)}"
     )
     return short_out, long_out
-
-
-def _coerce_ist_timestamp(value: Any) -> pd.Timestamp:
-    ts = pd.to_datetime(value, errors="coerce")
-    if pd.isna(ts):
-        return pd.NaT
-    ts = pd.Timestamp(ts)
-    if ts.tzinfo is None:
-        return ts.tz_localize(IST)
-    return ts.tz_convert(IST)
-
-
-def _normalize_ist_series(values: Any) -> pd.Series:
-    if isinstance(values, pd.Series):
-        ser = values.copy()
-    else:
-        ser = pd.Series(values)
-    return ser.apply(_coerce_ist_timestamp)
-
-
-def _find_first_col(columns: pd.Index, *candidates: str) -> Optional[str]:
-    for cand in candidates:
-        if cand in columns:
-            return cand
-    return None
-
-
-def _prepare_v16_5m_bars(intraday_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    if intraday_df is None or intraday_df.empty:
-        return pd.DataFrame(), {}
-
-    dt_col = _find_first_col(intraday_df.columns, "datetime", "date", "DateTime", "timestamp", "Timestamp")
-    open_col = _find_first_col(intraday_df.columns, "open", "Open")
-    high_col = _find_first_col(intraday_df.columns, "high", "High")
-    low_col = _find_first_col(intraday_df.columns, "low", "Low")
-    close_col = _find_first_col(intraday_df.columns, "close", "Close")
-    ema20_col = _find_first_col(intraday_df.columns, "EMA_20", "ema20", "ema_20")
-    rsi_col = _find_first_col(intraday_df.columns, "RSI", "rsi")
-    adx_col = _find_first_col(intraday_df.columns, "ADX", "adx")
-
-    if not dt_col or not high_col or not low_col or not close_col:
-        return pd.DataFrame(), {}
-
-    bars = intraday_df.copy()
-    bars[dt_col] = pd.to_datetime(bars[dt_col], errors="coerce")
-    try:
-        if getattr(bars[dt_col].dt, "tz", None) is None:
-            bars[dt_col] = bars[dt_col].dt.tz_localize(IST)
-        else:
-            bars[dt_col] = bars[dt_col].dt.tz_convert(IST)
-    except Exception:
-        pass
-    bars = bars.dropna(subset=[dt_col]).sort_values(dt_col).reset_index(drop=True)
-    return bars, {
-        "dt": dt_col,
-        "open": open_col or "",
-        "high": high_col,
-        "low": low_col,
-        "close": close_col,
-        "ema20": ema20_col or "",
-        "rsi": rsi_col or "",
-        "adx": adx_col or "",
-    }
-
-
-def _rebase_brackets_from_new_entry(
-    side: str,
-    original_entry: Any,
-    original_stop: Any,
-    original_target: Any,
-    new_entry: float,
-) -> Tuple[float, float]:
-    side_u = str(side or "").strip().upper()
-    old_entry = pd.to_numeric(original_entry, errors="coerce")
-    old_stop = pd.to_numeric(original_stop, errors="coerce")
-    old_target = pd.to_numeric(original_target, errors="coerce")
-    if not (np.isfinite(old_entry) and old_entry > 0 and np.isfinite(old_stop) and np.isfinite(old_target) and np.isfinite(new_entry) and new_entry > 0):
-        return np.nan, np.nan
-
-    if side_u == "SHORT":
-        stop_pct = max(0.0, (old_stop - old_entry) / old_entry)
-        target_pct = max(0.0, (old_entry - old_target) / old_entry)
-        new_stop = new_entry * (1.0 + stop_pct)
-        new_target = new_entry * (1.0 - target_pct)
-    else:
-        stop_pct = max(0.0, (old_entry - old_stop) / old_entry)
-        target_pct = max(0.0, (old_target - old_entry) / old_entry)
-        new_stop = new_entry * (1.0 - stop_pct)
-        new_target = new_entry * (1.0 + target_pct)
-
-    return float(new_stop), float(new_target)
-
-
-def _resolve_v16_5m_lag_entry(
-    side: str,
-    setup: str,
-    signal_time: Any,
-    intraday_df: pd.DataFrame,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
-        "ok": False,
-        "entry_time_ist": pd.NaT,
-        "entry_price": np.nan,
-        "lag_bars_5m": np.nan,
-        "mode": "",
-        "reason": "",
-    }
-
-    signal_ts = _coerce_ist_timestamp(signal_time)
-    if pd.isna(signal_ts):
-        result["reason"] = "missing_signal_time"
-        return result
-
-    bars, cols = _prepare_v16_5m_bars(intraday_df)
-    if bars.empty:
-        result["reason"] = "missing_5m_file"
-        return result
-
-    dt_col = cols["dt"]
-    close_col = cols["close"]
-    day_mask = bars[dt_col].dt.normalize() == signal_ts.normalize()
-    bars = bars.loc[day_mask].copy()
-    if bars.empty:
-        result["reason"] = "missing_signal_day_5m_bars"
-        return result
-
-    lag_bars = int(_lag_bars_for_setup(side, setup))
-    if lag_bars >= 0:
-        candidate_ts = signal_ts + pd.Timedelta(minutes=5 * lag_bars)
-        exact = bars.loc[bars[dt_col] == candidate_ts]
-        if exact.empty:
-            exact = bars.loc[bars[dt_col].dt.floor("min") == candidate_ts.floor("min")]
-        if exact.empty:
-            result["lag_bars_5m"] = lag_bars
-            result["mode"] = f"fixed_{lag_bars}"
-            result["reason"] = "missing_fixed_lag_5m_bar"
-            return result
-        row = exact.iloc[-1]
-        entry_price = pd.to_numeric(row.get(close_col, np.nan), errors="coerce")
-        if not np.isfinite(entry_price):
-            result["lag_bars_5m"] = lag_bars
-            result["mode"] = f"fixed_{lag_bars}"
-            result["reason"] = "missing_fixed_lag_5m_close"
-            return result
-        result.update(
-            ok=True,
-            entry_time_ist=_coerce_ist_timestamp(row[dt_col]),
-            entry_price=float(entry_price),
-            lag_bars_5m=lag_bars,
-            mode=f"fixed_{lag_bars}",
-            reason="",
-        )
-        return result
-
-    # Dynamic mode: first valid 5-minute bar after signal within a bounded window.
-    start_ts = signal_ts + pd.Timedelta(minutes=5)
-    end_ts = signal_ts + pd.Timedelta(minutes=5 * max(1, int(V16_5M_DYNAMIC_MAX_BARS)))
-    candidates = bars.loc[(bars[dt_col] >= start_ts) & (bars[dt_col] <= end_ts)].sort_values(dt_col)
-    if candidates.empty:
-        result["lag_bars_5m"] = -1
-        result["mode"] = "dynamic"
-        result["reason"] = "dynamic_window_empty"
-        return result
-
-    for _, row in candidates.iterrows():
-        candidate_ts = _coerce_ist_timestamp(row[dt_col])
-        metrics = _evaluate_v16_5m_entry_filter(side, setup, bars, candidate_ts)
-        if bool(metrics.get("v16_5m_filter_pass")):
-            entry_price = pd.to_numeric(row.get(close_col, np.nan), errors="coerce")
-            if not np.isfinite(entry_price):
-                continue
-            lag_5m = int(round((candidate_ts - signal_ts).total_seconds() / 300.0))
-            result.update(
-                ok=True,
-                entry_time_ist=candidate_ts,
-                entry_price=float(entry_price),
-                lag_bars_5m=lag_5m,
-                mode="dynamic",
-                reason="",
-            )
-            return result
-
-    result["lag_bars_5m"] = -1
-    result["mode"] = "dynamic"
-    result["reason"] = "dynamic_window_no_valid_bar"
-    return result
-
-
-def _apply_v16_5m_lag_entry_resolution(
-    trades_df: pd.DataFrame,
-    side: str,
-    dir_5m: Path,
-    engine: str = "pyarrow",
-) -> pd.DataFrame:
-    if trades_df.empty or not bool(V16_5M_LAG_ENTRY_ENABLED):
-        return trades_df
-    if not dir_5m.is_dir():
-        print(f"[V16_5M] WARN: 5-min data directory not found: {dir_5m}. Skipping lag-entry rebuild.")
-        return trades_df
-
-    df = trades_df.copy()
-    if "signal_time_ist" in df.columns:
-        df["signal_time_ist"] = _normalize_ist_series(df["signal_time_ist"])
-    if "entry_time_ist" in df.columns:
-        df["entry_time_ist"] = _normalize_ist_series(df["entry_time_ist"])
-
-    if "entry_time_15m_original" not in df.columns:
-        df["entry_time_15m_original"] = df["entry_time_ist"] if "entry_time_ist" in df.columns else pd.NaT
-    if "entry_price_15m_original" not in df.columns:
-        df["entry_price_15m_original"] = pd.to_numeric(df.get("entry_price", np.nan), errors="coerce")
-    if "sl_price_15m_original" not in df.columns:
-        df["sl_price_15m_original"] = pd.to_numeric(df.get("sl_price", df.get("stop_price", np.nan)), errors="coerce")
-    if "target_price_15m_original" not in df.columns:
-        df["target_price_15m_original"] = pd.to_numeric(df.get("target_price", np.nan), errors="coerce")
-    if "v16_5m_lag_mode" not in df.columns:
-        df["v16_5m_lag_mode"] = ""
-    if "v16_5m_lag_bars" not in df.columns:
-        df["v16_5m_lag_bars"] = np.nan
-    if "v16_5m_lag_reject_reason" not in df.columns:
-        df["v16_5m_lag_reject_reason"] = ""
-
-    cache: Dict[str, pd.DataFrame] = {}
-    keep_rows: List[int] = []
-    reject_counts: Dict[str, int] = {}
-
-    for idx in df.index:
-        ticker = str(df.at[idx, "ticker"]).upper() if "ticker" in df.columns else ""
-        intraday_df = _load_entry_5m_for_ticker(ticker, dir_5m, engine, cache)
-        resolved = _resolve_v16_5m_lag_entry(
-            side=side,
-            setup=df.at[idx, "setup"] if "setup" in df.columns else "",
-            signal_time=df.at[idx, "signal_time_ist"] if "signal_time_ist" in df.columns else pd.NaT,
-            intraday_df=intraday_df,
-        )
-        df.at[idx, "v16_5m_lag_mode"] = str(resolved.get("mode") or "")
-        df.at[idx, "v16_5m_lag_bars"] = pd.to_numeric(resolved.get("lag_bars_5m", np.nan), errors="coerce")
-        df.at[idx, "v16_5m_lag_reject_reason"] = str(resolved.get("reason") or "")
-
-        if not bool(resolved.get("ok")):
-            reason = str(resolved.get("reason") or "lag_entry_rejected")
-            reject_counts[reason] = reject_counts.get(reason, 0) + 1
-            continue
-
-        new_entry_time = _coerce_ist_timestamp(resolved.get("entry_time_ist"))
-        new_entry_price = pd.to_numeric(resolved.get("entry_price", np.nan), errors="coerce")
-        original_entry = pd.to_numeric(
-            df.at[idx, "entry_price_15m_original"] if "entry_price_15m_original" in df.columns else df.at[idx, "entry_price"],
-            errors="coerce",
-        )
-        original_stop = pd.to_numeric(
-            df.at[idx, "sl_price_15m_original"] if "sl_price_15m_original" in df.columns else np.nan,
-            errors="coerce",
-        )
-        if not np.isfinite(original_stop):
-            original_stop = pd.to_numeric(
-                df.at[idx, "sl_price"] if "sl_price" in df.columns else np.nan,
-                errors="coerce",
-            )
-        if not np.isfinite(original_stop):
-            original_stop = pd.to_numeric(
-                df.at[idx, "stop_price"] if "stop_price" in df.columns else np.nan,
-                errors="coerce",
-            )
-        original_target = pd.to_numeric(
-            df.at[idx, "target_price_15m_original"] if "target_price_15m_original" in df.columns else np.nan,
-            errors="coerce",
-        )
-        if not np.isfinite(original_target):
-            original_target = pd.to_numeric(
-                df.at[idx, "target_price"] if "target_price" in df.columns else np.nan,
-                errors="coerce",
-            )
-        new_stop, new_target = _rebase_brackets_from_new_entry(
-            side=side,
-            original_entry=original_entry,
-            original_stop=original_stop,
-            original_target=original_target,
-            new_entry=float(new_entry_price) if np.isfinite(new_entry_price) else np.nan,
-        )
-        if pd.isna(new_entry_time) or not np.isfinite(new_entry_price) or not np.isfinite(new_stop) or not np.isfinite(new_target):
-            reject_counts["rebased_brackets_invalid"] = reject_counts.get("rebased_brackets_invalid", 0) + 1
-            df.at[idx, "v16_5m_lag_reject_reason"] = "rebased_brackets_invalid"
-            continue
-
-        df.at[idx, "entry_time_ist"] = new_entry_time
-        df.at[idx, "entry_price"] = float(new_entry_price)
-        df.at[idx, "sl_price"] = float(new_stop)
-        df.at[idx, "stop_price"] = float(new_stop)
-        df.at[idx, "target_price"] = float(new_target)
-        keep_rows.append(idx)
-
-    out = df.loc[keep_rows].copy()
-    total = int(len(df))
-    kept = int(len(out))
-    print(f"[V16_5M] {str(side).upper()}: rebuilt {kept}/{total} trades with 5-min lag entries.")
-    if reject_counts:
-        reason_text = ", ".join(
-            f"{name}={count}" for name, count in sorted(
-                reject_counts.items(),
-                key=lambda kv: (-kv[1], kv[0]),
-            )
-        )
-        print(f"[V16_5M] {str(side).upper()} lag-entry rejects: {reason_text}")
-    return out
-
-
-def _load_entry_5m_for_ticker(
-    ticker: str,
-    dir_5m: Path,
-    engine: str,
-    cache: Dict[str, pd.DataFrame],
-) -> pd.DataFrame:
-    ticker_u = str(ticker or "").strip().upper()
-    if not ticker_u:
-        return pd.DataFrame()
-    if ticker_u in cache:
-        return cache[ticker_u]
-
-    for pattern in [
-        f"{ticker_u}_stocks_indicators_5min.parquet",
-        f"{ticker_u}_5min.parquet",
-        f"{ticker_u}.parquet",
-    ]:
-        fpath = dir_5m / pattern
-        if fpath.exists():
-            cache[ticker_u] = read_5m_parquet(str(fpath), engine)
-            return cache[ticker_u]
-
-    cache[ticker_u] = pd.DataFrame()
-    return cache[ticker_u]
-
-
-def _evaluate_v16_5m_entry_filter(
-    side: str,
-    setup: str,
-    intraday_df: pd.DataFrame,
-    entry_time: Any,
-) -> Dict[str, Any]:
-    metrics: Dict[str, Any] = {
-        "v16_5m_filter_pass": False,
-        "v16_5m_reject_reason": "",
-        "v16_5m_close_loc": np.nan,
-        "v16_5m_ema20_gap_pct": np.nan,
-        "v16_5m_rsi": np.nan,
-        "v16_5m_adx": np.nan,
-        "v16_5m_range_pct": np.nan,
-        "v16_5m_recent_range_median_pct": np.nan,
-        "v16_5m_prev_close_mean_gap_pct": np.nan,
-    }
-
-    entry_ts = _coerce_ist_timestamp(entry_time)
-    if pd.isna(entry_ts):
-        metrics["v16_5m_reject_reason"] = "missing_entry_time"
-        return metrics
-    if intraday_df is None or intraday_df.empty:
-        if not bool(V16_5M_REQUIRE_ENTRY_BAR):
-            metrics["v16_5m_filter_pass"] = True
-            return metrics
-        metrics["v16_5m_reject_reason"] = "missing_5m_file"
-        return metrics
-
-    dt_col = _find_first_col(intraday_df.columns, "datetime", "date", "DateTime", "timestamp", "Timestamp")
-    open_col = _find_first_col(intraday_df.columns, "open", "Open")
-    high_col = _find_first_col(intraday_df.columns, "high", "High")
-    low_col = _find_first_col(intraday_df.columns, "low", "Low")
-    close_col = _find_first_col(intraday_df.columns, "close", "Close")
-    ema20_col = _find_first_col(intraday_df.columns, "EMA_20", "ema20", "ema_20")
-    rsi_col = _find_first_col(intraday_df.columns, "RSI", "rsi")
-    adx_col = _find_first_col(intraday_df.columns, "ADX", "adx")
-
-    if not dt_col or not high_col or not low_col or not close_col:
-        metrics["v16_5m_reject_reason"] = "missing_5m_columns"
-        return metrics
-
-    bars = intraday_df.copy()
-    bars[dt_col] = pd.to_datetime(bars[dt_col], errors="coerce")
-    try:
-        if getattr(bars[dt_col].dt, "tz", None) is None:
-            bars[dt_col] = bars[dt_col].dt.tz_localize(IST)
-        else:
-            bars[dt_col] = bars[dt_col].dt.tz_convert(IST)
-    except Exception:
-        pass
-    bars = bars.dropna(subset=[dt_col]).sort_values(dt_col)
-
-    exact = bars.loc[bars[dt_col] == entry_ts]
-    if exact.empty:
-        exact = bars.loc[bars[dt_col].dt.floor("min") == entry_ts.floor("min")]
-    if exact.empty:
-        if not bool(V16_5M_REQUIRE_ENTRY_BAR):
-            metrics["v16_5m_filter_pass"] = True
-            return metrics
-        metrics["v16_5m_reject_reason"] = "missing_5m_entry_bar"
-        return metrics
-
-    entry_bar = exact.iloc[-1]
-    prev = bars.loc[bars[dt_col] < entry_ts].tail(V16_5M_LOOKBACK_BARS)
-
-    close_val = pd.to_numeric(entry_bar.get(close_col, np.nan), errors="coerce")
-    high_val = pd.to_numeric(entry_bar.get(high_col, np.nan), errors="coerce")
-    low_val = pd.to_numeric(entry_bar.get(low_col, np.nan), errors="coerce")
-    ema20_val = pd.to_numeric(entry_bar.get(ema20_col, np.nan), errors="coerce") if ema20_col else np.nan
-    rsi_val = pd.to_numeric(entry_bar.get(rsi_col, np.nan), errors="coerce") if rsi_col else np.nan
-    adx_val = pd.to_numeric(entry_bar.get(adx_col, np.nan), errors="coerce") if adx_col else np.nan
-
-    entry_range = high_val - low_val if np.isfinite(high_val) and np.isfinite(low_val) else np.nan
-    close_loc = np.nan
-    if np.isfinite(entry_range) and entry_range > 0:
-        close_loc = (close_val - low_val) / entry_range
-
-    ema20_gap_pct = np.nan
-    if np.isfinite(close_val) and np.isfinite(ema20_val) and ema20_val:
-        ema20_gap_pct = (close_val / ema20_val - 1.0) * 100.0
-
-    range_pct = np.nan
-    if np.isfinite(entry_range) and np.isfinite(close_val) and close_val:
-        range_pct = (entry_range / abs(close_val)) * 100.0
-
-    recent_range_median_pct = np.nan
-    prev_close_mean_gap_pct = np.nan
-    if not prev.empty:
-        prev_high = pd.to_numeric(prev[high_col], errors="coerce")
-        prev_low = pd.to_numeric(prev[low_col], errors="coerce")
-        prev_close = pd.to_numeric(prev[close_col], errors="coerce")
-        prev_range_pct = ((prev_high - prev_low) / prev_close.replace(0, np.nan).abs()) * 100.0
-        prev_range_pct = prev_range_pct.replace([np.inf, -np.inf], np.nan).dropna()
-        if not prev_range_pct.empty:
-            recent_range_median_pct = float(prev_range_pct.median())
-        prev_close = prev_close.replace([np.inf, -np.inf], np.nan).dropna()
-        if not prev_close.empty and np.isfinite(close_val):
-            prev_close_mean_gap_pct = (close_val / float(prev_close.mean()) - 1.0) * 100.0
-
-    metrics["v16_5m_close_loc"] = close_loc
-    metrics["v16_5m_ema20_gap_pct"] = ema20_gap_pct
-    metrics["v16_5m_rsi"] = rsi_val
-    metrics["v16_5m_adx"] = adx_val
-    metrics["v16_5m_range_pct"] = range_pct
-    metrics["v16_5m_recent_range_median_pct"] = recent_range_median_pct
-    metrics["v16_5m_prev_close_mean_gap_pct"] = prev_close_mean_gap_pct
-
-    if np.isfinite(adx_val) and adx_val < V16_5M_MIN_ADX:
-        metrics["v16_5m_reject_reason"] = "adx_below_floor"
-        return metrics
-
-    if (
-        np.isfinite(range_pct)
-        and np.isfinite(recent_range_median_pct)
-        and recent_range_median_pct > 0
-        and range_pct < recent_range_median_pct * V16_5M_RANGE_FLOOR_MULT
-    ):
-        metrics["v16_5m_reject_reason"] = "entry_bar_too_small"
-        return metrics
-
-    side_u = str(side or "").upper()
-    setup_u = str(setup or "").upper()
-    ema_tol = V16_5M_EMA20_TOL_PCT / 100.0
-
-    if side_u == "SHORT":
-        if np.isfinite(ema20_val) and np.isfinite(close_val) and close_val > ema20_val * (1.0 + ema_tol):
-            metrics["v16_5m_reject_reason"] = "short_above_ema20"
-            return metrics
-        if np.isfinite(close_loc) and close_loc > V16_5M_SHORT_CLOSE_LOCATION_MAX:
-            metrics["v16_5m_reject_reason"] = "short_weak_close_loc"
-            return metrics
-        if np.isfinite(rsi_val) and rsi_val > V16_5M_SHORT_RSI_MAX:
-            metrics["v16_5m_reject_reason"] = "short_rsi_too_high"
-            return metrics
-        if (
-            np.isfinite(prev_close_mean_gap_pct)
-            and prev_close_mean_gap_pct > V16_5M_PREV_CLOSE_MEAN_TOL_PCT
-        ):
-            metrics["v16_5m_reject_reason"] = "short_not_below_recent_closes"
-            return metrics
-    else:
-        long_close_loc_min = (
-            V16_5M_LONG_CLOSE_LOCATION_MIN_B_HUGE
-            if "B_HUGE" in setup_u
-            else V16_5M_LONG_CLOSE_LOCATION_MIN
-        )
-        if np.isfinite(ema20_val) and np.isfinite(close_val) and close_val < ema20_val * (1.0 - ema_tol):
-            metrics["v16_5m_reject_reason"] = "long_below_ema20"
-            return metrics
-        if np.isfinite(close_loc) and close_loc < long_close_loc_min:
-            metrics["v16_5m_reject_reason"] = "long_weak_close_loc"
-            return metrics
-        if np.isfinite(rsi_val) and rsi_val < V16_5M_LONG_RSI_MIN:
-            metrics["v16_5m_reject_reason"] = "long_rsi_too_low"
-            return metrics
-        if (
-            np.isfinite(prev_close_mean_gap_pct)
-            and prev_close_mean_gap_pct < -V16_5M_PREV_CLOSE_MEAN_TOL_PCT
-        ):
-            metrics["v16_5m_reject_reason"] = "long_not_above_recent_closes"
-            return metrics
-
-    metrics["v16_5m_filter_pass"] = True
-    metrics["v16_5m_reject_reason"] = ""
-    return metrics
-
-
-def _apply_v16_5m_entry_filter(
-    trades_df: pd.DataFrame,
-    side: str,
-    dir_5m: Path,
-    engine: str = "pyarrow",
-) -> pd.DataFrame:
-    if trades_df.empty or not bool(V16_5M_ENTRY_FILTER_ENABLED):
-        return trades_df
-    if not dir_5m.is_dir():
-        print(f"[V16_5M] WARN: 5-min data directory not found: {dir_5m}. Skipping precision filter.")
-        return trades_df
-
-    df = trades_df.copy()
-    if "entry_time_ist" in df.columns:
-        df["entry_time_ist"] = pd.to_datetime(df["entry_time_ist"], errors="coerce")
-
-    float_metric_cols = [
-        "v16_5m_close_loc",
-        "v16_5m_ema20_gap_pct",
-        "v16_5m_rsi",
-        "v16_5m_adx",
-        "v16_5m_range_pct",
-        "v16_5m_recent_range_median_pct",
-        "v16_5m_prev_close_mean_gap_pct",
-    ]
-    for col in float_metric_cols:
-        if col not in df.columns:
-            df[col] = np.nan
-        df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
-
-    if "v16_5m_filter_pass" not in df.columns:
-        df["v16_5m_filter_pass"] = False
-    else:
-        df["v16_5m_filter_pass"] = df["v16_5m_filter_pass"].astype(bool)
-
-    if "v16_5m_reject_reason" not in df.columns:
-        df["v16_5m_reject_reason"] = ""
-    else:
-        df["v16_5m_reject_reason"] = df["v16_5m_reject_reason"].fillna("").astype(str)
-
-    cache: Dict[str, pd.DataFrame] = {}
-    keep_rows: List[int] = []
-    reject_counts: Dict[str, int] = {}
-
-    for idx in df.index:
-        ticker = str(df.at[idx, "ticker"]).upper() if "ticker" in df.columns else ""
-        entry_bars = _load_entry_5m_for_ticker(ticker, dir_5m, engine, cache)
-        metrics = _evaluate_v16_5m_entry_filter(
-            side=side,
-            setup=df.at[idx, "setup"] if "setup" in df.columns else "",
-            intraday_df=entry_bars,
-            entry_time=df.at[idx, "entry_time_ist"] if "entry_time_ist" in df.columns else pd.NaT,
-        )
-        df.at[idx, "v16_5m_filter_pass"] = bool(metrics.get("v16_5m_filter_pass"))
-        df.at[idx, "v16_5m_reject_reason"] = str(metrics.get("v16_5m_reject_reason") or "")
-        for key in float_metric_cols:
-            value = metrics.get(key, np.nan)
-            df.at[idx, key] = float(value) if pd.notna(value) else np.nan
-        if bool(metrics.get("v16_5m_filter_pass")):
-            keep_rows.append(idx)
-        else:
-            reason = str(metrics.get("v16_5m_reject_reason") or "rejected")
-            reject_counts[reason] = reject_counts.get(reason, 0) + 1
-
-    out = df.loc[keep_rows].copy()
-    total = int(len(df))
-    kept = int(len(out))
-    print(f"[V16_5M] {str(side).upper()}: kept {kept}/{total} trades after 5-min precision filter.")
-    if reject_counts:
-        reason_text = ", ".join(
-            f"{name}={count}" for name, count in sorted(
-                reject_counts.items(),
-                key=lambda kv: (-kv[1], kv[0]),
-            )
-        )
-        print(f"[V16_5M] {str(side).upper()} reject reasons: {reason_text}")
-    return out
 
 
 # ===========================================================================
@@ -2086,7 +1793,7 @@ def _build_nifty_intraday_context(
     """
     Build a no-lookahead intraday NIFTY context map keyed by 15m timestamp.
 
-    After the first hour settles, classify each bar as:
+    After the opening range settles, classify each bar as:
     - LONG_ONLY: NIFTY is above first-hour range, above intraday anchor, and up on the day
     - SHORT_ONLY: NIFTY is below first-hour range, below intraday anchor, and down on the day
     - BOTH: otherwise
@@ -2264,7 +1971,11 @@ def _apply_nifty_intraday_context(
                 rs_thresh = float(NIFTY_RS_THRESHOLD_PCT)
                 apply_rs = True
             elif NIFTY_RS_BOTH_MODE_ENABLED:
-                rs_thresh = float(NIFTY_RS_BOTH_MODE_THRESHOLD_PCT)
+                rs_thresh = (
+                    float(NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT)
+                    if side_u == "LONG"
+                    else float(NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT)
+                )
                 apply_rs = True
             else:
                 rs_thresh = 0.0
@@ -2296,7 +2007,8 @@ def _apply_nifty_intraday_context(
     l, l_mode_removed, l_rs_removed = _apply_side(long_df, "LONG")
 
     both_mode_rs_note = (
-        f" [BOTH-mode RS>={NIFTY_RS_BOTH_MODE_THRESHOLD_PCT}% active]"
+        f" [BOTH-mode LONG RS>={NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT:.2f}% | "
+        f"SHORT RS<=-{NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT:.2f}% active]"
         if NIFTY_RS_BOTH_MODE_ENABLED else ""
     )
     print(
@@ -2350,16 +2062,16 @@ def _print_signal_entry_lag_summary(df: pd.DataFrame) -> None:
         max="max",
     ).reset_index()
 
-    lag_summary["p50_bars_5m"] = lag_summary["p50"] / 5.0
+    lag_summary["p50_bars_15m"] = lag_summary["p50"] / 15.0
     lag_summary = lag_summary.sort_values(["side", "setup", "impulse_type"]).reset_index(drop=True)
 
-    for col in ["min", "p50", "mean", "p90", "max", "p50_bars_5m"]:
+    for col in ["min", "p50", "mean", "p90", "max", "p50_bars_15m"]:
         lag_summary[col] = pd.to_numeric(lag_summary[col], errors="coerce").round(2)
 
     neg_rows = int((d["lag_min"] < 0).sum())
     zero_rows = int((d["lag_min"] == 0).sum())
 
-    print("\n[DEBUG] Signal->Entry lag by setup (minutes, 5m-bar semantics)")
+    print("\n[DEBUG] Signal->Entry lag by setup (minutes)")
     print(
         f"[DEBUG] Rows={len(d)} | negative_lag_rows={neg_rows} | "
         f"same_timestamp_rows={zero_rows}"
@@ -2516,6 +2228,175 @@ def _print_notional_pnl(combined: pd.DataFrame) -> None:
 # ===========================================================================
 # RECENT DAILY BREAKDOWN
 # ===========================================================================
+def _build_daily_breakdown_df(
+    df: pd.DataFrame,
+    trade_dates: Optional[List[Any]] = None,
+    include_total: bool = True,
+) -> pd.DataFrame:
+    """
+    Build a day-wise breakdown table matching the console summary format.
+
+    Returned columns:
+      Date | L | S | Tot | W | L_ | Win% | SumPnL% | AvgPnL% | Rs.PnL | Outcomes
+      plus optional VIX, RowType, and Notes helper columns.
+    """
+    if df.empty or "trade_date" not in df.columns:
+        return pd.DataFrame()
+
+    d = df.copy()
+    d["trade_date"] = pd.to_datetime(d["trade_date"], errors="coerce").dt.date
+    d = d.dropna(subset=["trade_date"])
+    if d.empty:
+        return pd.DataFrame()
+
+    d["pnl_pct"] = pd.to_numeric(d.get("pnl_pct", 0), errors="coerce").fillna(0.0)
+    d["pnl_rs"] = pd.to_numeric(d.get("pnl_rs", 0), errors="coerce").fillna(0.0)
+    d["side"] = d["side"].astype(str).str.upper()
+    d["outcome"] = d.get("outcome", pd.Series("", index=d.index)).astype(str).str.upper()
+
+    has_vix = "india_vix" in d.columns and pd.to_numeric(
+        d["india_vix"], errors="coerce"
+    ).fillna(0.0).gt(0).any()
+    if has_vix:
+        d["india_vix"] = pd.to_numeric(d["india_vix"], errors="coerce").fillna(0.0)
+
+    all_dates = sorted(d["trade_date"].unique())
+    if trade_dates is None:
+        use_dates = all_dates
+    else:
+        use_dates = sorted(
+            set(pd.to_datetime(pd.Series(list(trade_dates)), errors="coerce").dt.date.dropna().tolist())
+        )
+
+    if not use_dates:
+        return pd.DataFrame()
+
+    d = d[d["trade_date"].isin(use_dates)].copy()
+    rows: List[Dict[str, Any]] = []
+    totals = dict(trades=0, longs=0, shorts=0, wins=0, losses=0, sum_pnl=0.0, sum_rs=0.0)
+
+    for dt in use_dates:
+        day = d[d["trade_date"] == dt]
+        n = len(day)
+        n_long = int((day["side"] == "LONG").sum())
+        n_short = int((day["side"] == "SHORT").sum())
+        wins = int((day["pnl_pct"] > 0).sum())
+        losses = int((day["pnl_pct"] < 0).sum())
+        win_pct = wins / n * 100.0 if n else 0.0
+        sum_pnl = float(day["pnl_pct"].sum())
+        avg_pnl = float(day["pnl_pct"].mean()) if n else 0.0
+        sum_rs = float(day["pnl_rs"].sum())
+
+        oc = day["outcome"].value_counts()
+        oc_parts = []
+        for code, label in [("TARGET", "T"), ("SL", "S"), ("BE", "B"), ("EOD", "E")]:
+            if code in oc:
+                oc_parts.append(f"{label}:{int(oc[code])}")
+        oc_str = " ".join(oc_parts) if oc_parts else "-"
+
+        row: Dict[str, Any] = {
+            "Date": str(dt),
+            "L": n_long,
+            "S": n_short,
+            "Tot": n,
+            "W": wins,
+            "L_": losses,
+            "Win%": round(win_pct, 2),
+            "SumPnL%": round(sum_pnl, 4),
+            "AvgPnL%": round(avg_pnl, 4),
+            "Rs.PnL": round(sum_rs, 2),
+            "Outcomes": oc_str,
+            "RowType": "DAY",
+            "Notes": "",
+        }
+        if has_vix:
+            day_vix = day["india_vix"][day["india_vix"] > 0]
+            row["VIX"] = round(float(day_vix.iloc[0]), 2) if not day_vix.empty else 0.0
+        rows.append(row)
+
+        totals["trades"] += n
+        totals["longs"] += n_long
+        totals["shorts"] += n_short
+        totals["wins"] += wins
+        totals["losses"] += losses
+        totals["sum_pnl"] += sum_pnl
+        totals["sum_rs"] += sum_rs
+
+    if include_total:
+        total_win_pct = totals["wins"] / totals["trades"] * 100.0 if totals["trades"] else 0.0
+        avg_day_pnl = totals["sum_pnl"] / len(use_dates) if use_dates else 0.0
+        total_row: Dict[str, Any] = {
+            "Date": "TOTAL",
+            "L": totals["longs"],
+            "S": totals["shorts"],
+            "Tot": totals["trades"],
+            "W": totals["wins"],
+            "L_": totals["losses"],
+            "Win%": round(total_win_pct, 2),
+            "SumPnL%": round(float(totals["sum_pnl"]), 4),
+            "AvgPnL%": round(float(avg_day_pnl), 4),
+            "Rs.PnL": round(float(totals["sum_rs"]), 2),
+            "Outcomes": "",
+            "RowType": "TOTAL",
+            "Notes": "(avg/day)",
+        }
+        if has_vix:
+            total_row["VIX"] = np.nan
+        rows.append(total_row)
+
+    order = ["Date", "L", "S", "Tot", "W", "L_", "Win%", "SumPnL%", "AvgPnL%", "Rs.PnL"]
+    if has_vix:
+        order.append("VIX")
+    order.extend(["Outcomes", "RowType", "Notes"])
+    return pd.DataFrame(rows)[order]
+
+
+def _recent_trading_dates_from_runtime(n_days: int) -> List[Any]:
+    """
+    Infer the latest trading days from runtime 5-minute market-data coverage.
+
+    Prefer the configured NIFTY context aliases, because they are expected to
+    have continuous market-day coverage even when strategy trade output is empty.
+    """
+    n_days = max(0, int(n_days))
+    if n_days <= 0:
+        return []
+
+    dir_15m = _resolve_15m_dir()
+    candidates = list(NIFTY_CONTEXT_TICKERS)
+
+    try:
+        extra = list_tickers_15m(str(dir_15m), "_stocks_indicators_5min.parquet")
+        for ticker in extra:
+            if ticker not in candidates:
+                candidates.append(ticker)
+    except Exception:
+        pass
+
+    for ticker in candidates:
+        try:
+            p = dir_15m / f"{ticker}_stocks_indicators_5min.parquet"
+            if not p.exists():
+                continue
+            df_idx = read_15m_parquet(str(p), "pyarrow")
+            if df_idx.empty or "date" not in df_idx.columns:
+                continue
+            dates = (
+                pd.to_datetime(df_idx["date"], errors="coerce")
+                .dt.tz_convert(IST)
+                .dt.date
+                .dropna()
+                .drop_duplicates()
+                .sort_values()
+                .tolist()
+            )
+            if dates:
+                return dates[-n_days:]
+        except Exception:
+            continue
+    return []
+
+
 def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     """
     Print a day-by-day P&L / win-rate table for the most recent `n_weeks` trading weeks.
@@ -2532,23 +2413,19 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     if d.empty:
         return
 
-    d["pnl_pct"]   = pd.to_numeric(d.get("pnl_pct", 0), errors="coerce").fillna(0.0)
-    d["pnl_rs"]    = pd.to_numeric(d.get("pnl_rs", 0), errors="coerce").fillna(0.0)
-    d["side"]      = d["side"].astype(str).str.upper()
-    d["outcome"]   = d.get("outcome", pd.Series("", index=d.index)).astype(str).str.upper()
-    _has_vix = "india_vix" in d.columns and d["india_vix"].astype(float).gt(0).any()
-    if _has_vix:
-        d["india_vix"] = pd.to_numeric(d["india_vix"], errors="coerce").fillna(0.0)
-
-    # Keep only the last n_weeks*5 unique trading dates
-    all_dates = sorted(d["trade_date"].unique())
     n_days = n_weeks * 5
-    recent_dates = all_dates[-n_days:] if len(all_dates) >= n_days else all_dates
-    d = d[d["trade_date"].isin(recent_dates)]
-    if d.empty:
+    runtime_recent_dates = _recent_trading_dates_from_runtime(n_days)
+    all_trade_dates = sorted(d["trade_date"].unique())
+    if runtime_recent_dates:
+        recent_dates = runtime_recent_dates
+    else:
+        recent_dates = all_trade_dates[-n_days:] if len(all_trade_dates) >= n_days else all_trade_dates
+    summary_df = _build_daily_breakdown_df(d, trade_dates=recent_dates, include_total=True)
+    if summary_df.empty:
         return
 
-    _vix_col = f"{'VIX':>5} " if _has_vix else ""
+    has_vix = "VIX" in summary_df.columns
+    _vix_col = f"{'VIX':>5} " if has_vix else ""
     hdr = (
         f"{'Date':<12} {'L':>3} {'S':>3} {'Tot':>4} "
         f"{'W':>4} {'L_':>4} {'Win%':>6} "
@@ -2564,66 +2441,33 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     print(hdr)
     print(sep)
 
-    totals = dict(trades=0, longs=0, shorts=0, wins=0, losses=0,
-                  sum_pnl=0.0, sum_rs=0.0)
-
-    for dt in sorted(recent_dates):
-        day = d[d["trade_date"] == dt]
-        n       = len(day)
-        n_long  = int((day["side"] == "LONG").sum())
-        n_short = int((day["side"] == "SHORT").sum())
-        wins    = int((day["pnl_pct"] > 0).sum())
-        losses  = int((day["pnl_pct"] < 0).sum())
-        win_pct = wins / n * 100 if n else 0.0
-        sum_pnl = float(day["pnl_pct"].sum())
-        avg_pnl = float(day["pnl_pct"].mean()) if n else 0.0
-        sum_rs  = float(day["pnl_rs"].sum())
-
-        # outcome mini-summary: T=target, S=sl, B=be, E=eod
-        oc = day["outcome"].value_counts()
-        oc_parts = []
-        for code, label in [("TARGET", "T"), ("SL", "S"), ("BE", "B"), ("EOD", "E")]:
-            if code in oc:
-                oc_parts.append(f"{label}:{oc[code]}")
-        oc_str = " ".join(oc_parts) if oc_parts else "-"
-
-        # VIX: take first non-zero value for the day (it's a daily value)
-        if _has_vix:
-            _day_vix = day["india_vix"][day["india_vix"] > 0]
-            _vix_val = float(_day_vix.iloc[0]) if not _day_vix.empty else 0.0
-            _vix_str = f"{_vix_val:>5.1f} "
-        else:
-            _vix_str = ""
-
+    day_rows = summary_df[summary_df["RowType"] == "DAY"]
+    total_rows = summary_df[summary_df["RowType"] == "TOTAL"]
+    for _, row in day_rows.iterrows():
+        vix_str = ""
+        if has_vix:
+            vix_val = pd.to_numeric(pd.Series([row.get("VIX")]), errors="coerce").iloc[0]
+            vix_str = f"{float(vix_val):>5.1f} " if pd.notna(vix_val) and float(vix_val) > 0 else ""
         print(
-            f"{str(dt):<12} {n_long:>3} {n_short:>3} {n:>4} "
-            f"{wins:>4} {losses:>4} {win_pct:>5.0f}% "
-            f"{sum_pnl:>+10.2f}% {avg_pnl:>+10.2f}% "
-            f"{sum_rs:>+11,.0f}  "
-            f"{_vix_str}{oc_str}"
+            f"{str(row['Date']):<12} {int(row['L']):>3} {int(row['S']):>3} {int(row['Tot']):>4} "
+            f"{int(row['W']):>4} {int(row['L_']):>4} {float(row['Win%']):>5.0f}% "
+            f"{float(row['SumPnL%']):>+10.2f}% {float(row['AvgPnL%']):>+10.2f}% "
+            f"{float(row['Rs.PnL']):>+11,.0f}  "
+            f"{vix_str}{str(row['Outcomes']) if str(row['Outcomes']) else '-'}"
         )
 
-        totals["trades"] += n
-        totals["longs"]  += n_long
-        totals["shorts"] += n_short
-        totals["wins"]   += wins
-        totals["losses"] += losses
-        totals["sum_pnl"] += sum_pnl
-        totals["sum_rs"]  += sum_rs
-
-    # Summary row
     print(sep)
-    t = totals
-    tw = t["wins"] / t["trades"] * 100 if t["trades"] else 0.0
-    avg_day_pnl = t["sum_pnl"] / len(recent_dates) if recent_dates else 0.0
-    _total_vix_str = "  --- " if _has_vix else ""
-    print(
-        f"{'TOTAL':<12} {t['longs']:>3} {t['shorts']:>3} {t['trades']:>4} "
-        f"{t['wins']:>4} {t['losses']:>4} {tw:>5.0f}% "
-        f"{t['sum_pnl']:>+10.2f}% {avg_day_pnl:>+10.2f}% "
-        f"{t['sum_rs']:>+11,.0f}  "
-        f"{_total_vix_str}(avg/day)"
-    )
+    if not total_rows.empty:
+        row = total_rows.iloc[0]
+        total_vix_str = "  --- " if has_vix else ""
+        notes = str(row.get("Notes", "")).strip()
+        print(
+            f"{str(row['Date']):<12} {int(row['L']):>3} {int(row['S']):>3} {int(row['Tot']):>4} "
+            f"{int(row['W']):>4} {int(row['L_']):>4} {float(row['Win%']):>5.0f}% "
+            f"{float(row['SumPnL%']):>+10.2f}% {float(row['AvgPnL%']):>+10.2f}% "
+            f"{float(row['Rs.PnL']):>+11,.0f}  "
+            f"{total_vix_str}{notes}"
+        )
     print(f"{'='*_width}\n")
 
 
@@ -3171,7 +3015,7 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = runtime_dir("outputs_v16")
+    _outputs_dir = runtime_dir("outputs_v16_5min")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
@@ -3185,8 +3029,8 @@ def main() -> None:
 
         try:
             print("=" * 70)
-            print("AVWAP v16 COMBINED runner — V11 SHORT + V9 LONG + 5-min lag-entry + precision filter")
-            print("  - Entry signals: 15-min detection + 5-min lag-timed entry validation")
+            print("AVWAP v16_5min COMBINED runner — Anti-exhaustion filters + V11 SHORT + V9 LONG")
+            print("  - Entry signals: 5-min data")
             print("  - Exit resolution: 1-min data (stocks_indicators_1min_eq)")
             print("  - Outputs: */algo_trading/outputs")
             print("  - Intraday leverage: "
@@ -3195,32 +3039,23 @@ def main() -> None:
             print("    (unlevered price-return% is saved as pnl_pct_price)")
             print("=" * 70)
 
-            # Resolve 15-min data directory
+            # Resolve 5-min signal data directory
             dir_15m = _resolve_15m_dir()
-            print(f"[INFO] 15-min data directory: {dir_15m}")
+            print(f"[INFO] 5-min signal data directory: {dir_15m}")
             if dir_15m.is_dir():
-                n_files_15m = len(list(dir_15m.glob("*_stocks_indicators_15min.parquet")))
-                print(f"[INFO] 15-min parquet files found: {n_files_15m}")
+                n_files_15m = len(list(dir_15m.glob("*_stocks_indicators_5min.parquet")))
+                print(f"[INFO] 5-min parquet files found: {n_files_15m}")
             else:
-                print("[WARN] 15-min data directory not found.")
-
-            # Resolve 5-min entry-validation directory
-            dir_entry_5m = _resolve_entry_5m_dir()
-            print(f"[INFO] 5-min entry data directory: {dir_entry_5m}")
-            if dir_entry_5m.is_dir():
-                n_files_5m = len(list(dir_entry_5m.glob("*_stocks_indicators_5min.parquet")))
-                print(f"[INFO] 5-min parquet files found: {n_files_5m}")
-            else:
-                print("[WARN] 5-min data directory not found.")
+                print("[WARN] 5-min signal data directory not found.")
 
             # Resolve 1-min data directory
-            dir_1m = _resolve_1min_dir()
-            print(f"[INFO] 1-min data directory: {dir_1m}")
-            if dir_1m.is_dir():
-                n_files = len(list(dir_1m.glob("*.parquet")))
+            dir_5m = _resolve_5min_dir()
+            print(f"[INFO] 1-min data directory: {dir_5m}")
+            if dir_5m.is_dir():
+                n_files = len(list(dir_5m.glob("*.parquet")))
                 print(f"[INFO] 1-min parquet files found: {n_files}")
             else:
-                print("[WARN] 1-min data directory not found â€” will fall back to 15-min exits.")
+                print("[WARN] 1-min data directory not found â€” will fall back to 5-min exits.")
 
             short_cfg = default_short_config(
                 reports_dir=_outputs_dir,
@@ -3231,6 +3066,8 @@ def main() -> None:
             )
             short_cfg.dir_15m = str(dir_15m)
             long_cfg.dir_15m = str(dir_15m)
+            short_cfg.end_15m = "_stocks_indicators_5min.parquet"
+            long_cfg.end_15m = "_stocks_indicators_5min.parquet"
             short_cfg.market_regime_tickers = tuple(NIFTY_CONTEXT_TICKERS)
             long_cfg.market_regime_tickers = tuple(NIFTY_CONTEXT_TICKERS)
 
@@ -3242,6 +3079,8 @@ def main() -> None:
                 short_cfg.reversal_requires_sweep = True
                 short_cfg.enable_avwap_no_trade_zone = False
                 short_cfg.enable_mode_selector = True
+                # Keep historical backtests aligned with the live-parity short path.
+                short_cfg.use_prev_close_for_day_mode = False
                 short_cfg.use_time_windows = False
                 short_cfg.min_bars_left_after_entry = 0
                 short_cfg.enable_ema200_filter = False
@@ -3250,49 +3089,56 @@ def main() -> None:
                 short_cfg.vwap_side_min_count = 3
                 short_cfg.require_structure_filter = False
                 short_cfg.structure_lookback_bars = 30
-                short_cfg.adx_min = 17.0
+                short_cfg.adx_min = 28.0              # v15_5min Run5: restored 28 — ADX 22-28 dead zone: 25-45% win confirmed in Run4 data
                 short_cfg.adx_slope_min = 0.40
-                short_cfg.volume_min_ratio = 0.95
+                short_cfg.volume_min_ratio = 0.80   # V16 Run7: canonical — 0.80 scanner sensitivity
+                short_cfg.mod_impulse_min_atr = 0.30  # V16 Run6: relaxed 0.45→0.30 — matches LONG, more C1 qualify
+                short_cfg.avwap_min_consec_closes = 1  # V16 Run6: relaxed 2→1 — 1 close below AVWAP sufficient
                 short_cfg.rsi_max_short = 62.0
                 short_cfg.stochk_max = 90.0
                 short_cfg.stop_pct = 0.0084
                 short_cfg.target_pct = 0.01100
                 short_cfg.be_trigger_pct = 0.0042
                 short_cfg.trail_pct = 0.0023
-                short_cfg.enable_partial_exit = True
+                short_cfg.enable_partial_exit = False  # V16: no partial exits — SL/TARGET/EOD only
                 short_cfg.partial_exit_fraction = 0.50
                 short_cfg.partial_target_fraction = 0.50
                 short_cfg.enable_risk_based_position_sizing = False  # fixed Rs.50,000/trade via runner constant
                 short_cfg.risk_per_trade_pct_of_capital = 0.0035
-                short_cfg.max_trades_per_ticker_per_day = 5
+                short_cfg.max_trades_per_ticker_per_day = 6   # V16 Run3: raised 4→6 for volume increase
                 short_cfg.enable_topn_per_day = False
                 short_cfg.topn_per_day = 0
+                short_cfg.entry_time_cutoff = V15_SHORT_ENTRY_CUTOFF
+                short_cfg.min_opening_range_width_pct = V15_SHORT_MIN_OPENING_RANGE_WIDTH_PCT
+                short_cfg.signal_avwap_dist_atr_max = V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX
 
-                # Long side kept loose enough for higher participation, but
-                # the weakest add-on setups are rolled back for better quality.
+                # Long side: optimized profile from 15min analysis (2026-03-26)
                 long_cfg.require_entry_close_confirm = True
                 long_cfg.enable_liquidity_sweep_filter = False
                 long_cfg.enable_avwap_no_trade_zone = False
-                long_cfg.adx_min = 17.0
+                long_cfg.adx_min = 22.0              # v15_5min: raised from 17 — 22 confirmed optimal in sweep
                 long_cfg.adx_slope_min = 0.50
-                long_cfg.volume_min_ratio = 0.95
-                long_cfg.rsi_min_long = 38.0
+                long_cfg.volume_min_ratio = 0.80   # V16 Run7: canonical — 0.80 scanner sensitivity
+                long_cfg.avwap_min_consec_closes = 1  # V16 Run6: relaxed 2→1 — 1 close above AVWAP sufficient
+                long_cfg.rsi_min_long = 50.0         # v15_5min: raised from 38 — RSI<50=low win, RSI≥50=76%+ win
+                long_cfg.quality_score_min = 4.0     # v15_5min Run4: lowered 5.0→4.0 — QS 4-5 = 85.7% win (was wrongly excluded)
                 long_cfg.stochk_min = 15.0
                 long_cfg.stochk_max = 95.0
                 long_cfg.atr_pct_min = 0.0025
-                long_cfg.enable_setup_a_close_continuation_break = False
+                long_cfg.enable_setup_a_pullback_c2_break = True
+                long_cfg.enable_setup_a_close_continuation_break = True
                 long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-                long_cfg.stop_pct = 0.0075
+                long_cfg.stop_pct = 0.0070           # v15_5min: tightened from 0.0075 — sltgt sweep best=0.70%
                 long_cfg.target_pct = 0.0110
                 long_cfg.be_trigger_pct = 0.0055
                 long_cfg.trail_pct = 0.0028
                 long_cfg.min_bars_left_after_entry = 0
                 long_cfg.max_vix_for_entries = 13.0
-                long_cfg.max_trades_per_ticker_per_day = 4
+                long_cfg.max_trades_per_ticker_per_day = 5   # V16 Run3: raised 3→5 for volume increase
                 long_cfg.enable_topn_per_day = False
                 long_cfg.topn_per_day = 0
 
-                print("[PROFILE] V16: copied from V15 baseline profile.")
+                print("[PROFILE] V15: expanded SHORT participation + balanced LONG backtest participation.")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
@@ -3304,8 +3150,10 @@ def main() -> None:
             short_cfg.max_vix_for_entries = float(PACK2_SHORT_MAX_VIX_FOR_ENTRIES)
             long_cfg.max_vix_for_entries = float(PACK2_LONG_MAX_VIX_FOR_ENTRIES)
             long_cfg.lag_bars_long_a_mod_break_c1_high = int(LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH)
-            long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = int(LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH)
+            long_cfg.lag_bars_long_a_close_continuation_break = 2
+            long_cfg.lag_bars_long_a_pullback_c2_break_c2_high = 1
             long_cfg.lag_bars_long_b_huge_pullback_hold_break = int(LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK)
+            long_cfg.lag_bars_long_b_huge_c1_close_reclaim_break = 2
 
             if FORCE_LIVE_PARITY_MIN_BARS_LEFT:
                 short_cfg.min_bars_left_after_entry = 0
@@ -3373,7 +3221,7 @@ def main() -> None:
                     )
                 else:
                     print(
-                        "[REGIME] Disabled: no market index parquet found in 15m data directory. "
+                        "[REGIME] Disabled: no market index parquet found in 5m data directory. "
                         f"Checked={','.join(regime_missing)}"
                     )
 
@@ -3388,7 +3236,7 @@ def main() -> None:
                 f"slippage={long_cfg.slippage_pct*10000:.0f}bps, comm={long_cfg.commission_pct*10000:.0f}bps"
             )
             print(
-                "[INFO] Lag bars SHORT (5m entry bars): "
+                "[INFO] Lag bars SHORT: "
                 f"A_MOD={short_cfg.lag_bars_short_a_mod_break_c1_low}, "
                 f"A_PULLBACK={short_cfg.lag_bars_short_a_pullback_c2_break_c2_low}, "
                 f"B_HUGE={short_cfg.lag_bars_short_b_huge_failed_bounce}"
@@ -3399,10 +3247,19 @@ def main() -> None:
                 f"max_vix_for_entries={short_cfg.max_vix_for_entries:.2f}"
             )
             print(
-                "[INFO] Lag bars LONG  (5m entry bars): "
+                "[INFO] Wave2 SHORT filters: "
+                f"entry_cutoff=<{short_cfg.entry_time_cutoff.strftime('%H:%M')} | "
+                f"min_OR_width={short_cfg.min_opening_range_width_pct:.2f}% | "
+                f"signal_avwap_dist_atr_max={short_cfg.signal_avwap_dist_atr_max:.2f} | "
+                f"BOTH_mode_RS<=-{NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT:.2f}%"
+            )
+            print(
+                "[INFO] Lag bars LONG : "
                 f"A_MOD={long_cfg.lag_bars_long_a_mod_break_c1_high}, "
+                f"A_CONT={long_cfg.lag_bars_long_a_close_continuation_break}, "
                 f"A_PULLBACK={long_cfg.lag_bars_long_a_pullback_c2_break_c2_high}, "
-                f"B_HUGE={long_cfg.lag_bars_long_b_huge_pullback_hold_break}"
+                f"B_HUGE_HOLD={long_cfg.lag_bars_long_b_huge_pullback_hold_break}, "
+                f"B_RECLAIM={long_cfg.lag_bars_long_b_huge_c1_close_reclaim_break}"
             )
             print(
                 f"[INFO] Final signal-window override -> {FINAL_SIGNAL_WINDOW_OVERRIDE}"
@@ -3437,18 +3294,10 @@ def main() -> None:
             print(
                 "[INFO] Final reported exit policy: TARGET / SL / EOD only | "
                 f"EOD cutoff={V15_EOD_EXIT_TIME.strftime('%H:%M')} | "
-                "15m/1m fallback removes residual BE outcomes"
+                "5m/1m fallback removes residual BE outcomes"
             )
             print(f"[INFO] Live parity: min_bars_left=0 -> {FORCE_LIVE_PARITY_MIN_BARS_LEFT}")
             print(f"[INFO] Live parity: disable_topn_per_day -> {FORCE_LIVE_PARITY_DISABLE_TOPN}")
-            print(
-                "[INFO] V16 5-min entry filter: "
-                f"enabled={V16_5M_ENTRY_FILTER_ENABLED} | "
-                f"require_entry_bar={V16_5M_REQUIRE_ENTRY_BAR} | "
-                f"lookback={V16_5M_LOOKBACK_BARS} bars | "
-                f"EMA20_tol={V16_5M_EMA20_TOL_PCT:.2f}% | "
-                f"range_floor={V16_5M_RANGE_FLOOR_MULT:.2f}x median"
-            )
             print(
                 "[INFO] Exit realism band: "
                 f"enabled={EXIT_REALISM_BAND_ENABLED} | "
@@ -3460,16 +3309,16 @@ def main() -> None:
             print(f"[INFO] Console log: {log_path}")
             print("-" * 70)
 
-            # ---- PHASE 1: Scan for entry signals using 15-min data ----
-            print("\n[PHASE 1] Scanning for entry signals using 15-min data...")
-            short_df = _run_side_parallel("SHORT", short_cfg, MAX_WORKERS)
-            long_df = _run_side_parallel("LONG", long_cfg, MAX_WORKERS)
+            # ---- PHASE 1: Scan for entry signals using 5-min data ----
+            print("\n[PHASE 1] Scanning for entry signals using 5-min data...")
+            short_df, long_df = _run_both_parallel(short_cfg, long_cfg, MAX_WORKERS)
 
             if NIFTY_CONTEXT_ENABLED:
                 mode_map, nifty_ret_map, context_src, context_counts = _build_nifty_intraday_context(short_cfg)
                 if mode_map:
                     both_rs_info = (
-                        f" | BOTH-mode RS>={NIFTY_RS_BOTH_MODE_THRESHOLD_PCT:.2f}%"
+                        f" | BOTH-mode LONG RS>={NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT:.2f}%"
+                        f", SHORT RS<=-{NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT:.2f}%"
                         if NIFTY_RS_BOTH_MODE_ENABLED else " | BOTH-mode RS=disabled"
                     )
                     print(
@@ -3495,59 +3344,21 @@ def main() -> None:
 
             short_df, long_df = _replace_current_day_with_live_parity(short_df, long_df)
 
+            # ---- V16: Apply anti-exhaustion post-scan filters ----
+            print("\n[V16] Applying anti-exhaustion post-scan filters...")
+            short_df, long_df = _apply_v16_post_scan_filters(short_df, long_df)
+
             if short_df.empty and long_df.empty:
                 print("[DONE] No trades found.")
                 return
-
-            if V16_5M_LAG_ENTRY_ENABLED:
-                print("\n[V16_5M] Rebuilding entry timing from 5-minute lag rules...")
-                if not short_df.empty:
-                    short_df = _apply_v16_5m_lag_entry_resolution(
-                        short_df,
-                        "SHORT",
-                        dir_entry_5m,
-                        short_cfg.parquet_engine,
-                    )
-                if not long_df.empty:
-                    long_df = _apply_v16_5m_lag_entry_resolution(
-                        long_df,
-                        "LONG",
-                        dir_entry_5m,
-                        long_cfg.parquet_engine,
-                    )
-
-                if short_df.empty and long_df.empty:
-                    print("[DONE] No trades left after the V16 5-minute lag-entry rebuild.")
-                    return
-
-            if V16_5M_ENTRY_FILTER_ENABLED:
-                print("\n[V16_5M] Applying 5-min precision filter to entry candidates...")
-                if not short_df.empty:
-                    short_df = _apply_v16_5m_entry_filter(
-                        short_df,
-                        "SHORT",
-                        dir_entry_5m,
-                        short_cfg.parquet_engine,
-                    )
-                if not long_df.empty:
-                    long_df = _apply_v16_5m_entry_filter(
-                        long_df,
-                        "LONG",
-                        dir_entry_5m,
-                        long_cfg.parquet_engine,
-                    )
-
-                if short_df.empty and long_df.empty:
-                    print("[DONE] No trades left after the V16 5-min precision filter.")
-                    return
 
             # ---- PHASE 2: Re-resolve exits using 1-min data ----
             print("\n[PHASE 2] Re-resolving exits using 1-min data for higher precision...")
 
             # Determine 1-min file suffix by inspecting the directory
             suffix_5m = ".parquet"
-            if dir_1m.is_dir():
-                sample_files = list(dir_1m.glob("*"))[:5]
+            if dir_5m.is_dir():
+                sample_files = list(dir_5m.glob("*"))[:5]
                 for sf in sample_files:
                     if sf.suffix:
                         suffix_5m = sf.suffix
@@ -3557,7 +3368,7 @@ def main() -> None:
                 print(f"  [SHORT] {len(short_df)} trades to re-resolve...")
                 short_df = _resolve_exits_5min(
                     short_df,
-                    dir_1m,
+                    dir_5m,
                     suffix_5m,
                     short_cfg.parquet_engine,
                     eod_exit_time=V15_EOD_EXIT_TIME,
@@ -3567,7 +3378,7 @@ def main() -> None:
                 print(f"  [LONG] {len(long_df)} trades to re-resolve...")
                 long_df = _resolve_exits_5min(
                     long_df,
-                    dir_1m,
+                    dir_5m,
                     suffix_5m,
                     long_cfg.parquet_engine,
                     eod_exit_time=V15_EOD_EXIT_TIME,
@@ -3621,8 +3432,10 @@ def main() -> None:
                 _print_day_side_mix(combined)
 
             # --- Save CSV ---
-            out_csv = _outputs_dir / f"avwap_longshort_trades_v16_ALL_DAYS_{ts}.csv"
+            out_csv = _outputs_dir / f"avwap_longshort_trades_v16_5min_ALL_DAYS_{ts}.csv"
             combined.to_csv(out_csv, index=False)
+            out_daywise_csv = _outputs_dir / f"avwap_daywise_breakdown_v16_5min_ALL_DAYS_{ts}.csv"
+            _build_daily_breakdown_df(combined, include_total=True).to_csv(out_daywise_csv, index=False)
 
             # --- Generate Legacy Charts (from avwap_common) ---
             print("\n[INFO] Generating legacy backtest charts...")
@@ -3666,6 +3479,7 @@ def main() -> None:
             print("\n=============== SAMPLE (first 30 rows) ===============")
             print(combined.head(30)[cols].to_string(index=False))
             print(f"\n[FILE SAVED] {out_csv}")
+            print(f"[DAYWISE CSV] {out_daywise_csv}")
             print(f"[OUTPUTS DIR] {_outputs_dir}")
             print(f"[CONSOLE LOG] {log_path}")
             print("[DONE]")

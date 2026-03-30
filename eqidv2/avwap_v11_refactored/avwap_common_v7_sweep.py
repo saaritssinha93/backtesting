@@ -178,6 +178,30 @@ class StrategyConfig:
     # Keep 0.0 to disable.
     max_vix_for_entries: float = 0.0
 
+    # --- Realistic entry price modes ---
+    # These flags replace the backtest "trigger price fill" assumption with prices that
+    # match how live bar-close scanners actually execute.
+    #
+    # entry_at_bar_close=True  → entry_price = close of confirmation bar (most common live scenario:
+    #                             signal detected ~30s after bar closes, enter at near-close LTP).
+    # entry_at_next_open=True  → entry_price = open of the NEXT bar (enter at next-bar market open;
+    #                             takes priority over entry_at_bar_close when both are set).
+    # max_entry_slip_pct       → skip a trade if actual entry price exceeds trigger by more than
+    #                             this fraction (0.0 = disabled). E.g. 0.004 rejects entries
+    #                             where LTP is >0.4% above the model trigger.
+    entry_at_bar_close: bool = False
+    entry_at_next_open: bool = False
+    max_entry_slip_pct: float = 0.0
+
+    # --- LONG entry quality gates (0.0 = disabled) ---
+    # Data-driven from 518-trade LONG analysis (v15 rank-1 config):
+    #   ema_gap_atr_min=1.0 → 91% win rate  (EMA20 gap 1.0–1.5 ATR zone)
+    #   quality_score_min=5.0 → filters ~20% of trades with worst QS
+    #   signal_avwap_dist_atr_min=0.5 → avoids entries too close to AVWAP (low momentum)
+    ema_gap_atr_min: float = 0.0        # min EMA20-close gap in ATR units (long only)
+    quality_score_min: float = 0.0      # min quality score to accept long entry
+    signal_avwap_dist_atr_min: float = 0.0  # min AVWAP dist ATR at signal bar
+
     # --- V7: Liquidity sweep context filter ---
     enable_liquidity_sweep_filter: bool = True
     sweep_lookback_min_bars: int = 4

@@ -92,6 +92,16 @@ LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
 MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V15_MAX_CONCURRENT_TRADES", "0"))
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 
+# Max entry slip gate: if the live LTP (or signal_bar fallback) is more than this
+# fraction above the model trigger price for a LONG, the signal is rejected rather
+# than entered at a worsened price.  Set to 0.0 to disable.
+# Background: B_HUGE_C1_CLOSE_RECLAIM_BREAK signals arrive ~35s after bar close.
+# The bar's close is already 0.5–0.8% above the model trigger, leaving no room
+# with a 0.75% SL.  A cap of 0.003 (0.3%) rejects those chase entries.
+LONG_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_LONG_MAX_ENTRY_SLIP_PCT", "0.003"))
+# Same gate for SHORT (price must not be more than this BELOW model trigger).
+SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.0"))
+
 
 def _build_effective_v15_executor_cfgs():
     short_cfg = v15_default_short_config()
@@ -936,6 +946,31 @@ def simulate_trade(
                 f"[ENTRY.FALLBACK] ticker={ticker} | side={side} | signal_id={signal_id[:12]} | "
                 f"reason=ltp_unavailable | fallback_entry={signal_entry_price:.2f}"
             )
+
+    # --- Max entry slip gate ---
+    # Reject signals where the actual fill price has already deviated too far from
+    # the model trigger.  For LONG: reject if raw_entry > signal_entry_price * (1 + cap).
+    # For SHORT: reject if raw_entry < signal_entry_price * (1 - cap).
+    # Only applied on fresh entries (not resumes) when a meaningful cap is set.
+    if (not resume_mode) and signal_entry_price > 0:
+        if side == "LONG" and LONG_MAX_ENTRY_SLIP_PCT > 0.0:
+            slip = (raw_entry - signal_entry_price) / signal_entry_price
+            if slip > LONG_MAX_ENTRY_SLIP_PCT:
+                log.warning(
+                    f"[SLIP.GATE] REJECTED ticker={ticker} | side=LONG | signal_id={signal_id[:12]} | "
+                    f"model_trigger={signal_entry_price:.2f} | raw_entry={raw_entry:.2f} | "
+                    f"slip={slip*100:.2f}% > cap={LONG_MAX_ENTRY_SLIP_PCT*100:.2f}%"
+                )
+                return False
+        elif side == "SHORT" and SHORT_MAX_ENTRY_SLIP_PCT > 0.0:
+            slip = (signal_entry_price - raw_entry) / signal_entry_price
+            if slip > SHORT_MAX_ENTRY_SLIP_PCT:
+                log.warning(
+                    f"[SLIP.GATE] REJECTED ticker={ticker} | side=SHORT | signal_id={signal_id[:12]} | "
+                    f"model_trigger={signal_entry_price:.2f} | raw_entry={raw_entry:.2f} | "
+                    f"slip={slip*100:.2f}% > cap={SHORT_MAX_ENTRY_SLIP_PCT*100:.2f}%"
+                )
+                return False
 
     if resume_mode:
         entry_price = _safe_float(signal.get("entry_price_exec", signal.get("entry_price", raw_entry)), raw_entry)

@@ -125,6 +125,11 @@ INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_MAX_CONCURRENT_TRADES", "20"))
 # Conservative fallback so prices remain valid for common NSE 0.10/0.05 tick scripts.
 DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
+
+# Max entry slip gate: reject LONG signals where live LTP is more than this
+# fraction above the model trigger.  Set 0.0 to disable.
+LONG_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_LONG_MAX_ENTRY_SLIP_PCT", "0.003"))
+SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.0"))
 MAX_TICK_DECIMALS = 4
 
 
@@ -1478,6 +1483,35 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 )
                 # No open position was created; proceed to finalization for audit row.
                 pass
+
+            # ---- SLIP GATE: pre-entry LTP check ----
+            # Fetch current LTP and reject if it has chased too far from the model trigger.
+            if (not trade_closed) and signal_entry_price > 0:
+                ltp_check = get_ltp(ticker)
+                if ltp_check is not None and ltp_check > 0:
+                    if side == "LONG" and LONG_MAX_ENTRY_SLIP_PCT > 0.0:
+                        slip = (ltp_check - signal_entry_price) / signal_entry_price
+                        if slip > LONG_MAX_ENTRY_SLIP_PCT:
+                            result.outcome = "ENTRY_SKIPPED_MAX_SLIP"
+                            result.exit_price = signal_entry_price
+                            trade_closed = True
+                            log.warning(
+                                f"[SLIP.GATE] REJECTED {ticker} LONG | "
+                                f"model={signal_entry_price:.2f} ltp={ltp_check:.2f} "
+                                f"slip={slip*100:.2f}% > cap={LONG_MAX_ENTRY_SLIP_PCT*100:.2f}%"
+                            )
+                    elif side == "SHORT" and SHORT_MAX_ENTRY_SLIP_PCT > 0.0:
+                        slip = (signal_entry_price - ltp_check) / signal_entry_price
+                        if slip > SHORT_MAX_ENTRY_SLIP_PCT:
+                            result.outcome = "ENTRY_SKIPPED_MAX_SLIP"
+                            result.exit_price = signal_entry_price
+                            trade_closed = True
+                            log.warning(
+                                f"[SLIP.GATE] REJECTED {ticker} SHORT | "
+                                f"model={signal_entry_price:.2f} ltp={ltp_check:.2f} "
+                                f"slip={slip*100:.2f}% > cap={SHORT_MAX_ENTRY_SLIP_PCT*100:.2f}%"
+                            )
+
             # ---- STEP 1: Place market entry ----
             planned_qty = int(quantity)
             filled_price = 0.0
