@@ -211,8 +211,9 @@ FINAL_SHORT_SIGNAL_WINDOWS = [
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(11, 0, 0)),    # Run10: morning only — afternoon removed (12:00-15:00 dead, LONG PF 1.769→2.121 in Run9 test)
-    # Excluded: 11:00-15:00 (afternoon LONG = drag; OR gate + early-hour concentration is the thesis)
+    (dtime(9, 15, 0), dtime(11, 0, 0)),    # Run10: morning — best quality
+    (dtime(12, 0, 0), dtime(13, 0, 0)),    # Run13: afternoon window added — DayWin 76.56% vs 74.60%, PnL 546% vs 523%, MaxDD same 28.4%
+    # Run14 tested 13:00-14:15: worse (PF 1.809, MaxDD 33%, PnL 505%) — 12:00-13:00 is better
 ]
 V15_EOD_EXIT_TIME = dtime(15, 20, 0)
 
