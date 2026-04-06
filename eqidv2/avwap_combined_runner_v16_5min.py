@@ -38,7 +38,7 @@ Changes from v14:
 
 Earlier changes inherited from v14:
 1. All outputs saved to outputs_v16_5min/
-2. Entry signals: 5-min data; exits: 1-min data (stocks_indicators_1min_eq)
+2. Entry signals: 5-min data; exits: intrabar data (1-min when available, else 5-min)
 3. Expanded charting suite
 4. Normal Python imports (no importlib hacks)
 5. Unified Trade dataclass -- both sides produce identical columns
@@ -57,10 +57,12 @@ Usage:
 from __future__ import annotations
 
 import heapq
+import multiprocessing as mp
 import os
 import sys
+import time
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, time as dtime
 from pathlib import Path
@@ -106,6 +108,13 @@ _project_root = _this_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
 from avwap_v11_refactored.avwap_common_v11_v15 import (
     IST,
     StrategyConfig,
@@ -140,8 +149,8 @@ from avwap_v11_refactored.avwap_common_v7_sweep_v15 import (
 # ===========================================================================
 # RUNNER CONFIG (top-level orchestration settings)
 # ===========================================================================
-POSITION_SIZE_RS_SHORT = 50_000
-POSITION_SIZE_RS_LONG = 50_000
+POSITION_SIZE_RS_SHORT = 20_000
+POSITION_SIZE_RS_LONG = 20_000
 
 # Intraday leverage (margin). Position sizes above are *capital/margin per trade*.
 # Notional exposure = capital * leverage. Set leverage=1.0 to disable leverage effects.
@@ -202,9 +211,8 @@ FINAL_SHORT_SIGNAL_WINDOWS = [
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(11, 0, 0)),    # Run4: extended 09:15-10:30 → 09:15-11:00 (10:30-11:00 added for volume)
-    (dtime(12, 0, 0), dtime(15, 0, 0)),    # Run4: combined midday+afternoon 12:00-15:00 (was 13:00-14:15 + gap at 12:xx)
-    # Excluded: 11:00-12:00 (keep the 1-hr mid-morning gap for longs)
+    (dtime(9, 15, 0), dtime(11, 0, 0)),    # Run10: morning only — afternoon removed (12:00-15:00 dead, LONG PF 1.769→2.121 in Run9 test)
+    # Excluded: 11:00-15:00 (afternoon LONG = drag; OR gate + early-hour concentration is the thesis)
 ]
 V15_EOD_EXIT_TIME = dtime(15, 20, 0)
 
@@ -223,8 +231,14 @@ LONG_LAG_BARS_B_HUGE_C1_CLOSE_RECLAIM_BREAK = 2
 PORTFOLIO_START_CAPITAL_RS = 1_000_000
 DISALLOW_BOTH_SIDES_SAME_TICKER_DAY = False   # V16 Run3: allow both sides (volume increase)
 
-# Parallelism: set to 1 for serial, >1 for multi-process
-MAX_WORKERS = 1   # serial mode — avoids Windows ProcessPoolExecutor spawn crash
+# Parallelism:
+# - default to a modest worker pool for normal script launches
+# - fall back to threads only in interactive contexts where Windows spawn is fragile
+DEFAULT_MAX_WORKERS = max(1, min(4, (os.cpu_count() or 4)))
+MAX_WORKERS = max(1, int(os.getenv("EQIDV16_5MIN_MAX_WORKERS", str(DEFAULT_MAX_WORKERS))))
+EXECUTOR_MODE = str(os.getenv("EQIDV16_5MIN_EXECUTOR", "auto")).strip().lower()
+ENABLE_LEGACY_CHARTS = _env_flag("EQIDV16_5MIN_ENABLE_LEGACY_CHARTS", True)
+ENABLE_ENHANCED_CHARTS = _env_flag("EQIDV16_5MIN_ENABLE_ENHANCED_CHARTS", True)
 
 # Setup controls
 # Disable the weak short HUGE failed-bounce branch in V14.
@@ -252,7 +266,7 @@ NIFTY_RS_LOOKBACK_BARS = 4                     # v15: 60-min window (was 3 bars/
 NIFTY_RS_THRESHOLD_PCT = 0.20                  # v15: raised from 0.15 (above round-trip cost)
 # v15 NEW: apply BOTH-mode RS filtering with a moderately strict short threshold.
 NIFTY_RS_BOTH_MODE_ENABLED = True
-NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 1.0    # V16 Run7: canonical — RS 0.75-1.0 for longs killed day-win (89%→64%)
+NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 0.75   # User override: moderate LONG participation in BOTH mode while keeping other gates intact
 NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT = 0.75  # V16 Run3: relaxed 1.00→0.75 — RS -0.75 to -1.0 = 76% win (25T in V15R3 data)
 # Backward-compatibility alias for older live-parity callers that still expect
 # one shared BOTH-mode threshold constant.
@@ -278,6 +292,132 @@ V16_LONG_QS_DEAD_HI         = 8.0   # end of dead zone — QS 8.0-10.0 = 75% win
 V16_LONG_QS_ABS_MAX         = 10.0  # absolute cap — QS 10+ = 30% win (exhausted momentum)
 V16_LONG_AVWAP_DIST_ATR_MAX = 3.0   # V16 Run7: canonical — dist 2.5-3.0 ATR = 92% win; 3.0+ = degraded
 V16_SHORT_RS_EXHAUSTION_CAP = -2.0  # RS exhaustion guard applied via NIFTY_RS threshold
+# Opening Range (OR) gate: require price to have broken the opening range before entry.
+# Run11: SHORT OR gate disabled (minimal benefit, killed 90 trades); LONG kept (PF +24.9%, MaxDD halved)
+# Run11: OR narrowed to first bar only (09:15 candle) — narrower range, more entries qualify
+V16_OR_GATE_ENABLED        = False      # Run12: disabled — OR gate was blocking high-quality LONG trades (PF 1.669->1.773, DayWin 64.7%->80.0%)
+V16_OR_GATE_SHORT_ENABLED  = False      # Run11: disabled for SHORT (marginal PF gain not worth -90 trades)
+V16_OR_GATE_FIRST_BAR_ONLY = True       # Run11: use only 09:15 bar for OR (not 09:15-09:30 full range)
+V16_OR_GATE_TIME           = dtime(9, 30, 0)   # upper bound for OR bar selection (bars with time < this)
+# LONG AVWAP dead zone: 1.0-1.5 ATR band = break-even (59% TGT, avg +0.16%) — 39 trades wasted in Run7
+V16_LONG_AVWAP_DIST_DEAD_LO = 1.0  # start of dead zone (dist ≥ 1.0 ATR)
+V16_LONG_AVWAP_DIST_DEAD_HI = 1.5  # end of dead zone   (dist <  1.5 ATR) — outside this is fine
+
+
+def _enrich_with_or_levels(
+    short_df: pd.DataFrame,
+    long_df: pd.DataFrame,
+    dir_15m: str,
+    parquet_suffix: str = "_stocks_indicators_5min.parquet",
+) -> tuple:
+    """
+    Compute the Opening Range (OR) high/low for each (ticker, trade_date) and merge
+    into short_df and long_df as columns: or_high, or_low.
+
+    OR is defined as the high/low of all 5-min bars whose timestamp is STRICTLY
+    before V16_OR_GATE_TIME (09:30).  For this runner that means the single 09:15
+    bar (the first 5-min candle of the day, closing at 09:20 in NSE data).
+
+    Only called when V16_OR_GATE_ENABLED is True.
+    """
+    import pathlib
+
+    dir_path = pathlib.Path(dir_15m)
+    if not dir_path.is_dir():
+        print(f"[OR_ENRICH] dir_15m not found ({dir_15m}); skipping OR enrichment.")
+        for df in (short_df, long_df):
+            if not df.empty:
+                df["or_high"] = float("nan")
+                df["or_low"]  = float("nan")
+        return short_df, long_df
+
+    # Collect all (ticker, date) pairs we need OR levels for
+    def _needed_pairs(df):
+        if df.empty:
+            return set()
+        tickers = df["ticker"].unique() if "ticker" in df.columns else []
+        dates   = df["trade_date"].unique() if "trade_date" in df.columns else []
+        return {(t, d) for t in tickers for d in dates}
+
+    all_pairs = _needed_pairs(short_df) | _needed_pairs(long_df)
+    if not all_pairs:
+        return short_df, long_df
+
+    # Load parquet per ticker, extract OR levels for relevant dates
+    or_records: list[dict] = []
+    tickers_needed = {t for t, _ in all_pairs}
+    for ticker in tickers_needed:
+        fpath = dir_path / f"{ticker}{parquet_suffix}"
+        if not fpath.exists():
+            continue
+        try:
+            pq = pd.read_parquet(str(fpath))
+        except Exception:
+            continue
+        # Normalise datetime index / column
+        if isinstance(pq.index, pd.DatetimeIndex):
+            pq = pq.reset_index().rename(columns={pq.index.name or "index": "datetime"})
+        elif "datetime" not in pq.columns:
+            dt_candidates = [c for c in pq.columns if "time" in c.lower() or "date" in c.lower()]
+            if dt_candidates:
+                pq = pq.rename(columns={dt_candidates[0]: "datetime"})
+            else:
+                continue
+        pq["datetime"] = pd.to_datetime(pq["datetime"], errors="coerce")
+        pq = pq.dropna(subset=["datetime"])
+        pq["_date"] = pq["datetime"].dt.date
+        pq["_time"] = pq["datetime"].dt.time
+
+        # Dates needed for this ticker
+        dates_needed = {d for t, d in all_pairs if t == ticker}
+        for raw_date in dates_needed:
+            try:
+                d = pd.Timestamp(raw_date).date() if not isinstance(raw_date, type(pd.Timestamp("2000-01-01").date())) else raw_date
+            except Exception:
+                d = raw_date
+            day_bars = pq[pq["_date"] == d]
+            if V16_OR_GATE_FIRST_BAR_ONLY:
+                # Run11: only the 09:15 candle (first 5-min bar) — narrower OR, more entries qualify
+                or_bars = day_bars[day_bars["_time"] == dtime(9, 15, 0)]
+                if or_bars.empty:
+                    # fallback: any bar before OR gate time
+                    or_bars = day_bars[day_bars["_time"] < V16_OR_GATE_TIME]
+            else:
+                or_bars  = day_bars[day_bars["_time"] < V16_OR_GATE_TIME]
+            if or_bars.empty:
+                continue
+            hi_col = next((c for c in ("high", "High", "HIGH") if c in or_bars.columns), None)
+            lo_col = next((c for c in ("low",  "Low",  "LOW")  if c in or_bars.columns), None)
+            if hi_col is None or lo_col is None:
+                continue
+            or_records.append({
+                "ticker":    ticker,
+                "trade_date": raw_date,
+                "or_high":   float(or_bars[hi_col].max()),
+                "or_low":    float(or_bars[lo_col].min()),
+            })
+
+    if not or_records:
+        print("[OR_ENRICH] No OR levels computed (empty parquet data or no matching bars).")
+        for df in (short_df, long_df):
+            if not df.empty:
+                df["or_high"] = float("nan")
+                df["or_low"]  = float("nan")
+        return short_df, long_df
+
+    or_df = pd.DataFrame(or_records)
+    print(f"[OR_ENRICH] Computed OR levels for {len(or_df)} (ticker, date) pairs.")
+
+    def _merge_or(df):
+        if df.empty:
+            return df
+        df = df.copy()
+        df = df.merge(or_df[["ticker", "trade_date", "or_high", "or_low"]], on=["ticker", "trade_date"], how="left")
+        return df
+
+    short_df = _merge_or(short_df)
+    long_df  = _merge_or(long_df)
+    return short_df, long_df
 
 
 def _apply_v16_post_scan_filters(
@@ -327,11 +467,49 @@ def _apply_v16_post_scan_filters(
         long_dist_removed = int(mask_too_far.sum())
         long_df = long_df[~mask_too_far].copy()
 
+    # --- LONG: AVWAP dead zone (1.0-1.5 ATR = break-even, 59% TGT) ---
+    long_avwap_dead_removed = 0
+    if not long_df.empty and "avwap_dist_atr_signal" in long_df.columns:
+        dist_col2 = pd.to_numeric(long_df["avwap_dist_atr_signal"], errors="coerce").fillna(0.0)
+        mask_dead_dist = (dist_col2 >= V16_LONG_AVWAP_DIST_DEAD_LO) & (dist_col2 < V16_LONG_AVWAP_DIST_DEAD_HI)
+        long_avwap_dead_removed = int(mask_dead_dist.sum())
+        long_df = long_df[~mask_dead_dist].copy()
+
+    # --- OR Gate: require confirmed directional break of the 09:15-09:30 range ---
+    short_or_removed = 0
+    long_or_removed  = 0
+    if V16_OR_GATE_ENABLED:
+        # SHORT: OR gate disabled in Run11 (marginal benefit, cost -90 trades)
+        if V16_OR_GATE_SHORT_ENABLED and not short_df.empty and "or_low" in short_df.columns and "entry_price" in short_df.columns:
+            ep   = pd.to_numeric(short_df["entry_price"], errors="coerce")
+            orl  = pd.to_numeric(short_df["or_low"],      errors="coerce")
+            sig_time = pd.to_datetime(short_df.get("signal_time_ist", pd.Series(dtype=str)), errors="coerce")
+            is_post_or = sig_time.dt.time >= V16_OR_GATE_TIME
+            or_valid   = orl.notna()
+            mask_or_fail_short = is_post_or & or_valid & (ep >= orl)
+            short_or_removed = int(mask_or_fail_short.sum())
+            short_df = short_df[~mask_or_fail_short].copy()
+
+        # LONG: entry_price must be ABOVE or_high (confirmed breakout)
+        if not long_df.empty and "or_high" in long_df.columns and "entry_price" in long_df.columns:
+            ep2  = pd.to_numeric(long_df["entry_price"], errors="coerce")
+            orh  = pd.to_numeric(long_df["or_high"],     errors="coerce")
+            sig_time2 = pd.to_datetime(long_df.get("signal_time_ist", pd.Series(dtype=str)), errors="coerce")
+            is_post_or2 = sig_time2.dt.time >= V16_OR_GATE_TIME
+            or_valid2   = orh.notna()
+            mask_or_fail_long = is_post_or2 & or_valid2 & (ep2 <= orh)
+            long_or_removed = int(mask_or_fail_long.sum())
+            long_df = long_df[~mask_or_fail_long].copy()
+
     print(
-        f"[V16_FILTER] SHORT: {short_before}→{len(short_df)} "
-        f"(-{short_rsi_removed} RSI {V16_SHORT_RSI_DEAD_ZONE_LO:.0f}-{V16_SHORT_RSI_DEAD_ZONE_HI:.0f} dead zone) | "
-        f"LONG: {long_before}→{len(long_df)} "
-        f"(-{long_qs_removed} QS {V16_LONG_QS_DEAD_LO:.1f}-{V16_LONG_QS_DEAD_HI:.1f}dead+QS>{V16_LONG_QS_ABS_MAX:.0f}, -{long_dist_removed} dist>{V16_LONG_AVWAP_DIST_ATR_MAX:.1f}ATR)"
+        f"[V16_FILTER] SHORT: {short_before}->{len(short_df)} "
+        f"(-{short_rsi_removed} RSI {V16_SHORT_RSI_DEAD_ZONE_LO:.0f}-{V16_SHORT_RSI_DEAD_ZONE_HI:.0f} dead zone, "
+        f"-{short_or_removed} OR gate) | "
+        f"LONG: {long_before}->{len(long_df)} "
+        f"(-{long_qs_removed} QS {V16_LONG_QS_DEAD_LO:.1f}-{V16_LONG_QS_DEAD_HI:.1f}dead+QS>{V16_LONG_QS_ABS_MAX:.0f}, "
+        f"-{long_dist_removed} dist>{V16_LONG_AVWAP_DIST_ATR_MAX:.1f}ATR, "
+        f"-{long_avwap_dead_removed} dist {V16_LONG_AVWAP_DIST_DEAD_LO:.1f}-{V16_LONG_AVWAP_DIST_DEAD_HI:.1f}ATR dead, "
+        f"-{long_or_removed} OR gate)"
     )
     return short_df, long_df
 
@@ -340,8 +518,8 @@ def _apply_v16_post_scan_filters(
 # TARGET TEST — disabled in V12 (each side uses its own calibrated targets)
 # ===========================================================================
 TEST_TARGET_OVERRIDE   = True
-TEST_SHORT_TARGET_PCT  = 0.00750   # V16 Run7: reduced 0.90%→0.75% (test easier target, DD impact)
-TEST_LONG_TARGET_PCT   = 0.00750   # V16 Run7: reduced 0.90%→0.75%
+TEST_SHORT_TARGET_PCT  = 0.00700   # Tuned live profile: SHORT target 0.70%
+TEST_LONG_TARGET_PCT   = 0.00800   # Run12: LONG target 0.80% (was 0.825%)
 
 
 def apply_live_parity_profile(
@@ -376,8 +554,8 @@ def apply_live_parity_profile(
         short_cfg.avwap_min_consec_closes = 1  # V16 Run6: relaxed 2→1 — 1 close below AVWAP sufficient
         short_cfg.rsi_max_short = 62.0
         short_cfg.stochk_max = 90.0
-        short_cfg.stop_pct = 0.0084
-        short_cfg.target_pct = 0.01100
+        short_cfg.stop_pct = 0.0078          # Tuned live profile: SHORT SL=0.78%
+        short_cfg.target_pct = 0.00700       # Tuned live profile: SHORT TGT=0.70%
         short_cfg.be_trigger_pct = 0.0042
         short_cfg.trail_pct = 0.0023
         short_cfg.enable_partial_exit = False  # V16: no partial exits — SL/TARGET/EOD only
@@ -406,8 +584,8 @@ def apply_live_parity_profile(
         long_cfg.atr_pct_min = 0.0025
         long_cfg.enable_setup_a_close_continuation_break = True  # v15_5min: fixed (was False, inconsistent with main)
         long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-        long_cfg.stop_pct = 0.0070           # v15_5min: tightened from 0.0075 — sltgt sweep best=0.70%
-        long_cfg.target_pct = 0.0110
+        long_cfg.stop_pct = 0.0075           # Run12: LONG SL=0.75% (was 0.60%)
+        long_cfg.target_pct = 0.00800        # Run12: LONG TGT=0.80% (was 0.825%)
         long_cfg.be_trigger_pct = 0.0055
         long_cfg.trail_pct = 0.0028
         long_cfg.min_bars_left_after_entry = 0
@@ -616,32 +794,40 @@ def _describe_regime_source_availability(cfg: StrategyConfig) -> Tuple[List[str]
 
 
 # ===========================================================================
-# 1-MINUTE DATA READER
+# INTRABAR DATA READER
 # ===========================================================================
-def _resolve_5min_dir() -> Path:
-    """
-    Resolve the 1-min data directory relative to the algo_trading project root.
-    Looks for a directory named 'stocks_indicators_1min_eq' in the data path.
-    """
+def _resolve_intrabar_dir(runtime_dir_hint: Path, folder_names: Tuple[str, ...]) -> Path:
+    """Resolve an intrabar data directory from common runtime/project locations."""
     _script_dir = Path(__file__).resolve().parent
     if _script_dir.name == "avwap_v11_refactored":
         _proj = _script_dir.parent
     else:
         _proj = _script_dir
 
-    # Common locations to search for 1-min data
-    candidates = [
-        RUNTIME_DATA_1MIN_DIR,
-        _proj / "data" / "stocks_indicators_1min_eq",
-        _proj / "stocks_indicators_1min_eq",
-        _proj.parent / "data" / "stocks_indicators_1min_eq",
-        _proj.parent / "stocks_indicators_1min_eq",
-    ]
+    candidates = [runtime_dir_hint]
+    for folder_name in folder_names:
+        candidates.extend(
+            [
+                _proj / "data" / folder_name,
+                _proj / folder_name,
+                _proj.parent / "data" / folder_name,
+                _proj.parent / folder_name,
+            ]
+        )
     for c in candidates:
         if c.is_dir():
             return c
-    # Fallback: return the first candidate (will be created/handled later)
     return candidates[0]
+
+
+def _resolve_1min_dir() -> Path:
+    """Resolve the 1-minute intrabar exit directory."""
+    return _resolve_intrabar_dir(RUNTIME_DATA_1MIN_DIR, ("stocks_indicators_1min_eq",))
+
+
+def _resolve_5min_dir() -> Path:
+    """Backward-compatible alias used by existing sweep scripts."""
+    return _resolve_1min_dir()
 
 
 def _load_india_vix(project_root: Path) -> dict:
@@ -663,11 +849,8 @@ def _load_india_vix(project_root: Path) -> dict:
     return vix_map
 
 
-def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
-    """
-    Read a 5-minute parquet file for a ticker.
-    Returns empty DataFrame if file not found or read fails.
-    """
+def read_intrabar_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
+    """Read intrabar parquet and normalize its timestamp column to `datetime`."""
     try:
         p = Path(path)
         if not p.exists():
@@ -694,6 +877,11 @@ def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
         return df
     except Exception:
         return pd.DataFrame()
+
+
+def read_5m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
+    """Backward-compatible intrabar reader used by existing sweep scripts."""
+    return read_intrabar_parquet(path, engine=engine)
 
 
 def list_tickers_5m(dir_5m: Path, suffix: str = ".parquet") -> List[str]:
@@ -847,6 +1035,44 @@ def _print_exit_realism_band(label: str, df: pd.DataFrame) -> None:
     )
 
 
+def _load_ticker_intrabar_cache(
+    cache: Dict[str, pd.DataFrame],
+    ticker: str,
+    dir_path: Path,
+    patterns: List[str],
+    engine: str,
+) -> pd.DataFrame:
+    """Load and cache intrabar parquet for one ticker from common file-name patterns."""
+    if ticker in cache:
+        return cache[ticker]
+
+    loaded = pd.DataFrame()
+    if dir_path.is_dir():
+        for pattern in patterns:
+            fpath = dir_path / pattern
+            if fpath.exists():
+                loaded = read_intrabar_parquet(str(fpath), engine)
+                break
+    cache[ticker] = loaded
+    return loaded
+
+
+def _slice_trade_day_bars(
+    bars: pd.DataFrame,
+    entry_time: pd.Timestamp,
+    trade_date: pd.Timestamp,
+    eod_cutoff: Optional[pd.Timestamp],
+) -> pd.DataFrame:
+    """Slice post-entry bars for the trade date, optionally bounded by the EOD cutoff."""
+    if bars is None or bars.empty or "datetime" not in bars.columns:
+        return pd.DataFrame()
+
+    mask = (bars["datetime"] > entry_time) & (bars["datetime"].dt.normalize() == trade_date)
+    if eod_cutoff is not None:
+        mask = mask & (bars["datetime"] <= eod_cutoff)
+    return bars.loc[mask].sort_values("datetime")
+
+
 # ===========================================================================
 # 5-MIN EXIT RESOLUTION
 # ===========================================================================
@@ -858,11 +1084,13 @@ def _resolve_exits_5min(
     eod_exit_time: Optional[dtime] = None,
 ) -> pd.DataFrame:
     """
-    Re-evaluate exit prices, exit times, and outcomes using 1-min data
+    Re-evaluate exit prices, exit times, and outcomes using intrabar data
     for higher-resolution SL/target tracking.
 
     Entry signals and entry prices remain from 5-min scanning.
-    Only the exit side is recalculated at 1-min granularity.
+    Exit resolution preference is:
+      1. 1-minute data (`stocks_indicators_1min_eq`)
+      2. 5-minute fallback from the signal dataset
     """
     if trades_df.empty:
         return trades_df
@@ -873,6 +1101,7 @@ def _resolve_exits_5min(
         return trades_df
 
     df = trades_df.copy()
+    dir_1m = dir_5m
 
     # Backward-compat: unified Trade dataclass uses `sl_price`.
     # Keep `stop_price` as canonical within this function for downstream logic.
@@ -891,9 +1120,9 @@ def _resolve_exits_5min(
         if c in df.columns:
             df[c] = _normalize_ist_series(df[c])
 
-    # Cache 1-min data per ticker to avoid re-reads
-    _cache_5m: Dict[str, pd.DataFrame] = {}
-    _cache_15m: Dict[str, pd.DataFrame] = {}
+    # Cache intrabar data per ticker to avoid re-reads
+    _cache_1m: Dict[str, pd.DataFrame] = {}
+    _cache_5m_fallback: Dict[str, pd.DataFrame] = {}
     dir_15m = _resolve_15m_dir()
 
     def _resolve_from_bars(
@@ -1011,6 +1240,7 @@ def _resolve_exits_5min(
         }
 
     updated_rows = 0
+    resolved_1min_rows = 0
     fallback_rows = 0
     total_rows = len(df)
 
@@ -1025,27 +1255,6 @@ def _resolve_exits_5min(
         if pd.isna(entry_time) or stop_price is None or target_price is None:
             continue
 
-        # Load 1-min data for this ticker (cached)
-        if ticker not in _cache_5m:
-            # Try common naming patterns
-            found = False
-            for pattern in [
-                f"{ticker}{suffix_5m}",
-                f"{ticker}.parquet",
-                f"{ticker}_5min.parquet",
-                f"{ticker}_stocks_indicators_5min.parquet",
-                f"{ticker}_1min.parquet",
-                f"{ticker}_stocks_indicators_1min.parquet",
-            ]:
-                fpath = dir_5m / pattern
-                if fpath.exists():
-                    _cache_5m[ticker] = read_5m_parquet(str(fpath), engine)
-                    found = True
-                    break
-            if not found:
-                _cache_5m[ticker] = pd.DataFrame()
-
-        df_5m = _cache_5m[ticker]
         # Get the trade date for EOD cutoff
         trade_date = pd.Timestamp(entry_time).normalize()
         eod_cutoff = None
@@ -1053,22 +1262,34 @@ def _resolve_exits_5min(
             eod_cutoff = IST.localize(datetime.combine(trade_date.date(), eod_exit_time))
 
         resolved = None
-        if not df_5m.empty:
-            mask = (df_5m["datetime"] > entry_time) & (df_5m["datetime"].dt.normalize() == trade_date)
-            if eod_cutoff is not None:
-                mask = mask & (df_5m["datetime"] <= eod_cutoff)
-            bars = df_5m.loc[mask].sort_values("datetime")
-            resolved = _resolve_from_bars(bars, side, stop_price, target_price, "1MIN")
+        df_1m = _load_ticker_intrabar_cache(
+            _cache_1m,
+            ticker,
+            dir_1m,
+            [
+                f"{ticker}{suffix_5m}",
+                f"{ticker}.parquet",
+                f"{ticker}_1min.parquet",
+                f"{ticker}_stocks_indicators_1min.parquet",
+                f"{ticker}_5min.parquet",
+                f"{ticker}_stocks_indicators_5min.parquet",
+            ],
+            engine,
+        )
+        bars_1m = _slice_trade_day_bars(df_1m, entry_time, trade_date, eod_cutoff)
+        resolved = _resolve_from_bars(bars_1m, side, stop_price, target_price, "1MIN")
+        if resolved is not None:
+            resolved_1min_rows += 1
 
         if resolved is None:
-            if ticker not in _cache_15m:
+            if ticker not in _cache_5m_fallback:
                 fpath_15m = dir_15m / f"{ticker}_stocks_indicators_5min.parquet"
                 if fpath_15m.exists():
-                    _cache_15m[ticker] = read_15m_parquet(str(fpath_15m), engine)
+                    _cache_5m_fallback[ticker] = read_15m_parquet(str(fpath_15m), engine)
                 else:
-                    _cache_15m[ticker] = pd.DataFrame()
+                    _cache_5m_fallback[ticker] = pd.DataFrame()
 
-            df_15m = _cache_15m[ticker]
+            df_15m = _cache_5m_fallback[ticker]
             if not df_15m.empty:
                 time_col = "date"
                 mask_15m = (df_15m[time_col] > entry_time) & (df_15m[time_col].dt.normalize() == trade_date)
@@ -1160,8 +1381,10 @@ def _resolve_exits_5min(
         updated_rows += 1
 
     print(
-        f"[1MIN] Re-resolved exits for {updated_rows}/{total_rows} trades using 1-min data."
-        + (f" 5m_fallback={fallback_rows}." if fallback_rows else "")
+        f"[INTRABAR] Re-resolved exits for {updated_rows}/{total_rows} trades."
+        f" 1min={resolved_1min_rows}"
+        + (f" 5m_fallback={fallback_rows}" if fallback_rows else "")
+        + "."
     )
     return df
 
@@ -1219,6 +1442,48 @@ def _scan_one_ticker_both(
 # ===========================================================================
 # PARALLEL SCAN RUNNER
 # ===========================================================================
+def _main_module_supports_process_pool() -> bool:
+    main_mod = sys.modules.get("__main__")
+    main_file = getattr(main_mod, "__file__", "")
+    if not main_file:
+        return False
+    main_path = str(main_file).strip()
+    main_name = Path(main_path).name
+    return not (main_name.startswith("<") and main_name.endswith(">"))
+
+
+def _resolve_executor_mode(max_workers: int) -> str:
+    if max_workers <= 1:
+        return "serial"
+
+    aliases = {
+        "threads": "thread",
+        "threadpool": "thread",
+        "processes": "process",
+        "processpool": "process",
+    }
+    requested = aliases.get(EXECUTOR_MODE, EXECUTOR_MODE)
+    if requested in {"serial", "thread", "process"}:
+        return requested
+    if requested not in {"", "auto"}:
+        warnings.warn(
+            f"Unknown EQIDV16_5MIN_EXECUTOR={EXECUTOR_MODE!r}; falling back to auto mode.",
+            RuntimeWarning,
+        )
+    return "process" if _main_module_supports_process_pool() else "thread"
+
+
+def _build_executor(executor_mode: str, max_workers: int):
+    if executor_mode == "process":
+        kwargs: Dict[str, Any] = {"max_workers": max_workers}
+        if os.name == "nt":
+            kwargs["mp_context"] = mp.get_context("spawn")
+        return ProcessPoolExecutor(**kwargs)
+    if executor_mode == "thread":
+        return ThreadPoolExecutor(max_workers=max_workers)
+    raise ValueError(f"Unsupported executor mode: {executor_mode}")
+
+
 def _run_side_parallel(
     side: str,
     cfg: StrategyConfig,
@@ -1239,8 +1504,9 @@ def _run_side_parallel(
 
     all_dicts: List[dict] = []
     scan_errors: List[Tuple[str, str]] = []  # (ticker, error_msg)
+    executor_mode = _resolve_executor_mode(max_workers)
 
-    if max_workers <= 1:
+    if executor_mode == "serial":
         # Serial fallback
         for k, args in enumerate(task_args, 1):
             try:
@@ -1253,7 +1519,8 @@ def _run_side_parallel(
     else:
         # Parallel
         done_count = 0
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        print(f"  [{side}] executor={executor_mode} | workers={max_workers}")
+        with _build_executor(executor_mode, max_workers) as executor:
             futures = {executor.submit(worker_fn, a): a[0] for a in task_args}
             for future in as_completed(futures):
                 done_count += 1
@@ -1355,8 +1622,9 @@ def _run_both_parallel(
     short_dicts: List[dict] = []
     long_dicts: List[dict] = []
     scan_errors: List[Tuple[str, str]] = []
+    executor_mode = _resolve_executor_mode(max_workers)
 
-    if max_workers <= 1:
+    if executor_mode == "serial":
         for k, args in enumerate(task_args, 1):
             try:
                 short_rows, long_rows = _scan_one_ticker_both(args)
@@ -1371,7 +1639,8 @@ def _run_both_parallel(
                 )
     else:
         done_count = 0
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        print(f"  [COMBINED] executor={executor_mode} | workers={max_workers}")
+        with _build_executor(executor_mode, max_workers) as executor:
             futures = {executor.submit(_scan_one_ticker_both, a): a[0] for a in task_args}
             for future in as_completed(futures):
                 done_count += 1
@@ -1714,6 +1983,11 @@ def _sort_trades_for_output(df: pd.DataFrame) -> pd.DataFrame:
         if c in d.columns:
             d[c] = _normalize_ist_series(d[c])
 
+    if "entry_time_ist" in d.columns:
+        entry_ts = pd.to_datetime(d["entry_time_ist"], errors="coerce")
+        d["entry_date"] = entry_ts.dt.strftime("%Y-%m-%d").where(entry_ts.notna(), "")
+        d["entry_time"] = entry_ts.dt.strftime("%H:%M:%S").where(entry_ts.notna(), "")
+
     sort_cols = [
         c
         for c in ["trade_date", "entry_time_ist", "signal_time_ist", "ticker", "side"]
@@ -1721,6 +1995,20 @@ def _sort_trades_for_output(df: pd.DataFrame) -> pd.DataFrame:
     ]
     if sort_cols:
         d = d.sort_values(sort_cols).reset_index(drop=True)
+
+    if "entry_time_ist" in d.columns and {"entry_date", "entry_time"}.issubset(d.columns):
+        ordered_cols: List[str] = []
+        seen = set()
+        for col in d.columns:
+            if col == "entry_time_ist":
+                for extra in ("entry_date", "entry_time_ist", "entry_time"):
+                    if extra in d.columns and extra not in seen:
+                        ordered_cols.append(extra)
+                        seen.add(extra)
+            elif col not in seen:
+                ordered_cols.append(col)
+                seen.add(col)
+        d = d[ordered_cols]
 
     return d
 
@@ -3028,10 +3316,11 @@ def main() -> None:
         sys.stderr = _Tee(_orig_stderr, _log_fh)
 
         try:
+            run_started = time.perf_counter()
             print("=" * 70)
             print("AVWAP v16_5min COMBINED runner — Anti-exhaustion filters + V11 SHORT + V9 LONG")
             print("  - Entry signals: 5-min data")
-            print("  - Exit resolution: 1-min data (stocks_indicators_1min_eq)")
+            print("  - Exit resolution: 1-min if available, else 5-min fallback")
             print("  - Outputs: */algo_trading/outputs")
             print("  - Intraday leverage: "
                   f"SHORT={INTRADAY_LEVERAGE_SHORT}x | LONG={INTRADAY_LEVERAGE_LONG}x")
@@ -3048,11 +3337,11 @@ def main() -> None:
             else:
                 print("[WARN] 5-min signal data directory not found.")
 
-            # Resolve 1-min data directory
-            dir_5m = _resolve_5min_dir()
-            print(f"[INFO] 1-min data directory: {dir_5m}")
-            if dir_5m.is_dir():
-                n_files = len(list(dir_5m.glob("*.parquet")))
+            # Resolve intrabar exit data directories
+            dir_1m = _resolve_1min_dir()
+            print(f"[INFO] 1-min data directory: {dir_1m}")
+            if dir_1m.is_dir():
+                n_files = len(list(dir_1m.glob("*.parquet")))
                 print(f"[INFO] 1-min parquet files found: {n_files}")
             else:
                 print("[WARN] 1-min data directory not found â€” will fall back to 5-min exits.")
@@ -3096,8 +3385,8 @@ def main() -> None:
                 short_cfg.avwap_min_consec_closes = 1  # V16 Run6: relaxed 2→1 — 1 close below AVWAP sufficient
                 short_cfg.rsi_max_short = 62.0
                 short_cfg.stochk_max = 90.0
-                short_cfg.stop_pct = 0.0084
-                short_cfg.target_pct = 0.01100
+                short_cfg.stop_pct = 0.0078          # Tuned live profile: SHORT SL=0.78%
+                short_cfg.target_pct = 0.00700       # Tuned live profile: SHORT TGT=0.70%
                 short_cfg.be_trigger_pct = 0.0042
                 short_cfg.trail_pct = 0.0023
                 short_cfg.enable_partial_exit = False  # V16: no partial exits — SL/TARGET/EOD only
@@ -3128,8 +3417,8 @@ def main() -> None:
                 long_cfg.enable_setup_a_pullback_c2_break = True
                 long_cfg.enable_setup_a_close_continuation_break = True
                 long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
-                long_cfg.stop_pct = 0.0070           # v15_5min: tightened from 0.0075 — sltgt sweep best=0.70%
-                long_cfg.target_pct = 0.0110
+                long_cfg.stop_pct = 0.0060           # Tuned live profile: LONG SL=0.60%
+                long_cfg.target_pct = 0.00825        # Tuned live profile: LONG TGT=0.825%
                 long_cfg.be_trigger_pct = 0.0055
                 long_cfg.trail_pct = 0.0028
                 long_cfg.min_bars_left_after_entry = 0
@@ -3304,13 +3593,21 @@ def main() -> None:
                 f"use_stressed_base={EXIT_REALISM_USE_STRESSED_BASE} | "
                 f"stop_extra_slip={STOP_EXIT_EXTRA_SLIPPAGE_BPS:.1f}bps"
             )
-            print(f"[INFO] Parallelism: max_workers={MAX_WORKERS}")
+            print(
+                f"[INFO] Parallelism: max_workers={MAX_WORKERS} | "
+                f"executor={_resolve_executor_mode(MAX_WORKERS)}"
+            )
+            print(
+                f"[INFO] Chart generation: legacy={ENABLE_LEGACY_CHARTS} | "
+                f"enhanced={ENABLE_ENHANCED_CHARTS}"
+            )
             print(f"[INFO] Output directory: {_outputs_dir}")
             print(f"[INFO] Console log: {log_path}")
             print("-" * 70)
 
             # ---- PHASE 1: Scan for entry signals using 5-min data ----
             print("\n[PHASE 1] Scanning for entry signals using 5-min data...")
+            phase1_started = time.perf_counter()
             short_df, long_df = _run_both_parallel(short_cfg, long_cfg, MAX_WORKERS)
 
             if NIFTY_CONTEXT_ENABLED:
@@ -3344,21 +3641,32 @@ def main() -> None:
 
             short_df, long_df = _replace_current_day_with_live_parity(short_df, long_df)
 
+            # ---- V16: Enrich with Opening Range levels (required for OR gate) ----
+            if V16_OR_GATE_ENABLED:
+                print("\n[V16] Computing Opening Range levels for OR gate...")
+                short_df, long_df = _enrich_with_or_levels(
+                    short_df, long_df,
+                    dir_15m=str(dir_15m),
+                    parquet_suffix=short_cfg.end_15m,
+                )
+
             # ---- V16: Apply anti-exhaustion post-scan filters ----
             print("\n[V16] Applying anti-exhaustion post-scan filters...")
             short_df, long_df = _apply_v16_post_scan_filters(short_df, long_df)
+            print(f"[TIMING] Phase 1 completed in {time.perf_counter() - phase1_started:.1f}s")
 
             if short_df.empty and long_df.empty:
                 print("[DONE] No trades found.")
                 return
 
-            # ---- PHASE 2: Re-resolve exits using 1-min data ----
-            print("\n[PHASE 2] Re-resolving exits using 1-min data for higher precision...")
+            # ---- PHASE 2: Re-resolve exits using intrabar data ----
+            print("\n[PHASE 2] Re-resolving exits using 1-min intrabar data...")
+            phase2_started = time.perf_counter()
 
-            # Determine 1-min file suffix by inspecting the directory
+            # Determine intrabar file suffix by inspecting the 1-min directory
             suffix_5m = ".parquet"
-            if dir_5m.is_dir():
-                sample_files = list(dir_5m.glob("*"))[:5]
+            if dir_1m.is_dir():
+                sample_files = list(dir_1m.glob("*"))[:5]
                 for sf in sample_files:
                     if sf.suffix:
                         suffix_5m = sf.suffix
@@ -3368,7 +3676,7 @@ def main() -> None:
                 print(f"  [SHORT] {len(short_df)} trades to re-resolve...")
                 short_df = _resolve_exits_5min(
                     short_df,
-                    dir_5m,
+                    dir_1m,
                     suffix_5m,
                     short_cfg.parquet_engine,
                     eod_exit_time=V15_EOD_EXIT_TIME,
@@ -3378,11 +3686,12 @@ def main() -> None:
                 print(f"  [LONG] {len(long_df)} trades to re-resolve...")
                 long_df = _resolve_exits_5min(
                     long_df,
-                    dir_5m,
+                    dir_1m,
                     suffix_5m,
                     long_cfg.parquet_engine,
                     eod_exit_time=V15_EOD_EXIT_TIME,
                 )
+            print(f"[TIMING] Phase 2 completed in {time.perf_counter() - phase2_started:.1f}s")
 
             # ---- Apply leverage-aware P&L (capital ROI + notional rupees) ----
             if not short_df.empty:
@@ -3405,13 +3714,13 @@ def main() -> None:
             _print_signal_entry_lag_summary(combined)
 
             # --- Comprehensive metrics ---
-            print_metrics("SHORT (net of slippage+comm, 1-min exits)", compute_backtest_metrics(short_df))
-            print_metrics("LONG (net of slippage+comm, 1-min exits)", compute_backtest_metrics(long_df))
-            print_metrics("COMBINED (net of slippage+comm, 1-min exits)", compute_backtest_metrics(combined))
+            print_metrics("SHORT (net of slippage+comm, intrabar exits)", compute_backtest_metrics(short_df))
+            print_metrics("LONG (net of slippage+comm, intrabar exits)", compute_backtest_metrics(long_df))
+            print_metrics("COMBINED (net of slippage+comm, intrabar exits)", compute_backtest_metrics(combined))
             if EXIT_REALISM_BAND_ENABLED:
                 primary_variant = (
                     "pessimistic stressed path" if EXIT_REALISM_USE_STRESSED_BASE
-                    else "legacy 1-min base path"
+                    else "legacy base intrabar path"
                 )
                 print(
                     "\n[EXIT_REALISM] Primary reported path: "
@@ -3437,30 +3746,41 @@ def main() -> None:
             out_daywise_csv = _outputs_dir / f"avwap_daywise_breakdown_v16_5min_ALL_DAYS_{ts}.csv"
             _build_daily_breakdown_df(combined, include_total=True).to_csv(out_daywise_csv, index=False)
 
+            charts_started = time.perf_counter()
+            chart_files_legacy: List[str] = []
+            chart_files_enhanced: List[str] = []
+
             # --- Generate Legacy Charts (from avwap_common) ---
-            print("\n[INFO] Generating legacy backtest charts...")
-            chart_dir_legacy = _outputs_dir / "charts" / "legacy"
-            chart_files_legacy = generate_backtest_charts(
-                combined, short_df, long_df, save_dir=chart_dir_legacy, ts_label=ts,
-            )
-            if chart_files_legacy:
-                print(f"[INFO] {len(chart_files_legacy)} legacy charts saved to {chart_dir_legacy}/")
+            if ENABLE_LEGACY_CHARTS:
+                print("\n[INFO] Generating legacy backtest charts...")
+                chart_dir_legacy = _outputs_dir / "charts" / "legacy"
+                chart_files_legacy = generate_backtest_charts(
+                    combined, short_df, long_df, save_dir=chart_dir_legacy, ts_label=ts,
+                )
+                if chart_files_legacy:
+                    print(f"[INFO] {len(chart_files_legacy)} legacy charts saved to {chart_dir_legacy}/")
+            else:
+                print("\n[INFO] Skipping legacy backtest charts (EQIDV16_5MIN_ENABLE_LEGACY_CHARTS=0).")
 
             # --- Generate Enhanced Charts ---
-            print("\n[INFO] Generating enhanced analysis charts...")
-            chart_dir_enhanced = _outputs_dir / "charts" / "enhanced"
-            chart_files_enhanced = generate_enhanced_charts(
-                combined, short_df, long_df, save_dir=chart_dir_enhanced, ts_label=ts,
-            )
-            if chart_files_enhanced:
-                print(f"[INFO] {len(chart_files_enhanced)} enhanced charts saved to {chart_dir_enhanced}/")
-                for cf in chart_files_enhanced:
-                    print(f"  -> {Path(cf).name}")
+            if ENABLE_ENHANCED_CHARTS:
+                print("\n[INFO] Generating enhanced analysis charts...")
+                chart_dir_enhanced = _outputs_dir / "charts" / "enhanced"
+                chart_files_enhanced = generate_enhanced_charts(
+                    combined, short_df, long_df, save_dir=chart_dir_enhanced, ts_label=ts,
+                )
+                if chart_files_enhanced:
+                    print(f"[INFO] {len(chart_files_enhanced)} enhanced charts saved to {chart_dir_enhanced}/")
+                    for cf in chart_files_enhanced:
+                        print(f"  -> {Path(cf).name}")
+                else:
+                    print("[WARN] No enhanced charts generated (matplotlib may not be installed).")
             else:
-                print("[WARN] No enhanced charts generated (matplotlib may not be installed).")
+                print("[INFO] Skipping enhanced analysis charts (EQIDV16_5MIN_ENABLE_ENHANCED_CHARTS=0).")
 
             total_charts = len(chart_files_legacy or []) + len(chart_files_enhanced or [])
             print(f"\n[INFO] Total charts generated: {total_charts}")
+            print(f"[TIMING] Chart generation completed in {time.perf_counter() - charts_started:.1f}s")
 
             # --- Sample output ---
             cols = [
@@ -3482,6 +3802,7 @@ def main() -> None:
             print(f"[DAYWISE CSV] {out_daywise_csv}")
             print(f"[OUTPUTS DIR] {_outputs_dir}")
             print(f"[CONSOLE LOG] {log_path}")
+            print(f"[TIMING] Total runtime: {time.perf_counter() - run_started:.1f}s")
             print("[DONE]")
 
         finally:
@@ -3494,8 +3815,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
