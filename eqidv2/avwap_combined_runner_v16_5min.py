@@ -213,7 +213,7 @@ FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
     (dtime(9, 15, 0), dtime(11, 0, 0)),    # Run10: morning — best quality
     (dtime(12, 0, 0), dtime(13, 0, 0)),    # Run13: afternoon window added — DayWin 76.56% vs 74.60%, PnL 546% vs 523%, MaxDD same 28.4%
-    # Run14 tested 13:00-14:15: worse (PF 1.809, MaxDD 33%, PnL 505%) — 12:00-13:00 is better
+    # Run14 tested 13:00-14:15: worse. Run15 tested continuous 09:15-13:00: LONG DayWin 67%, MaxDD 56% (11:00-12:00 dead zone confirmed)
 ]
 V15_EOD_EXIT_TIME = dtime(15, 20, 0)
 
