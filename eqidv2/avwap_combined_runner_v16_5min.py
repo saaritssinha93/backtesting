@@ -303,6 +303,12 @@ V16_OR_GATE_TIME           = dtime(9, 30, 0)   # upper bound for OR bar selectio
 # LONG AVWAP dead zone: 1.0-1.5 ATR band = break-even (59% TGT, avg +0.16%) — 39 trades wasted in Run7
 V16_LONG_AVWAP_DIST_DEAD_LO = 1.0  # start of dead zone (dist ≥ 1.0 ATR)
 V16_LONG_AVWAP_DIST_DEAD_HI = 1.5  # end of dead zone   (dist <  1.5 ATR) — outside this is fine
+# Run14: Volume exhaustion filter — climax buying at entry = reject
+# Reject LONG if entry bar volume > N x day-average AND entry is >= M bars from open
+# Backtest result: vol>4x(bars>=3) filters 42 trades (23W/19L), LONG PF 1.776->1.961, DayWin 79.5%->81.6%, PnL flat
+V16_LONG_ENTRY_VOL_EXHAUST_ENABLED  = True
+V16_LONG_ENTRY_VOL_EXHAUST_MULT     = 4.0  # entry bar volume > 4x day avg = climax signal = reject
+V16_LONG_ENTRY_VOL_EXHAUST_MIN_BARS = 3    # only apply when entry is >= 3 bars from open (not OR-bar entries)
 
 
 def _enrich_with_or_levels(
@@ -421,6 +427,85 @@ def _enrich_with_or_levels(
     return short_df, long_df
 
 
+def _enrich_with_entry_vol_ratio(
+    long_df: pd.DataFrame,
+    dir_15m: str,
+    parquet_suffix: str = "_stocks_indicators_5min.parquet",
+) -> pd.DataFrame:
+    """
+    For each LONG trade, load the 5-min parquet for that (ticker, date) and compute:
+      entry_bar_vol_ratio  — entry bar volume / day-average volume
+      bars_from_open       — index of the entry bar (0 = first bar of day)
+
+    The entry bar is the first 5-min bar whose high >= entry_price * 0.999.
+    These columns are used by the volume exhaustion filter in _apply_v16_post_scan_filters.
+
+    Only called when V16_LONG_ENTRY_VOL_EXHAUST_ENABLED is True.
+    """
+    import pathlib
+    import numpy as np
+
+    if long_df.empty:
+        long_df = long_df.copy()
+        long_df["entry_bar_vol_ratio"] = np.nan
+        long_df["bars_from_open"]      = np.nan
+        return long_df
+
+    dir_path = pathlib.Path(dir_15m)
+    _5m_cache: dict = {}
+
+    def _get_day(ticker, date_str):
+        key = (ticker, date_str)
+        if key not in _5m_cache:
+            f = dir_path / f"{ticker}{parquet_suffix}"
+            if not f.exists():
+                _5m_cache[key] = pd.DataFrame()
+                return _5m_cache[key]
+            try:
+                df = pd.read_parquet(f)
+                df["date"] = pd.to_datetime(df["date"])
+            except Exception:
+                _5m_cache[key] = pd.DataFrame()
+                return _5m_cache[key]
+            day = df[df["date"].dt.strftime("%Y-%m-%d") == date_str].reset_index(drop=True)
+            _5m_cache[key] = day
+        return _5m_cache[key]
+
+    ratios   = []
+    bar_idxs = []
+
+    for _, row in long_df.iterrows():
+        ticker  = str(row.get("ticker", ""))
+        date_s  = str(row.get("trade_date", ""))[:10]
+        try:
+            entry_px = float(row.get("entry_price", 0))
+        except (ValueError, TypeError):
+            entry_px = 0.0
+
+        day = _get_day(ticker, date_s)
+        if day.empty or entry_px <= 0:
+            ratios.append(np.nan)
+            bar_idxs.append(np.nan)
+            continue
+
+        avg_vol = day["volume"].mean()
+        hits = day[day["high"] >= entry_px * 0.999]
+        if hits.empty or avg_vol <= 0:
+            ratios.append(np.nan)
+            bar_idxs.append(np.nan)
+            continue
+
+        entry_bar_vol = float(hits.iloc[0]["volume"])
+        ratios.append(entry_bar_vol / avg_vol)
+        bar_idxs.append(int(hits.index[0]))
+
+    long_df = long_df.copy()
+    long_df["entry_bar_vol_ratio"] = ratios
+    long_df["bars_from_open"]      = bar_idxs
+    print(f"[VOL_ENRICH] Computed entry vol ratio for {long_df['entry_bar_vol_ratio'].notna().sum()}/{len(long_df)} LONG trades.")
+    return long_df
+
+
 def _apply_v16_post_scan_filters(
     short_df: pd.DataFrame,
     long_df: pd.DataFrame,
@@ -476,6 +561,19 @@ def _apply_v16_post_scan_filters(
         long_avwap_dead_removed = int(mask_dead_dist.sum())
         long_df = long_df[~mask_dead_dist].copy()
 
+    # --- LONG: Volume exhaustion filter (Run14) — climax buying at entry bar = reject ---
+    long_vol_exhaust_removed = 0
+    if V16_LONG_ENTRY_VOL_EXHAUST_ENABLED and not long_df.empty and "entry_bar_vol_ratio" in long_df.columns:
+        vr_col  = pd.to_numeric(long_df["entry_bar_vol_ratio"], errors="coerce")
+        bfo_col = pd.to_numeric(long_df["bars_from_open"],      errors="coerce")
+        mask_exhaust = (
+            vr_col.notna()
+            & (vr_col > V16_LONG_ENTRY_VOL_EXHAUST_MULT)
+            & (bfo_col >= V16_LONG_ENTRY_VOL_EXHAUST_MIN_BARS)
+        )
+        long_vol_exhaust_removed = int(mask_exhaust.sum())
+        long_df = long_df[~mask_exhaust].copy()
+
     # --- OR Gate: require confirmed directional break of the 09:15-09:30 range ---
     short_or_removed = 0
     long_or_removed  = 0
@@ -510,6 +608,7 @@ def _apply_v16_post_scan_filters(
         f"(-{long_qs_removed} QS {V16_LONG_QS_DEAD_LO:.1f}-{V16_LONG_QS_DEAD_HI:.1f}dead+QS>{V16_LONG_QS_ABS_MAX:.0f}, "
         f"-{long_dist_removed} dist>{V16_LONG_AVWAP_DIST_ATR_MAX:.1f}ATR, "
         f"-{long_avwap_dead_removed} dist {V16_LONG_AVWAP_DIST_DEAD_LO:.1f}-{V16_LONG_AVWAP_DIST_DEAD_HI:.1f}ATR dead, "
+        f"-{long_vol_exhaust_removed} vol>{V16_LONG_ENTRY_VOL_EXHAUST_MULT:.0f}x exhaust, "
         f"-{long_or_removed} OR gate)"
     )
     return short_df, long_df
@@ -3647,6 +3746,15 @@ def main() -> None:
                 print("\n[V16] Computing Opening Range levels for OR gate...")
                 short_df, long_df = _enrich_with_or_levels(
                     short_df, long_df,
+                    dir_15m=str(dir_15m),
+                    parquet_suffix=short_cfg.end_15m,
+                )
+
+            # ---- V16 Run14: Enrich LONG trades with entry bar volume ratio ----
+            if V16_LONG_ENTRY_VOL_EXHAUST_ENABLED:
+                print("\n[V16] Computing entry bar volume ratios for exhaustion filter...")
+                long_df = _enrich_with_entry_vol_ratio(
+                    long_df,
                     dir_15m=str(dir_15m),
                     parquet_suffix=short_cfg.end_15m,
                 )
