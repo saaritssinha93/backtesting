@@ -86,7 +86,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--train-days", type=int, default=30, help="Walk-forward train window in market days")
     p.add_argument("--test-days", type=int, default=10, help="Walk-forward test window in market days")
-    p.add_argument("--step-days", type=int, default=10, help="Walk-forward step size in market days")
+    p.add_argument("--step-days", type=int, default=5, help="Walk-forward step size in market days")
     p.add_argument(
         "--top-entry-k",
         type=int,
@@ -184,6 +184,9 @@ def _calc_metrics(df: pd.DataFrame, market_days: Sequence[pd.Timestamp]) -> Dict
 
 
 def _score_metrics(metrics: Dict[str, float], target_tpd: float) -> float:
+    # Guard: folds with fewer than 5 trades have no statistical meaning — return neutral 0
+    if int(metrics.get("trades", 0)) < 5:
+        return 0.0
     pf = float(metrics.get("profit_factor", 0.0))
     pf = min(max(pf, 0.0), 5.0)
     pnl_per_day = float(metrics.get("pnl_pct_per_market_day", 0.0))
@@ -191,7 +194,8 @@ def _score_metrics(metrics: Dict[str, float], target_tpd: float) -> float:
     trade_win = float(metrics.get("trade_win_pct", 0.0))
     max_dd = max(0.0, float(metrics.get("max_drawdown_pct", 0.0)))
     tpd = float(metrics.get("trades_per_market_day", 0.0))
-    freq_penalty = abs(tpd - max(target_tpd, 0.25))
+    # Only penalise over-trading (noise/overfit signal) — not under-trading (may be higher quality)
+    overtrading_penalty = max(0.0, tpd - max(target_tpd * 1.5, 1.0))
     calmar_like = pnl_per_day / max(max_dd / max(float(metrics.get("market_days", 1)), 1.0), 1e-6)
     score = (
         (8.0 * pnl_per_day)
@@ -199,7 +203,7 @@ def _score_metrics(metrics: Dict[str, float], target_tpd: float) -> float:
         + (0.05 * day_win)
         + (0.025 * trade_win)
         + (0.35 * calmar_like)
-        - (1.25 * freq_penalty)
+        - (0.50 * overtrading_penalty)
     )
     return round(float(score), 6)
 
@@ -372,6 +376,9 @@ def _collect_actual_parameters(short_cfg: base.StrategyConfig, long_cfg: base.St
         "long.avwap_dist_max": float(base.V16_LONG_AVWAP_DIST_ATR_MAX),
         "long.avwap_dead_lo": float(base.V16_LONG_AVWAP_DIST_DEAD_LO),
         "long.avwap_dead_hi": float(base.V16_LONG_AVWAP_DIST_DEAD_HI),
+        "shared.v16_long_vol_exhaust_enabled": bool(base.V16_LONG_ENTRY_VOL_EXHAUST_ENABLED),
+        "shared.v16_long_vol_exhaust_mult": float(base.V16_LONG_ENTRY_VOL_EXHAUST_MULT),
+        "shared.v16_long_vol_exhaust_min_bars": int(base.V16_LONG_ENTRY_VOL_EXHAUST_MIN_BARS),
     }
 
 
@@ -418,6 +425,9 @@ def _parameter_catalog() -> List[ParameterSpec]:
         ParameterSpec("short.target_pct", "risk", "float", 0.0070, [0.0065, 0.0070, 0.0075], "Short target percent."),
         ParameterSpec("long.stop_pct", "risk", "float", 0.0075, [0.0065, 0.0075, 0.0080], "Long stop-loss percent."),
         ParameterSpec("long.target_pct", "risk", "float", 0.0080, [0.0075, 0.0080, 0.0085], "Long target percent."),
+        ParameterSpec("shared.v16_long_vol_exhaust_enabled", "shared", "bool", bool(base.V16_LONG_ENTRY_VOL_EXHAUST_ENABLED), [False, True], "LONG volume exhaustion filter toggle."),
+        ParameterSpec("shared.v16_long_vol_exhaust_mult", "shared", "float", float(base.V16_LONG_ENTRY_VOL_EXHAUST_MULT), [3.0, 4.0, 5.0], "Entry bar volume multiplier threshold for exhaustion filter."),
+        ParameterSpec("shared.v16_long_vol_exhaust_min_bars", "shared", "int", int(base.V16_LONG_ENTRY_VOL_EXHAUST_MIN_BARS), [2, 3, 4], "Minimum bars from open for exhaustion filter to apply."),
     ]
 
 
@@ -457,6 +467,9 @@ def _entry_scenarios(breadth: str) -> List[ScenarioSpec]:
             ScenarioSpec(name="context_strict_lookback5", stage="entry", notes="Stricter context with longer RS lookback.", shared_globals={"NIFTY_CONTEXT_MIN_DAYMOVE_PCT": 0.50, "NIFTY_RS_LOOKBACK_BARS": 5, "NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT": 1.00, "NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT": 1.00, "NIFTY_RS_BOTH_MODE_THRESHOLD_PCT": 1.00}),
             ScenarioSpec(name="both_window_pm", stage="entry", notes="Add more afternoon participation on both sides.", short_overrides={"use_time_windows": True, "signal_windows": [(dtime(9, 15), dtime(11, 0)), (dtime(12, 0), dtime(14, 0))]}, long_overrides={"use_time_windows": True, "signal_windows": [(dtime(9, 15), dtime(11, 0)), (dtime(12, 0), dtime(13, 30))]}),
             ScenarioSpec(name="long_avwap_cap_tighter", stage="entry", notes="Reduce long AVWAP chase tolerance.", filter_globals={"V16_LONG_AVWAP_DIST_ATR_MAX": 2.5}),
+            ScenarioSpec(name="vol_exhaust_off", stage="entry", notes="Disable LONG volume exhaustion filter entirely to measure its marginal contribution.", filter_globals={"V16_LONG_ENTRY_VOL_EXHAUST_ENABLED": False}),
+            ScenarioSpec(name="vol_exhaust_strict_5x", stage="entry", notes="Tighten LONG volume exhaustion threshold to 5x avg — fewer trades filtered.", filter_globals={"V16_LONG_ENTRY_VOL_EXHAUST_MULT": 5.0}),
+            ScenarioSpec(name="vol_exhaust_loose_3x", stage="entry", notes="Loosen LONG volume exhaustion threshold to 3x avg — more aggressive filtering.", filter_globals={"V16_LONG_ENTRY_VOL_EXHAUST_MULT": 3.0}),
         ]
     )
     return intensive
@@ -498,6 +511,13 @@ def _run_scenario_backtest(
     if base.V16_OR_GATE_ENABLED:
         short_df, long_df = base._enrich_with_or_levels(
             short_df,
+            long_df,
+            dir_15m=short_cfg.dir_15m,
+            parquet_suffix=short_cfg.end_15m,
+        )
+
+    if base.V16_LONG_ENTRY_VOL_EXHAUST_ENABLED and not long_df.empty:
+        long_df = base._enrich_with_entry_vol_ratio(
             long_df,
             dir_15m=short_cfg.dir_15m,
             parquet_suffix=short_cfg.end_15m,
@@ -664,6 +684,7 @@ def _build_leaderboard(summary_rows: List[Dict[str, Any]], fold_rows: List[Dict[
             fold_df[score_col] = fold_df.apply(
                 lambda row, pref=prefix, tpd=target: _score_metrics(
                     {
+                        "trades": row.get(f"{pref}_trades", 0),
                         "profit_factor": row.get(f"{pref}_profit_factor", 0.0),
                         "pnl_pct_per_market_day": row.get(f"{pref}_pnl_pct_per_market_day", 0.0),
                         "day_win_pct": row.get(f"{pref}_day_win_pct", 0.0),
@@ -720,12 +741,22 @@ def _build_leaderboard(summary_rows: List[Dict[str, Any]], fold_rows: List[Dict[
 
 
 def _fit_surrogate(leaderboard: pd.DataFrame, out_dir: Path, skip_surrogate: bool) -> pd.DataFrame:
-    if skip_surrogate or RandomForestRegressor is None or leaderboard.empty or len(leaderboard) < 8:
+    if skip_surrogate or RandomForestRegressor is None or leaderboard.empty:
         return pd.DataFrame()
 
     feature_cols = [col for col in leaderboard.columns if col.startswith("shared.") or col.startswith("short.") or col.startswith("long.")]
     param_df = _numeric_param_frame(leaderboard[["scenario_name", "stage", "notes"] + feature_cols].to_dict("records"))
     if param_df.empty or param_df.shape[1] == 0:
+        return pd.DataFrame()
+
+    # Require at least 3x samples-per-feature (minimum 20) for the RF to be meaningful.
+    # With fewer rows the importance scores are dominated by sampling noise, not signal.
+    min_rows_needed = max(20, param_df.shape[1] * 3)
+    if len(leaderboard) < min_rows_needed:
+        print(
+            f"[SURROGATE] Skipped: need >= {min_rows_needed} scenarios for {param_df.shape[1]} features, "
+            f"got {len(leaderboard)}. Run --breadth intensive with risk-stage enabled to accumulate more scenarios."
+        )
         return pd.DataFrame()
 
     y = pd.to_numeric(leaderboard["combined_robust_score"], errors="coerce").fillna(0.0).to_numpy()
