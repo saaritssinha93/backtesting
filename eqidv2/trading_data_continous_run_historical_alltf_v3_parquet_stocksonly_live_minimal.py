@@ -58,6 +58,7 @@ import numpy as np
 import pandas as pd
 import pytz
 from kiteconnect import KiteConnect, exceptions as kexc
+from requests import exceptions as reqexc
 from eqidv2_runtime_paths import CACHE_15M_DIR
 from eqidv2_runtime_paths import CACHE_5MIN_DIR
 from eqidv2_runtime_paths import DATA_15M_DIR
@@ -80,7 +81,11 @@ VALID_MODES = ("5min", "15min")
 DEFAULT_MAX_WORKERS = 6
 DEFAULT_FETCH_RETRY_BASE_SEC = float(os.getenv("EQIDV2_FETCH_RETRY_BASE_SEC", "0.8"))
 DEFAULT_FETCH_RATE_LIMIT_BACKOFF_BASE_SEC = float(os.getenv("EQIDV2_FETCH_RATE_LIMIT_BACKOFF_BASE_SEC", "2.0"))
+DEFAULT_FETCH_TIMEOUT_BACKOFF_BASE_SEC = float(os.getenv("EQIDV2_FETCH_TIMEOUT_BACKOFF_BASE_SEC", "1.2"))
 DEFAULT_FETCH_PACE_SEC = float(os.getenv("EQIDV2_FETCH_PACE_SEC", "0.50"))
+DEFAULT_KITE_REQUEST_TIMEOUT_SEC = float(
+    os.getenv("EQIDV2_KITE_REQUEST_TIMEOUT_SEC", os.getenv("EQIDV2_5M_KITE_TIMEOUT_SEC", "12"))
+)
 DEFAULT_LOG_UPDATED_TICKERS = str(os.getenv("EQIDV2_LOG_UPDATED_TICKERS", "0")).strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_LOG_UPDATED_TICKERS_TOP_N = max(0, int(os.getenv("EQIDV2_LOG_UPDATED_TICKERS_TOP_N", "8")))
 DEFAULT_SAVE_NEW_ROWS_REPORTS = str(os.getenv("EQIDV2_SAVE_NEW_ROWS_REPORTS", "0")).strip().lower() in {"1", "true", "yes", "on"}
@@ -88,6 +93,11 @@ DEFAULT_VERIFY_SAMPLE_SIZE = max(0, int(os.getenv("EQIDV2_VERIFY_SAMPLE_SIZE", "
 DEFAULT_LOG_INDICATOR_QUALITY = str(os.getenv("EQIDV2_LOG_INDICATOR_QUALITY", "0")).strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_DOWNCAST_NUMERIC = str(os.getenv("EQIDV2_DOWNCAST_NUMERIC", "0")).strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_PARQUET_COMPRESSION = str(os.getenv("EQIDV2_PARQUET_COMPRESSION", "none")).strip().lower()
+DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS = False
+DEFAULT_SESSION_COMPLETENESS_LOG_LIMIT = max(
+    1,
+    int(os.getenv("EQIDV2_5M_SESSION_COMPLETENESS_LOG_LIMIT", "6")),
+)
 
 # Market timing (IST)
 MARKET_OPEN_TIME = time(9, 15)
@@ -104,8 +114,10 @@ WARMUP_BARS = {
 }
 
 # Token cache
-TOKENS_CACHE_FILE = "stocks_tokens_cache.json"
+SCRIPT_ROOT = Path(__file__).resolve().parent
+TOKENS_CACHE_FILE = str(SCRIPT_ROOT / "stocks_tokens_cache.json")
 TOKENS_CACHE_MAX_AGE_DAYS = 7
+INVALID_SYMBOLS_FILE = str(SCRIPT_ROOT / "stocks_invalid_symbols.json")
 
 # Optional NSE holidays file (one date per line or CSV column "date")
 HOLIDAYS_FILE_DEFAULT = "nse_holidays.csv"
@@ -113,6 +125,113 @@ HOLIDAYS_FILE_DEFAULT = "nse_holidays.csv"
 # ========= STORAGE (PARQUET) =========
 MIGRATE_LEGACY_CSV = True
 DELETE_LEGACY_CSV = False
+
+
+class InvalidInstrumentTokenError(RuntimeError):
+    """Raised when Kite rejects a cached instrument token as invalid."""
+
+
+def _load_invalid_symbol_map() -> dict[str, dict[str, str]]:
+    try:
+        if not os.path.exists(INVALID_SYMBOLS_FILE):
+            return {}
+        raw = json.loads(Path(INVALID_SYMBOLS_FILE).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, dict[str, str]] = {}
+        for key, value in raw.items():
+            sym = str(key).strip().upper()
+            if not sym:
+                continue
+            meta = value if isinstance(value, dict) else {"reason": str(value)}
+            out[sym] = {str(k): str(v) for k, v in meta.items()}
+        return out
+    except Exception:
+        return {}
+
+
+def _load_invalid_symbols() -> set[str]:
+    return set(_load_invalid_symbol_map().keys())
+
+
+def _save_invalid_symbol_map(data: dict[str, dict[str, str]]) -> None:
+    Path(INVALID_SYMBOLS_FILE).write_text(
+        json.dumps(data, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _remove_symbols_from_token_cache(symbols: list[str] | set[str]) -> None:
+    syms_u = {str(sym).strip().upper() for sym in symbols if str(sym).strip()}
+    if not syms_u or not os.path.exists(TOKENS_CACHE_FILE):
+        return
+    try:
+        cache = json.loads(Path(TOKENS_CACHE_FILE).read_text(encoding="utf-8"))
+        if not isinstance(cache, dict):
+            return
+        changed = False
+        for sym in syms_u:
+            if sym in cache:
+                cache.pop(sym, None)
+                changed = True
+        if changed:
+            Path(TOKENS_CACHE_FILE).write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _quarantine_symbols(symbols: list[str] | set[str], logger: logging.Logger, reason: str) -> None:
+    syms_u = sorted({str(sym).strip().upper() for sym in symbols if str(sym).strip()})
+    if not syms_u:
+        return
+    try:
+        data = _load_invalid_symbol_map()
+        now_ist = datetime.now(IST_TZ).strftime("%Y-%m-%d %H:%M:%S%z")
+        changed = False
+        for sym in syms_u:
+            prev = data.get(sym) or {}
+            next_meta = {
+                "reason": str(reason).strip() or "invalid_symbol",
+                "noted_at": now_ist,
+            }
+            if prev != next_meta:
+                data[sym] = next_meta
+                changed = True
+        if changed:
+            _save_invalid_symbol_map(data)
+        _remove_symbols_from_token_cache(syms_u)
+        logger.warning(
+            "Quarantined %d symbol(s) from live fetch: %s",
+            len(syms_u),
+            ", ".join(syms_u[:20]),
+        )
+    except Exception as exc:
+        logger.warning("Failed to quarantine invalid symbols %s: %s", ", ".join(syms_u[:20]), exc)
+
+
+def _filter_quarantined_symbols(
+    tickers: list[str],
+    token_map: dict[str, int],
+    logger: logging.Logger,
+) -> tuple[list[str], dict[str, int]]:
+    invalid_symbols = _load_invalid_symbols()
+    if not invalid_symbols:
+        return tickers, token_map
+    filtered_tickers = [t for t in tickers if t.upper() not in invalid_symbols]
+    removed = sorted({t.upper() for t in tickers if t.upper() in invalid_symbols})
+    if removed:
+        logger.warning(
+            "Skipping %d quarantined symbol(s) from live fetch universe: %s",
+            len(removed),
+            ", ".join(removed[:20]),
+        )
+    filtered_token_map = {k: v for k, v in token_map.items() if k.upper() not in invalid_symbols}
+    return filtered_tickers, filtered_token_map
+
+
+def _is_invalid_token_error(ex: Exception) -> bool:
+    text = str(ex).strip().lower()
+    return "invalid token" in text
 
 
 # ========= LOGGING =========
@@ -198,7 +317,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                 tickers = sorted(token_map.keys())
                 if tickers:
                     logger.info("Loaded %d symbols from filtered_stocks_MIS.stocks_tokens", len(tickers))
-                    return tickers, token_map
+                    return _filter_quarantined_symbols(tickers, token_map, logger)
             except Exception:
                 pass
 
@@ -214,12 +333,12 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                     pass
                 if tickers:
                     logger.info("Loaded %d symbols from filtered_stocks_MIS.selected_stocks", len(tickers))
-                    return tickers, token_map
+                    return _filter_quarantined_symbols(tickers, token_map, logger)
 
             tickers = _normalize_ticker_list(ss)
             if tickers:
                 logger.info("Loaded %d symbols from filtered_stocks_MIS.selected_stocks", len(tickers))
-                return tickers, token_map
+                return _filter_quarantined_symbols(tickers, token_map, logger)
 
     for base in (cwd, script_dir, parent_dir):
         f = base / "stocks_tickers.txt"
@@ -228,7 +347,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
             tickers = _normalize_ticker_list(arr)
             if tickers:
                 logger.info("Loaded %d symbols from %s", len(tickers), str(f))
-                return tickers, token_map
+                return _filter_quarantined_symbols(tickers, token_map, logger)
 
     raise RuntimeError(
         "Could not load symbols.\n"
@@ -248,7 +367,7 @@ def setup_kite_session() -> KiteConnect:
         access_token = f.read().strip()
     with open("api_key.txt", "r", encoding="utf-8") as f:
         api_key = f.read().split()[0]
-    kite_local = KiteConnect(api_key=api_key)
+    kite_local = KiteConnect(api_key=api_key, timeout=DEFAULT_KITE_REQUEST_TIMEOUT_SEC)
     kite_local.set_access_token(access_token)
     return kite_local
 
@@ -529,6 +648,10 @@ def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, holidays: set[d
     step_td = timedelta(minutes=step_min) if step_min > 0 else timedelta(0)
 
     if last_ts >= (exp_ts - tol):
+        if mode.lower().strip() == "5min" and DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS:
+            missing_session = _missing_5min_session_stamps_from_store(existing_path, exp_ts)
+            if missing_session:
+                return False
         return True
     if step_min > 0:
         if (last_ts + step_td) >= (exp_ts - tol):
@@ -592,6 +715,12 @@ def fetch_historical_generic(
             or " 429 " in f" {text} "
         )
 
+    def _timeout_backoff(attempt: int) -> float:
+        return max(
+            DEFAULT_FETCH_RETRY_BASE_SEC * (2 ** (attempt - 1)),
+            DEFAULT_FETCH_TIMEOUT_BACKOFF_BASE_SEC * (2 ** (attempt - 1)),
+        )
+
     while s < end:
         e = min(s + chunk, end)
 
@@ -612,12 +741,21 @@ def fetch_historical_generic(
                 frames.append(df)
                 break
             except (kexc.NetworkException, kexc.DataException, kexc.TokenException, kexc.InputException) as ex:
+                if _is_invalid_token_error(ex):
+                    logger.warning("Failed chunk %s → %s (%s): %s", s, e, interval, ex)
+                    raise InvalidInstrumentTokenError(str(ex)) from ex
                 backoff_sec = DEFAULT_FETCH_RETRY_BASE_SEC * (2 ** (attempt - 1))
                 if _is_rate_limited_error(ex):
                     backoff_sec = max(
                         backoff_sec,
                         DEFAULT_FETCH_RATE_LIMIT_BACKOFF_BASE_SEC * (2 ** (attempt - 1)),
                     )
+                if attempt == MAX_RETRIES:
+                    logger.warning("Failed chunk %s â†’ %s (%s): %s", s, e, interval, ex)
+                else:
+                    _time.sleep(backoff_sec)
+            except (reqexc.Timeout, reqexc.ConnectionError, TimeoutError) as ex:
+                backoff_sec = _timeout_backoff(attempt)
                 if attempt == MAX_RETRIES:
                     logger.warning("Failed chunk %s â†’ %s (%s): %s", s, e, interval, ex)
                 else:
@@ -791,7 +929,16 @@ def add_change_features_intraday(df: pd.DataFrame) -> pd.DataFrame:
 # ========= TOKEN CACHE =========
 
 def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.Logger, refresh: bool = False) -> dict[str, int]:
-    syms_u = sorted({t.upper().strip() for t in symbols if t.strip()})
+    invalid_symbols = _load_invalid_symbols()
+    syms_u = sorted(
+        {
+            t.upper().strip()
+            for t in symbols
+            if t.strip() and t.upper().strip() not in invalid_symbols
+        }
+    )
+    if not syms_u:
+        return {}
 
     if (not refresh) and os.path.exists(TOKENS_CACHE_FILE):
         try:
@@ -808,6 +955,7 @@ def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.
     ins = pd.DataFrame(kite.instruments("NSE"))
     tokens = ins[ins["tradingsymbol"].isin(syms_u)][["tradingsymbol", "instrument_token"]]
     mp = dict(zip(tokens["tradingsymbol"], tokens["instrument_token"]))
+    missing_requested = sorted([t for t in syms_u if t not in mp])
 
     try:
         existing = {}
@@ -815,10 +963,19 @@ def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.
             existing = json.loads(Path(TOKENS_CACHE_FILE).read_text(encoding="utf-8"))
             if not isinstance(existing, dict):
                 existing = {}
+        for sym in missing_requested:
+            existing.pop(sym, None)
         existing.update({k: int(v) for k, v in mp.items()})
         Path(TOKENS_CACHE_FILE).write_text(json.dumps(existing, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+    if missing_requested:
+        logger.warning(
+            "Missing %d symbol(s) from current NSE instruments during token refresh: %s",
+            len(missing_requested),
+            ", ".join(missing_requested[:20]),
+        )
 
     return {t: int(mp[t]) for t in syms_u if t in mp}
 
@@ -949,6 +1106,178 @@ def _incremental_start_from_existing(
     return max(default_start, last_ts - back)
 
 
+def _expected_5min_session_stamps(expected_ts_ist: datetime | pd.Timestamp | None) -> list[pd.Timestamp]:
+    if not DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS:
+        return []
+
+    ts = _coerce_ist_datetime(expected_ts_ist)
+    if ts is None:
+        return []
+
+    session_open = pd.Timestamp(
+        IST_TZ.localize(datetime(ts.year, ts.month, ts.day, 9, 15, 0))
+    )
+    if ts < session_open:
+        return []
+
+    first_end = session_open + pd.Timedelta(minutes=5)
+    expected: list[pd.Timestamp] = [session_open]
+    if ts >= first_end:
+        expected.extend(
+            list(pd.date_range(start=first_end, end=ts.floor("min"), freq="5min", tz=IST_TZ))
+        )
+    return expected
+
+
+def _read_store_dates(path: str) -> pd.Series:
+    try:
+        ext = str(Path(path).suffix).lower()
+        if ext == ".parquet":
+            _ensure_parquet_engine()
+            df = pd.read_parquet(path, columns=["date"], engine="pyarrow")
+        else:
+            df = pd.read_csv(path, usecols=["date"])
+    except Exception:
+        return pd.Series([], dtype="datetime64[ns]")
+
+    if df is None or df.empty or "date" not in df.columns:
+        return pd.Series([], dtype="datetime64[ns]")
+
+    dt = pd.to_datetime(df["date"], errors="coerce").dropna()
+    if dt.empty:
+        return pd.Series([], dtype="datetime64[ns]")
+    if getattr(dt.dt, "tz", None) is None:
+        return dt.dt.tz_localize(IST_TZ)
+    return dt.dt.tz_convert(IST_TZ)
+
+
+def _missing_5min_session_stamps_from_series(
+    date_series: pd.Series,
+    expected_ts_ist: datetime | pd.Timestamp | None,
+) -> list[pd.Timestamp]:
+    expected = _expected_5min_session_stamps(expected_ts_ist)
+    if not expected:
+        return []
+    if date_series is None or len(date_series) == 0:
+        return expected
+
+    dt = pd.to_datetime(date_series, errors="coerce").dropna()
+    if dt.empty:
+        return expected
+    if getattr(dt.dt, "tz", None) is None:
+        dt = dt.dt.tz_localize(IST_TZ)
+    else:
+        dt = dt.dt.tz_convert(IST_TZ)
+
+    target_day = expected[0].date()
+    actual = {
+        pd.Timestamp(ts).floor("min")
+        for ts in dt[dt.dt.date == target_day].tolist()
+    }
+    return [stamp for stamp in expected if stamp.floor("min") not in actual]
+
+
+def _missing_5min_session_stamps_from_df(
+    df: pd.DataFrame,
+    expected_ts_ist: datetime | pd.Timestamp | None,
+) -> list[pd.Timestamp]:
+    if df is None or df.empty or "date" not in df.columns:
+        return _expected_5min_session_stamps(expected_ts_ist)
+    return _missing_5min_session_stamps_from_series(df["date"], expected_ts_ist)
+
+
+def _missing_5min_session_stamps_from_store(
+    path: str,
+    expected_ts_ist: datetime | pd.Timestamp | None,
+) -> list[pd.Timestamp]:
+    return _missing_5min_session_stamps_from_series(_read_store_dates(path), expected_ts_ist)
+
+
+def _format_missing_stamp_sample(missing_stamps: list[pd.Timestamp]) -> str:
+    if not missing_stamps:
+        return ""
+    return ", ".join(
+        pd.Timestamp(ts).strftime("%H:%M") for ts in missing_stamps[:DEFAULT_SESSION_COMPLETENESS_LOG_LIMIT]
+    )
+
+
+def _fetch_missing_5min_session_rows(
+    ticker: str,
+    kite: KiteConnect,
+    token: int,
+    expected_ts_ist: datetime | pd.Timestamp | None,
+    missing_stamps: list[pd.Timestamp],
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    expected_ts = _coerce_ist_datetime(expected_ts_ist)
+    if expected_ts is None or not missing_stamps:
+        return pd.DataFrame()
+
+    session_open = pd.Timestamp(
+        IST_TZ.localize(datetime(expected_ts.year, expected_ts.month, expected_ts.day, 9, 15, 0))
+    )
+    first_end = session_open + pd.Timedelta(minutes=5)
+    normalized_missing = sorted(pd.Timestamp(ts).floor("min") for ts in missing_stamps)
+    frames: list[pd.DataFrame] = []
+
+    if session_open.floor("min") in normalized_missing:
+        opening_df = fetch_historical_5min_df(
+            kite,
+            token,
+            session_open.to_pydatetime(),
+            first_end.to_pydatetime(),
+            logger,
+            "start",
+        )
+        if not opening_df.empty:
+            opening_dt = pd.to_datetime(opening_df["date"], errors="coerce")
+            if getattr(opening_dt.dt, "tz", None) is None:
+                opening_dt = opening_dt.dt.tz_localize(IST_TZ)
+            else:
+                opening_dt = opening_dt.dt.tz_convert(IST_TZ)
+            opening_df = opening_df.loc[opening_dt == session_open].copy()
+            if not opening_df.empty:
+                opening_df["date"] = opening_dt.loc[opening_df.index]
+                frames.append(opening_df)
+
+    end_missing = [ts for ts in normalized_missing if ts >= first_end]
+    if end_missing:
+        end_df = fetch_historical_5min_df(
+            kite,
+            token,
+            session_open.to_pydatetime(),
+            expected_ts.to_pydatetime(),
+            logger,
+            "end",
+        )
+        if not end_df.empty:
+            end_dt = pd.to_datetime(end_df["date"], errors="coerce")
+            if getattr(end_dt.dt, "tz", None) is None:
+                end_dt = end_dt.dt.tz_localize(IST_TZ)
+            else:
+                end_dt = end_dt.dt.tz_convert(IST_TZ)
+            mask = end_dt.isin(end_missing)
+            end_df = end_df.loc[mask].copy()
+            if not end_df.empty:
+                end_df["date"] = end_dt.loc[end_df.index]
+                frames.append(end_df)
+
+    if not frames:
+        logger.warning(
+            "[5MIN] %s session backfill returned no rows | missing=%s",
+            ticker,
+            _format_missing_stamp_sample(normalized_missing),
+        )
+        return pd.DataFrame()
+
+    return (
+        pd.concat(frames, ignore_index=True)
+        .drop_duplicates(subset="date", keep="last")
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+
 # ========= PER-SYMBOL PIPELINE =========
 
 def _compute_common_features(df: pd.DataFrame, mode: str) -> pd.DataFrame:
@@ -1028,6 +1357,7 @@ class UpdateReport:
     indicators_secs: float
     persist_secs: float
     total_secs: float
+    allow_previous_slot_verify: bool = False
 
 
 def verify_mode_outputs(
@@ -1035,6 +1365,7 @@ def verify_mode_outputs(
     symbols: list[str],
     expected_ts_ist: datetime,
     logger: logging.Logger,
+    allow_previous_slot_tickers: set[str] | None = None,
 ) -> tuple[int, list[str]]:
     """
     Post-run verification:
@@ -1047,6 +1378,11 @@ def verify_mode_outputs(
 
     if expected_ts_ist.tzinfo is None:
         expected_ts_ist = IST_TZ.localize(expected_ts_ist)
+    allow_previous_slot_tickers = {
+        str(t).strip().upper() for t in (allow_previous_slot_tickers or set()) if str(t).strip()
+    }
+    step_min = _mode_step_minutes(mode) or 0
+    prev_slot_tol_ts = expected_ts_ist - timedelta(minutes=step_min) if step_min > 0 else None
 
     for t in symbols:
         t_u = t.upper()
@@ -1066,6 +1402,21 @@ def verify_mode_outputs(
             last_ts = last_ts.tz_convert(IST_TZ)
 
         if last_ts >= (expected_ts_ist - tol):
+            if mode.lower().strip() == "5min" and DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS:
+                missing_session = _missing_5min_session_stamps_from_store(existing_path, expected_ts_ist)
+                if missing_session:
+                    failed.append(
+                        f"{t_u}:missing_session_stamps={_format_missing_stamp_sample(missing_session)}"
+                    )
+                else:
+                    ok += 1
+            else:
+                ok += 1
+        elif (
+            prev_slot_tol_ts is not None
+            and t_u in allow_previous_slot_tickers
+            and last_ts >= (prev_slot_tol_ts - tol)
+        ):
             ok += 1
         else:
             failed.append(f"{t_u}:stale_last_ts={last_ts.strftime('%Y-%m-%d %H:%M:%S%z')}")
@@ -1131,6 +1482,7 @@ def _recover_verify_failures(
     report_dir: str,
     print_missing_rows: bool,
     print_missing_rows_max: int,
+    allow_previous_slot_tickers: set[str] | None = None,
 ) -> float:
     """
     Recovery pass for symbols that failed final verification.
@@ -1221,7 +1573,13 @@ def _recover_verify_failures(
                         logger.exception("[%s][VERIFY] Recovery worker crashed for %s: %s", mode.upper(), tkr, e)
 
         check_symbols = token_missing + [t for (t, _) in work_items]
-        _, verify_failed_subset = verify_mode_outputs(mode, check_symbols, expected_ts_ist, logger)
+        _, verify_failed_subset = verify_mode_outputs(
+            mode,
+            check_symbols,
+            expected_ts_ist,
+            logger,
+            allow_previous_slot_tickers=allow_previous_slot_tickers,
+        )
         remaining = _extract_failed_tickers(verify_failed_subset, check_symbols)
 
         if remaining and attempt < max_attempts:
@@ -1302,6 +1660,27 @@ def process_ticker(
             else:
                 last_before_ts = existing_last_ts.tz_convert(IST_TZ)
 
+    session_expected_ts = _coerce_ist_datetime(exp.get("value"))
+    session_missing_stamps = (
+        _missing_5min_session_stamps_from_df(existing, session_expected_ts)
+        if mode == "5min" and DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS
+        else []
+    )
+    session_backfill_mode = bool(
+        mode == "5min"
+        and DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS
+        and not existing.empty
+        and session_missing_stamps
+    )
+    if session_backfill_mode:
+        logger.warning(
+            "[%s] %s session completeness gap detected | missing=%d | sample=%s",
+            mode.upper(),
+            ticker,
+            len(session_missing_stamps),
+            _format_missing_stamp_sample(session_missing_stamps),
+        )
+
     slot_fetch_start, slot_fetch_end, slot_target_ts = _resolve_current_slot_window(
         mode,
         intraday_ts,
@@ -1310,7 +1689,12 @@ def process_ticker(
         end_dt_ist,
     )
 
-    if slot_target_ts is not None and last_before_ts is not None and last_before_ts >= slot_target_ts:
+    if (
+        slot_target_ts is not None
+        and last_before_ts is not None
+        and last_before_ts >= slot_target_ts
+        and not session_backfill_mode
+    ):
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                             exp_str, 0, None, None, None,
@@ -1327,19 +1711,65 @@ def process_ticker(
                             load_existing_secs, fetch_secs, indicators_secs, persist_secs,
                             _time.perf_counter() - t_total0)
 
+    def _fetch_for_token(active_token: int) -> pd.DataFrame:
+        if session_backfill_mode:
+            return _fetch_missing_5min_session_rows(
+                ticker,
+                kite,
+                active_token,
+                session_expected_ts,
+                session_missing_stamps,
+                logger,
+            )
+        if mode == "5min":
+            return fetch_historical_5min_df(kite, active_token, inc_start, fetch_end_dt, logger, intraday_ts)
+        if mode == "15min":
+            return fetch_historical_15min_df(kite, active_token, inc_start, fetch_end_dt, logger, intraday_ts)
+        raise ValueError(f"Unsupported mode for fetch: {mode}")
+
     try:
         t_fetch0 = _time.perf_counter()
-        if mode == "5min":
-            fetched = fetch_historical_5min_df(kite, token, inc_start, fetch_end_dt, logger, intraday_ts)
-        elif mode == "15min":
-            fetched = fetch_historical_15min_df(kite, token, inc_start, fetch_end_dt, logger, intraday_ts)
+        fetched = _fetch_for_token(token)
+        fetch_secs = _time.perf_counter() - t_fetch0
+    except InvalidInstrumentTokenError:
+        refreshed = {}
+        try:
+            refreshed = load_or_fetch_tokens(kite, [ticker], logger, refresh=True)
+        except Exception as refresh_exc:
+            logger.warning("[%s] %s token refresh failed after invalid token: %s", mode.upper(), ticker, refresh_exc)
+
+        refreshed_token = refreshed.get(ticker.upper())
+        if refreshed_token and int(refreshed_token) != int(token):
+            logger.warning(
+                "[%s] %s invalid cached token %s refreshed to %s. Retrying once.",
+                mode.upper(),
+                ticker,
+                token,
+                refreshed_token,
+            )
+            try:
+                t_fetch0 = _time.perf_counter()
+                fetched = _fetch_for_token(int(refreshed_token))
+                fetch_secs = _time.perf_counter() - t_fetch0
+            except InvalidInstrumentTokenError:
+                _quarantine_symbols([ticker], logger, "invalid_token_after_refresh")
+                return UpdateReport(mode, ticker, "noop", out_path, existed_before,
+                                    last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
+                                    exp_str, 0, None, None, None,
+                                    load_existing_secs, fetch_secs, indicators_secs, persist_secs,
+                                    _time.perf_counter() - t_total0)
         else:
-            return UpdateReport(mode, ticker, "failed", out_path, existed_before,
+            _quarantine_symbols([ticker], logger, "missing_from_current_nse_instruments")
+            logger.warning(
+                "[%s] %s is absent from current NSE instruments after invalid token. Skipping future live fetch attempts.",
+                mode.upper(),
+                ticker,
+            )
+            return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                                 last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                                 exp_str, 0, None, None, None,
                                 load_existing_secs, fetch_secs, indicators_secs, persist_secs,
                                 _time.perf_counter() - t_total0)
-        fetch_secs = _time.perf_counter() - t_fetch0
     except Exception as e:
         logger.exception("[%s] %s fetch failed: %s", mode.upper(), ticker, e)
         return UpdateReport(mode, ticker, "failed", out_path, existed_before,
@@ -1353,18 +1783,20 @@ def process_ticker(
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                             exp_str, 0, None, None, None,
                             load_existing_secs, fetch_secs, indicators_secs, persist_secs,
-                            _time.perf_counter() - t_total0)
+                            _time.perf_counter() - t_total0,
+                            allow_previous_slot_verify=bool(slot_target_ts is not None))
 
-    if slot_target_ts is not None:
+    if slot_target_ts is not None and not session_backfill_mode:
         fetched = fetched[fetched["date"] == slot_target_ts].reset_index(drop=True)
         if fetched.empty:
             return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                                 last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                                 exp_str, 0, None, None, None,
                                 load_existing_secs, fetch_secs, indicators_secs, persist_secs,
-                                _time.perf_counter() - t_total0)
+                                _time.perf_counter() - t_total0,
+                                allow_previous_slot_verify=True)
 
-    if mode in {"5min", "15min"} and last_before_ts is not None:
+    if mode in {"5min", "15min"} and last_before_ts is not None and not session_backfill_mode:
         overlap = fetched[fetched["date"] <= last_before_ts].copy()
         if not overlap.empty:
             overlap_first = pd.to_datetime(overlap["date"], errors="coerce").dropna().min()
@@ -1385,14 +1817,15 @@ def process_ticker(
                                 last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                                 exp_str, 0, None, None, None,
                                 load_existing_secs, fetch_secs, indicators_secs, persist_secs,
-                                _time.perf_counter() - t_total0)
+                                _time.perf_counter() - t_total0,
+                                allow_previous_slot_verify=bool(slot_target_ts is not None))
 
     merged = fetched
     if not existing.empty:
         if mode in {"5min", "15min"}:
             merged = (
                 pd.concat([existing, fetched], ignore_index=True)
-                  .drop_duplicates(subset="date", keep="first")
+                  .drop_duplicates(subset="date", keep="last" if session_backfill_mode else "first")
                   .sort_values("date")
                   .reset_index(drop=True)
             )
@@ -1423,7 +1856,16 @@ def process_ticker(
             except Exception:
                 pass
 
-        if existed_before and last_before_ts is not None:
+        if session_backfill_mode and not existing.empty:
+            before_dates = {
+                pd.Timestamp(ts).floor("min")
+                for ts in _to_ist(existing["date"]).dropna().tolist()
+            }
+            merged_dates = _to_ist(merged["date"])
+            new_rows = merged.loc[
+                ~merged_dates.dt.floor("min").isin(before_dates)
+            ].copy()
+        elif existed_before and last_before_ts is not None:
             new_rows = merged[merged["date"] > last_before_ts].copy()
         else:
             new_rows = merged.copy()
@@ -1608,6 +2050,7 @@ def run_mode(
 
     all_reports: list[UpdateReport] = []
     updated_reports: list[UpdateReport] = []
+    allow_previous_slot_tickers: set[str] = set()
     failed = 0
 
     t_workers0 = _time.perf_counter()
@@ -1627,6 +2070,8 @@ def run_mode(
             try:
                 rep: UpdateReport = fut.result()
                 all_reports.append(rep)
+                if rep.allow_previous_slot_verify:
+                    allow_previous_slot_tickers.add(rep.ticker.upper())
                 if rep.status == "failed":
                     failed += 1
                 if rep.status in ("created", "updated"):
@@ -1690,16 +2135,30 @@ def run_mode(
         logger.info("[%s][TIMING] per_ticker_sum_s load=%.2f fetch=%.2f ind=%.2f persist=%.2f total=%.2f",
                     mode.upper(), sum_load, sum_fetch, sum_ind, sum_persist, sum_total)
 
-    verify_symbols = _sample_verify_symbols(syms, DEFAULT_VERIFY_SAMPLE_SIZE)
-    if len(verify_symbols) != len(syms):
+    verify_universe = [s for s in syms if s.upper() not in _load_invalid_symbols()]
+    skipped_invalid = len(syms) - len(verify_universe)
+    if skipped_invalid > 0:
+        logger.warning(
+            "[%s][VERIFY] Skipping %d quarantined symbol(s) from verification.",
+            mode.upper(),
+            skipped_invalid,
+        )
+    verify_symbols = _sample_verify_symbols(verify_universe, DEFAULT_VERIFY_SAMPLE_SIZE)
+    if len(verify_symbols) != len(verify_universe):
         logger.info(
             "[%s][VERIFY] Fast sample enabled: checking %d/%d symbols",
             mode.upper(),
             len(verify_symbols),
-            len(syms),
+            len(verify_universe),
         )
     t_verify0 = _time.perf_counter()
-    ok_count, verify_failed = verify_mode_outputs(mode, verify_symbols, verify_expected_ts, logger)
+    ok_count, verify_failed = verify_mode_outputs(
+        mode,
+        verify_symbols,
+        verify_expected_ts,
+        logger,
+        allow_previous_slot_tickers=allow_previous_slot_tickers,
+    )
     verify_secs = _time.perf_counter() - t_verify0
     logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
                 mode.upper(),
@@ -1726,14 +2185,22 @@ def run_mode(
             report_dir=report_dir,
             print_missing_rows=print_missing_rows,
             print_missing_rows_max=print_missing_rows_max,
+            allow_previous_slot_tickers=allow_previous_slot_tickers,
         )
         t_verify1 = _time.perf_counter()
-        ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+        verify_universe = [s for s in syms if s.upper() not in _load_invalid_symbols()]
+        ok_count, verify_failed = verify_mode_outputs(
+            mode,
+            verify_universe,
+            verify_expected_ts,
+            logger,
+            allow_previous_slot_tickers=allow_previous_slot_tickers,
+        )
         verify_post_secs = _time.perf_counter() - t_verify1
         logger.info("[%s][VERIFY][POST] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
                     mode.upper(),
                     verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
-                    ok_count, len(verify_symbols), len(verify_failed), verify_post_secs)
+                    ok_count, len(verify_universe), len(verify_failed), verify_post_secs)
 
     if recovery_secs > 0.0:
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=%.2fs | verify_pre=%.2fs | recover=%.2fs | verify_post=%.2fs | total=%.2fs",

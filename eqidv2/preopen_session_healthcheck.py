@@ -392,9 +392,11 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     v15_paper_enabled = _task_is_enabled("EQIDV2_avwap_paper_trade_v15_0900")
     v15_live_enabled = _task_is_enabled("EQIDV2_avwap_live_trade_v15_0905")
     v15_nifty_enabled = _task_is_enabled("EQIDV2_nifty_guard_fetch_v15_0915")
+    v16_5min_nifty_enabled = _task_is_enabled("EQIDV2_nifty_guard_fetch_v16_5min_0915")
     kite_export_enabled = _task_is_enabled("EQIDV2_kite_export_start_0915")
     now_local = now_ist()
     v15_nifty_log_due = now_local.time() >= dt.time(9, 15)
+    v16_5min_nifty_log_due = now_local.time() >= dt.time(9, 15)
 
     # Scheduled tasks expected to have run by 09:05.
     preopen_tasks = [
@@ -444,6 +446,15 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_task_enabled_state(
+            "EQIDV2_nifty_guard_fetch_v16_5min_0915",
+            "task_EQIDV2_nifty_guard_fetch_v16_5min_0915",
+            require_run_today=False,
+            inactive_ok=True,
+            inactive_detail="session not enabled",
+        )
+    )
+    checks.append(
+        check_task_enabled_state(
             "EQIDV2_kite_export_start_0915",
             "task_EQIDV2_kite_export_start_0915",
             require_run_today=False,
@@ -484,6 +495,15 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             max_age_min=max_age_min,
             label="nifty_guard_fetch_v15",
             enabled=v15_nifty_enabled and v15_nifty_log_due,
+            disabled_detail="session not enabled or scheduled later in session",
+        )
+    )
+    checks.append(
+        check_file_recent_if_enabled(
+            LOG_DIR / "nifty_guard_fetcher_v16_5min.log",
+            max_age_min=max_age_min,
+            label="nifty_guard_fetch_v16_5min",
+            enabled=v16_5min_nifty_enabled and v16_5min_nifty_log_due,
             disabled_detail="session not enabled or scheduled later in session",
         )
     )

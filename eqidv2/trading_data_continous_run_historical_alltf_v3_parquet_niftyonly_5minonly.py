@@ -221,10 +221,60 @@ def _merge_fetch(existing: pd.DataFrame, fetched: pd.DataFrame) -> pd.DataFrame:
         return fetched.copy()
     return (
         pd.concat([existing, fetched], ignore_index=True)
-        .drop_duplicates(subset="date", keep="first")
+        .drop_duplicates(subset="date", keep="last")
         .sort_values("date")
         .reset_index(drop=True)
     )
+
+
+def _load_existing_ohlc_raw(out_path: str) -> pd.DataFrame:
+    existing_path = _resolve_existing_store_path(out_path)
+    if not Path(existing_path).exists():
+        return pd.DataFrame()
+
+    keep_cols = ["date", "open", "high", "low", "close", "volume"]
+    try:
+        if str(existing_path).lower().endswith(".parquet"):
+            df = pd.read_parquet(existing_path, columns=keep_cols)
+        else:
+            df = pd.read_csv(existing_path)
+        if df.empty or "date" not in df.columns:
+            return pd.DataFrame()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        if getattr(df["date"].dt, "tz", None) is None:
+            df["date"] = df["date"].dt.tz_localize(IST_TZ)
+        else:
+            df["date"] = df["date"].dt.tz_convert(IST_TZ)
+        keep = [c for c in keep_cols if c in df.columns]
+        return df[keep].drop_duplicates(subset="date", keep="last").sort_values("date").reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _session_open_ts(target_ts: datetime | pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(target_ts)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize(IST_TZ)
+    else:
+        ts = ts.tz_convert(IST_TZ)
+    return pd.Timestamp(
+        IST_TZ.localize(datetime(ts.year, ts.month, ts.day, MARKET_OPEN_TIME.hour, MARKET_OPEN_TIME.minute, 0))
+    )
+
+
+def _missing_opening_snapshot(existing: pd.DataFrame, target_ts: datetime | pd.Timestamp) -> bool:
+    if existing is None or existing.empty or "date" not in existing.columns:
+        return True
+    target = pd.Timestamp(target_ts)
+    if target.tzinfo is None:
+        target = target.tz_localize(IST_TZ)
+    else:
+        target = target.tz_convert(IST_TZ)
+    session_open = _session_open_ts(target)
+    today_df = existing[existing["date"].dt.date == target.date()].copy()
+    if today_df.empty:
+        return True
+    return bool((today_df["date"].dt.floor("min") == session_open.floor("min")).sum() == 0)
 
 
 def main() -> int:
@@ -252,22 +302,53 @@ def main() -> int:
 
     primary_alias = aliases[0]
     primary_out = str(Path(OUT_DIR) / f"{primary_alias}_stocks_indicators_5min.parquet")
+    existing = _load_existing_ohlc_raw(primary_out)
+    opening_snapshot_missing = _missing_opening_snapshot(existing, end_dt)
 
-    if (not args.no_skip) and _nifty_is_exactly_fresh(primary_out, now_ist, holidays, args.intraday_ts):
+    if (
+        (not args.no_skip)
+        and _nifty_is_exactly_fresh(primary_out, now_ist, holidays, args.intraday_ts)
+        and not opening_snapshot_missing
+    ):
         logger.info("%s already fresh. Skipping fetch.", primary_alias)
         return 0
+
+    merged = existing.copy()
+    if opening_snapshot_missing:
+        session_open = _session_open_ts(end_dt)
+        repair_end = min(pd.Timestamp(end_dt), session_open + pd.Timedelta(minutes=STEP_MIN))
+        session_open_dt = session_open.to_pydatetime()
+        repair_end_dt = repair_end.to_pydatetime()
+        logger.warning(
+            "Opening snapshot missing for %s on %s. Repairing via intraday_ts=start from %s to %s.",
+            primary_alias,
+            session_open.date(),
+            session_open_dt,
+            repair_end_dt,
+        )
+        repair = fetch_historical_5min_df(kite, token, session_open_dt, repair_end_dt, logger, "start")
+        if repair.empty:
+            logger.warning("Opening snapshot repair fetch returned no rows.")
+        else:
+            merged = _merge_fetch(merged, repair)
+            logger.info(
+                "Opening snapshot repair added %d row(s); first=%s last=%s",
+                len(repair),
+                repair["date"].min(),
+                repair["date"].max(),
+            )
 
     inc_start = _normalize_fetch_start(_incremental_start(primary_out, start_dt), holidays)
     if inc_start >= end_dt:
         inc_start = end_dt - timedelta(minutes=STEP_MIN)
     logger.info("Fetch window: %s -> %s", inc_start, end_dt)
-    existing = _load_existing_ohlc(primary_out, args.intraday_ts)
     fetched = fetch_historical_5min_df(kite, token, inc_start, end_dt, logger, args.intraday_ts)
-    if fetched.empty:
+    if fetched.empty and merged.empty:
         logger.info("No new rows fetched.")
         return 0
 
-    merged = _merge_fetch(existing, fetched)
+    if not fetched.empty:
+        merged = _merge_fetch(merged, fetched)
     merged = _compute_features_5m(merged)
     merged = _downcast_numeric_columns(merged)
 

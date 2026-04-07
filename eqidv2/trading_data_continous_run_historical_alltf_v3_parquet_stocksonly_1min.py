@@ -55,6 +55,7 @@ import numpy as np
 import pandas as pd
 import pytz
 from kiteconnect import KiteConnect, exceptions as kexc
+import requests.exceptions as _rexc
 
 # ========= GLOBAL CONFIG =========
 
@@ -235,6 +236,10 @@ def setup_kite_session() -> KiteConnect:
       app2 -> api_key2.txt / access_token2.txt
       app3 -> api_key3.txt / access_token3.txt
       app4 -> api_key4.txt / access_token4.txt
+      app5 -> api_key5.txt / access_token5.txt
+      app6 -> api_key6.txt / access_token6.txt
+      app7 -> api_key7.txt / access_token7.txt
+      app8 -> api_key8.txt / access_token8.txt
     """
     global kite_pool, kite_pool_rr_idx
 
@@ -243,6 +248,10 @@ def setup_kite_session() -> KiteConnect:
         ("app2", "api_key2.txt", "access_token2.txt"),
         ("app3", "api_key3.txt", "access_token3.txt"),
         ("app4", "api_key4.txt", "access_token4.txt"),
+        ("app5", "api_key5.txt", "access_token5.txt"),
+        ("app6", "api_key6.txt", "access_token6.txt"),
+        ("app7", "api_key7.txt", "access_token7.txt"),
+        ("app8", "api_key8.txt", "access_token8.txt"),
     ]
 
     logger = logging.getLogger("stocks_fetcher")
@@ -266,7 +275,7 @@ def setup_kite_session() -> KiteConnect:
                 raise ValueError(f"{key_file} must contain 'API_KEY API_SECRET' separated by space.")
 
             api_key = key_data[0]
-            sess = KiteConnect(api_key=api_key)
+            sess = KiteConnect(api_key=api_key, timeout=30)
             sess.set_access_token(access_token)
             profile = sess.profile()
             user_name = profile.get("user_name", "N/A")
@@ -285,7 +294,7 @@ def setup_kite_session() -> KiteConnect:
         primary = sessions[0]
 
     if primary is None:
-        raise RuntimeError("No valid Kite session available. Check api_key/access_token files for app1..app4.")
+        raise RuntimeError("No valid Kite session available. Check api_key/access_token files for app1..app8.")
 
     with kite_pool_lock:
         kite_pool = list(sessions)
@@ -296,7 +305,7 @@ def setup_kite_session() -> KiteConnect:
 
 
 def get_kite_client_rr() -> KiteConnect:
-    """Round-robin client picker across app1..app4 sessions."""
+    """Round-robin client picker across app1..app8 sessions."""
     global kite_pool_rr_idx
     with kite_pool_lock:
         if kite_pool:
@@ -655,11 +664,12 @@ def fetch_historical_generic(
 
                 frames.append(df)
                 break
-            except (kexc.NetworkException, kexc.DataException, kexc.TokenException, kexc.InputException) as ex:
+            except (kexc.NetworkException, kexc.DataException, kexc.TokenException, kexc.InputException,
+                    _rexc.ReadTimeout, _rexc.ConnectionError) as ex:
                 if attempt == MAX_RETRIES:
-                    logger.warning("Failed chunk %s â†’ %s (%s): %s", s, e, interval, ex)
+                    logger.warning("Failed chunk %s -> %s (%s): %s", s, e, interval, ex)
                 else:
-                    _time.sleep(1.0 * attempt)
+                    _time.sleep(2.0 * attempt)
             finally:
                 _time.sleep(SLEEP_BETWEEN_CALLS)
 
