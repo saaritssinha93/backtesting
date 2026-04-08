@@ -1,7 +1,30 @@
 ﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v16_5min.py - AVWAP v16 COMBINED runner on 5-minute signals
+avwap_combined_runner_v20_5min.py - AVWAP v20 COMBINED runner on 5-minute signals
 ===================================================================================
+
+V20 DESIGN PHILOSOPHY — Relative Acceptance Index (RAI)
+--------------------------------------------------------
+V20 replaces the single-number Relative Strength (RS) scalar with a composite
+Relative Acceptance Index that measures signal quality across five dimensions:
+
+  RAI_long  = 0.35*RS_2bar + 0.25*RS_4bar + 0.20*AVWAP_acceptance
+              + 0.10*OR_break_quality + 0.10*volume_quality - exhaustion_penalty
+
+  RAI_short = 0.35*RS_2bar + 0.25*RS_4bar + 0.20*AVWAP_rejection
+              + 0.10*OR_break_quality + 0.10*weakness_quality - exhaustion_penalty
+
+  RS_2bar            — 2-bar stock-vs-NIFTY return differential (early detection)
+  RS_4bar            — 4-bar return differential (existing NIFTY_RS_LOOKBACK_BARS)
+  AVWAP_acceptance   — LONG: price is above AVWAP by a clean, un-stretched margin
+  AVWAP_rejection    — SHORT: price has cleanly rejected below AVWAP
+  OR_break_quality   — price has confirmed the Opening Range break direction
+  volume_quality     — LONG: healthy participation volume (not climax)
+  weakness_quality   — SHORT: volume confirms the selling impulse
+  exhaustion_penalty — deducted when RSI dead zones / vol climax / stretched dist
+
+V20 INHERITS all V16 anti-exhaustion filters (RSI dead zone, QS bands, dist cap,
+volume exhaustion) which continue to run as pre-RAI guards unchanged.
 
 V16 DESIGN PHILOSOPHY — Acceptance/Retest Continuation (not pure breakout-chasing)
 ------------------------------------------------------------------------------------
@@ -108,12 +131,32 @@ _project_root = _this_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
+import avwap_v11_refactored.avwap_common_v11 as avwap_common_v11_module
+import avwap_v11_refactored.avwap_common_v11_v15 as avwap_common_v11_v15_module
+
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return bool(default)
     return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 from avwap_v11_refactored.avwap_common_v11_v15 import (
     IST,
@@ -145,6 +188,9 @@ from avwap_v11_refactored.avwap_common_v7_sweep_v15 import (
     default_long_config as default_long_config_v9,
 )
 
+_BASE_READ_15M_PARQUET = read_15m_parquet
+_BASE_LIST_TICKERS_15M = list_tickers_15m
+
 
 # ===========================================================================
 # RUNNER CONFIG (top-level orchestration settings)
@@ -158,6 +204,27 @@ INTRADAY_LEVERAGE_SHORT = 5.0
 INTRADAY_LEVERAGE_LONG = 5.0
 
 ENABLE_CASH_CONSTRAINED_PORTFOLIO_SIM = False
+
+# If True, v20 uses only 5-minute signal/exit data. This disables the
+# historical 1-minute-to-5-minute backfill bridge and bypasses 1-minute exit
+# resolution. Keep this on when you want fully apples-to-apples 5-minute tests.
+V20_STRICT_5MIN_ONLY = _env_bool(
+    "EQIDV20_STRICT_5MIN_ONLY", True
+)
+
+# If True, rebuild missing historical 5-minute entry bars from the archived
+# 1-minute dataset and prepend them to the current 5-minute indicator files.
+# This lets v20 scan the full available entry history instead of only the
+# recent runtime 5-minute dump.
+V20_ENABLE_1MIN_ENTRY_BACKFILL = _env_bool(
+    "EQIDV20_ENABLE_1MIN_ENTRY_BACKFILL", False if V20_STRICT_5MIN_ONLY else True
+)
+
+# Exit-resolution preference. In strict 5-minute mode this is forced off so
+# exits are evaluated only from the 5-minute signal dataset.
+V20_USE_1MIN_EXIT_RESOLUTION = _env_bool(
+    "EQIDV20_USE_1MIN_EXIT_RESOLUTION", False if V20_STRICT_5MIN_ONLY else True
+)
 
 # If True, force min_bars_left_after_entry=0 for BOTH sides (live-signal parity).
 # This makes entry counts comparable to eqidv2_* live/daily scanners.
@@ -310,6 +377,93 @@ V16_LONG_ENTRY_VOL_EXHAUST_ENABLED  = True
 V16_LONG_ENTRY_VOL_EXHAUST_MULT     = 4.0  # entry bar volume > 4x day avg = climax signal = reject
 V16_LONG_ENTRY_VOL_EXHAUST_MIN_BARS = 3    # only apply when entry is >= 3 bars from open (not OR-bar entries)
 
+# ===========================================================================
+# V20 RELATIVE ACCEPTANCE INDEX (RAI) — replaces single-number RS threshold
+# ===========================================================================
+# Set RAI_ENABLED=False to revert to plain RS threshold (V16 behaviour).
+RAI_ENABLED = True
+
+# RAI decision thresholds (0→1 scale; below threshold = reject)
+RAI_LONG_THRESHOLD  = 0.35
+RAI_SHORT_THRESHOLD = 0.35
+
+# RS_2bar lookback (bars) — detects momentum earlier than the 4-bar window
+RAI_RS2_LOOKBACK_BARS = 2
+
+# RS normalisation scale (%). RS_2bar/4bar are mapped to [0,1] using these
+# as the ±1σ reference: score=0.5 at RS=0, score=1.0 at RS=+scale (LONG).
+RAI_RS2_SCALE_PCT = 2.0   # typical ±range for 2-bar differential
+RAI_RS4_SCALE_PCT = 3.0   # typical ±range for 4-bar differential
+
+# Component weights (must sum to 1.0)
+RAI_W_RS2  = 0.35
+RAI_W_RS4  = 0.25
+RAI_W_AVWAP = 0.20
+RAI_W_OR   = 0.10
+RAI_W_VOL  = 0.10
+
+# AVWAP normalisation caps (ATR units)
+RAI_AVWAP_LONG_SWEET_MAX  = 2.5   # dist > this starts to decay for LONG
+RAI_AVWAP_SHORT_SWEET_MAX = 2.1   # mirror of V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX
+
+# Volume quality reference band (ratio vs day-avg)
+RAI_VOL_GOOD_LO = 0.8    # below = weak participation
+RAI_VOL_GOOD_HI = 3.0    # above = climax territory (penalty handles 4x+)
+
+# Exhaustion penalty schedule (subtracted from raw RAI)
+RAI_PENALTY_RSI_SHORT_DEAD   = 0.35   # RSI 35-40 dead zone on SHORT
+RAI_PENALTY_RSI_SHORT_BLOWN  = 0.20   # RSI < 25 (downside already exhausted)
+RAI_PENALTY_RSI_LONG_OVER    = 0.35   # RSI > 75 (upside exhausted for LONG)
+RAI_PENALTY_VOL_CLIMAX       = 0.30   # entry vol > 4x avg (climax buying/selling)
+RAI_PENALTY_DIST_DEAD        = 0.20   # LONG dist in 1.0-1.5 ATR dead zone
+RAI_PENALTY_DIST_STRETCHED   = 0.40   # LONG dist > 3.0 ATR
+RAI_PENALTY_QS_DEAD          = 0.20   # LONG QS in 7.5-8.0 dead zone
+RAI_PENALTY_QS_EXHAUSTED     = 0.35   # LONG QS > 10.0
+
+# =======================================================================
+# V20 HYBRID CONTEXT
+# Keep the stronger V19 AVWAP-RS base path and only let RAI add a very
+# narrow SHORT-side exception in neutral/BOTH mode.
+# =======================================================================
+V20_AVWAP_RS_THRESH_LONG_BOTH = _env_float("EQIDV20_AVWAP_RS_THRESH_LONG_BOTH", 0.75)
+V20_AVWAP_RS_THRESH_SHORT_BOTH = _env_float("EQIDV20_AVWAP_RS_THRESH_SHORT_BOTH", 0.50)
+V20_AVWAP_RS_THRESH_LONG_DIRECTIONAL = _env_float(
+    "EQIDV20_AVWAP_RS_THRESH_LONG_DIRECTIONAL", 0.25
+)
+V20_AVWAP_RS_THRESH_SHORT_DIRECTIONAL = _env_float(
+    "EQIDV20_AVWAP_RS_THRESH_SHORT_DIRECTIONAL", 0.20
+)
+V20_AVWAP_RS_EXHAUST_CAP = _env_float("EQIDV20_AVWAP_RS_EXHAUST_CAP", 3.0)
+V20_AVWAP_RS_FALLBACK_LONG = _env_float("EQIDV20_AVWAP_RS_FALLBACK_LONG", 0.60)
+V20_AVWAP_RS_FALLBACK_SHORT = _env_float("EQIDV20_AVWAP_RS_FALLBACK_SHORT", 0.40)
+V20_RS_MOMENTUM_ENABLED = _env_bool("EQIDV20_RS_MOMENTUM_ENABLED", True)
+V20_LONG_AVWAP_RS_DEAD_LO = _env_float("EQIDV20_LONG_AVWAP_RS_DEAD_LO", 0.0)
+V20_LONG_AVWAP_RS_DEAD_HI = _env_float("EQIDV20_LONG_AVWAP_RS_DEAD_HI", 0.0)
+
+V20_SHORT_RAI_EXCEPTION_ENABLED = _env_bool("EQIDV20_SHORT_RAI_EXCEPTION_ENABLED", True)
+V20_SHORT_RAI_EXCEPTION_BOTH_ONLY = _env_bool(
+    "EQIDV20_SHORT_RAI_EXCEPTION_BOTH_ONLY", True
+)
+V20_SHORT_RAI_EXCEPTION_MIN = _env_float("EQIDV20_SHORT_RAI_EXCEPTION_MIN", 0.48)
+V20_SHORT_RAI_EXCEPTION_RS4_ABS_MIN = _env_float(
+    "EQIDV20_SHORT_RAI_EXCEPTION_RS4_ABS_MIN", 0.35
+)
+V20_SHORT_RAI_EXCEPTION_RS4_ABS_MAX = _env_float(
+    "EQIDV20_SHORT_RAI_EXCEPTION_RS4_ABS_MAX", 0.80
+)
+V20_SHORT_RAI_EXCEPTION_RSI_MAX = _env_float(
+    "EQIDV20_SHORT_RAI_EXCEPTION_RSI_MAX", 35.0
+)
+V20_SHORT_RAI_EXCEPTION_STOCH_MAX = _env_float(
+    "EQIDV20_SHORT_RAI_EXCEPTION_STOCH_MAX", 12.0
+)
+V20_SHORT_RAI_EXCEPTION_AVWAP_DIST_MIN = _env_float(
+    "EQIDV20_SHORT_RAI_EXCEPTION_AVWAP_DIST_MIN", 0.60
+)
+V20_SHORT_RAI_EXCEPTION_ATR_PCT_MAX = _env_float(
+    "EQIDV20_SHORT_RAI_EXCEPTION_ATR_PCT_MAX", 0.0045
+)
+
 
 def _enrich_with_or_levels(
     short_df: pd.DataFrame,
@@ -355,14 +509,16 @@ def _enrich_with_or_levels(
     tickers_needed = {t for t, _ in all_pairs}
     for ticker in tickers_needed:
         fpath = dir_path / f"{ticker}{parquet_suffix}"
-        if not fpath.exists():
+        if not fpath.exists() and not V20_ENABLE_1MIN_ENTRY_BACKFILL:
             continue
         try:
-            pq = pd.read_parquet(str(fpath))
+            pq = read_15m_parquet(str(fpath))
         except Exception:
             continue
         # Normalise datetime index / column
-        if isinstance(pq.index, pd.DatetimeIndex):
+        if "date" in pq.columns and "datetime" not in pq.columns:
+            pq = pq.rename(columns={"date": "datetime"})
+        elif isinstance(pq.index, pd.DatetimeIndex):
             pq = pq.reset_index().rename(columns={pq.index.name or "index": "datetime"})
         elif "datetime" not in pq.columns:
             dt_candidates = [c for c in pq.columns if "time" in c.lower() or "date" in c.lower()]
@@ -458,12 +614,11 @@ def _enrich_with_entry_vol_ratio(
         key = (ticker, date_str)
         if key not in _5m_cache:
             f = dir_path / f"{ticker}{parquet_suffix}"
-            if not f.exists():
+            if not f.exists() and not V20_ENABLE_1MIN_ENTRY_BACKFILL:
                 _5m_cache[key] = pd.DataFrame()
                 return _5m_cache[key]
             try:
-                df = pd.read_parquet(f)
-                df["date"] = pd.to_datetime(df["date"])
+                df = read_15m_parquet(str(f))
             except Exception:
                 _5m_cache[key] = pd.DataFrame()
                 return _5m_cache[key]
@@ -809,9 +964,8 @@ def _score_15m_dir(cand_abs: Path) -> Tuple[int, int, int]:
     """
     Score a 5-minute signal-data directory by (latest_end_ts, earliest_start_ts, file_count).
 
-    We still require fresh market coverage, but when two directories are similarly
-    current we prefer the one with the broader historical span so backtests use the
-    full runtime dataset instead of a shorter local snapshot.
+    We still require fresh market coverage, but when multiple directories are
+    current we prefer the one with the broader historical span.
     """
     if not cand_abs.is_dir():
         return (-1, -1, 0)
@@ -967,6 +1121,193 @@ def _resolve_1min_dir() -> Path:
 def _resolve_5min_dir() -> Path:
     """Backward-compatible alias used by existing sweep scripts."""
     return _resolve_1min_dir()
+
+
+def _normalize_signal_ohlcv_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a canonical IST-sorted OHLCV frame with a `date` column."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+    out = df.copy()
+    dt_col = None
+    for cand in ("date", "datetime", "DateTime", "timestamp", "Timestamp"):
+        if cand in out.columns:
+            dt_col = cand
+            break
+    if dt_col is None:
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+    required = {"open", "high", "low", "close"}
+    if not required.issubset(set(out.columns)):
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+    dt = pd.to_datetime(out[dt_col], errors="coerce")
+    if getattr(dt.dt, "tz", None) is None:
+        dt = dt.dt.tz_localize("UTC")
+    dt = dt.dt.tz_convert(IST)
+
+    out["date"] = dt
+    if "volume" not in out.columns:
+        out["volume"] = 0.0
+
+    keep_cols = ["date", "open", "high", "low", "close", "volume"]
+    out = out[keep_cols].copy()
+    for col in ["open", "high", "low", "close", "volume"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    out = out.dropna(subset=["date", "open", "high", "low", "close"])
+    if out.empty:
+        return pd.DataFrame(columns=keep_cols)
+
+    out = out.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+    out["volume"] = out["volume"].fillna(0.0)
+    return out
+
+
+def _compute_5min_indicator_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rebuild the standard indicator columns expected by the 5-minute strategy files.
+
+    This is used only when we stitch older 1-minute history ahead of the current
+    runtime 5-minute dump, so the combined dataset stays internally consistent.
+    """
+    out = _normalize_signal_ohlcv_frame(df)
+    if out.empty:
+        return out
+
+    out["ATR"] = avwap_common_v11_module.compute_atr14(out)
+    out["EMA_20"] = avwap_common_v11_module.ensure_ema(out, 20)
+    out["EMA_50"] = avwap_common_v11_module.ensure_ema(out, 50)
+    out["EMA_200"] = avwap_common_v11_module.ensure_ema(out, 200)
+    out["RSI"] = avwap_common_v11_module.compute_rsi14(out)
+    stoch_k, stoch_d = avwap_common_v11_module.compute_stoch_14_3(out)
+    out["Stoch_%K"] = stoch_k
+    out["Stoch_%D"] = stoch_d
+    out["ADX"] = avwap_common_v11_module.compute_adx14(out)
+    return out
+
+
+def _resample_1min_history_to_5min(df_1m: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate archived 1-minute OHLCV into 5-minute entry bars."""
+    base = _normalize_signal_ohlcv_frame(df_1m)
+    if base.empty:
+        return base
+
+    base["session_day"] = base["date"].dt.tz_convert(IST).dt.date
+    agg_map = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+    }
+
+    pieces: List[pd.DataFrame] = []
+    for _, day_df in base.groupby("session_day", sort=True):
+        day_df = day_df.sort_values("date").set_index("date")
+        bars = (
+            day_df[["open", "high", "low", "close", "volume"]]
+            .resample("5min", label="right", closed="right")
+            .agg(agg_map)
+            .dropna(subset=["open", "high", "low", "close"])
+            .reset_index()
+        )
+        if not bars.empty:
+            pieces.append(bars)
+
+    if not pieces:
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+    out = pd.concat(pieces, ignore_index=True)
+    local_time = out["date"].dt.tz_convert(IST).dt.time
+    out = out.loc[
+        (local_time >= dtime(9, 20, 0)) & (local_time <= dtime(15, 30, 0))
+    ].copy()
+    return _normalize_signal_ohlcv_frame(out)
+
+
+def _ticker_from_signal_path(path: str, suffix: str = "_stocks_indicators_5min.parquet") -> str:
+    name = Path(path).name
+    suffix_l = suffix.lower()
+    if name.lower().endswith(suffix_l):
+        return name[: -len(suffix)].upper()
+    stem = Path(path).stem
+    if stem.lower().endswith("_stocks_indicators_5min"):
+        return stem[: -len("_stocks_indicators_5min")].upper()
+    return stem.upper()
+
+
+def _read_5min_signal_parquet_with_backfill(path: str, engine: str = "pyarrow") -> pd.DataFrame:
+    """
+    Read the primary 5-minute parquet and prepend any older history that exists
+    only in the archived 1-minute directory.
+    """
+    primary = _BASE_READ_15M_PARQUET(path, engine)
+    if not V20_ENABLE_1MIN_ENTRY_BACKFILL:
+        return primary
+
+    ticker = _ticker_from_signal_path(path)
+    if not ticker:
+        return primary
+
+    dir_1m = _resolve_1min_dir()
+    if not dir_1m.is_dir():
+        return primary
+
+    one_min_path = dir_1m / f"{ticker}_stocks_indicators_1min.parquet"
+    if not one_min_path.exists():
+        return primary
+
+    try:
+        df_1m = pd.read_parquet(one_min_path, engine=engine)
+    except Exception:
+        return primary
+
+    older_5m = _resample_1min_history_to_5min(df_1m)
+    if older_5m.empty:
+        return primary
+
+    primary_raw = _normalize_signal_ohlcv_frame(primary)
+    if primary_raw.empty:
+        return _compute_5min_indicator_columns(older_5m)
+
+    first_primary = pd.to_datetime(primary_raw["date"], errors="coerce").min()
+    older_only = older_5m.loc[older_5m["date"] < first_primary].copy()
+    if older_only.empty:
+        return primary
+
+    combined_raw = pd.concat([older_only, primary_raw], ignore_index=True)
+    combined_raw = _normalize_signal_ohlcv_frame(combined_raw)
+    if combined_raw.empty:
+        return primary
+
+    return _compute_5min_indicator_columns(combined_raw)
+
+
+def _list_5min_signal_tickers(dir_15m: str, end_15m: str) -> List[str]:
+    """Ticker universe for v20: union of current 5-minute files and archived 1-minute files."""
+    tickers = set(_BASE_LIST_TICKERS_15M(dir_15m, end_15m))
+    if V20_ENABLE_1MIN_ENTRY_BACKFILL and str(end_15m).lower() == "_stocks_indicators_5min.parquet":
+        dir_1m = _resolve_1min_dir()
+        if dir_1m.is_dir():
+            for p in dir_1m.glob("*_stocks_indicators_1min.parquet"):
+                tickers.add(p.name[: -len("_stocks_indicators_1min.parquet")].upper())
+    return sorted(tickers)
+
+
+def _install_5min_entry_backfill_hooks() -> None:
+    """Route v20's 5-minute reads through the stitched history loader."""
+    global read_15m_parquet, list_tickers_15m
+
+    read_15m_parquet = _read_5min_signal_parquet_with_backfill
+    list_tickers_15m = _list_5min_signal_tickers
+    avwap_common_v11_module.read_15m_parquet = _read_5min_signal_parquet_with_backfill
+    avwap_common_v11_v15_module.read_15m_parquet = _read_5min_signal_parquet_with_backfill
+    avwap_common_v11_module.list_tickers_15m = _list_5min_signal_tickers
+    avwap_common_v11_v15_module.list_tickers_15m = _list_5min_signal_tickers
+
+
+_install_5min_entry_backfill_hooks()
 
 
 def _load_india_vix(project_root: Path) -> dict:
@@ -1228,19 +1569,18 @@ def _resolve_exits_5min(
 
     Entry signals and entry prices remain from 5-min scanning.
     Exit resolution preference is:
-      1. 1-minute data (`stocks_indicators_1min_eq`)
+      1. 1-minute data (`stocks_indicators_1min_eq`) when enabled
       2. 5-minute fallback from the signal dataset
     """
     if trades_df.empty:
         return trades_df
 
-    if not dir_5m.is_dir():
+    use_1min_resolution = bool(V20_USE_1MIN_EXIT_RESOLUTION and dir_5m.is_dir())
+    if V20_USE_1MIN_EXIT_RESOLUTION and not dir_5m.is_dir():
         print(f"[WARN] 1-min data directory not found: {dir_5m}")
         print("[WARN] Falling back to 5-min exit resolution.")
-        return trades_df
-
     df = trades_df.copy()
-    dir_1m = dir_5m
+    dir_1m = dir_5m if use_1min_resolution else Path()
 
     # Backward-compat: unified Trade dataclass uses `sl_price`.
     # Keep `stop_price` as canonical within this function for downstream logic.
@@ -1401,24 +1741,25 @@ def _resolve_exits_5min(
             eod_cutoff = IST.localize(datetime.combine(trade_date.date(), eod_exit_time))
 
         resolved = None
-        df_1m = _load_ticker_intrabar_cache(
-            _cache_1m,
-            ticker,
-            dir_1m,
-            [
-                f"{ticker}{suffix_5m}",
-                f"{ticker}.parquet",
-                f"{ticker}_1min.parquet",
-                f"{ticker}_stocks_indicators_1min.parquet",
-                f"{ticker}_5min.parquet",
-                f"{ticker}_stocks_indicators_5min.parquet",
-            ],
-            engine,
-        )
-        bars_1m = _slice_trade_day_bars(df_1m, entry_time, trade_date, eod_cutoff)
-        resolved = _resolve_from_bars(bars_1m, side, stop_price, target_price, "1MIN")
-        if resolved is not None:
-            resolved_1min_rows += 1
+        if use_1min_resolution:
+            df_1m = _load_ticker_intrabar_cache(
+                _cache_1m,
+                ticker,
+                dir_1m,
+                [
+                    f"{ticker}{suffix_5m}",
+                    f"{ticker}.parquet",
+                    f"{ticker}_1min.parquet",
+                    f"{ticker}_stocks_indicators_1min.parquet",
+                    f"{ticker}_5min.parquet",
+                    f"{ticker}_stocks_indicators_5min.parquet",
+                ],
+                engine,
+            )
+            bars_1m = _slice_trade_day_bars(df_1m, entry_time, trade_date, eod_cutoff)
+            resolved = _resolve_from_bars(bars_1m, side, stop_price, target_price, "1MIN")
+            if resolved is not None:
+                resolved_1min_rows += 1
 
         if resolved is None:
             if ticker not in _cache_5m_fallback:
@@ -2192,7 +2533,7 @@ def _load_first_nifty_source(
 ) -> Tuple[pd.DataFrame, str]:
     for ticker_found in tickers:
         p = Path(cfg.dir_15m) / f"{ticker_found}{cfg.end_15m}"
-        if not p.exists():
+        if not p.exists() and not V20_ENABLE_1MIN_ENTRY_BACKFILL:
             continue
         try:
             df = read_15m_parquet(str(p), cfg.parquet_engine)
@@ -2216,7 +2557,7 @@ def _intraday_anchor_from_close_volume(close_s: pd.Series, volume_s: pd.Series) 
 
 def _build_nifty_intraday_context(
     cfg: StrategyConfig,
-) -> Tuple[Dict[str, str], Dict[str, float], str, Dict[str, int]]:
+) -> Tuple[Dict[str, str], Dict[str, float], Dict[str, float], str, Dict[str, int]]:
     """
     Build a no-lookahead intraday NIFTY context map keyed by 15m timestamp.
 
@@ -2224,10 +2565,13 @@ def _build_nifty_intraday_context(
     - LONG_ONLY: NIFTY is above first-hour range, above intraday anchor, and up on the day
     - SHORT_ONLY: NIFTY is below first-hour range, below intraday anchor, and down on the day
     - BOTH: otherwise
+
+    V20: returns both 4-bar (existing) and 2-bar NIFTY return maps for RAI.
+    Signature: (mode_map, ret_map_4bar, ret_map_2bar, ticker_found, counts)
     """
     idx, ticker_found = _load_first_nifty_source(cfg, NIFTY_CONTEXT_TICKERS)
     if idx.empty:
-        return {}, {}, "", {}
+        return {}, {}, {}, "", {}
 
     try:
         idx = idx[idx["date"].apply(lambda ts: pd.Timestamp(ts).tz_convert(IST).time() <= dtime(15, 15, 0))].copy()
@@ -2254,11 +2598,13 @@ def _build_nifty_intraday_context(
         idx["volume"] = pd.to_numeric(idx["volume"], errors="coerce").fillna(0.0)
 
         idx["intraday_anchor"] = (
-            idx.groupby("day", group_keys=False)
+            idx.groupby("day", group_keys=False)[["close", "volume"]]
             .apply(lambda g: _intraday_anchor_from_close_volume(g["close"], g["volume"]))
             .reset_index(level=0, drop=True)
         )
         idx["ret_lookback_pct"] = idx.groupby("day")["close"].pct_change(NIFTY_RS_LOOKBACK_BARS) * 100.0
+        # V20: also compute 2-bar return for RAI RS_2bar component
+        idx["ret_2bar_pct"] = idx.groupby("day")["close"].pct_change(RAI_RS2_LOOKBACK_BARS) * 100.0
 
         prev_day_close = idx.groupby("day", as_index=True)["close"].last().shift(1)
         idx["prev_day_close"] = idx["day"].map(prev_day_close)
@@ -2289,16 +2635,21 @@ def _build_nifty_intraday_context(
 
         mode_map: Dict[str, str] = {}
         ret_map: Dict[str, float] = {}
+        ret_map_2bar: Dict[str, float] = {}
         counts = {"LONG_ONLY": 0, "SHORT_ONLY": 0, "BOTH": 0}
-        for ts, mode, ret in zip(idx["date"], modes, idx["ret_lookback_pct"]):
+        for ts, mode, ret, ret2 in zip(
+            idx["date"], modes, idx["ret_lookback_pct"], idx["ret_2bar_pct"]
+        ):
             key = _ts_to_key_local(ts)
             mode_map[key] = str(mode)
             if np.isfinite(ret):
                 ret_map[key] = float(ret)
+            if np.isfinite(ret2):
+                ret_map_2bar[key] = float(ret2)
             counts[str(mode)] = counts.get(str(mode), 0) + 1
-        return mode_map, ret_map, ticker_found, counts
+        return mode_map, ret_map, ret_map_2bar, ticker_found, counts
     except Exception:
-        return {}, {}, "", {}
+        return {}, {}, {}, "", {}
 
 
 def _build_stock_return_map(
@@ -2312,7 +2663,7 @@ def _build_stock_return_map(
 
     out: Dict[str, float] = {}
     p = Path(cfg.dir_15m) / f"{ticker_u}{cfg.end_15m}"
-    if not p.exists():
+    if not p.exists() and not V20_ENABLE_1MIN_ENTRY_BACKFILL:
         cache[ticker_u] = out
         return out
 
@@ -2342,22 +2693,381 @@ def _build_stock_return_map(
     return out
 
 
+def _build_stock_return_map_nbar(
+    ticker: str,
+    cfg: StrategyConfig,
+    lookback_bars: int,
+    cache: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    """
+    Like _build_stock_return_map but with a configurable lookback.
+    Used by V20 RAI to compute RS_2bar alongside the existing RS_4bar.
+    cache keys are (ticker, lookback_bars) to avoid collisions.
+    """
+    cache_key = f"{str(ticker).strip().upper()}__n{lookback_bars}"
+    if cache_key in cache:
+        return cache[cache_key]
+
+    out: Dict[str, float] = {}
+    ticker_u = str(ticker).strip().upper()
+    p = Path(cfg.dir_15m) / f"{ticker_u}{cfg.end_15m}"
+    if not p.exists() and not V20_ENABLE_1MIN_ENTRY_BACKFILL:
+        cache[cache_key] = out
+        return out
+
+    try:
+        df = read_15m_parquet(str(p), cfg.parquet_engine)
+        if df.empty:
+            cache[cache_key] = out
+            return out
+        df = df.sort_values("date").reset_index(drop=True)
+        dt = pd.to_datetime(df["date"], errors="coerce")
+        df = df.loc[dt.notna()].copy()
+        dt = dt.loc[dt.notna()]
+        if getattr(dt.dt, "tz", None) is None:
+            dt = dt.dt.tz_localize("UTC")
+        else:
+            dt = dt.dt.tz_convert(IST)
+        df["date"] = dt.dt.tz_convert(IST)
+        df["day"] = df["date"].dt.strftime("%Y-%m-%d")
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df["ret_n_pct"] = df.groupby("day")["close"].pct_change(lookback_bars) * 100.0
+        for ts, ret in zip(df["date"], df["ret_n_pct"]):
+            if np.isfinite(ret):
+                out[_ts_to_key_local(ts)] = float(ret)
+    except Exception:
+        out = {}
+    cache[cache_key] = out
+    return out
+
+
+_v20_nifty_vwap_ratio: Dict[str, float] = {}
+_v20_nifty_vwap_loaded: bool = False
+_v20_stock_vwap_cache: Dict[str, Dict[str, float]] = {}
+
+
+def _ensure_nifty_vwap_ratio_map(cfg: StrategyConfig) -> Dict[str, float]:
+    """Build ts_key -> (close / day_vwap - 1) * 100 for the chosen NIFTY proxy."""
+    global _v20_nifty_vwap_ratio, _v20_nifty_vwap_loaded
+    if _v20_nifty_vwap_loaded:
+        return _v20_nifty_vwap_ratio
+
+    idx, ticker_found = _load_first_nifty_source(cfg, NIFTY_CONTEXT_TICKERS)
+    if idx.empty:
+        print("[V20] WARNING: Nifty VWAP ratio map unavailable.")
+        _v20_nifty_vwap_loaded = True
+        return _v20_nifty_vwap_ratio
+
+    try:
+        dt = pd.to_datetime(idx["date"], errors="coerce")
+        idx = idx.loc[dt.notna()].copy()
+        dt = dt.loc[dt.notna()]
+        if getattr(dt.dt, "tz", None) is None:
+            dt = dt.dt.tz_localize("UTC")
+        else:
+            dt = dt.dt.tz_convert(IST)
+        idx["date"] = dt.dt.tz_convert(IST)
+        idx = idx.sort_values("date").reset_index(drop=True)
+        idx["day"] = idx["date"].dt.strftime("%Y-%m-%d")
+        idx["close"] = pd.to_numeric(idx["close"], errors="coerce")
+        if "volume" not in idx.columns:
+            idx["volume"] = 0.0
+        idx["volume"] = pd.to_numeric(idx["volume"], errors="coerce").fillna(0.0)
+
+        idx["cum_vwap"] = (
+            idx.groupby("day", group_keys=False)[["close", "volume"]]
+            .apply(lambda g: _intraday_anchor_from_close_volume(g["close"], g["volume"]))
+            .reset_index(level=0, drop=True)
+        )
+        idx["vwap_ratio_pct"] = (
+            idx["close"] / idx["cum_vwap"].replace(0, np.nan) - 1.0
+        ) * 100.0
+
+        for ts, ratio in zip(idx["date"], idx["vwap_ratio_pct"]):
+            if np.isfinite(ratio):
+                _v20_nifty_vwap_ratio[_ts_to_key_local(ts)] = float(ratio)
+
+        print(
+            f"[V20] Nifty VWAP ratio map loaded ({ticker_found}): "
+            f"{len(_v20_nifty_vwap_ratio)} bars"
+        )
+    except Exception as exc:
+        print(f"[V20] WARNING: Failed to build Nifty VWAP ratio map: {exc}")
+
+    _v20_nifty_vwap_loaded = True
+    return _v20_nifty_vwap_ratio
+
+
+def _build_stock_vwap_ratio_map(
+    ticker: str,
+    cfg: StrategyConfig,
+    cache: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    """Build ts_key -> (close / day_vwap - 1) * 100 for a stock."""
+    ticker_u = str(ticker).strip().upper()
+    if ticker_u in cache:
+        return cache[ticker_u]
+
+    out: Dict[str, float] = {}
+    p = Path(cfg.dir_15m) / f"{ticker_u}{cfg.end_15m}"
+    if not p.exists() and not V20_ENABLE_1MIN_ENTRY_BACKFILL:
+        cache[ticker_u] = out
+        return out
+
+    try:
+        df = read_15m_parquet(str(p), cfg.parquet_engine)
+        if df.empty:
+            cache[ticker_u] = out
+            return out
+        df = df.sort_values("date").reset_index(drop=True)
+        dt = pd.to_datetime(df["date"], errors="coerce")
+        df = df.loc[dt.notna()].copy()
+        dt = dt.loc[dt.notna()]
+        if getattr(dt.dt, "tz", None) is None:
+            dt = dt.dt.tz_localize("UTC")
+        else:
+            dt = dt.dt.tz_convert(IST)
+        df["date"] = dt.dt.tz_convert(IST)
+        df["day"] = df["date"].dt.strftime("%Y-%m-%d")
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        if "volume" not in df.columns:
+            df["volume"] = 0.0
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
+
+        df["cum_vwap"] = (
+            df.groupby("day", group_keys=False)[["close", "volume"]]
+            .apply(lambda g: _intraday_anchor_from_close_volume(g["close"], g["volume"]))
+            .reset_index(level=0, drop=True)
+        )
+        df["vwap_ratio_pct"] = (
+            df["close"] / df["cum_vwap"].replace(0, np.nan) - 1.0
+        ) * 100.0
+        for ts, ratio in zip(df["date"], df["vwap_ratio_pct"]):
+            if np.isfinite(ratio):
+                out[_ts_to_key_local(ts)] = float(ratio)
+    except Exception:
+        out = {}
+
+    cache[ticker_u] = out
+    return out
+
+
+def _ts_key_shift(ts_key: str, bars: int = -1) -> str:
+    ts = pd.Timestamp(ts_key)
+    shifted = ts + pd.Timedelta(minutes=5 * bars)
+    return shifted.isoformat()
+
+
+def _v20_avwap_rs_keep(
+    side_u: str,
+    mode: str,
+    avwap_rs: float,
+    avwap_rs_prev: float,
+) -> bool:
+    """V19-style AVWAP-RS keep logic reused inside the hybrid v20 filter."""
+    if not np.isfinite(avwap_rs):
+        return False
+
+    if mode != "BOTH":
+        thresh_long = V20_AVWAP_RS_THRESH_LONG_DIRECTIONAL
+        thresh_short = V20_AVWAP_RS_THRESH_SHORT_DIRECTIONAL
+    else:
+        thresh_long = V20_AVWAP_RS_THRESH_LONG_BOTH
+        thresh_short = V20_AVWAP_RS_THRESH_SHORT_BOTH
+
+    if side_u == "LONG":
+        keep = (
+            avwap_rs >= thresh_long
+            and avwap_rs <= V20_AVWAP_RS_EXHAUST_CAP
+        )
+        if keep and V20_LONG_AVWAP_RS_DEAD_HI > V20_LONG_AVWAP_RS_DEAD_LO:
+            if V20_LONG_AVWAP_RS_DEAD_LO <= avwap_rs < V20_LONG_AVWAP_RS_DEAD_HI:
+                keep = False
+        if keep and V20_RS_MOMENTUM_ENABLED and np.isfinite(avwap_rs_prev):
+            keep = (avwap_rs - avwap_rs_prev) >= 0.0
+        return keep
+
+    keep = (
+        avwap_rs <= -thresh_short
+        and avwap_rs >= -V20_AVWAP_RS_EXHAUST_CAP
+    )
+    if keep and V20_RS_MOMENTUM_ENABLED and np.isfinite(avwap_rs_prev):
+        keep = (avwap_rs - avwap_rs_prev) <= 0.0
+    return keep
+
+
+def _compute_rai(
+    side: str,
+    stock_ret_2bar: float,
+    nifty_ret_2bar: float,
+    stock_ret_4bar: float,
+    nifty_ret_4bar: float,
+    avwap_dist_atr: float,
+    or_high: float,
+    or_low: float,
+    entry_price: float,
+    rsi_signal: float,
+    quality_score: float,
+    vol_ratio: float,
+    bars_from_open: float,
+) -> Tuple[float, Dict[str, float]]:
+    """
+    Compute the Relative Acceptance Index for one trade.
+
+    Returns (rai_score, component_dict) where rai_score is clamped to [0, 1]
+    and component_dict holds the breakdown for diagnostics/CSV export.
+
+    All component scores are independently normalised to [0, 1] before
+    weighting so each dimension contributes proportionally.
+    """
+    side_u = str(side).upper()
+    rs2_raw = float(stock_ret_2bar - nifty_ret_2bar) if (
+        np.isfinite(stock_ret_2bar) and np.isfinite(nifty_ret_2bar)
+    ) else np.nan
+    rs4_raw = float(stock_ret_4bar - nifty_ret_4bar) if (
+        np.isfinite(stock_ret_4bar) and np.isfinite(nifty_ret_4bar)
+    ) else np.nan
+
+    # ---- RS_2bar component ----
+    # Centred at 0, mapped with scale = RAI_RS2_SCALE_PCT → score 0.5 at RS=0
+    # LONG: positive RS is good; SHORT: negative RS is good.
+    if np.isfinite(rs2_raw):
+        signed = rs2_raw if side_u == "LONG" else -rs2_raw
+        rs2_score = max(0.0, min(1.0, signed / (2.0 * RAI_RS2_SCALE_PCT) + 0.5))
+    else:
+        rs2_score = 0.5  # neutral when data unavailable
+
+    # ---- RS_4bar component ----
+    if np.isfinite(rs4_raw):
+        signed4 = rs4_raw if side_u == "LONG" else -rs4_raw
+        rs4_score = max(0.0, min(1.0, signed4 / (2.0 * RAI_RS4_SCALE_PCT) + 0.5))
+    else:
+        rs4_score = 0.5
+
+    # ---- AVWAP acceptance / rejection component ----
+    dist = float(avwap_dist_atr) if np.isfinite(avwap_dist_atr) else 0.0
+    if side_u == "LONG":
+        # Price should be cleanly above AVWAP (dist > 0), not stretched (dist > sweet_max)
+        if dist <= 0:
+            avwap_score = 0.20  # below AVWAP — weak for LONG
+        else:
+            avwap_score = max(0.0, min(1.0, (RAI_AVWAP_LONG_SWEET_MAX - dist) / RAI_AVWAP_LONG_SWEET_MAX))
+    else:
+        # SHORT: price should be below AVWAP. dist here = magnitude of rejection.
+        # More distance below AVWAP (up to cap) = stronger rejection.
+        avwap_score = max(0.0, min(1.0, dist / RAI_AVWAP_SHORT_SWEET_MAX)) if dist > 0 else 0.10
+
+    # ---- OR break quality component ----
+    # Binary: clean break = 1.0, no-break / unknown = 0.5
+    if np.isfinite(or_high) and np.isfinite(or_low) and np.isfinite(entry_price) and entry_price > 0:
+        if side_u == "LONG":
+            or_score = 1.0 if entry_price > or_high else 0.2
+        else:
+            or_score = 1.0 if entry_price < or_low else 0.2
+    else:
+        or_score = 0.5  # OR data unavailable → neutral
+
+    # ---- Volume quality / weakness quality component ----
+    if np.isfinite(vol_ratio) and vol_ratio > 0:
+        if side_u == "LONG":
+            # Sweet zone 1.0-3.0x (real participation without climax)
+            # Below RAI_VOL_GOOD_LO = thin; above 4x = climax (also penalized below)
+            if vol_ratio < RAI_VOL_GOOD_LO:
+                vol_score = max(0.0, vol_ratio / RAI_VOL_GOOD_LO * 0.5)
+            elif vol_ratio <= RAI_VOL_GOOD_HI:
+                vol_score = 0.5 + 0.5 * (vol_ratio - RAI_VOL_GOOD_LO) / (RAI_VOL_GOOD_HI - RAI_VOL_GOOD_LO)
+                vol_score = min(1.0, vol_score)
+            else:
+                # Above good_hi but below climax threshold → decay
+                vol_score = max(0.0, 1.0 - (vol_ratio - RAI_VOL_GOOD_HI) / 2.0)
+        else:
+            # SHORT (weakness quality): selling impulse should have decent volume
+            # Sweet zone 1.5-4.0x (sellers in control but not climax reversal)
+            if vol_ratio < 1.0:
+                vol_score = vol_ratio * 0.4
+            elif vol_ratio <= 4.0:
+                vol_score = 0.4 + 0.6 * (vol_ratio - 1.0) / 3.0
+                vol_score = min(1.0, vol_score)
+            else:
+                vol_score = max(0.0, 1.0 - (vol_ratio - 4.0) / 2.0)
+    else:
+        vol_score = 0.5  # neutral when vol data unavailable
+
+    # ---- Weighted sum ----
+    raw = (
+        RAI_W_RS2  * rs2_score
+        + RAI_W_RS4  * rs4_score
+        + RAI_W_AVWAP * avwap_score
+        + RAI_W_OR   * or_score
+        + RAI_W_VOL  * vol_score
+    )
+
+    # ---- Exhaustion penalty ----
+    penalty = 0.0
+    rsi = float(rsi_signal) if np.isfinite(rsi_signal) else -1.0
+    qs  = float(quality_score) if np.isfinite(quality_score) else 0.0
+    bfo = float(bars_from_open) if np.isfinite(bars_from_open) else 0.0
+    vr  = float(vol_ratio) if np.isfinite(vol_ratio) else 0.0
+
+    if side_u == "SHORT":
+        if 0 < rsi and V16_SHORT_RSI_DEAD_ZONE_LO <= rsi < V16_SHORT_RSI_DEAD_ZONE_HI:
+            penalty += RAI_PENALTY_RSI_SHORT_DEAD
+        if 0 < rsi < 25:
+            penalty += RAI_PENALTY_RSI_SHORT_BLOWN
+    else:  # LONG
+        if rsi > 75:
+            penalty += RAI_PENALTY_RSI_LONG_OVER
+        if dist >= V16_LONG_AVWAP_DIST_DEAD_LO and dist < V16_LONG_AVWAP_DIST_DEAD_HI:
+            penalty += RAI_PENALTY_DIST_DEAD
+        if dist > V16_LONG_AVWAP_DIST_ATR_MAX:
+            penalty += RAI_PENALTY_DIST_STRETCHED
+        if qs > 0 and V16_LONG_QS_DEAD_LO < qs <= V16_LONG_QS_DEAD_HI:
+            penalty += RAI_PENALTY_QS_DEAD
+        if qs > V16_LONG_QS_ABS_MAX:
+            penalty += RAI_PENALTY_QS_EXHAUSTED
+
+    # Volume climax penalty (both sides)
+    if np.isfinite(vol_ratio) and vr > V16_LONG_ENTRY_VOL_EXHAUST_MULT and bfo >= V16_LONG_ENTRY_VOL_EXHAUST_MIN_BARS:
+        penalty += RAI_PENALTY_VOL_CLIMAX
+
+    rai = max(0.0, min(1.0, raw - penalty))
+
+    components = {
+        "rai": rai,
+        "rai_raw": raw,
+        "rai_penalty": penalty,
+        "rai_rs2": rs2_score,
+        "rai_rs4": rs4_score,
+        "rai_avwap": avwap_score,
+        "rai_or": or_score,
+        "rai_vol": vol_score,
+        "rai_rs2_raw_pct": float(rs2_raw) if np.isfinite(rs2_raw) else np.nan,
+        "rai_rs4_raw_pct": float(rs4_raw) if np.isfinite(rs4_raw) else np.nan,
+    }
+    return rai, components
+
+
 def _apply_nifty_intraday_context(
     short_df: pd.DataFrame,
     long_df: pd.DataFrame,
     cfg: StrategyConfig,
     mode_map: Dict[str, str],
     nifty_ret_map: Dict[str, float],
+    nifty_ret_2bar_map: Optional[Dict[str, float]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Apply no-lookahead NIFTY context and relative-strength filter to trades."""
+    """Apply hybrid V20 context: V19 AVWAP-RS base + narrow SHORT RAI exception."""
     if not mode_map:
         return short_df, long_df
 
+    _nifty_ret_2bar_map = nifty_ret_2bar_map or {}
+    nifty_vwap_map = _ensure_nifty_vwap_ratio_map(cfg)
     stock_ret_cache: Dict[str, Dict[str, float]] = {}
+    stock_ret_2bar_cache: Dict[str, Dict[str, float]] = {}
+    stock_vwap_cache: Dict[str, Dict[str, float]] = {}
 
-    def _apply_side(df: pd.DataFrame, side: str) -> Tuple[pd.DataFrame, int, int]:
+    def _apply_side(df: pd.DataFrame, side: str) -> Tuple[pd.DataFrame, int, int, int]:
         if df.empty:
-            return df, 0, 0
+            return df, 0, 0, 0
 
         d = df.copy()
         ts_col = "entry_time_ist" if "entry_time_ist" in d.columns else "signal_time_ist"
@@ -2379,71 +3089,169 @@ def _apply_nifty_intraday_context(
         if not NIFTY_RS_FILTER_ENABLED or d.empty:
             if "ts_key_local" in d.columns:
                 d = d.drop(columns=["ts_key_local"])
-            return d, mode_removed, 0
+            return d, mode_removed, 0, 0
 
         keep_mask: List[bool] = []
         rel_vals: List[float] = []
-        rs_removed = 0
+        avwap_rs_vals: List[float] = []
+        rai_vals: List[float] = []
+        context_paths: List[str] = []
+        filter_removed = 0
+        exception_added = 0
         side_u = side.upper()
+
         for row in d.itertuples(index=False):
             ts_key = getattr(row, "ts_key_local")
             mode = getattr(row, "nifty_context_mode", "BOTH")
             rel_val = np.nan
+            avwap_rs = np.nan
             keep = True
+            context_path = "NO_FILTER"
 
-            # Determine which RS threshold applies for this bar's mode:
-            # - Directional modes (LONG_ONLY / SHORT_ONLY): use full NIFTY_RS_THRESHOLD_PCT
-            # - BOTH mode: use relaxed NIFTY_RS_BOTH_MODE_THRESHOLD_PCT (v15 new)
-            if mode != "BOTH":
-                rs_thresh = float(NIFTY_RS_THRESHOLD_PCT)
-                apply_rs = True
-            elif NIFTY_RS_BOTH_MODE_ENABLED:
-                rs_thresh = (
-                    float(NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT)
-                    if side_u == "LONG"
-                    else float(NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT)
-                )
-                apply_rs = True
-            else:
-                rs_thresh = 0.0
-                apply_rs = False
+            apply_rs = (mode != "BOTH") or NIFTY_RS_BOTH_MODE_ENABLED
+
+            rai_score = np.nan
 
             if apply_rs:
-                stock_ret_map = _build_stock_return_map(getattr(row, "ticker"), cfg, stock_ret_cache)
-                stock_ret = stock_ret_map.get(ts_key, np.nan)
-                nifty_ret = nifty_ret_map.get(ts_key, np.nan)
-                if np.isfinite(stock_ret) and np.isfinite(nifty_ret):
-                    rel_val = float(stock_ret - nifty_ret)
+                ticker = getattr(row, "ticker")
+                stock_ret_map_4bar = _build_stock_return_map(
+                    ticker, cfg, stock_ret_cache
+                )
+                stock_ret_4bar = stock_ret_map_4bar.get(ts_key, np.nan)
+                nifty_ret_4bar = nifty_ret_map.get(ts_key, np.nan)
+
+                if np.isfinite(stock_ret_4bar) and np.isfinite(nifty_ret_4bar):
+                    rel_val = float(stock_ret_4bar - nifty_ret_4bar)
+
+                if RAI_ENABLED:
+                    stock_ret_map_2bar = _build_stock_return_map_nbar(
+                        ticker, cfg, RAI_RS2_LOOKBACK_BARS,
+                        stock_ret_2bar_cache
+                    )
+                    stock_ret_2bar = stock_ret_map_2bar.get(ts_key, np.nan)
+                    nifty_ret_2bar = _nifty_ret_2bar_map.get(ts_key, np.nan)
+
+                    avwap_dist = float(getattr(row, "avwap_dist_atr_signal", np.nan))
+                    or_high_v  = float(getattr(row, "or_high", np.nan))
+                    or_low_v   = float(getattr(row, "or_low", np.nan))
+                    entry_px   = float(getattr(row, "entry_price", np.nan))
+                    rsi_v      = float(getattr(row, "rsi_signal", np.nan))
+                    qs_v       = float(getattr(row, "quality_score", np.nan))
+                    vol_v      = float(getattr(row, "entry_bar_vol_ratio", np.nan))
+                    bfo_v      = float(getattr(row, "bars_from_open", np.nan))
+
+                    rai_score, _ = _compute_rai(
+                        side_u,
+                        stock_ret_2bar, nifty_ret_2bar,
+                        stock_ret_4bar, nifty_ret_4bar,
+                        avwap_dist, or_high_v, or_low_v, entry_px,
+                        rsi_v, qs_v, vol_v, bfo_v,
+                    )
+
+                stock_vwap_map = _build_stock_vwap_ratio_map(
+                    ticker, cfg, stock_vwap_cache
+                )
+                stock_vwap_ratio = stock_vwap_map.get(ts_key, np.nan)
+                nifty_vwap_ratio = nifty_vwap_map.get(ts_key, np.nan)
+                avwap_rs_prev = np.nan
+                if np.isfinite(stock_vwap_ratio) and np.isfinite(nifty_vwap_ratio):
+                    avwap_rs = float(stock_vwap_ratio - nifty_vwap_ratio)
+                    prev_key = _ts_key_shift(ts_key, bars=-1)
+                    stock_vwap_prev = stock_vwap_map.get(prev_key, np.nan)
+                    nifty_vwap_prev = nifty_vwap_map.get(prev_key, np.nan)
+                    if np.isfinite(stock_vwap_prev) and np.isfinite(nifty_vwap_prev):
+                        avwap_rs_prev = float(stock_vwap_prev - nifty_vwap_prev)
+
+                if np.isfinite(avwap_rs):
+                    keep = _v20_avwap_rs_keep(side_u, mode, avwap_rs, avwap_rs_prev)
+                    context_path = "AVWAP_RS_BASE" if keep else "AVWAP_RS_REJECT"
+                elif np.isfinite(rel_val):
                     if side_u == "LONG":
-                        keep = rel_val >= rs_thresh
+                        keep = rel_val >= V20_AVWAP_RS_FALLBACK_LONG
                     else:
-                        keep = rel_val <= -rs_thresh
+                        keep = rel_val <= -V20_AVWAP_RS_FALLBACK_SHORT
+                    context_path = "RAW_RS_FALLBACK" if keep else "RAW_RS_REJECT"
+                else:
+                    keep = False
+                    context_path = "NO_CONTEXT_DATA"
+
+                if (
+                    side_u == "SHORT"
+                    and not keep
+                    and V20_SHORT_RAI_EXCEPTION_ENABLED
+                    and RAI_ENABLED
+                    and np.isfinite(rai_score)
+                ):
+                    mode_ok = (mode == "BOTH") or (not V20_SHORT_RAI_EXCEPTION_BOTH_ONLY)
+                    avwap_dist_v = float(getattr(row, "avwap_dist_atr_signal", np.nan))
+                    rsi_v = float(getattr(row, "rsi_signal", np.nan))
+                    stoch_v = float(getattr(row, "stochk_signal", np.nan))
+                    atr_pct_v = float(getattr(row, "atr_pct_signal", np.nan))
+                    rs_ok = (
+                        np.isfinite(rel_val)
+                        and rel_val <= -V20_SHORT_RAI_EXCEPTION_RS4_ABS_MIN
+                        and rel_val >= -V20_SHORT_RAI_EXCEPTION_RS4_ABS_MAX
+                    )
+                    if (
+                        mode_ok
+                        and rai_score >= V20_SHORT_RAI_EXCEPTION_MIN
+                        and rs_ok
+                        and np.isfinite(avwap_dist_v)
+                        and avwap_dist_v >= V20_SHORT_RAI_EXCEPTION_AVWAP_DIST_MIN
+                        and np.isfinite(rsi_v)
+                        and rsi_v <= V20_SHORT_RAI_EXCEPTION_RSI_MAX
+                        and np.isfinite(stoch_v)
+                        and stoch_v <= V20_SHORT_RAI_EXCEPTION_STOCH_MAX
+                        and np.isfinite(atr_pct_v)
+                        and atr_pct_v <= V20_SHORT_RAI_EXCEPTION_ATR_PCT_MAX
+                    ):
+                        keep = True
+                        context_path = "RAI_SHORT_EXCEPTION"
+                        exception_added += 1
 
             keep_mask.append(bool(keep))
             rel_vals.append(rel_val)
+            avwap_rs_vals.append(float(avwap_rs) if np.isfinite(avwap_rs) else np.nan)
+            rai_vals.append(float(rai_score) if np.isfinite(rai_score) else np.nan)
+            context_paths.append(context_path)
             if not keep:
-                rs_removed += 1
+                filter_removed += 1
 
         d["nifty_rel_strength_pct"] = rel_vals
+        d["nifty_avwap_rs_pct"] = avwap_rs_vals
+        d["rai_score"] = rai_vals
+        d["v20_context_path"] = context_paths
         d = d[pd.Series(keep_mask, index=d.index)].copy()
         if "ts_key_local" in d.columns:
             d = d.drop(columns=["ts_key_local"])
-        return d, mode_removed, rs_removed
+        return d, mode_removed, filter_removed, exception_added
 
-    s, s_mode_removed, s_rs_removed = _apply_side(short_df, "SHORT")
-    l, l_mode_removed, l_rs_removed = _apply_side(long_df, "LONG")
+    s, s_mode_removed, s_removed, s_exception_added = _apply_side(short_df, "SHORT")
+    l, l_mode_removed, l_removed, _ = _apply_side(long_df, "LONG")
 
-    both_mode_rs_note = (
-        f" [BOTH-mode LONG RS>={NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT:.2f}% | "
-        f"SHORT RS<=-{NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT:.2f}% active]"
-        if NIFTY_RS_BOTH_MODE_ENABLED else ""
-    )
     print(
-        "[NIFTY_CONTEXT] Applied intraday filter: "
-        f"SHORT {len(short_df)}->{len(s)} (mode_removed={s_mode_removed}, rs_removed={s_rs_removed}) | "
-        f"LONG {len(long_df)}->{len(l)} (mode_removed={l_mode_removed}, rs_removed={l_rs_removed})"
-        f"{both_mode_rs_note}"
+        "[NIFTY_CONTEXT] Applied hybrid V20 filter: "
+        f"SHORT {len(short_df)}->{len(s)} "
+        f"(mode_removed={s_mode_removed}, filter_removed={s_removed}, short_exception_added={s_exception_added}) | "
+        f"LONG {len(long_df)}->{len(l)} "
+        f"(mode_removed={l_mode_removed}, filter_removed={l_removed}) "
+        f"[AVWAP-RS long both/dir={V20_AVWAP_RS_THRESH_LONG_BOTH:.2f}/{V20_AVWAP_RS_THRESH_LONG_DIRECTIONAL:.2f}% | "
+        f"short both/dir={V20_AVWAP_RS_THRESH_SHORT_BOTH:.2f}/{V20_AVWAP_RS_THRESH_SHORT_DIRECTIONAL:.2f}% | "
+        f"short exception RAI>={V20_SHORT_RAI_EXCEPTION_MIN:.2f}]"
     )
+
+    if RAI_ENABLED:
+        for label, df_side in [("SHORT", s), ("LONG", l)]:
+            if not df_side.empty and "rai_score" in df_side.columns:
+                rai_col = pd.to_numeric(df_side["rai_score"], errors="coerce").dropna()
+                if len(rai_col) > 0:
+                    print(
+                        f"[RAI] {label} passed: n={len(rai_col)} | "
+                        f"mean={rai_col.mean():.3f} | median={rai_col.median():.3f} | "
+                        f"min={rai_col.min():.3f} | max={rai_col.max():.3f} | "
+                        f"p25={rai_col.quantile(0.25):.3f} | p75={rai_col.quantile(0.75):.3f}"
+                    )
+
     return s, l
 
 
@@ -2803,7 +3611,7 @@ def _recent_trading_dates_from_runtime(n_days: int) -> List[Any]:
     for ticker in candidates:
         try:
             p = dir_15m / f"{ticker}_stocks_indicators_5min.parquet"
-            if not p.exists():
+            if not p.exists() and not V20_ENABLE_1MIN_ENTRY_BACKFILL:
                 continue
             df_idx = read_15m_parquet(str(p), "pyarrow")
             if df_idx.empty or "date" not in df_idx.columns:
@@ -3442,11 +4250,11 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = runtime_dir("outputs_v16_5min")
+    _outputs_dir = runtime_dir("outputs_v20_5min")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
-    log_path = _outputs_dir / f"avwap_combined_runner_{ts}.txt"
+    log_path = _outputs_dir / f"avwap_combined_runner_v20_{ts}.txt"
 
     # Tee all console output to outputs/*.txt
     _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
@@ -3457,9 +4265,16 @@ def main() -> None:
         try:
             run_started = time.perf_counter()
             print("=" * 70)
-            print("AVWAP v16_5min COMBINED runner — Anti-exhaustion filters + V11 SHORT + V9 LONG")
+            print("AVWAP v20_5min COMBINED runner — V19 AVWAP-RS base + selective SHORT RAI exception")
             print("  - Entry signals: 5-min data")
-            print("  - Exit resolution: 1-min if available, else 5-min fallback")
+            print(
+                "  - Exit resolution: "
+                + (
+                    "5-min only"
+                    if not V20_USE_1MIN_EXIT_RESOLUTION
+                    else "1-min if available, else 5-min fallback"
+                )
+            )
             print("  - Outputs: */algo_trading/outputs")
             print("  - Intraday leverage: "
                   f"SHORT={INTRADAY_LEVERAGE_SHORT}x | LONG={INTRADAY_LEVERAGE_LONG}x")
@@ -3470,6 +4285,14 @@ def main() -> None:
             # Resolve 5-min signal data directory
             dir_15m = _resolve_15m_dir()
             print(f"[INFO] 5-min signal data directory: {dir_15m}")
+            print(
+                "[INFO] Strict 5-min mode: "
+                f"{'ENABLED' if V20_STRICT_5MIN_ONLY else 'DISABLED'}"
+            )
+            print(
+                "[INFO] Entry history backfill from 1-min archive: "
+                f"{'ENABLED' if V20_ENABLE_1MIN_ENTRY_BACKFILL else 'DISABLED'}"
+            )
             if dir_15m.is_dir():
                 n_files_15m = len(list(dir_15m.glob("*_stocks_indicators_5min.parquet")))
                 print(f"[INFO] 5-min parquet files found: {n_files_15m}")
@@ -3490,6 +4313,10 @@ def main() -> None:
             if dir_1m.is_dir():
                 n_files = len(list(dir_1m.glob("*.parquet")))
                 print(f"[INFO] 1-min parquet files found: {n_files}")
+                print(
+                    "[INFO] 1-min exit resolution: "
+                    f"{'ENABLED' if V20_USE_1MIN_EXIT_RESOLUTION else 'DISABLED'}"
+                )
             else:
                 print("[WARN] 1-min data directory not found â€” will fall back to 5-min exits.")
 
@@ -3730,7 +4557,11 @@ def main() -> None:
             print(
                 "[INFO] Final reported exit policy: TARGET / SL / EOD only | "
                 f"EOD cutoff={V15_EOD_EXIT_TIME.strftime('%H:%M')} | "
-                "5m/1m fallback removes residual BE outcomes"
+                + (
+                    "5m-only exit resolution removes residual BE outcomes"
+                    if not V20_USE_1MIN_EXIT_RESOLUTION
+                    else "5m/1m fallback removes residual BE outcomes"
+                )
             )
             print(f"[INFO] Live parity: min_bars_left=0 -> {FORCE_LIVE_PARITY_MIN_BARS_LEFT}")
             print(f"[INFO] Live parity: disable_topn_per_day -> {FORCE_LIVE_PARITY_DISABLE_TOPN}")
@@ -3744,6 +4575,16 @@ def main() -> None:
                 f"[INFO] Parallelism: max_workers={MAX_WORKERS} | "
                 f"executor={_resolve_executor_mode(MAX_WORKERS)}"
             )
+            if RAI_ENABLED:
+                print(
+                    f"[V20] Hybrid context enabled — AVWAP-RS long/short base="
+                    f"{V20_AVWAP_RS_THRESH_LONG_BOTH:.2f}/{V20_AVWAP_RS_THRESH_SHORT_BOTH:.2f}% (BOTH mode)"
+                    f" | directional={V20_AVWAP_RS_THRESH_LONG_DIRECTIONAL:.2f}/{V20_AVWAP_RS_THRESH_SHORT_DIRECTIONAL:.2f}%"
+                    f" | short RAI exception>={V20_SHORT_RAI_EXCEPTION_MIN:.2f}"
+                    f" | RS2={RAI_RS2_LOOKBACK_BARS}bars RS4={NIFTY_RS_LOOKBACK_BARS}bars"
+                )
+            else:
+                print("[V20] Hybrid base enabled with RAI exception disabled.")
             print(
                 f"[INFO] Chart generation: legacy={ENABLE_LEGACY_CHARTS} | "
                 f"enhanced={ENABLE_ENHANCED_CHARTS}"
@@ -3758,20 +4599,26 @@ def main() -> None:
             short_df, long_df = _run_both_parallel(short_cfg, long_cfg, MAX_WORKERS)
 
             if NIFTY_CONTEXT_ENABLED:
-                mode_map, nifty_ret_map, context_src, context_counts = _build_nifty_intraday_context(short_cfg)
+                mode_map, nifty_ret_map, nifty_ret_2bar_map, context_src, context_counts = _build_nifty_intraday_context(short_cfg)
                 if mode_map:
-                    both_rs_info = (
-                        f" | BOTH-mode LONG RS>={NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT:.2f}%"
-                        f", SHORT RS<=-{NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT:.2f}%"
-                        if NIFTY_RS_BOTH_MODE_ENABLED else " | BOTH-mode RS=disabled"
-                    )
+                    if RAI_ENABLED:
+                        filter_info = (
+                            f" | RAI filter: LONG>={RAI_LONG_THRESHOLD:.2f} | SHORT>={RAI_SHORT_THRESHOLD:.2f}"
+                            f" | RS2bar_lookback={RAI_RS2_LOOKBACK_BARS}bars"
+                        )
+                    else:
+                        filter_info = (
+                            f" | BOTH-mode LONG RS>={NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT:.2f}%"
+                            f", SHORT RS<=-{NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT:.2f}%"
+                            if NIFTY_RS_BOTH_MODE_ENABLED else " | BOTH-mode RS=disabled"
+                        )
                     print(
                         "[NIFTY_CONTEXT] "
                         f"Source={context_src} | OR_end={NIFTY_CONTEXT_OR_END_TIME.strftime('%H:%M')} | "
                         f"confirm={NIFTY_CONTEXT_CONFIRM_TIME.strftime('%H:%M')} | "
                         f"daymove>={NIFTY_CONTEXT_MIN_DAYMOVE_PCT:.2f}% | "
-                        f"RS({NIFTY_RS_LOOKBACK_BARS} bars)>={NIFTY_RS_THRESHOLD_PCT:.2f}%"
-                        f"{both_rs_info} | "
+                        f"RS4bar({NIFTY_RS_LOOKBACK_BARS} bars)>={NIFTY_RS_THRESHOLD_PCT:.2f}%"
+                        f"{filter_info} | "
                         f"LONG_ONLY={int(context_counts.get('LONG_ONLY', 0))}, "
                         f"SHORT_ONLY={int(context_counts.get('SHORT_ONLY', 0))}, "
                         f"BOTH={int(context_counts.get('BOTH', 0))}"
@@ -3782,6 +4629,7 @@ def main() -> None:
                         short_cfg,
                         mode_map,
                         nifty_ret_map,
+                        nifty_ret_2bar_map=nifty_ret_2bar_map,
                     )
                 else:
                     print("[NIFTY_CONTEXT] Enabled but no valid NIFTY parquet found; skipped.")
@@ -3897,9 +4745,9 @@ def main() -> None:
                 _print_day_side_mix(combined)
 
             # --- Save CSV ---
-            out_csv = _outputs_dir / f"avwap_longshort_trades_v16_5min_ALL_DAYS_{ts}.csv"
+            out_csv = _outputs_dir / f"avwap_longshort_trades_v20_5min_ALL_DAYS_{ts}.csv"
             combined.to_csv(out_csv, index=False)
-            out_daywise_csv = _outputs_dir / f"avwap_daywise_breakdown_v16_5min_ALL_DAYS_{ts}.csv"
+            out_daywise_csv = _outputs_dir / f"avwap_daywise_breakdown_v20_5min_ALL_DAYS_{ts}.csv"
             _build_daily_breakdown_df(combined, include_total=True).to_csv(out_daywise_csv, index=False)
 
             charts_started = time.perf_counter()

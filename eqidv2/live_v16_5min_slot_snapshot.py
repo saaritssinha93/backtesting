@@ -12,13 +12,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 import eqidv2_live_combined_analyser_csv_v15 as base_v15
+import avwap_combined_runner_v16_5min as v16_runner
 from avwap_combined_runner_v16_5min import (
     NIFTY_CONTEXT_MIN_DAYMOVE_PCT,
     NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT,
     NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT,
     NIFTY_RS_LOOKBACK_BARS,
 )
-from avwap_v11_refactored.avwap_common_v11_v15 import list_tickers_15m
+from avwap_v11_refactored.avwap_common_v11_v15 import default_short_config, list_tickers_15m
 from eqidv2_runtime_paths import DATA_5M_DIR, RUNTIME_ROOT
 
 
@@ -245,93 +246,36 @@ def _build_slot_context_payload(
         "nifty_context": {},
     }
     try:
-        _, df_nifty, _ = _read_one_ticker_tail(NIFTYBEES_TICKER, source_root, max(int(tail_rows), 400))
-        if df_nifty is None or df_nifty.empty:
+        cfg = default_short_config()
+        cfg.dir_15m = str(source_root)
+        cfg.end_15m = END_5M
+        mode_map, nifty_ret_map, source, counts = v16_runner._build_nifty_intraday_context(cfg)
+        if not mode_map:
             payload["nifty_context"] = {
                 "allow_long": True,
                 "allow_short": True,
+                "mode": "BOTH",
                 "rs_pct": 0.0,
-                "day_move_pct": 0.0,
-                "source": NIFTYBEES_TICKER,
-                "fallback": "empty_nifty",
+                "source": str(source or NIFTYBEES_TICKER),
+                "decision_reason": "backtest_intraday_context_unavailable",
             }
             return payload
 
-        df_nifty = df_nifty[df_nifty["date"] <= slot_ist].copy()
-        df_nifty = df_nifty[df_nifty["date"].dt.date == slot_ist.date()].copy()
-        if len(df_nifty) < 2:
-            payload["nifty_context"] = {
-                "allow_long": True,
-                "allow_short": True,
-                "rs_pct": 0.0,
-                "day_move_pct": 0.0,
-                "source": NIFTYBEES_TICKER,
-                "fallback": "short_history",
-            }
-            return payload
+        ts_key = v16_runner._ts_to_key_local(slot_ist)
+        mode = str(mode_map.get(ts_key, "BOTH")).strip().upper() or "BOTH"
+        rs_val = nifty_ret_map.get(ts_key)
+        rs_pct = float(rs_val) if rs_val is not None and pd.notna(rs_val) else 0.0
 
-        df_nifty = df_nifty.sort_values("date").reset_index(drop=True)
-        session_open = normalize_slot_ist(
-            slot_ist.replace(hour=9, minute=15, second=0, microsecond=0)
-        )
-        first_session_slot = normalize_slot_ist(df_nifty["date"].iloc[0])
-        session_complete = bool(first_session_slot <= session_open)
-        day_open = float(df_nifty["open"].iloc[0])
-        day_close = float(df_nifty["close"].iloc[-1])
-        if day_open <= 0:
-            day_move_pct = 0.0
-        else:
-            day_move_pct = (day_close - day_open) / day_open * 100.0
-
-        lookback = int(NIFTY_RS_LOOKBACK_BARS)
-        if len(df_nifty) <= lookback:
-            rs_pct = day_move_pct
-        else:
-            close_now = float(df_nifty["close"].iloc[-1])
-            close_past = float(df_nifty["close"].iloc[-(lookback + 1)])
-            rs_pct = (close_now - close_past) / close_past * 100.0 if close_past > 0 else 0.0
-
-        if not session_complete and DEFAULT_NEUTRALIZE_PARTIAL_NIFTY_SESSION:
-            allow_long = True
-            allow_short = True
-            weak_daymove_policy = "partial_session_neutral"
-            decision_reason = weak_daymove_policy
-        elif abs(day_move_pct) < float(NIFTY_CONTEXT_MIN_DAYMOVE_PCT):
-            if DEFAULT_NEUTRALIZE_WEAK_NIFTY_CONTEXT:
-                allow_long = True
-                allow_short = True
-                weak_daymove_policy = "neutral"
-            else:
-                allow_long = False
-                allow_short = False
-                weak_daymove_policy = "blocked"
-            decision_reason = weak_daymove_policy
-        else:
-            allow_long = rs_pct >= float(NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT)
-            allow_short = rs_pct <= -float(NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT)
-            weak_daymove_policy = "threshold"
-            if not allow_long and not allow_short and DEFAULT_DIRECTIONAL_NIFTY_CONTEXT_FALLBACK:
-                if day_move_pct > 0:
-                    allow_long = True
-                    decision_reason = "directional_daymove_long"
-                elif day_move_pct < 0:
-                    allow_short = True
-                    decision_reason = "directional_daymove_short"
-                else:
-                    decision_reason = "threshold_blocked"
-            else:
-                decision_reason = "threshold" if (allow_long or allow_short) else "threshold_blocked"
-
+        allow_long = mode != "SHORT_ONLY"
+        allow_short = mode != "LONG_ONLY"
         payload["nifty_context"] = {
             "allow_long": bool(allow_long),
             "allow_short": bool(allow_short),
+            "mode": mode,
             "rs_pct": float(rs_pct),
-            "day_move_pct": float(day_move_pct),
-            "weak_daymove_policy": weak_daymove_policy,
-            "decision_reason": decision_reason,
-            "session_complete": bool(session_complete),
-            "first_session_slot_ist": first_session_slot.strftime("%Y-%m-%d %H:%M:%S%z"),
-            "source": NIFTYBEES_TICKER,
+            "source": str(source or NIFTYBEES_TICKER),
+            "decision_reason": "backtest_intraday_context",
+            "context_counts": {str(k): int(v) for k, v in (counts or {}).items()},
         }
     except Exception as exc:
         payload["error"] = repr(exc)

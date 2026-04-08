@@ -76,6 +76,9 @@ WARMUP_BARS_5M = 400
 
 TOKENS_CACHE_FILE = "stocks_tokens_cache.json"
 TOKENS_CACHE_MAX_AGE_DAYS = 7
+TOKEN_SYMBOL_ALIASES = {
+    "LTIM": ["LTM"],
+}
 
 HOLIDAYS_FILE_DEFAULT = "nse_holidays.csv"
 
@@ -474,15 +477,11 @@ def _intraday_end_shift_minutes(interval: str) -> int:
 def _pick_chunk_days(start: datetime, end: datetime) -> int:
     """
     Kite historical_data max window varies by interval.
-    For 5-minute, larger chunks reduce API calls while staying safe.
-    We'll use:
-      - 180 days for older ranges
-      - 120 days for more recent
+    For 5-minute candles, staying well below the hard limit is safer
+    because inclusive boundaries and timezone conversions can push a
+    nominal chunk over the API cap.
     """
-    days = max(1, int((end - start).total_seconds() // 86400))
-    if days > 365:
-        return 180
-    return 120
+    return 90
 
 def fetch_historical_5min_df(
     kite: KiteConnect,
@@ -722,6 +721,18 @@ def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.
     ins = pd.DataFrame(kite.instruments("NSE"))
     tokens = ins[ins["tradingsymbol"].isin(syms_u)][["tradingsymbol", "instrument_token"]]
     mp = dict(zip(tokens["tradingsymbol"], tokens["instrument_token"]))
+
+    if TOKEN_SYMBOL_ALIASES:
+        tradingsymbol_to_token = dict(zip(ins["tradingsymbol"].astype(str).str.upper(), ins["instrument_token"]))
+        for wanted, aliases in TOKEN_SYMBOL_ALIASES.items():
+            if wanted not in syms_u or wanted in mp:
+                continue
+            for alias in aliases:
+                token = tradingsymbol_to_token.get(str(alias).upper())
+                if token is not None:
+                    mp[wanted] = int(token)
+                    logger.info("Resolved token alias %s -> %s", wanted, alias)
+                    break
 
     try:
         existing = {}

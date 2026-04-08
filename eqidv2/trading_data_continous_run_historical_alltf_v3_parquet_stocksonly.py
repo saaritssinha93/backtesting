@@ -93,6 +93,9 @@ WARMUP_BARS = {
 # Token cache
 TOKENS_CACHE_FILE = "stocks_tokens_cache.json"
 TOKENS_CACHE_MAX_AGE_DAYS = 7
+TOKEN_SYMBOL_ALIASES = {
+    "LTIM": ["LTM"],
+}
 
 # Optional NSE holidays file (one date per line or CSV column "date")
 HOLIDAYS_FILE_DEFAULT = "nse_holidays.csv"
@@ -324,9 +327,13 @@ def last_completed_intraday_end(now_ist: datetime, step_min: int, holidays: set[
 
 # ========= START DATE PER MODE =========
 
-def get_start_date(mode: str, now_ist: datetime) -> datetime:
+def get_start_date(mode: str, now_ist: datetime, from_date_raw: str | None = None) -> datetime:
     if now_ist.tzinfo is None:
         now_ist = IST_TZ.localize(now_ist)
+
+    if from_date_raw:
+        d = pd.to_datetime(from_date_raw, errors="raise").date()
+        return IST_TZ.localize(datetime(d.year, d.month, d.day, 0, 0, 0))
 
     # Keep your original intraday start anchor behaviour
     return IST_TZ.localize(datetime(2025, 8, 25, 0, 0, 0))
@@ -525,7 +532,14 @@ def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, holidays: set[d
 
     return False
 
-def missing_spec(mode: str, out_path: str, now_ist: datetime, holidays: set[date], intraday_ts: str) -> dict:
+def missing_spec(
+    mode: str,
+    out_path: str,
+    now_ist: datetime,
+    holidays: set[date],
+    intraday_ts: str,
+    desired_start: datetime | None = None,
+) -> dict:
     existing_path = _resolve_existing_store_path(out_path)
 
     spec = expected_last_stamp(mode, now_ist, holidays, intraday_ts)
@@ -541,6 +555,9 @@ def missing_spec(mode: str, out_path: str, now_ist: datetime, holidays: set[date
         last_ts = last_ts.tz_localize(IST_TZ)
     else:
         last_ts = last_ts.tz_convert(IST_TZ)
+
+    if desired_start is not None and _needs_prefix_backfill(out_path, desired_start):
+        return {"kind": "rows_missing", "last_ts": last_ts, "expected": spec}
 
     if ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
         return {"kind": "fresh", "last_ts": last_ts, "expected": spec}
@@ -792,6 +809,18 @@ def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.
     tokens = ins[ins["tradingsymbol"].isin(syms_u)][["tradingsymbol", "instrument_token"]]
     mp = dict(zip(tokens["tradingsymbol"], tokens["instrument_token"]))
 
+    if TOKEN_SYMBOL_ALIASES:
+        tradingsymbol_to_token = dict(zip(ins["tradingsymbol"].astype(str).str.upper(), ins["instrument_token"]))
+        for wanted, aliases in TOKEN_SYMBOL_ALIASES.items():
+            if wanted not in syms_u or wanted in mp:
+                continue
+            for alias in aliases:
+                token = tradingsymbol_to_token.get(str(alias).upper())
+                if token is not None:
+                    mp[wanted] = int(token)
+                    logger.info("Resolved token alias %s -> %s", wanted, alias)
+                    break
+
     try:
         existing = {}
         if os.path.exists(TOKENS_CACHE_FILE):
@@ -851,6 +880,47 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
     except Exception:
         return pd.DataFrame()
 
+def _read_first_ts_from_store(out_path: str):
+    existing_path = _resolve_existing_store_path(out_path)
+    if not os.path.exists(existing_path):
+        return None
+
+    try:
+        ext = str(Path(existing_path).suffix).lower()
+        if ext == ".parquet":
+            _ensure_parquet_engine()
+            df = pd.read_parquet(existing_path, columns=["date"], engine="pyarrow")
+        else:
+            df = pd.read_csv(existing_path, usecols=["date"])
+        if df.empty or "date" not in df.columns:
+            return None
+
+        dt = _to_ist(df["date"]).dropna()
+        if dt.empty:
+            return None
+        return dt.min()
+    except Exception:
+        return None
+
+def _needs_prefix_backfill(out_path: str, desired_start: datetime) -> bool:
+    first_ts = _read_first_ts_from_store(out_path)
+    if first_ts is None:
+        return False
+
+    desired = pd.Timestamp(desired_start)
+    if desired.tzinfo is None:
+        desired = desired.tz_localize(IST_TZ)
+    else:
+        desired = desired.tz_convert(IST_TZ)
+
+    first_ts = pd.Timestamp(first_ts)
+    if first_ts.tzinfo is None:
+        first_ts = first_ts.tz_localize(IST_TZ)
+    else:
+        first_ts = first_ts.tz_convert(IST_TZ)
+
+    return bool(first_ts > (desired + timedelta(seconds=1)))
+
 def _incremental_start_from_existing(mode: str, out_path: str, default_start: datetime) -> datetime:
     existing_path = _resolve_existing_store_path(out_path)
     if not os.path.exists(existing_path):
@@ -870,6 +940,9 @@ def _incremental_start_from_existing(mode: str, out_path: str, default_start: da
         back = timedelta(minutes=15 * warm)
     else:
         back = timedelta(days=30)
+
+    if _needs_prefix_backfill(out_path, default_start):
+        return default_start
 
     s = (last_ts - back)
     s = s.to_pydatetime() if isinstance(s, pd.Timestamp) else s
@@ -1193,7 +1266,8 @@ def process_ticker(
     exp = expected_last_stamp(mode, now_ist, holidays, intraday_ts)
     exp_str = _fmt_expected(exp)
 
-    if skip_if_fresh and ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
+    prefix_backfill_needed = _needs_prefix_backfill(out_path, start_dt_ist)
+    if skip_if_fresh and ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts) and not prefix_backfill_needed:
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                             exp_str, 0, None, None, None,
@@ -1266,8 +1340,15 @@ def process_ticker(
             except Exception:
                 pass
 
-        if existed_before and last_before_ts is not None:
-            new_rows = merged[merged["date"] > last_before_ts].copy()
+        if not existing.empty and "date" in existing.columns:
+            existing_key = (
+                pd.to_datetime(existing["date"], errors="coerce")
+                .dropna()
+                .dt.strftime("%Y-%m-%d %H:%M:%S%z")
+            )
+            existing_key_set = set(existing_key.tolist())
+            merged_key = pd.to_datetime(merged["date"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S%z")
+            new_rows = merged.loc[~merged_key.isin(existing_key_set)].copy()
         else:
             new_rows = merged.copy()
 
@@ -1335,7 +1416,9 @@ def run_mode(
     refresh_tokens: bool,
     report_dir: str,
     print_missing_rows: bool,
-    print_missing_rows_max: int
+    print_missing_rows_max: int,
+    from_date: str | None = None,
+    symbols: list[str] | None = None,
 ):
     logger = logging.getLogger("stocks_fetcher")
     t_mode0 = _time.perf_counter()
@@ -1345,7 +1428,7 @@ def run_mode(
         raise ValueError(f"Unknown mode '{mode}'. Expected: {', '.join(VALID_MODES)}")
 
     now_ist = datetime.now(IST_TZ)
-    start_dt = get_start_date(mode, now_ist)
+    start_dt = get_start_date(mode, now_ist, from_date_raw=from_date)
 
     step = 5 if mode == "5min" else 15
     end_dt = last_completed_intraday_end(now_ist, step, holidays)
@@ -1359,6 +1442,23 @@ def run_mode(
         return
 
     syms, pre_token_map = load_stocks_universe(logger)
+    if symbols:
+        requested = []
+        seen_requested: set[str] = set()
+        for item in symbols:
+            s = str(item).strip().upper()
+            if s and s not in seen_requested:
+                requested.append(s)
+                seen_requested.add(s)
+        if requested:
+            universe_only = sorted(set(requested) - {str(s).strip().upper() for s in syms})
+            if universe_only:
+                logger.warning(
+                    "[%s] Requested symbol(s) not present in filtered_stocks universe; attempting direct token lookup: %s",
+                    mode.upper(),
+                    ", ".join(universe_only[:30]),
+                )
+            syms = requested
 
     missing_files: list[str] = []
     missing_rows: list[str] = []
@@ -1369,7 +1469,7 @@ def run_mode(
         for t in syms:
             t = t.upper()
             out_path = os.path.join(DIRS[mode]["out"], f"{t}_stocks_indicators_{mode}.parquet")
-            ms = missing_spec(mode, out_path, now_ist, holidays, intraday_ts)
+            ms = missing_spec(mode, out_path, now_ist, holidays, intraday_ts, desired_start=start_dt)
             if ms["kind"] == "fresh":
                 fresh.append(t)
             elif ms["kind"] == "file_missing":
@@ -1583,6 +1683,10 @@ def run_mode(
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("mode", nargs="?", default="all", help="5min|15min|all")
+    p.add_argument("--from-date", default=None,
+                   help="Optional historical start date in YYYY-MM-DD (for prefix backfills too)")
+    p.add_argument("--symbols", default=None,
+                   help="Optional comma-separated symbol list to process instead of the full universe")
     p.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
     p.add_argument("--no-skip", action="store_true",
                    help="Disable freshness skip (will refetch/recompute even if fresh)")
@@ -1632,11 +1736,15 @@ def main():
 
     mode = args.mode.lower().strip()
     skip_if_fresh = not args.no_skip
+    symbol_filter = None
+    if args.symbols:
+        symbol_filter = [part.strip().upper() for part in str(args.symbols).split(",") if part.strip()]
 
     if mode == "all":
         for m in VALID_MODES:
             run_mode(
                 m,
+                from_date=args.from_date,
                 max_workers=args.max_workers,
                 skip_if_fresh=skip_if_fresh,
                 intraday_ts=args.intraday_ts,
@@ -1644,11 +1752,13 @@ def main():
                 refresh_tokens=args.refresh_tokens,
                 report_dir=args.report_dir,
                 print_missing_rows=args.print_missing_rows,
-                print_missing_rows_max=args.print_missing_rows_max
+                print_missing_rows_max=args.print_missing_rows_max,
+                symbols=symbol_filter,
             )
     else:
         run_mode(
             mode,
+            from_date=args.from_date,
             max_workers=args.max_workers,
             skip_if_fresh=skip_if_fresh,
             intraday_ts=args.intraday_ts,
@@ -1656,7 +1766,8 @@ def main():
             refresh_tokens=args.refresh_tokens,
             report_dir=args.report_dir,
             print_missing_rows=args.print_missing_rows,
-            print_missing_rows_max=args.print_missing_rows_max
+            print_missing_rows_max=args.print_missing_rows_max,
+            symbols=symbol_filter,
         )
 
 

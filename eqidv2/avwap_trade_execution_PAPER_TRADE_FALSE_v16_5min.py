@@ -144,25 +144,25 @@ _EFFECTIVE_V16_5MIN_SHORT_CFG, _EFFECTIVE_V16_5MIN_LONG_CFG = _build_effective_v
 SHORT_STOP_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_STOP_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "stop_pct", 0.0078))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "stop_pct", 0.0075))),
     )
 )
 LONG_STOP_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_LONG_STOP_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "stop_pct", 0.0060))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "stop_pct", 0.0075))),
     )
 )
 SHORT_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0070))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0080))),
     )
 )
 LONG_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_LONG_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.00825))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.0080))),
     )
 )
 
@@ -217,8 +217,8 @@ _SIGNAL_COL_MAP = {
     "target":         "target_price",
     "impulse":        "impulse_type",
     "created_ts_ist": "signal_datetime",
-    "bar_time_ist":   "signal_entry_datetime_ist",
-    "signal_bar_time_ist": "signal_entry_datetime_ist",
+    "bar_time_ist":   "signal_bar_time_ist",
+    "signal_bar_time_ist": "signal_bar_time_ist",
     "conf_mult":      "confidence_multiplier",
 }
 
@@ -230,7 +230,13 @@ DEFAULT_POSITION_SIZE = float(
     )
 )
 # Leave unset so quantity is taken from the signal row when present.
-FORCE_ENTRY_QUANTITY: Optional[int] = None
+_FORCE_ENTRY_QUANTITY_RAW = str(os.getenv("EQIDV16_5MIN_FORCE_ENTRY_QUANTITY", "")).strip()
+try:
+    FORCE_ENTRY_QUANTITY: Optional[int] = (
+        max(1, int(_FORCE_ENTRY_QUANTITY_RAW)) if _FORCE_ENTRY_QUANTITY_RAW else None
+    )
+except Exception:
+    FORCE_ENTRY_QUANTITY = None
 
 # ============================================================================
 # LOGGING
@@ -267,6 +273,8 @@ log = setup_logging()
 # ============================================================================
 kite: Optional[KiteConnect] = None
 kite_pool: List[KiteConnect] = []
+kite_session_names: Dict[int, str] = {}
+kite_primary_session_name = "N/A"
 kite_pool_lock = threading.Lock()
 kite_pool_rr_idx = 0
 symbol_tick_size_cache: Dict[str, float] = {}
@@ -276,16 +284,21 @@ symbol_tick_size_lock = threading.Lock()
 
 def setup_kite_session() -> KiteConnect:
     """Set up and return a KiteConnect primary session, with optional app pool."""
-    global kite, kite_pool, kite_pool_rr_idx
+    global kite, kite_pool, kite_pool_rr_idx, kite_session_names, kite_primary_session_name
 
     specs = [
         ("app1", "api_key.txt", "access_token.txt"),
         ("app2", "api_key2.txt", "access_token2.txt"),
         ("app3", "api_key3.txt", "access_token3.txt"),
         ("app4", "api_key4.txt", "access_token4.txt"),
+        ("app5", "api_key5.txt", "access_token5.txt"),
+        ("app6", "api_key6.txt", "access_token6.txt"),
+        ("app7", "api_key7.txt", "access_token7.txt"),
+        ("app8", "api_key8.txt", "access_token8.txt"),
     ]
 
     sessions: List[KiteConnect] = []
+    session_names: List[str] = []
     primary_user = "N/A"
     primary_app = "N/A"
 
@@ -317,6 +330,7 @@ def setup_kite_session() -> KiteConnect:
                 primary_app = app_name
                 primary_user = user_name
             sessions.append(client)
+            session_names.append(app_name)
             log.info(f"[KITE] Session ready: {app_name} | user={user_name}")
         except Exception as e:
             if app_name == "app1":
@@ -335,7 +349,9 @@ def setup_kite_session() -> KiteConnect:
     kite = sessions[0]
     with kite_pool_lock:
         kite_pool = list(sessions)
+        kite_session_names = {id(client): name for client, name in zip(sessions, session_names)}
         kite_pool_rr_idx = 0
+    kite_primary_session_name = primary_app
 
     log.info(f"Kite primary session established: {primary_app} | user={primary_user}")
     log.info(f"[KITE] Session pool active apps: {len(sessions)}")
@@ -353,6 +369,25 @@ def _next_kite_for_reads() -> KiteConnect:
     if kite is None:
         raise RuntimeError("Kite session not initialized")
     return kite
+
+
+def _iter_kite_write_clients() -> List[Tuple[str, KiteConnect]]:
+    with kite_pool_lock:
+        pool = list(kite_pool)
+        names = dict(kite_session_names)
+
+    clients: List[Tuple[str, KiteConnect]] = []
+    seen: Set[int] = set()
+    ordered = ([kite] if kite is not None else []) + pool
+    for client in ordered:
+        if client is None:
+            continue
+        client_id = id(client)
+        if client_id in seen:
+            continue
+        seen.add(client_id)
+        clients.append((names.get(client_id, f"session{len(clients) + 1}"), client))
+    return clients
 
 
 def get_ltp(ticker: str) -> float:
@@ -662,33 +697,31 @@ def _place_exit_legs(
 
     target_order_id = ""
     try:
-        target_order_id = str(
-            kite.place_order(
-                variety=kite.VARIETY_REGULAR,
-                exchange=kite.EXCHANGE_NSE,
-                tradingsymbol=ticker,
-                transaction_type=exit_txn,
-                quantity=quantity,
-                product=kite.PRODUCT_MIS,
-                order_type=kite.ORDER_TYPE_LIMIT,
-                price=target_price,
-                validity=kite.VALIDITY_DAY,
-                tag="AVWAPTarget",
-            )
+        target_order_id = _place_order_with_fallback(
+            f"{ticker} target leg",
+            variety=kite.VARIETY_REGULAR,
+            exchange=kite.EXCHANGE_NSE,
+            tradingsymbol=ticker,
+            transaction_type=exit_txn,
+            quantity=quantity,
+            product=kite.PRODUCT_MIS,
+            order_type=kite.ORDER_TYPE_LIMIT,
+            price=target_price,
+            validity=kite.VALIDITY_DAY,
+            tag="AVWAPTarget",
         )
-        sl_order_id = str(
-            kite.place_order(
-                variety=kite.VARIETY_REGULAR,
-                exchange=kite.EXCHANGE_NSE,
-                tradingsymbol=ticker,
-                transaction_type=exit_txn,
-                quantity=quantity,
-                product=kite.PRODUCT_MIS,
-                order_type=kite.ORDER_TYPE_SLM,
-                trigger_price=stop_price,
-                validity=kite.VALIDITY_DAY,
-                tag="AVWAPStopLoss",
-            )
+        sl_order_id = _place_order_with_fallback(
+            f"{ticker} stop leg",
+            variety=kite.VARIETY_REGULAR,
+            exchange=kite.EXCHANGE_NSE,
+            tradingsymbol=ticker,
+            transaction_type=exit_txn,
+            quantity=quantity,
+            product=kite.PRODUCT_MIS,
+            order_type=kite.ORDER_TYPE_SLM,
+            trigger_price=stop_price,
+            validity=kite.VALIDITY_DAY,
+            tag="AVWAPStopLoss",
         )
         _reset_orders_snapshot_cache()
         return target_order_id, sl_order_id
@@ -891,6 +924,50 @@ def _sanitize_error_message(message: object, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 3)] + "..."
+
+
+def _is_order_write_ip_restriction_error(error: Exception) -> bool:
+    text = _sanitize_error_message(error, limit=500).lower()
+    return (
+        "not allowed to place orders for this app" in text
+        or "update allowed ips" in text
+        or "allowed to place orders for this app" in text
+    )
+
+
+def _place_order_with_fallback(log_context: str, **place_kwargs: Any) -> str:
+    global kite, kite_primary_session_name
+
+    candidates = _iter_kite_write_clients()
+    if not candidates:
+        raise RuntimeError("Kite session not initialized")
+
+    last_error: Optional[Exception] = None
+    total = len(candidates)
+    for idx, (app_name, client) in enumerate(candidates, 1):
+        try:
+            order_id = str(client.place_order(**place_kwargs))
+            if kite is not client:
+                kite = client
+                kite_primary_session_name = app_name
+                log.warning(
+                    f"[KITE.WRITE_FAILOVER] {log_context}: switched active write session to "
+                    f"{app_name} after primary write rejection."
+                )
+            return order_id
+        except Exception as exc:
+            last_error = exc
+            if _is_order_write_ip_restriction_error(exc) and idx < total:
+                log.warning(
+                    f"[KITE.WRITE_FAILOVER] {log_context}: {app_name} blocked for order placement "
+                    f"({_sanitize_error_message(exc, limit=160)}). Trying next app."
+                )
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"{log_context}: order placement failed without a concrete exception")
 
 
 def _is_mis_block_or_missing_error(error: Exception) -> bool:
@@ -1189,7 +1266,8 @@ def _global_eod_force_close_sweep(now_ist: Optional[datetime] = None) -> None:
 
         close_txn = kite.TRANSACTION_TYPE_BUY if broker_signed_qty < 0 else kite.TRANSACTION_TYPE_SELL
         try:
-            close_order_id = kite.place_order(
+            close_order_id = _place_order_with_fallback(
+                f"{ticker} global EOD close",
                 variety=kite.VARIETY_REGULAR,
                 exchange=kite.EXCHANGE_NSE,
                 tradingsymbol=ticker,
@@ -1382,7 +1460,8 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
 
     def _force_market_close(tag: str, outcome: str, timeout_sec: int = 30) -> bool:
         try:
-            close_order_id = kite.place_order(
+            close_order_id = _place_order_with_fallback(
+                f"{ticker} force close {tag}",
                 variety=kite.VARIETY_REGULAR,
                 exchange=kite.EXCHANGE_NSE,
                 tradingsymbol=ticker,
@@ -1524,7 +1603,8 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     entry_filled = True
                     break
 
-                entry_order_id = kite.place_order(
+                entry_order_id = _place_order_with_fallback(
+                    f"{ticker} entry {entry_txn} attempt {entry_attempt}/{ENTRY_RETRY_ATTEMPTS}",
                     variety=kite.VARIETY_REGULAR,
                     exchange=kite.EXCHANGE_NSE,
                     tradingsymbol=ticker,
@@ -3407,6 +3487,8 @@ def main():
         f"MIS={INTRADAY_LEVERAGE:.1f}x | "
         f"notional≈Rs.{DEFAULT_POSITION_SIZE * INTRADAY_LEVERAGE:,.0f}"
     )
+    if FORCE_ENTRY_QUANTITY is not None:
+        log.info(f"  Quantity override : FORCE_ENTRY_QUANTITY={FORCE_ENTRY_QUANTITY} (all NEW entries)")
     log.info(
         "  SL/Target policy  : "
         "signal prices preferred | "

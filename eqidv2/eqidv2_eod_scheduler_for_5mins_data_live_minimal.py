@@ -227,7 +227,13 @@ def ticker_is_fresh_strict(mode: str, out_path: str, now_ist: datetime, holidays
     if exp_ts.tzinfo is None:
         exp_ts = core.IST_TZ.localize(exp_ts)
     tol = timedelta(seconds=1)
-    return last_ts >= (exp_ts - tol)
+    if last_ts < (exp_ts - tol):
+        return False
+    if mode.lower().strip() == "5min" and getattr(core, "DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS", False):
+        missing_session = core._missing_5min_session_stamps_from_store(existing_path, exp_ts)
+        if missing_session:
+            return False
+    return True
 
 # Apply patch only if core exposes expected_last_stamp (newer core); otherwise keep original.
 if hasattr(core, 'expected_last_stamp') and _orig_ticker_is_fresh is not None:
@@ -373,6 +379,45 @@ def _last_5m_bar_for_ticker_ist(ticker: str) -> Optional[datetime]:
     return last_ts.tz_convert(core.IST_TZ)
 
 
+def _ticker_has_required_5m_slot_data(
+    ticker: str,
+    expected_ts_ist: datetime,
+) -> tuple[bool, Optional[datetime], list]:
+    out_path = str(RUNTIME_DATA_5M_DIR / f"{str(ticker).strip().upper()}{END_5M}")
+    try:
+        existing_path = core._resolve_existing_store_path(out_path)
+        if not os.path.exists(existing_path):
+            return False, None, []
+        last_ts = core._read_last_ts_from_store(existing_path)
+    except Exception:
+        return False, None, []
+
+    if last_ts is None:
+        return False, None, []
+
+    if getattr(last_ts, "tzinfo", None) is None:
+        last_ts = core.IST_TZ.localize(last_ts)
+    else:
+        last_ts = last_ts.tz_convert(core.IST_TZ)
+
+    target_ts = expected_ts_ist if expected_ts_ist.tzinfo is not None else IST.localize(expected_ts_ist)
+    target_ts = target_ts.astimezone(IST)
+    tol = timedelta(seconds=1)
+    if last_ts < (target_ts - tol):
+        return False, last_ts, []
+
+    missing_session: list = []
+    if getattr(core, "DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS", False):
+        try:
+            missing_session = list(core._missing_5min_session_stamps_from_store(existing_path, target_ts))
+        except Exception:
+            missing_session = []
+        if missing_session:
+            return False, last_ts, missing_session
+
+    return True, last_ts, []
+
+
 def _publish_slot_ready_marker(
     slot_end: datetime,
     *,
@@ -411,11 +456,11 @@ def _watch_and_publish_slot_ready_marker(
         fresh = 0
         checked = 0
         for ticker in sample_tickers:
-            last_ts = _last_5m_bar_for_ticker_ist(ticker)
+            ok, last_ts, _ = _ticker_has_required_5m_slot_data(ticker, target_slot)
             if last_ts is None:
                 continue
             checked += 1
-            if last_ts >= target_slot:
+            if ok:
                 fresh += 1
         ratio = (fresh / checked) if checked > 0 else 0.0
         if checked > 0 and ratio >= float(min_fresh_ratio):
@@ -440,11 +485,11 @@ def _watch_and_publish_slot_ready_marker(
     fresh = 0
     checked = 0
     for ticker in sample_tickers:
-        last_ts = _last_5m_bar_for_ticker_ist(ticker)
+        ok, last_ts, _ = _ticker_has_required_5m_slot_data(ticker, target_slot)
         if last_ts is None:
             continue
         checked += 1
-        if last_ts >= target_slot:
+        if ok:
             fresh += 1
     ratio = (fresh / checked) if checked > 0 else 0.0
     if checked > 0 and ratio >= float(min_fresh_ratio):
@@ -472,6 +517,8 @@ def _write_slot_status(
     effective_per_app: int,
     sla_warn_sec: float,
     failures: list[str],
+    verification_failed_count: int,
+    verification_failure_sample: list[str],
 ) -> None:
     slot_ts = slot_end if slot_end.tzinfo is not None else IST.localize(slot_end)
     slot_ts = slot_ts.astimezone(IST)
@@ -493,6 +540,12 @@ def _write_slot_status(
         "sla_mode": "soft_warn_only",
         "completion_policy": "continue_until_verified",
         "failures": list(failures),
+        "verification_failed_count": int(verification_failed_count),
+        "verification_failure_sample": list(verification_failure_sample),
+        "overall_state": (
+            "FAIL" if failures or int(verification_failed_count) > 0
+            else ("WARN" if float(total_elapsed_sec) > float(sla_warn_sec) else "OK")
+        ),
     }
     SLOT_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = SLOT_STATUS_PATH.with_suffix(".tmp")
@@ -708,10 +761,10 @@ def _run_partition(
     refresh_tokens: bool,
     intraday_ts: str,
     skip_if_fresh: bool,
-) -> None:
+) -> dict[str, object]:
     if not partition_tickers:
         print(f"[INFO] {partition_name}: no tickers assigned; skipping.")
-        return
+        return {"verify_failed_count": 0, "verify_failed_sample": []}
 
     current_loader = core.load_stocks_universe
     current_setup = core.setup_kite_session
@@ -723,7 +776,7 @@ def _run_partition(
     try:
         core.load_stocks_universe = _partition_loader
         core.setup_kite_session = setup_kite_fn
-        core.run_mode(
+        return dict(core.run_mode(
             mode,
             max_workers=max_workers,
             skip_if_fresh=bool(skip_if_fresh),
@@ -733,7 +786,7 @@ def _run_partition(
             refresh_tokens=refresh_tokens,
             print_missing_rows=False,
             print_missing_rows_max=5,
-        )
+        ) or {})
     finally:
         core.load_stocks_universe = current_loader
         core.setup_kite_session = current_setup
@@ -751,6 +804,7 @@ def _run_partition_worker(
     refresh_tokens: bool,
     intraday_ts: str,
     skip_if_fresh: bool,
+    expected_ts_ist: datetime,
     result_queue,
 ) -> None:
     # Use stream-only logger in child process to avoid concurrent file truncation.
@@ -765,7 +819,7 @@ def _run_partition_worker(
     setup_fn = _setup_fn_map().get(setup_kind, setup_kite_session_from_eqidv2_dir)
     started_at = time.perf_counter()
     try:
-        _run_partition(
+        summary = _run_partition(
             mode,
             partition_name,
             partition_tickers,
@@ -778,9 +832,45 @@ def _run_partition_worker(
             intraday_ts=intraday_ts,
             skip_if_fresh=skip_if_fresh,
         )
-        result_queue.put((partition_name, True, "", time.perf_counter() - started_at, len(partition_tickers)))
+        verify_failed = list((summary or {}).get("verify_failed_sample", []) or [])
+        verify_failed_count = int((summary or {}).get("verify_failed_count", len(verify_failed)) or 0)
+        if verify_failed_count > 0:
+            sample = ", ".join(verify_failed[:8])
+            result_queue.put(
+                (
+                    partition_name,
+                    False,
+                    f"verify_failed={verify_failed_count} sample={sample}",
+                    time.perf_counter() - started_at,
+                    len(partition_tickers),
+                    verify_failed_count,
+                    verify_failed[:8],
+                )
+            )
+        else:
+            result_queue.put(
+                (
+                    partition_name,
+                    True,
+                    "",
+                    time.perf_counter() - started_at,
+                    len(partition_tickers),
+                    0,
+                    [],
+                )
+            )
     except Exception as e:
-        result_queue.put((partition_name, False, str(e), time.perf_counter() - started_at, len(partition_tickers)))
+        result_queue.put(
+            (
+                partition_name,
+                False,
+                str(e),
+                time.perf_counter() - started_at,
+                len(partition_tickers),
+                0,
+                [],
+            )
+        )
 
 def run_update_5m_once(
     max_workers: int,
@@ -895,6 +985,7 @@ def run_update_5m_once(
                 "refresh_tokens": refresh_tokens,
                 "intraday_ts": intraday_ts_mode,
                 "skip_if_fresh": skip_if_fresh_mode,
+                "expected_ts_ist": (slot_end if slot_end is not None else now_ist()),
                 "result_queue": result_queue,
             },
         )
@@ -911,24 +1002,40 @@ def run_update_5m_once(
     if marker_thread is not None:
         marker_thread.join(timeout=2.0)
 
-    result_map: dict[str, tuple[bool, str, float, int]] = {}
+    result_map: dict[str, tuple[bool, str, float, int, int, list[str]]] = {}
     for _ in workers:
         try:
-            pname, ok, msg, elapsed_sec, ticker_count = result_queue.get(timeout=1.0)
-            result_map[str(pname)] = (bool(ok), str(msg), float(elapsed_sec), int(ticker_count))
+            pname, ok, msg, elapsed_sec, ticker_count, verify_failed_count, verify_failed_sample = result_queue.get(timeout=1.0)
+            result_map[str(pname)] = (
+                bool(ok),
+                str(msg),
+                float(elapsed_sec),
+                int(ticker_count),
+                int(verify_failed_count),
+                list(verify_failed_sample),
+            )
         except Exception:
             break
 
     failures: list[str] = []
     partition_elapsed: dict[str, float] = {}
     partition_symbol_counts: dict[str, int] = {}
+    verification_failed_count = 0
+    verification_failure_sample: list[str] = []
     for pname, proc in workers:
-        ok, msg, elapsed_sec, ticker_count = result_map.get(
+        ok, msg, elapsed_sec, ticker_count, part_verify_failed_count, part_verify_failed_sample = result_map.get(
             pname,
-            (proc.exitcode == 0, f"worker_exit={proc.exitcode}", 0.0, 0),
+            (proc.exitcode == 0, f"worker_exit={proc.exitcode}", 0.0, 0, 0, []),
         )
         partition_elapsed[pname] = float(elapsed_sec)
         partition_symbol_counts[pname] = int(ticker_count)
+        verification_failed_count += int(part_verify_failed_count)
+        for item in part_verify_failed_sample:
+            text = str(item).strip()
+            if text and text not in verification_failure_sample:
+                verification_failure_sample.append(text)
+                if len(verification_failure_sample) >= 20:
+                    break
         if (not ok) or (proc.exitcode not in (0, None)):
             failures.append(f"{pname}: {msg}")
 
@@ -963,6 +1070,8 @@ def run_update_5m_once(
                 effective_per_app=partition_max_workers,
                 sla_warn_sec=slot_sla_warn_sec,
                 failures=failures,
+                verification_failed_count=verification_failed_count,
+                verification_failure_sample=verification_failure_sample,
             )
         except Exception as exc:
             print(f"[WARN] Failed to write 5min slot status: {exc}")
@@ -983,6 +1092,8 @@ def run_update_5m_once(
         "sla_warn_sec": float(slot_sla_warn_sec),
         "sla_breached": bool(total_elapsed_sec > float(slot_sla_warn_sec)),
         "failures": list(failures),
+        "verification_failed_count": int(verification_failed_count),
+        "verification_failure_sample": list(verification_failure_sample),
     }
 
 def main() -> None:

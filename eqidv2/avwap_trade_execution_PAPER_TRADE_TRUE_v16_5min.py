@@ -115,25 +115,25 @@ _EFFECTIVE_V16_5MIN_SHORT_CFG, _EFFECTIVE_V16_5MIN_LONG_CFG = _build_effective_v
 SHORT_STOP_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_STOP_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "stop_pct", 0.0078))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "stop_pct", 0.0075))),
     )
 )
 LONG_STOP_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_LONG_STOP_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "stop_pct", 0.0060))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "stop_pct", 0.0075))),
     )
 )
 SHORT_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0070))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0080))),
     )
 )
 LONG_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_LONG_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.00825))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.0080))),
     )
 )
 ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
@@ -179,7 +179,13 @@ MAX_CAPITAL_DEPLOYED_RS = float(
 )
 
 # Leave unset so quantity is taken from the signal row when present.
-FORCE_ENTRY_QUANTITY: Optional[int] = None
+_FORCE_ENTRY_QUANTITY_RAW = str(os.getenv("EQIDV16_5MIN_FORCE_ENTRY_QUANTITY", "")).strip()
+try:
+    FORCE_ENTRY_QUANTITY: Optional[int] = (
+        max(1, int(_FORCE_ENTRY_QUANTITY_RAW)) if _FORCE_ENTRY_QUANTITY_RAW else None
+    )
+except Exception:
+    FORCE_ENTRY_QUANTITY = None
 
 # Paper trade log columns
 TRADE_LOG_COLUMNS = [
@@ -221,8 +227,8 @@ _SIGNAL_COL_MAP = {
     "target":         "target_price",
     "impulse":        "impulse_type",
     "created_ts_ist": "signal_datetime",
-    "bar_time_ist":   "signal_entry_datetime_ist",
-    "signal_bar_time_ist": "signal_entry_datetime_ist",
+    "bar_time_ist":   "signal_bar_time_ist",
+    "signal_bar_time_ist": "signal_bar_time_ist",
     "conf_mult":      "confidence_multiplier",
 }
 
@@ -318,10 +324,19 @@ def _read_first_token(path: str) -> str:
 
 def _kite_auth_profiles() -> List[Tuple[str, str, str]]:
     profiles: List[Tuple[str, str, str]] = []
-    if os.path.exists("api_key.txt") and os.path.exists("access_token.txt"):
-        profiles.append(("primary", "api_key.txt", "access_token.txt"))
-    if os.path.exists("api_key2.txt") and os.path.exists("access_token2.txt"):
-        profiles.append(("secondary", "api_key2.txt", "access_token2.txt"))
+    specs = [
+        ("app1", "api_key.txt", "access_token.txt"),
+        ("app2", "api_key2.txt", "access_token2.txt"),
+        ("app3", "api_key3.txt", "access_token3.txt"),
+        ("app4", "api_key4.txt", "access_token4.txt"),
+        ("app5", "api_key5.txt", "access_token5.txt"),
+        ("app6", "api_key6.txt", "access_token6.txt"),
+        ("app7", "api_key7.txt", "access_token7.txt"),
+        ("app8", "api_key8.txt", "access_token8.txt"),
+    ]
+    for profile_name, key_path, token_path in specs:
+        if os.path.exists(key_path) and os.path.exists(token_path):
+            profiles.append((profile_name, key_path, token_path))
     return profiles
 
 def _is_kite_auth_error(exc: Exception) -> bool:
@@ -2052,6 +2067,8 @@ def main():
         f"MIS={INTRADAY_LEVERAGE:.1f}x | "
         f"notional≈Rs.{DEFAULT_POSITION_SIZE * INTRADAY_LEVERAGE:,.0f}"
     )
+    if FORCE_ENTRY_QUANTITY is not None:
+        log.info(f"  Quantity override: FORCE_ENTRY_QUANTITY={FORCE_ENTRY_QUANTITY} (all NEW entries)")
     log.info(
         "  SL/Target policy: "
         "signal prices preferred | "

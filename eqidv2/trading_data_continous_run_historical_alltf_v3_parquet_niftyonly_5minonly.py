@@ -156,6 +156,26 @@ def _incremental_start(out_path: str, base_start_dt):
     if not Path(existing_path).exists():
         return base_start_dt
 
+    try:
+        existing = _load_existing_ohlc_raw(out_path)
+        if not existing.empty and "date" in existing.columns:
+            first_ts = pd.to_datetime(existing["date"], errors="coerce").dropna().min()
+            if pd.notna(first_ts):
+                first_ts = pd.Timestamp(first_ts)
+                if first_ts.tzinfo is None:
+                    first_ts = first_ts.tz_localize(IST_TZ)
+                else:
+                    first_ts = first_ts.tz_convert(IST_TZ)
+                base_ts = pd.Timestamp(base_start_dt)
+                if base_ts.tzinfo is None:
+                    base_ts = base_ts.tz_localize(IST_TZ)
+                else:
+                    base_ts = base_ts.tz_convert(IST_TZ)
+                if first_ts > (base_ts + pd.Timedelta(seconds=1)):
+                    return base_ts
+    except Exception:
+        pass
+
     last_ts = _read_last_ts_from_store(existing_path)
     if last_ts is None:
         return base_start_dt
@@ -214,6 +234,29 @@ def _nifty_is_exactly_fresh(out_path: str, now_ist: datetime, holidays: set, int
         exp_ts = exp_ts.tz_convert(IST_TZ)
 
     return last_ts >= (exp_ts - pd.Timedelta(seconds=1))
+
+
+def _nifty_needs_prefix_backfill(out_path: str, base_start_dt) -> bool:
+    try:
+        existing = _load_existing_ohlc_raw(out_path)
+        if existing.empty or "date" not in existing.columns:
+            return False
+        first_ts = pd.to_datetime(existing["date"], errors="coerce").dropna().min()
+        if pd.isna(first_ts):
+            return False
+        first_ts = pd.Timestamp(first_ts)
+        if first_ts.tzinfo is None:
+            first_ts = first_ts.tz_localize(IST_TZ)
+        else:
+            first_ts = first_ts.tz_convert(IST_TZ)
+        base_ts = pd.Timestamp(base_start_dt)
+        if base_ts.tzinfo is None:
+            base_ts = base_ts.tz_localize(IST_TZ)
+        else:
+            base_ts = base_ts.tz_convert(IST_TZ)
+        return bool(first_ts > (base_ts + pd.Timedelta(seconds=1)))
+    except Exception:
+        return False
 
 
 def _merge_fetch(existing: pd.DataFrame, fetched: pd.DataFrame) -> pd.DataFrame:
@@ -308,6 +351,7 @@ def main() -> int:
     if (
         (not args.no_skip)
         and _nifty_is_exactly_fresh(primary_out, now_ist, holidays, args.intraday_ts)
+        and not _nifty_needs_prefix_backfill(primary_out, start_dt)
         and not opening_snapshot_missing
     ):
         logger.info("%s already fresh. Skipping fetch.", primary_alias)

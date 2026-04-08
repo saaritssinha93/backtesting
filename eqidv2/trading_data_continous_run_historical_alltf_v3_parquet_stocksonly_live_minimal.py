@@ -61,6 +61,7 @@ from kiteconnect import KiteConnect, exceptions as kexc
 from requests import exceptions as reqexc
 from eqidv2_runtime_paths import CACHE_15M_DIR
 from eqidv2_runtime_paths import CACHE_5MIN_DIR
+from eqidv2_runtime_paths import DATA_5M_DIR
 from eqidv2_runtime_paths import DATA_15M_DIR
 from eqidv2_runtime_paths import runtime_dir
 
@@ -70,7 +71,7 @@ IST_TZ = pytz.timezone("Asia/Kolkata")
 
 # Directories (only intraday)
 DIRS = {
-    "5min":   {"cache": str(CACHE_5MIN_DIR),  "out": str(runtime_dir("stocks_indicators_5min_eq"))},
+    "5min":   {"cache": str(CACHE_5MIN_DIR),  "out": str(DATA_5M_DIR)},
     "15min":  {"cache": str(CACHE_15M_DIR),   "out": str(DATA_15M_DIR)},
 }
 for cfg in DIRS.values():
@@ -93,7 +94,19 @@ DEFAULT_VERIFY_SAMPLE_SIZE = max(0, int(os.getenv("EQIDV2_VERIFY_SAMPLE_SIZE", "
 DEFAULT_LOG_INDICATOR_QUALITY = str(os.getenv("EQIDV2_LOG_INDICATOR_QUALITY", "0")).strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_DOWNCAST_NUMERIC = str(os.getenv("EQIDV2_DOWNCAST_NUMERIC", "0")).strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_PARQUET_COMPRESSION = str(os.getenv("EQIDV2_PARQUET_COMPRESSION", "none")).strip().lower()
-DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS = False
+DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS = str(
+    os.getenv("EQIDV2_5M_ENFORCE_SESSION_COMPLETENESS", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_5M_LIVE_SLIM_MODE = str(
+    os.getenv("EQIDV2_5M_LIVE_SLIM_MODE", "0")
+).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_5M_LIVE_SLIM_CALENDAR_DAYS = max(
+    7,
+    int(os.getenv("EQIDV2_5M_LIVE_SLIM_CALENDAR_DAYS", "21")),
+)
+DEFAULT_5M_SYNTHETIC_GAP_FILL = str(
+    os.getenv("EQIDV2_5M_SYNTHETIC_GAP_FILL", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_SESSION_COMPLETENESS_LOG_LIMIT = max(
     1,
     int(os.getenv("EQIDV2_5M_SESSION_COMPLETENESS_LOG_LIMIT", "6")),
@@ -459,6 +472,10 @@ def last_completed_intraday_end(now_ist: datetime, step_min: int, holidays: set[
 def get_start_date(mode: str, now_ist: datetime) -> datetime:
     if now_ist.tzinfo is None:
         now_ist = IST_TZ.localize(now_ist)
+
+    if mode.lower().strip() == "5min" and DEFAULT_5M_LIVE_SLIM_MODE:
+        anchor = (now_ist - timedelta(days=DEFAULT_5M_LIVE_SLIM_CALENDAR_DAYS)).date()
+        return IST_TZ.localize(datetime(anchor.year, anchor.month, anchor.day, 0, 0, 0))
 
     # Keep your original intraday start anchor behaviour
     return IST_TZ.localize(datetime(2025, 8, 25, 0, 0, 0))
@@ -1003,12 +1020,19 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
         return pd.DataFrame()
 
     try:
-        keep_cols = ["date", "open", "high", "low", "close", "volume"]
+        keep_cols = ["date", "open", "high", "low", "close", "volume", "gap_filled"]
         ext = str(Path(existing_path).suffix).lower()
 
         if ext == ".parquet":
             _ensure_parquet_engine()
-            df = pd.read_parquet(existing_path, columns=keep_cols, engine="pyarrow")
+            try:
+                df = pd.read_parquet(existing_path, columns=keep_cols, engine="pyarrow")
+            except Exception:
+                df = pd.read_parquet(
+                    existing_path,
+                    columns=[c for c in keep_cols if c != "gap_filled"],
+                    engine="pyarrow",
+                )
         else:
             df = pd.read_csv(existing_path)
 
@@ -1020,6 +1044,15 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
         if intraday_ts.lower() == "end":
             step = {"5min": 5, "15min": 15}[mode]
             df = _maybe_convert_existing_intraday_to_end(df, step)
+
+        if mode.lower().strip() == "5min" and DEFAULT_5M_LIVE_SLIM_MODE:
+            cutoff_date = (datetime.now(IST_TZ) - timedelta(days=DEFAULT_5M_LIVE_SLIM_CALENDAR_DAYS)).date()
+            df = df[df["date"].dt.tz_convert(IST_TZ).dt.date >= cutoff_date].copy()
+
+        if "gap_filled" not in df.columns:
+            df["gap_filled"] = 0
+        else:
+            df["gap_filled"] = pd.to_numeric(df["gap_filled"], errors="coerce").fillna(0).astype(int)
 
         keep = [c for c in keep_cols if c in df.columns]
         return df[keep].drop_duplicates(subset="date").sort_values("date").reset_index(drop=True)
@@ -1199,6 +1232,109 @@ def _format_missing_stamp_sample(missing_stamps: list[pd.Timestamp]) -> str:
     return ", ".join(
         pd.Timestamp(ts).strftime("%H:%M") for ts in missing_stamps[:DEFAULT_SESSION_COMPLETENESS_LOG_LIMIT]
     )
+
+
+def _trim_live_5min_history(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or "date" not in df.columns:
+        return df
+    if not DEFAULT_5M_LIVE_SLIM_MODE:
+        return df
+
+    dt = pd.to_datetime(df["date"], errors="coerce")
+    if dt.isna().all():
+        return df
+    if getattr(dt.dt, "tz", None) is None:
+        dt = dt.dt.tz_localize(IST_TZ)
+    else:
+        dt = dt.dt.tz_convert(IST_TZ)
+
+    cutoff_date = (datetime.now(IST_TZ) - timedelta(days=DEFAULT_5M_LIVE_SLIM_CALENDAR_DAYS)).date()
+    trimmed = df.loc[dt.dt.date >= cutoff_date].copy()
+    if trimmed.empty:
+        trimmed = df.tail(400).copy()
+    return trimmed.sort_values("date").reset_index(drop=True)
+
+
+def _synthetic_fill_price_for_stamp(df: pd.DataFrame, stamp: pd.Timestamp) -> float | None:
+    before = df.loc[df["date"] < stamp].sort_values("date")
+    if not before.empty:
+        try:
+            px = float(before.iloc[-1]["close"])
+            if np.isfinite(px):
+                return px
+        except Exception:
+            pass
+
+    after = df.loc[df["date"] > stamp].sort_values("date")
+    if not after.empty:
+        for col in ("open", "close"):
+            try:
+                px = float(after.iloc[0][col])
+                if np.isfinite(px):
+                    return px
+            except Exception:
+                continue
+
+    return None
+
+
+def _apply_synthetic_5min_gap_fill(
+    df: pd.DataFrame,
+    expected_ts_ist: datetime | pd.Timestamp | None,
+    ticker: str,
+    logger: logging.Logger,
+) -> tuple[pd.DataFrame, list[pd.Timestamp]]:
+    if not DEFAULT_5M_SYNTHETIC_GAP_FILL:
+        return df, []
+    if df is None or df.empty or "date" not in df.columns:
+        return df, []
+
+    out = df.copy()
+    out["date"] = _to_ist(out["date"])
+    if "gap_filled" not in out.columns:
+        out["gap_filled"] = 0
+    else:
+        out["gap_filled"] = pd.to_numeric(out["gap_filled"], errors="coerce").fillna(0).astype(int)
+
+    missing = _missing_5min_session_stamps_from_df(out, expected_ts_ist)
+    if not missing:
+        return out.sort_values("date").reset_index(drop=True), []
+
+    synth_rows: list[dict[str, object]] = []
+    for stamp in missing:
+        fill_px = _synthetic_fill_price_for_stamp(out, pd.Timestamp(stamp))
+        if fill_px is None:
+            continue
+        synth_rows.append(
+            {
+                "date": pd.Timestamp(stamp),
+                "open": fill_px,
+                "high": fill_px,
+                "low": fill_px,
+                "close": fill_px,
+                "volume": 0.0,
+                "gap_filled": 1,
+            }
+        )
+
+    if not synth_rows:
+        return out.sort_values("date").reset_index(drop=True), []
+
+    synth_df = pd.DataFrame(synth_rows)
+    out = (
+        pd.concat([out, synth_df], ignore_index=True)
+        .sort_values("date")
+        .drop_duplicates(subset="date", keep="last")
+        .reset_index(drop=True)
+    )
+    filled_now = [pd.Timestamp(row["date"]).floor("min") for row in synth_rows]
+    logger.info(
+        "[5MIN] %s synthetic gap fill applied | count=%d | sample=%s",
+        ticker,
+        len(filled_now),
+        _format_missing_stamp_sample(filled_now),
+    )
+    return out, filled_now
 
 
 def _fetch_missing_5min_session_rows(
@@ -1786,6 +1922,9 @@ def process_ticker(
                             _time.perf_counter() - t_total0,
                             allow_previous_slot_verify=bool(slot_target_ts is not None))
 
+    fetched = fetched.copy()
+    fetched["gap_filled"] = 0
+
     if slot_target_ts is not None and not session_backfill_mode:
         fetched = fetched[fetched["date"] == slot_target_ts].reset_index(drop=True)
         if fetched.empty:
@@ -1797,6 +1936,16 @@ def process_ticker(
                                 allow_previous_slot_verify=True)
 
     if mode in {"5min", "15min"} and last_before_ts is not None and not session_backfill_mode:
+        replaceable_overlap = set()
+        if "gap_filled" in existing.columns:
+            existing_dt = _to_ist(existing["date"]).dt.floor("min")
+            replaceable_overlap = {
+                pd.Timestamp(ts)
+                for ts in existing_dt.loc[
+                    pd.to_numeric(existing["gap_filled"], errors="coerce").fillna(0).astype(int) > 0
+                ].tolist()
+            }
+
         overlap = fetched[fetched["date"] <= last_before_ts].copy()
         if not overlap.empty:
             overlap_first = pd.to_datetime(overlap["date"], errors="coerce").dropna().min()
@@ -1810,7 +1959,12 @@ def process_ticker(
                 overlap_first.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(overlap_first) else "n/a",
                 overlap_last.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(overlap_last) else "n/a",
             )
-            fetched = fetched[fetched["date"] > last_before_ts].reset_index(drop=True)
+            if replaceable_overlap:
+                fetched_dt = _to_ist(fetched["date"]).dt.floor("min")
+                keep_overlap = fetched_dt.isin(replaceable_overlap)
+                fetched = fetched[(fetched["date"] > last_before_ts) | keep_overlap].reset_index(drop=True)
+            else:
+                fetched = fetched[fetched["date"] > last_before_ts].reset_index(drop=True)
 
         if fetched.empty:
             return UpdateReport(mode, ticker, "noop", out_path, existed_before,
@@ -1825,7 +1979,7 @@ def process_ticker(
         if mode in {"5min", "15min"}:
             merged = (
                 pd.concat([existing, fetched], ignore_index=True)
-                  .drop_duplicates(subset="date", keep="last" if session_backfill_mode else "first")
+                  .drop_duplicates(subset="date", keep="last")
                   .sort_values("date")
                   .reset_index(drop=True)
             )
@@ -1836,6 +1990,10 @@ def process_ticker(
                   .sort_values("date")
                   .reset_index(drop=True)
             )
+
+    if mode == "5min":
+        merged, _ = _apply_synthetic_5min_gap_fill(merged, session_expected_ts, ticker, logger)
+        merged = _trim_live_5min_history(merged)
 
     try:
         t_ind0 = _time.perf_counter()
@@ -1955,7 +2113,11 @@ def run_mode(
     if end_dt <= start_dt:
         logger.info("End cutoff <= start. Nothing to fetch for %s.", mode)
         logger.info("[%s][TIMING] total=%.2fs (nothing_to_fetch)", mode.upper(), _time.perf_counter() - t_mode0)
-        return
+        return {
+            "verify_failed_count": 0,
+            "verify_failed_sample": [],
+            "total_elapsed_sec": float(_time.perf_counter() - t_mode0),
+        }
 
     syms, pre_token_map = load_stocks_universe(logger)
 
@@ -2012,7 +2174,11 @@ def run_mode(
                     ok_count, len(syms), len(verify_failed), verify_secs)
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=0.00s | workers=0.00s | verify=%.2fs | total=%.2fs",
                     mode.upper(), freshness_scan_secs, verify_secs, _time.perf_counter() - t_mode0)
-        return
+        return {
+            "verify_failed_count": int(len(verify_failed)),
+            "verify_failed_sample": list(verify_failed[:20]),
+            "total_elapsed_sec": float(_time.perf_counter() - t_mode0),
+        }
 
     t_token0 = _time.perf_counter()
     kite = setup_kite_session()
@@ -2044,7 +2210,11 @@ def run_mode(
                     ok_count, len(syms), len(verify_failed), verify_secs)
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=0.00s | verify=%.2fs | total=%.2fs",
                     mode.upper(), freshness_scan_secs, token_prep_secs, verify_secs, _time.perf_counter() - t_mode0)
-        return
+        return {
+            "verify_failed_count": int(len(verify_failed)),
+            "verify_failed_sample": list(verify_failed[:20]),
+            "total_elapsed_sec": float(_time.perf_counter() - t_mode0),
+        }
 
     logger.info("[%s] Processing ONLY missing symbols=%d with max_workers=%d ...", mode.upper(), len(work_items), max_workers)
 
@@ -2220,6 +2390,11 @@ def run_mode(
                     workers_secs,
                     verify_secs,
                     _time.perf_counter() - t_mode0)
+    return {
+        "verify_failed_count": int(len(verify_failed)),
+        "verify_failed_sample": list(verify_failed[:20]),
+        "total_elapsed_sec": float(_time.perf_counter() - t_mode0),
+    }
 
 def parse_args():
     p = argparse.ArgumentParser()

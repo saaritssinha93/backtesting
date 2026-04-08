@@ -6,9 +6,9 @@ Persistent 5-min slot scanner for V16 Run 7 canonical parameters.
 
 Scans all 1041 NSE tickers every 5 minutes using:
   - V16 Run 7 scanner config (avwap_min_consec_closes=1, mod_impulse_min_atr=0.30, volume=0.80)
-  - Nifty RS filter: LONG RS>=1.0%, SHORT RS<=-0.75% (BOTH mode)
+  - Backtest-parity NIFTY intraday context and per-stock RS filtering
   - V16 anti-exhaustion post-scan filters (RSI dead zone, QS two-band, AVWAP dist cap)
-  - Target: SHORT=0.75%, LONG=0.75% (Run 7 canonical)
+  - Unified SL/TGT: 0.75% stop, 0.80% target
 
 Outputs (to LIVE_SIGNALS_DIR):
   signals_YYYY-MM-DD_v16_5min_short.csv
@@ -107,7 +107,16 @@ SLOT_START_OFFSET_SECONDS = int(os.getenv("EQIDV16_5MIN_SLOT_START_OFFSET_SECOND
 SLOT_READY_MAX_WAIT_SECONDS = int(os.getenv("EQIDV16_5MIN_SLOT_READY_MAX_WAIT_SECONDS", "90"))
 SLOT_READY_POLL_SECONDS = max(1, int(os.getenv("EQIDV16_5MIN_SLOT_READY_POLL_SECONDS", "2")))
 SLOT_READY_SAMPLE_SIZE = max(1, int(os.getenv("EQIDV16_5MIN_SLOT_READY_SAMPLE_SIZE", "24")))
-SLOT_READY_MIN_FRESH_RATIO = float(os.getenv("EQIDV16_5MIN_SLOT_READY_MIN_FRESH_RATIO", "0.60"))
+SLOT_READY_MIN_FRESH_RATIO = float(os.getenv("EQIDV16_5MIN_SLOT_READY_MIN_FRESH_RATIO", "0.95"))
+_SLOT_READY_PRIORITY_TICKERS_RAW = os.getenv(
+    "EQIDV16_5MIN_SLOT_READY_PRIORITY_TICKERS",
+    "NIFTYBEES,SBIN,RELIANCE,TCS,HDFCBANK,ICICIBANK,INFY",
+)
+SLOT_READY_PRIORITY_TICKERS = [
+    str(part).strip().upper()
+    for part in str(_SLOT_READY_PRIORITY_TICKERS_RAW).split(",")
+    if str(part).strip()
+]
 USE_SCHEDULER_READY_MARKER = str(
     os.getenv("EQIDV16_5MIN_USE_SCHEDULER_READY_MARKER", "1")
 ).strip().lower() not in {
@@ -117,7 +126,7 @@ USE_SCHEDULER_READY_MARKER = str(
     "off",
 }
 SLOT_READY_MARKER_MIN_FRESH_RATIO = float(
-    os.getenv("EQIDV16_5MIN_SLOT_READY_MARKER_MIN_FRESH_RATIO", "0.70")
+    os.getenv("EQIDV16_5MIN_SLOT_READY_MARKER_MIN_FRESH_RATIO", "0.95")
 )
 SKIP_STALE_SLOT_ON_TIMEOUT = str(os.getenv("EQIDV16_5MIN_SKIP_STALE_SLOT_ON_TIMEOUT", "1")).strip().lower() not in {
     "0",
@@ -170,11 +179,19 @@ INTRADAY_LEVERAGE   = 5.0
 DEFAULT_POSITION_SIZE_RS = float(
     os.getenv("EQIDV16_5MIN_DEFAULT_POSITION_SIZE_RS", "10000")
 )
+_FORCE_SIGNAL_QUANTITY_RAW = str(os.getenv("EQIDV16_5MIN_FORCE_SIGNAL_QUANTITY", "")).strip()
+try:
+    FORCE_SIGNAL_QUANTITY: Optional[int] = (
+        max(1, int(_FORCE_SIGNAL_QUANTITY_RAW)) if _FORCE_SIGNAL_QUANTITY_RAW else None
+    )
+except Exception:
+    FORCE_SIGNAL_QUANTITY = None
 
 _BASE_DIR  = Path(__file__).resolve().parent
 _LOG_DIR   = _BASE_DIR / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 SLOT_READY_MARKER_DIR = runtime_dir("slot_ready_5m")
+SLOT_READY_STATUS_PATH = _LOG_DIR / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"
 
 _SCRIPT_NAME = "eqidv2_live_combined_analyser_csv_v16_5min.py"
 _LOG_FILE    = _LOG_DIR / "eqidv2_live_combined_analyser_csv_v16_5min.log"
@@ -278,14 +295,30 @@ def _sample_tickers_for_slot_ready(tickers: List[str], sample_size: int) -> List
     size = min(max(1, int(sample_size)), len(uniq))
     if size >= len(uniq):
         return uniq
-    if size == 1:
-        return [uniq[len(uniq) // 2]]
-    step = max(1.0, (len(uniq) - 1) / float(size - 1))
+
     picks: List[str] = []
-    for idx in range(size):
+    for ticker in SLOT_READY_PRIORITY_TICKERS:
+        if ticker in uniq and ticker not in picks:
+            picks.append(ticker)
+            if len(picks) >= size:
+                return sorted(picks)
+
+    remaining = [ticker for ticker in uniq if ticker not in picks]
+    remaining_slots = size - len(picks)
+    if remaining_slots <= 0:
+        return sorted(picks)
+    if remaining_slots == 1:
+        picks.append(remaining[len(remaining) // 2])
+        return sorted(set(picks))
+
+    step = max(1.0, (len(remaining) - 1) / float(remaining_slots - 1))
+    for idx in range(remaining_slots):
         pos = int(round(idx * step))
-        pos = max(0, min(len(uniq) - 1, pos))
-        picks.append(uniq[pos])
+        pos = max(0, min(len(remaining) - 1, pos))
+        ticker = remaining[pos]
+        if ticker not in picks:
+            picks.append(ticker)
+
     return sorted(set(picks))
 
 
@@ -301,6 +334,57 @@ def _last_bar_for_ticker_ist_5m(ticker: str) -> pd.Timestamp:
     return ts.floor("min")
 
 
+def _expected_5m_session_stamps(slot: datetime) -> List[pd.Timestamp]:
+    slot_ts = pd.Timestamp(slot)
+    if slot_ts.tzinfo is None:
+        slot_ts = slot_ts.tz_localize(IST)
+    else:
+        slot_ts = slot_ts.tz_convert(IST)
+    session_open = _session_open_timestamp(slot_ts.date())
+    expected: List[pd.Timestamp] = [session_open]
+    first_close = session_open + pd.Timedelta(minutes=SLOT_MINUTES)
+    if slot_ts >= first_close:
+        expected.extend(list(pd.date_range(start=first_close, end=slot_ts.floor("min"), freq=f"{SLOT_MINUTES}min", tz=IST)))
+    return expected
+
+
+def _ticker_ready_for_slot_5m(ticker: str, slot: datetime) -> Tuple[bool, pd.Timestamp, List[pd.Timestamp]]:
+    df_tail = _load_5m_parquet(ticker, n=max(TAIL_ROWS, 96))
+    if df_tail.empty or "date" not in df_tail.columns:
+        return False, pd.NaT, []
+
+    dt = pd.to_datetime(df_tail["date"], errors="coerce").dropna()
+    if dt.empty:
+        return False, pd.NaT, []
+    if getattr(dt.dt, "tz", None) is None:
+        dt = dt.dt.tz_localize(IST)
+    else:
+        dt = dt.dt.tz_convert(IST)
+
+    target_slot = pd.Timestamp(slot)
+    if target_slot.tzinfo is None:
+        target_slot = target_slot.tz_localize(IST)
+    else:
+        target_slot = target_slot.tz_convert(IST)
+    target_slot = target_slot.floor("min")
+
+    last_bar = pd.Timestamp(dt.max()).floor("min")
+    if last_bar < target_slot:
+        return False, last_bar, []
+
+    expected = _expected_5m_session_stamps(target_slot.to_pydatetime())
+    target_day = target_slot.date()
+    actual = {
+        pd.Timestamp(ts).floor("min")
+        for ts in dt[dt.dt.date == target_day].tolist()
+    }
+    missing = [stamp for stamp in expected if stamp.floor("min") not in actual]
+    if missing:
+        return False, last_bar, missing
+
+    return True, last_bar, []
+
+
 def _slot_ready_marker_path(slot: datetime) -> Path:
     slot_ts = pd.Timestamp(slot)
     if slot_ts.tzinfo is None:
@@ -308,6 +392,31 @@ def _slot_ready_marker_path(slot: datetime) -> Path:
     else:
         slot_ts = slot_ts.tz_convert(IST)
     return SLOT_READY_MARKER_DIR / f"slot_{slot_ts.strftime('%Y%m%d_%H%M')}.json"
+
+
+def _load_scheduler_slot_status(slot: datetime) -> Optional[Dict[str, Any]]:
+    path = SLOT_READY_STATUS_PATH
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    slot_ts = pd.Timestamp(slot)
+    if slot_ts.tzinfo is None:
+        slot_ts = slot_ts.tz_localize(IST)
+    else:
+        slot_ts = slot_ts.tz_convert(IST)
+    payload_slot = pd.to_datetime(payload.get("slot_ist"), errors="coerce")
+    if pd.isna(payload_slot):
+        return None
+    if payload_slot.tzinfo is None:
+        payload_slot = payload_slot.tz_localize(IST)
+    else:
+        payload_slot = payload_slot.tz_convert(IST)
+    if payload_slot.floor("min") != slot_ts.floor("min"):
+        return None
+    return payload
 
 
 def _load_slot_ready_marker(slot: datetime) -> Optional[Dict[str, Any]]:
@@ -321,6 +430,16 @@ def _load_slot_ready_marker(slot: datetime) -> Optional[Dict[str, Any]]:
         ratio = float(payload.get("fresh_ratio", 0.0) or 0.0)
         if ratio < float(SLOT_READY_MARKER_MIN_FRESH_RATIO):
             return None
+        source = str(payload.get("source", "marker")).strip().lower()
+        if source != "final":
+            return None
+        status_payload = _load_scheduler_slot_status(slot)
+        if status_payload is not None:
+            failures = list(status_payload.get("failures", []) or [])
+            verification_failed_count = int(status_payload.get("verification_failed_count", 0) or 0)
+            overall_state = str(status_payload.get("overall_state", "")).strip().upper()
+            if overall_state == "FAIL" or failures or verification_failed_count > 0:
+                return None
         return payload
     except Exception:
         return None
@@ -380,11 +499,11 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
         fresh = 0
         checked = 0
         for ticker in sample:
-            last_bar = _last_bar_for_ticker_ist_5m(ticker)
+            ready_ok, last_bar, _ = _ticker_ready_for_slot_5m(ticker, target_slot.to_pydatetime())
             if pd.isna(last_bar):
                 continue
             checked += 1
-            if last_bar >= target_slot:
+            if ready_ok:
                 fresh += 1
 
         ratio = (fresh / checked) if checked > 0 else 0.0
@@ -577,7 +696,9 @@ def _build_v16_cfgs() -> Tuple[StrategyConfig, StrategyConfig]:
     short_cfg = default_short_config()
     long_cfg  = default_long_config()
     short_cfg, long_cfg = apply_live_parity_profile(short_cfg, long_cfg)
-    # Apply the tuned V16_5min target overrides from the combined runner.
+    # Keep live scanner aligned with the shared v16_5min SL/TGT policy.
+    short_cfg.stop_pct   = 0.0075
+    long_cfg.stop_pct    = 0.0075
     short_cfg.target_pct = float(TEST_SHORT_TARGET_PCT)
     long_cfg.target_pct  = float(TEST_LONG_TARGET_PCT)
     # Point configs at 5-min data dir
@@ -586,6 +707,67 @@ def _build_v16_cfgs() -> Tuple[StrategyConfig, StrategyConfig]:
     long_cfg.dir_15m  = DIR_5M
     long_cfg.end_15m  = END_5M
     return short_cfg, long_cfg
+
+
+def _slot_mode_flags_from_context_mode(mode: str) -> Tuple[bool, bool]:
+    mode_u = str(mode or "BOTH").strip().upper()
+    if mode_u == "LONG_ONLY":
+        return True, False
+    if mode_u == "SHORT_ONLY":
+        return False, True
+    return True, True
+
+
+def _build_backtest_context_state(slot_ist: datetime, cfg: StrategyConfig) -> Dict[str, Any]:
+    slot_ts = pd.Timestamp(slot_ist)
+    if slot_ts.tzinfo is None:
+        slot_ts = slot_ts.tz_localize(IST)
+    else:
+        slot_ts = slot_ts.tz_convert(IST)
+
+    try:
+        mode_map, nifty_ret_map, source, counts = v16_runner._build_nifty_intraday_context(cfg)
+    except Exception as exc:
+        print(
+            f"[NIFTY_CONTEXT] slot={slot_ts.strftime('%H:%M')} build error={exc!r} -> allow both",
+            flush=True,
+        )
+        mode_map, nifty_ret_map, source, counts = {}, {}, "", {}
+
+    mode = "BOTH"
+    rs_pct = 0.0
+    if mode_map:
+        ts_key = v16_runner._ts_to_key_local(slot_ts)
+        mode = str(mode_map.get(ts_key, "BOTH")).strip().upper() or "BOTH"
+        rs_val = nifty_ret_map.get(ts_key, np.nan)
+        if np.isfinite(rs_val):
+            rs_pct = float(rs_val)
+
+    allow_long, allow_short = _slot_mode_flags_from_context_mode(mode if mode_map else "BOTH")
+    payload = {
+        "nifty_context": {
+            "source": str(source or ""),
+            "mode": mode if mode_map else "BOTH",
+            "allow_long": bool(allow_long),
+            "allow_short": bool(allow_short),
+            "rs_pct": float(rs_pct),
+            "decision_reason": "backtest_intraday_context",
+            "context_counts": {str(k): int(v) for k, v in (counts or {}).items()},
+        }
+    }
+    print(
+        f"[NIFTY_CONTEXT] slot={slot_ts.strftime('%H:%M')} source={str(source or 'unavailable')} "
+        f"mode={payload['nifty_context']['mode']} allow_long={allow_long} "
+        f"allow_short={allow_short} rs={rs_pct:+.2f}%",
+        flush=True,
+    )
+    return {
+        "allow_long": bool(allow_long),
+        "allow_short": bool(allow_short),
+        "mode_map": dict(mode_map or {}),
+        "nifty_ret_map": dict(nifty_ret_map or {}),
+        "payload": payload,
+    }
 
 
 # ===========================================================================
@@ -633,18 +815,30 @@ def _write_side_signals_csv(signals: List[dict], side: str, signal_day_str: str)
             for sig in signals_side:
                 ticker    = str(sig.get("ticker", "")).upper().strip()
                 setup     = str(sig.get("setup", ""))
-                bar_time_raw = sig.get("bar_time_ist", sig.get("signal_datetime", ""))
-                bar_time_ts  = base_v15._parse_ist_timestamp(str(bar_time_raw))
-                if not ticker or bar_time_ts is None:
+                signal_time_raw = sig.get(
+                    "signal_time_ist",
+                    sig.get(
+                        "signal_bar_time_ist",
+                        sig.get("bar_time_ist", sig.get("signal_datetime", "")),
+                    ),
+                )
+                entry_time_raw = sig.get(
+                    "entry_time_ist",
+                    sig.get("signal_entry_datetime_ist", signal_time_raw),
+                )
+                signal_time_ts = base_v15._parse_ist_timestamp(str(signal_time_raw))
+                entry_time_ts  = base_v15._parse_ist_timestamp(str(entry_time_raw))
+                if not ticker or entry_time_ts is None:
                     skipped += 1
                     continue
 
-                bar_time   = str(bar_time_ts)
-                dedupe_key = base_v15._signal_dedupe_key(ticker, side_upper, bar_time, setup)
+                signal_time = str(signal_time_ts or entry_time_ts)
+                entry_time  = str(entry_time_ts)
+                dedupe_key = base_v15._signal_dedupe_key(ticker, side_upper, entry_time, setup)
                 if dedupe_key in existing_keys or dedupe_key in run_keys:
                     skipped += 1
                     continue
-                signal_id = base_v15._generate_signal_id(ticker, side_upper, bar_time, setup)
+                signal_id = base_v15._generate_signal_id(ticker, side_upper, entry_time, setup)
                 if signal_id in existing_ids:
                     skipped += 1
                     continue
@@ -652,12 +846,15 @@ def _write_side_signals_csv(signals: List[dict], side: str, signal_day_str: str)
                 entry_price  = _safe_float(sig.get("entry_price",  0.0), 0.0)
                 stop_price   = _safe_float(sig.get("stop_price",   0.0), 0.0)
                 target_price = _safe_float(sig.get("target_price", 0.0), 0.0)
-                notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
-                qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
+                if FORCE_SIGNAL_QUANTITY is not None:
+                    qty = int(FORCE_SIGNAL_QUANTITY)
+                else:
+                    notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
+                    qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
 
                 row = {
                     "signal_id":                  signal_id,
-                    "signal_datetime":             bar_time,
+                    "signal_datetime":             signal_time,
                     "received_time":               received_time,
                     "detected_time_ist":           received_time,
                     "logtime_ist":                 received_time,
@@ -673,8 +870,8 @@ def _write_side_signals_csv(signals: List[dict], side: str, signal_day_str: str)
                     "rsi":                         round(_safe_float(sig.get("rsi_signal", sig.get("rsi", 0.0)), 0.0), 2),
                     "adx":                         round(_safe_float(sig.get("adx_signal", sig.get("adx", 0.0)), 0.0), 2),
                     "quantity":                    qty,
-                    "signal_entry_datetime_ist":   bar_time,
-                    "signal_bar_time_ist":         bar_time,
+                    "signal_entry_datetime_ist":   entry_time,
+                    "signal_bar_time_ist":         signal_time,
                 }
                 writer.writerow(row)
                 existing_ids.add(signal_id)
@@ -923,6 +1120,56 @@ def _apply_v16_filters_to_dicts(
     return short_out, long_out
 
 
+def _apply_backtest_parity_filters_to_dicts(
+    short_rows: List[dict],
+    long_rows: List[dict],
+    short_cfg: StrategyConfig,
+    long_cfg: StrategyConfig,
+    mode_map: Dict[str, str],
+    nifty_ret_map: Dict[str, float],
+) -> Tuple[List[dict], List[dict], Dict[str, Any]]:
+    short_df = v16_runner._finalize_side_scan_df(pd.DataFrame(short_rows), short_cfg)
+    long_df = v16_runner._finalize_side_scan_df(pd.DataFrame(long_rows), long_cfg)
+
+    meta: Dict[str, Any] = {
+        "raw_short": int(len(short_df)),
+        "raw_long": int(len(long_df)),
+    }
+
+    if mode_map:
+        short_df, long_df = v16_runner._apply_nifty_intraday_context(
+            short_df,
+            long_df,
+            short_cfg,
+            mode_map,
+            nifty_ret_map,
+        )
+    meta["post_context_short"] = int(len(short_df))
+    meta["post_context_long"] = int(len(long_df))
+
+    if getattr(v16_runner, "V16_OR_GATE_ENABLED", False):
+        short_df, long_df = v16_runner._enrich_with_or_levels(
+            short_df,
+            long_df,
+            dir_15m=DIR_5M,
+            parquet_suffix=END_5M,
+        )
+    if getattr(v16_runner, "V16_LONG_ENTRY_VOL_EXHAUST_ENABLED", False) and not long_df.empty:
+        long_df = v16_runner._enrich_with_entry_vol_ratio(
+            long_df,
+            dir_15m=DIR_5M,
+            parquet_suffix=END_5M,
+        )
+
+    short_df, long_df = _apply_v16_post_scan_filters(short_df, long_df)
+    meta["final_short"] = int(len(short_df))
+    meta["final_long"] = int(len(long_df))
+
+    short_out = short_df.to_dict("records") if not short_df.empty else []
+    long_out = long_df.to_dict("records") if not long_df.empty else []
+    return short_out, long_out, meta
+
+
 def _blocked_nifty_context_message(slot: datetime, slot_payload: Optional[Dict[str, Any]]) -> str:
     nifty_context = (slot_payload or {}).get("nifty_context") or {}
     reason = str(nifty_context.get("decision_reason", "") or "").strip()
@@ -974,7 +1221,8 @@ def main() -> None:
         f"  DATA_5M_DIR : {DIR_5M}\n"
         f"  SIGNALS_DIR : {RUNTIME_LIVE_SIGNALS_DIR}\n"
         f"  TARGET      : SHORT={TEST_SHORT_TARGET_PCT*100:.2f}%, LONG={TEST_LONG_TARGET_PCT*100:.2f}%\n"
-        f"  RS filter   : LONG>={NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT}%, SHORT<={-NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT}%\n"
+        "  STOP        : SHORT=0.75%, LONG=0.75%\n"
+        "  CONTEXT     : backtest intraday NIFTY context + per-stock RS\n"
         "=" * 70,
         flush=True,
     )
@@ -993,6 +1241,8 @@ def main() -> None:
         f"ADX>={long_cfg.adx_min} volume>={long_cfg.volume_min_ratio}",
         flush=True,
     )
+    if FORCE_SIGNAL_QUANTITY is not None:
+        print(f"[CONFIG] Quantity override: FORCE_SIGNAL_QUANTITY={FORCE_SIGNAL_QUANTITY}", flush=True)
 
     tickers = _list_tickers_5m()
     holidays = base_v15._read_holidays_safe()
@@ -1032,10 +1282,9 @@ def main() -> None:
                 use_rolling_cache=USE_SNAPSHOT_ROLLING_CACHE,
                 build_slot_context=True,
             )
-            allow_long, allow_short, rs_pct, slot_payload = _load_snapshot_slot_context(slot_dt)
-        else:
-            allow_long, allow_short, rs_pct = _compute_nifty_rs_at_slot(slot_dt)
-            slot_payload = {}
+        context_state = _build_backtest_context_state(slot_dt, short_cfg)
+        allow_long = bool(context_state["allow_long"])
+        allow_short = bool(context_state["allow_short"])
         started = time.perf_counter()
         short_rows, long_rows, scan_meta = _scan_slot(
             slot_dt,
@@ -1046,14 +1295,26 @@ def main() -> None:
             tickers=tickers,
             prebuilt_snapshot_meta=prebuilt_snapshot_meta,
         )
+        short_rows, long_rows, filter_meta = _apply_backtest_parity_filters_to_dicts(
+            short_rows,
+            long_rows,
+            short_cfg,
+            long_cfg,
+            context_state.get("mode_map", {}),
+            context_state.get("nifty_ret_map", {}),
+        )
         elapsed = time.perf_counter() - started
         summary = {
             "slot": slot_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
             "tickers": len(tickers),
             "allow_long": bool(allow_long),
             "allow_short": bool(allow_short),
-            "raw_short": len(short_rows),
-            "raw_long": len(long_rows),
+            "raw_short": int(filter_meta.get("raw_short", len(short_rows))),
+            "raw_long": int(filter_meta.get("raw_long", len(long_rows))),
+            "post_context_short": int(filter_meta.get("post_context_short", len(short_rows))),
+            "post_context_long": int(filter_meta.get("post_context_long", len(long_rows))),
+            "final_short": int(filter_meta.get("final_short", len(short_rows))),
+            "final_long": int(filter_meta.get("final_long", len(long_rows))),
             "elapsed_sec": round(elapsed, 3),
             "scan_shards": int(SCAN_SHARDS),
             "scan_max_workers": int(SCAN_MAX_WORKERS),
@@ -1062,7 +1323,7 @@ def main() -> None:
             "tail_rows": int(TAIL_ROWS),
             "scan_elapsed_sec": float(scan_meta.get("scan_elapsed_sec", 0.0)),
             "scan_total_elapsed_sec": float(scan_meta.get("total_elapsed_sec", 0.0)),
-            "slot_context_source": "snapshot" if slot_payload else "live_nifty",
+            "slot_context_source": "backtest_intraday_context",
         }
         snapshot_meta = scan_meta.get("snapshot_meta") or {}
         if snapshot_meta:
@@ -1149,36 +1410,45 @@ def main() -> None:
                 use_rolling_cache=USE_SNAPSHOT_ROLLING_CACHE,
                 build_slot_context=True,
             )
-            allow_long, allow_short, rs_pct, _slot_payload = _load_snapshot_slot_context(slot)
-        else:
-            allow_long, allow_short, rs_pct = _compute_nifty_rs_at_slot(slot)
+        context_state = _build_backtest_context_state(slot, short_cfg)
+        allow_long = bool(context_state["allow_long"])
+        allow_short = bool(context_state["allow_short"])
 
-        if not allow_long and not allow_short:
-            print(_blocked_nifty_context_message(slot, _slot_payload if USE_SLOT_SNAPSHOTS else None), flush=True)
-        else:
-            short_rows, long_rows, scan_meta = _scan_slot(
-                slot,
-                short_cfg,
-                long_cfg,
-                allow_long,
-                allow_short,
-                tickers=tickers,
-                prebuilt_snapshot_meta=prebuilt_snapshot_meta,
-            )
-            short_rows, long_rows = _apply_rs_filter_dicts(short_rows, long_rows, allow_long, allow_short)
-            short_rows, long_rows = _apply_v16_filters_to_dicts(short_rows, long_rows)
+        short_rows, long_rows, scan_meta = _scan_slot(
+            slot,
+            short_cfg,
+            long_cfg,
+            allow_long,
+            allow_short,
+            tickers=tickers,
+            prebuilt_snapshot_meta=prebuilt_snapshot_meta,
+        )
+        short_rows, long_rows, filter_meta = _apply_backtest_parity_filters_to_dicts(
+            short_rows,
+            long_rows,
+            short_cfg,
+            long_cfg,
+            context_state.get("mode_map", {}),
+            context_state.get("nifty_ret_map", {}),
+        )
 
-            short_written = _write_side_signals_csv(short_rows, "SHORT", signal_day_str)
-            long_written  = _write_side_signals_csv(long_rows,  "LONG",  signal_day_str)
+        short_written = _write_side_signals_csv(short_rows, "SHORT", signal_day_str)
+        long_written  = _write_side_signals_csv(long_rows,  "LONG",  signal_day_str)
 
-            elapsed = time.perf_counter() - slot_start
-            print(
-                f"[SLOT_DONE] slot={slot.strftime('%H:%M')} "
-                f"short_written={short_written} long_written={long_written} "
-                f"scan_elapsed={float(scan_meta.get('scan_elapsed_sec', 0.0)):.1f}s "
-                f"total_elapsed={elapsed:.1f}s",
-                flush=True,
-            )
+        elapsed = time.perf_counter() - slot_start
+        print(
+            f"[SLOT_DONE] slot={slot.strftime('%H:%M')} "
+            f"raw_short={int(filter_meta.get('raw_short', 0))} "
+            f"raw_long={int(filter_meta.get('raw_long', 0))} "
+            f"post_context_short={int(filter_meta.get('post_context_short', 0))} "
+            f"post_context_long={int(filter_meta.get('post_context_long', 0))} "
+            f"final_short={int(filter_meta.get('final_short', 0))} "
+            f"final_long={int(filter_meta.get('final_long', 0))} "
+            f"short_written={short_written} long_written={long_written} "
+            f"scan_elapsed={float(scan_meta.get('scan_elapsed_sec', 0.0)):.1f}s "
+            f"total_elapsed={elapsed:.1f}s",
+            flush=True,
+        )
 
         _touch_status("RUNNING", phase="SCAN_DONE", slot=slot.strftime("%H:%M"))
         _touch_heartbeat("RUNNING", phase="SCAN_DONE", slot=slot.strftime("%H:%M"))
