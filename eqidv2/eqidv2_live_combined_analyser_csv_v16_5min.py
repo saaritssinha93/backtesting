@@ -31,7 +31,7 @@ import multiprocessing as mp
 import os
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
@@ -57,7 +57,7 @@ from avwap_combined_runner_v16_5min import (
 from avwap_v11_refactored.avwap_common_v11_v15 import (
     StrategyConfig,
     default_short_config,
-    default_long_config,
+    default_long_config as default_long_config_v11,
     prepare_session_bars_for_scan,
     read_15m_parquet,
     list_tickers_15m,
@@ -179,6 +179,8 @@ INTRADAY_LEVERAGE   = 5.0
 DEFAULT_POSITION_SIZE_RS = float(
     os.getenv("EQIDV16_5MIN_DEFAULT_POSITION_SIZE_RS", "10000")
 )
+LIVE_NIFTY_CONTEXT_OR_END_TIME = dtime(9, 20)
+LIVE_NIFTY_CONTEXT_CONFIRM_TIME = dtime(9, 20)
 _FORCE_SIGNAL_QUANTITY_RAW = str(os.getenv("EQIDV16_5MIN_FORCE_SIGNAL_QUANTITY", "")).strip()
 try:
     FORCE_SIGNAL_QUANTITY: Optional[int] = (
@@ -186,6 +188,31 @@ try:
     )
 except Exception:
     FORCE_SIGNAL_QUANTITY = None
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+V17B_RS_ATR_NORM_ENABLED = True
+V17B_RS_ATR_NORM_THRESH_SHORT_BOTH = _env_float(
+    "EQIDV17B_RS_ATR_NORM_THRESH_SHORT_BOTH", 0.50
+)
+V17B_RS_ATR_DIRECTIONAL_THRESH_SHORT = _env_float(
+    "EQIDV17B_RS_ATR_DIRECTIONAL_THRESH_SHORT", 0.35
+)
+V17B_RS_ATR_FALLBACK_PCT_SHORT = _env_float(
+    "EQIDV17B_RS_ATR_FALLBACK_PCT_SHORT", 0.40
+)
+
+v16_runner.NIFTY_CONTEXT_OR_END_TIME = LIVE_NIFTY_CONTEXT_OR_END_TIME
+v16_runner.NIFTY_CONTEXT_CONFIRM_TIME = LIVE_NIFTY_CONTEXT_CONFIRM_TIME
 
 _BASE_DIR  = Path(__file__).resolve().parent
 _LOG_DIR   = _BASE_DIR / "logs"
@@ -231,6 +258,30 @@ def _start_tee() -> None:
         sys.stderr = tee  # type: ignore[assignment]
     except Exception:
         pass
+
+
+def _sleep_until_resilient(
+    target_dt: datetime,
+    *,
+    phase: str,
+    slot: Optional[str] = None,
+    next_wake: Optional[str] = None,
+    poll_seconds: float = 30.0,
+) -> None:
+    """Sleep in short chunks so laptop suspend/resume does not strand the loop overnight."""
+    while True:
+        now = _now_ist()
+        delta = (target_dt - now).total_seconds()
+        if delta <= 0:
+            return
+        payload: Dict[str, Any] = {"phase": phase}
+        if slot:
+            payload["slot"] = slot
+        if next_wake:
+            payload["next_wake"] = next_wake
+        _touch_status("RUNNING", **payload)
+        _touch_heartbeat("RUNNING", **payload)
+        time.sleep(min(float(poll_seconds), max(1.0, delta)))
 
 
 # ===========================================================================
@@ -492,18 +543,26 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
     last_ratio = 0.0
     last_checked = 0
 
+    # Fast freshness gate: check file mtime instead of reading parquet content.
+    # os.stat() costs ~0.1ms per file vs ~15ms for a parquet read.
+    # 1044 files * 0.1ms = ~100ms total — no threading needed.
+    _slot_unix_ts = target_slot.timestamp()
+
+    def _ticker_fresh_mtime(ticker: str) -> bool:
+        path = os.path.join(DIR_5M, f"{ticker}{END_5M}")
+        try:
+            return os.stat(path).st_mtime >= _slot_unix_ts
+        except OSError:
+            return False
+
     while True:
         marker_ready = _wait_ready_via_marker(slot, started)
         if marker_ready is not None:
             return marker_ready
         fresh = 0
-        checked = 0
+        checked = len(sample)
         for ticker in sample:
-            ready_ok, last_bar, _ = _ticker_ready_for_slot_5m(ticker, target_slot.to_pydatetime())
-            if pd.isna(last_bar):
-                continue
-            checked += 1
-            if ready_ok:
+            if _ticker_fresh_mtime(ticker):
                 fresh += 1
 
         ratio = (fresh / checked) if checked > 0 else 0.0
@@ -689,12 +748,189 @@ def _load_snapshot_slot_context(slot_ist: datetime) -> Tuple[bool, bool, float, 
         return allow_long, allow_short, rs_pct, {}
 
 
+def _build_live_v16_short_cfg() -> StrategyConfig:
+    short_builder = getattr(v16_runner, "default_short_config", None)
+    if callable(short_builder):
+        return short_builder()
+    return default_short_config()
+
+
+def _build_live_v16_long_cfg() -> StrategyConfig:
+    long_builder = getattr(v16_runner, "default_long_config_v9", None)
+    if callable(long_builder):
+        return long_builder()
+    return default_long_config_v11()
+
+
+_V17B_ATR_CACHE: Dict[str, Dict[str, float]] = {}
+
+
+def _build_stock_atr_map_live(
+    ticker: str,
+    cfg: StrategyConfig,
+    cache: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    ticker_u = str(ticker).strip().upper()
+    if ticker_u in cache:
+        return cache[ticker_u]
+
+    out: Dict[str, float] = {}
+    path = Path(cfg.dir_15m) / f"{ticker_u}{cfg.end_15m}"
+    if not path.exists():
+        cache[ticker_u] = out
+        return out
+
+    try:
+        df = read_15m_parquet(str(path), getattr(cfg, "parquet_engine", "pyarrow"))
+        if df is None or df.empty:
+            cache[ticker_u] = out
+            return out
+        atr_col = next((c for c in df.columns if str(c).lower() == "atr"), None)
+        if atr_col is None:
+            cache[ticker_u] = out
+            return out
+        df = df.sort_values("date").reset_index(drop=True)
+        dt = pd.to_datetime(df["date"], errors="coerce")
+        df = df.loc[dt.notna()].copy()
+        dt = dt.loc[dt.notna()]
+        if getattr(dt.dt, "tz", None) is None:
+            dt = dt.dt.tz_localize("UTC")
+        df["date"] = dt.dt.tz_convert(IST)
+        df["close_num"] = pd.to_numeric(df["close"], errors="coerce")
+        df["atr_num"] = pd.to_numeric(df[atr_col], errors="coerce")
+        df["atr_pct"] = df["atr_num"] / df["close_num"].replace(0, np.nan) * 100.0
+        for ts, atr_pct in zip(df["date"], df["atr_pct"]):
+            if np.isfinite(atr_pct) and atr_pct > 0:
+                out[v16_runner._ts_to_key_local(ts)] = float(atr_pct)
+    except Exception:
+        out = {}
+
+    cache[ticker_u] = out
+    return out
+
+
+def _apply_live_short_v17b_context(
+    short_df: pd.DataFrame,
+    short_cfg: StrategyConfig,
+    mode_map: Dict[str, str],
+    nifty_ret_map: Dict[str, float],
+) -> Tuple[pd.DataFrame, int, int]:
+    if short_df.empty:
+        return short_df, 0, 0
+
+    work = short_df.copy()
+    ts_col = "entry_time_ist" if "entry_time_ist" in work.columns else "signal_time_ist"
+    ts_series = pd.to_datetime(work[ts_col], errors="coerce")
+    if getattr(ts_series.dt, "tz", None) is None:
+        ts_series = ts_series.dt.tz_localize(IST)
+    else:
+        ts_series = ts_series.dt.tz_convert(IST)
+    work["ts_key_local"] = ts_series.map(v16_runner._ts_to_key_local)
+    work["nifty_context_mode"] = work["ts_key_local"].map(mode_map).fillna("BOTH")
+
+    before = len(work)
+    work = work[work["nifty_context_mode"].ne("LONG_ONLY")].copy()
+    mode_removed = before - len(work)
+
+    if not getattr(v16_runner, "NIFTY_RS_FILTER_ENABLED", True) or work.empty:
+        if "ts_key_local" in work.columns:
+            work = work.drop(columns=["ts_key_local"])
+        return work, mode_removed, 0
+
+    stock_ret_cache: Dict[str, Dict[str, float]] = {}
+    keep_mask: List[bool] = []
+    rel_vals: List[float] = []
+    rs_removed = 0
+
+    for row in work.itertuples(index=False):
+        ts_key = getattr(row, "ts_key_local")
+        mode = getattr(row, "nifty_context_mode", "BOTH")
+        rel_val = np.nan
+        keep = True
+        apply_rs = (mode != "BOTH") or bool(getattr(v16_runner, "NIFTY_RS_BOTH_MODE_ENABLED", True))
+
+        if apply_rs:
+            stock_ret_map = v16_runner._build_stock_return_map(
+                getattr(row, "ticker"), short_cfg, stock_ret_cache
+            )
+            stock_ret = stock_ret_map.get(ts_key, np.nan)
+            nifty_ret = nifty_ret_map.get(ts_key, np.nan)
+
+            if np.isfinite(stock_ret) and np.isfinite(nifty_ret):
+                raw_rs = float(stock_ret - nifty_ret)
+                rel_val = raw_rs
+                if V17B_RS_ATR_NORM_ENABLED:
+                    atr_map = _build_stock_atr_map_live(
+                        getattr(row, "ticker"), short_cfg, _V17B_ATR_CACHE
+                    )
+                    atr_pct = atr_map.get(ts_key, np.nan)
+                    if np.isfinite(atr_pct) and atr_pct > 0:
+                        rs_norm = raw_rs / atr_pct
+                        thresh = (
+                            V17B_RS_ATR_DIRECTIONAL_THRESH_SHORT
+                            if mode != "BOTH"
+                            else V17B_RS_ATR_NORM_THRESH_SHORT_BOTH
+                        )
+                        keep = rs_norm <= -thresh
+                    else:
+                        keep = raw_rs <= -V17B_RS_ATR_FALLBACK_PCT_SHORT
+                else:
+                    thresh = (
+                        float(getattr(v16_runner, "NIFTY_RS_THRESHOLD_PCT", 0.20))
+                        if mode != "BOTH"
+                        else float(getattr(v16_runner, "NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT", 0.75))
+                    )
+                    keep = raw_rs <= -thresh
+
+        keep_mask.append(bool(keep))
+        rel_vals.append(rel_val)
+        if not keep:
+            rs_removed += 1
+
+    work["nifty_rel_strength_pct"] = rel_vals
+    work = work[pd.Series(keep_mask, index=work.index)].copy()
+    if "ts_key_local" in work.columns:
+        work = work.drop(columns=["ts_key_local"])
+    return work, mode_removed, rs_removed
+
+
+def _apply_live_v17b_hybrid_context(
+    short_df: pd.DataFrame,
+    long_df: pd.DataFrame,
+    short_cfg: StrategyConfig,
+    long_cfg: StrategyConfig,
+    mode_map: Dict[str, str],
+    nifty_ret_map: Dict[str, float],
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if not mode_map:
+        return short_df, long_df
+
+    short_out, s_mode_removed, s_rs_removed = _apply_live_short_v17b_context(
+        short_df, short_cfg, mode_map, nifty_ret_map
+    )
+    _, long_out = v16_runner._apply_nifty_intraday_context(
+        pd.DataFrame(), long_df, long_cfg, mode_map, nifty_ret_map
+    )
+    l_mode_removed = max(0, len(long_df) - len(long_out))
+    print(
+        "[NIFTY_CONTEXT] Applied live V17b hybrid filter: "
+        f"SHORT {len(short_df)}->{len(short_out)} "
+        f"(mode_removed={s_mode_removed}, rs_removed={s_rs_removed}) "
+        f"[ATR both/directional={V17B_RS_ATR_NORM_THRESH_SHORT_BOTH:.2f}/"
+        f"{V17B_RS_ATR_DIRECTIONAL_THRESH_SHORT:.2f} | "
+        f"fallback={V17B_RS_ATR_FALLBACK_PCT_SHORT:.2f}%] | "
+        f"LONG {len(long_df)}->{len(long_out)} "
+        f"(v16 long filter retained, total_removed={l_mode_removed})"
+    )
+    return short_out, long_out
+
+
 # ===========================================================================
 # BUILD EFFECTIVE V16 CONFIGS
 # ===========================================================================
 def _build_v16_cfgs() -> Tuple[StrategyConfig, StrategyConfig]:
-    short_cfg = default_short_config()
-    long_cfg  = default_long_config()
+    short_cfg = _build_live_v16_short_cfg()
+    long_cfg  = _build_live_v16_long_cfg()
     short_cfg, long_cfg = apply_live_parity_profile(short_cfg, long_cfg)
     # Keep live scanner aligned with the shared v16_5min SL/TGT policy.
     short_cfg.stop_pct   = 0.0075
@@ -706,6 +942,10 @@ def _build_v16_cfgs() -> Tuple[StrategyConfig, StrategyConfig]:
     short_cfg.end_15m = END_5M
     long_cfg.dir_15m  = DIR_5M
     long_cfg.end_15m  = END_5M
+    # Allow scanning the most recent closed bar (tail_guard=1 instead of 3)
+    # reducing signal detection lag from 3-slot to 2-slot in live mode.
+    short_cfg.allow_incomplete_tail = True
+    long_cfg.allow_incomplete_tail  = True
     return short_cfg, long_cfg
 
 
@@ -1137,10 +1377,11 @@ def _apply_backtest_parity_filters_to_dicts(
     }
 
     if mode_map:
-        short_df, long_df = v16_runner._apply_nifty_intraday_context(
+        short_df, long_df = _apply_live_v17b_hybrid_context(
             short_df,
             long_df,
             short_cfg,
+            long_cfg,
             mode_map,
             nifty_ret_map,
         )
@@ -1346,7 +1587,11 @@ def main() -> None:
             clear_slot_snapshot_cache()
             nxt = base_v15._next_trading_day_start(now, holidays)
             print(f"[SKIP] Not a trading day. Sleeping until {base_v15._fmt_ist_dt(nxt)}.", flush=True)
-            base_v15._sleep_until(nxt)
+            _sleep_until_resilient(
+                nxt,
+                phase="WAIT_NEXT_TRADING_DAY",
+                next_wake=base_v15._fmt_ist_dt(nxt),
+            )
             holidays = base_v15._read_holidays_safe()
             continue
 
@@ -1355,19 +1600,33 @@ def main() -> None:
             clear_slot_snapshot_cache()
             nxt = base_v15._next_trading_day_start(now, holidays)
             print(f"[DONE] Past END_TIME. Sleeping until {base_v15._fmt_ist_dt(nxt)}.", flush=True)
-            base_v15._sleep_until(nxt)
+            _sleep_until_resilient(
+                nxt,
+                phase="WAIT_NEXT_TRADING_DAY",
+                next_wake=base_v15._fmt_ist_dt(nxt),
+            )
             holidays = base_v15._read_holidays_safe()
             continue
 
         if now < slot:
             print(f"[WAIT] Sleeping until slot {slot.strftime('%Y-%m-%d %H:%M:%S%z')}", flush=True)
-            base_v15._sleep_until(slot)
+            _sleep_until_resilient(
+                slot,
+                phase="WAIT_SLOT",
+                slot=slot.strftime("%H:%M"),
+                next_wake=slot.strftime("%Y-%m-%d %H:%M:%S%z"),
+                poll_seconds=15.0,
+            )
 
         now = _now_ist()
         if now.time() > END_TIME:
             nxt = base_v15._next_trading_day_start(now, holidays)
             print(f"[DONE] Past END_TIME. Sleeping until {base_v15._fmt_ist_dt(nxt)}.", flush=True)
-            base_v15._sleep_until(nxt)
+            _sleep_until_resilient(
+                nxt,
+                phase="WAIT_NEXT_TRADING_DAY",
+                next_wake=base_v15._fmt_ist_dt(nxt),
+            )
             holidays = base_v15._read_holidays_safe()
             continue
 

@@ -6,6 +6,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -67,6 +68,11 @@ DEFAULT_NEUTRALIZE_PARTIAL_NIFTY_SESSION = str(
 IST = base_v15.IST
 END_5M = "_stocks_indicators_5min.parquet"
 NIFTYBEES_TICKER = "NIFTYBEES"
+LIVE_NIFTY_CONTEXT_OR_END_TIME = dtime(9, 20)
+LIVE_NIFTY_CONTEXT_CONFIRM_TIME = dtime(9, 20)
+
+v16_runner.NIFTY_CONTEXT_OR_END_TIME = LIVE_NIFTY_CONTEXT_OR_END_TIME
+v16_runner.NIFTY_CONTEXT_CONFIRM_TIME = LIVE_NIFTY_CONTEXT_CONFIRM_TIME
 
 
 @dataclass

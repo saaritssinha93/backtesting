@@ -103,8 +103,10 @@ SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0
 
 
 def _build_effective_v16_5min_executor_cfgs():
-    short_cfg = v16_5min_default_short_config()
-    long_cfg = v16_5min_default_long_config()
+    short_builder = getattr(v16_runner, "default_short_config", None)
+    long_builder = getattr(v16_runner, "default_long_config_v9", None)
+    short_cfg = short_builder() if callable(short_builder) else v16_5min_default_short_config()
+    long_cfg = long_builder() if callable(long_builder) else v16_5min_default_long_config()
     apply_profile = getattr(v16_runner, "apply_live_parity_profile", None)
     if callable(apply_profile):
         short_cfg, long_cfg = apply_profile(short_cfg, long_cfg)

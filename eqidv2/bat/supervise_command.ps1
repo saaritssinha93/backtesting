@@ -181,6 +181,32 @@ function Write-Status {
     Write-KeyFile -Path $StatusFile -Data $payload
 }
 
+function Write-RunningStatus {
+    param(
+        [int]$RestartCount,
+        [Nullable[int]]$ChildPid,
+        [string]$Reason
+    )
+    $pidValue = ""
+    if ($null -ne $ChildPid) {
+        $pidValue = [int]$ChildPid
+    }
+    $payload = @{
+        status             = "RUNNING"
+        name               = $Name
+        ts                 = (Get-Date -Format "yyyy-MM-dd_HH:mm:ss")
+        exit_code          = ""
+        restart_count      = $RestartCount
+        reason             = $Reason
+        pid                = $pidValue
+        cutoff_hhmm        = $CutoffHHmm
+        log_file           = $LogFile
+        supervisor_log_file = $script:SupervisorLogFile
+        heartbeat_file     = $HeartbeatFile
+    }
+    Write-KeyFile -Path $StatusFile -Data $payload
+}
+
 Ensure-ParentDir -Path $LogFile
 Ensure-ParentDir -Path $StatusFile
 Ensure-ParentDir -Path $HeartbeatFile
@@ -230,6 +256,7 @@ while ($true) {
 
     Write-LogLine -Level "INFO" -Message "START $Name (run=$runNo, restart_count=$restartCount)"
     $process = Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/c", $cmdLine) -WorkingDirectory $WorkDir -PassThru -WindowStyle Hidden
+    Write-RunningStatus -RestartCount $restartCount -ChildPid $process.Id -Reason "started"
 
     $forcedHungKill = $false
     $runStartUtc = [DateTime]::UtcNow
@@ -244,6 +271,7 @@ while ($true) {
         }
         $idleSec = ([DateTime]::UtcNow - $lastActivityUtc).TotalSeconds
         Write-Heartbeat -State "RUNNING" -RestartCount $restartCount -ChildPid $process.Id -IdleSec $idleSec -LastLogUtc $lastActivityUtc.ToString("o") -Note "monitoring"
+        Write-RunningStatus -RestartCount $restartCount -ChildPid $process.Id -Reason "monitoring"
 
         if ($hungTimeoutSec -gt 0 -and $idleSec -ge $hungTimeoutSec) {
             Write-LogLine -Level "WARN" -Message "HUNG threshold reached for $Name (idle=${idleSec}s >= ${hungTimeoutSec}s). Killing process tree pid=$($process.Id)."

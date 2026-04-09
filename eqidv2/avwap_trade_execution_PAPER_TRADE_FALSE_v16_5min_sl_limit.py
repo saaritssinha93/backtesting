@@ -79,13 +79,13 @@ IST = pytz.timezone("Asia/Kolkata")
 
 SIGNAL_DIR = str(RUNTIME_LIVE_SIGNALS_DIR)
 SIGNAL_CSV_PATTERNS = ("signals_{}_v16_5min_short.csv", "signals_{}_v16_5min_long.csv")
-TRADE_LOG_PATTERN = "live_trades_{}_v16_5min.csv"
-LIVE_TRADE_EXEC_LOG_PATTERN = "live_trade_execution_{}_v16_5min.log"
-EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_live_v16_5min.json")
-MIS_REJECTED_SYMBOLS_FILE = os.path.join(SIGNAL_DIR, "mis_rejected_symbols_v16_5min.json")
-SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary_v16_5min.json")
-OPEN_TRADES_STATE_PATTERN = "open_live_trades_state_{}_v16_5min.json"
-KILL_SWITCH_COMMAND_FILE = os.path.join(SIGNAL_DIR, "kill_switch_false_v16_5min.json")
+TRADE_LOG_PATTERN = "live_trades_{}_v16_5min_sl_limit.csv"
+LIVE_TRADE_EXEC_LOG_PATTERN = "live_trade_execution_{}_v16_5min_sl_limit.log"
+EXECUTED_SIGNALS_FILE = os.path.join(SIGNAL_DIR, "executed_signals_live_v16_5min_sl_limit.json")
+MIS_REJECTED_SYMBOLS_FILE = os.path.join(SIGNAL_DIR, "mis_rejected_symbols_v16_5min_sl_limit.json")
+SUMMARY_FILE = os.path.join(SIGNAL_DIR, "live_trade_summary_v16_5min_sl_limit.json")
+OPEN_TRADES_STATE_PATTERN = "open_live_trades_state_{}_v16_5min_sl_limit.json"
+KILL_SWITCH_COMMAND_FILE = os.path.join(SIGNAL_DIR, "kill_switch_false_v16_5min_sl_limit.json")
 
 # Trading hours
 MARKET_OPEN = dt_time(9, 15)
@@ -129,6 +129,8 @@ DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
 LONG_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_LONG_MAX_ENTRY_SLIP_PCT", "0.003"))
 SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.0"))
 MAX_TICK_DECIMALS = 4
+SL_LIMIT_BUFFER_PCT = float(os.getenv("EQIDV2_SL_LIMIT_BUFFER_PCT", "0.0005"))
+SL_LIMIT_FALLBACK_GRACE_SEC = float(os.getenv("EQIDV2_SL_LIMIT_FALLBACK_GRACE_SEC", "6"))
 
 
 def _optional_int_env(name: str, default: int) -> Optional[int]:
@@ -686,6 +688,21 @@ def wait_for_fill(order_id: str, timeout_sec: int = FILL_WAIT_TIMEOUT_SEC) -> Op
     return None
 
 
+def _build_sl_limit_prices(exit_txn: str, stop_price: float, tick_size: float) -> Tuple[float, float]:
+    side = str(exit_txn or "").upper()
+    if side == "BUY":
+        trigger_price = round_to_tick(stop_price, tick=tick_size, mode="up")
+        limit_price = round_to_tick(trigger_price * (1.0 + SL_LIMIT_BUFFER_PCT), tick=tick_size, mode="up")
+        if limit_price <= trigger_price:
+            limit_price = round_to_tick(trigger_price + tick_size, tick=tick_size, mode="up")
+    else:
+        trigger_price = round_to_tick(stop_price, tick=tick_size, mode="down")
+        limit_price = round_to_tick(trigger_price * (1.0 - SL_LIMIT_BUFFER_PCT), tick=tick_size, mode="down")
+        if limit_price >= trigger_price:
+            limit_price = round_to_tick(max(tick_size, trigger_price - tick_size), tick=tick_size, mode="down")
+    return float(trigger_price), float(limit_price)
+
+
 def _place_exit_legs(
     ticker: str,
     exit_txn: str,
@@ -694,7 +711,10 @@ def _place_exit_legs(
     stop_price: float,
 ) -> Tuple[str, str]:
     """
-    Place target LIMIT + stop-loss SLM exit legs and return their order IDs.
+    Place target LIMIT + stop-loss SL-LIMIT exit legs and return their order IDs.
+
+    The stop leg uses a small trigger/limit gap so we avoid worst-case SLM
+    slippage, but still force-close later if the triggered SL-LIMIT remains open.
     """
     tick_size = get_tick_size(ticker)
     exit_side = str(exit_txn or "").upper()
@@ -706,7 +726,7 @@ def _place_exit_legs(
         stop_mode = "down"
 
     target_price = round_to_tick(target_price, tick=tick_size, mode=target_mode)
-    stop_price = round_to_tick(stop_price, tick=tick_size, mode=stop_mode)
+    stop_trigger_price, stop_limit_price = _build_sl_limit_prices(exit_txn, stop_price, tick_size)
 
     target_order_id = ""
     try:
@@ -731,8 +751,9 @@ def _place_exit_legs(
             transaction_type=exit_txn,
             quantity=quantity,
             product=kite.PRODUCT_MIS,
-            order_type=kite.ORDER_TYPE_SLM,
-            trigger_price=stop_price,
+            order_type=kite.ORDER_TYPE_SL,
+            price=stop_limit_price,
+            trigger_price=stop_trigger_price,
             validity=kite.VALIDITY_DAY,
             tag="AVWAPStopLoss",
         )
@@ -1406,7 +1427,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
     Execute or resume a complete live MIS trade on Zerodha:
       1. Market entry order (new trades only)
       2. Wait for fill (new trades only)
-      3. Place target (LIMIT) + stop-loss (SL-M), or restore existing legs
+      3. Place target (LIMIT) + stop-loss (SL-LIMIT), or restore existing legs
       4. Monitor until target/SL fills or 15:20 forced close
     """
     ticker = str(signal["ticker"]).upper()
@@ -1888,6 +1909,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 _publish_open_trade_state("OPEN")
 
             # ---- STEP 5: Monitor until target/SL/forced close ----
+            sl_open_since_monotonic: Optional[float] = None
             while (not trade_closed) and result.target_order_id and result.sl_order_id:
                 now_ist = datetime.now(IST)
 
@@ -1981,6 +2003,33 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     result.outcome = "SL"
                     trade_closed = True
                     break
+
+                if sl_status == "OPEN":
+                    if sl_open_since_monotonic is None:
+                        sl_open_since_monotonic = time.monotonic()
+                        log.warning(
+                            f"[LIVE] SL-LIMIT triggered for {ticker} but not filled yet. "
+                            f"Waiting up to {SL_LIMIT_FALLBACK_GRACE_SEC:.1f}s before market fallback."
+                        )
+                    elif (time.monotonic() - sl_open_since_monotonic) >= SL_LIMIT_FALLBACK_GRACE_SEC:
+                        log.error(
+                            f"[LIVE] SL-LIMIT fallback for {ticker}: stop remained OPEN for "
+                            f"{SL_LIMIT_FALLBACK_GRACE_SEC:.1f}s after trigger. "
+                            "Cancelling exit legs and forcing market close."
+                        )
+                        cancel_order_safe(kite.VARIETY_REGULAR, result.target_order_id)
+                        cancel_order_safe(kite.VARIETY_REGULAR, result.sl_order_id)
+                        if _force_market_close(
+                            tag="AVWAPSLFallback",
+                            outcome="SL_LIMIT_FALLBACK_MARKET_CLOSE",
+                            timeout_sec=30,
+                        ):
+                            trade_closed = True
+                            break
+                        _sync_active_position("sl_limit_fallback_needs_reconcile")
+                        return
+                else:
+                    sl_open_since_monotonic = None
 
                 target_invalid = target_status in {"REJECTED", "CANCELLED"}
                 sl_invalid = sl_status in {"REJECTED", "CANCELLED"}
@@ -3528,7 +3577,7 @@ class SignalCSVHandler(FileSystemEventHandler):
 # ============================================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="AVWAP Live Trade Executor V15 (Zerodha Real Orders)"
+        description="AVWAP Live Trade Executor V16 5min SL-LIMIT fallback variant"
     )
     parser.add_argument(
         "--max-trades", type=int, default=MAX_CONCURRENT_TRADES,
@@ -3545,7 +3594,7 @@ def main():
     _set_dispatch_lockdown(None)
 
     log.info("=" * 65)
-    log.info("AVWAP Live Trade Executor V16 5min -- PAPER_TRADE = FALSE")
+    log.info("AVWAP Live Trade Executor V16 5min SL-LIMIT fallback -- PAPER_TRADE = FALSE")
     log.info("  ***  REAL ORDERS WILL BE PLACED ON ZERODHA  ***")
     log.info(f"  Mode              : {'DRY-RUN' if args.dry_run else 'LIVE TRADING'}")
     log.info(f"  Max concurrent    : {args.max_trades}")
@@ -3567,6 +3616,11 @@ def main():
         f"SHORT=SL {SHORT_STOP_PCT*100:.2f}% / TGT {SHORT_TARGET_PCT*100:.2f}% | "
         f"LONG=SL {LONG_STOP_PCT*100:.2f}% / TGT {LONG_TARGET_PCT*100:.2f}% "
         "(fallback profile; rebased from actual fill)"
+    )
+    log.info(
+        "  Exit order mode   : "
+        f"target=LIMIT | stop=SL-LIMIT (buffer={SL_LIMIT_BUFFER_PCT*100:.3f}%) | "
+        f"fallback=MARKET after {SL_LIMIT_FALLBACK_GRACE_SEC:.1f}s if stop remains OPEN"
     )
     if RISK_LIMITS_ENABLED:
         log.info(
