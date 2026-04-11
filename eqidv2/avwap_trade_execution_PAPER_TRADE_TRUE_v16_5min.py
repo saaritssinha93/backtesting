@@ -48,6 +48,15 @@ from datetime import date, datetime, timedelta, time as dt_time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+import socket as _socket
+
+# Force IPv4 for all outbound connections (avoids Kite IP-whitelist failures on
+# dynamic IPv6 addresses assigned by the ISP).
+_orig_getaddrinfo = _socket.getaddrinfo
+def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):  # noqa: A002
+    return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
+_socket.getaddrinfo = _ipv4_only_getaddrinfo
+
 import pandas as pd
 import pytz
 import avwap_combined_runner_v16_5min as v16_runner
@@ -100,6 +109,15 @@ SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 LONG_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_LONG_MAX_ENTRY_SLIP_PCT", "0.003"))
 # Same gate for SHORT (price must not be more than this BELOW model trigger).
 SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.0"))
+ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENABLE", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ENTRY_RETRY_NEAR_ENTRY_PCT = float(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_PCT", "0.003"))
+ENTRY_RETRY_WAIT_SEC = int(os.getenv("EQIDV2_ENTRY_RETRY_WAIT_SEC", "300"))
+ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "5"))
 
 
 def _build_effective_v16_5min_executor_cfgs():
@@ -114,6 +132,34 @@ def _build_effective_v16_5min_executor_cfgs():
 
 
 _EFFECTIVE_V16_5MIN_SHORT_CFG, _EFFECTIVE_V16_5MIN_LONG_CFG = _build_effective_v16_5min_executor_cfgs()
+
+
+def _entry_price_within_retry_band(side: str, signal_entry_price: float, live_price: float) -> bool:
+    if signal_entry_price <= 0 or live_price <= 0:
+        return False
+    band = max(0.0, float(ENTRY_RETRY_NEAR_ENTRY_PCT))
+    if side == "LONG":
+        return live_price <= signal_entry_price * (1.0 + band)
+    return live_price >= signal_entry_price * (1.0 - band)
+
+
+def _wait_for_near_entry_price(
+    ticker: str,
+    side: str,
+    signal_entry_price: float,
+    retry_until_ist: datetime,
+    use_ltp: bool = True,
+) -> Optional[float]:
+    last_ltp: Optional[float] = None
+    poll_sec = max(1.0, float(ENTRY_RETRY_POLL_SEC))
+    while datetime.now(IST) <= retry_until_ist:
+        ltp_now = get_ltp(ticker) if use_ltp else None
+        if ltp_now is not None and ltp_now > 0:
+            last_ltp = float(ltp_now)
+            if _entry_price_within_retry_band(side, signal_entry_price, last_ltp):
+                return last_ltp
+        time.sleep(poll_sec)
+    return last_ltp
 SHORT_STOP_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_STOP_PCT",
@@ -962,6 +1008,42 @@ def simulate_trade(
                 f"[ENTRY.FALLBACK] ticker={ticker} | side={side} | signal_id={signal_id[:12]} | "
                 f"reason=ltp_unavailable | fallback_entry={signal_entry_price:.2f}"
             )
+
+    # --- Near-entry retry window + max entry slip gate ---
+    if (not resume_mode) and signal_entry_price > 0 and ENTRY_RETRY_NEAR_ENTRY_ENABLE and ENTRY_RETRY_WAIT_SEC > 0:
+        if raw_entry > 0 and not _entry_price_within_retry_band(side, signal_entry_price, raw_entry):
+            retry_until_ist = min(
+                datetime.now(IST) + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC)),
+                forced_close_dt,
+            )
+            log.info(
+                f"[ENTRY.RETRY] Waiting for {ticker} {side} to return near entry "
+                f"| signal_id={signal_id[:12]} | signal={signal_entry_price:.2f} "
+                f"| ltp={raw_entry:.2f} | band={ENTRY_RETRY_NEAR_ENTRY_PCT*100:.2f}% "
+                f"| until={retry_until_ist.strftime('%H:%M:%S')}"
+            )
+            waited_ltp = _wait_for_near_entry_price(
+                ticker=ticker,
+                side=side,
+                signal_entry_price=signal_entry_price,
+                retry_until_ist=retry_until_ist,
+                use_ltp=use_ltp,
+            )
+            if waited_ltp is not None and waited_ltp > 0 and _entry_price_within_retry_band(side, signal_entry_price, float(waited_ltp)):
+                raw_entry = float(waited_ltp)
+                entry_source_used = "ltp_retry_near_signal"
+                log.info(
+                    f"[ENTRY.RETRY] Re-armed {ticker} {side} near entry "
+                    f"| signal_id={signal_id[:12]} | signal={signal_entry_price:.2f} "
+                    f"| ltp={raw_entry:.2f}"
+                )
+            else:
+                log.warning(
+                    f"[ENTRY.RETRY] Timed out for {ticker} {side} | signal_id={signal_id[:12]} "
+                    f"| signal={signal_entry_price:.2f} | "
+                    f"last_ltp={(float(waited_ltp) if waited_ltp else float(raw_entry)):.2f}"
+                )
+                return False
 
     # --- Max entry slip gate ---
     # Reject signals where the actual fill price has already deviated too far from

@@ -14,7 +14,7 @@ What was removed:
 
 What remains:
 - ETF universe loader (filtered_stocks_MIS.py or stocks_tickers.txt)
-- Kite session setup with app pool (app1/app2/app3/app4)
+- Kite session setup with app pool (app1..app8)
 - Trading calendar helpers (weekends + optional holidays file)
 - Robust missing/freshness detection for daily candles
 - Incremental fetching with warmup re-stabilization
@@ -32,7 +32,7 @@ Usage examples:
     python trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_daily.py all
 
 Notes:
-- Fixed historical window start: 2025-08-25 (IST), until latest completed daily candle.
+- Fixed historical window start: 2025-06-01 (IST), until latest completed daily candle.
 - By default, the script skips tickers that are already "fresh".
 """
 
@@ -58,9 +58,13 @@ from kiteconnect import KiteConnect, exceptions as kexc
 
 IST_TZ = pytz.timezone("Asia/Kolkata")
 
-# Directories (daily only)
+# Directories (daily only) — output to central TradingData location
+_TRADING_ROOT = r"C:\TradingData\eqidv2"
 DIRS = {
-    "daily": {"cache": "stocks_cache_daily_eq", "out": "stocks_indicators_daily_eq"},
+    "daily": {
+        "cache": os.path.join(_TRADING_ROOT, "stocks_cache_daily_eq"),
+        "out":   os.path.join(_TRADING_ROOT, "stocks_indicators_daily_eq"),
+    },
 }
 for cfg in DIRS.values():
     os.makedirs(cfg["cache"], exist_ok=True)
@@ -237,10 +241,14 @@ def setup_kite_session() -> KiteConnect:
     global kite_pool, kite_pool_rr_idx
 
     specs = [
-        ("app1", "api_key.txt", "access_token.txt"),
+        ("app1", "api_key.txt",  "access_token.txt"),
         ("app2", "api_key2.txt", "access_token2.txt"),
         ("app3", "api_key3.txt", "access_token3.txt"),
         ("app4", "api_key4.txt", "access_token4.txt"),
+        ("app5", "api_key5.txt", "access_token5.txt"),
+        ("app6", "api_key6.txt", "access_token6.txt"),
+        ("app7", "api_key7.txt", "access_token7.txt"),
+        ("app8", "api_key8.txt", "access_token8.txt"),
     ]
 
     logger = logging.getLogger("stocks_fetcher")
@@ -283,7 +291,7 @@ def setup_kite_session() -> KiteConnect:
         primary = sessions[0]
 
     if primary is None:
-        raise RuntimeError("No valid Kite session available. Check api_key/access_token files for app1..app4.")
+        raise RuntimeError("No valid Kite session available. Check api_key/access_token files for app1..app8.")
 
     with kite_pool_lock:
         kite_pool = list(sessions)
@@ -376,8 +384,8 @@ def get_start_date(mode: str, now_ist: datetime) -> datetime:
     if now_ist.tzinfo is None:
         now_ist = IST_TZ.localize(now_ist)
 
-    # Keep your original intraday start anchor behaviour
-    return IST_TZ.localize(datetime(2025, 8, 25, 0, 0, 0))
+    # Historical window start: 2025-06-01
+    return IST_TZ.localize(datetime(2025, 6, 1, 0, 0, 0))
 
 
 # ========= DATA HELPERS =========

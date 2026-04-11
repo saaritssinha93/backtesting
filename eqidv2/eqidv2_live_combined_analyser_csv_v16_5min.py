@@ -250,12 +250,27 @@ class _Tee:
                 pass
 
 
+def _reconfigure_stdio() -> None:
+    for name in ("stdout", "stderr", "__stdout__", "__stderr__"):
+        stream = getattr(sys, name, None)
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _start_tee() -> None:
     try:
+        _reconfigure_stdio()
         fh = open(_LOG_FILE, "a", encoding="utf-8", buffering=1)
-        tee = _Tee(sys.__stdout__, fh)
-        sys.stdout = tee  # type: ignore[assignment]
-        sys.stderr = tee  # type: ignore[assignment]
+        base_stdout = getattr(sys, "__stdout__", None) or sys.stdout
+        base_stderr = getattr(sys, "__stderr__", None) or sys.stderr
+        tee_out = _Tee(base_stdout, fh)
+        tee_err = _Tee(base_stderr, fh)
+        sys.stdout = tee_out  # type: ignore[assignment]
+        sys.stderr = tee_err  # type: ignore[assignment]
     except Exception:
         pass
 
@@ -717,7 +732,7 @@ def _compute_nifty_rs_at_slot(slot_ist: datetime) -> Tuple[bool, bool, float]:
         return allow_long, allow_short, rs_pct
 
     except Exception as exc:
-        print(f"[NIFTY_RS] ERROR: {exc} — defaulting to allow both", flush=True)
+        print(f"[NIFTY_RS] ERROR: {exc} - defaulting to allow both", flush=True)
         return True, True, 0.0
 
 
@@ -1458,7 +1473,7 @@ def main() -> None:
 
     print(
         "=" * 70 + "\n"
-        "EQIDV2 V16 5min Live Scanner — Anti-exhaustion filters\n"
+        "EQIDV2 V16 5min Live Scanner - Anti-exhaustion filters\n"
         f"  DATA_5M_DIR : {DIR_5M}\n"
         f"  SIGNALS_DIR : {RUNTIME_LIVE_SIGNALS_DIR}\n"
         f"  TARGET      : SHORT={TEST_SHORT_TARGET_PCT*100:.2f}%, LONG={TEST_LONG_TARGET_PCT*100:.2f}%\n"

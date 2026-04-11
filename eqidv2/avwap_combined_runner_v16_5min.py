@@ -979,7 +979,7 @@ def _load_india_vix(project_root: Path) -> dict:
         return {}
     vix_path = project_root / "india_vix.parquet"
     if not vix_path.exists():
-        print("[WARN] india_vix.parquet not found â€” VIX scaling disabled.")
+        print("[WARN] india_vix.parquet not found - VIX scaling disabled.")
         print("       Run 'python fetch_india_vix.py' to generate it.")
         return {}
     df = pd.read_parquet(vix_path)
@@ -2863,7 +2863,7 @@ def _print_recent_daily_breakdown(df: pd.DataFrame, n_weeks: int = 2) -> None:
     sep = "-" * _width
 
     print(f"\n{'='*_width}")
-    print(f"  Day-wise Breakdown â€” last {n_weeks} weeks ({len(recent_dates)} trading days)")
+    print(f"  Day-wise Breakdown - last {n_weeks} weeks ({len(recent_dates)} trading days)")
     print(f"{'='*_width}")
     print(hdr)
     print(sep)
@@ -2942,7 +2942,7 @@ def generate_enhanced_charts(
         from matplotlib.gridspec import GridSpec
         import matplotlib.ticker as mticker
     except ImportError:
-        print("[WARN] matplotlib not available â€” skipping chart generation.")
+        print("[WARN] matplotlib not available - skipping chart generation.")
         return []
 
     warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
@@ -3457,7 +3457,7 @@ def main() -> None:
         try:
             run_started = time.perf_counter()
             print("=" * 70)
-            print("AVWAP v16_5min COMBINED runner — Anti-exhaustion filters + V11 SHORT + V9 LONG")
+            print("AVWAP v16_5min COMBINED runner - Anti-exhaustion filters + V11 SHORT + V9 LONG")
             print("  - Entry signals: 5-min data")
             print("  - Exit resolution: 1-min if available, else 5-min fallback")
             print("  - Outputs: */algo_trading/outputs")
@@ -3491,7 +3491,7 @@ def main() -> None:
                 n_files = len(list(dir_1m.glob("*.parquet")))
                 print(f"[INFO] 1-min parquet files found: {n_files}")
             else:
-                print("[WARN] 1-min data directory not found â€” will fall back to 5-min exits.")
+                print("[WARN] 1-min data directory not found - will fall back to 5-min exits.")
 
             short_cfg = default_short_config(
                 reports_dir=_outputs_dir,
@@ -3632,12 +3632,12 @@ def main() -> None:
                 long_cfg.vix_scale_max    = VIX_SCALE_MAX
                 long_cfg.vix_scale_target = VIX_SCALE_TARGET
                 long_cfg.vix_scale_sl     = VIX_SCALE_SL
-                print(f"[VIX] Scaling ENABLED â€” {len(_vix_map)} daily values loaded. "
+                print(f"[VIX] Scaling ENABLED - {len(_vix_map)} daily values loaded. "
                       f"baseline={VIX_BASELINE}, range=[{VIX_SCALE_MIN}x, {VIX_SCALE_MAX}x]")
             elif VIX_SCALE_ENABLED:
-                print("[VIX] Scaling ENABLED but no VIX data â€” using fixed SL/target.")
+                print("[VIX] Scaling ENABLED but no VIX data - using fixed SL/target.")
             else:
-                print("[VIX] Scaling DISABLED — fixed SL/target used (old behaviour).")
+                print("[VIX] Scaling DISABLED - fixed SL/target used (old behaviour).")
 
             regime_map, regime_source = build_market_regime_map(short_cfg)
             if regime_map:

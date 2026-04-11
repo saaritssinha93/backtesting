@@ -15,7 +15,7 @@ What was removed:
 
 What remains:
 - ETF universe loader (filtered_stocks_MIS.py or stocks_tickers.txt)
-- Kite session setup with app pool (app1/app2/app3/app4)
+- Kite session setup with app pool (app1..app8)
 - Trading calendar helpers (weekends + optional holidays file)
 - Robust missing/freshness detection for intraday candles
 - Incremental fetching with warmup re-stabilization
@@ -34,9 +34,11 @@ Usage examples:
 
 Notes:
 - Intraday timestamps can be stored as candle "end" (recommended) or "start".
-- Fixed historical window start: 2025-08-25 (IST), until latest completed 1-min candle.
+- Fixed historical window start: 2025-06-01 (IST), until latest completed 1-min candle.
 - By default, the script skips tickers that are already "fresh".
 """
+
+from __future__ import annotations
 
 import os
 import sys
@@ -256,7 +258,7 @@ def setup_kite_session() -> KiteConnect:
 
     logger = logging.getLogger("stocks_fetcher")
     sessions: list[KiteConnect] = []
-    primary: KiteConnect | None = None
+    primary: Optional[KiteConnect] = None
 
     for app_name, key_file, token_file in specs:
         if not (os.path.exists(key_file) and os.path.exists(token_file)):
@@ -361,6 +363,12 @@ def _prev_trading_day(d: date, holidays: set[date]) -> date:
         x -= timedelta(days=1)
     return x
 
+def _next_trading_day(d: date, holidays: set[date]) -> date:
+    x = d
+    while not _is_trading_day(x, holidays):
+        x += timedelta(days=1)
+    return x
+
 def _round_down_session_anchored(ts: datetime, step_min: int) -> datetime:
     if ts.tzinfo is None:
         ts = IST_TZ.localize(ts)
@@ -404,7 +412,7 @@ def get_start_date(mode: str, now_ist: datetime) -> datetime:
         now_ist = IST_TZ.localize(now_ist)
 
     # Keep your original intraday start anchor behaviour
-    return IST_TZ.localize(datetime(2025, 8, 25, 0, 0, 0))
+    return IST_TZ.localize(datetime(2025, 6, 1, 0, 0, 0))
 
 
 # ========= DATA HELPERS =========
@@ -519,6 +527,124 @@ def _read_last_ts_from_store(path: str):
         return ts
     return _read_last_ts_fast_csv(path)
 
+def _read_first_ts_fast_parquet(path: str):
+    try:
+        _ensure_parquet_engine()
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(path)
+        md = pf.metadata
+        if md is None or md.num_rows <= 0 or md.num_row_groups <= 0:
+            return None
+
+        table = pf.read_row_group(0, columns=["date"])
+        if table.num_rows <= 0:
+            return None
+
+        col = table.column(0)
+        val = col[0].as_py()
+        ts = pd.to_datetime(val, errors="coerce")
+        if pd.isna(ts):
+            return None
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(IST_TZ)
+        else:
+            ts = ts.tz_convert(IST_TZ)
+        return ts
+    except Exception:
+        return None
+
+def _read_first_ts_fast_csv(path: str):
+    try:
+        df = pd.read_csv(path, usecols=["date"], nrows=1)
+        if df.empty or "date" not in df.columns:
+            return None
+        ts = pd.to_datetime(df["date"].iloc[0], errors="coerce")
+        if pd.isna(ts):
+            return None
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(IST_TZ)
+        else:
+            ts = ts.tz_convert(IST_TZ)
+        return ts
+    except Exception:
+        return None
+
+def _read_first_ts_from_store(path: str):
+    ext = str(Path(path).suffix).lower()
+    if ext == ".parquet":
+        return _read_first_ts_fast_parquet(path)
+    if ext == ".csv":
+        return _read_first_ts_fast_csv(path)
+    ts = _read_first_ts_fast_parquet(path)
+    if ts is not None:
+        return ts
+    return _read_first_ts_fast_csv(path)
+
+def _history_meta_path_for(out_path: str) -> Path:
+    p = Path(out_path)
+    return p.parent / "_history_meta" / f"{p.stem}.json"
+
+def _history_start_verified(out_path: str, required_start_ist: datetime) -> bool:
+    try:
+        mp = _history_meta_path_for(out_path)
+        if not mp.exists():
+            return False
+        data = json.loads(mp.read_text(encoding="utf-8"))
+        req = required_start_ist.astimezone(IST_TZ) if required_start_ist.tzinfo else IST_TZ.localize(required_start_ist)
+        return (
+            str(data.get("requested_start_ist", "")) == req.isoformat()
+            and bool(data.get("verified_full_history", False))
+        )
+    except Exception:
+        return False
+
+def _write_history_meta(out_path: str, required_start_ist: datetime, observed_first_ts: Optional[datetime]) -> None:
+    try:
+        mp = _history_meta_path_for(out_path)
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        req = required_start_ist.astimezone(IST_TZ) if required_start_ist.tzinfo else IST_TZ.localize(required_start_ist)
+        obs = None
+        if observed_first_ts is not None:
+            obs = observed_first_ts.astimezone(IST_TZ).isoformat() if observed_first_ts.tzinfo else IST_TZ.localize(observed_first_ts).isoformat()
+        payload = {
+            "requested_start_ist": req.isoformat(),
+            "observed_first_ts_ist": obs,
+            "verified_full_history": True,
+            "updated_at_ist": datetime.now(IST_TZ).isoformat(),
+        }
+        mp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+def _history_start_satisfied(
+    mode: str,
+    out_path: str,
+    required_start_ist: Optional[datetime],
+    holidays: set[date],
+    intraday_ts: str,
+) -> bool:
+    if required_start_ist is None:
+        return True
+
+    existing_path = _resolve_existing_store_path(out_path)
+    if not os.path.exists(existing_path):
+        return False
+
+    first_ts = _read_first_ts_from_store(existing_path)
+    if first_ts is not None:
+        if first_ts.tzinfo is None:
+            first_ts = first_ts.tz_localize(IST_TZ)
+        else:
+            first_ts = first_ts.tz_convert(IST_TZ)
+        exp_first = expected_first_stamp(mode, required_start_ist, holidays, intraday_ts)["value"]
+        if exp_first.tzinfo is None:
+            exp_first = IST_TZ.localize(exp_first)
+        if first_ts <= (exp_first + timedelta(seconds=1)):
+            return True
+
+    return _history_start_verified(out_path, required_start_ist)
+
 def _intraday_end_shift_minutes(interval: str) -> int:
     return {"minute": 1}.get(interval, 0)
 
@@ -555,6 +681,24 @@ def expected_last_stamp(mode: str, now_ist: datetime, holidays: set[date], intra
 
     return {"kind": "ts", "value": exp_end, "step_min": step}
 
+def expected_first_stamp(mode: str, start_dt_ist: datetime, holidays: set[date], intraday_ts: str) -> dict:
+    mode = mode.lower().strip()
+
+    if start_dt_ist.tzinfo is None:
+        start_dt_ist = IST_TZ.localize(start_dt_ist)
+    else:
+        start_dt_ist = start_dt_ist.astimezone(IST_TZ)
+
+    step_map = {"1min": 1}
+    step = step_map.get(mode, 0)
+
+    first_day = _next_trading_day(start_dt_ist.date(), holidays)
+    first_bar = IST_TZ.localize(datetime(first_day.year, first_day.month, first_day.day, 9, 15, 0))
+    if intraday_ts.lower() == "end" and step > 0:
+        first_bar = first_bar + timedelta(minutes=step)
+
+    return {"kind": "ts", "value": first_bar, "step_min": step}
+
 def _legacy_csv_path_for(parquet_path: str) -> str:
     return str(Path(parquet_path).with_suffix(".csv"))
 
@@ -567,7 +711,14 @@ def _resolve_existing_store_path(target_parquet_path: str) -> str:
             return legacy
     return target_parquet_path
 
-def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, holidays: set[date], intraday_ts: str) -> bool:
+def ticker_is_fresh(
+    mode: str,
+    out_path: str,
+    now_ist: datetime,
+    holidays: set[date],
+    intraday_ts: str,
+    required_start_ist: Optional[datetime] = None,
+) -> bool:
     existing_path = _resolve_existing_store_path(out_path)
     if not os.path.exists(existing_path):
         return False
@@ -586,6 +737,9 @@ def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, holidays: set[d
     if exp_ts.tzinfo is None:
         exp_ts = IST_TZ.localize(exp_ts)
 
+    if not _history_start_satisfied(mode, out_path, required_start_ist, holidays, intraday_ts):
+        return False
+
     tol = timedelta(seconds=1)
     step_min = int(spec.get("step_min", 0) or 0)
     step_td = timedelta(minutes=step_min) if step_min > 0 else timedelta(0)
@@ -600,7 +754,14 @@ def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, holidays: set[d
 
     return False
 
-def missing_spec(mode: str, out_path: str, now_ist: datetime, holidays: set[date], intraday_ts: str) -> dict:
+def missing_spec(
+    mode: str,
+    out_path: str,
+    now_ist: datetime,
+    holidays: set[date],
+    intraday_ts: str,
+    required_start_ist: Optional[datetime] = None,
+) -> dict:
     existing_path = _resolve_existing_store_path(out_path)
 
     spec = expected_last_stamp(mode, now_ist, holidays, intraday_ts)
@@ -617,8 +778,11 @@ def missing_spec(mode: str, out_path: str, now_ist: datetime, holidays: set[date
     else:
         last_ts = last_ts.tz_convert(IST_TZ)
 
-    if ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
+    if ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts, required_start_ist=required_start_ist):
         return {"kind": "fresh", "last_ts": last_ts, "expected": spec}
+
+    if not _history_start_satisfied(mode, out_path, required_start_ist, holidays, intraday_ts):
+        return {"kind": "history_incomplete", "last_ts": last_ts, "expected": spec}
 
     return {"kind": "rows_missing", "last_ts": last_ts, "expected": spec}
 
@@ -935,9 +1099,18 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
     except Exception:
         return pd.DataFrame()
 
-def _incremental_start_from_existing(mode: str, out_path: str, default_start: datetime) -> datetime:
+def _incremental_start_from_existing(
+    mode: str,
+    out_path: str,
+    default_start: datetime,
+    holidays: Optional[set[date]] = None,
+    intraday_ts: str = "end",
+) -> datetime:
     existing_path = _resolve_existing_store_path(out_path)
     if not os.path.exists(existing_path):
+        return default_start
+
+    if holidays is not None and not _history_start_satisfied(mode, out_path, default_start, holidays, intraday_ts):
         return default_start
 
     last_ts = _read_last_ts_from_store(existing_path)
@@ -1034,12 +1207,12 @@ class UpdateReport:
     status: str            # created|updated|noop|failed
     out_path: str
     existed_before: bool
-    last_before: str | None
-    expected: str | None
+    last_before: Optional[str]
+    expected: Optional[str]
     new_rows_count: int
-    new_first: str | None
-    new_last: str | None
-    new_rows_path: str | None
+    new_first: Optional[str]
+    new_last: Optional[str]
+    new_rows_path: Optional[str]
     load_existing_secs: float
     fetch_secs: float
     indicators_secs: float
@@ -1275,14 +1448,18 @@ def process_ticker(
     exp = expected_last_stamp(mode, now_ist, holidays, intraday_ts)
     exp_str = _fmt_expected(exp)
 
-    if skip_if_fresh and ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
+    if skip_if_fresh and ticker_is_fresh(
+        mode, out_path, now_ist, holidays, intraday_ts, required_start_ist=start_dt_ist
+    ):
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                             exp_str, 0, None, None, None,
                             load_existing_secs, fetch_secs, indicators_secs, persist_secs,
                             _time.perf_counter() - t_total0)
 
-    inc_start = _incremental_start_from_existing(mode, out_path, start_dt_ist)
+    inc_start = _incremental_start_from_existing(
+        mode, out_path, start_dt_ist, holidays=holidays, intraday_ts=intraday_ts
+    )
     if inc_start >= end_dt_ist:
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
@@ -1345,6 +1522,11 @@ def process_ticker(
 
         t_persist0 = _time.perf_counter()
         _finalize_and_save(merged, out_path)
+        if inc_start <= start_dt_ist:
+            observed_first = pd.to_datetime(merged["date"], errors="coerce").dropna().min() if "date" in merged.columns else None
+            if pd.notna(observed_first):
+                observed_first = observed_first.to_pydatetime() if isinstance(observed_first, pd.Timestamp) else observed_first
+            _write_history_meta(out_path, start_dt_ist, observed_first)
 
         # Optional: if we migrated from a legacy CSV, delete it after successful parquet write
         if DELETE_LEGACY_CSV and existed_before and str(existing_path).lower().endswith(".csv"):
@@ -1456,7 +1638,7 @@ def run_mode(
         for t in syms:
             t = t.upper()
             out_path = os.path.join(DIRS[mode]["out"], f"{t}_stocks_indicators_{mode}.parquet")
-            ms = missing_spec(mode, out_path, now_ist, holidays, intraday_ts)
+            ms = missing_spec(mode, out_path, now_ist, holidays, intraday_ts, required_start_ist=start_dt)
             if ms["kind"] == "fresh":
                 fresh.append(t)
             elif ms["kind"] == "file_missing":

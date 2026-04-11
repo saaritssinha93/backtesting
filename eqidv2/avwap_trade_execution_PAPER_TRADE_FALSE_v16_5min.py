@@ -50,8 +50,20 @@ from datetime import date, datetime, timedelta, time as dt_time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+import socket as _socket
+import http.client as http_client
+
+# Force IPv4 for all outbound connections (avoids Kite IP-whitelist failures on
+# dynamic IPv6 addresses assigned by the ISP).
+_orig_getaddrinfo = _socket.getaddrinfo
+def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):  # noqa: A002
+    return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
+_socket.getaddrinfo = _ipv4_only_getaddrinfo
+
 import pandas as pd
 import pytz
+import requests
+import urllib3
 import avwap_combined_runner_v16_5min as v16_runner
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
 from avwap_v11_refactored.avwap_common_v11_v15 import (
@@ -128,6 +140,21 @@ DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
 # fraction above the model trigger.  Set 0.0 to disable.
 LONG_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_LONG_MAX_ENTRY_SLIP_PCT", "0.003"))
 SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.0"))
+ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENABLE", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ENTRY_RETRY_NEAR_ENTRY_PCT = float(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_PCT", "0.003"))
+ENTRY_RETRY_WAIT_SEC = int(os.getenv("EQIDV2_ENTRY_RETRY_WAIT_SEC", "300"))
+ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "5"))
+TRANSIENT_API_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_TRANSIENT_API_RETRY_ATTEMPTS", "4")))
+TRANSIENT_API_RETRY_BASE_SEC = max(0.25, float(os.getenv("EQIDV2_TRANSIENT_API_RETRY_BASE_SEC", "1.0")))
+TRANSIENT_ENTRY_ORDER_RECOVER_LOOKBACK_SEC = max(
+    1.0,
+    float(os.getenv("EQIDV2_TRANSIENT_ENTRY_ORDER_RECOVER_LOOKBACK_SEC", "15.0")),
+)
 MAX_TICK_DECIMALS = 4
 
 
@@ -154,6 +181,130 @@ def _build_effective_v16_5min_executor_cfgs():
 
 
 _EFFECTIVE_V16_5MIN_SHORT_CFG, _EFFECTIVE_V16_5MIN_LONG_CFG = _build_effective_v16_5min_executor_cfgs()
+
+
+def _entry_price_within_retry_band(side: str, signal_entry_price: float, live_price: float) -> bool:
+    if signal_entry_price <= 0 or live_price <= 0:
+        return False
+    band = max(0.0, float(ENTRY_RETRY_NEAR_ENTRY_PCT))
+    if side == "LONG":
+        return live_price <= signal_entry_price * (1.0 + band)
+    return live_price >= signal_entry_price * (1.0 - band)
+
+
+def _is_transient_kite_connection_error(error: Exception) -> bool:
+    if isinstance(
+        error,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            urllib3.exceptions.ProtocolError,
+            urllib3.exceptions.ReadTimeoutError,
+            http_client.RemoteDisconnected,
+            TimeoutError,
+            ConnectionResetError,
+            BrokenPipeError,
+        ),
+    ):
+        return True
+
+    text = _sanitize_error_message(error, limit=500).lower()
+    return any(
+        token in text
+        for token in (
+            "connection aborted",
+            "remote end closed connection without response",
+            "remotedisconnected",
+            "protocolerror",
+            "connection reset by peer",
+            "max retries exceeded",
+            "read timed out",
+            "timeout",
+            "temporarily unavailable",
+        )
+    )
+
+
+def _transient_retry_sleep(attempt: int, retry_until_ist: Optional[datetime]) -> float:
+    base = max(0.25, float(TRANSIENT_API_RETRY_BASE_SEC))
+    sleep_sec = base * max(1, attempt)
+    if retry_until_ist is not None:
+        remaining = max(0.0, (retry_until_ist - datetime.now(IST)).total_seconds())
+        sleep_sec = min(sleep_sec, remaining)
+    return max(0.0, sleep_sec)
+
+
+def _entry_retry_deadline(
+    signal: dict,
+    trade_start_ist: datetime,
+    forced_close_dt: datetime,
+) -> datetime:
+    base_ts = _parse_ist_signal_ts(
+        signal.get("signal_entry_datetime_ist")
+        or signal.get("signal_bar_time_ist")
+        or signal.get("bar_time_ist")
+        or signal.get("signal_datetime")
+    )
+    if base_ts is None:
+        candidate = trade_start_ist + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC))
+    else:
+        candidate = base_ts.to_pydatetime() + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC))
+    return min(candidate, forced_close_dt)
+
+
+def _safe_get_entry_ltp(
+    ticker: str,
+    *,
+    retry_until_ist: datetime,
+    context: str,
+) -> Optional[float]:
+    attempt = 0
+    last_error: Optional[Exception] = None
+    while datetime.now(IST) <= retry_until_ist:
+        attempt += 1
+        try:
+            return float(get_ltp(ticker))
+        except Exception as exc:
+            if not _is_transient_kite_connection_error(exc):
+                raise
+            last_error = exc
+            sleep_sec = _transient_retry_sleep(attempt, retry_until_ist)
+            if sleep_sec <= 0:
+                break
+            log.warning(
+                f"[KITE.NET.RETRY] {context}: transient quote error for {ticker} "
+                f"(attempt {attempt}): {_sanitize_error_message(exc, limit=180)} "
+                f"| retrying in {sleep_sec:.1f}s"
+            )
+            time.sleep(sleep_sec)
+    if last_error is not None:
+        log.warning(
+            f"[KITE.NET.RETRY] {context}: quote retry window expired for {ticker} "
+            f"({_sanitize_error_message(last_error, limit=180)})"
+        )
+    return None
+
+
+def _wait_for_near_entry_price(
+    ticker: str,
+    side: str,
+    signal_entry_price: float,
+    retry_until_ist: datetime,
+) -> Optional[float]:
+    last_ltp: Optional[float] = None
+    poll_sec = max(1.0, float(ENTRY_RETRY_POLL_SEC))
+    while datetime.now(IST) <= retry_until_ist:
+        ltp_now = _safe_get_entry_ltp(
+            ticker,
+            retry_until_ist=retry_until_ist,
+            context=f"{ticker} near-entry watch",
+        )
+        if ltp_now is not None and ltp_now > 0:
+            last_ltp = float(ltp_now)
+            if _entry_price_within_retry_band(side, signal_entry_price, last_ltp):
+                return last_ltp
+        time.sleep(poll_sec)
+    return last_ltp
 SHORT_STOP_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_STOP_PCT",
@@ -295,6 +446,58 @@ symbol_tick_size_loaded = False
 symbol_tick_size_lock = threading.Lock()
 
 
+def _try_build_kite_client(key_file: str, token_file: str) -> tuple:
+    """Returns (KiteConnect client, user_name) or raises on failure."""
+    with open(key_file, "r", encoding="utf-8") as f_key:
+        key_data = f_key.read().strip().split()
+    with open(token_file, "r", encoding="utf-8") as f_tok:
+        access_token = f_tok.read().strip()
+    if len(key_data) < 2:
+        raise ValueError(f"{key_file} must contain 'API_KEY API_SECRET' separated by space.")
+    api_key = key_data[0]
+    client = KiteConnect(api_key=api_key)
+    client.set_access_token(access_token)
+    profile = client.profile()
+    user_name = profile.get("user_name", "N/A")
+    return client, user_name
+
+
+def _refresh_failed_sessions_bg(
+    failed_specs: list,
+    retry_every_sec: int = 120,
+    max_attempts: int = 10,
+) -> None:
+    """Background thread: retry failed Kite app sessions and add them to the pool."""
+    for attempt in range(1, max_attempts + 1):
+        time.sleep(retry_every_sec)
+        if not failed_specs:
+            break
+        remaining = []
+        for app_name, key_file, token_file in failed_specs:
+            if not (os.path.exists(key_file) and os.path.exists(token_file)):
+                remaining.append((app_name, key_file, token_file))
+                continue
+            try:
+                client, user_name = _try_build_kite_client(key_file, token_file)
+                with kite_pool_lock:
+                    kite_pool.append(client)
+                    kite_session_names[id(client)] = app_name
+                log.info(
+                    f"[KITE.REFRESH] {app_name} session recovered "
+                    f"(attempt {attempt}/{max_attempts}) | user={user_name}"
+                )
+            except Exception as e:
+                log.warning(
+                    f"[KITE.REFRESH] {app_name} retry failed "
+                    f"(attempt {attempt}/{max_attempts}): {e}"
+                )
+                remaining.append((app_name, key_file, token_file))
+        failed_specs = remaining
+        if not failed_specs:
+            log.info(f"[KITE.REFRESH] All failed sessions recovered after {attempt} attempt(s).")
+            break
+
+
 def setup_kite_session() -> KiteConnect:
     """Set up and return a KiteConnect primary session, with optional app pool."""
     global kite, kite_pool, kite_pool_rr_idx, kite_session_names, kite_primary_session_name
@@ -312,6 +515,7 @@ def setup_kite_session() -> KiteConnect:
 
     sessions: List[KiteConnect] = []
     session_names: List[str] = []
+    failed_auth_specs: list = []
     primary_user = "N/A"
     primary_app = "N/A"
 
@@ -326,19 +530,7 @@ def setup_kite_session() -> KiteConnect:
             continue
 
         try:
-            with open(key_file, "r", encoding="utf-8") as f_key:
-                key_data = f_key.read().strip().split()
-            with open(token_file, "r", encoding="utf-8") as f_tok:
-                access_token = f_tok.read().strip()
-            if len(key_data) < 2:
-                raise ValueError(
-                    f"{key_file} must contain 'API_KEY API_SECRET' separated by space."
-                )
-            api_key = key_data[0]
-            client = KiteConnect(api_key=api_key)
-            client.set_access_token(access_token)
-            profile = client.profile()
-            user_name = profile.get("user_name", "N/A")
+            client, user_name = _try_build_kite_client(key_file, token_file)
             if primary_app == "N/A":
                 primary_app = app_name
                 primary_user = user_name
@@ -351,8 +543,9 @@ def setup_kite_session() -> KiteConnect:
                     f"[KITE] Primary session setup failed ({app_name}): {e}. "
                     "Continuing with fallback apps."
                 )
-                continue
-            log.warning(f"[KITE] {app_name} disabled due to setup error: {e}")
+            else:
+                log.warning(f"[KITE] {app_name} disabled due to setup error: {e}")
+            failed_auth_specs.append((app_name, key_file, token_file))
 
     if not sessions:
         raise RuntimeError(
@@ -368,6 +561,21 @@ def setup_kite_session() -> KiteConnect:
 
     log.info(f"Kite primary session established: {primary_app} | user={primary_user}")
     log.info(f"[KITE] Session pool active apps: {len(sessions)}")
+
+    # Retry failed apps in background — tokens may not be refreshed at market open yet
+    if failed_auth_specs:
+        t = threading.Thread(
+            target=_refresh_failed_sessions_bg,
+            args=(failed_auth_specs,),
+            kwargs={"retry_every_sec": 120, "max_attempts": 10},
+            daemon=True,
+            name="kite-session-refresh",
+        )
+        t.start()
+        log.info(
+            f"[KITE.REFRESH] Background session refresh started for "
+            f"{len(failed_auth_specs)} app(s): {[s[0] for s in failed_auth_specs]}"
+        )
     return kite
 
 
@@ -519,6 +727,28 @@ def _reset_orders_snapshot_cache() -> None:
     global orders_snapshot_ts_monotonic
     with orders_snapshot_lock:
         orders_snapshot_ts_monotonic = 0.0
+
+
+def _order_row_timestamp_ist(row: Optional[dict]) -> Optional[datetime]:
+    row = row or {}
+    for key in ("exchange_update_timestamp", "exchange_timestamp", "order_timestamp"):
+        value = row.get(key)
+        if isinstance(value, datetime):
+            return value.astimezone(IST) if value.tzinfo else IST.localize(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                ts = pd.to_datetime(value.strip(), errors="coerce")
+                if pd.isna(ts):
+                    continue
+                ts = pd.Timestamp(ts)
+                if ts.tzinfo is None:
+                    ts = ts.tz_localize(IST)
+                else:
+                    ts = ts.tz_convert(IST)
+                return ts.to_pydatetime()
+            except Exception:
+                continue
+    return None
 
 
 def _find_order_in_list(orders: Sequence[dict], order_id: str) -> Optional[dict]:
@@ -998,17 +1228,140 @@ def _place_order_with_fallback(log_context: str, **place_kwargs: Any) -> str:
             return order_id
         except Exception as exc:
             last_error = exc
-            if _is_order_write_ip_restriction_error(exc) and idx < total:
-                log.warning(
-                    f"[KITE.WRITE_FAILOVER] {log_context}: {app_name} blocked for order placement "
-                    f"({_sanitize_error_message(exc, limit=160)}). Trying next app."
-                )
-                continue
+            if idx < total:
+                if _is_order_write_ip_restriction_error(exc):
+                    log.warning(
+                        f"[KITE.WRITE_FAILOVER] {log_context}: {app_name} blocked for order "
+                        f"placement ({_sanitize_error_message(exc, limit=160)}). Trying next app."
+                    )
+                    continue
+                if _is_transient_kite_connection_error(exc):
+                    log.warning(
+                        f"[KITE.WRITE_FAILOVER] {log_context}: {app_name} transient connection "
+                        f"error ({_sanitize_error_message(exc, limit=160)}). Trying next app."
+                    )
+                    time.sleep(0.3)
+                    continue
             raise
 
     if last_error is not None:
         raise last_error
     raise RuntimeError(f"{log_context}: order placement failed without a concrete exception")
+
+
+def _recover_recent_entry_order_id(
+    *,
+    ticker: str,
+    transaction_type: str,
+    not_before_ist: datetime,
+) -> Optional[str]:
+    try:
+        orders = _get_orders_snapshot(force_refresh=True)
+    except Exception as exc:
+        if not _is_rate_limit_error(exc):
+            log.warning(
+                f"[KITE.NET.RETRY] {ticker}: broker order recovery lookup failed "
+                f"({_sanitize_error_message(exc, limit=180)})"
+            )
+        return None
+
+    discovered = _pick_latest_tagged_order(orders, ticker, "AVWAPENTRY", transaction_type)
+    if not discovered:
+        return None
+
+    discovered_ts = _order_row_timestamp_ist(discovered)
+    if discovered_ts is None:
+        return None
+
+    window_open = not_before_ist - timedelta(seconds=float(TRANSIENT_ENTRY_ORDER_RECOVER_LOOKBACK_SEC))
+    if discovered_ts < window_open:
+        return None
+
+    order_id = str(discovered.get("order_id", "")).strip()
+    return order_id or None
+
+
+def _place_entry_order_resilient(
+    *,
+    ticker: str,
+    side: str,
+    signal_entry_price: float,
+    retry_until_ist: datetime,
+    log_context: str,
+    **place_kwargs: Any,
+) -> Optional[str]:
+    transaction_type = str(place_kwargs.get("transaction_type", "")).strip().upper()
+    last_error: Optional[Exception] = None
+    for attempt in range(1, TRANSIENT_API_RETRY_ATTEMPTS + 1):
+        started_ist = datetime.now(IST)
+        try:
+            return _place_order_with_fallback(log_context, **place_kwargs)
+        except Exception as exc:
+            if not _is_transient_kite_connection_error(exc):
+                raise
+            last_error = exc
+
+            recovered_order_id = _recover_recent_entry_order_id(
+                ticker=ticker,
+                transaction_type=transaction_type,
+                not_before_ist=started_ist,
+            )
+            if recovered_order_id:
+                log.warning(
+                    f"[KITE.NET.RETRY] {log_context}: recovered broker entry order "
+                    f"{recovered_order_id} after disconnect."
+                )
+                return recovered_order_id
+
+            if datetime.now(IST) >= retry_until_ist:
+                break
+
+            ltp_now = _safe_get_entry_ltp(
+                ticker,
+                retry_until_ist=retry_until_ist,
+                context=f"{ticker} transient entry retry",
+            )
+            if ltp_now is None:
+                break
+
+            if not _entry_price_within_retry_band(side, signal_entry_price, float(ltp_now)):
+                log.warning(
+                    f"[KITE.NET.RETRY] {log_context}: price moved away during retry "
+                    f"| signal={signal_entry_price:.2f} ltp={ltp_now:.2f}"
+                )
+                waited_ltp = _wait_for_near_entry_price(
+                    ticker=ticker,
+                    side=side,
+                    signal_entry_price=signal_entry_price,
+                    retry_until_ist=retry_until_ist,
+                )
+                if (
+                    waited_ltp is None
+                    or waited_ltp <= 0
+                    or not _entry_price_within_retry_band(side, signal_entry_price, float(waited_ltp))
+                ):
+                    log.warning(
+                        f"[KITE.NET.RETRY] {log_context}: entry retry window expired "
+                        f"before price returned near signal."
+                    )
+                    break
+
+            sleep_sec = _transient_retry_sleep(attempt, retry_until_ist)
+            if sleep_sec <= 0:
+                break
+            log.warning(
+                f"[KITE.NET.RETRY] {log_context}: transient order error "
+                f"(attempt {attempt}/{TRANSIENT_API_RETRY_ATTEMPTS}) "
+                f"{_sanitize_error_message(exc, limit=180)} | retrying in {sleep_sec:.1f}s"
+            )
+            time.sleep(sleep_sec)
+
+    if last_error is not None:
+        log.warning(
+            f"[KITE.NET.RETRY] {log_context}: giving up after transient order errors "
+            f"({_sanitize_error_message(last_error, limit=180)})"
+        )
+    return None
 
 
 def _is_mis_block_or_missing_error(error: Exception) -> bool:
@@ -1422,6 +1775,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
     trade_id = str(signal.get("trade_id", "")).strip() or default_trade_id
     today = trade_start_ist.date()
     forced_close_dt = IST.localize(datetime.combine(today, FORCED_CLOSE_TIME))
+    entry_retry_deadline = _entry_retry_deadline(signal, trade_start_ist, forced_close_dt)
 
     if side == "SHORT":
         entry_txn = "SELL"
@@ -1605,9 +1959,50 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
             # ---- SLIP GATE: pre-entry LTP check ----
             # Fetch current LTP and reject if it has chased too far from the model trigger.
             if (not trade_closed) and signal_entry_price > 0:
-                ltp_check = get_ltp(ticker)
-                if ltp_check is not None and ltp_check > 0:
-                    if side == "LONG" and LONG_MAX_ENTRY_SLIP_PCT > 0.0:
+                ltp_check = _safe_get_entry_ltp(
+                    ticker,
+                    retry_until_ist=entry_retry_deadline,
+                    context=f"{ticker} pre-entry",
+                )
+                if ltp_check is None:
+                    result.outcome = "ENTRY_SKIPPED_CONNECTION_RETRY_TIMEOUT"
+                    result.exit_price = signal_entry_price
+                    trade_closed = True
+                    log.warning(
+                        f"[KITE.NET.RETRY] Skipping {ticker} {side}: no stable quote before "
+                        f"freshness deadline {entry_retry_deadline.strftime('%H:%M:%S')}."
+                    )
+                elif ltp_check > 0:
+                    if ENTRY_RETRY_NEAR_ENTRY_ENABLE and ENTRY_RETRY_WAIT_SEC > 0:
+                        if not _entry_price_within_retry_band(side, signal_entry_price, float(ltp_check)):
+                            log.info(
+                                f"[ENTRY.RETRY] Waiting for {ticker} {side} to return near entry "
+                                f"| signal={signal_entry_price:.2f} ltp={ltp_check:.2f} "
+                                f"| band={ENTRY_RETRY_NEAR_ENTRY_PCT*100:.2f}% "
+                                f"| until={entry_retry_deadline.strftime('%H:%M:%S')}"
+                            )
+                            waited_ltp = _wait_for_near_entry_price(
+                                ticker=ticker,
+                                side=side,
+                                signal_entry_price=signal_entry_price,
+                                retry_until_ist=entry_retry_deadline,
+                            )
+                            if waited_ltp is not None and waited_ltp > 0 and _entry_price_within_retry_band(side, signal_entry_price, float(waited_ltp)):
+                                ltp_check = float(waited_ltp)
+                                log.info(
+                                    f"[ENTRY.RETRY] Re-armed {ticker} {side} near entry "
+                                    f"| signal={signal_entry_price:.2f} ltp={ltp_check:.2f}"
+                                )
+                            else:
+                                result.outcome = "ENTRY_SKIPPED_NEAR_ENTRY_TIMEOUT"
+                                result.exit_price = signal_entry_price
+                                trade_closed = True
+                                log.warning(
+                                    f"[ENTRY.RETRY] Timed out for {ticker} {side} "
+                                    f"| signal={signal_entry_price:.2f} "
+                                    f"| last_ltp={(float(waited_ltp) if waited_ltp else float(ltp_check)):.2f}"
+                                )
+                    if (not trade_closed) and side == "LONG" and LONG_MAX_ENTRY_SLIP_PCT > 0.0:
                         slip = (ltp_check - signal_entry_price) / signal_entry_price
                         if slip > LONG_MAX_ENTRY_SLIP_PCT:
                             result.outcome = "ENTRY_SKIPPED_MAX_SLIP"
@@ -1618,7 +2013,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                                 f"model={signal_entry_price:.2f} ltp={ltp_check:.2f} "
                                 f"slip={slip*100:.2f}% > cap={LONG_MAX_ENTRY_SLIP_PCT*100:.2f}%"
                             )
-                    elif side == "SHORT" and SHORT_MAX_ENTRY_SLIP_PCT > 0.0:
+                    elif (not trade_closed) and side == "SHORT" and SHORT_MAX_ENTRY_SLIP_PCT > 0.0:
                         slip = (signal_entry_price - ltp_check) / signal_entry_price
                         if slip > SHORT_MAX_ENTRY_SLIP_PCT:
                             result.outcome = "ENTRY_SKIPPED_MAX_SLIP"
@@ -1644,8 +2039,12 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     entry_filled = True
                     break
 
-                entry_order_id = _place_order_with_fallback(
-                    f"{ticker} entry {entry_txn} attempt {entry_attempt}/{ENTRY_RETRY_ATTEMPTS}",
+                entry_order_id = _place_entry_order_resilient(
+                    ticker=ticker,
+                    side=side,
+                    signal_entry_price=signal_entry_price,
+                    retry_until_ist=entry_retry_deadline,
+                    log_context=f"{ticker} entry {entry_txn} attempt {entry_attempt}/{ENTRY_RETRY_ATTEMPTS}",
                     variety=kite.VARIETY_REGULAR,
                     exchange=kite.EXCHANGE_NSE,
                     tradingsymbol=ticker,
@@ -1656,6 +2055,15 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     validity=kite.VALIDITY_DAY,
                     tag="AVWAPEntry",
                 )
+                if not entry_order_id:
+                    result.outcome = "ENTRY_SKIPPED_CONNECTION_RETRY_TIMEOUT"
+                    result.exit_price = signal_entry_price
+                    trade_closed = True
+                    log.warning(
+                        f"[KITE.NET.RETRY] {ticker} {side}: transient entry retry window expired "
+                        f"before a confirmed broker order could be placed."
+                    )
+                    break
                 _reset_orders_snapshot_cache()
                 result.entry_order_id = str(entry_order_id)
                 result.entry_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z")
@@ -2146,7 +2554,16 @@ def _log_trade_result(result: LiveTradeResult) -> None:
                 continue
             if desired_key and key == desired_key:
                 if not replaced:
-                    rewritten.append(row)
+                    # Never downgrade a terminal outcome to a non-terminal placeholder.
+                    # This guards against any future dispatch-vs-thread race where a
+                    # non-terminal write (ENTRY_PENDING) arrives after the thread has
+                    # already written the correct terminal outcome.
+                    existing_outcome = str(existing.get("outcome", "")).strip()
+                    new_outcome = str(row.get("outcome", "")).strip()
+                    if existing_outcome not in NON_TERMINAL_OUTCOMES and new_outcome in NON_TERMINAL_OUTCOMES:
+                        rewritten.append(existing)
+                    else:
+                        rewritten.append(row)
                     replaced = True
                     seen_keys.add(key)
                 continue
@@ -3448,6 +3865,11 @@ def process_new_signals(
             continue
 
         sid = signal_id
+        # Write PENDING row BEFORE spawning the thread to avoid a race where the thread
+        # completes (e.g. immediate deadline-past skip) and writes the terminal outcome
+        # before this dispatch code reaches _log_pending_signal_to_csv, which would then
+        # silently overwrite the correct terminal outcome with ENTRY_PENDING.
+        _log_pending_signal_to_csv(signal, signal_id)
         started = _launch_trade_thread(
             signal=signal,
             signal_id=sid,
@@ -3464,7 +3886,6 @@ def process_new_signals(
         with closed_trades_lock:
             closed_signal_ids_today.add(signal_id)
             closed_tickers_today.add(ticker)
-        _log_pending_signal_to_csv(signal, signal_id)
 
         log.info(
             f"[DISPATCH] Launched LIVE trade: {side} {ticker} @ {entry_p} "
