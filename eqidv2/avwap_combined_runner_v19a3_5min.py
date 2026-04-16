@@ -1,71 +1,34 @@
 ﻿# -*- coding: utf-8 -*-
 """
-avwap_combined_runner_v18c_5min.py - AVWAP v18c COMBINED runner on 5-minute signals
-===================================================================================
+avwap_combined_runner_v19a3_5min.py - AVWAP v19a3 standalone 5-minute runner
+=============================================================================
 
-V18c = V18b + 7 targeted improvements to push trades/day from ~3 → ~5–7
----------------------------------------------------------------------------
+Standalone v19a3 runner — fully self-contained, no dependency on v18c6 code.
+Based on v19a2 with Area 3 shortlist rank cutoffs applied.
 
-CHANGES FROM V18b
------------------
-1. EXPANDED SIGNAL WINDOWS (both sides):
-   SHORT: 09:20-11:30, 12:00-14:45   (was 09:30-11:00, 13:00-14:30)
-   LONG:  09:20-11:30, 11:15-12:45 (bridge), 12:00-14:45
-   — 09:20 captures the first 5-min AVWAP break of the day (was excluded)
-   — Bridge window 11:15-12:45 LONG only: midday AVWAP reclaim after morning run
-   — Bridge signals (11:30-12:00) classified to morning shortlist; overlap (12:00-12:45)
-     classified to afternoon shortlist
-   — Extended afternoon end 13:30→14:45 adds the pre-close continuation zone
-
-2. NIFTY BOTH-MODE LONG RS THRESHOLD relaxed: 0.65% → 0.50%
-   — RS 0.50-0.65% bucket had ~70% day-win in V16 data; was being excluded on flat days
-   — SHORT BOTH-mode threshold unchanged at 0.65%
-
-3. V16 LONG AVWAP DEAD ZONE narrowed:
-   1.10-1.35 ATR → 1.05-1.20 ATR  (recovers the 1.20-1.35 range, marginal not dead)
-   — Removed 216 trades in v18b; tighter band loses fewer good entries
-
-4. V16 LONG QS ABSOLUTE MAX raised: 10.0 → 11.0
-   — QS 10.0-11.0 is borderline (not the 30%-win exhausted zone; that starts ~11+)
-   — Recovers a segment of high-setup-quality HUGE reclaim trades
-
-5. V17C SHORT CONTINUATION GATES relaxed (all-AND chain was killing 71.7% of SHORTs):
-   close_bottom_frac  : 0.25 → 0.32
-   opposing_wick_frac : 0.20 → 0.28
-   range_expansion    : 1.05 → 0.95  (allow slight compression — trend momentum enough)
-   volume_min_ratio   : 0.90 → 0.75
-   adx_slope_min      : 0.40 → 0.25
-
-6. SHORT TARGET PCT raised: 0.80% → 0.95%
-   — R:R improves from 1.07x to 1.27x; if target hit-rate drops 63%→58%, PF still +20%
-   — Makes short side structurally more robust to small hit-rate variation
-
-7. LONG CLOSE CONTINUATION BREAK setup enabled: False → True
-   — Required for bridge window A_MOD_CLOSE_CONTINUATION_BREAK signals
-   — Already confirmed in V18a (42 trades, PF 1.67)
-
-SHORTLIST REBUILD REQUIRED FOR FULL VOLUME GAIN:
-   Re-run two_session_shortlist_history_builder.py with:
-   V18C_SHORTLIST_CONFIG = {
-       'morning':   {'rvol_min': 0.70, 'orp_atr_min': 0.07, 'clv_min': 0.55, 'tv_min_rs': 2_000_000},
-       'afternoon': {'rvol_min': 0.60, 'orp_atr_min': 0.04, 'clv_min': 0.45, 'tv_min_rs': 1_500_000},
-   }
-   Expected: ~1.5-1.6x more shortlisted tickers per session.
-
-Earlier changes inherited from v18b:
-1. All outputs saved to outputs_v18c_5min/
-2. Entry signals: 5-min data; exits: intrabar data (1-min when available, else 5-min)
-3. Expanded charting suite
-4. Normal Python imports (no importlib hacks)
-5. Unified Trade dataclass -- both sides produce identical columns
-6. Parallel ticker scanning via ProcessPoolExecutor
-7. Slippage + commission model baked into P&L
-8. Comprehensive backtest metrics (Sharpe, Sortino, Calmar, drawdown, profit factor)
-9. All config via StrategyConfig dataclass -- no module-level globals
-10. Cash-constrained portfolio sim uses itertuples() instead of iterrows()
-
-Usage:
-    python avwap_combined_runner_v18c_5min.py
+Key runtime behaviour:
+- 5-minute signal source forced to stocks_indicators_5min_eq_live2 when present
+- Three-window shortlist from filtered_stocks_two_session_history_v3_3times
+- Exact trade windows:
+    W1 MORNING   09:30-11:00
+    W2 MID       11:15-12:45
+    W3 AFTERNOON 13:00-14:30
+- Same-side shortlist rescue only; no cross-side combined rescue leakage
+- Exit policy: SL / TARGET / EOD only
+- v19a3 changes vs v19a2 (2026-04-15):
+    SHORT rank cutoff: only allow shortlist_rank_pct <= 0.50 globally
+      (rank 35-50% in morning PF=1.118, rank 50-75% PF=1.214 — weak/noise)
+    SHORT mid tighter: only allow shortlist_rank_pct <= 0.35 in mid session
+      (rank 35-50% in mid = PF=0.776 actively losing)
+    LONG: no rank cutoff — all buckets profitable (worst bucket PF=1.875)
+- Inherited from v19a2:
+    LONG RECLAIM:  SL=0.70%, TGT=1.40%
+    SHORT signals: blocked 10:35-11:05
+    LONG signals:  09:45 blocked
+    SHORT CONTINUATION:  SL=0.55%, TGT=1.20%
+    SHORT A_MOD:         SL=0.65%, TGT=1.50%
+    SHORT B_HUGE:        SL=0.85%, TGT=1.40%
+    LONG standard:       SL=0.65%, TGT=1.30%
 """
 
 from __future__ import annotations
@@ -85,10 +48,27 @@ from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 
-from eqidv2_runtime_paths import DATA_5M_DIR as RUNTIME_DATA_5M_DIR
-from eqidv2_runtime_paths import DATA_1MIN_DIR as RUNTIME_DATA_1MIN_DIR
-from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
-from eqidv2_runtime_paths import runtime_dir
+RUNTIME_ROOT = Path(os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2"))
+RUNTIME_DATA_5M_DIR = Path(
+    os.getenv("EQIDV2_DATA_5M_DIR", str(RUNTIME_ROOT / "stocks_indicators_5min_eq"))
+)
+RUNTIME_DATA_1MIN_DIR = Path(
+    os.getenv("EQIDV2_DATA_1MIN_DIR", str(RUNTIME_ROOT / "stocks_indicators_1min_eq"))
+)
+RUNTIME_LIVE_SIGNALS_DIR = Path(
+    os.getenv("EQIDV2_LIVE_SIGNALS_DIR", str(RUNTIME_ROOT / "live_signals"))
+)
+
+
+def runtime_dir(*parts: str) -> Path:
+    return RUNTIME_ROOT.joinpath(*parts)
+
+V18C5_DATA_5M_DIR = Path(
+    os.getenv(
+        "EQIDV18C5_DATA_5M_DIR",
+        r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live2",
+    )
+)
 
 # ===========================================================================
 # CONSOLE OUTPUT TEE (stdout/stderr -> console + outputs/*.txt)
@@ -172,14 +152,21 @@ import avwap_v11_refactored.avwap_short_strategy_v11 as short_mod
 import avwap_v11_refactored.avwap_long_strategy_v9_sweep as long_mod
 
 try:
-    from filtered_stocks_two_session_history_v1 import (
+    from filtered_stocks_two_session_history_v3_3times import (
         get_shortlist as get_two_session_shortlist,
         get_shortlist_entries as get_two_session_shortlist_entries,
     )
+    print("[V19A3] Using shortlist v3_3times (filtered_stocks_two_session_history_v3_3times)")
 except ImportError:
-    from filtered_stocks_two_session_history_v1 import get_shortlist as get_two_session_shortlist
-
     get_two_session_shortlist_entries = None
+
+    def get_two_session_shortlist(scan_date, session, side="combined", as_set=False):
+        return set() if as_set else []
+
+    print(
+        "[V19A3] WARNING: filtered_stocks_two_session_history_v3_3times not found. "
+        "Run two_session_shortlist_history_builder_v3_3times.py first."
+    )
 
 
 # ===========================================================================
@@ -236,20 +223,24 @@ FINAL_LONG_SIGNAL_WINDOWS = [
 ]
 '''
 
-# Final signal-window override — V18c expanded windows.
-# SHORT: 09:20-11:30 (was 09:30-11:30) + 12:00-14:45 (was 13:00-14:45)
-# LONG:  09:20-11:30 + bridge 11:15-12:45 (NEW) + 12:00-14:45
+# Final signal-window override — v19a2 windows with entry dead-zone blocks.
+# SHORT: 09:20-10:30 + 11:10-11:30 + 12:00-14:45
+#   Gap 10:35-11:05 blocks entries at 10:40-11:05 (dead zone: -44% total loss, 19 trades)
+# LONG:  09:20-09:40 + 09:55-11:30 + bridge 11:15-12:45 + 12:00-14:45
+#   Gap 09:45-09:50 blocks entries at 09:50 (losing bucket: PF<1, 29 trades)
 FINAL_SIGNAL_WINDOW_OVERRIDE = True
 FINAL_SHORT_USE_TIME_WINDOWS = True
 FINAL_SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 20, 0), dtime(11, 30, 0)),   # V18c: earlier start captures first AVWAP break
-    (dtime(12, 0, 0), dtime(14, 45, 0)),   # V18c: full afternoon including 12:00-13:00 gap
+    (dtime(9, 20, 0), dtime(10, 30, 0)),   # morning early: 09:20-10:30
+    (dtime(11, 10, 0), dtime(11, 30, 0)),  # morning late: 11:10-11:30 (skip dead zone 10:35-11:05)
+    (dtime(12, 0, 0), dtime(14, 45, 0)),   # full afternoon
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 20, 0), dtime(11, 30, 0)),   # V18c: earlier start
-    (dtime(11, 15, 0), dtime(12, 45, 0)),  # V18c NEW: midday AVWAP reclaim bridge (LONG only)
-    (dtime(12, 0, 0), dtime(14, 45, 0)),   # V18c: full afternoon
+    (dtime(9, 20, 0), dtime(9, 40, 0)),    # morning early: 09:20-09:40 (keep golden 09:40 entries)
+    (dtime(9, 55, 0), dtime(11, 30, 0)),   # morning main: 09:55-11:30 (skip 09:45→09:50 losers)
+    (dtime(11, 15, 0), dtime(12, 45, 0)),  # midday bridge (LONG only)
+    (dtime(12, 0, 0), dtime(14, 45, 0)),   # full afternoon
 ]
 # Session classification windows for shortlist gating.
 # Bridge zone (11:30-12:00) maps to morning shortlist — premarket context still dominant.
@@ -276,7 +267,7 @@ V18B_LONG_CARRY_MAX_RANK_PCT = 0.35
 V18B_TIER1_MAX_RANK_PCT = 0.20
 V18B_TIER2_MAX_RANK_PCT = 0.55
 V18B_SHORT_COMBINED_MAX_RANK_PCT = 1.00
-V18B_LONG_COMBINED_RESCUE_MAX_RANK_PCT = 0.55
+V18B_LONG_COMBINED_RESCUE_MAX_RANK_PCT = 0.35  # V18c5: tightened 0.55→0.35; rank_pct 0.35-0.55 LONG = 51.8% win (worst bucket)
 V18B_LONG_COMBINED_RESCUE_MIN_QS = 4.0
 
 V18B_SHORT_TIER3_ALLOWED_SETUPS = {
@@ -302,22 +293,22 @@ V18B_LONG_VOLUME_MIN_RATIO = 0.80
 V18B_LONG_RSI_MIN = 50.0
 V18B_LONG_QS_MIN = 4.0
 
-# V18c lower-DD cleanup package:
-# keep the v18c2 structure, then add a deeper exhaustion guard for the
-# remaining short-continuation tier-2 bucket plus two weak A_MOD mid blocks.
-V18C_ENABLE_SHORT_PULLBACK = False
-V18C_ENABLE_LONG_CLOSE_CONTINUATION = False
-V18C_SHORT_CONT_LATE_CUTOFF = dtime(13, 45, 0)
-V18C_LONG_RESCUE_MAX_TIER = 1
-V18C_LONG_LATE_A_MOD_CUTOFF = dtime(13, 45, 0)
-V18C_LONG_LATE_A_MOD_BLOCK_TIERS = {1, 3}
-V18C_MID_START = dtime(10, 30, 0)
-V18C_MID_END = dtime(11, 59, 59)
-V18C_PM_START = dtime(12, 0, 0)
-V18C_PM_END = dtime(13, 44, 59)
-V18C_EARLY_END = dtime(10, 29, 59)
-V18C_SHORT_CONT_T2_OVERSOLD_RSI_MAX = 19.0
-V18C_SHORT_CONT_T2_OVERSOLD_AVWAP_MIN_ATR = 1.20
+# V18c3 cleanup package:
+# keep the v18c2 structure, then add one deeper exhaustion guard for the
+# remaining short-continuation tier-2 bucket.
+V18C5_ENABLE_SHORT_PULLBACK = False
+V18C5_ENABLE_LONG_CLOSE_CONTINUATION = False
+V18C5_SHORT_CONT_LATE_CUTOFF = dtime(13, 45, 0)
+V18C5_LONG_RESCUE_MAX_TIER = 1
+V18C5_LONG_LATE_A_MOD_CUTOFF = dtime(13, 45, 0)
+V18C5_LONG_LATE_A_MOD_BLOCK_TIERS = {1, 3}
+V18C5_MID_START = dtime(10, 30, 0)
+V18C5_MID_END = dtime(11, 59, 59)
+V18C5_PM_START = dtime(12, 0, 0)
+V18C5_PM_END = dtime(13, 44, 59)
+V18C5_EARLY_END = dtime(10, 29, 59)
+V18C5_SHORT_CONT_T2_OVERSOLD_RSI_MAX = 19.0
+V18C5_SHORT_CONT_T2_OVERSOLD_AVWAP_MIN_ATR = 1.20
 
 # Per-setup signal->entry lag (in 5-min bars for this runner).
 # Edit these to manually control (entry_time_ist - signal_time_ist) behavior.
@@ -381,12 +372,12 @@ NIFTY_CONTEXT_OR_END_TIME = dtime(9, 20, 0)    # v17c: first completed 5-min bar
 NIFTY_CONTEXT_CONFIRM_TIME = dtime(9, 20, 0)   # v17c: earlier confirmation
 NIFTY_CONTEXT_MIN_DAYMOVE_PCT = 0.25           # v18b tuned: widen eligible days modestly
 NIFTY_RS_FILTER_ENABLED = True
-NIFTY_RS_LOOKBACK_BARS = 4                     # v15: 60-min window (was 3 bars/45min)
+NIFTY_RS_LOOKBACK_BARS = 6                     # V18c5: 90-min window (was 4 bars/60min); more stable regime signal
 NIFTY_RS_THRESHOLD_PCT = 0.20                  # v15: raised from 0.15 (above round-trip cost)
 # v15 NEW: apply BOTH-mode RS filtering with a moderately strict short threshold.
 NIFTY_RS_BOTH_MODE_ENABLED = True
-NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 0.50   # V18c: relaxed 0.55→0.50; RS 0.50-0.55% = ~70% day-win
-NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT = 0.65  # V18c: SHORT kept stricter than LONG on flat days
+NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT = 0.75   # V18c5: raised 0.50→0.75; RS<0.75 BOTH-mode LONG = 43-47% win (noise)
+NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT = 0.75  # V18c5: raised 0.65→0.75; flat-day SHORT below 0.75% = noise
 # Backward-compatibility alias for older live-parity callers that still expect
 # one shared BOTH-mode threshold constant.
 NIFTY_RS_BOTH_MODE_THRESHOLD_PCT = NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT
@@ -478,8 +469,8 @@ V15_SHORT_SIGNAL_AVWAP_DIST_ATR_MAX = 2.10
 # These are the core V16 additions over V15.
 # ===========================================================================
 # SHORT RSI dead zone: specifically 35-40 (38.5% win) — NOT all RSI<40 (RSI<35 = 66.7% win, keep!)
-V16_SHORT_RSI_DEAD_ZONE_LO  = 37.0  # v18b tuned: keep only the weakest short pocket blocked
-V16_SHORT_RSI_DEAD_ZONE_HI  = 38.5
+V16_SHORT_RSI_DEAD_ZONE_LO  = 35.0  # V18c5: expanded 37.0→35.0; broader 5-pt congestion zone more robust
+V16_SHORT_RSI_DEAD_ZONE_HI  = 40.0  # V18c5: expanded 38.5→40.0
 # LONG QS: two-band filter — block the 7.5-8.0 dead zone (50% win) AND the >10.0 exhausted zone (30% win)
 # QS 8.0-10.0 is ALLOWED (75% win confirmed in V15R3 data — Run2 incorrectly blocked all QS>7.5)
 V16_LONG_QS_DEAD_LO         = 7.80  # narrow dead zone (only the weakest QS pocket)
@@ -501,8 +492,10 @@ V16_LONG_AVWAP_DIST_DEAD_HI = 1.20  # V18c: tightened 1.25→1.20 — recover 1.
 # Reject LONG if entry bar volume > N x day-average AND entry is >= M bars from open
 # Backtest result: vol>4x(bars>=3) filters 42 trades (23W/19L), LONG PF 1.776->1.961, DayWin 79.5%->81.6%, PnL flat
 V16_LONG_ENTRY_VOL_EXHAUST_ENABLED  = True
-V16_LONG_ENTRY_VOL_EXHAUST_MULT     = 6.0  # v18b tuned: keep extreme climaxes blocked, admit more valid momentum
+V16_LONG_ENTRY_VOL_EXHAUST_MULT     = 3.0  # V18c5: tightened 6.0→3.0; vol>2x=55% win, >3x=52% — quality cliff at 3x
 V16_LONG_ENTRY_VOL_EXHAUST_MIN_BARS = 3    # only apply when entry is >= 3 bars from open (not OR-bar entries)
+# V18c5: Hard bars_from_open cutoff for LONG — entries 100+ min from open are coin-flip
+V16_LONG_MAX_BARS_FROM_OPEN = 20  # >20 bars = 50.0% win rate, 18.4% EOD rate — skip
 
 
 def _enrich_with_or_levels(
@@ -768,6 +761,15 @@ def _apply_v16_post_scan_filters(
         long_vol_exhaust_removed = int(mask_exhaust.sum())
         long_df = long_df[~mask_exhaust].copy()
 
+    # --- LONG: V18c5 bars_from_open hard cutoff — skip entries 100+ min from open ---
+    long_bfo_late_removed = 0
+    if not long_df.empty and "bars_from_open" in long_df.columns:
+        bfo_col2 = pd.to_numeric(long_df["bars_from_open"], errors="coerce")
+        mask_late_entry = bfo_col2.notna() & (bfo_col2 > V16_LONG_MAX_BARS_FROM_OPEN)
+        long_bfo_late_removed = int(mask_late_entry.sum())
+        if long_bfo_late_removed:
+            long_df = long_df[~mask_late_entry].copy()
+
     # --- OR Gate: require confirmed directional break of the 09:15-09:30 range ---
     short_or_removed = 0
     long_or_removed  = 0
@@ -803,6 +805,7 @@ def _apply_v16_post_scan_filters(
         f"-{long_dist_removed} dist>{V16_LONG_AVWAP_DIST_ATR_MAX:.1f}ATR, "
         f"-{long_avwap_dead_removed} dist {V16_LONG_AVWAP_DIST_DEAD_LO:.1f}-{V16_LONG_AVWAP_DIST_DEAD_HI:.1f}ATR dead, "
         f"-{long_vol_exhaust_removed} vol>{V16_LONG_ENTRY_VOL_EXHAUST_MULT:.0f}x exhaust, "
+        f"-{long_bfo_late_removed} bfo>{V16_LONG_MAX_BARS_FROM_OPEN} late-entry, "
         f"-{long_or_removed} OR gate)"
     )
     return short_df, long_df
@@ -1177,9 +1180,9 @@ def _apply_v18_session_shortlists(df: pd.DataFrame, side_label: str) -> pd.DataF
     return filtered
 
 
-def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame:
+def _apply_v18c5_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame:
     if df is None or df.empty:
-        print(f"[V18C_CLEANUP] {side_label}: no rows to clean.")
+        print(f"[V18C5_CLEANUP] {side_label}: no rows to clean.")
         return df
 
     filtered = df.copy()
@@ -1228,7 +1231,7 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
     entry_ts, setup_u, source_s, tier_s, entry_time_s = _refresh_views(filtered)
 
     if str(side_label).upper() == "SHORT":
-        if not V18C_ENABLE_SHORT_PULLBACK:
+        if not V18C5_ENABLE_SHORT_PULLBACK:
             pullback_mask = setup_u.eq("A_PULLBACK_C2_THEN_BREAK_C2_LOW")
             removed_short_pullback = int(pullback_mask.sum())
             if removed_short_pullback:
@@ -1236,7 +1239,7 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
                 entry_ts, setup_u, source_s, tier_s, entry_time_s = _refresh_views(filtered)
 
         cont_mask = setup_u.eq("C_SHORT_CONTINUATION_BREAK")
-        cont_late_mask = cont_mask & entry_time_s.ge(V18C_SHORT_CONT_LATE_CUTOFF)
+        cont_late_mask = cont_mask & entry_time_s.ge(V18C5_SHORT_CONT_LATE_CUTOFF)
         removed_short_cont_late = int(cont_late_mask.sum())
         if removed_short_cont_late:
             filtered = filtered.loc[~cont_late_mask].copy()
@@ -1255,10 +1258,10 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             & source_s.eq("short")
             & tier_s.eq(2)
             & pd.to_numeric(filtered.get("rsi_signal", np.nan), errors="coerce").le(
-                V18C_SHORT_CONT_T2_OVERSOLD_RSI_MAX
+                V18C5_SHORT_CONT_T2_OVERSOLD_RSI_MAX
             )
             & pd.to_numeric(filtered.get("avwap_dist_atr_signal", np.nan), errors="coerce").ge(
-                V18C_SHORT_CONT_T2_OVERSOLD_AVWAP_MIN_ATR
+                V18C5_SHORT_CONT_T2_OVERSOLD_AVWAP_MIN_ATR
             )
         )
         removed_short_cont_t2_oversold = int(cont_t2_oversold_mask.sum())
@@ -1271,8 +1274,8 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             cont_mask
             & source_s.eq("short")
             & tier_s.eq(2)
-            & entry_time_s.ge(V18C_MID_START)
-            & entry_time_s.le(V18C_MID_END)
+            & entry_time_s.ge(V18C5_MID_START)
+            & entry_time_s.le(V18C5_MID_END)
         )
         removed_short_cont_t2_short_mid = int(cont_t2_short_mid_mask.sum())
         if removed_short_cont_t2_short_mid:
@@ -1284,7 +1287,7 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             cont_mask
             & source_s.eq("combined")
             & tier_s.eq(2)
-            & entry_time_s.le(V18C_EARLY_END)
+            & entry_time_s.le(V18C5_EARLY_END)
         )
         removed_short_cont_t2_combined_early = int(cont_t2_combined_early_mask.sum())
         if removed_short_cont_t2_combined_early:
@@ -1296,8 +1299,8 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             amod_mask
             & source_s.eq("short")
             & tier_s.eq(1)
-            & entry_time_s.ge(V18C_MID_START)
-            & entry_time_s.le(V18C_MID_END)
+            & entry_time_s.ge(V18C5_MID_START)
+            & entry_time_s.le(V18C5_MID_END)
         )
         removed_short_amod_t1_short_mid = int(amod_t1_short_mid_mask.sum())
         if removed_short_amod_t1_short_mid:
@@ -1309,8 +1312,8 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             amod_mask
             & source_s.eq("short")
             & tier_s.eq(3)
-            & entry_time_s.ge(V18C_MID_START)
-            & entry_time_s.le(V18C_MID_END)
+            & entry_time_s.ge(V18C5_MID_START)
+            & entry_time_s.le(V18C5_MID_END)
         )
         removed_short_amod_t3_short_mid = int(amod_t3_short_mid_mask.sum())
         if removed_short_amod_t3_short_mid:
@@ -1322,7 +1325,7 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             amod_mask
             & source_s.eq("short")
             & tier_s.eq(2)
-            & entry_time_s.le(V18C_EARLY_END)
+            & entry_time_s.le(V18C5_EARLY_END)
         )
         removed_short_amod_t2_short_early = int(amod_t2_short_early_mask.sum())
         if removed_short_amod_t2_short_early:
@@ -1334,8 +1337,8 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             amod_mask
             & source_s.eq("combined")
             & tier_s.eq(1)
-            & entry_time_s.ge(V18C_MID_START)
-            & entry_time_s.le(V18C_MID_END)
+            & entry_time_s.ge(V18C5_MID_START)
+            & entry_time_s.le(V18C5_MID_END)
         )
         removed_short_amod_t1_combined_mid = int(amod_t1_combined_mid_mask.sum())
         if removed_short_amod_t1_combined_mid:
@@ -1347,21 +1350,21 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             amod_mask
             & source_s.eq("combined")
             & tier_s.eq(2)
-            & entry_time_s.ge(V18C_PM_START)
+            & entry_time_s.ge(V18C5_PM_START)
         )
         removed_short_amod_t2_combined_pm = int(amod_t2_combined_pm_mask.sum())
         if removed_short_amod_t2_combined_pm:
             filtered = filtered.loc[~amod_t2_combined_pm_mask].copy()
 
     else:
-        if not V18C_ENABLE_LONG_CLOSE_CONTINUATION:
+        if not V18C5_ENABLE_LONG_CLOSE_CONTINUATION:
             close_cont_mask = setup_u.eq("A_MOD_CLOSE_CONTINUATION_BREAK")
             removed_long_close_cont = int(close_cont_mask.sum())
             if removed_long_close_cont:
                 filtered = filtered.loc[~close_cont_mask].copy()
                 entry_ts, setup_u, source_s, tier_s, entry_time_s = _refresh_views(filtered)
 
-        rescue_mask = source_s.eq("combined_rescue") & tier_s.gt(float(V18C_LONG_RESCUE_MAX_TIER))
+        rescue_mask = source_s.eq("combined_rescue") & tier_s.gt(float(V18C5_LONG_RESCUE_MAX_TIER))
         removed_long_rescue = int(rescue_mask.sum())
         if removed_long_rescue:
             filtered = filtered.loc[~rescue_mask].copy()
@@ -1369,8 +1372,8 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
 
         late_amod_mask = (
             setup_u.eq("A_MOD_BREAK_C1_HIGH")
-            & tier_s.isin(sorted(V18C_LONG_LATE_A_MOD_BLOCK_TIERS))
-            & entry_time_s.ge(V18C_LONG_LATE_A_MOD_CUTOFF)
+            & tier_s.isin(sorted(V18C5_LONG_LATE_A_MOD_BLOCK_TIERS))
+            & entry_time_s.ge(V18C5_LONG_LATE_A_MOD_CUTOFF)
         )
         removed_long_late_amod = int(late_amod_mask.sum())
         if removed_long_late_amod:
@@ -1382,8 +1385,8 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             amod_mask
             & source_s.eq("long")
             & tier_s.eq(1)
-            & entry_time_s.ge(V18C_MID_START)
-            & entry_time_s.le(V18C_MID_END)
+            & entry_time_s.ge(V18C5_MID_START)
+            & entry_time_s.le(V18C5_MID_END)
         )
         removed_long_amod_t1_long_mid = int(amod_t1_long_mid_mask.sum())
         if removed_long_amod_t1_long_mid:
@@ -1394,8 +1397,8 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
         amod_rescue_pm_mask = (
             amod_mask
             & source_s.eq("combined_rescue")
-            & entry_time_s.ge(V18C_PM_START)
-            & entry_time_s.le(V18C_PM_END)
+            & entry_time_s.ge(V18C5_PM_START)
+            & entry_time_s.le(V18C5_PM_END)
         )
         removed_long_amod_rescue_pm = int(amod_rescue_pm_mask.sum())
         if removed_long_amod_rescue_pm:
@@ -1407,8 +1410,8 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             amod_mask
             & source_s.eq("long")
             & tier_s.eq(3)
-            & entry_time_s.ge(V18C_PM_START)
-            & entry_time_s.le(V18C_PM_END)
+            & entry_time_s.ge(V18C5_PM_START)
+            & entry_time_s.le(V18C5_PM_END)
         )
         removed_long_amod_t3_long_pm = int(amod_t3_long_pm_mask.sum())
         if removed_long_amod_t3_long_pm:
@@ -1419,7 +1422,7 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
         bhuge_rescue_late_mask = (
             bhuge_mask
             & source_s.eq("combined_rescue")
-            & entry_time_s.ge(V18C_MID_START)
+            & entry_time_s.ge(V18C5_MID_START)
         )
         removed_long_bhuge_rescue_late = int(bhuge_rescue_late_mask.sum())
         if removed_long_bhuge_rescue_late:
@@ -1431,7 +1434,7 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             bhuge_mask
             & source_s.eq("long")
             & tier_s.eq(3)
-            & entry_time_s.ge(V18C_MID_START)
+            & entry_time_s.ge(V18C5_MID_START)
         )
         removed_long_bhuge_t3_long_late = int(bhuge_t3_long_late_mask.sum())
         if removed_long_bhuge_t3_long_late:
@@ -1443,14 +1446,14 @@ def _apply_v18c_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame
             bhuge_mask
             & source_s.eq("long")
             & tier_s.eq(2)
-            & entry_time_s.ge(V18C_PM_START)
+            & entry_time_s.ge(V18C5_PM_START)
         )
         removed_long_bhuge_t2_long_pm = int(bhuge_t2_long_pm_mask.sum())
         if removed_long_bhuge_t2_long_pm:
             filtered = filtered.loc[~bhuge_t2_long_pm_mask].copy()
 
     print(
-        f"[V18C_CLEANUP] {side_label}: {len(df)}->{len(filtered)} "
+        f"[V18C5_CLEANUP] {side_label}: {len(df)}->{len(filtered)} "
         f"(-{len(df) - len(filtered)} removed | "
         f"short_pullback={removed_short_pullback}, "
         f"short_cont_late={removed_short_cont_late}, "
@@ -1547,7 +1550,7 @@ def apply_live_parity_profile(
         long_cfg.stochk_max = 95.0
         long_cfg.atr_pct_min = 0.0025
         long_cfg.enable_setup_a_pullback_c2_break = True
-        long_cfg.enable_setup_a_close_continuation_break = V18C_ENABLE_LONG_CLOSE_CONTINUATION
+        long_cfg.enable_setup_a_close_continuation_break = V18C5_ENABLE_LONG_CLOSE_CONTINUATION
         long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
         long_cfg.stop_pct = 0.0075           # v17c breakout baseline long SL: 0.75%
         long_cfg.target_pct = 0.01000        # v17c breakout baseline long TGT: 1.00%
@@ -1744,6 +1747,7 @@ def _resolve_15m_dir() -> Path:
         _proj = _script_dir
 
     candidates = [
+        V18C5_DATA_5M_DIR,
         RUNTIME_DATA_5M_DIR,
         _proj / "stocks_indicators_5min_eq",
         _proj.parent / "stocks_indicators_5min_eq",
@@ -2081,11 +2085,28 @@ def _slice_trade_day_bars(
 # ===========================================================================
 # 5-MIN EXIT RESOLUTION
 # ===========================================================================
-def _v17c_setup_exit_profile(side_val: str, setup_val: str) -> Dict[str, float]:
+def _v17c_setup_exit_profile(side_val: str, setup_val: str, entry_time_ist=None) -> Dict[str, float]:
+    """
+    V18c5 exit profile:
+    - SHORT B_HUGE: upgraded to SL=0.85%, TGT=1.20% (was 0.75%/0.95%) — matches LONG B_HUGE
+    - LONG session-aware target: morning=1.00%, afternoon=0.75% (less time, lower EOD rate)
+    - LONG B_HUGE: always 1.20% target regardless of session (momentum hits fast)
+    """
     side_u = str(side_val or "").upper()
     setup_u = str(setup_val or "").upper()
 
     if side_u == "SHORT":
+        # V18c5: B_HUGE SHORT upgraded to larger target/stop matching its reversal nature
+        if setup_u == "B_HUGE_RED_FAILED_BOUNCE":
+            return {
+                "stop_pct": 0.0085,         # V18c5: upgraded 0.75%→0.85% for B_HUGE SHORT
+                "target_pct": 0.0120,       # V18c5: upgraded 0.95%→1.20% for B_HUGE SHORT
+                "be_trigger_pct": 0.0,
+                "trail_pct": V17C_SHORT_TRAIL_PCT if V17C_SHORT_ENABLE_TRAILING_STOP else 0.0,
+                "be_pad_pct": 0.0001,
+                "enable_breakeven": False,
+                "enable_trailing_stop": V17C_SHORT_ENABLE_TRAILING_STOP,
+            }
         return {
             "stop_pct": V17C_SHORT_STOP_PCT,
             "target_pct": V17C_SHORT_TARGET_PCT,
@@ -2096,23 +2117,41 @@ def _v17c_setup_exit_profile(side_val: str, setup_val: str) -> Dict[str, float]:
             "enable_trailing_stop": V17C_SHORT_ENABLE_TRAILING_STOP,
         }
 
-    profile = {
+    # LONG side
+    # V18c5: session-aware target — afternoon has less runway, reduce target to limit EOD exits
+    is_afternoon = False
+    if entry_time_ist is not None:
+        try:
+            et = pd.to_datetime(entry_time_ist, errors="coerce")
+            if pd.notna(et):
+                is_afternoon = et.time() >= dtime(12, 0, 0)
+        except Exception:
+            pass
+
+    # B_HUGE LONG: always large target regardless of session (momentum setups hit fast)
+    if setup_u in {"B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK", "B_HUGE_C1_CLOSE_RECLAIM_BREAK"}:
+        return {
+            "stop_pct": 0.0085,
+            "target_pct": 0.0120,
+            "be_trigger_pct": 0.0,
+            "trail_pct": 0.0,
+            "be_pad_pct": 0.0001,
+            "enable_breakeven": False,
+            "enable_trailing_stop": False,
+        }
+
+    # Standard LONG: afternoon target reduced to 0.75% to capture more within shrinking window
+    long_target = 0.0075 if is_afternoon else 0.0100  # V18c5: 0.75% afternoon, 1.00% morning
+
+    return {
         "stop_pct": 0.0075,
-        "target_pct": 0.0100,
+        "target_pct": long_target,
         "be_trigger_pct": 0.0,
         "trail_pct": 0.0,
         "be_pad_pct": 0.0001,
         "enable_breakeven": False,
         "enable_trailing_stop": False,
     }
-    if setup_u in {"B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK", "B_HUGE_C1_CLOSE_RECLAIM_BREAK"}:
-        profile.update(
-            stop_pct=0.0085,
-            target_pct=0.0120,
-            be_trigger_pct=0.0,
-            trail_pct=0.0,
-        )
-    return profile
 
 
 def _resolve_exits_5min(
@@ -2329,7 +2368,7 @@ def _resolve_exits_5min(
         setup = str(df.at[idx, "setup"]) if "setup" in df.columns and pd.notna(df.at[idx, "setup"]) else ""
         entry_price = float(df.at[idx, "entry_price"])
         entry_time = df.at[idx, "entry_time_ist"]
-        exit_profile = _v17c_setup_exit_profile(side, setup)
+        exit_profile = _v17c_setup_exit_profile(side, setup, entry_time_ist=entry_time)  # V18c5: pass entry_time for session-aware target
         stop_price = entry_price * (1.0 + exit_profile["stop_pct"]) if side == "SHORT" else entry_price * (1.0 - exit_profile["stop_pct"])
         target_price = entry_price * (1.0 - exit_profile["target_pct"]) if side == "SHORT" else entry_price * (1.0 + exit_profile["target_pct"])
         df.at[idx, "stop_price"] = stop_price
@@ -3818,7 +3857,8 @@ def _apply_nifty_intraday_context(
             keep = True
             if np.isfinite(raw_rs):
                 if mode != "BOTH":
-                    rs_thresh = float(NIFTY_RS_THRESHOLD_PCT)
+                    # V18c5: LONG_ONLY mode RS floor — directional-day LONGs with RS<0.35% have 39.4% win rate
+                    rs_thresh = max(float(NIFTY_RS_THRESHOLD_PCT), 0.35)
                 elif NIFTY_RS_BOTH_MODE_ENABLED:
                     rs_thresh = float(NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT)
                 else:
@@ -4848,11 +4888,11 @@ def main() -> None:
         _project_root = _script_dir.parent
     else:
         _project_root = _script_dir
-    _outputs_dir = runtime_dir("outputs_v18c_5min")
+    _outputs_dir = runtime_dir("outputs_v18c5_5min")
     _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     ts = now_ist().strftime("%Y%m%d_%H%M%S")
-    log_path = _outputs_dir / f"avwap_combined_runner_v18c_{ts}.txt"
+    log_path = _outputs_dir / f"avwap_combined_runner_v18c3_{ts}.txt"
 
     # Tee all console output to outputs/*.txt
     _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
@@ -4863,7 +4903,7 @@ def main() -> None:
         try:
             run_started = time.perf_counter()
             print("=" * 70)
-            print("AVWAP v18c_5min COMBINED runner — expanded windows + relaxed SHORT gates + wider targets")
+            print("AVWAP v18c5_5min COMBINED runner — lower-DD cleanup package")
             print("  - Entry signals: 5-min data")
             print("  - Exit resolution: 1-min if available, else 5-min fallback")
             print("  - Outputs: */algo_trading/outputs")
@@ -4970,7 +5010,7 @@ def main() -> None:
                 long_cfg.stochk_max = 95.0
                 long_cfg.atr_pct_min = 0.0025
                 long_cfg.enable_setup_a_pullback_c2_break = True
-                long_cfg.enable_setup_a_close_continuation_break = V18C_ENABLE_LONG_CLOSE_CONTINUATION
+                long_cfg.enable_setup_a_close_continuation_break = V18C5_ENABLE_LONG_CLOSE_CONTINUATION
                 long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
                 long_cfg.stop_pct = 0.0075           # v17c breakout baseline long SL: 0.75%
                 long_cfg.target_pct = 0.01000        # v17c breakout baseline long TGT: 1.00%
@@ -4984,7 +5024,7 @@ def main() -> None:
                 long_cfg.enable_topn_per_day = False
                 long_cfg.topn_per_day = 0
 
-                print("[PROFILE] V18c: lower-DD cleanup package aligned to v18c3.")
+                print("[PROFILE] V18c3: lower-DD cleanup on top of the v18c2 structure.")
 
             # Apply per-setup signal->entry lag controls
             short_cfg.lag_bars_short_a_mod_break_c1_low = int(SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW)
@@ -5225,12 +5265,12 @@ def main() -> None:
             short_df, long_df = _apply_v16_post_scan_filters(short_df, long_df)
             print("\n[V17C] Applying setup-specific quality filters...")
             short_df, long_df = _apply_v17c_setup_quality_filters(short_df, long_df, short_cfg)
-            print("\n[V18c] Applying session-wise historical shortlist universe...")
+            print("\n[V18c3] Applying session-wise historical shortlist universe...")
             short_df = _apply_v18_session_shortlists(short_df, "SHORT")
             long_df = _apply_v18_session_shortlists(long_df, "LONG")
-            print("\n[V18c] Applying post-shortlist trade cleanup...")
-            short_df = _apply_v18c_trade_cleanup(short_df, "SHORT")
-            long_df = _apply_v18c_trade_cleanup(long_df, "LONG")
+            print("\n[V18c3] Applying post-shortlist trade cleanup...")
+            short_df = _apply_v18c5_trade_cleanup(short_df, "SHORT")
+            long_df = _apply_v18c5_trade_cleanup(long_df, "LONG")
             print(f"[TIMING] Phase 1 completed in {time.perf_counter() - phase1_started:.1f}s")
 
             if short_df.empty and long_df.empty:
@@ -5319,9 +5359,9 @@ def main() -> None:
                 _print_day_side_mix(combined)
 
             # --- Save CSV ---
-            out_csv = _outputs_dir / f"avwap_longshort_trades_v18c_5min_ALL_DAYS_{ts}.csv"
+            out_csv = _outputs_dir / f"avwap_longshort_trades_v18c5_5min_ALL_DAYS_{ts}.csv"
             combined.to_csv(out_csv, index=False)
-            out_daywise_csv = _outputs_dir / f"avwap_daywise_breakdown_v18c_5min_ALL_DAYS_{ts}.csv"
+            out_daywise_csv = _outputs_dir / f"avwap_daywise_breakdown_v18c5_5min_ALL_DAYS_{ts}.csv"
             _build_daily_breakdown_df(combined, include_total=True).to_csv(out_daywise_csv, index=False)
 
             charts_started = time.perf_counter()
@@ -5389,6 +5429,560 @@ def main() -> None:
 
     # Also print after restoring, for convenience when running interactively
     print(f"[LOG SAVED] {log_path}")
+
+
+# ===========================================================================
+# V19A STANDALONE OVERRIDES
+# ===========================================================================
+
+V19A_DATA_5M_DIR = Path(
+    os.getenv(
+        "EQIDV19A_DATA_5M_DIR",
+        r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live2",
+    )
+)
+
+V19A_MORNING_WINDOW_START = dtime(9, 30, 0)
+V19A_MORNING_WINDOW_END = dtime(11, 0, 0)
+V19A_MID_WINDOW_START = dtime(11, 15, 0)
+V19A_MID_WINDOW_END = dtime(12, 45, 0)
+V19A_AFTERNOON_WINDOW_START = dtime(13, 0, 0)
+V19A_AFTERNOON_WINDOW_END = dtime(14, 30, 0)
+
+FINAL_SIGNAL_WINDOW_OVERRIDE = True
+FINAL_SHORT_USE_TIME_WINDOWS = True
+FINAL_LONG_USE_TIME_WINDOWS = True
+# v19a2 Area-2: entry dead-zone blocks applied here (these override the earlier module-level defs)
+# SHORT: block signals 10:35-11:05 → removes -44% dead zone (entries 10:40-11:05)
+#   Morning window 09:30-10:30 only (dead zone extends to 11:05, morning ends 11:00 anyway)
+# LONG:  block signal 09:45 → removes losing 09:50 entries (PF<1, 29 trades)
+#   Split morning: 09:30-09:40 and 09:55-11:00
+FINAL_SHORT_SIGNAL_WINDOWS = [
+    (V19A_MORNING_WINDOW_START, dtime(10, 30, 0)),  # morning: 09:30-10:30 (cut before dead zone)
+    (V19A_MID_WINDOW_START, V19A_MID_WINDOW_END),   # mid: 11:15-12:45
+    (V19A_AFTERNOON_WINDOW_START, V19A_AFTERNOON_WINDOW_END),  # afternoon: 13:00-14:30
+]
+FINAL_LONG_SIGNAL_WINDOWS = [
+    (V19A_MORNING_WINDOW_START, dtime(9, 40, 0)),   # morning early: 09:30-09:40 (golden zone)
+    (dtime(9, 55, 0), V19A_MORNING_WINDOW_END),     # morning main: 09:55-11:00 (skip 09:45 signal)
+    (V19A_MID_WINDOW_START, V19A_MID_WINDOW_END),   # mid: 11:15-12:45
+    (V19A_AFTERNOON_WINDOW_START, V19A_AFTERNOON_WINDOW_END),  # afternoon: 13:00-14:30
+]
+
+V18_MORNING_SESSION_WINDOW = (V19A_MORNING_WINDOW_START, V19A_MORNING_WINDOW_END)
+V18C_BRIDGE_ZONE_END = V19A_MID_WINDOW_START
+V18_AFTERNOON_SESSION_WINDOW = (V19A_AFTERNOON_WINDOW_START, V19A_AFTERNOON_WINDOW_END)
+
+V18B_SHORT_ENTRY_CUTOFF = V19A_AFTERNOON_WINDOW_END
+V18B_SHORT_EXPANDED_SHORTLIST_SIDE = V18B_SHORT_PRIMARY_SHORTLIST_SIDE
+V18B_LONG_EXPANDED_SHORTLIST_SIDE = V18B_LONG_PRIMARY_SHORTLIST_SIDE
+V18B_ENABLE_AFTERNOON_MORNING_CARRY = False
+
+V17C_SHORT_ENABLE_BREAKEVEN = False
+V17C_SHORT_ENABLE_TRAILING_STOP = False
+V17C_SHORT_BE_TRIGGER_PCT = 0.0
+V17C_SHORT_TRAIL_PCT = 0.0
+
+V19A_SHORT_CONT_RS_LOOKBACK_BARS = 4
+V19A_LONG_RECLAIM_RS_LOOKBACK_BARS = 4
+V19A_LONG_RECLAIM_RS_BOTH_PCT = 0.50
+V19A_LONG_RECLAIM_RS_DIRECTIONAL_PCT = float(NIFTY_RS_THRESHOLD_PCT)
+
+# v19a1 Area-1 retuned exit constants (2026-04-15)
+# SHORT CONTINUATION: TGT 1.80%→1.20% — baseline hit-rate was only 22.7% at 1.80%
+# SHORT A_MOD: TGT 1.90%→1.50% — too far, lowers TGT hit-rate unnecessarily
+# LONG standard: TGT 1.50%→1.30% — improve capture rate
+# LONG RECLAIM: SL 0.70%→0.85% + TGT 1.85%→1.20% — match sweep-optimised profile
+V19A_SHORT_STOP_PCT = 0.0055         # CONTINUATION SL unchanged
+V19A_SHORT_TARGET_PCT = 0.0120       # CONTINUATION TGT: 1.80% → 1.20%
+V19A_LONG_STOP_PCT = 0.0065         # standard LONG SL unchanged
+V19A_LONG_TARGET_PCT = 0.0130       # standard LONG TGT: 1.50% → 1.30%
+
+V19A_SHORT_AMOD_STOP_PCT = 0.0065   # A_MOD SHORT SL unchanged
+V19A_SHORT_AMOD_TARGET_PCT = 0.0150 # A_MOD SHORT TGT: 1.90% → 1.50%
+V19A_SHORT_BHUGE_STOP_PCT = 0.0085  # B_HUGE SHORT SL unchanged
+V19A_SHORT_BHUGE_TARGET_PCT = 0.0140 # B_HUGE SHORT TGT unchanged (sweep-optimised)
+
+V19A_LONG_RECLAIM_STOP_PCT = 0.0070  # RECLAIM SL: restored to 0.70% (0.85% hurt PF in v19a1)
+V19A_LONG_RECLAIM_TARGET_PCT = 0.0140 # RECLAIM TGT: 1.85%→1.40% (tighter capture, was 1.20% in v19a1)
+
+_V19A_RET_CACHE: Dict[Tuple[str, str, int], Dict[str, float]] = {}
+_V19A_NIFTY_RET_CACHE: Dict[Tuple[str, int], Dict[str, float]] = {}
+_ORIG_V19A_RESOLVE_15M_DIR = _resolve_15m_dir
+_ORIG_V19A_EXIT_PROFILE = _v17c_setup_exit_profile
+_ORIG_V19A_RUNTIME_DIR = runtime_dir
+_ORIG_V19A_MAIN = main
+
+
+def _v19a_classify_session(ts_val) -> Optional[str]:
+    ts = pd.to_datetime(ts_val, errors="coerce")
+    if pd.isna(ts):
+        return None
+    bar_time = ts.time()
+    if V19A_MORNING_WINDOW_START <= bar_time <= V19A_MORNING_WINDOW_END:
+        return "morning"
+    if V19A_MID_WINDOW_START <= bar_time <= V19A_MID_WINDOW_END:
+        return "mid"
+    if V19A_AFTERNOON_WINDOW_START <= bar_time <= V19A_AFTERNOON_WINDOW_END:
+        return "afternoon"
+    return None
+
+
+def _v19a_resolve_15m_dir() -> Path:
+    if V19A_DATA_5M_DIR.is_dir():
+        return V19A_DATA_5M_DIR
+    return _ORIG_V19A_RESOLVE_15M_DIR()
+
+
+def _build_return_map_with_lookback(
+    ticker: str,
+    cfg: Any,
+    lookback_bars: int,
+) -> Dict[str, float]:
+    ticker_u = str(ticker).strip().upper()
+    cache_key = (str(Path(cfg.dir_15m)), ticker_u, int(lookback_bars))
+    cached = _V19A_RET_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    out: Dict[str, float] = {}
+    p = Path(cfg.dir_15m) / f"{ticker_u}{cfg.end_15m}"
+    if not p.exists():
+        _V19A_RET_CACHE[cache_key] = out
+        return out
+
+    try:
+        df = read_15m_parquet(str(p), cfg.parquet_engine)
+        if df.empty:
+            _V19A_RET_CACHE[cache_key] = out
+            return out
+        df = df.sort_values("date").reset_index(drop=True)
+        dt = pd.to_datetime(df["date"], errors="coerce")
+        df = df.loc[dt.notna()].copy()
+        dt = dt.loc[dt.notna()]
+        if getattr(dt.dt, "tz", None) is None:
+            dt = dt.dt.tz_localize("UTC")
+        else:
+            dt = dt.dt.tz_convert(IST)
+        df["date"] = dt.dt.tz_convert(IST)
+        df["day"] = df["date"].dt.strftime("%Y-%m-%d")
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df["ret_lookback_pct"] = (
+            df.groupby("day")["close"].pct_change(int(lookback_bars)) * 100.0
+        )
+        for ts, ret in zip(df["date"], df["ret_lookback_pct"]):
+            if np.isfinite(ret):
+                out[_ts_to_key_local(ts)] = float(ret)
+    except Exception:
+        out = {}
+
+    _V19A_RET_CACHE[cache_key] = out
+    return out
+
+
+def _build_nifty_return_map_with_lookback(
+    cfg: Any,
+    lookback_bars: int,
+) -> Dict[str, float]:
+    cache_key = (str(Path(cfg.dir_15m)), int(lookback_bars))
+    cached = _V19A_NIFTY_RET_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    out: Dict[str, float] = {}
+    idx, _ = _load_first_nifty_source(cfg, NIFTY_CONTEXT_TICKERS)
+    if idx.empty:
+        _V19A_NIFTY_RET_CACHE[cache_key] = out
+        return out
+
+    try:
+        dt = pd.to_datetime(idx["date"], errors="coerce")
+        idx = idx.loc[dt.notna()].copy()
+        dt = dt.loc[dt.notna()]
+        if getattr(dt.dt, "tz", None) is None:
+            dt = dt.dt.tz_localize("UTC")
+        else:
+            dt = dt.dt.tz_convert(IST)
+        idx["date"] = dt.dt.tz_convert(IST)
+        idx = idx.sort_values("date").reset_index(drop=True)
+        idx["day"] = idx["date"].dt.strftime("%Y-%m-%d")
+        idx["close"] = pd.to_numeric(idx["close"], errors="coerce")
+        idx["ret_lookback_pct"] = (
+            idx.groupby("day")["close"].pct_change(int(lookback_bars)) * 100.0
+        )
+        for ts, ret in zip(idx["date"], idx["ret_lookback_pct"]):
+            if np.isfinite(ret):
+                out[_ts_to_key_local(ts)] = float(ret)
+    except Exception:
+        out = {}
+
+    _V19A_NIFTY_RET_CACHE[cache_key] = out
+    return out
+
+
+def _apply_short_v19a_context(
+    short_df: pd.DataFrame,
+    cfg: Any,
+    mode_map: Dict[str, str],
+    nifty_ret_map: Dict[str, float],
+) -> Tuple[pd.DataFrame, int, int]:
+    if short_df.empty:
+        return short_df, 0, 0
+
+    d = short_df.copy()
+    ts_col = "entry_time_ist" if "entry_time_ist" in d.columns else "signal_time_ist"
+    ts_series = pd.to_datetime(d[ts_col], errors="coerce")
+    if getattr(ts_series.dt, "tz", None) is None:
+        ts_series = ts_series.dt.tz_localize(IST)
+    else:
+        ts_series = ts_series.dt.tz_convert(IST)
+    d["ts_key_local"] = ts_series.map(_ts_to_key_local)
+    d["nifty_context_mode"] = d["ts_key_local"].map(mode_map).fillna("BOTH")
+
+    before = len(d)
+    d = d[d["nifty_context_mode"].ne("LONG_ONLY")].copy()
+    mode_removed = before - len(d)
+
+    if not NIFTY_RS_FILTER_ENABLED or d.empty:
+        return d.drop(columns=["ts_key_local"], errors="ignore"), mode_removed, 0
+
+    cont_nifty_ret_map = _build_nifty_return_map_with_lookback(
+        cfg, V19A_SHORT_CONT_RS_LOOKBACK_BARS
+    )
+    atr_cache: Dict[str, Dict[str, float]] = {}
+    keep_mask: List[bool] = []
+    rel_vals: List[float] = []
+    rs_removed = 0
+
+    for row in d.itertuples(index=False):
+        ts_key = getattr(row, "ts_key_local")
+        mode = getattr(row, "nifty_context_mode", "BOTH")
+        setup = str(getattr(row, "setup", "")).upper()
+        rel_val = np.nan
+        keep = True
+        apply_rs = (mode != "BOTH") or NIFTY_RS_BOTH_MODE_ENABLED
+
+        if apply_rs:
+            if setup == "C_SHORT_CONTINUATION_BREAK":
+                stock_ret_map = _build_return_map_with_lookback(
+                    getattr(row, "ticker"), cfg, V19A_SHORT_CONT_RS_LOOKBACK_BARS
+                )
+                stock_ret = stock_ret_map.get(ts_key, np.nan)
+                nifty_ret = cont_nifty_ret_map.get(ts_key, np.nan)
+            else:
+                stock_ret_map = _build_stock_return_map(
+                    getattr(row, "ticker"), cfg, {}
+                )
+                stock_ret = stock_ret_map.get(ts_key, np.nan)
+                nifty_ret = nifty_ret_map.get(ts_key, np.nan)
+
+            if np.isfinite(stock_ret) and np.isfinite(nifty_ret):
+                raw_rs = float(stock_ret - nifty_ret)
+                rel_val = raw_rs
+                if V17C_RS_ATR_NORM_ENABLED:
+                    atr_map = _build_stock_atr_map(getattr(row, "ticker"), cfg, atr_cache)
+                    atr_pct = atr_map.get(ts_key, np.nan)
+                    if np.isfinite(atr_pct) and atr_pct > 0:
+                        rs_norm = raw_rs / atr_pct
+                        thresh = (
+                            V17C_RS_ATR_DIRECTIONAL_THRESH_SHORT
+                            if mode != "BOTH"
+                            else V17C_RS_ATR_NORM_THRESH_SHORT_BOTH
+                        )
+                        keep = rs_norm <= -thresh
+                    else:
+                        keep = raw_rs <= -V17C_RS_ATR_FALLBACK_PCT_SHORT
+                else:
+                    thresh = (
+                        float(NIFTY_RS_THRESHOLD_PCT)
+                        if mode != "BOTH"
+                        else float(NIFTY_RS_BOTH_MODE_THRESHOLD_SHORT_PCT)
+                    )
+                    keep = raw_rs <= -thresh
+
+        keep_mask.append(bool(keep))
+        rel_vals.append(rel_val)
+        if not keep:
+            rs_removed += 1
+
+    d["nifty_rel_strength_pct"] = rel_vals
+    d = d[pd.Series(keep_mask, index=d.index)].copy()
+    d.drop(columns=["ts_key_local"], inplace=True, errors="ignore")
+    return d, mode_removed, rs_removed
+
+
+def _apply_nifty_intraday_context_v19a(
+    short_df: pd.DataFrame,
+    long_df: pd.DataFrame,
+    cfg: Any,
+    mode_map: Dict[str, str],
+    nifty_ret_map: Dict[str, float],
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if not mode_map:
+        return short_df, long_df
+
+    def _prepare(df: pd.DataFrame, side: str) -> Tuple[pd.DataFrame, int]:
+        if df.empty:
+            return df, 0
+        d = df.copy()
+        ts_col = "entry_time_ist" if "entry_time_ist" in d.columns else "signal_time_ist"
+        ts = pd.to_datetime(d[ts_col], errors="coerce")
+        if getattr(ts.dt, "tz", None) is None:
+            ts = ts.dt.tz_localize(IST)
+        else:
+            ts = ts.dt.tz_convert(IST)
+        d["ts_key_local"] = ts.map(_ts_to_key_local)
+        d["nifty_context_mode"] = d["ts_key_local"].map(mode_map).fillna("BOTH")
+        before = len(d)
+        if side == "SHORT":
+            d = d[d["nifty_context_mode"].ne("LONG_ONLY")].copy()
+        else:
+            d = d[d["nifty_context_mode"].ne("SHORT_ONLY")].copy()
+        return d, before - len(d)
+
+    long_d, l_mode_removed = _prepare(long_df, "LONG")
+    short_d, s_mode_removed, s_rs_removed = _apply_short_v19a_context(
+        short_df, cfg, mode_map, nifty_ret_map
+    )
+
+    l_rs_removed = 0
+    reclaim_nifty_ret_map = _build_nifty_return_map_with_lookback(
+        cfg, V19A_LONG_RECLAIM_RS_LOOKBACK_BARS
+    )
+    keep_mask: List[bool] = []
+    rel_vals: List[float] = []
+    long_stock_ret_cache: Dict[str, Dict[str, float]] = {}
+
+    if not long_d.empty and NIFTY_RS_FILTER_ENABLED:
+        for row in long_d.itertuples(index=False):
+            ts_key = getattr(row, "ts_key_local")
+            mode = getattr(row, "nifty_context_mode", "BOTH")
+            setup = str(getattr(row, "setup", "")).upper()
+
+            if setup == "B_HUGE_C1_CLOSE_RECLAIM_BREAK":
+                stock_ret_map = _build_return_map_with_lookback(
+                    getattr(row, "ticker"), cfg, V19A_LONG_RECLAIM_RS_LOOKBACK_BARS
+                )
+                stock_ret = stock_ret_map.get(ts_key, np.nan)
+                nifty_ret = reclaim_nifty_ret_map.get(ts_key, np.nan)
+            else:
+                stock_ret_map = _build_stock_return_map(
+                    getattr(row, "ticker"), cfg, long_stock_ret_cache
+                )
+                stock_ret = stock_ret_map.get(ts_key, np.nan)
+                nifty_ret = nifty_ret_map.get(ts_key, np.nan)
+
+            raw_rs = np.nan
+            if np.isfinite(stock_ret) and np.isfinite(nifty_ret):
+                raw_rs = float(stock_ret - nifty_ret)
+            rel_vals.append(raw_rs)
+
+            keep = True
+            if np.isfinite(raw_rs):
+                if setup == "B_HUGE_C1_CLOSE_RECLAIM_BREAK":
+                    rs_thresh = (
+                        float(V19A_LONG_RECLAIM_RS_DIRECTIONAL_PCT)
+                        if mode != "BOTH"
+                        else float(V19A_LONG_RECLAIM_RS_BOTH_PCT)
+                    )
+                else:
+                    if mode != "BOTH":
+                        rs_thresh = max(float(NIFTY_RS_THRESHOLD_PCT), 0.35)
+                    elif NIFTY_RS_BOTH_MODE_ENABLED:
+                        rs_thresh = float(NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT)
+                    else:
+                        rs_thresh = 0.0
+                    if setup == "B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK":
+                        rs_thresh = (
+                            float(V17C_LONG_HUGE_PULLBACK_RS_DIRECTIONAL_PCT)
+                            if mode != "BOTH"
+                            else float(V17C_LONG_HUGE_PULLBACK_RS_BOTH_PCT)
+                        )
+                keep = raw_rs >= rs_thresh
+
+            keep_mask.append(bool(keep))
+            if not keep:
+                l_rs_removed += 1
+
+        long_d["nifty_rel_strength_pct"] = rel_vals
+        long_d = long_d[pd.Series(keep_mask, index=long_d.index)].copy()
+
+    for frame in (short_d, long_d):
+        if not frame.empty:
+            frame.drop(columns=["ts_key_local"], inplace=True, errors="ignore")
+
+    print(
+        "[NIFTY_CONTEXT] Applied intraday filter (v19a standalone): "
+        f"SHORT {len(short_df)}->{len(short_d)} "
+        f"(mode_removed={s_mode_removed}, rs_removed={s_rs_removed}, "
+        f"short_cont_lookback={V19A_SHORT_CONT_RS_LOOKBACK_BARS}) | "
+        f"LONG {len(long_df)}->{len(long_d)} "
+        f"(mode_removed={l_mode_removed}, rs_removed={l_rs_removed}, "
+        f"reclaim_rs_lookback={V19A_LONG_RECLAIM_RS_LOOKBACK_BARS}, "
+        f"reclaim_both_thresh={V19A_LONG_RECLAIM_RS_BOTH_PCT:.2f}%)"
+    )
+    return short_d, long_d
+
+
+def _v19a_setup_exit_profile(
+    side_val: str,
+    setup_val: str,
+    entry_time_ist=None,
+) -> Dict[str, float]:
+    profile = dict(
+        _ORIG_V19A_EXIT_PROFILE(side_val, setup_val, entry_time_ist=entry_time_ist)
+    )
+    side_u = str(side_val or "").upper()
+    setup_u = str(setup_val or "").upper()
+
+    if side_u == "SHORT":
+        if setup_u == "A_MOD_BREAK_C1_LOW":
+            profile.update(
+                stop_pct=V19A_SHORT_AMOD_STOP_PCT,
+                target_pct=V19A_SHORT_AMOD_TARGET_PCT,
+                be_trigger_pct=0.0,
+                trail_pct=0.0,
+                enable_breakeven=False,
+                enable_trailing_stop=False,
+            )
+            return profile
+
+        if setup_u == "B_HUGE_RED_FAILED_BOUNCE":
+            # Keep the small-sample short B_HUGE setup on its conservative
+            # baseline rather than forcing a highly-optimized low-sample fit.
+            profile.update(
+                stop_pct=V19A_SHORT_BHUGE_STOP_PCT,
+                target_pct=V19A_SHORT_BHUGE_TARGET_PCT,
+                be_trigger_pct=0.0,
+                trail_pct=0.0,
+                enable_breakeven=False,
+                enable_trailing_stop=False,
+            )
+            return profile
+
+        profile.update(
+            stop_pct=V19A_SHORT_STOP_PCT,
+            target_pct=V19A_SHORT_TARGET_PCT,
+            be_trigger_pct=0.0,
+            trail_pct=0.0,
+            enable_breakeven=False,
+            enable_trailing_stop=False,
+        )
+        return profile
+
+    if setup_u == "B_HUGE_C1_CLOSE_RECLAIM_BREAK":
+        profile.update(
+            stop_pct=V19A_LONG_RECLAIM_STOP_PCT,
+            target_pct=V19A_LONG_RECLAIM_TARGET_PCT,
+            be_trigger_pct=0.0,
+            trail_pct=0.0,
+            enable_breakeven=False,
+            enable_trailing_stop=False,
+        )
+    else:
+        profile.update(
+            stop_pct=V19A_LONG_STOP_PCT,
+            target_pct=V19A_LONG_TARGET_PCT,
+            be_trigger_pct=0.0,
+            trail_pct=0.0,
+            enable_breakeven=False,
+            enable_trailing_stop=False,
+        )
+    return profile
+
+
+def runtime_dir(*parts: str) -> Path:
+    return _ORIG_V19A_RUNTIME_DIR("outputs_v19a3_5min")
+
+
+# ---------------------------------------------------------------------------
+# V19A3 Area-3: shortlist rank cutoffs
+# SHORT global: cut rank_pct > 0.50 (rank 35-50% PF=1.118, rank 50-75% PF=1.214)
+# SHORT mid:    cut rank_pct > 0.35 (rank 35-50% in mid = PF=0.776, actively losing)
+# LONG:         no cut (worst bucket rank 75-100% still PF=1.875)
+# ---------------------------------------------------------------------------
+V19A3_SHORT_GLOBAL_MAX_RANK_PCT = 0.50
+V19A3_SHORT_MID_MAX_RANK_PCT    = 0.35
+
+_ORIG_V19A3_CLEANUP = _apply_v18c5_trade_cleanup
+
+
+def _apply_v18c5_trade_cleanup(df: pd.DataFrame, side_label: str) -> pd.DataFrame:
+    df = _ORIG_V19A3_CLEANUP(df, side_label)
+    if str(side_label).upper() != "SHORT":
+        return df
+    if df.empty or "shortlist_rank_pct" not in df.columns:
+        return df
+
+    before = len(df)
+
+    # Global SHORT rank cutoff: drop rank_pct > 0.50
+    global_mask = df["shortlist_rank_pct"].isna() | (df["shortlist_rank_pct"] <= V19A3_SHORT_GLOBAL_MAX_RANK_PCT)
+    df = df[global_mask].copy()
+
+    # Tighter SHORT mid cutoff: drop rank_pct > 0.35 in mid session
+    if "shortlist_session" in df.columns:
+        mid_mask = (df["shortlist_session"] != "mid") | (
+            df["shortlist_rank_pct"].isna() | (df["shortlist_rank_pct"] <= V19A3_SHORT_MID_MAX_RANK_PCT)
+        )
+        df = df[mid_mask].copy()
+
+    removed = before - len(df)
+    if removed > 0:
+        print(f"[V19A3] SHORT rank cutoff: -{removed} trades (global>50% + mid>35%)")
+    return df
+
+
+def _rename_new_outputs(output_dir: Path, before: set[str]) -> List[Path]:
+    renamed: List[Path] = []
+    for path in output_dir.iterdir():
+        if not path.is_file() or path.name in before:
+            continue
+        new_name = (
+            path.name
+            .replace("v18c5_5min", "v19a3_5min")
+            .replace("v19a2_5min", "v19a3_5min")
+            .replace("v19a1_5min", "v19a3_5min")
+            .replace("v19a_5min", "v19a3_5min")
+            .replace("avwap_combined_runner_v18c3_", "avwap_combined_runner_v19a3_")
+            .replace("avwap_combined_runner_v19a2_", "avwap_combined_runner_v19a3_")
+            .replace("avwap_combined_runner_v19a1_", "avwap_combined_runner_v19a3_")
+            .replace("avwap_combined_runner_v19a_", "avwap_combined_runner_v19a3_")
+        )
+        if new_name != path.name:
+            new_path = path.with_name(new_name)
+            path.rename(new_path)
+            renamed.append(new_path)
+        else:
+            renamed.append(path)
+    return sorted(renamed)
+
+
+_resolve_15m_dir = _v19a_resolve_15m_dir
+_apply_nifty_intraday_context = _apply_nifty_intraday_context_v19a
+_v17c_setup_exit_profile = _v19a_setup_exit_profile
+_classify_v18_session = _v19a_classify_session
+
+
+def main() -> None:
+    output_dir = runtime_dir("outputs_v19a3_5min")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    before = {p.name for p in output_dir.iterdir() if p.is_file()}
+    print("[V19A3] Starting standalone backtest with three-window shortlist (v3_3times)...")
+    print("[V19A3] Area-3 rank cutoffs active:")
+    print(f"[V19A3]   SHORT global max rank_pct = {V19A3_SHORT_GLOBAL_MAX_RANK_PCT:.0%}  (drops rank 50-75% bucket PF=1.214)")
+    print(f"[V19A3]   SHORT mid    max rank_pct = {V19A3_SHORT_MID_MAX_RANK_PCT:.0%}  (drops mid rank 35-50% PF=0.776)")
+    print("[V19A3]   LONG  no rank cutoff")
+    print("[V19A3] Inherited from v19a2:")
+    print("[V19A3]   LONG RECLAIM        SL=0.70%  TGT=1.40%")
+    print("[V19A3]   SHORT signals blocked 10:35-11:05")
+    print("[V19A3]   LONG  signal  blocked 09:45")
+    _ORIG_V19A_MAIN()
+    renamed = _rename_new_outputs(output_dir, before)
+    if renamed:
+        print("[V19A3] Output files:")
+        for path in renamed:
+            print(f"[V19A3]   {path}")
 
 
 if __name__ == "__main__":

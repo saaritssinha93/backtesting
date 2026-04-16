@@ -252,6 +252,15 @@ def _entry_retry_deadline(
     return min(candidate, forced_close_dt)
 
 
+def _trade_started_after_entry_deadline(
+    trade_start_ist: Optional[datetime],
+    entry_retry_deadline: Optional[datetime],
+) -> bool:
+    if trade_start_ist is None or entry_retry_deadline is None:
+        return False
+    return trade_start_ist >= entry_retry_deadline
+
+
 def _safe_get_entry_ltp(
     ticker: str,
     *,
@@ -1965,13 +1974,27 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     context=f"{ticker} pre-entry",
                 )
                 if ltp_check is None:
-                    result.outcome = "ENTRY_SKIPPED_CONNECTION_RETRY_TIMEOUT"
+                    started_stale = _trade_started_after_entry_deadline(
+                        trade_start_ist, entry_retry_deadline
+                    )
+                    result.outcome = (
+                        "ENTRY_SKIPPED_STALE_SIGNAL"
+                        if started_stale
+                        else "ENTRY_SKIPPED_CONNECTION_RETRY_TIMEOUT"
+                    )
                     result.exit_price = signal_entry_price
                     trade_closed = True
-                    log.warning(
-                        f"[KITE.NET.RETRY] Skipping {ticker} {side}: no stable quote before "
-                        f"freshness deadline {entry_retry_deadline.strftime('%H:%M:%S')}."
-                    )
+                    if started_stale:
+                        log.warning(
+                            f"[STALE] Skipping {ticker} {side}: signal surfaced at "
+                            f"{trade_start_ist.strftime('%H:%M:%S')} after freshness deadline "
+                            f"{entry_retry_deadline.strftime('%H:%M:%S')}."
+                        )
+                    else:
+                        log.warning(
+                            f"[KITE.NET.RETRY] Skipping {ticker} {side}: no stable quote before "
+                            f"freshness deadline {entry_retry_deadline.strftime('%H:%M:%S')}."
+                        )
                 elif ltp_check > 0:
                     if ENTRY_RETRY_NEAR_ENTRY_ENABLE and ENTRY_RETRY_WAIT_SEC > 0:
                         if not _entry_price_within_retry_band(side, signal_entry_price, float(ltp_check)):
@@ -2056,13 +2079,27 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     tag="AVWAPEntry",
                 )
                 if not entry_order_id:
-                    result.outcome = "ENTRY_SKIPPED_CONNECTION_RETRY_TIMEOUT"
+                    started_stale = _trade_started_after_entry_deadline(
+                        trade_start_ist, entry_retry_deadline
+                    )
+                    result.outcome = (
+                        "ENTRY_SKIPPED_STALE_SIGNAL"
+                        if started_stale
+                        else "ENTRY_SKIPPED_CONNECTION_RETRY_TIMEOUT"
+                    )
                     result.exit_price = signal_entry_price
                     trade_closed = True
-                    log.warning(
-                        f"[KITE.NET.RETRY] {ticker} {side}: transient entry retry window expired "
-                        f"before a confirmed broker order could be placed."
-                    )
+                    if started_stale:
+                        log.warning(
+                            f"[STALE] {ticker} {side}: signal surfaced at "
+                            f"{trade_start_ist.strftime('%H:%M:%S')} after freshness deadline "
+                            f"{entry_retry_deadline.strftime('%H:%M:%S')}."
+                        )
+                    else:
+                        log.warning(
+                            f"[KITE.NET.RETRY] {ticker} {side}: transient entry retry window expired "
+                            f"before a confirmed broker order could be placed."
+                        )
                     break
                 _reset_orders_snapshot_cache()
                 result.entry_order_id = str(entry_order_id)

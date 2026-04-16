@@ -14,6 +14,9 @@ param(
     [int]$CooldownWindowSec = 300,
     [int]$CooldownMaxRestarts = 6,
     [int]$CooldownDelaySec = 120,
+    [string]$FreshnessFile = "",
+    [int]$FreshnessTimeoutSec = 0,
+    [int]$FreshnessGraceSec = 0,
     [string]$CutoffHHmm = "",
     [switch]$SkipRunAfterCutoff,
     [switch]$StopRestartsAfterCutoff
@@ -151,6 +154,9 @@ function Write-Heartbeat {
         cooldown_window_s = $CooldownWindowSec
         cooldown_limit   = $CooldownMaxRestarts
         cooldown_delay_s = $CooldownDelaySec
+        freshness_file   = $FreshnessFile
+        freshness_timeout_s = $FreshnessTimeoutSec
+        freshness_grace_s = $FreshnessGraceSec
         note             = $Note
         log_file         = $LogFile
         supervisor_log_file = $script:SupervisorLogFile
@@ -200,6 +206,9 @@ function Write-RunningStatus {
         reason             = $Reason
         pid                = $pidValue
         cutoff_hhmm        = $CutoffHHmm
+        freshness_file     = $FreshnessFile
+        freshness_timeout_s = $FreshnessTimeoutSec
+        freshness_grace_s  = $FreshnessGraceSec
         log_file           = $LogFile
         supervisor_log_file = $script:SupervisorLogFile
         heartbeat_file     = $HeartbeatFile
@@ -227,6 +236,8 @@ $hungTimeoutSec = [Math]::Max(0, $HungTimeoutSec)
 $cooldownWindowSec = [Math]::Max(0, $CooldownWindowSec)
 $cooldownMaxRestarts = [Math]::Max(0, $CooldownMaxRestarts)
 $cooldownDelaySec = [Math]::Max(1, $CooldownDelaySec)
+$freshnessTimeoutSec = [Math]::Max(0, $FreshnessTimeoutSec)
+$freshnessGraceSec = [Math]::Max(0, $FreshnessGraceSec)
 
 if ($SkipRunAfterCutoff -and (Is-AfterCutoff -HHmm $CutoffHHmm)) {
     Write-LogLine -Level "INFO" -Message "SKIP $Name (after cutoff $CutoffHHmm)"
@@ -259,6 +270,7 @@ while ($true) {
     Write-RunningStatus -RestartCount $restartCount -ChildPid $process.Id -Reason "started"
 
     $forcedHungKill = $false
+    $forcedExitReason = ""
     $runStartUtc = [DateTime]::UtcNow
     $lastActivityUtc = $runStartUtc
     while (-not $process.HasExited) {
@@ -281,8 +293,42 @@ while ($true) {
                 Write-LogLine -Level "WARN" -Message "taskkill failed for pid=$($process.Id): $($_.Exception.Message)"
             }
             $forcedHungKill = $true
+            $forcedExitReason = "hung_idle"
             Start-Sleep -Seconds 1
             break
+        }
+
+        if ($freshnessTimeoutSec -gt 0 -and -not [string]::IsNullOrWhiteSpace($FreshnessFile)) {
+            $runAgeSec = ([DateTime]::UtcNow - $runStartUtc).TotalSeconds
+            if ($runAgeSec -ge $freshnessGraceSec) {
+                if (Test-Path -LiteralPath $FreshnessFile) {
+                    $freshnessUtc = (Get-Item -LiteralPath $FreshnessFile).LastWriteTimeUtc
+                    $freshnessAgeSec = ([DateTime]::UtcNow - $freshnessUtc).TotalSeconds
+                    if ($freshnessAgeSec -ge $freshnessTimeoutSec) {
+                        Write-LogLine -Level "WARN" -Message "Freshness threshold reached for $Name (file=$FreshnessFile, age=${freshnessAgeSec}s >= ${freshnessTimeoutSec}s). Killing process tree pid=$($process.Id)."
+                        try {
+                            & taskkill /PID $process.Id /T /F *> $null
+                        } catch {
+                            Write-LogLine -Level "WARN" -Message "taskkill failed for pid=$($process.Id): $($_.Exception.Message)"
+                        }
+                        $forcedHungKill = $true
+                        $forcedExitReason = "freshness_stale"
+                        Start-Sleep -Seconds 1
+                        break
+                    }
+                } else {
+                    Write-LogLine -Level "WARN" -Message "Freshness file missing for $Name after grace window (file=$FreshnessFile, grace=${freshnessGraceSec}s). Killing process tree pid=$($process.Id)."
+                    try {
+                        & taskkill /PID $process.Id /T /F *> $null
+                    } catch {
+                        Write-LogLine -Level "WARN" -Message "taskkill failed for pid=$($process.Id): $($_.Exception.Message)"
+                    }
+                    $forcedHungKill = $true
+                    $forcedExitReason = "freshness_missing"
+                    Start-Sleep -Seconds 1
+                    break
+                }
+            }
         }
     }
 
@@ -302,7 +348,8 @@ while ($true) {
     }
 
     $lastLogUtc = if (Test-Path -LiteralPath $LogFile) { (Get-Item -LiteralPath $LogFile).LastWriteTimeUtc.ToString("o") } else { "" }
-    Write-Heartbeat -State "EXITED" -RestartCount $restartCount -ChildPid $null -IdleSec $null -LastLogUtc $lastLogUtc -Note "exit_code=$exitCode"
+    $exitNote = if ([string]::IsNullOrWhiteSpace($forcedExitReason)) { "exit_code=$exitCode" } else { "exit_code=$exitCode reason=$forcedExitReason" }
+    Write-Heartbeat -State "EXITED" -RestartCount $restartCount -ChildPid $null -IdleSec $null -LastLogUtc $lastLogUtc -Note $exitNote
     Write-LogLine -Level "INFO" -Message "END $Name (exit=$exitCode)"
 
     if ($exitCode -eq 0) {

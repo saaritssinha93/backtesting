@@ -48,6 +48,12 @@ V17B_RS_ATR_DIRECTIONAL_THRESH_SHORT = _env_float(
 V17B_RS_ATR_FALLBACK_PCT_SHORT = _env_float(
     "EQIDV17B_RS_ATR_FALLBACK_PCT_SHORT", 0.40
 )
+V17B_DATA_5M_DIR = Path(
+    os.getenv(
+        "EQIDV17B_DATA_5M_DIR",
+        r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live",
+    )
+)
 
 
 # ===========================================================================
@@ -62,6 +68,12 @@ def _v17b_runtime_dir(*parts):
 
 
 _base.runtime_dir = _v17b_runtime_dir
+
+
+# ===========================================================================
+# PATCH 2: use live 5-minute parquet universe for v17b
+# ===========================================================================
+_base.RUNTIME_DATA_5M_DIR = V17B_DATA_5M_DIR
 
 
 # ===========================================================================

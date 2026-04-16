@@ -37,6 +37,7 @@ import argparse
 import json
 import multiprocessing as mp
 import os
+import queue
 import sys
 import threading
 import time
@@ -257,6 +258,9 @@ DEFAULT_SLOT_SLA_WARN_SEC = float(os.getenv("EQIDV2_5M_SLOT_SLA_WARN_SEC", "20")
 DEFAULT_KITE_REQUEST_TIMEOUT_SEC = float(
     os.getenv("EQIDV2_5M_KITE_TIMEOUT_SEC", os.getenv("EQIDV2_KITE_REQUEST_TIMEOUT_SEC", "12"))
 )
+DEFAULT_PARTITION_TIMEOUT_SEC = float(os.getenv("EQIDV2_5M_PARTITION_TIMEOUT_SEC", "150"))
+DEFAULT_PARTITION_JOIN_POLL_SEC = float(os.getenv("EQIDV2_5M_PARTITION_JOIN_POLL_SEC", "0.25"))
+DEFAULT_PARTITION_TERMINATE_GRACE_SEC = float(os.getenv("EQIDV2_5M_PARTITION_TERMINATE_GRACE_SEC", "5"))
 DEFAULT_ADAPTIVE_THROTTLE = str(os.getenv("EQIDV2_5M_ADAPTIVE_THROTTLE", "1")).strip().lower() in {
     "1",
     "true",
@@ -293,6 +297,12 @@ DEFAULT_ENABLE_OPENING_SLOT_FETCH = str(
     "on",
 }
 _APP_VALIDATION_CACHE: dict[str, tuple[tuple[tuple[str, int, int], ...], bool, str]] = {}
+_APP_SELF_HEAL_STATE: dict[str, dict[str, object]] = {}
+DEFAULT_APP_SELF_HEAL_COOLDOWN_SEC = int(os.getenv("EQIDV2_5M_APP_SELF_HEAL_COOLDOWN_SEC", "1800"))
+DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY = max(
+    1,
+    int(os.getenv("EQIDV2_5M_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY", "2")),
+)
 SLOT_STATUS_PATH = EQIDV2_DIR / "logs" / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"
 
 # ---------------------------------------------------------------------
@@ -666,15 +676,47 @@ def _read_holidays_set() -> set:
 def _split_tickers_evenly(tickers: list[str], partition_count: int) -> list[list[str]]:
     ordered = sorted({str(t).strip().upper() for t in tickers if str(t).strip()})
     partition_count = max(1, int(partition_count))
-    base_size, remainder = divmod(len(ordered), partition_count)
-    partitions: list[list[str]] = []
-    start = 0
-    for idx in range(partition_count):
-        size = base_size + (1 if idx < remainder else 0)
-        end = start + size
-        partitions.append(ordered[start:end])
-        start = end
+    partitions: list[list[str]] = [[] for _ in range(partition_count)]
+    for idx, ticker in enumerate(ordered):
+        partitions[idx % partition_count].append(ticker)
     return partitions
+
+def _app_index(app_name: str) -> int:
+    if app_name == "app1":
+        return 1
+    suffix = str(app_name).replace("app", "", 1).strip()
+    if not suffix.isdigit():
+        raise ValueError(f"Unsupported app name: {app_name}")
+    return int(suffix)
+
+def _should_attempt_app_self_heal(app_name: str, detail: str) -> tuple[bool, str]:
+    text = str(detail).strip().lower()
+    if not text:
+        return True, "empty_error_detail"
+    if "unsupported app index" in text:
+        return False, "unsupported_app_index"
+    if "invalid api_key" in text:
+        return False, "invalid_api_key_configuration"
+    if "api_key" in text and ("not found" in text or "missing" in text):
+        return False, "missing_api_key_configuration"
+    if "must contain" in text and "api_key" in text:
+        return False, "invalid_api_key_file_format"
+    return True, "recoverable_auth_validation_error"
+
+def _get_app_self_heal_state(app_name: str) -> dict[str, object]:
+    today = str(now_ist().date())
+    state = _APP_SELF_HEAL_STATE.get(app_name)
+    if state is None or str(state.get("day", "")) != today:
+        state = {
+            "day": today,
+            "attempts": 0,
+            "cooldown_until_monotonic": 0.0,
+            "last_failure": "",
+            "last_attempt_ist": "",
+            "last_success_ist": "",
+        }
+        _APP_SELF_HEAL_STATE[app_name] = state
+    return state
 
 def _validate_app_session(app_name: str, setup_fn: Callable[[], object]) -> tuple[bool, str]:
     auth_files = []
@@ -703,6 +745,67 @@ def _validate_app_session(app_name: str, setup_fn: Callable[[], object]) -> tupl
         _APP_VALIDATION_CACHE[app_name] = (signature, False, msg)
         return False, msg
 
+def _attempt_app_session_self_heal(
+    app_name: str,
+    setup_fn: Callable[[], object],
+    failure_detail: str,
+) -> tuple[bool, str]:
+    should_attempt, attempt_reason = _should_attempt_app_self_heal(app_name, failure_detail)
+    if not should_attempt:
+        return False, f"self_heal_skipped={attempt_reason}"
+
+    state = _get_app_self_heal_state(app_name)
+    attempts_today = int(state.get("attempts", 0) or 0)
+    if attempts_today >= DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY:
+        return False, f"self_heal_daily_limit={DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY}"
+
+    cooldown_until = float(state.get("cooldown_until_monotonic", 0.0) or 0.0)
+    now_mono = time.monotonic()
+    if now_mono < cooldown_until:
+        remaining = max(0.0, cooldown_until - now_mono)
+        return False, f"self_heal_cooldown={remaining:.0f}s"
+
+    state["attempts"] = attempts_today + 1
+    state["last_attempt_ist"] = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    print(
+        f"[INFO] {app_name}: auth validation failed ({failure_detail}). "
+        f"Attempting self-heal {state['attempts']}/{DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY}."
+    )
+    try:
+        from authentication_v2 import (
+            _read_key_secret,
+            _seed_additional_session_for_today,
+            _seed_session_for_today,
+        )
+
+        primary_parts = _read_key_secret()
+        _APP_VALIDATION_CACHE.pop(app_name, None)
+        if app_name == "app1":
+            _seed_session_for_today(primary_parts, force_login=False)
+        else:
+            _seed_additional_session_for_today(
+                primary_parts,
+                force_login=False,
+                app_idx=_app_index(app_name),
+            )
+
+        _APP_VALIDATION_CACHE.pop(app_name, None)
+        ok, detail = _validate_app_session(app_name, setup_fn)
+        if ok:
+            state["cooldown_until_monotonic"] = 0.0
+            state["last_failure"] = ""
+            state["last_success_ist"] = now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+            print(f"[OK] {app_name}: self-heal succeeded; session restored for {detail}.")
+            return True, f"{detail} (self-healed)"
+
+        state["last_failure"] = str(detail)
+        state["cooldown_until_monotonic"] = time.monotonic() + float(DEFAULT_APP_SELF_HEAL_COOLDOWN_SEC)
+        return False, f"self_heal_validation_failed={detail}"
+    except Exception as exc:
+        state["last_failure"] = str(exc).strip() or exc.__class__.__name__
+        state["cooldown_until_monotonic"] = time.monotonic() + float(DEFAULT_APP_SELF_HEAL_COOLDOWN_SEC)
+        return False, f"self_heal_failed={state['last_failure']}"
+
 def _app_auth_label(app_name: str) -> str:
     if app_name == "app1":
         return "api_key.txt/access_token.txt"
@@ -718,6 +821,13 @@ def _build_working_app_partitions(
 
     for app_name, setup_fn in _setup_fn_map().items():
         ok, detail = _validate_app_session(app_name, setup_fn)
+        if not ok:
+            healed, healed_detail = _attempt_app_session_self_heal(app_name, setup_fn, detail)
+            if healed:
+                ok = True
+                detail = healed_detail
+            else:
+                detail = f"{detail}; {healed_detail}"
         if ok:
             working_apps.append((app_name, detail))
         else:
@@ -819,6 +929,10 @@ def _run_partition_worker(
     setup_fn = _setup_fn_map().get(setup_kind, setup_kite_session_from_eqidv2_dir)
     started_at = time.perf_counter()
     try:
+        print(
+            f"[PART] {partition_name}: start tickers={len(partition_tickers)} "
+            f"max_workers={int(max_workers)} intraday_ts={intraday_ts} skip_if_fresh={bool(skip_if_fresh)}"
+        )
         summary = _run_partition(
             mode,
             partition_name,
@@ -834,43 +948,98 @@ def _run_partition_worker(
         )
         verify_failed = list((summary or {}).get("verify_failed_sample", []) or [])
         verify_failed_count = int((summary or {}).get("verify_failed_count", len(verify_failed)) or 0)
+        elapsed_sec = time.perf_counter() - started_at
         if verify_failed_count > 0:
             sample = ", ".join(verify_failed[:8])
+            print(
+                f"[PART] {partition_name}: completed with verification failures "
+                f"elapsed={elapsed_sec:.2f}s verify_failed={verify_failed_count}"
+            )
             result_queue.put(
                 (
                     partition_name,
                     False,
                     f"verify_failed={verify_failed_count} sample={sample}",
-                    time.perf_counter() - started_at,
+                    elapsed_sec,
                     len(partition_tickers),
                     verify_failed_count,
                     verify_failed[:8],
                 )
             )
         else:
+            print(
+                f"[PART] {partition_name}: completed successfully "
+                f"elapsed={elapsed_sec:.2f}s tickers={len(partition_tickers)}"
+            )
             result_queue.put(
                 (
                     partition_name,
                     True,
                     "",
-                    time.perf_counter() - started_at,
+                    elapsed_sec,
                     len(partition_tickers),
                     0,
                     [],
                 )
             )
     except Exception as e:
+        elapsed_sec = time.perf_counter() - started_at
+        print(f"[PART] {partition_name}: failed after {elapsed_sec:.2f}s error={e}")
         result_queue.put(
             (
                 partition_name,
                 False,
                 str(e),
-                time.perf_counter() - started_at,
+                elapsed_sec,
                 len(partition_tickers),
                 0,
                 [],
             )
         )
+
+def _drain_partition_results(
+    result_queue,
+    result_map: dict[str, tuple[bool, str, float, int, int, list[str]]],
+) -> int:
+    drained = 0
+    while True:
+        try:
+            pname, ok, msg, elapsed_sec, ticker_count, verify_failed_count, verify_failed_sample = result_queue.get_nowait()
+        except queue.Empty:
+            break
+        except Exception:
+            break
+
+        result_map[str(pname)] = (
+            bool(ok),
+            str(msg),
+            float(elapsed_sec),
+            int(ticker_count),
+            int(verify_failed_count),
+            list(verify_failed_sample),
+        )
+        drained += 1
+    return drained
+
+def _terminate_partition_process(proc: object, pname: str, timeout_sec: float) -> None:
+    try:
+        proc.terminate()
+    except Exception as exc:
+        print(f"[WARN] {pname}: terminate() failed after timeout: {exc}")
+    try:
+        proc.join(timeout=max(0.5, float(timeout_sec)))
+    except Exception:
+        pass
+    if getattr(proc, "is_alive", lambda: False)():
+        print(f"[WARN] {pname}: terminate grace elapsed; escalating to kill().")
+        try:
+            proc.kill()
+        except Exception as exc:
+            print(f"[WARN] {pname}: kill() failed: {exc}")
+        try:
+            proc.join(timeout=max(0.5, float(timeout_sec)))
+        except Exception:
+            pass
 
 def run_update_5m_once(
     max_workers: int,
@@ -885,6 +1054,7 @@ def run_update_5m_once(
     ready_marker_poll_seconds: float = DEFAULT_READY_MARKER_POLL_SECONDS,
     ready_marker_min_fresh_ratio: float = DEFAULT_READY_MARKER_MIN_FRESH_RATIO,
     slot_sla_warn_sec: float = DEFAULT_SLOT_SLA_WARN_SEC,
+    partition_timeout_sec: float = DEFAULT_PARTITION_TIMEOUT_SEC,
 ) -> dict[str, object]:
     slot_started_at = time.perf_counter()
     holidays = _read_holidays_set()
@@ -941,7 +1111,8 @@ def run_update_5m_once(
         f"working_apps={len(app_assignments)},",
         f"active_apps={active_partition_count},",
         f"per_app_cap={max_workers_per_app},",
-        f"effective_per_app={partition_max_workers}",
+        f"effective_per_app={partition_max_workers},",
+        f"partition_timeout={float(partition_timeout_sec):.1f}s",
     )
 
     marker_stop_event: Optional[threading.Event] = None
@@ -968,7 +1139,9 @@ def run_update_5m_once(
         marker_thread.start()
 
     workers: list[tuple[str, object]] = []
+    partition_ticker_counts: dict[str, int] = {}
     for pname, ptickers, ptoken_map in partitions:
+        partition_ticker_counts[pname] = len(ptickers)
         proc = ctx.Process(
             target=_run_partition_worker,
             args=(
@@ -994,28 +1167,58 @@ def run_update_5m_once(
     for _, proc in workers:
         proc.start()
 
-    for _, proc in workers:
-        proc.join()
+    result_map: dict[str, tuple[bool, str, float, int, int, list[str]]] = {}
+    timed_out_workers: dict[str, tuple[bool, str, float, int, int, list[str]]] = {}
+    worker_start_times = {pname: time.perf_counter() for pname, _ in workers}
+    pending_workers = {pname: proc for pname, proc in workers}
+
+    while pending_workers:
+        _drain_partition_results(result_queue, result_map)
+        for pname, proc in list(pending_workers.items()):
+            if not proc.is_alive():
+                try:
+                    proc.join(timeout=0.1)
+                except Exception:
+                    pass
+                pending_workers.pop(pname, None)
+                continue
+
+            elapsed_sec = time.perf_counter() - worker_start_times[pname]
+            if elapsed_sec >= float(partition_timeout_sec):
+                print(
+                    f"[WARN] {pname}: partition exceeded timeout "
+                    f"({elapsed_sec:.2f}s >= {float(partition_timeout_sec):.2f}s). Terminating worker."
+                )
+                _terminate_partition_process(proc, pname, DEFAULT_PARTITION_TERMINATE_GRACE_SEC)
+                timed_out_workers[pname] = (
+                    False,
+                    f"partition_timeout={float(partition_timeout_sec):.1f}s",
+                    elapsed_sec,
+                    int(partition_ticker_counts.get(pname, 0)),
+                    0,
+                    [],
+                )
+                pending_workers.pop(pname, None)
+
+        if pending_workers:
+            time.sleep(max(0.05, float(DEFAULT_PARTITION_JOIN_POLL_SEC)))
 
     if marker_stop_event is not None:
         marker_stop_event.set()
     if marker_thread is not None:
         marker_thread.join(timeout=2.0)
 
-    result_map: dict[str, tuple[bool, str, float, int, int, list[str]]] = {}
-    for _ in workers:
-        try:
-            pname, ok, msg, elapsed_sec, ticker_count, verify_failed_count, verify_failed_sample = result_queue.get(timeout=1.0)
-            result_map[str(pname)] = (
-                bool(ok),
-                str(msg),
-                float(elapsed_sec),
-                int(ticker_count),
-                int(verify_failed_count),
-                list(verify_failed_sample),
-            )
-        except Exception:
-            break
+    _drain_partition_results(result_queue, result_map)
+    for pname, timed_out_result in timed_out_workers.items():
+        result_map.setdefault(pname, timed_out_result)
+    try:
+        result_queue.close()
+    except Exception:
+        pass
+    try:
+        result_queue.join_thread()
+    except Exception:
+        pass
 
     failures: list[str] = []
     partition_elapsed: dict[str, float] = {}
@@ -1089,6 +1292,7 @@ def run_update_5m_once(
         "total_worker_budget": int(max_workers),
         "per_app_cap": int(max_workers_per_app),
         "effective_per_app": int(partition_max_workers),
+        "partition_timeout_sec": float(partition_timeout_sec),
         "sla_warn_sec": float(slot_sla_warn_sec),
         "sla_breached": bool(total_elapsed_sec > float(slot_sla_warn_sec)),
         "failures": list(failures),
@@ -1179,10 +1383,19 @@ def main() -> None:
         f"{DEFAULT_KITE_REQUEST_TIMEOUT_SEC:.1f}s",
     )
     print(
+        "       Partition timeout:",
+        f"{DEFAULT_PARTITION_TIMEOUT_SEC:.1f}s",
+    )
+    print(
         "       Adaptive throttle:",
         f"enabled={DEFAULT_ADAPTIVE_THROTTLE}, min_total={DEFAULT_ADAPTIVE_MIN_WORKERS}, "
         f"min_per_app={DEFAULT_ADAPTIVE_MIN_WORKERS_PER_APP}, step_total={DEFAULT_ADAPTIVE_TOTAL_STEP}, "
         f"step_per_app={DEFAULT_ADAPTIVE_PER_APP_STEP}",
+    )
+    print(
+        "       Auth self-heal:",
+        f"cooldown={DEFAULT_APP_SELF_HEAL_COOLDOWN_SEC}s, "
+        f"max_attempts_per_day={DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY}",
     )
     print(
         "       Ready marker:",
@@ -1279,6 +1492,7 @@ def main() -> None:
                 ready_marker_sample_size=int(args.ready_marker_sample_size),
                 ready_marker_poll_seconds=float(args.ready_marker_poll_seconds),
                 ready_marker_min_fresh_ratio=float(args.ready_marker_min_fresh_ratio),
+                partition_timeout_sec=float(DEFAULT_PARTITION_TIMEOUT_SEC),
             )
         except Exception as e:
             print(f"[ERROR] Update failed: {e}", file=sys.stderr)

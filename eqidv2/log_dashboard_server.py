@@ -98,6 +98,7 @@ LOG_IDS = tuple(LOG_FILES.keys()) + (
 STATUS_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.status",
     "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.status",
+    "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
     "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.status",
@@ -112,6 +113,7 @@ STATUS_FILES: Dict[str, str] = {
 }
 
 HEARTBEAT_FILES: Dict[str, str] = {
+    "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat",
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
     "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.heartbeat",
