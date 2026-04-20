@@ -1,2 +1,0 @@
-"signal_id","signal_datetime","received_time","detected_time_ist","logtime_ist","ticker","side","setup","impulse_type","entry_price","stop_price","target_price","quality_score","atr_pct","rsi","adx","quantity","signal_entry_datetime_ist","signal_bar_time_ist"
-"8a6c56ac89f8d14c","2026-03-12 13:30:00+05:30","2026-03-12 13:59:33+0530","2026-03-12 13:59:33+0530","2026-03-12 13:59:33+0530","AARTIIND","LONG","B_HUGE_GREEN_PULLBACK_HOLD_THEN_BREAK","","452.62","449.9","457.6","7.2506","0.0","0.0","0.0","552","2026-03-12 13:30:00+05:30","2026-03-12 13:30:00+05:30"

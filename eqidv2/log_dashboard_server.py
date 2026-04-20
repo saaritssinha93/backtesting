@@ -237,6 +237,237 @@ def _find_bat_process_pids(bat_basename: str) -> list[int]:
     return pids
 
 
+def _parse_pid_value(value: object) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        pid = int(text)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def _find_process_pids_by_token(token: str) -> list[int]:
+    if not token:
+        return []
+    safe = token.replace("'", "''")
+    ps_cmd = (
+        "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe' OR "
+        "Name='powershell.exe' OR Name='python.exe' OR Name='pythonw.exe' OR Name='conhost.exe'\" "
+        f"| Where-Object {{ $_.CommandLine -and $_.CommandLine -like '*{safe}*' }} "
+        "| Select-Object -ExpandProperty ProcessId"
+    )
+    rc, out = _run_cmd_silent(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+        timeout=6.0,
+    )
+    if rc != 0 or not out:
+        return []
+    pids: list[int] = []
+    for line in out.splitlines():
+        item = line.strip()
+        if item.isdigit():
+            pids.append(int(item))
+    return pids
+
+
+def _list_alive_pids(pids: Sequence[int]) -> list[int]:
+    clean = sorted({int(pid) for pid in pids if int(pid) > 0})
+    if not clean:
+        return []
+    joined = ",".join(str(pid) for pid in clean)
+    ps_cmd = (
+        f"$ids=@({joined}); "
+        "Get-Process -Id $ids -ErrorAction SilentlyContinue | "
+        "Select-Object -ExpandProperty Id"
+    )
+    rc, out = _run_cmd_silent(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+        timeout=5.0,
+    )
+    if rc != 0 or not out:
+        return []
+    alive: list[int] = []
+    for line in out.splitlines():
+        item = line.strip()
+        if item.isdigit():
+            alive.append(int(item))
+    return alive
+
+
+def _kill_pid_tree(pid: int, force: bool) -> Tuple[int, str]:
+    cmd = ["taskkill"]
+    if force:
+        cmd.append("/F")
+    cmd.extend(["/T", "/PID", str(pid)])
+    return _run_cmd_silent(cmd, timeout=6.0)
+
+
+def _wait_for_pids_exit(pids: Sequence[int], timeout: float) -> list[int]:
+    deadline = time.time() + max(0.5, timeout)
+    remaining = _list_alive_pids(pids)
+    while remaining and time.time() < deadline:
+        time.sleep(0.35)
+        remaining = _list_alive_pids(remaining)
+    return remaining
+
+
+def _supervisor_status_path(card_id: str) -> Optional[Path]:
+    filename = STATUS_FILES.get(card_id)
+    if not filename:
+        return None
+    return LOG_DIR / filename
+
+
+def _default_supervisor_spawn_path(card_id: str) -> Optional[Path]:
+    filename = STATUS_FILES.get(card_id)
+    if not filename:
+        return None
+    stem = filename[:-7] if filename.lower().endswith(".status") else Path(filename).stem
+    return RUNTIME_STATUS_DIR / f"{stem}.supervisor.spawn"
+
+
+def _read_restart_identity(card_id: str) -> Dict[str, str]:
+    info: Dict[str, str] = {}
+    filename = STATUS_FILES.get(card_id)
+    if not filename:
+        return info
+
+    worker_status_path = _resolve_status_path(filename)
+    supervisor_status_path = _supervisor_status_path(card_id)
+
+    worker_status = parse_status_file(worker_status_path)
+    if worker_status:
+        for key, value in worker_status.items():
+            info[f"worker_{key}"] = value
+
+    supervisor_status = parse_status_file(supervisor_status_path) if supervisor_status_path else {}
+    if supervisor_status:
+        for key, value in supervisor_status.items():
+            info[f"supervisor_{key}"] = value
+
+    spawn_path: Optional[Path] = None
+    raw_spawn_path = str(supervisor_status.get("spawn_record_file", "")).strip()
+    if raw_spawn_path:
+        try:
+            spawn_path = Path(raw_spawn_path)
+        except (TypeError, ValueError):
+            spawn_path = None
+    if spawn_path is None:
+        spawn_path = _default_supervisor_spawn_path(card_id)
+    if spawn_path is not None:
+        spawn = parse_status_file(spawn_path)
+        if spawn:
+            for key, value in spawn.items():
+                info[f"spawn_{key}"] = value
+
+    info["card_id"] = card_id
+    if supervisor_status_path is not None:
+        info["supervisor_status_path"] = str(supervisor_status_path)
+    info["worker_status_path"] = str(worker_status_path)
+    if spawn_path is not None:
+        info["spawn_path"] = str(spawn_path)
+    return info
+
+
+def _restart_identity_key(snapshot: Dict[str, str]) -> Tuple[str, ...]:
+    return (
+        str(snapshot.get("supervisor_run_id", "")).strip(),
+        str(snapshot.get("spawn_run_id", "")).strip(),
+        str(snapshot.get("supervisor_supervisor_pid", "")).strip(),
+        str(snapshot.get("supervisor_launcher_pid", "")).strip(),
+        str(snapshot.get("supervisor_worker_pid", "")).strip(),
+        str(snapshot.get("supervisor_launcher_start_utc", "")).strip(),
+        str(snapshot.get("supervisor_worker_start_utc", "")).strip(),
+        str(snapshot.get("spawn_supervisor_pid", "")).strip(),
+        str(snapshot.get("spawn_launcher_pid", "")).strip(),
+        str(snapshot.get("spawn_worker_pid", "")).strip(),
+        str(snapshot.get("spawn_launcher_start_utc", "")).strip(),
+        str(snapshot.get("spawn_worker_start_utc", "")).strip(),
+    )
+
+
+def _wait_for_restart_identity_change(card_id: str, before: Dict[str, str], timeout: float = 20.0) -> Dict[str, str]:
+    before_key = _restart_identity_key(before)
+    deadline = time.time() + max(2.0, timeout)
+    latest = before
+    while time.time() < deadline:
+        latest = _read_restart_identity(card_id)
+        if _restart_identity_key(latest) != before_key:
+            return latest
+        time.sleep(0.5)
+    return latest
+
+
+def _collect_restart_candidate_pids(card_id: str, bat_basename: str) -> Tuple[list[int], Dict[str, str], Set[str]]:
+    snapshot = _read_restart_identity(card_id)
+    pids: Set[int] = set()
+    for key in (
+        "worker_pid",
+        "supervisor_pid",
+        "launcher_pid",
+        "pid",
+    ):
+        for prefix in ("supervisor_", "spawn_", "worker_"):
+            pid = _parse_pid_value(snapshot.get(f"{prefix}{key}", ""))
+            if pid is not None:
+                pids.add(pid)
+
+    tokens: Set[str] = set()
+    if bat_basename:
+        tokens.add(Path(bat_basename).name)
+
+    for raw in (
+        snapshot.get("worker_script", ""),
+        snapshot.get("supervisor_name", ""),
+    ):
+        value = str(raw or "").strip()
+        if value:
+            tokens.add(Path(value).name)
+
+    for token in list(tokens):
+        for pid in _find_process_pids_by_token(token):
+            if pid > 0:
+                pids.add(pid)
+
+    return sorted(pids), snapshot, tokens
+
+
+def _verify_restart_success(card_id: str, before: Dict[str, str], trace: list[str]) -> Optional[Dict[str, Any]]:
+    after = _wait_for_restart_identity_change(card_id, before, timeout=20.0)
+    if _restart_identity_key(after) == _restart_identity_key(before):
+        trace.append("verify=no_change")
+        return None
+
+    new_worker_pid = (
+        _parse_pid_value(after.get("supervisor_worker_pid"))
+        or _parse_pid_value(after.get("spawn_worker_pid"))
+        or _parse_pid_value(after.get("worker_pid"))
+    )
+    new_supervisor_pid = (
+        _parse_pid_value(after.get("supervisor_supervisor_pid"))
+        or _parse_pid_value(after.get("spawn_supervisor_pid"))
+    )
+    new_status = (
+        str(after.get("worker_status", "")).strip()
+        or str(after.get("supervisor_status", "")).strip()
+        or str(after.get("spawn_state", "")).strip()
+    )
+    trace.append(
+        "verify=changed"
+        f"; new_supervisor_pid={new_supervisor_pid or ''}"
+        f"; new_worker_pid={new_worker_pid or ''}"
+        f"; new_status={new_status}"
+    )
+    return {
+        "new_supervisor_pid": new_supervisor_pid,
+        "new_worker_pid": new_worker_pid,
+        "new_status": new_status,
+        "after": after,
+    }
+
+
 def _restart_card_session(card_id: str) -> Dict[str, Any]:
     task_names = CARD_TASK_NAMES.get(card_id, ())
     bat_basename = RESTARTABLE_CARDS.get(card_id, "")
@@ -244,57 +475,82 @@ def _restart_card_session(card_id: str) -> Dict[str, Any]:
         return {"ok": False, "message": "Session is not restartable."}
     task_name = task_names[0]
     trace: list[str] = []
+    identity_before = _read_restart_identity(card_id)
+    cutoff_hhmm = str(identity_before.get("supervisor_cutoff_hhmm", "")).strip()
+    if cutoff_hhmm.isdigit():
+        now_hhmm = dt.datetime.now(IST).strftime("%H%M")
+        if now_hhmm >= cutoff_hhmm:
+            return {
+                "ok": False,
+                "message": (
+                    f"Restart blocked after cutoff ({cutoff_hhmm}). "
+                    "A relaunch now would be skipped by this session's BAT/supervisor."
+                ),
+                "task_name": task_name,
+            }
+
+    def _run_and_verify(step_no: int, success_message: str, run_label: str) -> Optional[Dict[str, Any]]:
+        run_rc, run_out = _run_cmd_silent(["schtasks", "/Run", "/TN", task_name], timeout=5.0)
+        trace.append(f"{run_label}_rc={run_rc}")
+        if run_out:
+            trace.append(f"{run_label}_out={run_out[:240]}")
+        verified = _verify_restart_success(card_id, identity_before, trace)
+        if verified is not None:
+            return {
+                "ok": True,
+                "step": step_no,
+                "message": success_message,
+                "task_name": task_name,
+                "trace": " | ".join(trace),
+                "new_supervisor_pid": verified["new_supervisor_pid"],
+                "new_worker_pid": verified["new_worker_pid"],
+                "new_status": verified["new_status"],
+            }
+        if run_rc != 0 and run_out:
+            trace.append(f"{run_label}_verify_failed")
+        return None
 
     # Step 1: graceful restart via Task Scheduler (/End then /Run)
     end_rc, _ = _run_cmd_silent(["schtasks", "/End", "/TN", task_name], timeout=5.0)
     trace.append(f"end_rc={end_rc}")
     time.sleep(1.0)
-    run_rc, run_out = _run_cmd_silent(["schtasks", "/Run", "/TN", task_name], timeout=5.0)
-    trace.append(f"run_rc={run_rc}")
-    if run_rc == 0:
-        return {
-            "ok": True,
-            "step": 1,
-            "message": "Restarted via Task Scheduler.",
-            "task_name": task_name,
-            "trace": " | ".join(trace),
-        }
+    verified = _run_and_verify(1, "Restarted via Task Scheduler and verified.", "run1")
+    if verified is not None:
+        return verified
 
-    # Step 2: graceful taskkill on bat tree (no /F), then /Run
-    pids = _find_bat_process_pids(bat_basename)
+    # Step 2: graceful taskkill on scheduler/supervisor tree (no /F), then /Run
+    pids, _, tokens = _collect_restart_candidate_pids(card_id, bat_basename)
     for pid in pids:
-        _run_cmd_silent(["taskkill", "/T", "/PID", str(pid)], timeout=4.0)
+        _kill_pid_tree(pid, force=False)
+    remaining = _wait_for_pids_exit(pids, timeout=4.0)
     trace.append(f"graceful_pids={pids}")
+    if tokens:
+        trace.append(f"tokens={sorted(tokens)}")
+    if remaining:
+        trace.append(f"graceful_remaining={remaining}")
     time.sleep(1.2)
-    run_rc, run_out = _run_cmd_silent(["schtasks", "/Run", "/TN", task_name], timeout=5.0)
-    trace.append(f"run2_rc={run_rc}")
-    if run_rc == 0:
-        return {
-            "ok": True,
-            "step": 2,
-            "message": "Graceful stop + start succeeded.",
-            "task_name": task_name,
-            "trace": " | ".join(trace),
-        }
+    verified = _run_and_verify(2, "Graceful stop + verified start succeeded.", "run2")
+    if verified is not None:
+        return verified
 
     # Step 3: force taskkill + /Run
-    pids = _find_bat_process_pids(bat_basename)
+    pids, _, _ = _collect_restart_candidate_pids(card_id, bat_basename)
     for pid in pids:
-        _run_cmd_silent(["taskkill", "/F", "/T", "/PID", str(pid)], timeout=4.0)
+        _kill_pid_tree(pid, force=True)
+    remaining = _wait_for_pids_exit(pids, timeout=6.0)
     trace.append(f"force_pids={pids}")
+    if remaining:
+        trace.append(f"force_remaining={remaining}")
     time.sleep(1.0)
-    run_rc, run_out = _run_cmd_silent(["schtasks", "/Run", "/TN", task_name], timeout=5.0)
-    trace.append(f"run3_rc={run_rc}")
-    if run_rc == 0:
-        return {
-            "ok": True,
-            "step": 3,
-            "message": "Force stop + start succeeded.",
-            "task_name": task_name,
-            "trace": " | ".join(trace),
-        }
+    verified = _run_and_verify(3, "Force stop + verified start succeeded.", "run3")
+    if verified is not None:
+        return verified
 
-    err_msg = run_out or "schtasks /Run failed"
+    run_rc, run_out = _run_cmd_silent(["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"], timeout=5.0)
+    trace.append(f"query_rc={run_rc}")
+    if run_out:
+        trace.append(f"query_out={run_out[:240]}")
+    err_msg = run_out or "restart verification failed"
     return {
         "ok": False,
         "step": 3,
@@ -527,13 +783,94 @@ def parse_status_file(path: Path) -> Dict[str, str]:
     if not path.exists():
         return out
     try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if text.startswith("\ufeff"):
+            text = text.lstrip("\ufeff")
+        for line in text.splitlines():
             if "=" in line:
                 k, v = line.split("=", 1)
-                out[k.strip()] = v.strip()
+                out[k.strip().lstrip("\ufeff")] = v.strip()
     except OSError:
         return {}
     return out
+
+
+def _parse_status_datetime(raw: object, *, default_tz: dt.tzinfo = IST) -> Optional[dt.datetime]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=default_tz)
+        return parsed.astimezone(IST)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d_%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return dt.datetime.strptime(text, fmt).replace(tzinfo=default_tz)
+        except ValueError:
+            continue
+    return None
+
+
+def _append_status_note(status: Dict[str, str], note: str) -> Dict[str, str]:
+    merged = dict(status or {})
+    extra = str(note or "").strip()
+    if not extra:
+        return merged
+    current = str(merged.get("derived_status", "")).strip()
+    merged["derived_status"] = f"{current}; {extra}" if current else extra
+    return merged
+
+
+def infer_pid_session_provenance(card_id: str, status: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(status or {})
+    candidate_keys = (
+        ("start_ts_utc", "start_ts_utc"),
+        ("worker_start_utc", "worker_start_utc"),
+        ("launcher_start_utc", "launcher_start_utc"),
+        ("start_ts", "start_ts"),
+    )
+    sources_to_check = [("status", merged)]
+    supervisor_filename = STATUS_FILES.get(card_id, "")
+    if supervisor_filename:
+        supervisor_path = LOG_DIR / supervisor_filename
+        supervisor_status = parse_status_file(supervisor_path)
+        if supervisor_status:
+            sources_to_check.append(("supervisor_status", supervisor_status))
+
+    start_ist: Optional[dt.datetime] = None
+    start_source = ""
+    for scope, source_dict in sources_to_check:
+        for key, source in candidate_keys:
+            parsed = _parse_status_datetime(source_dict.get(key, ""))
+            if parsed is not None:
+                start_ist = parsed.astimezone(IST)
+                start_source = f"{scope}:{source}"
+                break
+        if start_ist is not None:
+            break
+
+    if start_ist is None:
+        return merged
+
+    session_start = dt.datetime.combine(dt.datetime.now(IST).date(), dt.time(9, 0), tzinfo=IST)
+    merged["pid_start_ist"] = start_ist.strftime("%Y-%m-%d %H:%M:%S%z")
+    merged["pid_start_source"] = start_source
+    merged["session_start_ist"] = session_start.strftime("%Y-%m-%d %H:%M:%S%z")
+
+    if start_ist < session_start:
+        merged["provenance_flag"] = "PID_PREDATES_SESSION"
+        merged = _append_status_note(
+            merged,
+            (
+                f"provenance=pid_predates_session"
+                f" | pid_start={merged['pid_start_ist']}"
+                f" | session_start={merged['session_start_ist']}"
+            ),
+        )
+    return merged
 
 
 def merge_runtime_status(status: Dict[str, str], heartbeat: Dict[str, str]) -> Dict[str, str]:
@@ -1610,6 +1947,65 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       background: rgba(8, 18, 28, 0.7);
     }
 
+    .restart-all-btn {
+      position: absolute;
+      top: 14px;
+      right: 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid rgba(121, 200, 255, 0.55);
+      background: linear-gradient(135deg, rgba(22, 55, 82, 0.95), rgba(16, 108, 150, 0.92));
+      color: #e6f2ff;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      padding: 7px 14px;
+      border-radius: 999px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(12, 58, 90, 0.45);
+      transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+      user-select: none;
+    }
+
+    .restart-all-btn:hover {
+      border-color: rgba(121, 200, 255, 0.95);
+      background: linear-gradient(135deg, rgba(30, 78, 118, 0.98), rgba(22, 130, 180, 0.98));
+      box-shadow: 0 6px 18px rgba(18, 90, 140, 0.55);
+      transform: translateY(-1px);
+    }
+
+    .restart-all-btn:active {
+      transform: translateY(0);
+      box-shadow: 0 3px 8px rgba(12, 58, 90, 0.4);
+    }
+
+    .restart-all-btn:disabled {
+      opacity: 0.72;
+      cursor: wait;
+      transform: none;
+    }
+
+    .restart-all-btn .restart-icon {
+      display: inline-block;
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    .restart-all-btn.is-busy .restart-icon {
+      animation: restart-spin 0.9s linear infinite;
+    }
+
+    .restart-all-btn.is-ok {
+      border-color: rgba(15, 207, 154, 0.8);
+      background: linear-gradient(135deg, rgba(14, 84, 60, 0.95), rgba(18, 150, 110, 0.95));
+    }
+
+    .restart-all-btn.is-err {
+      border-color: rgba(255, 107, 107, 0.8);
+      background: linear-gradient(135deg, rgba(110, 25, 25, 0.95), rgba(180, 52, 52, 0.95));
+    }
+
     button {
       border: 1px solid rgba(84, 204, 255, 0.5);
       color: #081726;
@@ -2105,6 +2501,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <header>
     <h1>EQIDV2 Scheduled Jobs Dashboard</h1>
     <div class="sub" id="info">loading...</div>
+    <button type="button" class="restart-all-btn" id="restartAllBtn"
+            title="Restart all managed sessions (sequential 3-step escalation per session)">
+      <span class="restart-icon" aria-hidden="true">&#x21BB;</span>
+      <span class="restart-all-label">Restart All</span>
+    </button>
     <div class="toolbar">
       <button id="refreshBtn" onclick="loadNow()">Refresh Now</button>
       <div class="toolbar-note">Auto refresh every 15 seconds | Maximize and scroll horizontally for full line data</div>
@@ -2471,6 +2872,69 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       });
     }
 
+    function wireRestartAllControl() {
+      const btn = document.getElementById('restartAllBtn');
+      if (!btn || btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      const labelEl = btn.querySelector('.restart-all-label');
+      const origLabel = labelEl ? labelEl.textContent : "Restart All";
+      btn.addEventListener('click', async () => {
+        if (btn.disabled) return;
+        if (!window.confirm(`Restart all ${RESTARTABLE_CARDS.size} managed sessions?`)) return;
+        btn.disabled = true;
+        btn.classList.remove('is-ok', 'is-err');
+        btn.classList.add('is-busy');
+        const ids = Array.from(RESTARTABLE_CARDS);
+        const total = ids.length;
+        let done = 0;
+        let failed = 0;
+        const updateLabel = () => {
+          if (labelEl) labelEl.textContent = `Restarting ${done}/${total}`;
+        };
+        updateLabel();
+        const results = await Promise.all(ids.map(async (cardId) => {
+          try {
+            const res = await fetch(apiUrl('/api/restart'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
+              body: JSON.stringify({ card_id: cardId })
+            });
+            const data = await res.json().catch(() => ({}));
+            const ok = !!(res.ok && data && data.ok);
+            if (!ok) failed += 1;
+            return { cardId, ok, step: data && data.step, message: data && data.message };
+          } catch (err) {
+            failed += 1;
+            return { cardId, ok: false, message: String((err && err.message) || err) };
+          } finally {
+            done += 1;
+            updateLabel();
+          }
+        }));
+        btn.classList.remove('is-busy');
+        if (failed === 0) {
+          btn.classList.add('is-ok');
+          if (labelEl) labelEl.textContent = `OK ${total}/${total}`;
+          btn.title = results.map(r => `${r.cardId}: step ${r.step}`).join(' | ');
+        } else {
+          btn.classList.add('is-err');
+          if (labelEl) labelEl.textContent = `${total - failed}/${total} OK, ${failed} failed`;
+          btn.title = results
+            .filter(r => !r.ok)
+            .map(r => `${r.cardId}: ${r.message || 'failed'}`)
+            .join(' | ');
+        }
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.classList.remove('is-ok', 'is-err');
+          if (labelEl) labelEl.textContent = origLabel;
+          btn.title = "Restart all managed sessions (sequential 3-step escalation per session)";
+          loadNow();
+        }, 3200);
+      });
+    }
+
     function wireRestartControls() {
       const buttons = document.querySelectorAll('#cards .restart-btn');
       buttons.forEach((btn) => {
@@ -2479,6 +2943,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const target = ev.currentTarget;
           const cardId = target.getAttribute('data-restart-id') || "";
           if (!cardId || target.disabled) return;
+          const sessionName = displayName(cardId);
+          if (!window.confirm(`Restart session "${sessionName}"?\n\nEscalation: (1) scheduler restart, (2) graceful stop + start, (3) force stop + start.`)) return;
           const labelEl = target.querySelector('.restart-label');
           const origLabel = labelEl ? labelEl.textContent : "Restart";
           target.disabled = true;
@@ -2646,6 +3112,22 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const status = it.status && it.status.status ? it.status.status : "";
           const mtime = it.mtime || "-";
           const size = it.size_bytes || 0;
+          const statusBits = [];
+          if (it.status && it.status.provenance_flag) {
+            statusBits.push(`provenance: ${it.status.provenance_flag}`);
+          }
+          if (it.status && it.status.pid_start_ist) {
+            statusBits.push(`pid start: ${it.status.pid_start_ist}`);
+          }
+          if (it.status && it.status.scheduler_next_run) {
+            statusBits.push(`next run: ${it.status.scheduler_next_run}`);
+          }
+          if (it.status && it.status.derived_status) {
+            statusBits.push(String(it.status.derived_status));
+          }
+          const statusMeta = statusBits.length
+            ? `<div class="meta">${statusBits.map((part) => esc(part)).join(" | ")}</div>`
+            : "";
           const cardCls = cardStatusClass(status);
           const isFs = FULLSCREEN_ID === id ? " is-fullscreen" : "";
           const toggleLabel = FULLSCREEN_ID === id ? "Minimize" : "Maximize";
@@ -2658,6 +3140,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                   <button type="button" class="${toggleCls}" data-toggle-id="${esc(id)}">${toggleLabel}</button>
                   <div class="name">${esc(displayName(it.id))}</div>
                   <div class="meta">file: ${esc(it.file_name || "-")} | mtime: ${esc(mtime)} | size: ${size} bytes</div>
+                  ${statusMeta}
                 </div>
                 <div class="card-head-right">
                   ${renderRestartButton(it.id)}
@@ -2706,6 +3189,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
       }
     }
 
+    wireRestartAllControl();
     loadNow();
     setInterval(loadNow, 15000);
   </script>
@@ -2731,6 +3215,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 status = merge_runtime_status(status, heartbeat)
             status = infer_scanner_runtime_status(key, path, status)
             status = apply_scheduler_status(key, status, task_snapshot)
+            status = infer_pid_session_provenance(key, status)
             try:
                 size = path.stat().st_size if path.exists() else 0
             except OSError:

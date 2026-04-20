@@ -95,7 +95,12 @@ PENDING_CSV_PATTERN  = "pending_signals_{}_v16_5min.csv"
 
 SLOT_MINUTES        = 5
 START_TIME          = dtime(9, 15)
-END_TIME            = dtime(15, 0)
+# Two-session design: morning slots (< 11:00) expire at 11:00; afternoon slots
+# (11:00..<13:30) expire at 13:30. Any slot >= 13:30 would inherit an
+# already-past expiry under `_compute_expires_at`, so stop scanning at 13:30.
+# Detection Engine and Trade Executor remain live past this time to confirm
+# and execute signals from the last afternoon slot (13:25).
+END_TIME            = dtime(13, 30)
 HARD_STOP_TIME      = dtime(15, 30)
 TAIL_ROWS           = int(os.getenv("EQIDV16_5MIN_TAIL_ROWS", "260"))
 SLOT_START_OFFSET_SECONDS   = int(os.getenv("EQIDV16_5MIN_SLOT_START_OFFSET_SECONDS", "45"))

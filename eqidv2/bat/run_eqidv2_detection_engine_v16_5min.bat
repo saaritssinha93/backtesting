@@ -72,7 +72,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
   -CooldownWindowSec 300 ^
   -CooldownMaxRestarts 6 ^
   -CooldownDelaySec 120 ^
-  -CutoffHHmm 1535 ^
+  -CutoffHHmm 1520 ^
   -SkipRunAfterCutoff ^
   -StopRestartsAfterCutoff
 

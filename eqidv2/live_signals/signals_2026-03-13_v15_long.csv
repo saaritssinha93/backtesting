@@ -1,2 +1,0 @@
-date,ticker,side,signal_entry_datetime_ist,signal_bar_time_ist,setup,impulse_type,entry_price,sl_price,target_price,quality_score,signal_id
-2026-03-13,USHAMART,LONG,2026-03-13 10:30:00+05:30,2026-03-13 10:30:00+05:30,B_HUGE_C1_CLOSE_RECLAIM_BREAK,HUGE,387.32745,386.24293314,391.58805195,9.481170478481904,66abe74003a9a438

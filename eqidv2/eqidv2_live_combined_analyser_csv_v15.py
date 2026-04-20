@@ -103,6 +103,8 @@ SLOT_READY_MARKER_DIR.mkdir(parents=True, exist_ok=True)
 RUNTIME_STATUS_FILE_ENV = "EQIDV2_RUNTIME_STATUS_FILE"
 RUNTIME_HEARTBEAT_FILE_ENV = "EQIDV2_RUNTIME_HEARTBEAT_FILE"
 RUNTIME_SCRIPT_NAME_ENV = "EQIDV2_RUNTIME_SCRIPT_NAME"
+_PROCESS_START_UTC = datetime.now(pytz.UTC)
+_PROCESS_START_IST = _PROCESS_START_UTC.astimezone(IST)
 
 PARQUET_ENGINE = "pyarrow"
 
@@ -2139,6 +2141,8 @@ def _touch_runtime_status(status: str, **extra: Any) -> None:
         script=_runtime_script_name(),
         pid=os.getpid(),
         ts=now_ist().strftime("%Y-%m-%d_%H:%M:%S"),
+        start_ts=_PROCESS_START_IST.strftime("%Y-%m-%d_%H:%M:%S"),
+        start_ts_utc=_PROCESS_START_UTC.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         **extra,
     )
 
@@ -2150,6 +2154,8 @@ def _touch_runtime_heartbeat(state: str = "RUNNING", **extra: Any) -> None:
         script=_runtime_script_name(),
         pid=os.getpid(),
         ts=now_ist().strftime("%Y-%m-%d_%H:%M:%S"),
+        start_ts=_PROCESS_START_IST.strftime("%Y-%m-%d_%H:%M:%S"),
+        start_ts_utc=_PROCESS_START_UTC.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         **extra,
     )
 

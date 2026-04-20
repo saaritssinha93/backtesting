@@ -1,2 +1,0 @@
-date,ticker,side,signal_entry_datetime_ist,signal_bar_time_ist,setup,impulse_type,entry_price,sl_price,target_price,quality_score,signal_id
-2026-03-13,HINDPETRO,SHORT,2026-03-13 10:15:00+05:30,2026-03-13 10:15:00+05:30,A_MOD_BREAK_C1_LOW,MODERATE,385.22292779541016,387.7653991188598,381.0817813216095,0.9083218244371528,f9b17087dcbbb161

@@ -41,6 +41,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
@@ -111,7 +112,18 @@ NIFTYBEES_TICKER      = "NIFTYBEES"
 CHECK_INTERVAL_SEC    = int(os.getenv("EQIDV2_DETECTION_CHECK_INTERVAL_SEC", "60"))
 STARTUP_OFFSET_SEC    = int(os.getenv("EQIDV2_DETECTION_STARTUP_OFFSET_SEC", "30"))
 MARKET_OPEN           = dtime(9, 15)
-HARD_STOP             = dtime(15, 35)
+# Fix #14: align with trade executor FORCED_CLOSE_TIME (15:20). Confirmations
+# after 15:20 would be rejected as ENTRY_SKIPPED_AFTER_CUTOFF by the executor,
+# so there's no point running detection past that point.
+def _parse_hard_stop_hhmm(val: str) -> dtime:
+    try:
+        hh, mm = val.strip().split(":")
+        return dtime(int(hh), int(mm))
+    except Exception:
+        return dtime(15, 20)
+HARD_STOP             = _parse_hard_stop_hhmm(
+    os.getenv("EQIDV2_DETECTION_HARD_STOP_HHMM", "15:20")
+)
 MAX_DATA_AGE_SEC      = int(os.getenv("EQIDV2_DETECTION_MAX_DATA_AGE_SEC", "180"))  # 3 min
 ALIGN_TO_5MIN_BOUNDARY = str(
     os.getenv("EQIDV2_DETECTION_ALIGN_TO_5MIN", "0")
@@ -375,31 +387,67 @@ def _assess_pending_parquet_freshness(
                 f"data_incomplete (last_row={_format_ist_ts(last_row_ts)} < required_slot={_format_ist_ts(req_ts)})",
             )
 
-    if age_sec > MAX_DATA_AGE_SEC:
+    # Fix #13: use max(mtime, last_row_ts) as the freshness clock.
+    # On Windows + OneDrive, os.replace/sync can leave a just-written file with
+    # a briefly-stale mtime even though its last candle is current. Trust the
+    # more-recent of the two timestamps to avoid false-rejecting fresh data.
+    effective_age_sec = age_sec
+    if last_row_ts is not None:
+        try:
+            now_ist = pd.Timestamp.now(tz=IST)
+            last_row_age = max(0.0, (now_ist - last_row_ts).total_seconds())
+            effective_age_sec = min(age_sec, last_row_age)
+        except Exception:
+            pass
+
+    if effective_age_sec > MAX_DATA_AGE_SEC:
         return (
             df,
             age_sec,
             last_row_ts,
-            f"data_stale ({age_sec:.0f}s > {MAX_DATA_AGE_SEC}s; last_row={_format_ist_ts(last_row_ts)})",
+            f"data_stale ({effective_age_sec:.0f}s > {MAX_DATA_AGE_SEC}s; "
+            f"mtime_age={age_sec:.0f}s; last_row={_format_ist_ts(last_row_ts)})",
         )
 
-    return df, age_sec, last_row_ts, None
+    return df, effective_age_sec, last_row_ts, None
+
+
+def _marker_source_slot_key(marker_ts: Any) -> Optional[str]:
+    """Normalize a marker's slot timestamp to a floor-to-5min IST ISO key.
+
+    Used to compare a marker's source slot against the pending pool's expected
+    source slots. This is the primary acceptance gate for ready markers — when
+    the source slot matches what the detector is waiting for, wall-clock age
+    is irrelevant (the data is exactly what's needed).
+    """
+    if marker_ts is None:
+        return None
+    try:
+        ts = pd.Timestamp(marker_ts)
+    except Exception:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.tz_localize(IST)
+    else:
+        ts = ts.tz_convert(IST)
+    return ts.floor("5min").isoformat()
 
 
 def _load_latest_ready_marker(
     now_ist: datetime,
     allowed_slot_keys: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return the freshest ready marker for today's session.
+    """Return the newest ready marker for today's session.
 
-    When ``allowed_slot_keys`` is provided (a set of ISO-formatted floor-to-5min
-    slot timestamps), iterate newest-first through ALL fresh markers and return
-    the first one whose slot matches. Without the filter the freshest fresh
-    marker wins — matching the original semantics.
+    Acceptance rules:
+      - If ``allowed_slot_keys`` is provided, a marker is accepted when its
+        source slot matches one of the keys. Wall-clock age is NOT applied —
+        matching the expected source slot is the stronger guarantee.
+      - If no slot filter is supplied, the freshest marker within
+        ``READY_MARKER_MAX_AGE_SEC`` wins (legacy behavior).
 
-    This replaces the old "take newest, reject on slot mismatch" pattern, which
-    could leave a perfectly good older marker unused and stall the detection
-    cycle in a `waiting_ready_marker` loop until its max-age expired.
+    In both modes candidates are scanned newest-first and bounded to today's
+    session via a date check so stale markers from prior days never leak in.
     """
     if not USE_READY_MARKER_HANDOFF:
         return None
@@ -444,12 +492,13 @@ def _load_latest_ready_marker(
             continue
 
         age_sec = max(0.0, float((now_ts - marker_ts).total_seconds()))
-        if age_sec > float(READY_MARKER_MAX_AGE_SEC):
-            continue
 
         if allowed_slot_keys:
-            marker_slot_key = pd.Timestamp(marker_ts).floor("5min").isoformat()
-            if marker_slot_key not in allowed_slot_keys:
+            marker_slot_key = _marker_source_slot_key(marker_ts)
+            if marker_slot_key is None or marker_slot_key not in allowed_slot_keys:
+                continue
+        else:
+            if age_sec > float(READY_MARKER_MAX_AGE_SEC):
                 continue
 
         ready_tickers = {
@@ -467,7 +516,13 @@ def _load_latest_ready_marker(
 
 
 def _load_ready_marker_for_slot(slot_ts: pd.Timestamp, now_ist: datetime) -> Optional[Dict[str, Any]]:
-    """Load the ready marker for a specific slot by exact filename lookup."""
+    """Load the ready marker for a specific slot by exact filename lookup.
+
+    Acceptance is by exact source-slot match (the filename is derived from the
+    slot boundary by the fetcher). Wall-clock age is not enforced because a
+    slot-match already guarantees the marker describes the candle the
+    detector is waiting for.
+    """
     if not USE_READY_MARKER_HANDOFF:
         return None
     slot_local = slot_ts.tz_convert(IST)
@@ -484,7 +539,7 @@ def _load_ready_marker_for_slot(slot_ts: pd.Timestamp, now_ist: datetime) -> Opt
     else:
         now_ts = now_ts.tz_convert(IST)
     age_sec = max(0.0, float((now_ts - slot_local).total_seconds()))
-    if age_sec > float(READY_MARKER_MAX_AGE_SEC):
+    if slot_local.date() != now_ts.date():
         return None
     ready_tickers = {
         str(t).upper().strip()
@@ -933,12 +988,17 @@ def _run_detection_cycle_live_parity(
         if slot_ts is not None:
             pending_source_slots.add(slot_ts.isoformat())
 
-    ready_marker = _load_latest_ready_marker(now)
+    ready_marker = _load_latest_ready_marker(
+        now,
+        allowed_slot_keys=pending_source_slots or None,
+    )
     ready_tickers: Optional[Set[str]] = None
     if USE_READY_MARKER_HANDOFF:
         if ready_marker is None:
             print(
-                f"[DETECTION_PARITY] {now.strftime('%H:%M:%S')} | pending={len(pending_sigs)} | waiting_ready_marker",
+                f"[DETECTION_PARITY] {now.strftime('%H:%M:%S')} | pending={len(pending_sigs)} | "
+                f"waiting_ready_marker (no fresh marker matching pending_slots="
+                f"{sorted(pending_source_slots) if pending_source_slots else '[]'})",
                 flush=True,
             )
             return "waiting_ready_marker"
@@ -949,20 +1009,6 @@ def _run_detection_cycle_live_parity(
                 flush=True,
             )
             return "waiting_ready_marker"
-        # Slot-aware check: the ready marker must belong to one of our pending source
-        # slots. Consuming a marker from a different slot produces stale ticker sets.
-        if pending_source_slots:
-            marker_slot_ts = _normalize_ist_timestamp(ready_marker.get("slot", ""))
-            if marker_slot_ts is not None:
-                marker_slot_key = marker_slot_ts.floor("5min").isoformat()
-                if marker_slot_key not in pending_source_slots:
-                    print(
-                        f"[DETECTION_PARITY] {now.strftime('%H:%M:%S')} | pending={len(pending_sigs)} | "
-                        f"waiting_ready_marker (slot mismatch: marker={marker_slot_key} "
-                        f"pending_slots={sorted(pending_source_slots)})",
-                        flush=True,
-                    )
-                    return "waiting_ready_marker"
 
     slot_groups: Dict[str, Dict[str, Any]] = {}
     skipped_no_slot = 0
@@ -998,6 +1044,7 @@ def _run_detection_cycle_live_parity(
     )
 
     counters: Dict[str, int] = {
+        "pending_at_start": len(pending_sigs),
         "confirmed": 0,
         "filtered": 0,
         "slots": 0,
@@ -1005,7 +1052,18 @@ def _run_detection_cycle_live_parity(
         "long_written": 0,
         "unmatched_final": 0,
         "still_pending": 0,
+        "waiting_ready": 0,
+        "waiting_data": 0,
     }
+    reason_counts: Counter[str] = Counter()
+    # Fix #15: per-signal waiting breakdown (ticker not in ready_tickers =
+    # waiting on Pending Fetcher; slot_wait_reasons = waiting on candle close).
+    if ready_tickers is not None:
+        for sig in pending_sigs:
+            tk = str(sig.get("ticker", "")).strip().upper()
+            if tk and tk not in ready_tickers:
+                counters["waiting_ready"] += 1
+                reason_counts["waiting_ready:ticker_not_in_ready_marker"] += 1
     for slot_key in sorted(slot_groups.keys()):
         group = slot_groups[slot_key]
         slot_ts = pd.Timestamp(group["slot"]).tz_convert(IST)
@@ -1050,6 +1108,9 @@ def _run_detection_cycle_live_parity(
 
         slot_signals = slot_ready_signals
         if slot_wait_reasons:
+            counters["waiting_data"] += len(slot_wait_reasons)
+            for reason in slot_wait_reasons.values():
+                reason_counts[f"waiting_data:{reason}"] += 1
             wait_preview = ", ".join(
                 f"{ticker}:{reason}" for ticker, reason in sorted(slot_wait_reasons.items())[:5]
             )
@@ -1068,6 +1129,7 @@ def _run_detection_cycle_live_parity(
                 sig["status"] = "filtered_parity"
                 sig["filter_reason"] = "missing_ticker"
                 counters["filtered"] += 1
+                reason_counts["filtered_parity:missing_ticker"] += 1
             print(
                 f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | tickers=0 | filtered={len(slot_signals)}",
                 flush=True,
@@ -1111,8 +1173,11 @@ def _run_detection_cycle_live_parity(
         slot_long_written = 0
         slot_detected = 0
         slot_filtered = 0
+        slot_hhmm = slot_ts.strftime('%H:%M')
         for sig in slot_signals:
             signal_id = str(sig.get("signal_id", "")).strip() or _signal_id_from_rowlike(sig)
+            sig_ticker = str(sig.get("ticker", "")).strip().upper() or "?"
+            sig_side = str(sig.get("side", "")).strip().upper() or "?"
             if signal_id:
                 pending_ids.add(signal_id)
             if signal_id and signal_id in final_by_id:
@@ -1140,11 +1205,23 @@ def _run_detection_cycle_live_parity(
                     slot_short_written += int(wrote)
                 elif side_upper == "LONG":
                     slot_long_written += int(wrote)
+                # Fix #15: per-signal outcome log.
+                print(
+                    f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {side_upper} -> "
+                    f"CONFIRMED (written={int(wrote)})",
+                    flush=True,
+                )
             else:
                 sig["status"] = "filtered_parity"
                 sig["filter_reason"] = "not_in_live_parity_final_set"
                 slot_filtered += 1
                 counters["filtered"] += 1
+                reason_counts["filtered_parity:not_in_live_parity_final_set"] += 1
+                print(
+                    f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {sig_side} -> "
+                    f"FILTERED (not_in_live_parity_final_set)",
+                    flush=True,
+                )
 
         counters["short_written"] += int(slot_short_written)
         counters["long_written"] += int(slot_long_written)
@@ -1172,6 +1249,8 @@ def _run_detection_cycle_live_parity(
     counters["still_pending"] = sum(
         1 for s in signals if str(s.get("status", "")).lower() == "pending"
     )
+    if skipped_no_slot:
+        reason_counts["pending:missing_source_slot"] += int(skipped_no_slot)
 
     all_detected = [s for s in signals if str(s.get("status", "")).lower() == "detected"]
     _write_detected_csv(all_detected, date_str)
@@ -1180,12 +1259,20 @@ def _run_detection_cycle_live_parity(
     _write_pending_state_atomic(state, date_str)
     _write_pending_csv(state, date_str)
 
+    # Fix #15: cycle summary with explicit pending / promoted / waiting / filtered counts.
+    waiting_total = counters["waiting_ready"] + counters["waiting_data"]
+    reason_summary = ", ".join(
+        f"{reason}={count}" for reason, count in reason_counts.most_common(8)
+    )
     print(
-        f"[DETECTION_PARITY] {now.strftime('%H:%M:%S')} | slots={counters['slots']} | "
-        f"confirmed={counters['confirmed']} | filtered={counters['filtered']} | "
-        f"short_written={counters['short_written']} | long_written={counters['long_written']} | "
+        f"[DETECTION_CYCLE] {now.strftime('%H:%M:%S')} | pending={counters['pending_at_start']} | "
+        f"slots={counters['slots']} | promoted={counters['confirmed']} | "
+        f"waiting={waiting_total} (ready={counters['waiting_ready']},data={counters['waiting_data']}) | "
+        f"filtered_parity={counters['filtered']} | "
+        f"written=S{counters['short_written']}/L{counters['long_written']} | "
         f"still_pending={counters['still_pending']} | unmatched_final={counters['unmatched_final']} | "
-        f"missing_slot_meta={skipped_no_slot}",
+        f"missing_slot_meta={skipped_no_slot}"
+        f"{' | reasons=' + reason_summary if reason_summary else ''}",
         flush=True,
     )
     return "processed"
@@ -1544,13 +1631,17 @@ def _run_detection_cycle(
         if slot_ts is not None:
             pending_source_slots_legacy.add(slot_ts.isoformat())
 
-    ready_marker = _load_latest_ready_marker(now)
+    ready_marker = _load_latest_ready_marker(
+        now,
+        allowed_slot_keys=pending_source_slots_legacy or None,
+    )
     ready_tickers: Optional[Set[str]] = None
     if USE_READY_MARKER_HANDOFF:
         if ready_marker is None:
             print(
                 f"[DETECTION] {now.strftime('%H:%M:%S')} | pending={len(pending_sigs)} | "
-                "waiting_ready_marker",
+                f"waiting_ready_marker (no fresh marker matching pending_slots="
+                f"{sorted(pending_source_slots_legacy) if pending_source_slots_legacy else '[]'})",
                 flush=True,
             )
             return "waiting_ready_marker"
@@ -1562,19 +1653,6 @@ def _run_detection_cycle(
                 flush=True,
             )
             return "waiting_ready_marker"
-        # Slot-aware check: the ready marker must belong to one of our pending source slots.
-        if pending_source_slots_legacy:
-            marker_slot_ts = _normalize_ist_timestamp(ready_marker.get("slot", ""))
-            if marker_slot_ts is not None:
-                marker_slot_key = marker_slot_ts.floor("5min").isoformat()
-                if marker_slot_key not in pending_source_slots_legacy:
-                    print(
-                        f"[DETECTION] {now.strftime('%H:%M:%S')} | pending={len(pending_sigs)} | "
-                        f"waiting_ready_marker (slot mismatch: marker={marker_slot_key} "
-                        f"pending_slots={sorted(pending_source_slots_legacy)})",
-                        flush=True,
-                    )
-                    return "waiting_ready_marker"
 
     # Compute NIFTY RS + context once per cycle (same value used for all pending signals)
     rs_pct, allow_long, allow_short = _load_niftybees_rs(now)
@@ -1685,7 +1763,11 @@ def main() -> None:
         if now.time() >= HARD_STOP:
             _touch_status("STOPPED_AFTER_CUTOFF")
             _touch_heartbeat("STOPPED")
-            print("[STOP] Hard-stop reached. Exiting.", flush=True)
+            print(
+                f"[STOP] Hard-stop {HARD_STOP.strftime('%H:%M')} reached "
+                "(aligned with executor entry cutoff). Exiting.",
+                flush=True,
+            )
             return
 
         if now.time() < MARKET_OPEN:

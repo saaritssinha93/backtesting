@@ -900,6 +900,14 @@ while ($true) {
 
     while (-not $process.HasExited) {
         Start-Sleep -Seconds $monitorIntervalSec
+        try {
+            $process.Refresh()
+        } catch {
+            # no-op
+        }
+        if ($process.HasExited) {
+            break
+        }
 
         if ($null -eq $script:CurrentWorkerPid) {
             $workerDetails = Resolve-WorkerIdentity -LauncherPid $process.Id
@@ -922,6 +930,16 @@ while ($true) {
         Write-RunningStatus -RestartCount $restartCount -ChildPid $process.Id -Reason "monitoring"
 
         $launcherNow = Get-ManagedProcessDetails -ProcessId $process.Id
+        if ($null -eq $launcherNow) {
+            try {
+                $process.Refresh()
+            } catch {
+                # no-op
+            }
+            if ($process.HasExited) {
+                break
+            }
+        }
         if ($null -eq $launcherNow -or -not (Same-ProcessIdentity -Details $launcherNow -ExpectedPid $process.Id -ExpectedStartUtc $script:CurrentLauncherStartUtc)) {
             $forcedHungKill = $true
             $forcedExitReason = "launcher_identity_mismatch"
