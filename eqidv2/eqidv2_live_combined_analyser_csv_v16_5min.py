@@ -4,11 +4,14 @@ EQIDV2 — V16 5min Live Signal Scanner
 ======================================
 Persistent 5-min slot scanner for V16 Run 7 canonical parameters.
 
+Operational file names stay on the v16 path, but this live analyser imports the
+v17f runner patch bundle first so live scan/context/filter logic matches v17f.
+
 Scans all 1041 NSE tickers every 5 minutes using:
   - V16 Run 7 scanner config (avwap_min_consec_closes=1, mod_impulse_min_atr=0.30, volume=0.80)
   - Backtest-parity NIFTY intraday context and per-stock RS filtering
   - V16 anti-exhaustion post-scan filters (RSI dead zone, QS two-band, AVWAP dist cap)
-  - Unified SL/TGT: 0.75% stop, 0.80% target
+  - Unified SL/TGT: 0.75% stop, 1.00% target
 
 Outputs (to LIVE_SIGNALS_DIR):
   signals_YYYY-MM-DD_v16_5min_short.csv
@@ -43,6 +46,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # V16 runner — params, filters, scan helpers
 # ---------------------------------------------------------------------------
+import avwap_combined_runner_v17f_5min as _v17f_runner  # noqa: F401
 import avwap_combined_runner_v16_5min as v16_runner
 from avwap_combined_runner_v16_5min import (
     apply_live_parity_profile,
@@ -64,11 +68,11 @@ from avwap_v11_refactored.avwap_common_v11_v15 import (
 )
 from avwap_v11_refactored.avwap_short_strategy_v11 import (
     scan_all_days_for_ticker as scan_short,
-    scan_all_days_for_ticker_prepared as scan_short_prepared,
+    scan_all_days_for_ticker_prepared as _base_scan_short_prepared,
 )
 from avwap_v11_refactored.avwap_long_strategy_v9_sweep import (
     scan_all_days_for_ticker as scan_long,
-    scan_all_days_for_ticker_prepared as scan_long_prepared,
+    scan_all_days_for_ticker_prepared as _base_scan_long_prepared,
 )
 
 # ---------------------------------------------------------------------------
@@ -78,6 +82,7 @@ import eqidv2_live_combined_analyser_csv_v15 as base_v15
 from eqidv2_runtime_paths import (
     DATA_5M_DIR as RUNTIME_DATA_5M_DIR,
     LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
+    RUNTIME_STATUS_DIR,
     runtime_dir,
 )
 from live_v16_5min_slot_snapshot import (
@@ -179,6 +184,7 @@ INTRADAY_LEVERAGE   = 5.0
 DEFAULT_POSITION_SIZE_RS = float(
     os.getenv("EQIDV16_5MIN_DEFAULT_POSITION_SIZE_RS", "10000")
 )
+LIVE_MIN_BARS_FOR_SCAN = max(4, int(os.getenv("EQIDV16_5MIN_LIVE_MIN_BARS_FOR_SCAN", "4")))
 LIVE_NIFTY_CONTEXT_OR_END_TIME = dtime(9, 20)
 LIVE_NIFTY_CONTEXT_CONFIRM_TIME = dtime(9, 20)
 _FORCE_SIGNAL_QUANTITY_RAW = str(os.getenv("EQIDV16_5MIN_FORCE_SIGNAL_QUANTITY", "")).strip()
@@ -920,22 +926,17 @@ def _apply_live_v17b_hybrid_context(
     if not mode_map:
         return short_df, long_df
 
-    short_out, s_mode_removed, s_rs_removed = _apply_live_short_v17b_context(
-        short_df, short_cfg, mode_map, nifty_ret_map
+    short_out, long_out = v16_runner._apply_nifty_intraday_context(
+        short_df,
+        long_df,
+        short_cfg,
+        mode_map,
+        nifty_ret_map,
     )
-    _, long_out = v16_runner._apply_nifty_intraday_context(
-        pd.DataFrame(), long_df, long_cfg, mode_map, nifty_ret_map
-    )
-    l_mode_removed = max(0, len(long_df) - len(long_out))
     print(
-        "[NIFTY_CONTEXT] Applied live V17b hybrid filter: "
-        f"SHORT {len(short_df)}->{len(short_out)} "
-        f"(mode_removed={s_mode_removed}, rs_removed={s_rs_removed}) "
-        f"[ATR both/directional={V17B_RS_ATR_NORM_THRESH_SHORT_BOTH:.2f}/"
-        f"{V17B_RS_ATR_DIRECTIONAL_THRESH_SHORT:.2f} | "
-        f"fallback={V17B_RS_ATR_FALLBACK_PCT_SHORT:.2f}%] | "
-        f"LONG {len(long_df)}->{len(long_out)} "
-        f"(v16 long filter retained, total_removed={l_mode_removed})"
+        "[NIFTY_CONTEXT] Applied runner context parity: "
+        f"SHORT {len(short_df)}->{len(short_out)} | "
+        f"LONG {len(long_df)}->{len(long_out)}"
     )
     return short_out, long_out
 
@@ -961,7 +962,23 @@ def _build_v16_cfgs() -> Tuple[StrategyConfig, StrategyConfig]:
     # reducing signal detection lag from 3-slot to 2-slot in live mode.
     short_cfg.allow_incomplete_tail = True
     long_cfg.allow_incomplete_tail  = True
+    short_cfg.min_bars_for_scan = LIVE_MIN_BARS_FOR_SCAN
+    long_cfg.min_bars_for_scan  = LIVE_MIN_BARS_FOR_SCAN
     return short_cfg, long_cfg
+
+
+def _scan_short_prepared_live(ticker: str, df_prepared: pd.DataFrame, short_cfg: StrategyConfig):
+    scan_fn = getattr(v16_runner, "scan_short_prepared", None)
+    if callable(scan_fn):
+        return scan_fn(ticker, df_prepared, short_cfg)
+    return _base_scan_short_prepared(ticker, df_prepared, short_cfg)
+
+
+def _scan_long_prepared_live(ticker: str, df_prepared: pd.DataFrame, long_cfg: StrategyConfig):
+    scan_fn = getattr(v16_runner, "scan_long_prepared", None)
+    if callable(scan_fn):
+        return scan_fn(ticker, df_prepared, long_cfg)
+    return _base_scan_long_prepared(ticker, df_prepared, long_cfg)
 
 
 def _slot_mode_flags_from_context_mode(mode: str) -> Tuple[bool, bool]:
@@ -1099,8 +1116,9 @@ def _write_side_signals_csv(signals: List[dict], side: str, signal_day_str: str)
                     continue
 
                 entry_price  = _safe_float(sig.get("entry_price",  0.0), 0.0)
-                stop_price   = _safe_float(sig.get("stop_price",   0.0), 0.0)
+                stop_price   = _safe_float(sig.get("stop_price", sig.get("sl_price", 0.0)), 0.0)
                 target_price = _safe_float(sig.get("target_price", 0.0), 0.0)
+                signal_price = _safe_float(sig.get("signal_price", entry_price), entry_price)
                 if FORCE_SIGNAL_QUANTITY is not None:
                     qty = int(FORCE_SIGNAL_QUANTITY)
                 else:
@@ -1117,6 +1135,7 @@ def _write_side_signals_csv(signals: List[dict], side: str, signal_day_str: str)
                     "side":                        side_upper,
                     "setup":                       setup,
                     "impulse_type":                str(sig.get("impulse_type", "")),
+                    "signal_price":                round(signal_price, 2),
                     "entry_price":                 round(entry_price, 2),
                     "stop_price":                  round(stop_price, 2),
                     "target_price":                round(target_price, 2),
@@ -1217,14 +1236,14 @@ def _scan_partition_worker(
                 continue
 
             if allow_short:
-                s_trades = scan_short_prepared(ticker, df_prepared, short_cfg)
+                s_trades = _scan_short_prepared_live(ticker, df_prepared, short_cfg)
                 for trade in s_trades:
                     row = asdict(trade) if not isinstance(trade, dict) else trade
                     row["side"] = "SHORT"
                     part_short_rows.append(row)
 
             if allow_long:
-                l_trades = scan_long_prepared(ticker, df_prepared, long_cfg)
+                l_trades = _scan_long_prepared_live(ticker, df_prepared, long_cfg)
                 for trade in l_trades:
                     row = asdict(trade) if not isinstance(trade, dict) else trade
                     row["side"] = "LONG"
@@ -1453,8 +1472,8 @@ def _blocked_nifty_context_message(slot: datetime, slot_payload: Optional[Dict[s
 # STATUS / HEARTBEAT HELPERS
 # ===========================================================================
 def _touch_status(status: str, **extra: Any) -> None:
-    os.environ["EQIDV2_RUNTIME_STATUS_FILE"] = str(_LOG_DIR / "eqidv2_live_combined_analyser_csv_v16_5min.status")
-    os.environ["EQIDV2_RUNTIME_HEARTBEAT_FILE"] = str(_LOG_DIR / "eqidv2_live_combined_analyser_csv_v16_5min.heartbeat")
+    os.environ["EQIDV2_RUNTIME_STATUS_FILE"] = str(RUNTIME_STATUS_DIR / "eqidv2_live_combined_analyser_csv_v16_5min.status")
+    os.environ["EQIDV2_RUNTIME_HEARTBEAT_FILE"] = str(RUNTIME_STATUS_DIR / "eqidv2_live_combined_analyser_csv_v16_5min.heartbeat")
     os.environ["EQIDV2_RUNTIME_SCRIPT_NAME"] = _SCRIPT_NAME
     base_v15._touch_runtime_status(status, **extra)
 

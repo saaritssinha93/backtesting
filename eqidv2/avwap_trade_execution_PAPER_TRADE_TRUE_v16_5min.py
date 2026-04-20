@@ -16,8 +16,8 @@ For each new signal:
   4. Appends results to a daily paper trade log CSV
 
 Output:
-  - live_signals/paper_trades_YYYY-MM-DD_v15_new.csv   (detailed trade log)
-  - live_signals/paper_trade_summary_v15_new.json      (running P&L summary)
+  - live_signals/live_trades_YYYY-MM-DD_v16_5min_paper.csv  (detailed trade log)
+  - live_signals/live_trade_summary_v16_5min_paper.json     (running P&L summary)
 
 Features:
   - Watchdog-based CSV monitoring for instant reaction
@@ -117,7 +117,7 @@ ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENA
 }
 ENTRY_RETRY_NEAR_ENTRY_PCT = float(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_PCT", "0.003"))
 ENTRY_RETRY_WAIT_SEC = int(os.getenv("EQIDV2_ENTRY_RETRY_WAIT_SEC", "300"))
-ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "5"))
+ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "2"))  # per-cycle LTP poll interval (spec: Section 10)
 
 
 def _build_effective_v16_5min_executor_cfgs():
@@ -160,6 +160,48 @@ def _wait_for_near_entry_price(
                 return last_ltp
         time.sleep(poll_sec)
     return last_ltp
+
+
+def _entry_retry_deadline(
+    signal: dict,
+    trade_start_ist: datetime,
+    forced_close_dt: datetime,
+) -> datetime:
+    # Anchor to Stage-2 confirmation time first — this is the definitive moment
+    # the signal was live in the two-stage pipeline (detected_time_ist/logtime_ist).
+    # For same-cycle detections (received_time == detected_time_ist) the old
+    # rebasing logic produced a deadline anchored to the stale model entry slot,
+    # causing ENTRY_SKIPPED_STALE_SIGNAL on all early-session signals.
+    base_ts = _parse_ist_signal_ts(
+        signal.get("detected_time_ist") or signal.get("logtime_ist")
+    )
+    # Fall back to Stage-1 pending pool insertion time.
+    if base_ts is None:
+        base_ts = _parse_ist_signal_ts(signal.get("received_time"))
+    # Final fallback: model entry slot (legacy rows without pipeline timestamps).
+    if base_ts is None:
+        base_ts = _parse_ist_signal_ts(
+            signal.get("signal_entry_datetime_ist")
+            or signal.get("signal_bar_time_ist")
+            or signal.get("bar_time_ist")
+            or signal.get("signal_datetime")
+        )
+    if base_ts is None:
+        candidate = trade_start_ist + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC))
+    else:
+        candidate = base_ts.to_pydatetime() + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC))
+    return min(candidate, forced_close_dt)
+
+
+def _trade_started_after_entry_deadline(
+    trade_start_ist: Optional[datetime],
+    entry_retry_deadline: Optional[datetime],
+) -> bool:
+    if trade_start_ist is None or entry_retry_deadline is None:
+        return False
+    return trade_start_ist >= entry_retry_deadline
+
+
 SHORT_STOP_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_STOP_PCT",
@@ -175,13 +217,13 @@ LONG_STOP_PCT = float(
 SHORT_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0080))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0100))),
     )
 )
 LONG_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_LONG_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.0080))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.0100))),
     )
 )
 ENTRY_PRICE_SOURCE_CHOICES = ("signal_bar", "ltp_on_signal")
@@ -991,6 +1033,66 @@ def simulate_trade(
     trade_id = str(signal.get("trade_id", "")).strip() or f"PT-{signal_id[:8]}-{entry_time_ist.strftime('%H%M%S')}"
     today = datetime.now(IST).date()
     forced_close_dt = IST.localize(datetime.combine(today, FORCED_CLOSE_TIME))
+    trade_start_ist = entry_time_ist if not resume_mode else datetime.now(IST)
+    entry_retry_deadline = _entry_retry_deadline(signal, trade_start_ist, forced_close_dt)
+
+    def _finalize_pre_entry_skip(outcome_name: str, warning_message: str) -> bool:
+        exit_time_ist = datetime.now(IST)
+        trade = PaperTrade(
+            trade_id=trade_id,
+            signal_id=signal_id,
+            signal_datetime=str(signal.get("signal_datetime", "")),
+            signal_entry_datetime_ist=str(signal.get("signal_entry_datetime_ist", "")),
+            entry_time=trade_start_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+            exit_time=exit_time_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+            ticker=ticker,
+            side=side,
+            setup=setup,
+            impulse_type=impulse,
+            quantity=quantity,
+            entry_price=round(signal_entry_price, 2),
+            exit_price=round(signal_entry_price, 2),
+            stop_price=round(stop_price, 2),
+            target_price=round(target_price, 2),
+            outcome=outcome_name,
+            pnl_rs=0.0,
+            pnl_pct=0.0,
+            quality_score=_safe_float(signal.get("quality_score", 0), 0.0),
+            p_win=_safe_float(signal.get("p_win", 0.0), 0.0),
+            confidence_multiplier=_safe_float(signal.get("confidence_multiplier", 1.0), 1.0),
+        )
+        _log_trade(trade)
+
+        with daily_pnl_lock:
+            daily_pnl["total"] += 0.0
+            daily_pnl["trades"] += 1
+            day_total = float(daily_pnl["total"])
+            day_wins = int(daily_pnl["wins"])
+            day_losses = int(daily_pnl["losses"])
+            _save_summary()
+
+        log.warning(warning_message)
+        log.info(
+            f"[SIM] RESULT {side} {ticker} | {outcome_name} | "
+            f"P&L: Rs.+0.00 (+0.00%) | Day total: Rs.{day_total:+,.2f} "
+            f"({day_wins}W/{day_losses}L)"
+        )
+
+        _release_capacity(signal_id)
+        with active_trades_lock:
+            active_trades.pop(signal_id, None)
+        _log_live_pnl_snapshot(use_ltp, source=f"skip:{ticker}")
+        return True
+
+    if not resume_mode and _trade_started_after_entry_deadline(trade_start_ist, entry_retry_deadline):
+        return _finalize_pre_entry_skip(
+            "ENTRY_SKIPPED_STALE_SIGNAL",
+            (
+                f"[STALE] Skipping {ticker} {side}: signal surfaced at "
+                f"{trade_start_ist.strftime('%H:%M:%S')} after freshness deadline "
+                f"{entry_retry_deadline.strftime('%H:%M:%S')}."
+            ),
+        )
 
     # Select raw entry reference price:
     # - signal_bar: use signal CSV entry_price (15m logic)
@@ -1012,10 +1114,7 @@ def simulate_trade(
     # --- Near-entry retry window + max entry slip gate ---
     if (not resume_mode) and signal_entry_price > 0 and ENTRY_RETRY_NEAR_ENTRY_ENABLE and ENTRY_RETRY_WAIT_SEC > 0:
         if raw_entry > 0 and not _entry_price_within_retry_band(side, signal_entry_price, raw_entry):
-            retry_until_ist = min(
-                datetime.now(IST) + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC)),
-                forced_close_dt,
-            )
+            retry_until_ist = entry_retry_deadline
             log.info(
                 f"[ENTRY.RETRY] Waiting for {ticker} {side} to return near entry "
                 f"| signal_id={signal_id[:12]} | signal={signal_entry_price:.2f} "

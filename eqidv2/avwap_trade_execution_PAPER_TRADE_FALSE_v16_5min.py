@@ -1,8 +1,9 @@
 ﻿# -*- coding: utf-8 -*-
 """
-avwap_trade_execution_PAPER_TRADE_FALSE_v15.py - Live Trade Executor (Zerodha Real, V15)
-========================================================================================
-Watches the daily V15 signal CSVs and places REAL orders on Zerodha via KiteConnect.
+avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.py - Live Trade Executor (Zerodha Real, V16 5-min)
+=====================================================================================================
+Watches the V16 5-min signal CSVs and places REAL orders on Zerodha via KiteConnect.
+See EQIDV2_V16_5MIN_PIPELINE_REFERENCE.txt Section 10 (EXECUTOR — LIVE) for specification.
 
 For each new signal:
   1. Places a MARKET entry order (MIS product for intraday)
@@ -15,8 +16,9 @@ For each new signal:
 Concurrent trades run in parallel threads (up to MAX_CONCURRENT_TRADES).
 
 Output:
-  - live_signals/live_trades_YYYY-MM-DD_v15_new.csv   (detailed trade log)
-  - live_signals/live_trade_summary_v15_new.json      (running P&L summary)
+  - live_signals/live_trades_YYYY-MM-DD_v16_5min.csv        (detailed trade log)
+  - live_signals/live_trade_summary_v16_5min.json           (running P&L summary)
+  - live_signals/open_live_trades_state_YYYY-MM-DD_v16_5min.json (crash recovery state)
 
 Safety features:
   - Signal deduplication via signal_id tracking
@@ -105,8 +107,8 @@ MARKET_CLOSE = dt_time(15, 30)
 FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe before broker auto-square-off
 
 # Order monitoring
-ORDER_POLL_SEC = 3
-FILL_WAIT_TIMEOUT_SEC = 60
+ORDER_POLL_SEC = 1                      # per-cycle order book poll interval (spec: Section 10)
+FILL_WAIT_TIMEOUT_SEC = 60              # max wait for entry order fill
 MAX_CANCEL_RETRIES = 3
 CANCEL_RETRY_WAIT_SEC = 2
 ENTRY_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_ENTRY_RETRY_ATTEMPTS", "2")))
@@ -148,7 +150,7 @@ ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENA
 }
 ENTRY_RETRY_NEAR_ENTRY_PCT = float(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_PCT", "0.003"))
 ENTRY_RETRY_WAIT_SEC = int(os.getenv("EQIDV2_ENTRY_RETRY_WAIT_SEC", "300"))
-ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "5"))
+ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "2"))  # per-cycle LTP poll interval (spec: Section 10)
 TRANSIENT_API_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_TRANSIENT_API_RETRY_ATTEMPTS", "4")))
 TRANSIENT_API_RETRY_BASE_SEC = max(0.25, float(os.getenv("EQIDV2_TRANSIENT_API_RETRY_BASE_SEC", "1.0")))
 TRANSIENT_ENTRY_ORDER_RECOVER_LOOKBACK_SEC = max(
@@ -239,12 +241,25 @@ def _entry_retry_deadline(
     trade_start_ist: datetime,
     forced_close_dt: datetime,
 ) -> datetime:
+    # Anchor to Stage-2 confirmation time first — this is the definitive moment
+    # the signal was live in the two-stage pipeline (detected_time_ist/logtime_ist).
+    # For same-cycle detections (received_time == detected_time_ist) the old
+    # rebasing logic produced a deadline anchored to the stale model entry slot,
+    # causing ENTRY_SKIPPED_STALE_SIGNAL on all early-session signals.
     base_ts = _parse_ist_signal_ts(
-        signal.get("signal_entry_datetime_ist")
-        or signal.get("signal_bar_time_ist")
-        or signal.get("bar_time_ist")
-        or signal.get("signal_datetime")
+        signal.get("detected_time_ist") or signal.get("logtime_ist")
     )
+    # Fall back to Stage-1 pending pool insertion time.
+    if base_ts is None:
+        base_ts = _parse_ist_signal_ts(signal.get("received_time"))
+    # Final fallback: model entry slot (legacy rows without pipeline timestamps).
+    if base_ts is None:
+        base_ts = _parse_ist_signal_ts(
+            signal.get("signal_entry_datetime_ist")
+            or signal.get("signal_bar_time_ist")
+            or signal.get("bar_time_ist")
+            or signal.get("signal_datetime")
+        )
     if base_ts is None:
         candidate = trade_start_ist + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC))
     else:
@@ -329,13 +344,13 @@ LONG_STOP_PCT = float(
 SHORT_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0080))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0100))),
     )
 )
 LONG_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_LONG_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.0080))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.0100))),
     )
 )
 
@@ -3448,18 +3463,20 @@ def _normalize_signal(raw: dict) -> dict:
         else:
             sig["quantity"] = 1
 
-    # Keep signal SL/target when supplied; only backfill missing fields.
+    # Live mode: reject rows with missing SL/target rather than silently backfilling.
+    # Backfilling hides upstream data-quality problems; the downstream dispatch check
+    # (entry_price/stop_price/target_price <= 0) will never fire if we heal the values
+    # here. Instead, leave them at 0 so the dispatch loop logs ENTRY_SKIPPED and skips.
     side = str(sig.get("side", "")).strip().upper()
     entry = _safe_float(sig.get("entry_price", 0.0), 0.0)
     stop_price = _safe_float(sig.get("stop_price", 0.0), 0.0)
     target_price = _safe_float(sig.get("target_price", 0.0), 0.0)
     if entry > 0 and side in {"SHORT", "LONG"} and (stop_price <= 0 or target_price <= 0):
-        if side == "SHORT":
-            sig["stop_price"] = round(entry * (1.0 + SHORT_STOP_PCT), 2)
-            sig["target_price"] = round(entry * (1.0 - SHORT_TARGET_PCT), 2)
-        else:
-            sig["stop_price"] = round(entry * (1.0 - LONG_STOP_PCT), 2)
-            sig["target_price"] = round(entry * (1.0 + LONG_TARGET_PCT), 2)
+        log.warning(
+            f"[NORMALIZE] Signal has missing stop_price={stop_price:.4f} or "
+            f"target_price={target_price:.4f} from upstream — "
+            f"refusing to backfill in live mode. Signal will be rejected at dispatch."
+        )
 
     return sig
 

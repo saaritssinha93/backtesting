@@ -16,8 +16,8 @@ if not exist "%RUN_BAT%" (
   endlocal & exit /b 1
 )
 
-echo [INFO] Creating weekday authentication v2 task at 08:50 ...
-schtasks /Create /F /TN "%TASK_NAME%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 08:50 /TR "%RUN_BAT%"
+echo [INFO] Creating weekday authentication v2 task at 08:30 ...
+schtasks /Create /F /TN "%TASK_NAME%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 08:30 /TR "%RUN_BAT%"
 if errorlevel 1 (
   echo [ERROR] Failed to create %TASK_NAME%
   endlocal & exit /b 1
@@ -30,6 +30,6 @@ if errorlevel 1 (
 )
 
 echo [INFO] Task created/updated successfully:
-echo        %TASK_NAME%   (Mon-Fri 08:50)
+echo        %TASK_NAME%   (Mon-Fri 08:30)
 
 endlocal & exit /b 0

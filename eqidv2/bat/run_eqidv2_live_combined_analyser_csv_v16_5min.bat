@@ -18,11 +18,12 @@ set "EQIDV16_5MIN_SLOT_READY_SAMPLE_SIZE=2000"
 
 set "LOG_DIR=%BASE_DIR%\logs"
 set "ALERT_DIR=%LOG_DIR%\alerts"
+set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
 set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv_v16_5min.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v16_5min.log"
 set "ALERT_LOG=%ALERT_DIR%\CRITICAL_eqidv2_live_combined_analyser_csv_v16_5min.log"
-set "STATUS_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v16_5min.status"
-set "HEARTBEAT_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v16_5min.heartbeat"
+set "STATUS_FILE=%RUNTIME_STATUS_DIR%\eqidv2_live_combined_analyser_csv_v16_5min.status"
+set "HEARTBEAT_FILE=%RUNTIME_STATUS_DIR%\eqidv2_live_combined_analyser_csv_v16_5min.heartbeat"
 set "EQIDV2_RUNTIME_STATUS_FILE=%STATUS_FILE%"
 set "EQIDV2_RUNTIME_HEARTBEAT_FILE=%HEARTBEAT_FILE%"
 set "EQIDV2_RUNTIME_SCRIPT_NAME=%SCRIPT_NAME%"
@@ -34,6 +35,7 @@ set "STATUS_OVERRIDE="
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "%ALERT_DIR%" mkdir "%ALERT_DIR%"
+if not exist "%RUNTIME_STATUS_DIR%" mkdir "%RUNTIME_STATUS_DIR%"
 
 cd /d "%BASE_DIR%"
 

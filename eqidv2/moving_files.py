@@ -13,7 +13,7 @@ import pandas as pd
 # =========================
 # CONFIG
 # =========================
-SOURCE_DIR = Path(r"C:\TradingData\eqidv2\stocks_indicators_5min_eq")
+SOURCE_DIR = Path(r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live")
 DEST_DIR = Path(r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live2")
 
 # If you know the exact unique key columns, put them here.

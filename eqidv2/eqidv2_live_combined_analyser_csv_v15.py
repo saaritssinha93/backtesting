@@ -94,9 +94,10 @@ OUT_SIGNALS_DIR = runtime_dir("out_eqidv2_live_signals_15m_v2")
 OUT_CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 OUT_SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 
-STATE_DIR = ROOT / "logs"
+STATE_DIR = runtime_dir("runtime_state")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = STATE_DIR / "eqidv2_avwap_live_state_v11_v2.json"
+LEGACY_STATE_FILE = ROOT / "logs" / "eqidv2_avwap_live_state_v11_v2.json"
 SLOT_READY_MARKER_DIR = runtime_dir("slot_ready_15m")
 SLOT_READY_MARKER_DIR.mkdir(parents=True, exist_ok=True)
 RUNTIME_STATUS_FILE_ENV = "EQIDV2_RUNTIME_STATUS_FILE"
@@ -121,10 +122,11 @@ DEFAULT_POSITION_SIZE_RS = 50_000       # Rs. margin per trade
 INTRADAY_LEVERAGE = 5.0                 # MIS leverage on Zerodha
 
 SIGNAL_CSV_COLUMNS = [
-    "signal_id", "signal_datetime", "received_time", "detected_time_ist", "logtime_ist", "ticker", "side",
+    "signal_id", "signal_datetime", "signal_price", "received_time", "detected_time_ist", "logtime_ist", "ticker", "side",
     "setup", "impulse_type", "entry_price", "stop_price", "target_price",
     "quality_score", "atr_pct", "rsi", "adx", "quantity",
     "signal_entry_datetime_ist", "signal_bar_time_ist",
+    "stage2_detected_at_ist",
 ]
 
 
@@ -702,36 +704,32 @@ def normalize_dates(df: pd.DataFrame) -> pd.DataFrame:
 # STATE (duplicate prevention)
 # =============================================================================
 def _load_state() -> Dict[str, Any]:
-    if not STATE_FILE.exists():
+    state_path = STATE_FILE if STATE_FILE.exists() else LEGACY_STATE_FILE
+    if not state_path.exists():
         return {"last_signal": {}}
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        return json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:
         return {"last_signal": {}}
 
 
 def _save_state(state: Dict[str, Any]) -> None:
     payload = json.dumps(state, indent=2, sort_keys=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
     max_attempts = 8
     base_wait_sec = 0.15
     max_wait_sec = 1.20
     last_exc: Optional[OSError] = None
 
     for attempt in range(1, max_attempts + 1):
+        tmp = STATE_FILE.with_name(f"{STATE_FILE.name}.tmp.{os.getpid()}.{attempt}")
         try:
             tmp.write_text(payload, encoding="utf-8")
-            try:
-                tmp.replace(STATE_FILE)
-            except PermissionError:
-                # On Windows (especially with OneDrive), rename can fail if another
-                # process has a short-lived handle on the target path.
-                STATE_FILE.write_text(payload, encoding="utf-8")
-                with contextlib.suppress(OSError):
-                    tmp.unlink()
+            os.replace(tmp, STATE_FILE)
             return
         except OSError as exc:
             last_exc = exc
+            with contextlib.suppress(OSError):
+                tmp.unlink()
             if attempt >= max_attempts:
                 break
             wait_sec = min(max_wait_sec, base_wait_sec * (2 ** (attempt - 1)))
@@ -2106,7 +2104,32 @@ def _write_runtime_kv(path: Optional[Path], **fields: Any) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = "".join(f"{key}={value}\n" for key, value in fields.items() if value is not None)
-    path.write_text(payload, encoding="utf-8")
+    # Atomic write + retry: OneDrive/Defender can briefly lock the target
+    # file; a direct write_text() surfaces that as PermissionError and
+    # crashes the caller's slot loop. Never let a status-file write kill
+    # the strategy.
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    last_err: Optional[BaseException] = None
+    for attempt in range(3):
+        try:
+            tmp_path.write_text(payload, encoding="utf-8")
+            os.replace(tmp_path, path)
+            return
+        except OSError as exc:
+            last_err = exc
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+            if attempt < 2:
+                time.sleep(0.25 * (attempt + 1))
+    try:
+        sys.stderr.write(
+            f"[runtime_kv] WARN could not write {path.name} after 3 attempts: {last_err}\n"
+        )
+    except Exception:
+        pass
 
 
 def _touch_runtime_status(status: str, **extra: Any) -> None:

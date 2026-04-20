@@ -526,6 +526,7 @@ def scan_one_day(
                 outcome=outcome,
                 pnl_pct=net_pnl,
                 pnl_pct_gross=gross_pnl,
+                signal_price=close1,
                 position_size_rs=position_size_rs,
                 risk_per_trade_rs=risk_rs,
                 day_mode=day_mode,

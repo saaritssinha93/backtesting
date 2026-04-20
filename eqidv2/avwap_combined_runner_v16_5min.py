@@ -21,7 +21,7 @@ V16 NEW FILTERS vs V15 (implemented as post-scan quality gates):
 V16 INHERITS from V15 Run 5 (best quality config):
   - SHORT ADX ≥ 28, RS threshold 1.00%, entry cutoff 13:30
   - LONG  ADX ≥ 22, RSI ≥ 50, quality_score_min = 4.0
-  - Signal windows: SHORT 09:15-11:00, 12:00-13:30 | LONG 09:15-11:00, 12:00-15:00
+  - Signal windows: SHORT 09:15-12:00, 12:00-13:30 | LONG 09:15-12:00, 12:00-15:00
 
 Changes from v14:
 1. NIFTY_CONTEXT_OR_END_TIME: 10:15 -> 9:30  (15-min opening range for earlier live participation)
@@ -205,15 +205,15 @@ FINAL_LONG_SIGNAL_WINDOWS = [
 FINAL_SIGNAL_WINDOW_OVERRIDE = True
 FINAL_SHORT_USE_TIME_WINDOWS = True
 FINAL_SHORT_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(11, 0, 0)),    # morning: 60-70% win (9:xx=60.8%, 10:xx=70.6%)
+    (dtime(9, 15, 0), dtime(12, 0, 0)),    # live override: extend the first session through 12:00 noon
     (dtime(12, 0, 0), dtime(13, 30, 0)),   # Run5: 12:xx=80% win, 13:00-13:30=83% win; entry_cutoff=13:30 gates tail
-    # Excluded: 11:00-12:00 (25% win — dead zone), 13:30+ (25% win — cut by entry_cutoff)
+    # Excluded: 13:30+ (25% win — cut by entry_cutoff)
 ]
 FINAL_LONG_USE_TIME_WINDOWS = True
 FINAL_LONG_SIGNAL_WINDOWS = [
-    (dtime(9, 15, 0), dtime(11, 0, 0)),    # Run10: morning — best quality
+    (dtime(9, 15, 0), dtime(12, 0, 0)),    # live override: extend the first session through 12:00 noon
     (dtime(12, 0, 0), dtime(13, 0, 0)),    # Run13: afternoon window added — DayWin 76.56% vs 74.60%, PnL 546% vs 523%, MaxDD same 28.4%
-    # Run14 tested 13:00-14:15: worse. Run15 tested continuous 09:15-13:00: LONG DayWin 67%, MaxDD 56% (11:00-12:00 dead zone confirmed)
+    # Run14 tested 13:00-14:15: worse. Run15 tested continuous 09:15-13:00: LONG DayWin 67%, MaxDD 56%
 ]
 V15_EOD_EXIT_TIME = dtime(15, 20, 0)
 
@@ -614,12 +614,67 @@ def _apply_v16_post_scan_filters(
     return short_df, long_df
 
 
+def get_v16_filter_reason(row: dict, side: str) -> Optional[str]:
+    """
+    Returns the first V16 post-scan filter that would reject this signal dict,
+    or None if it passes all filters.  Used by Detection Engine to record individual
+    ticker filter reasons in the pending state JSON.
+
+    Mirrors the logic of _apply_v16_post_scan_filters() but for a single row.
+    """
+    side_u = str(side).upper().strip()
+
+    if side_u == "SHORT":
+        rsi = float(row.get("rsi_signal", -1) or -1)
+        if V16_SHORT_RSI_DEAD_ZONE_LO <= rsi < V16_SHORT_RSI_DEAD_ZONE_HI:
+            return (
+                f"SHORT RSI={rsi:.1f} dead zone "
+                f"[{V16_SHORT_RSI_DEAD_ZONE_LO:.0f}-{V16_SHORT_RSI_DEAD_ZONE_HI:.0f}]"
+            )
+        return None
+
+    # ---------- LONG filters (applied in order) ----------
+    qs = float(row.get("quality_score", 0) or 0)
+    if V16_LONG_QS_DEAD_LO < qs <= V16_LONG_QS_DEAD_HI:
+        return (
+            f"QS={qs:.2f} dead zone [{V16_LONG_QS_DEAD_LO:.1f}-{V16_LONG_QS_DEAD_HI:.1f}]"
+        )
+    if qs > V16_LONG_QS_ABS_MAX:
+        return f"QS={qs:.2f} exhausted > {V16_LONG_QS_ABS_MAX:.1f}"
+
+    dist = float(row.get("avwap_dist_atr_signal", 0) or 0)
+    if dist > V16_LONG_AVWAP_DIST_ATR_MAX:
+        return f"avwap_dist_atr={dist:.2f} > {V16_LONG_AVWAP_DIST_ATR_MAX:.1f} cap"
+    if V16_LONG_AVWAP_DIST_DEAD_LO <= dist < V16_LONG_AVWAP_DIST_DEAD_HI:
+        return (
+            f"avwap_dist_atr={dist:.2f} dead zone "
+            f"[{V16_LONG_AVWAP_DIST_DEAD_LO:.1f}-{V16_LONG_AVWAP_DIST_DEAD_HI:.1f}]"
+        )
+
+    if V16_LONG_ENTRY_VOL_EXHAUST_ENABLED:
+        vr  = float(row.get("entry_bar_vol_ratio", 0) or 0)
+        bfo = int(row.get("bars_from_open", 0) or 0)
+        if vr > V16_LONG_ENTRY_VOL_EXHAUST_MULT and bfo >= V16_LONG_ENTRY_VOL_EXHAUST_MIN_BARS:
+            return (
+                f"vol_ratio={vr:.1f}x climax exhaust "
+                f"(bars_from_open={bfo}, mult>{V16_LONG_ENTRY_VOL_EXHAUST_MULT:.0f}x)"
+            )
+
+    if V16_OR_GATE_ENABLED:
+        ep  = float(row.get("entry_price", 0) or 0)
+        orh = float(row.get("or_high", 0) or 0)
+        if orh > 0 and ep <= orh:
+            return f"OR gate: entry={ep:.2f} <= or_high={orh:.2f}"
+
+    return None  # passes all V16 filters
+
+
 # ===========================================================================
 # TARGET TEST — disabled in V12 (each side uses its own calibrated targets)
 # ===========================================================================
 TEST_TARGET_OVERRIDE   = True
-TEST_SHORT_TARGET_PCT  = 0.00800   # Unified v16_5min target: 0.80%
-TEST_LONG_TARGET_PCT   = 0.00800   # Unified v16_5min target: 0.80%
+TEST_SHORT_TARGET_PCT  = 0.01000   # Unified v16_5min target: 1.00%
+TEST_LONG_TARGET_PCT   = 0.01000   # Unified v16_5min target: 1.00%
 
 
 def apply_live_parity_profile(
@@ -655,7 +710,7 @@ def apply_live_parity_profile(
         short_cfg.rsi_max_short = 58.0       # Pack C short: avoid weaker/late short entries
         short_cfg.stochk_max = 90.0
         short_cfg.stop_pct = 0.0075          # Unified v16_5min SL: 0.75%
-        short_cfg.target_pct = 0.00800       # Unified v16_5min TGT: 0.80%
+        short_cfg.target_pct = 0.01000       # Unified v16_5min TGT: 1.00%
         short_cfg.be_trigger_pct = 0.0042
         short_cfg.trail_pct = 0.0023
         short_cfg.enable_partial_exit = False  # V16: no partial exits — SL/TARGET/EOD only
@@ -686,7 +741,7 @@ def apply_live_parity_profile(
         long_cfg.enable_setup_a_close_continuation_break = True  # v15_5min: fixed (was False, inconsistent with main)
         long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
         long_cfg.stop_pct = 0.0075           # Unified v16_5min SL: 0.75%
-        long_cfg.target_pct = 0.00800        # Unified v16_5min TGT: 0.80%
+        long_cfg.target_pct = 0.01000        # Unified v16_5min TGT: 1.00%
         long_cfg.be_trigger_pct = 0.0055
         long_cfg.trail_pct = 0.0028
         long_cfg.min_bars_left_after_entry = 0
@@ -1705,6 +1760,9 @@ def _finalize_side_scan_df(out: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFra
 
     out = apply_topn_per_day(out, cfg)
 
+    if "stop_price" not in out.columns and "sl_price" in out.columns:
+        out["stop_price"] = out["sl_price"]
+
     for c in ["signal_time_ist", "entry_time_ist", "exit_time_ist"]:
         if c in out.columns:
             out[c] = pd.to_datetime(out[c], errors="coerce")
@@ -1893,6 +1951,8 @@ def _convert_live_replay_rows_to_backtest_df(replay_df: pd.DataFrame, side: str)
         _infer_signal_time_from_entry(entry_ts, side, setup)
         for entry_ts, setup in zip(d["entry_time_ist"], d["setup"])
     ])
+    legacy_signal_price = d["entry_price"] if "entry_price" in d.columns else np.nan
+    d["signal_price"] = pd.to_numeric(d.get("signal_price", legacy_signal_price), errors="coerce")
 
     for col in ["entry_price", "sl_price", "target_price", "quality_score", "adx", "rsi", "stochk", "atr_pct"]:
         if col not in d.columns:
@@ -1920,7 +1980,7 @@ def _convert_live_replay_rows_to_backtest_df(replay_df: pd.DataFrame, side: str)
 
     ordered_cols = [
         "trade_date", "ticker", "side", "setup", "impulse_type",
-        "signal_time_ist", "entry_time_ist", "entry_price", "sl_price",
+        "signal_time_ist", "signal_price", "entry_time_ist", "entry_price", "sl_price",
         "target_price", "exit_time_ist", "exit_price", "outcome",
         "pnl_pct", "pnl_pct_gross", "position_size_rs", "risk_per_trade_rs",
         "day_mode", "gap_pct_open", "opening_range_width_pct",
@@ -3533,7 +3593,7 @@ def main() -> None:
                 short_cfg.rsi_max_short = 58.0       # Pack C short: avoid weaker/late short entries
                 short_cfg.stochk_max = 90.0
                 short_cfg.stop_pct = 0.0075          # Unified v16_5min SL: 0.75%
-                short_cfg.target_pct = 0.00800       # Unified v16_5min TGT: 0.80%
+                short_cfg.target_pct = 0.01000       # Unified v16_5min TGT: 1.00%
                 short_cfg.be_trigger_pct = 0.0042
                 short_cfg.trail_pct = 0.0023
                 short_cfg.enable_partial_exit = False  # V16: no partial exits — SL/TARGET/EOD only
@@ -3565,7 +3625,7 @@ def main() -> None:
                 long_cfg.enable_setup_a_close_continuation_break = True
                 long_cfg.enable_setup_b_huge_c1_close_reclaim_break = True
                 long_cfg.stop_pct = 0.0075           # Unified v16_5min SL: 0.75%
-                long_cfg.target_pct = 0.00800        # Unified v16_5min TGT: 0.80%
+                long_cfg.target_pct = 0.01000        # Unified v16_5min TGT: 1.00%
                 long_cfg.be_trigger_pct = 0.0055
                 long_cfg.trail_pct = 0.0028
                 long_cfg.min_bars_left_after_entry = 0

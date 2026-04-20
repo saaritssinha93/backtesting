@@ -488,6 +488,7 @@ def scan_one_day(
                     outcome=outcome,
                     pnl_pct=net_pnl,
                     pnl_pct_gross=gross_pnl,
+                    signal_price=close1,
                     adx_signal=adx1,
                     rsi_signal=rsi1,
                     stochk_signal=k1,

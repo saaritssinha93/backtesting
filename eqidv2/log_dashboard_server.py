@@ -12,6 +12,7 @@ import math
 import os
 import re
 import subprocess
+import time
 from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,10 +20,22 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
-from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
+from eqidv2_runtime_paths import (
+    LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
+    RUNTIME_STATUS_DIR,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
+
+
+def _resolve_status_path(filename: str) -> Path:
+    # v16_5min scripts now write runtime status off OneDrive; older scripts
+    # still write under logs/. Prefer the off-OneDrive copy when present.
+    off_onedrive = RUNTIME_STATUS_DIR / filename
+    if off_onedrive.exists():
+        return off_onedrive
+    return LOG_DIR / filename
 LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 IST = ZoneInfo("Asia/Kolkata")
@@ -81,7 +94,10 @@ LOG_FILES: Dict[str, str] = {
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.log",
     "nifty_guard_fetch_v16_5min": "nifty_guard_fetcher_v16_5min.log",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.log",
-    "live_combined_csv_v16_5min": "eqidv2_live_combined_analyser_csv_v16_5min.log",
+    "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.log",
+    "signal_engine_v16_5min":          "eqidv2_signal_engine_v16_5min.log",
+    "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.log",
+    "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.log",
 }
 LOG_IDS = tuple(LOG_FILES.keys()) + (
     "paper_trade_v5",
@@ -93,6 +109,8 @@ LOG_IDS = tuple(LOG_FILES.keys()) + (
     "kite_trade_v15",
     "kite_trade_v16_5min",
     "preopen_healthcheck",
+    "pending_signals_v16_5min",
+    "detected_signals_v16_5min",
 )
 
 STATUS_FILES: Dict[str, str] = {
@@ -109,7 +127,10 @@ STATUS_FILES: Dict[str, str] = {
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.status",
     "nifty_guard_fetch_v16_5min": "nifty_guard_fetcher_v16_5min.status",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.status",
-    "live_combined_csv_v16_5min": "eqidv2_live_combined_analyser_csv_v16_5min.status",
+    "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.status",
+    "signal_engine_v16_5min":          "eqidv2_signal_engine_v16_5min.status",
+    "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
+    "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.status",
 }
 
 HEARTBEAT_FILES: Dict[str, str] = {
@@ -118,7 +139,10 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
     "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.heartbeat",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.heartbeat",
-    "live_combined_csv_v16_5min": "eqidv2_live_combined_analyser_csv_v16_5min.heartbeat",
+    "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.heartbeat",
+    "signal_engine_v16_5min":          "eqidv2_signal_engine_v16_5min.heartbeat",
+    "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.heartbeat",
+    "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.heartbeat",
 }
 
 CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
@@ -136,8 +160,8 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "kite_trade_v15": ("\\EQIDV2_avwap_live_trade_v15_0905",),
     "live_kite_trades_csv_v15": ("\\EQIDV2_avwap_live_trade_v15_0905",),
     "live_combined_csv_v16_5min": ("\\EQIDV2_live_combined_csv_v16_5min_0900",),
-    "live_signals_csv_v16_5min_short": ("\\EQIDV2_live_combined_csv_v16_5min_0900",),
-    "live_signals_csv_v16_5min_long": ("\\EQIDV2_live_combined_csv_v16_5min_0900",),
+    "live_signals_csv_v16_5min_short": ("\\EQIDV2_detection_engine_v16_5min_0900",),
+    "live_signals_csv_v16_5min_long": ("\\EQIDV2_detection_engine_v16_5min_0900",),
     "paper_trade_v16_5min": ("\\EQIDV2_paper_trade_v16_5min_0900",),
     "live_papertrade_result_csv_v16_5min": ("\\EQIDV2_paper_trade_v16_5min_0900",),
     "kite_trade_v16_5min": ("\\EQIDV2_live_trade_v16_5min_0900",),
@@ -145,10 +169,139 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "preopen_healthcheck": ("\\EQIDV2_preopen_session_healthcheck_0905",),
     "kite_holdings_today_csv": ("\\EQIDV2_kite_export_start_0915",),
     "kite_positions_day_today_csv": ("\\EQIDV2_kite_export_start_0915",),
+    "signal_engine_v16_5min":        ("\\EQIDV2_signal_engine_v16_5min_0900",),
+    "pending_signals_v16_5min":      ("\\EQIDV2_signal_engine_v16_5min_0900",),
+    "pending_data_fetcher_v16_5min": ("\\EQIDV2_pending_data_fetcher_v16_5min_0900",),
+    "detection_engine_v16_5min":     ("\\EQIDV2_detection_engine_v16_5min_0900",),
+    "detected_signals_v16_5min":     ("\\EQIDV2_detection_engine_v16_5min_0900",),
 }
 
 _TASK_SNAPSHOT_CACHE: Dict[str, Dict[str, str]] = {}
 _TASK_SNAPSHOT_CACHE_AT: Optional[dt.datetime] = None
+
+RESTARTABLE_CARDS: Dict[str, str] = {
+    "nifty_guard_fetch_v16_5min":    "run_nifty_guard_fetcher_v16_5min.bat",
+    "eod_5min_data":                 "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
+    "signal_engine_v16_5min":        "run_eqidv2_signal_engine_v16_5min.bat",
+    "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
+    "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
+    "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
+    "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
+    "authentication_v2":             "run_authentication_v2.bat",
+    "preopen_healthcheck":           "run_preopen_session_healthcheck.bat",
+}
+
+
+def _run_cmd_silent(cmd: Sequence[str], timeout: float = 5.0) -> Tuple[int, str]:
+    kwargs: Dict[str, Any] = {
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = subprocess.run(list(cmd), **kwargs)
+        combined = (result.stdout or "") + (result.stderr or "")
+        return result.returncode, combined.strip()
+    except subprocess.TimeoutExpired:
+        return 124, "timeout"
+    except FileNotFoundError as exc:
+        return 127, str(exc)
+    except Exception as exc:
+        return 1, str(exc)
+
+
+def _find_bat_process_pids(bat_basename: str) -> list[int]:
+    if not bat_basename:
+        return []
+    # Escape single quotes for PowerShell literal
+    safe = bat_basename.replace("'", "''")
+    ps_cmd = (
+        "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe' OR "
+        "Name='powershell.exe' OR Name='python.exe' OR Name='pythonw.exe' OR Name='conhost.exe'\" "
+        f"| Where-Object {{ $_.CommandLine -and $_.CommandLine -like '*{safe}*' }} "
+        "| Select-Object -ExpandProperty ProcessId"
+    )
+    rc, out = _run_cmd_silent(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+        timeout=6.0,
+    )
+    if rc != 0 or not out:
+        return []
+    pids: list[int] = []
+    for line in out.splitlines():
+        token = line.strip()
+        if token.isdigit():
+            pids.append(int(token))
+    return pids
+
+
+def _restart_card_session(card_id: str) -> Dict[str, Any]:
+    task_names = CARD_TASK_NAMES.get(card_id, ())
+    bat_basename = RESTARTABLE_CARDS.get(card_id, "")
+    if not task_names or not bat_basename:
+        return {"ok": False, "message": "Session is not restartable."}
+    task_name = task_names[0]
+    trace: list[str] = []
+
+    # Step 1: graceful restart via Task Scheduler (/End then /Run)
+    end_rc, _ = _run_cmd_silent(["schtasks", "/End", "/TN", task_name], timeout=5.0)
+    trace.append(f"end_rc={end_rc}")
+    time.sleep(1.0)
+    run_rc, run_out = _run_cmd_silent(["schtasks", "/Run", "/TN", task_name], timeout=5.0)
+    trace.append(f"run_rc={run_rc}")
+    if run_rc == 0:
+        return {
+            "ok": True,
+            "step": 1,
+            "message": "Restarted via Task Scheduler.",
+            "task_name": task_name,
+            "trace": " | ".join(trace),
+        }
+
+    # Step 2: graceful taskkill on bat tree (no /F), then /Run
+    pids = _find_bat_process_pids(bat_basename)
+    for pid in pids:
+        _run_cmd_silent(["taskkill", "/T", "/PID", str(pid)], timeout=4.0)
+    trace.append(f"graceful_pids={pids}")
+    time.sleep(1.2)
+    run_rc, run_out = _run_cmd_silent(["schtasks", "/Run", "/TN", task_name], timeout=5.0)
+    trace.append(f"run2_rc={run_rc}")
+    if run_rc == 0:
+        return {
+            "ok": True,
+            "step": 2,
+            "message": "Graceful stop + start succeeded.",
+            "task_name": task_name,
+            "trace": " | ".join(trace),
+        }
+
+    # Step 3: force taskkill + /Run
+    pids = _find_bat_process_pids(bat_basename)
+    for pid in pids:
+        _run_cmd_silent(["taskkill", "/F", "/T", "/PID", str(pid)], timeout=4.0)
+    trace.append(f"force_pids={pids}")
+    time.sleep(1.0)
+    run_rc, run_out = _run_cmd_silent(["schtasks", "/Run", "/TN", task_name], timeout=5.0)
+    trace.append(f"run3_rc={run_rc}")
+    if run_rc == 0:
+        return {
+            "ok": True,
+            "step": 3,
+            "message": "Force stop + start succeeded.",
+            "task_name": task_name,
+            "trace": " | ".join(trace),
+        }
+
+    err_msg = run_out or "schtasks /Run failed"
+    return {
+        "ok": False,
+        "step": 3,
+        "message": f"Restart failed: {err_msg}",
+        "task_name": task_name,
+        "trace": " | ".join(trace),
+    }
 
 
 def _latest_matching_file(base_dir: Path, glob_pattern: str) -> Optional[Path]:
@@ -346,6 +499,26 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         legacy_name = "paper_trade_execution.log"
         return LIVE_SIGNAL_DIR / legacy_name, str(Path("live_signals") / legacy_name)
 
+    if name == "pending_signals_v16_5min":
+        today_name = f"pending_signals_{today_ist}_v16_5min.csv"
+        today_path = LIVE_SIGNAL_DIR / today_name
+        latest = _latest_matching_file(LIVE_SIGNAL_DIR, "pending_signals_*_v16_5min.csv")
+        if latest is not None:
+            return latest, str(Path("live_signals") / latest.name)
+        if today_path.exists():
+            return today_path, str(Path("live_signals") / today_name)
+        return today_path, str(Path("live_signals") / today_name)
+
+    if name == "detected_signals_v16_5min":
+        today_name = f"detected_signals_{today_ist}_v16_5min.csv"
+        today_path = LIVE_SIGNAL_DIR / today_name
+        latest = _latest_matching_file(LIVE_SIGNAL_DIR, "detected_signals_*_v16_5min.csv")
+        if latest is not None:
+            return latest, str(Path("live_signals") / latest.name)
+        if today_path.exists():
+            return today_path, str(Path("live_signals") / today_name)
+        return today_path, str(Path("live_signals") / today_name)
+
     raise KeyError(name)
 
 
@@ -401,6 +574,76 @@ def infer_scanner_runtime_status(key: str, path: Path, status: Dict[str, str]) -
         merged["status"] = "RUNNING"
         merged["derived_status"] = f"log_fresh_{age_min:.1f}m"
     return merged
+
+
+def _count_csv_data_rows(path: Path, side: Optional[str] = None) -> int:
+    if not path.exists():
+        return 0
+    side_upper = str(side or "").strip().upper()
+    count = 0
+    try:
+        with open(path, newline="", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if side_upper and str(row.get("side", "")).strip().upper() != side_upper:
+                    continue
+                count += 1
+    except (OSError, csv.Error):
+        return 0
+    return count
+
+
+def infer_v16_side_output_status(side_csv_path: Path, side: str, detected_csv_path: Path) -> Dict[str, str]:
+    side_upper = str(side or "").strip().upper()
+    side_rows = _count_csv_data_rows(side_csv_path)
+    detected_rows = _count_csv_data_rows(detected_csv_path, side=side_upper)
+    derived = f"side_rows={side_rows}; detected_rows={detected_rows}"
+
+    if not side_csv_path.exists():
+        return {
+            "status": "MISSING_OUTPUT" if detected_rows > 0 else "WAITING_OUTPUT",
+            "derived_status": derived,
+        }
+
+    if side_rows <= 0:
+        return {
+            "status": "EMPTY_OUTPUT",
+            "derived_status": derived,
+        }
+
+    if not detected_csv_path.exists():
+        return {
+            "status": "STALE_OUTPUT",
+            "derived_status": f"{derived}; reason=missing_detected_csv",
+        }
+
+    if detected_rows <= 0:
+        return {
+            "status": "STALE_OUTPUT",
+            "derived_status": f"{derived}; reason=no_detected_rows",
+        }
+
+    if detected_rows > 0 and side_rows < detected_rows:
+        return {
+            "status": "STALE_OUTPUT",
+            "derived_status": f"{derived}; reason=row_count_lag",
+        }
+
+    if detected_rows > 0 and detected_csv_path.exists():
+        try:
+            side_mtime = side_csv_path.stat().st_mtime
+            detected_mtime = detected_csv_path.stat().st_mtime
+        except OSError:
+            side_mtime = 0.0
+            detected_mtime = 0.0
+        lag_sec = max(0.0, detected_mtime - side_mtime)
+        if lag_sec > 2.0:
+            return {
+                "status": "STALE_OUTPUT",
+                "derived_status": f"{derived}; reason=mtime_lag_{lag_sec:.1f}s",
+            }
+
+    return {"derived_status": derived}
 
 
 def _parse_schtasks_verbose(text: str) -> Dict[str, Dict[str, str]]:
@@ -998,6 +1241,41 @@ def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
     os.replace(tmp_path, path)
 
 
+# Column projection specs for two-stage V16 5min CSV cards.
+_PENDING_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
+    ("added_at",     ("added_at",)),
+    ("ticker",       ("ticker",)),
+    ("side",         ("side",)),
+    ("status",       ("status",)),
+    ("setup",        ("setup",)),
+    ("entry_ist",    ("signal_entry_datetime_ist",)),
+    ("expires_at",   ("expires_at",)),
+    ("entry_px",     ("entry_price",)),
+    ("stop_px",      ("stop_price", "sl_price")),
+    ("tgt_px",       ("target_price",)),
+]
+_DETECTED_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
+    ("detected_at",  ("detected_time",)),
+    ("ticker",       ("ticker",)),
+    ("side",         ("side",)),
+    ("setup",        ("setup",)),
+    ("entry_px",     ("entry_price",)),
+    ("stop_px",      ("stop_price", "sl_price")),
+    ("tgt_px",       ("target_price",)),
+    ("lag_sec",      ("lag_from_signal_sec",)),
+]
+_LIVE_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
+    ("signal_datetime", ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist", "created_ts_ist")),
+    ("detected_time_ist", ("detected_time_ist",)),
+    ("ticker", ("ticker",)),
+    ("side", ("side",)),
+    ("entry_px", ("entry_price",)),
+    ("stop_px", ("stop_price", "sl_price", "_stop_price")),
+    ("tgt_px", ("target_price",)),
+    ("quantity", ("quantity",)),
+]
+
+
 class LogDashboardHandler(BaseHTTPRequestHandler):
     server_version = "EQIDV2LogDashboard/1.0"
 
@@ -1040,6 +1318,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/kill":
             self._handle_kill_switch()
+            return
+        if parsed.path == "/api/restart":
+            self._handle_restart_session()
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
@@ -1095,6 +1376,24 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    def _handle_restart_session(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            self._send_json(
+                {"ok": False, "message": "Invalid JSON payload."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        card_id = str(payload.get("card_id", "")).strip()
+        if not card_id or card_id not in RESTARTABLE_CARDS:
+            self._send_json(
+                {"ok": False, "message": "Unknown or non-restartable session."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        result = _restart_card_session(card_id)
+        self._send_json(result)
 
     def _handle_kill_switch(self) -> None:
         payload = self._read_json_body()
@@ -1496,6 +1795,69 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       background: rgba(23, 61, 89, 0.9);
     }
 
+    .restart-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid rgba(121, 200, 255, 0.45);
+      background: linear-gradient(135deg, rgba(22, 55, 82, 0.92), rgba(16, 90, 130, 0.88));
+      color: #dcecff;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      padding: 4px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+      transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+      user-select: none;
+    }
+
+    .restart-btn:hover {
+      border-color: rgba(121, 200, 255, 0.9);
+      background: linear-gradient(135deg, rgba(28, 74, 112, 0.96), rgba(18, 110, 160, 0.96));
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.32);
+      transform: translateY(-1px);
+    }
+
+    .restart-btn:active {
+      transform: translateY(0);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+
+    .restart-btn:disabled {
+      opacity: 0.72;
+      cursor: wait;
+      transform: none;
+    }
+
+    .restart-btn .restart-icon {
+      display: inline-block;
+      font-size: 13px;
+      line-height: 1;
+    }
+
+    .restart-btn.is-busy .restart-icon {
+      animation: restart-spin 0.9s linear infinite;
+    }
+
+    .restart-btn.is-ok {
+      border-color: rgba(15, 207, 154, 0.75);
+      background: linear-gradient(135deg, rgba(14, 84, 60, 0.95), rgba(15, 140, 102, 0.95));
+      color: #e8fff5;
+    }
+
+    .restart-btn.is-err {
+      border-color: rgba(255, 107, 107, 0.75);
+      background: linear-gradient(135deg, rgba(110, 25, 25, 0.95), rgba(170, 48, 48, 0.95));
+      color: #ffecec;
+    }
+
+    @keyframes restart-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
     .kill-shell {
       margin: 8px 10px 4px;
       padding: 8px;
@@ -1754,13 +2116,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const LOG_ORDER = [
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
-      "live_combined_csv_v16_5min",
+      "signal_engine_v16_5min",
+      "pending_signals_v16_5min",
+      "pending_data_fetcher_v16_5min",
+      "detection_engine_v16_5min",
+      "detected_signals_v16_5min",
       "live_signals_csv_v16_5min_short",
       "live_signals_csv_v16_5min_long",
       "live_kite_trades_csv_v16_5min",
       "kite_trade_v16_5min",
       "paper_trade_v16_5min",
       "live_papertrade_result_csv_v16_5min",
+      "live_combined_csv_v16_5min",
       "eod_15min_data",
       "nifty_guard_fetch_v15",
       "live_combined_csv_v15_new_persistent",
@@ -1777,6 +2144,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_1540_update"
     ];
     const LOG_TITLES = {
+      "signal_engine_v16_5min":        "V16 5min Signal Engine (Raw Pool)",
+      "pending_signals_v16_5min":      "V16 5min Pending Pool CSV",
+      "pending_data_fetcher_v16_5min": "V16 5min Pending Data Fetcher",
+      "detection_engine_v16_5min":     "V16 5min Detection Engine (Confirmation)",
+      "detected_signals_v16_5min":     "V16 5min Detected Signals CSV",
       "eod_5min_data": "Live Data Fetch (5mins)",
       "eod_15min_data": "Live Data Fetch (15mins)",
       "live_combined_csv_v16_5min": "V16 5min Scanner (anti-exhaustion, 5min slots)",
@@ -1797,13 +2169,24 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "kite_positions_day_today_csv": "Kite Positions (Daily, Today)",
       "authentication_v2": "Auth_V2",
       "paper_trade_v15": "Papertrade Runner View V15",
-      "preopen_healthcheck": "Preopen Healthcheck 09:05",
+      "preopen_healthcheck": "Preopen Healthcheck",
       "kite_trade_v15": "Live Kite Trades Log V15",
       "eod_1540_update": "Live EOD Data Fetch"
     };
     const API_TOKEN = __API_TOKEN_JSON__;
     let FULLSCREEN_ID = "";
     const TABLE_SORT_STATE = {};
+    const RESTARTABLE_CARDS = new Set([
+      "nifty_guard_fetch_v16_5min",
+      "eod_5min_data",
+      "signal_engine_v16_5min",
+      "detection_engine_v16_5min",
+      "pending_data_fetcher_v16_5min",
+      "kite_positions_day_today_csv",
+      "kite_holdings_today_csv",
+      "authentication_v2",
+      "preopen_healthcheck"
+    ]);
     const KILL_CARD_SCOPE = {
       "kite_trade_v16_5min": "false_v16_5min",
       "live_kite_trades_csv_v16_5min": "false_v16_5min",
@@ -1839,6 +2222,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (!s) return '<span class="pill">UNKNOWN</span>';
       if (s === "SUCCESS" || s === "RUNNING") return `<span class="pill ok">${esc(s)}</span>`;
       if (s === "RESTARTING" || s === "COOLDOWN") return `<span class="pill warn">${esc(s)}</span>`;
+      if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return `<span class="pill warn">${esc(s)}</span>`;
+      if (s === "MISSING_OUTPUT") return `<span class="pill fail">${esc(s)}</span>`;
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED") return `<span class="pill">${esc(s)}</span>`;
       if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED") return `<span class="pill">${esc(s)}</span>`;
       return `<span class="pill fail">${esc(s)}</span>`;
@@ -1848,6 +2233,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       const s = String(status || "").toUpperCase();
       if (s === "SUCCESS" || s === "RUNNING") return "card is-ok";
       if (s === "RESTARTING" || s === "COOLDOWN") return "card is-warn";
+      if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "card is-warn";
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF") return "card";
       if (s) return "card is-bad";
       return "card";
@@ -1855,6 +2241,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     function killScopeForCard(cardId) {
       return KILL_CARD_SCOPE[cardId] || "";
+    }
+
+    function renderRestartButton(cardId) {
+      if (!RESTARTABLE_CARDS.has(cardId)) return "";
+      return `
+        <button type="button" class="restart-btn" data-restart-id="${esc(cardId)}"
+                title="Restart session (1: scheduler restart, 2: graceful stop, 3: force stop)"
+                aria-label="Restart session">
+          <span class="restart-icon" aria-hidden="true">&#x21BB;</span>
+          <span class="restart-label">Restart</span>
+        </button>
+      `;
     }
 
     function uniqueSorted(arr) {
@@ -2073,6 +2471,57 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       });
     }
 
+    function wireRestartControls() {
+      const buttons = document.querySelectorAll('#cards .restart-btn');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const target = ev.currentTarget;
+          const cardId = target.getAttribute('data-restart-id') || "";
+          if (!cardId || target.disabled) return;
+          const labelEl = target.querySelector('.restart-label');
+          const origLabel = labelEl ? labelEl.textContent : "Restart";
+          target.disabled = true;
+          target.classList.remove('is-ok', 'is-err');
+          target.classList.add('is-busy');
+          if (labelEl) labelEl.textContent = "Restarting...";
+          try {
+            const res = await fetch(apiUrl('/api/restart'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
+              body: JSON.stringify({ card_id: cardId })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data && data.ok) {
+              target.classList.add('is-ok');
+              const step = data.step || "?";
+              if (labelEl) labelEl.textContent = `OK (step ${step})`;
+            } else {
+              target.classList.add('is-err');
+              if (labelEl) labelEl.textContent = "Failed";
+              const msg = (data && data.message) ? data.message : `HTTP ${res.status}`;
+              target.title = `Restart failed: ${msg}`;
+            }
+          } catch (err) {
+            target.classList.add('is-err');
+            if (labelEl) labelEl.textContent = "Error";
+            const msg = (err && err.message) ? err.message : String(err);
+            target.title = `Restart error: ${msg}`;
+          } finally {
+            target.classList.remove('is-busy');
+            setTimeout(() => {
+              target.disabled = false;
+              target.classList.remove('is-ok', 'is-err');
+              if (labelEl) labelEl.textContent = origLabel;
+              target.title = "Restart session (1: scheduler restart, 2: graceful stop, 3: force stop)";
+              loadNow();
+            }, 2400);
+          }
+        });
+      });
+    }
+
     function wireKillSwitchControls() {
       const roots = document.querySelectorAll('#cards .kill-shell');
       roots.forEach((root) => {
@@ -2211,6 +2660,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                   <div class="meta">file: ${esc(it.file_name || "-")} | mtime: ${esc(mtime)} | size: ${size} bytes</div>
                 </div>
                 <div class="card-head-right">
+                  ${renderRestartButton(it.id)}
                   <div>${statusBadge(status)}</div>
                 </div>
               </div>
@@ -2236,6 +2686,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const cards = document.getElementById('cards');
         cards.innerHTML = html;
         wireCardControls();
+        wireRestartControls();
         wireKillSwitchControls();
         enhanceSortableTables();
         applyFullscreenState();
@@ -2274,8 +2725,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         task_snapshot = load_task_scheduler_snapshot()
         for key in LOG_IDS:
             path, file_name = resolve_log_target(key)
-            status = parse_status_file(LOG_DIR / STATUS_FILES[key]) if key in STATUS_FILES else {}
-            heartbeat = parse_status_file(LOG_DIR / HEARTBEAT_FILES[key]) if key in HEARTBEAT_FILES else {}
+            status = parse_status_file(_resolve_status_path(STATUS_FILES[key])) if key in STATUS_FILES else {}
+            heartbeat = parse_status_file(_resolve_status_path(HEARTBEAT_FILES[key])) if key in HEARTBEAT_FILES else {}
             if heartbeat:
                 status = merge_runtime_status(status, heartbeat)
             status = infer_scanner_runtime_status(key, path, status)
@@ -2284,6 +2735,20 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 size = path.stat().st_size if path.exists() else 0
             except OSError:
                 size = 0
+            if key == "pending_signals_v16_5min":
+                tail = _format_csv_projection(
+                    path, _PENDING_SIGNALS_V16_COLS,
+                    limit_rows=5000,
+                    time_only_cols={"added_at", "entry_ist", "expires_at"},
+                )
+            elif key == "detected_signals_v16_5min":
+                tail = _format_csv_projection(
+                    path, _DETECTED_SIGNALS_V16_COLS,
+                    limit_rows=5000,
+                    time_only_cols={"detected_at"},
+                )
+            else:
+                tail = tail_text(path, lines=lines)
             items.append(
                 {
                     "id": key,
@@ -2292,7 +2757,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                     "mtime": iso_mtime(path),
                     "size_bytes": size,
                     "status": status,
-                    "tail": tail_text(path, lines=lines),
+                    "tail": tail,
                 }
             )
 
@@ -2471,6 +2936,10 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
+        detected_csv_path_v16_5min, _detected_csv_name_v16_5min = resolve_log_target(
+            "detected_signals_v16_5min"
+        )
+
         # Dynamic card: today's live signal CSV V16_5MIN short.
         live_csv_name_v16_5min_short = f"signals_{today_ist}_v16_5min_short.csv"
         live_csv_path_v16_5min_short = LIVE_SIGNAL_DIR / live_csv_name_v16_5min_short
@@ -2480,9 +2949,14 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             )
         except OSError:
             live_size_v16_5min_short = 0
+        live_status_v16_5min_short = infer_v16_side_output_status(
+            live_csv_path_v16_5min_short,
+            "SHORT",
+            detected_csv_path_v16_5min,
+        )
         live_entries_tail_v16_5min_short = _format_csv_projection(
             live_csv_path_v16_5min_short,
-            live_entries_cols,
+            _LIVE_SIGNALS_V16_COLS,
             limit_rows=5000,
             time_only_cols={"signal_datetime", "detected_time_ist"},
         )
@@ -2493,7 +2967,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "exists": live_csv_path_v16_5min_short.exists(),
                 "mtime": iso_mtime(live_csv_path_v16_5min_short),
                 "size_bytes": live_size_v16_5min_short,
-                "status": {},
+                "status": live_status_v16_5min_short,
                 "tail": live_entries_tail_v16_5min_short,
             }
         )
@@ -2507,9 +2981,14 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             )
         except OSError:
             live_size_v16_5min_long = 0
+        live_status_v16_5min_long = infer_v16_side_output_status(
+            live_csv_path_v16_5min_long,
+            "LONG",
+            detected_csv_path_v16_5min,
+        )
         live_entries_tail_v16_5min_long = _format_csv_projection(
             live_csv_path_v16_5min_long,
-            live_entries_cols,
+            _LIVE_SIGNALS_V16_COLS,
             limit_rows=5000,
             time_only_cols={"signal_datetime", "detected_time_ist"},
         )
@@ -2520,7 +2999,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "exists": live_csv_path_v16_5min_long.exists(),
                 "mtime": iso_mtime(live_csv_path_v16_5min_long),
                 "size_bytes": live_size_v16_5min_long,
-                "status": {},
+                "status": live_status_v16_5min_long,
                 "tail": live_entries_tail_v16_5min_long,
             }
         )

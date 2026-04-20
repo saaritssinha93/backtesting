@@ -88,6 +88,12 @@ def _get_version_config(version: str) -> dict:
         csv_dir = Path(r"C:\TradingData\eqidv2\outputs_v17b_5min")
         label = "v17b"
 
+    elif v == "v17c":
+        import avwap_combined_runner_v17c_5min  # noqa: F401 — patches _base
+        import avwap_combined_runner_v16_5min as runner
+        csv_dir = Path(r"C:\TradingData\eqidv2\outputs_v17c_5min")
+        label = "v17c"
+
     elif v == "v18c6":
         # v18c6 wraps v18c5: import v18c6 first so its patches apply, then use
         # v18c5 as the actual runner (where all execution helpers live).
@@ -104,7 +110,7 @@ def _get_version_config(version: str) -> dict:
         label = "v19a"
 
     else:
-        raise ValueError(f"Unknown version '{version}'. Choose: v17b, v18c3, v18c4, v18c6, v19a")
+        raise ValueError(f"Unknown version '{version}'. Choose: v17b, v17c, v18c3, v18c4, v18c6, v19a")
 
     # Pick the latest trades CSV in that directory
     if v == "v19a":
@@ -115,7 +121,7 @@ def _get_version_config(version: str) -> dict:
         candidates = sorted(csv_dir.glob("*trades*.csv"))
     if not candidates:
         raise FileNotFoundError(f"No trades CSV found in {csv_dir}")
-    csv_path = candidates[-1]
+    csv_path = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
 
     return {"runner": runner, "csv_path": csv_path, "label": label}
 
@@ -176,8 +182,8 @@ def _apply_target_override(
             runner.TEST_SHORT_TARGET_PCT  = short_tgt
             runner.TEST_LONG_TARGET_PCT   = long_tgt
 
-    elif v == "v17b":
-        # v17b delegates to _base (avwap_combined_runner_v16_5min)
+    elif v in ("v17b", "v17c"):
+        # v17b/v17c delegate to _base (avwap_combined_runner_v16_5min)
         import avwap_combined_runner_v16_5min as _base
         _base.TEST_TARGET_OVERRIDE  = True
         _base.TEST_SHORT_TARGET_PCT = short_tgt
@@ -271,8 +277,40 @@ def run(
         long_df  = _compute_prices(long_df)
         print(f"[PREP] Recomputed stop_price/target_price via setup-specific exit profiles ({label}).")
 
+    elif v in ("v17b", "v17c"):
+        short_tgt_eff = (
+            float(short_tgt)
+            if short_tgt is not None
+            else float(getattr(runner, "TEST_SHORT_TARGET_PCT", 0.0080))
+        )
+        long_tgt_eff = (
+            float(long_tgt)
+            if long_tgt is not None
+            else float(getattr(runner, "TEST_LONG_TARGET_PCT", 0.0080))
+        )
+        short_sl_eff = float(short_sl) if short_sl is not None else 0.0075
+        long_sl_eff = float(long_sl) if long_sl is not None else 0.0075
+
+        for side_df, tgt, sl_pct in [
+            (short_df, short_tgt_eff, short_sl_eff),
+            (long_df, long_tgt_eff, long_sl_eff),
+        ]:
+            if side_df.empty or "entry_price" not in side_df.columns:
+                continue
+            ep = side_df["entry_price"].astype(float)
+            is_short = side_df["side"].str.upper().eq("SHORT")
+            side_df["stop_price"]   = np.where(is_short, ep * (1 + sl_pct), ep * (1 - sl_pct))
+            side_df["target_price"] = np.where(is_short, ep * (1 - tgt), ep * (1 + tgt))
+            side_df["sl_price"]     = side_df["stop_price"]
+
+        print(
+            "[PREP] Recomputed stop_price/target_price via live-parity defaults "
+            f"— SHORT_TGT={short_tgt_eff*100:.2f}% LONG_TGT={long_tgt_eff*100:.2f}% "
+            f"SHORT_SL={short_sl_eff*100:.2f}% LONG_SL={long_sl_eff*100:.2f}%"
+        )
+
     elif short_tgt is not None and long_tgt is not None:
-        # Simple uniform override for v17b / v18c3 / v18c4
+        # Simple uniform override for v17b / v17c / v18c3 / v18c4
         for side_df, tgt, sl_pct in [
             (short_df, short_tgt, short_sl if short_sl is not None else 0.0075),
             (long_df,  long_tgt,  long_sl  if long_sl  is not None else 0.0075),
@@ -355,7 +393,7 @@ def main():
     parser = argparse.ArgumentParser(description="Quick exit re-resolver")
     parser.add_argument(
         "--version", required=True,
-        choices=["v17b", "v18c3", "v18c4", "v18c6", "v19a"],
+        choices=["v17b", "v17c", "v18c3", "v18c4", "v18c6", "v19a"],
         help="Which runner version to use",
     )
     parser.add_argument(

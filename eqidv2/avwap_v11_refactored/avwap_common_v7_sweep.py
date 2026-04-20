@@ -305,6 +305,7 @@ class Trade:
     outcome: str           # TARGET / SL / BE / EOD
     pnl_pct: float         # after slippage + commission
     pnl_pct_gross: float   # before costs
+    signal_price: float = 0.0
 
     # Diagnostics (present for both sides now)
     adx_signal: float = 0.0

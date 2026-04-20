@@ -171,13 +171,13 @@ LONG_STOP_PCT = float(
 SHORT_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0080))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_SHORT_CFG, "target_pct", 0.0100))),
     )
 )
 LONG_TARGET_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_LONG_TARGET_PCT",
-        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.0080))),
+        str(float(getattr(_EFFECTIVE_V16_5MIN_LONG_CFG, "target_pct", 0.0100))),
     )
 )
 

@@ -25,6 +25,20 @@ CACHE_15M_DIR = Path(
 CACHE_5MIN_DIR = Path(
     os.getenv("EQIDV2_CACHE_5MIN_DIR", str(RUNTIME_ROOT / "stocks_cache_5min_eq"))
 )
+DATA_5M_PENDING_DIR = Path(
+    os.getenv("EQIDV2_DATA_5M_PENDING_DIR",
+              str(RUNTIME_ROOT / "stocks_indicators_5min_eq_pending"))
+)
+SLOT_READY_PENDING_DIR = Path(
+    os.getenv("EQIDV2_SLOT_READY_PENDING_DIR",
+              str(RUNTIME_ROOT / "slot_ready_5m_pending"))
+)
+# Runtime status/heartbeat files live off the OneDrive-synced workspace so
+# the Python writer (and its atomic-replace) cannot be blocked by OneDrive
+# or Defender transient locks. Still env-overridable for tests.
+RUNTIME_STATUS_DIR = Path(
+    os.getenv("EQIDV2_RUNTIME_STATUS_DIR", str(RUNTIME_ROOT / "runtime_status"))
+)
 
 
 def runtime_dir(*parts: str) -> Path:
@@ -44,5 +58,8 @@ for _path in (
     LIVE_SIGNALS_DIR,
     CACHE_15M_DIR,
     CACHE_5MIN_DIR,
+    DATA_5M_PENDING_DIR,
+    SLOT_READY_PENDING_DIR,
+    RUNTIME_STATUS_DIR,
 ):
     _path.mkdir(parents=True, exist_ok=True)

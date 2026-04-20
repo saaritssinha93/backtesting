@@ -5,6 +5,7 @@ set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backte
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
+set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
 
 REM Aggressive unified scan tuning:
 REM - start sooner after slot boundary
@@ -28,10 +29,11 @@ set "EQIDV5_UNIFIED_15M_FETCH_RESTART_DELAY_SEC=20"
 
 set "LOG_DIR=%BASE_DIR%\logs"
 set "ALERT_DIR=%LOG_DIR%\alerts"
+set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
 set "SCRIPT_NAME=eqidv2_live_combined_analyser_csv_v5_unified.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v5_unified.log"
 set "ALERT_LOG=%ALERT_DIR%\CRITICAL_eqidv2_live_combined_analyser_csv_v5_unified.log"
-set "STATUS_FILE=%LOG_DIR%\eqidv2_live_combined_analyser_csv_v5_unified.status"
+set "STATUS_FILE=%RUNTIME_STATUS_DIR%\eqidv2_live_combined_analyser_csv_v5_unified.status"
 set "STATUS_TMP=%STATUS_FILE%.tmp"
 
 REM Unified scanner runs through long horizon.
@@ -43,6 +45,7 @@ set "STATUS_OVERRIDE="
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "%ALERT_DIR%" mkdir "%ALERT_DIR%"
+if not exist "%RUNTIME_STATUS_DIR%" mkdir "%RUNTIME_STATUS_DIR%"
 
 cd /d "%BASE_DIR%"
 

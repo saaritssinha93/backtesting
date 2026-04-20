@@ -15,7 +15,8 @@ set "STATUS_FILE=%LOG_DIR%\nifty_guard_fetcher_v16_5min.status"
 set "NIFTY_SYMBOL=NIFTYBEES"
 set "NIFTY_ALIASES=NIFTYBEES,NIFTY50,NIFTY_50,NIFTY"
 set "FIRST_SLOT_HHMM=0915"
-set "POLL_SEC=2"
+set "POLL_SEC=1"
+set "SLOT_OFFSET_SEC=2"
 set "END_CUTOFF_HHMM=1531"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
@@ -28,10 +29,12 @@ cd /d "%BASE_DIR%"
 
 echo [%DATE% %TIME%] START %SCRIPT_NAME%
 echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
-echo [INFO] NIFTY guard fetch loop: symbol=%NIFTY_SYMBOL%, aliases=%NIFTY_ALIASES%, slot_minutes=00/05/10/15/20/25/30/35/40/45/50/55, first_slot=%FIRST_SLOT_HHMM%, cutoff=%END_CUTOFF_HHMM%, poll=%POLL_SEC%s>>"%LOG_FILE%"
+echo [INFO] NIFTY guard fetch loop: symbol=%NIFTY_SYMBOL%, aliases=%NIFTY_ALIASES%, slot_minutes=00/05/10/15/20/25/30/35/40/45/50/55, first_slot=%FIRST_SLOT_HHMM%, cutoff=%END_CUTOFF_HHMM%, poll=%POLL_SEC%s, slot_offset=%SLOT_OFFSET_SEC%s>>"%LOG_FILE%"
 
 :RUN_LOOP
-for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmm')"') do set "NOW_HHMM=%%a"
+for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmmss')"') do set "NOW_HHMMSS=%%a"
+set "NOW_HHMM=!NOW_HHMMSS:~0,4!"
+set "NOW_SS=!NOW_HHMMSS:~4,2!"
 if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% goto DONE
 if !NOW_HHMM! LSS %FIRST_SLOT_HHMM% (
   timeout /t %POLL_SEC% >nul
@@ -52,6 +55,7 @@ if "!NOW_MM!"=="40" set "SLOT_READY=1"
 if "!NOW_MM!"=="45" set "SLOT_READY=1"
 if "!NOW_MM!"=="50" set "SLOT_READY=1"
 if "!NOW_MM!"=="55" set "SLOT_READY=1"
+if !NOW_SS! LSS %SLOT_OFFSET_SEC% set "SLOT_READY=0"
 if not "!SLOT_READY!"=="1" (
   timeout /t %POLL_SEC% >nul
   goto RUN_LOOP

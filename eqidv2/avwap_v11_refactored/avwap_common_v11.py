@@ -320,6 +320,7 @@ class Trade:
     outcome: str           # TARGET / SL / BE / EOD
     pnl_pct: float         # after slippage + commission
     pnl_pct_gross: float   # before costs
+    signal_price: float = 0.0
     position_size_rs: float = 0.0
     risk_per_trade_rs: float = 0.0
     day_mode: str = "trend"
