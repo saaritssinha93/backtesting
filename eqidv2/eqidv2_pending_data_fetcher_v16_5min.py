@@ -71,6 +71,11 @@ from eqidv2_runtime_paths import (
     RUNTIME_STATUS_DIR,
 )
 
+# strategy_v2 §C3 — cross-process pool-JSON lock (see eqidv2_pool_lock.py).
+# PF shares the same lockfile namespace as SE and DE; every status-transition
+# write sequence (load → mutate → atomic replace) must run inside pool_lock.
+from eqidv2_pool_lock import pool_lock, bump_pool_rev
+
 # ---------------------------------------------------------------------------
 # Reuse the full scheduler's fetch infrastructure (core.run_mode, session setup)
 # ---------------------------------------------------------------------------
@@ -339,28 +344,34 @@ def _mark_missing_token_pending_signals(missing_tokens: List[str]) -> int:
     if not missing_set:
         return 0
 
-    state = _load_today_pending_state()
-    signals = state.get("signals", [])
-    updated = 0
-    now_str = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
     date_str = _now_ist().strftime("%Y-%m-%d")
-    affected: List[Dict[str, Any]] = []
+    # strategy_v2 §C3 — hold the pool lock across the full read→mutate→write
+    # sequence so SE/DE cannot clobber a concurrent update. The lifecycle
+    # audit emit happens after the write inside the lock to preserve ordering
+    # relative to `pool_rev`.
+    with pool_lock(date_str):
+        state = _load_today_pending_state()
+        signals = state.get("signals", [])
+        updated = 0
+        now_str = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+        affected: List[Dict[str, Any]] = []
 
-    for sig in signals:
-        if str(sig.get("status", "")).lower() != "pending":
-            continue
-        ticker = str(sig.get("ticker", "")).upper().strip()
-        if ticker not in missing_set:
-            continue
-        sig["status"] = "filtered_missing_token"
-        sig["filter_reason"] = "no_token_in_stocks_tokens_cache"
-        affected.append(sig)
-        updated += 1
+        for sig in signals:
+            if str(sig.get("status", "")).lower() != "pending":
+                continue
+            ticker = str(sig.get("ticker", "")).upper().strip()
+            if ticker not in missing_set:
+                continue
+            sig["status"] = "filtered_missing_token"
+            sig["filter_reason"] = "no_token_in_stocks_tokens_cache"
+            affected.append(sig)
+            updated += 1
 
-    if updated > 0:
-        state["last_updated"] = now_str
-        _write_today_pending_state_atomic(state)
-        _emit_dropped_events(affected, "no_token_in_stocks_tokens_cache", date_str)
+        if updated > 0:
+            state["last_updated"] = now_str
+            bump_pool_rev(state)
+            _write_today_pending_state_atomic(state)
+            _emit_dropped_events(affected, "no_token_in_stocks_tokens_cache", date_str)
 
     return updated
 
@@ -409,29 +420,33 @@ def _mark_verify_failed_pending_signals(tickers: List[str]) -> int:
     if not target_set:
         return 0
 
-    state = _load_today_pending_state()
-    signals = state.get("signals", [])
-    updated = 0
-    now_str = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
     date_str = _now_ist().strftime("%Y-%m-%d")
-    affected: List[Dict[str, Any]] = []
     reason = f"verify_failed_after_{VERIFY_FAIL_MAX_RETRIES}_retries_in_slot"
+    # strategy_v2 §C3 — hold the pool lock across the full read→mutate→write
+    # sequence; SE/DE could otherwise overwrite the status flip.
+    with pool_lock(date_str):
+        state = _load_today_pending_state()
+        signals = state.get("signals", [])
+        updated = 0
+        now_str = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+        affected: List[Dict[str, Any]] = []
 
-    for sig in signals:
-        if str(sig.get("status", "")).lower() != "pending":
-            continue
-        ticker = str(sig.get("ticker", "")).upper().strip()
-        if ticker not in target_set:
-            continue
-        sig["status"] = "filtered_verify_failed"
-        sig["filter_reason"] = reason
-        affected.append(sig)
-        updated += 1
+        for sig in signals:
+            if str(sig.get("status", "")).lower() != "pending":
+                continue
+            ticker = str(sig.get("ticker", "")).upper().strip()
+            if ticker not in target_set:
+                continue
+            sig["status"] = "filtered_verify_failed"
+            sig["filter_reason"] = reason
+            affected.append(sig)
+            updated += 1
 
-    if updated > 0:
-        state["last_updated"] = now_str
-        _write_today_pending_state_atomic(state)
-        _emit_dropped_events(affected, reason, date_str)
+        if updated > 0:
+            state["last_updated"] = now_str
+            bump_pool_rev(state)
+            _write_today_pending_state_atomic(state)
+            _emit_dropped_events(affected, reason, date_str)
 
     return updated
 

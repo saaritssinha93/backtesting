@@ -17,6 +17,8 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -320,6 +322,119 @@ def _missing_opening_snapshot(existing: pd.DataFrame, target_ts: datetime | pd.T
     return bool((today_df["date"].dt.floor("min") == session_open.floor("min")).sum() == 0)
 
 
+def _nifty_slot_ready_dir() -> Path:
+    """strategy_v2 C1 — resolve the NF slot-ready marker directory."""
+    runtime_root = os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2")
+    return Path(
+        os.getenv("EQIDV2_NIFTY_SLOT_READY_DIR", str(Path(runtime_root) / "nifty_slot_ready_5m"))
+    )
+
+
+def _slot_key_from_bar_end(bar_end_ts, intraday_ts: str) -> str:
+    """Slot key for the marker, always keyed to bar-END (= DE slot OPEN)."""
+    ts = pd.Timestamp(bar_end_ts)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize(IST_TZ)
+    else:
+        ts = ts.tz_convert(IST_TZ)
+    if intraday_ts.lower() == "start":
+        ts = ts + pd.Timedelta(minutes=STEP_MIN)
+    return ts.strftime("%Y%m%d_%H%M")
+
+
+def _write_nifty_slot_ready_marker(
+    slot_end_ts,
+    last_bar_ts,
+    primary_alias: str,
+    out_path: str,
+    intraday_ts: str,
+    logger,
+) -> None:
+    """
+    strategy_v2 C1 — write an atomic slot-ready marker after a confirmed
+    NIFTY fetch. DE's `_wait_for_nifty_slot_ready` blocks on this file and
+    aborts the slot with [ABORT] NF_STALE if it never appears. The marker
+    key uses bar-END time (= DE slot OPEN convention).
+    """
+    try:
+        marker_dir = _nifty_slot_ready_dir()
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        slot_key = _slot_key_from_bar_end(slot_end_ts, intraday_ts)
+        last_ts = pd.Timestamp(last_bar_ts)
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.tz_localize(IST_TZ)
+        else:
+            last_ts = last_ts.tz_convert(IST_TZ)
+        slot_end = pd.Timestamp(slot_end_ts)
+        if slot_end.tzinfo is None:
+            slot_end = slot_end.tz_localize(IST_TZ)
+        else:
+            slot_end = slot_end.tz_convert(IST_TZ)
+        now_ist = datetime.now(IST_TZ)
+        payload = {
+            "slot_key":         slot_key,
+            "slot_bar_end_ist": slot_end.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "last_bar_ist":     last_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "written_at_ist":   now_ist.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "symbol":           primary_alias,
+            "parquet_path":     str(out_path),
+            "intraday_ts":      intraday_ts,
+            "source":           "trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py",
+        }
+        marker_path = marker_dir / f"nifty_ready_{slot_key}.json"
+        tmp_path = marker_path.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, sort_keys=True)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except Exception:
+                pass
+        os.replace(tmp_path, marker_path)
+        logger.info("[SLOT_READY] NF marker written: %s", marker_path)
+    except Exception as exc:
+        logger.warning("NF slot-ready marker write failed: %s", exc)
+
+
+def _maybe_write_nf_marker_from_existing(
+    existing: pd.DataFrame,
+    end_dt,
+    primary_alias: str,
+    out_path: str,
+    intraday_ts: str,
+    logger,
+) -> None:
+    """Write the NF marker using the already-fresh on-disk parquet (skip path)."""
+    if existing is None or existing.empty or "date" not in existing.columns:
+        return
+    try:
+        last_bar = pd.to_datetime(existing["date"], errors="coerce").dropna().max()
+        if pd.isna(last_bar):
+            return
+        last_ts = pd.Timestamp(last_bar)
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.tz_localize(IST_TZ)
+        else:
+            last_ts = last_ts.tz_convert(IST_TZ)
+        exp = pd.Timestamp(end_dt)
+        if exp.tzinfo is None:
+            exp = exp.tz_localize(IST_TZ)
+        else:
+            exp = exp.tz_convert(IST_TZ)
+        if last_ts < exp - pd.Timedelta(seconds=1):
+            return
+        _write_nifty_slot_ready_marker(
+            slot_end_ts=end_dt,
+            last_bar_ts=last_ts,
+            primary_alias=primary_alias,
+            out_path=out_path,
+            intraday_ts=intraday_ts,
+            logger=logger,
+        )
+    except Exception as exc:
+        logger.warning("NF slot-ready skip-path marker failed: %s", exc)
+
+
 def main() -> int:
     args = parse_args()
     logger = setup_logger()
@@ -355,6 +470,14 @@ def main() -> int:
         and not opening_snapshot_missing
     ):
         logger.info("%s already fresh. Skipping fetch.", primary_alias)
+        _maybe_write_nf_marker_from_existing(
+            existing=existing,
+            end_dt=end_dt,
+            primary_alias=primary_alias,
+            out_path=primary_out,
+            intraday_ts=args.intraday_ts,
+            logger=logger,
+        )
         return 0
 
     merged = existing.copy()
@@ -402,6 +525,40 @@ def main() -> int:
         logger.info("[SAVE] %s | rows=%d | last=%s", out_path, len(merged), merged["date"].iloc[-1])
 
     logger.info("Done. Stored NIFTY 5m parquet(s) in %s", OUT_DIR)
+
+    # strategy_v2 C1 — only publish the NF slot-ready marker when the confirmed
+    # last bar actually reaches end_dt. A partial fetch must NOT advertise the
+    # slot to DE; better for DE to ABORT with NF_STALE than run RS off stale data.
+    try:
+        if not merged.empty:
+            last_bar = merged["date"].iloc[-1]
+            last_ts = pd.Timestamp(last_bar)
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.tz_localize(IST_TZ)
+            else:
+                last_ts = last_ts.tz_convert(IST_TZ)
+            exp_ts = pd.Timestamp(end_dt)
+            if exp_ts.tzinfo is None:
+                exp_ts = exp_ts.tz_localize(IST_TZ)
+            else:
+                exp_ts = exp_ts.tz_convert(IST_TZ)
+            if last_ts >= exp_ts - pd.Timedelta(seconds=1):
+                _write_nifty_slot_ready_marker(
+                    slot_end_ts=end_dt,
+                    last_bar_ts=last_ts,
+                    primary_alias=primary_alias,
+                    out_path=primary_out,
+                    intraday_ts=args.intraday_ts,
+                    logger=logger,
+                )
+            else:
+                logger.warning(
+                    "NF slot-ready marker suppressed: last_bar=%s < expected=%s",
+                    last_ts, exp_ts,
+                )
+    except Exception as exc:
+        logger.warning("NF slot-ready success-path marker failed: %s", exc)
+
     return 0
 
 

@@ -119,6 +119,7 @@ from eqidv2_runtime_paths import (
     RUNTIME_STATUS_DIR,
     runtime_dir,
 )
+from eqidv2_pool_lock import pool_lock, bump_pool_rev
 from live_v16_5min_slot_snapshot import (
     build_slot_snapshots,
     clear_rolling_cache as clear_slot_snapshot_cache,
@@ -455,32 +456,70 @@ def _load_scheduler_slot_status(slot: datetime) -> Optional[Dict[str, Any]]:
 
 
 def _load_slot_ready_marker(slot: datetime) -> Optional[Dict[str, Any]]:
+    """
+    strategy_v2 §M1 — return the authoritative LF completion marker when it
+    declares a complete slot; return None otherwise (caller can inspect via
+    :func:`_load_slot_ready_marker_raw` to distinguish "not yet written"
+    from "written but incomplete").
+    """
+    payload = _load_slot_ready_marker_raw(slot)
+    if payload is None:
+        return None
+    # strategy_v2 §M1 — authoritative marker carries `complete`. If present,
+    # that is the sole truth source: False ⇒ LF failed; True ⇒ safe to scan.
+    if "complete" in payload:
+        return payload if bool(payload.get("complete")) else None
+    # Back-compat: pre-M1 markers have no `complete` field. Fall back to the
+    # older source=="final" + sampled-ratio + sidecar-status check.
+    ratio = float(payload.get("fresh_ratio", 0.0) or 0.0)
+    if ratio < float(SLOT_READY_MARKER_MIN_FRESH_RATIO):
+        return None
+    source = str(payload.get("source", "marker")).strip().lower()
+    if source != "final":
+        return None
+    status_payload = _load_scheduler_slot_status(slot)
+    if status_payload is not None:
+        failures = list(status_payload.get("failures", []) or [])
+        verification_failed_count = int(status_payload.get("verification_failed_count", 0) or 0)
+        overall_state = str(status_payload.get("overall_state", "")).strip().upper()
+        if overall_state == "FAIL" or failures or verification_failed_count > 0:
+            return None
+    return payload
+
+
+def _load_slot_ready_marker_raw(slot: datetime) -> Optional[Dict[str, Any]]:
+    """Read the marker file without applying the acceptance filter.
+    Returns None only when the file is absent/unparseable."""
     if not USE_SCHEDULER_READY_MARKER:
         return None
     path = _slot_ready_marker_path(slot)
     if not path.exists():
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        ratio = float(payload.get("fresh_ratio", 0.0) or 0.0)
-        if ratio < float(SLOT_READY_MARKER_MIN_FRESH_RATIO):
-            return None
-        source = str(payload.get("source", "marker")).strip().lower()
-        if source != "final":
-            return None
-        status_payload = _load_scheduler_slot_status(slot)
-        if status_payload is not None:
-            failures = list(status_payload.get("failures", []) or [])
-            verification_failed_count = int(status_payload.get("verification_failed_count", 0) or 0)
-            overall_state = str(status_payload.get("overall_state", "")).strip().upper()
-            if overall_state == "FAIL" or failures or verification_failed_count > 0:
-                return None
-        return payload
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
 
 
-def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool, float, float, int]:
+def _wait_for_slot_data_ready(
+    slot: datetime,
+    tickers: List[str],
+) -> Tuple[bool, float, float, int, str, Dict[str, Any]]:
+    """
+    strategy_v2 §B4/§M1 — LF → SE freshness gate.
+
+    Returns (ready, fresh_ratio, waited_sec, checked, reason, detail).
+
+    reason values:
+      - "marker_complete"    → LF authoritative marker declares complete=True
+      - "marker_back_compat" → pre-M1 marker accepted via source=="final" path
+      - "probe_ok"           → defense-in-depth probe passed even without marker
+      - "marker_incomplete"  → LF marker explicitly says complete=False (abort)
+      - "timeout_no_marker"  → no acceptable marker + probe never converged
+      - "gate_disabled"      → USE_SCHEDULER_READY_MARKER=0 and probe failed
+
+    SE caller decides whether to skip the slot / emit [ABORT] LF_INCOMPLETE.
+    """
     delay_target = slot + timedelta(seconds=int(SLOT_START_OFFSET_SECONDS))
     now = _now_ist()
     if now < delay_target:
@@ -494,21 +533,38 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
 
     sample = _sample_tickers_for_slot_ready(tickers, SLOT_READY_SAMPLE_SIZE)
     max_wait = max(0, int(SLOT_READY_MAX_WAIT_SECONDS))
+
+    def _accept_marker(payload: Dict[str, Any], waited: float) -> Tuple[bool, float, float, int, str, Dict[str, Any]]:
+        ratio = float(payload.get("fresh_ratio", 0.0) or 0.0)
+        checked = int(payload.get("checked_count", 0) or 0)
+        reason = "marker_complete" if "complete" in payload else "marker_back_compat"
+        print(
+            f"[WAIT] 5min slot readiness accepted via scheduler marker "
+            f"reason={reason} "
+            f"written={payload.get('tickers_written', 'n/a')}/"
+            f"{payload.get('tickers_expected', 'n/a')} "
+            f"sample_ratio={ratio:.2f} checked={checked}",
+            flush=True,
+        )
+        return True, ratio, waited, checked, reason, payload
+
+    def _reject_incomplete(raw: Dict[str, Any], waited: float) -> Tuple[bool, float, float, int, str, Dict[str, Any]]:
+        return False, 0.0, waited, 0, "marker_incomplete", raw
+
+    # Fast path — marker already present when SE enters the gate.
     marker_payload = _load_slot_ready_marker(slot)
     if marker_payload is not None:
         waited = max(0.0, (_now_ist() - now).total_seconds())
-        ratio = float(marker_payload.get("fresh_ratio", 0.0) or 0.0)
-        checked = int(marker_payload.get("checked_count", 0) or 0)
-        print(
-            f"[WAIT] 5min slot readiness accepted via scheduler marker "
-            f"(ratio={ratio:.2f}, checked={checked})",
-            flush=True,
-        )
-        return True, ratio, waited, checked
+        return _accept_marker(marker_payload, waited)
+    raw = _load_slot_ready_marker_raw(slot)
+    if raw is not None and "complete" in raw and not bool(raw.get("complete")):
+        waited = max(0.0, (_now_ist() - now).total_seconds())
+        return _reject_incomplete(raw, waited)
 
     if max_wait <= 0 or not sample:
         waited = max(0.0, (_now_ist() - now).total_seconds())
-        return False, 0.0, waited, len(sample)
+        reason = "gate_disabled" if (max_wait <= 0 or not USE_SCHEDULER_READY_MARKER) else "timeout_no_marker"
+        return False, 0.0, waited, len(sample), reason, {}
 
     target_slot = pd.Timestamp(slot)
     if target_slot.tzinfo is None:
@@ -529,19 +585,18 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
 
     last_ratio, last_checked = 0.0, 0
     while True:
-        # Re-check marker on each iteration
+        # Re-check marker on each iteration — LF publishes after workers join.
         marker_payload = _load_slot_ready_marker(slot)
         if marker_payload is not None:
             waited = max(0.0, (_now_ist() - started).total_seconds())
-            ratio = float(marker_payload.get("fresh_ratio", 0.0) or 0.0)
-            checked = int(marker_payload.get("checked_count", 0) or 0)
-            print(
-                f"[WAIT] 5min slot readiness accepted via scheduler marker "
-                f"(ratio={ratio:.2f}, checked={checked})",
-                flush=True,
-            )
-            return True, ratio, waited, checked
+            return _accept_marker(marker_payload, waited)
+        raw = _load_slot_ready_marker_raw(slot)
+        if raw is not None and "complete" in raw and not bool(raw.get("complete")):
+            waited = max(0.0, (_now_ist() - started).total_seconds())
+            return _reject_incomplete(raw, waited)
 
+        # Defense-in-depth probe — only accepted when marker is absent and
+        # the whole universe sample passes the freshness threshold.
         fresh = sum(1 for t in sample if _ticker_fresh_mtime(t))
         checked = len(sample)
         ratio = (fresh / checked) if checked > 0 else 0.0
@@ -549,11 +604,11 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
         if checked > 0 and ratio >= float(SLOT_READY_MIN_FRESH_RATIO):
             waited = (_now_ist() - started).total_seconds()
             print(
-                f"[WAIT] 5min slot freshness ready after {waited:.1f}s "
-                f"(fresh={fresh}/{checked}, ratio={ratio:.2f})",
+                f"[WAIT] 5min slot freshness ready via probe after {waited:.1f}s "
+                f"(fresh={fresh}/{checked}, ratio={ratio:.2f}, no_marker=True)",
                 flush=True,
             )
-            return True, ratio, waited, checked
+            return True, ratio, waited, checked, "probe_ok", {}
 
         now = _now_ist()
         if now >= deadline:
@@ -563,7 +618,7 @@ def _wait_for_slot_data_ready(slot: datetime, tickers: List[str]) -> Tuple[bool,
                 f"(ratio={ratio:.2f}, checked={checked})",
                 flush=True,
             )
-            return False, last_ratio, waited, last_checked
+            return False, last_ratio, waited, last_checked, "timeout_no_marker", {}
         time.sleep(min(float(SLOT_READY_POLL_SECONDS), max(0.0, (deadline - now).total_seconds())))
 
 
@@ -983,6 +1038,52 @@ def _append_pool_lifecycle_event(date_str: str, event: Dict[str, Any]) -> None:
         print(f"[WARN] pool_lifecycle append failed: {exc}", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# strategy_v2 §C2 — deterministic entry-bar computation for F3
+#
+# The F3 past-slot guard must not depend on which timestamp convention the
+# scanner happens to emit in `entry_time_ist` (bar-OPEN vs bar-CLOSE), nor on
+# the column name itself. We compute entry-bar-OPEN from (setup, trigger_bar)
+# directly and pin the table to the v16 runner constants so the two modules
+# cannot silently drift.
+# ---------------------------------------------------------------------------
+SETUP_LAG_BARS: Dict[str, int] = {
+    # LONG
+    "A_MOD_BREAK_C1_HIGH":            int(getattr(v16_runner, "LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH", 1)),
+    "A_PULLBACK_C2_BREAK_C2_HIGH":    int(getattr(v16_runner, "LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH", 2)),
+    "B_HUGE_PULLBACK_HOLD_BREAK":     int(getattr(v16_runner, "LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK", 999)),
+    "B_HUGE_C1_CLOSE_RECLAIM_BREAK":  int(getattr(v16_runner, "LONG_LAG_BARS_B_HUGE_C1_CLOSE_RECLAIM_BREAK", 2)),
+    "A_MOD_CLOSE_CONTINUATION_BREAK": int(getattr(v16_runner, "LONG_LAG_BARS_A_MOD_CLOSE_CONTINUATION_BREAK", 2)),
+    # SHORT
+    "A_MOD_BREAK_C1_LOW":             int(getattr(v16_runner, "SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW", 1)),
+    "A_PULLBACK_C2_BREAK_C2_LOW":     int(getattr(v16_runner, "SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW", 2)),
+    "B_HUGE_FAILED_BOUNCE":           int(getattr(v16_runner, "SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE", -1)),
+}
+_BAR_MINUTES = int(SLOT_MINUTES)
+
+
+def _expected_entry_bar_open(trigger_bar_iso: str, setup: str) -> Optional[datetime]:
+    """
+    Deterministic entry-bar OPEN = trigger_bar_open + lag * 5min.
+
+    Returns None when the inputs are incomplete (e.g. HUGE_FAILED_BOUNCE with
+    dynamic lag=-1 or a setup missing from the table) so the caller can fall
+    back to the scanner-emitted value without crashing.
+    """
+    if not trigger_bar_iso:
+        return None
+    lag = SETUP_LAG_BARS.get(str(setup))
+    if lag is None or lag < 0:
+        return None
+    trig = base_v15._parse_ist_timestamp(str(trigger_bar_iso))
+    if trig is None:
+        return None
+    trig_dt = pd.Timestamp(trig).to_pydatetime()
+    if trig_dt.tzinfo is None:
+        trig_dt = IST.localize(trig_dt)
+    return trig_dt + timedelta(minutes=_BAR_MINUTES * lag)
+
+
 _TRIGGER_BAR_PARQUET_CACHE: Dict[str, pd.DataFrame] = {}
 
 
@@ -1060,142 +1161,200 @@ def _write_pending_pool(
 
     Returns (added, deduped, total_pending).
     """
-    state = _load_pending_state(date_str)
-    existing_ids: set = {s["signal_id"] for s in state.get("signals", [])}
+    # strategy_v2 §C3 — exclusive pool lock spans the full load→mutate→write
+    # section so PF/DE cannot interleave a stale write between our load and
+    # our atomic replace. The block is short (in-memory merge only; the scan
+    # itself already ran before this function is called).
+    with pool_lock(date_str):
+        state = _load_pending_state(date_str)
+        existing_ids: set = {s["signal_id"] for s in state.get("signals", [])}
 
-    added = 0
-    deduped = 0
-    dropped_past_slot = 0
-    now_ist = _now_ist()
-    now_str = now_ist.strftime("%Y-%m-%d %H:%M:%S%z")
+        added = 0
+        deduped = 0
+        dropped_past_slot = 0
+        now_ist = _now_ist()
+        now_str = now_ist.strftime("%Y-%m-%d %H:%M:%S%z")
 
-    all_rows = [(r, "SHORT") for r in short_rows] + [(r, "LONG") for r in long_rows]
+        all_rows = [(r, "SHORT") for r in short_rows] + [(r, "LONG") for r in long_rows]
 
-    _reset_trigger_bar_cache()
+        _reset_trigger_bar_cache()
 
-    for row, side in all_rows:
-        ticker = str(row.get("ticker", "")).upper().strip()
-        if not ticker:
-            continue
-
-        signal_time_raw = row.get(
-            "signal_time_ist",
-            row.get("signal_bar_time_ist", row.get("bar_time_ist", row.get("signal_datetime", ""))),
-        )
-        entry_time_raw = row.get("entry_time_ist", row.get("signal_entry_datetime_ist", signal_time_raw))
-        signal_time_ts = base_v15._parse_ist_timestamp(str(signal_time_raw))
-        entry_time_ts  = base_v15._parse_ist_timestamp(str(entry_time_raw))
-        if entry_time_ts is None:
-            continue
-
-        # strategy_v2 §F3 — refuse to write rows whose entry_slot is already past.
-        try:
-            entry_dt = pd.Timestamp(entry_time_ts).to_pydatetime()
-            if entry_dt.tzinfo is None:
-                entry_dt = IST.localize(entry_dt)
-            if entry_dt < now_ist:
-                dropped_past_slot += 1
-                print(
-                    f"[SKIP] SE_PAST_SLOT ticker={ticker} side={side} "
-                    f"entry={entry_dt.isoformat()} now={now_ist.isoformat()}",
-                    flush=True,
-                )
+        for row, side in all_rows:
+            ticker = str(row.get("ticker", "")).upper().strip()
+            if not ticker:
                 continue
-        except Exception:
-            pass
 
-        setup    = str(row.get("setup", ""))
-        entry_t  = str(entry_time_ts)
-        # strategy_v2 §A2 — deterministic key (ticker, side, entry_time, setup).
-        # entry_time is mechanically derived from trigger_bar + setup-lag, so
-        # this is functionally equivalent to hashing the trigger bar directly.
-        signal_id = base_v15._generate_signal_id(ticker, side, entry_t, setup)
+            signal_time_raw = row.get(
+                "signal_time_ist",
+                row.get("signal_bar_time_ist", row.get("bar_time_ist", row.get("signal_datetime", ""))),
+            )
+            entry_time_raw = row.get("entry_time_ist", row.get("signal_entry_datetime_ist", signal_time_raw))
+            signal_time_ts = base_v15._parse_ist_timestamp(str(signal_time_raw))
+            entry_time_ts  = base_v15._parse_ist_timestamp(str(entry_time_raw))
+            if entry_time_ts is None:
+                continue
 
-        if signal_id in existing_ids:
-            deduped += 1
-            continue
+            setup = str(row.get("setup", ""))
 
-        entry_price  = _safe_float(row.get("entry_price", 0.0))
-        signal_price = _safe_float(row.get("signal_price", entry_price))
-        stop_price   = _safe_float(row.get("stop_price", row.get("sl_price", 0.0)))
-        target_price = _safe_float(row.get("target_price", 0.0))
+            # strategy_v2 §C2 — deterministic F3 guard.
+            #
+            # The scanner's `entry_time_ist` column is ambiguous: it is
+            # bar-OPEN or bar-CLOSE depending on whether the parquets were built
+            # with intraday_ts=start or intraday_ts=end. A silent flip of that
+            # upstream flag would make F3 drop every 1-lag signal. To make the
+            # guard contract-independent we recompute the entry bar from
+            # (setup, trigger_bar_iso) and use bar-CLOSE as the "past" cutoff,
+            # which is what EXEC treats as the entry-window expiry anyway.
+            #
+            # The persisted `signal_entry_datetime_ist` / `signal_id` continue to
+            # use the scanner-emitted value so downstream contracts (DE,
+            # executor, lifecycle audit, dedup across restarts) are byte-identical
+            # to pre-fix behaviour.
+            trigger_iso_for_check = str(row.get("signal_time_ist", row.get("signal_bar_time_ist", signal_time_raw)) or "")
+            expected_entry_open = _expected_entry_bar_open(trigger_iso_for_check, setup)
+            try:
+                scanner_entry_dt = pd.Timestamp(entry_time_ts).to_pydatetime()
+                if scanner_entry_dt.tzinfo is None:
+                    scanner_entry_dt = IST.localize(scanner_entry_dt)
+            except Exception:
+                scanner_entry_dt = None
 
-        notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
-        qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
+            if expected_entry_open is not None:
+                expected_entry_close = expected_entry_open + timedelta(minutes=_BAR_MINUTES)
+                # F3 cutoff — entry is only "past" once the entry bar has fully
+                # closed. This matches the executor's slip-tolerant retry window
+                # and is independent of scanner column semantics.
+                if expected_entry_close < now_ist:
+                    dropped_past_slot += 1
+                    print(
+                        f"[SKIP] SE_PAST_SLOT ticker={ticker} side={side} setup={setup} "
+                        f"entry_bar={expected_entry_open.isoformat()}..{expected_entry_close.isoformat()} "
+                        f"now={now_ist.isoformat()}",
+                        flush=True,
+                    )
+                    continue
+                # Contract check — scanner must emit either bar-OPEN or bar-CLOSE
+                # of the expected entry bar. Anything else indicates scanner
+                # schema drift (column renamed, intraday_ts flipped, lag table
+                # out of sync) and must fail loud instead of silently miswriting.
+                if scanner_entry_dt is not None and scanner_entry_dt not in (
+                    expected_entry_open, expected_entry_close,
+                ):
+                    raise RuntimeError(
+                        "SE_CONTRACT_VIOLATION: scanner entry_time does not match "
+                        f"deterministic entry bar. ticker={ticker} side={side} "
+                        f"setup={setup} scanner_entry={scanner_entry_dt.isoformat()} "
+                        f"expected_open={expected_entry_open.isoformat()} "
+                        f"expected_close={expected_entry_close.isoformat()} "
+                        f"trigger_iso={trigger_iso_for_check}"
+                    )
+            else:
+                # Fallback only for setups with no static lag in the table
+                # (e.g. HUGE_FAILED_BOUNCE dynamic lag=-1). Use the legacy
+                # column-based cutoff.
+                if scanner_entry_dt is not None and scanner_entry_dt < now_ist:
+                    dropped_past_slot += 1
+                    print(
+                        f"[SKIP] SE_PAST_SLOT_FALLBACK ticker={ticker} side={side} setup={setup} "
+                        f"entry={scanner_entry_dt.isoformat()} now={now_ist.isoformat()}",
+                        flush=True,
+                    )
+                    continue
 
-        # strategy_v2 §A3 + §C1 — stash trigger-bar OHLC + drift hash so PF/DE
-        # can re-validate without a fresh Kite fetch.
-        trigger_iso = str(signal_time_ts) if signal_time_ts is not None else ""
-        trigger_fields = _lookup_trigger_bar_ohlc(ticker, signal_time_ts)
+            entry_t  = str(entry_time_ts)
+            # strategy_v2 §A2 — deterministic key (ticker, side, entry_time, setup).
+            # entry_time is mechanically derived from trigger_bar + setup-lag, so
+            # this is functionally equivalent to hashing the trigger bar directly.
+            signal_id = base_v15._generate_signal_id(ticker, side, entry_t, setup)
 
-        pending_entry: Dict[str, Any] = {
-            "signal_id":       signal_id,
-            "ticker":          ticker,
-            "side":            side,
-            "source_slot":     slot_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
-            "signal_datetime": str(signal_time_ts or entry_time_ts),
-            "signal_entry_datetime_ist": entry_t,
-            "signal_bar_time": str(signal_time_ts or entry_time_ts),
-            "added_at":        now_str,
-            "signal_price":    round(signal_price, 2),
-            "entry_price":     round(entry_price, 2),
-            "stop_price":      round(stop_price, 2),
-            "target_price":    round(target_price, 2),
-            "quality_score":   round(_safe_float(row.get("quality_score", 0.0)), 4),
-            "avwap_dist_atr":  round(_safe_float(row.get("avwap_dist_atr_signal", 0.0)), 4),
-            "rsi_signal":      round(_safe_float(row.get("rsi_signal", 0.0)), 2),
-            "adx":             round(_safe_float(row.get("adx_signal", row.get("adx", 0.0))), 2),
-            "rs_pct":          round(rs_pct, 4),
-            "bars_from_open":  int(row.get("bars_from_open", 0) or 0),
-            "or_high":         round(_safe_float(row.get("or_high", 0.0)), 2),
-            "or_low":          round(_safe_float(row.get("or_low", 0.0)), 2),
-            "entry_bar_vol_ratio": round(_safe_float(row.get("entry_bar_vol_ratio", 0.0)), 4),
-            "quantity":        qty,
-            "setup":           setup,
-            "impulse_type":    str(row.get("impulse_type", "")),
-            "expires_at":      _compute_expires_at(slot_ist, side),
-            "status":          "pending",
-            "detection_time":  None,
-            "detection_price": None,
-            "filter_reason":   None,
-            "trigger_bar_iso": trigger_iso,
-            "trigger_open":    trigger_fields.get("trigger_open", ""),
-            "trigger_high":    trigger_fields.get("trigger_high", ""),
-            "trigger_low":     trigger_fields.get("trigger_low", ""),
-            "trigger_close":   trigger_fields.get("trigger_close", ""),
-            "trigger_volume":  trigger_fields.get("trigger_volume", ""),
-            "trigger_ohlc_hash": trigger_fields.get("trigger_ohlc_hash", ""),
-        }
-        state["signals"].append(pending_entry)
-        existing_ids.add(signal_id)
-        added += 1
+            if signal_id in existing_ids:
+                deduped += 1
+                continue
 
-        # strategy_v2 §E2 — append-only lifecycle audit.
-        _append_pool_lifecycle_event(date_str, {
-            "event":     "WRITTEN",
-            "signal_id": signal_id,
-            "ticker":    ticker,
-            "side":      side,
-            "setup":     setup,
-            "source_slot":               pending_entry["source_slot"],
-            "signal_entry_datetime_ist": entry_t,
-            "trigger_bar_iso":           trigger_iso,
-            "trigger_ohlc_hash":         trigger_fields.get("trigger_ohlc_hash", ""),
-            "ts": now_str,
-        })
+            entry_price  = _safe_float(row.get("entry_price", 0.0))
+            signal_price = _safe_float(row.get("signal_price", entry_price))
+            stop_price   = _safe_float(row.get("stop_price", row.get("sl_price", 0.0)))
+            target_price = _safe_float(row.get("target_price", 0.0))
 
-    if dropped_past_slot:
-        print(
-            f"[INFO] SE dropped {dropped_past_slot} row(s) with entry_slot < now (F3 guard).",
-            flush=True,
-        )
+            notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
+            qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
 
-    state["last_updated"] = now_str
-    _write_pending_state_atomic(state, date_str)
-    _write_pending_csv(state, date_str)
+            # strategy_v2 §A3 + §C1 — stash trigger-bar OHLC + drift hash so PF/DE
+            # can re-validate without a fresh Kite fetch.
+            trigger_iso = str(signal_time_ts) if signal_time_ts is not None else ""
+            trigger_fields = _lookup_trigger_bar_ohlc(ticker, signal_time_ts)
+
+            pending_entry: Dict[str, Any] = {
+                "signal_id":       signal_id,
+                "ticker":          ticker,
+                "side":            side,
+                "source_slot":     slot_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+                "signal_datetime": str(signal_time_ts or entry_time_ts),
+                "signal_entry_datetime_ist": entry_t,
+                "signal_bar_time": str(signal_time_ts or entry_time_ts),
+                "added_at":        now_str,
+                "signal_price":    round(signal_price, 2),
+                "entry_price":     round(entry_price, 2),
+                "stop_price":      round(stop_price, 2),
+                "target_price":    round(target_price, 2),
+                "quality_score":   round(_safe_float(row.get("quality_score", 0.0)), 4),
+                "avwap_dist_atr":  round(_safe_float(row.get("avwap_dist_atr_signal", 0.0)), 4),
+                "rsi_signal":      round(_safe_float(row.get("rsi_signal", 0.0)), 2),
+                "adx":             round(_safe_float(row.get("adx_signal", row.get("adx", 0.0))), 2),
+                "rs_pct":          round(rs_pct, 4),
+                "bars_from_open":  int(row.get("bars_from_open", 0) or 0),
+                "or_high":         round(_safe_float(row.get("or_high", 0.0)), 2),
+                "or_low":          round(_safe_float(row.get("or_low", 0.0)), 2),
+                "entry_bar_vol_ratio": round(_safe_float(row.get("entry_bar_vol_ratio", 0.0)), 4),
+                "quantity":        qty,
+                "setup":           setup,
+                "impulse_type":    str(row.get("impulse_type", "")),
+                "expires_at":      _compute_expires_at(slot_ist, side),
+                "status":          "pending",
+                "detection_time":  None,
+                "detection_price": None,
+                "filter_reason":   None,
+                "trigger_bar_iso": trigger_iso,
+                "trigger_open":    trigger_fields.get("trigger_open", ""),
+                "trigger_high":    trigger_fields.get("trigger_high", ""),
+                "trigger_low":     trigger_fields.get("trigger_low", ""),
+                "trigger_close":   trigger_fields.get("trigger_close", ""),
+                "trigger_volume":  trigger_fields.get("trigger_volume", ""),
+                "trigger_ohlc_hash": trigger_fields.get("trigger_ohlc_hash", ""),
+            }
+            state["signals"].append(pending_entry)
+            existing_ids.add(signal_id)
+            added += 1
+
+            # strategy_v2 §E2 — append-only lifecycle audit.
+            _append_pool_lifecycle_event(date_str, {
+                "event":     "WRITTEN",
+                "signal_id": signal_id,
+                "ticker":    ticker,
+                "side":      side,
+                "setup":     setup,
+                "source_slot":               pending_entry["source_slot"],
+                "signal_entry_datetime_ist": entry_t,
+                "trigger_bar_iso":           trigger_iso,
+                "trigger_ohlc_hash":         trigger_fields.get("trigger_ohlc_hash", ""),
+                "ts": now_str,
+            })
+
+        if dropped_past_slot:
+            print(
+                f"[INFO] SE dropped {dropped_past_slot} row(s) with entry_slot < now (F3 guard).",
+                flush=True,
+            )
+
+        state["last_updated"] = now_str
+        # strategy_v2 §C3 — bump monotonic pool revision before atomic replace
+        # so dashboards / PF / DE can detect they are looking at a fresh write.
+        bump_pool_rev(state)
+        _write_pending_state_atomic(state, date_str)
+        _write_pending_csv(state, date_str)
+        total_pending = sum(1 for s in state["signals"] if s.get("status") == "pending")
+
     _reset_trigger_bar_cache()
-
-    total_pending = sum(1 for s in state["signals"] if s.get("status") == "pending")
     return added, deduped, total_pending
 
 
@@ -1340,19 +1499,36 @@ def main() -> None:
         _touch_status("RUNNING", phase="WAIT_DATA", slot=slot_str)
         _touch_heartbeat("RUNNING", phase="WAIT_DATA", slot=slot_str)
 
-        ready, ratio, waited, checked = _wait_for_slot_data_ready(slot, tickers)
+        ready, ratio, waited, checked, gate_reason, gate_detail = _wait_for_slot_data_ready(slot, tickers)
         print(
-            f"[WAIT] slot={slot_str} ready={ready} "
+            f"[WAIT] slot={slot_str} ready={ready} reason={gate_reason} "
             f"fresh_ratio={ratio:.2f} waited={waited:.1f}s checked={checked}",
             flush=True,
         )
         if not ready and SKIP_STALE_SLOT_ON_TIMEOUT:
             _touch_status("RUNNING", phase="SKIP_STALE", slot=slot_str)
-            print(
-                f"[SKIP_SLOT] slot={slot_str} data freshness timed out "
-                f"(ratio={ratio:.2f}). Skipping stale scan.",
-                flush=True,
-            )
+            # strategy_v2 §M1 — emit a structured LF_INCOMPLETE abort so ops /
+            # dashboards can distinguish "LF crashed mid-slot" (marker_incomplete)
+            # from "LF never finished in time" (timeout_no_marker). Either way
+            # SE refuses to scan against partial data.
+            if gate_reason == "marker_incomplete":
+                tickers_written = gate_detail.get("tickers_written", "n/a")
+                tickers_expected = gate_detail.get("tickers_expected", "n/a")
+                failures = gate_detail.get("partition_failures", []) or []
+                verify_failed = gate_detail.get("verification_failed_count", 0)
+                print(
+                    f"[ABORT] LF_INCOMPLETE slot={slot_str} reason=marker_incomplete "
+                    f"tickers_written={tickers_written}/{tickers_expected} "
+                    f"partition_failures={len(failures)} verify_failed={verify_failed} "
+                    f"duration_ms={gate_detail.get('duration_ms', 0):.0f}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[ABORT] LF_INCOMPLETE slot={slot_str} reason={gate_reason} "
+                    f"ratio={ratio:.2f} waited={waited:.1f}s checked={checked}",
+                    flush=True,
+                )
             continue
 
         _touch_status("RUNNING", phase="SCAN", slot=slot_str)

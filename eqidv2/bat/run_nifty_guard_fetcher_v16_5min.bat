@@ -20,8 +20,15 @@ set "SLOT_OFFSET_SEC=2"
 set "END_CUTOFF_HHMM=1531"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
+REM strategy_v2 §J3 fix #12 — bounded intra-slot retries so one transient
+REM fetch failure doesn't blank out an entire slot's NIFTY RS gate.
+set "NF_SLOT_MAX_RETRIES=3"
+set "NF_SLOT_RETRY_DELAY_SEC=5"
+set "NF_SLOT_FAIL_DIR=%EQIDV2_RUNTIME_ROOT%\nifty_slot_fail_5m"
 set /a RESTART_COUNT=0
 set "LAST_SLOT="
+set "SLOT_RETRY_HHMM="
+set /a SLOT_RETRY_COUNT=0
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
@@ -65,9 +72,15 @@ if "!LAST_SLOT!"=="!NOW_HHMM!" (
   goto RUN_LOOP
 )
 
+REM strategy_v2 §J3 fix #12 — reset the per-slot retry counter when the
+REM slot boundary changes so each new slot gets a fresh attempt budget.
+if not "!SLOT_RETRY_HHMM!"=="!NOW_HHMM!" (
+  set "SLOT_RETRY_HHMM=!NOW_HHMM!"
+  set /a SLOT_RETRY_COUNT=0
+)
+
 "%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --symbol "%NIFTY_SYMBOL%" --aliases "%NIFTY_ALIASES%" >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
-set "LAST_SLOT=!NOW_HHMM!"
 
 echo [%DATE% %TIME%] FETCH %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)
 echo [%DATE% %TIME%] FETCH %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)>>"%LOG_FILE%"
@@ -75,10 +88,28 @@ echo [%DATE% %TIME%] FETCH %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)>>"%LOG_FILE%"
 if not "%EXIT_CODE%"=="0" (
   set /a RESTART_COUNT+=1
   if !RESTART_COUNT! GTR %MAX_RESTARTS% goto DONE
-  echo [WARN] %SCRIPT_NAME% failed ^(exit=%EXIT_CODE%^). Retry !RESTART_COUNT!/%MAX_RESTARTS% in %RESTART_DELAY_SEC%s...>>"%LOG_FILE%"
-  timeout /t %RESTART_DELAY_SEC% >nul
+  set /a SLOT_RETRY_COUNT+=1
+  echo [WARN] %SCRIPT_NAME% failed ^(exit=%EXIT_CODE%^). Slot-retry !SLOT_RETRY_COUNT!/%NF_SLOT_MAX_RETRIES% for slot !NOW_HHMM! ^(global !RESTART_COUNT!/%MAX_RESTARTS%^) in %NF_SLOT_RETRY_DELAY_SEC%s...>>"%LOG_FILE%"
+  if !SLOT_RETRY_COUNT! GEQ %NF_SLOT_MAX_RETRIES% (
+    REM Slot-retry budget exhausted: mark this slot done so the loop moves
+    REM on instead of spinning, and emit a fail marker DE can consult.
+    set "LAST_SLOT=!NOW_HHMM!"
+    if not exist "%NF_SLOT_FAIL_DIR%" mkdir "%NF_SLOT_FAIL_DIR%"
+    for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyyMMdd')"') do set "TODAY_YMD=%%a"
+    for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-ddTHH:mm:sszzz"') do set "FAIL_TS=%%a"
+    set "FAIL_MARKER=%NF_SLOT_FAIL_DIR%\nifty_slot_fail_!TODAY_YMD!_!NOW_HHMM!.json"
+    >"!FAIL_MARKER!" echo {"slot":"!TODAY_YMD!_!NOW_HHMM!","symbol":"%NIFTY_SYMBOL%","exit_code":%EXIT_CODE%,"retries":!SLOT_RETRY_COUNT!,"emitted_at":"!FAIL_TS!"}
+    echo [ABORT] NF_SLOT_RETRY_EXHAUSTED slot=!NOW_HHMM! retries=!SLOT_RETRY_COUNT! marker=!FAIL_MARKER!>>"%LOG_FILE%"
+  )
+  timeout /t %NF_SLOT_RETRY_DELAY_SEC% >nul
   goto RUN_LOOP
 )
+
+REM strategy_v2 §J3 fix #12 — only mark the slot as complete on success.
+REM Under the old code this was set unconditionally above the exit-code
+REM check, which blocked retries of transient failures for the rest of the
+REM minute and silently blanked the slot's RS gate.
+set "LAST_SLOT=!NOW_HHMM!"
 
 for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm:ss"') do set "RUN_TS=%%a"
 >"%STATUS_FILE%" echo status=SUCCESS

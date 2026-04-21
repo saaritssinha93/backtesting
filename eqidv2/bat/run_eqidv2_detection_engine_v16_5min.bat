@@ -20,6 +20,12 @@ set "EQIDV2_DETECTION_STARTUP_OFFSET_SEC=0"
 set "EQIDV2_DETECTION_ALIGN_TO_5MIN=1"
 set "EQIDV2_DETECTION_SLOT_OFFSET_SEC=4"
 set "EQIDV2_DETECTION_MAX_DATA_AGE_SEC=400"
+REM strategy_v2 C1 — NF slot-ready gate (DE refuses to detect until NF
+REM publishes nifty_ready_<slot>.json; aborts slot on timeout with
+REM [ABORT] NF_STALE). Set _REQUIRE=0 only for offline replay.
+set "EQIDV2_DETECTION_NF_READY_REQUIRE=1"
+set "EQIDV2_DETECTION_NF_READY_TIMEOUT_SEC=90"
+set "EQIDV2_DETECTION_NF_READY_POLL_SEC=1"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
 set "SCRIPT_NAME=eqidv2_detection_engine_v16_5min.py"

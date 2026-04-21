@@ -1,4 +1,4 @@
-# Auto-generated at IST: 2026-04-21 21:49:25+0530
+# Auto-generated at IST: 2026-04-21 22:50:04+0530
 # Source: Merged_NSE_BSE_Instruments.csv
 # Rule: exchange == NSE and segment == NSE
 # Count: 9174

@@ -450,6 +450,68 @@ def _publish_slot_ready_marker(
     os.replace(tmp_path, path)
 
 
+def _publish_slot_completion_marker(
+    slot_end: datetime,
+    *,
+    tickers_expected: int,
+    tickers_written: int,
+    failures: list,
+    verification_failed_count: int,
+    verification_failure_sample: list,
+    duration_ms: float,
+    sample_fresh: int,
+    sample_checked: int,
+) -> None:
+    """
+    strategy_v2 §M1 — authoritative LF completion marker.
+
+    Written after all partition workers join and `_write_slot_status` runs,
+    so every field reflects the real fetch outcome (not a sampled probe).
+    SE gates on this file: `complete=True` ⇒ safe to scan; `complete=False`
+    ⇒ `[ABORT] LF_INCOMPLETE`. Overwrites any earlier watcher-published
+    marker for the same slot so there is exactly one source of truth.
+    """
+    failures_list = [str(f) for f in (failures or [])]
+    verify_sample_list = [str(t) for t in (verification_failure_sample or [])]
+    complete = (
+        not failures_list
+        and int(verification_failed_count) == 0
+        and int(tickers_written) >= int(tickers_expected)
+    )
+    tickers_failed = max(0, int(tickers_expected) - int(tickers_written)) + int(verification_failed_count)
+    ratio = (float(sample_fresh) / float(sample_checked)) if sample_checked > 0 else 0.0
+
+    path = _slot_ready_marker_path(slot_end)
+    payload = {
+        "slot_ist": slot_end.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S%z"),
+        "published_at_ist": now_ist().strftime("%Y-%m-%d %H:%M:%S%z"),
+        "source": "final",
+        "complete": bool(complete),
+        # authoritative fetch outcome (full universe, not a sample)
+        "tickers_expected": int(tickers_expected),
+        "tickers_written":  int(tickers_written),
+        "tickers_failed":   int(tickers_failed),
+        "partition_failures": failures_list,
+        "verification_failed_count": int(verification_failed_count),
+        "verification_failure_sample": verify_sample_list,
+        "duration_ms": float(duration_ms),
+        # back-compat fields (kept so pre-M1 SE builds still parse the marker)
+        "fresh_count":   int(sample_fresh),
+        "checked_count": int(sample_checked),
+        "fresh_ratio":   float(ratio),
+    }
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+    print(
+        f"[READY] Published authoritative 5m completion marker "
+        f"slot={slot_end.astimezone(IST).strftime('%Y-%m-%d %H:%M:%S%z')} "
+        f"complete={complete} written={tickers_written}/{tickers_expected} "
+        f"failed={tickers_failed} duration_ms={duration_ms:.0f}",
+        flush=True,
+    )
+
+
 def _watch_and_publish_slot_ready_marker(
     slot_end: datetime,
     sample_tickers: list[str],
@@ -1278,6 +1340,38 @@ def run_update_5m_once(
             )
         except Exception as exc:
             print(f"[WARN] Failed to write 5min slot status: {exc}")
+
+        # strategy_v2 §M1 — always publish the authoritative completion marker
+        # AFTER workers join and status is written. This overwrites any earlier
+        # watcher-published marker and carries the real fetch outcome so SE can
+        # decide between "scan" and "[ABORT] LF_INCOMPLETE" without guessing.
+        try:
+            tickers_expected_total = int(len(all_tickers))
+            tickers_written_total = int(sum(partition_symbol_counts.values()))
+            sample_fresh = 0
+            sample_checked = 0
+            if bool(ready_marker_enabled) and 'ready_sample' in locals() and ready_sample:
+                target_slot = slot_end.astimezone(IST)
+                for ticker in ready_sample:
+                    ok, last_ts, _ = _ticker_has_required_5m_slot_data(ticker, target_slot)
+                    if last_ts is None:
+                        continue
+                    sample_checked += 1
+                    if ok:
+                        sample_fresh += 1
+            _publish_slot_completion_marker(
+                slot_end,
+                tickers_expected=tickers_expected_total,
+                tickers_written=tickers_written_total,
+                failures=failures,
+                verification_failed_count=verification_failed_count,
+                verification_failure_sample=verification_failure_sample,
+                duration_ms=float(total_elapsed_sec) * 1000.0,
+                sample_fresh=sample_fresh,
+                sample_checked=sample_checked,
+            )
+        except Exception as exc:
+            print(f"[WARN] Failed to write 5min completion marker: {exc}")
 
     if failures:
         raise RuntimeError("Parallel partition run failed: " + " | ".join(failures))

@@ -117,9 +117,17 @@ import eqidv2_live_combined_analyser_csv_v16_5min as live_v16
 from eqidv2_runtime_paths import (
     DATA_5M_DIR as RUNTIME_DATA_5M_DIR,
     LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
+    NIFTY_SLOT_READY_DIR,
     SLOT_READY_PENDING_DIR,
     RUNTIME_STATUS_DIR,
 )
+
+# strategy_v2 §C3 — cross-process pool-JSON lock. The DE cycle performs a
+# read-modify-write on pending_signals_<date>_v16_5min.json (load state at
+# the top of the cycle, mutate rows to status=detected/filtered_*, atomic
+# replace at the bottom). Without this lock, SE or PF can interleave a
+# write during the cycle body and get silently clobbered.
+from eqidv2_pool_lock import pool_lock, bump_pool_rev
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -192,6 +200,15 @@ NEUTRALIZE_PARTIAL_NIFTY_SESSION = str(
 # slot_ist, demote RS to neutral instead of silently using stale direction.
 # Same default as Signal Engine (420s = one 5-min bar + 2-min slack).
 NIFTY_MAX_STALE_SEC = float(os.getenv("EQIDV2_NIFTY_MAX_STALE_SEC", "420"))
+# strategy_v2 C1 — NF slot-ready gate. DE refuses to run detection on a slot
+# until NF has written nifty_ready_<slot>.json. On timeout we log
+# [ABORT] NF_STALE and emit an NF_STALE lifecycle event, so a silent NF
+# outage cannot drive RS off stale NIFTYBEES data.
+NF_READY_REQUIRE = str(
+    os.getenv("EQIDV2_DETECTION_NF_READY_REQUIRE", "1")
+).strip().lower() not in {"0", "false", "no", "off"}
+NF_READY_TIMEOUT_SEC = float(os.getenv("EQIDV2_DETECTION_NF_READY_TIMEOUT_SEC", "90"))
+NF_READY_POLL_SEC = max(0.2, float(os.getenv("EQIDV2_DETECTION_NF_READY_POLL_SEC", "1.0")))
 USE_READY_MARKER_HANDOFF = str(
     os.getenv("EQIDV2_DETECTION_USE_READY_MARKERS", "1")
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -603,6 +620,34 @@ def _load_ready_marker_for_slot(slot_ts: pd.Timestamp, now_ist: datetime) -> Opt
     payload["_marker_age_sec"] = round(age_sec, 1)
     payload["_ready_tickers"] = ready_tickers
     return payload
+
+
+def _nf_ready_marker_path(slot_ist: datetime) -> Path:
+    """strategy_v2 C1 — path for the NF slot-ready marker for `slot_ist`."""
+    slot_local = slot_ist if slot_ist.tzinfo else IST.localize(slot_ist)
+    slot_key = slot_local.astimezone(IST).strftime("%Y%m%d_%H%M")
+    return Path(NIFTY_SLOT_READY_DIR) / f"nifty_ready_{slot_key}.json"
+
+
+def _wait_for_nifty_slot_ready(slot_ist: datetime) -> Tuple[bool, float, str]:
+    """
+    strategy_v2 C1 — block up to NF_READY_TIMEOUT_SEC waiting for the NF
+    slot-ready marker matching `slot_ist`. Returns (ready, waited_sec,
+    marker_path). If NF_READY_REQUIRE is false the gate is a no-op and we
+    return (True, 0.0, marker_path) to preserve legacy behaviour.
+    """
+    marker_path = _nf_ready_marker_path(slot_ist)
+    if not NF_READY_REQUIRE:
+        return True, 0.0, str(marker_path)
+    start = time.monotonic()
+    deadline = start + max(0.0, float(NF_READY_TIMEOUT_SEC))
+    while True:
+        if marker_path.exists():
+            return True, time.monotonic() - start, str(marker_path)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, time.monotonic() - start, str(marker_path)
+        time.sleep(min(NF_READY_POLL_SEC, max(0.1, remaining)))
 
 
 def _load_niftybees_rs(slot_ist: datetime) -> Tuple[float, bool, bool]:
@@ -1112,9 +1157,66 @@ def _run_detection_cycle_live_parity(
     signals = state.get("signals", [])
     pending_sigs = [s for s in signals if str(s.get("status", "")).lower() == "pending"]
 
+    # strategy_v2 §J3 fix #3 — parity-mode expires_at gate.
+    # The legacy _process_pending_signal path (used when DETECTION_PARITY_MODE=0)
+    # short-circuits expired signals at step a. The parity cycle used to skip
+    # this check entirely, so a morning signal could be promoted to detected
+    # after an afternoon DE restart and dispatched to the executor. The
+    # executor's retry_deadline catches it eventually, but the pool row +
+    # detected_csv gain spurious rows. Now we sweep expiries up front, inside
+    # the pool_lock (caller already holds it), so the atomic write at the end
+    # of the cycle persists status=expired_window for future cycles.
+    expired_sigs: List[Dict[str, Any]] = []
+    for sig in pending_sigs:
+        expires_at_raw = sig.get("expires_at", "")
+        if not expires_at_raw:
+            continue
+        parsed = base_v15._parse_ist_timestamp(str(expires_at_raw))
+        if parsed is None:
+            continue
+        try:
+            exp_ts = pd.Timestamp(parsed)
+            if exp_ts.tzinfo is None:
+                exp_ts = exp_ts.tz_localize(IST)
+            else:
+                exp_ts = exp_ts.tz_convert(IST)
+            if now >= exp_ts:
+                sig["status"] = "expired_window"
+                sig["filter_reason"] = f"past expires_at={expires_at_raw}"
+                expired_sigs.append(sig)
+        except Exception:
+            pass
+
+    if expired_sigs:
+        for sig in expired_sigs:
+            try:
+                _append_pool_lifecycle_event(date_str, {
+                    "event":       "DROPPED",
+                    "signal_id":   str(sig.get("signal_id", "")),
+                    "ticker":      str(sig.get("ticker", "")),
+                    "side":        str(sig.get("side", "")),
+                    "setup":       str(sig.get("setup", "")),
+                    "reason":      "expired_window_parity",
+                    "source_slot": str(sig.get("source_slot", "")),
+                })
+            except Exception as exc:
+                print(f"[WARN] lifecycle DROPPED append failed: {exc}", flush=True)
+        print(
+            f"[DETECTION_PARITY] {now.strftime('%H:%M:%S')} | expired_window={len(expired_sigs)}",
+            flush=True,
+        )
+        pending_sigs = [s for s in pending_sigs if str(s.get("status", "")).lower() == "pending"]
+
     if not pending_sigs:
         if signals:
             _sync_pending_csv_if_needed(state, date_str)
+        # Persist any expired→expired_window transitions even when nothing
+        # remains pending, so the pool JSON + lifecycle audit reflect reality.
+        if expired_sigs:
+            state["last_updated"] = now.strftime("%Y-%m-%d %H:%M:%S%z")
+            bump_pool_rev(state)
+            _write_pending_state_atomic(state, date_str)
+            _write_pending_csv(state, date_str)
         slot_log_key = _floor_to_5m(now).strftime("%Y%m%d_%H%M")
         if _LAST_NO_PENDING_LOG_KEY_PARITY != slot_log_key:
             print(
@@ -1491,6 +1593,9 @@ def _run_detection_cycle_live_parity(
     _write_detected_csv(all_detected, date_str)
 
     state["last_updated"] = now.strftime("%Y-%m-%d %H:%M:%S%z")
+    # strategy_v2 §C3 — bump monotonic pool revision before atomic replace
+    # (lock is already held by the caller in run_loop).
+    bump_pool_rev(state)
     _write_pending_state_atomic(state, date_str)
     _write_pending_csv(state, date_str)
 
@@ -1938,6 +2043,9 @@ def _run_detection_cycle(
 
     # Update pending JSON
     state["last_updated"] = now.strftime("%Y-%m-%d %H:%M:%S%z")
+    # strategy_v2 §C3 — bump monotonic pool revision before atomic replace
+    # (lock is already held by the caller in run_loop).
+    bump_pool_rev(state)
     _write_pending_state_atomic(state, date_str)
     _write_pending_csv(state, date_str)
 
@@ -2130,16 +2238,54 @@ def main() -> None:
                 time.sleep(max(0.5, (next_wake - now).total_seconds()))
                 continue
 
-        _touch_status("RUNNING", phase="DETECT", slot=slot_display)
+        # strategy_v2 C1 — NF slot-ready gate. Refuse to detect this slot until
+        # the NIFTY guard fetcher publishes its per-slot marker. On timeout we
+        # emit [ABORT] NF_STALE + a lifecycle event and skip the slot so the
+        # RS gate can never run against a stale NIFTYBEES parquet.
+        nf_ready = True
+        nf_waited = 0.0
+        nf_marker = ""
+        if ALIGN_TO_5MIN_BOUNDARY and slot_key is not None:
+            _touch_status("RUNNING", phase="WAIT_NF", slot=slot_display)
+            nf_ready, nf_waited, nf_marker = _wait_for_nifty_slot_ready(slot)
 
-        try:
-            if DETECTION_PARITY_MODE:
-                cycle_result = _run_detection_cycle_live_parity(short_cfg, long_cfg)
-            else:
-                cycle_result = _run_detection_cycle(short_cfg, long_cfg)
-        except Exception as exc:
-            print(f"[ERROR] Detection cycle error: {exc}", flush=True)
-            cycle_result = "error"
+        if not nf_ready:
+            print(
+                f"[ABORT] NF_STALE slot={slot_display} waited={nf_waited:.1f}s "
+                f"timeout={NF_READY_TIMEOUT_SEC:.0f}s marker={nf_marker} "
+                f"reason=no_nf_slot_ready_marker",
+                flush=True,
+            )
+            try:
+                date_str = slot.astimezone(IST).strftime("%Y-%m-%d")
+                _append_pool_lifecycle_event(date_str, {
+                    "event":      "NF_STALE",
+                    "slot":       slot_display,
+                    "waited_sec": round(nf_waited, 2),
+                    "timeout_sec": float(NF_READY_TIMEOUT_SEC),
+                    "marker":     nf_marker,
+                })
+            except Exception as exc:
+                print(f"[WARN] NF_STALE lifecycle append failed: {exc}", flush=True)
+            _touch_status("RUNNING", phase="NF_STALE", slot=slot_display)
+            cycle_result = "nf_stale"
+        else:
+            _touch_status("RUNNING", phase="DETECT", slot=slot_display)
+            # strategy_v2 §C3 — wrap the full cycle (load → V16 filter →
+            # atomic write) in the pool lock so SE/PF cannot interleave a
+            # write into the same pending JSON during the cycle body. The
+            # cycle typically completes in <5s; the 30s lock timeout gives
+            # plenty of slack over the slot budget.
+            cycle_date_str = _now_ist().strftime("%Y-%m-%d")
+            try:
+                with pool_lock(cycle_date_str):
+                    if DETECTION_PARITY_MODE:
+                        cycle_result = _run_detection_cycle_live_parity(short_cfg, long_cfg)
+                    else:
+                        cycle_result = _run_detection_cycle(short_cfg, long_cfg)
+            except Exception as exc:
+                print(f"[ERROR] Detection cycle error: {exc}", flush=True)
+                cycle_result = "error"
 
         _touch_status("RUNNING", phase="IDLE")
         _touch_heartbeat("RUNNING", phase="IDLE")

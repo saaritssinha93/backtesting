@@ -4,7 +4,7 @@ import argparse
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from kite_testing import load_all_sessions
 
@@ -15,7 +15,10 @@ FULL_UNIVERSE_FILE = ROOT / "filtered_stocks_NSE_cash_full.py"
 INTRADAY_5X_FILE = ROOT / "filtered_stocks_NSE_cash_intraday_5x.py"
 STOCK_UNIVERSE_FILE = ROOT / "filtered_stocks_NSE_stock_universe.py"
 STOCK_INTRADAY_5X_FILE = ROOT / "filtered_stocks_NSE_stock_intraday_5x.py"
+MIS_V2_FILE = ROOT / "filtered_stocks_MIS_v2.py"
 DEFAULT_BATCH_SIZE = 64
+DEFAULT_LTP_BATCH_SIZE = 250
+DEFAULT_QUOTE_BATCH_SIZE = 200
 STOCK_EXCLUDE_SYMBOL_PARTS = ("ETF", "INAV")
 STOCK_EXCLUDE_NAME_PARTS = (
     "ETF",
@@ -167,6 +170,90 @@ def scan_intraday_leverage(
     return app_name, eligible, ineligible, api_calls
 
 
+def fetch_ltp_map(
+    preferred_app: str,
+    symbols: Sequence[str],
+    batch_size: int,
+) -> Tuple[str, Dict[str, float], List[str], int]:
+    app_name, client, _profile = _choose_session(preferred_app)
+    ltp_map: Dict[str, float] = {}
+    missing: List[str] = []
+    api_calls = 0
+
+    for batch in _chunked(symbols, batch_size):
+        instruments = [f"NSE:{symbol}" for symbol in batch]
+        payload = client.ltp(instruments) or {}
+        api_calls += 1
+        for symbol in batch:
+            item = payload.get(f"NSE:{symbol}", {}) if isinstance(payload, dict) else {}
+            try:
+                last_price = float(item.get("last_price", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                last_price = 0.0
+            if last_price > 0:
+                ltp_map[symbol] = last_price
+            else:
+                missing.append(symbol)
+
+    return app_name, ltp_map, missing, api_calls
+
+
+def fetch_quote_metrics(
+    preferred_app: str,
+    symbols: Sequence[str],
+    batch_size: int,
+) -> Tuple[str, Dict[str, Dict[str, float]], List[str], int]:
+    app_name, client, _profile = _choose_session(preferred_app)
+    metrics: Dict[str, Dict[str, float]] = {}
+    missing: List[str] = []
+    api_calls = 0
+
+    for batch in _chunked(symbols, batch_size):
+        instruments = [f"NSE:{symbol}" for symbol in batch]
+        payload = client.quote(instruments) or {}
+        api_calls += 1
+        for symbol in batch:
+            row = payload.get(f"NSE:{symbol}", {}) if isinstance(payload, dict) else {}
+            try:
+                last_price = float(row.get("last_price", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                last_price = 0.0
+            try:
+                volume = float(row.get("volume", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                volume = 0.0
+            try:
+                average_price = float(row.get("average_price", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                average_price = 0.0
+            ref_price = average_price if average_price > 0 else last_price
+            traded_value = float(volume * ref_price) if volume > 0 and ref_price > 0 else 0.0
+            if last_price > 0:
+                metrics[symbol] = {
+                    "last_price": float(last_price),
+                    "volume": float(volume),
+                    "average_price": float(average_price),
+                    "traded_value": float(traded_value),
+                }
+            else:
+                missing.append(symbol)
+
+    return app_name, metrics, missing, api_calls
+
+
+def _price_tag(value: float) -> str:
+    text = f"{float(value):g}"
+    return text.replace(".", "p")
+
+
+def build_price_filtered_path(min_price: float) -> Path:
+    return ROOT / f"filtered_stocks_NSE_stock_intraday_5x_price_ge_{_price_tag(min_price)}.py"
+
+
+def build_liquid_filtered_path(min_price: float) -> Path:
+    return ROOT / f"filtered_stocks_NSE_stock_intraday_5x_price_ge_{_price_tag(min_price)}_liquid.py"
+
+
 def _py_set_literal(symbols: Sequence[str]) -> str:
     if not symbols:
         return "set()"
@@ -200,8 +287,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--app", default="", help="Optional fixed Kite app name, for example app1.")
     parser.add_argument("--min-leverage", type=float, default=5.0, help="Minimum leverage required.")
+    parser.add_argument(
+        "--min-price",
+        type=float,
+        default=0.0,
+        help="Optional live LTP cutoff for the stock intraday universe, for example 25.",
+    )
     parser.add_argument("--quantity", type=int, default=1, help="Probe quantity for MIS margin preview.")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Symbols per order_margins call.")
+    parser.add_argument(
+        "--ltp-batch-size",
+        type=int,
+        default=DEFAULT_LTP_BATCH_SIZE,
+        help="Symbols per Kite ltp() call when applying a min-price filter.",
+    )
+    parser.add_argument(
+        "--quote-batch-size",
+        type=int,
+        default=DEFAULT_QUOTE_BATCH_SIZE,
+        help="Symbols per Kite quote() call when applying live liquidity filters.",
+    )
+    parser.add_argument(
+        "--min-live-volume",
+        type=float,
+        default=0.0,
+        help="Optional live quote volume cutoff, for example 100000.",
+    )
+    parser.add_argument(
+        "--min-live-traded-value-rs",
+        type=float,
+        default=0.0,
+        help="Optional live quote traded-value cutoff in rupees, for example 50000000 for Rs 5 crore.",
+    )
+    parser.add_argument(
+        "--exclude-series-suffixes",
+        default="",
+        help="Optional comma-separated symbol suffixes to exclude, for example -SM,-ST,-BE.",
+    )
     parser.add_argument(
         "--skip-live-scan",
         action="store_true",
@@ -280,6 +402,116 @@ def main() -> int:
         stock_intraday,
     )
     print(f"[OK] Wrote {STOCK_INTRADAY_5X_FILE.name} with {len(stock_intraday)} symbols.")
+    if float(args.min_price) > 0:
+        ltp_app_name, ltp_map, missing_ltp, ltp_api_calls = fetch_ltp_map(
+            preferred_app=args.app,
+            symbols=stock_intraday,
+            batch_size=max(1, int(args.ltp_batch_size)),
+        )
+        min_price = float(args.min_price)
+        stock_intraday_price_filtered = sorted(
+            symbol for symbol in stock_intraday if float(ltp_map.get(symbol, 0.0)) >= min_price
+        )
+        price_filtered_path = build_price_filtered_path(min_price)
+        write_universe_module(
+            price_filtered_path,
+            generated_at,
+            [
+                f"Source universe: {STOCK_INTRADAY_5X_FILE.name}",
+                f"Kite app used: {ltp_app_name}",
+                "Probe: live NSE LTP via Kite ltp()",
+                f"Rule: price >= Rs {min_price:g}",
+                f"Count: {len(stock_intraday_price_filtered)}",
+                f"Missing LTP: {len(missing_ltp)}",
+                f"API calls: {ltp_api_calls}",
+            ],
+            stock_intraday_price_filtered,
+        )
+        print(f"[OK] Wrote {price_filtered_path.name} with {len(stock_intraday_price_filtered)} symbols.")
+        if missing_ltp:
+            print(f"[WARN] Missing LTP sample: {', '.join(missing_ltp[:20])}")
+        raw_suffixes = [part.strip().upper() for part in str(args.exclude_series_suffixes).split(",")]
+        excluded_suffixes = tuple(part for part in raw_suffixes if part)
+        if (
+            float(args.min_live_volume) > 0
+            or float(args.min_live_traded_value_rs) > 0
+            or excluded_suffixes
+        ):
+            quote_app_name, quote_metrics, missing_quote, quote_api_calls = fetch_quote_metrics(
+                preferred_app=args.app,
+                symbols=stock_intraday_price_filtered,
+                batch_size=max(1, int(args.quote_batch_size)),
+            )
+            min_live_volume = float(args.min_live_volume)
+            min_live_traded_value_rs = float(args.min_live_traded_value_rs)
+            liquid_symbols = []
+            for symbol in stock_intraday_price_filtered:
+                if excluded_suffixes and symbol.endswith(excluded_suffixes):
+                    continue
+                row = quote_metrics.get(symbol, {})
+                volume = float(row.get("volume", 0.0))
+                traded_value = float(row.get("traded_value", 0.0))
+                if min_live_volume > 0 and volume < min_live_volume:
+                    continue
+                if min_live_traded_value_rs > 0 and traded_value < min_live_traded_value_rs:
+                    continue
+                liquid_symbols.append(symbol)
+            liquid_path = build_liquid_filtered_path(min_price)
+            write_universe_module(
+                liquid_path,
+                generated_at,
+                [
+                    f"Source universe: {price_filtered_path.name}",
+                    f"Kite app used: {quote_app_name}",
+                    "Probe: live NSE quote() metrics via Kite",
+                    f"Rule: volume >= {min_live_volume:g}" if min_live_volume > 0 else "Rule: no minimum live volume",
+                    (
+                        f"Rule: traded_value >= Rs {min_live_traded_value_rs:g}"
+                        if min_live_traded_value_rs > 0
+                        else "Rule: no minimum live traded value"
+                    ),
+                    (
+                        f"Rule: exclude suffixes {','.join(excluded_suffixes)}"
+                        if excluded_suffixes
+                        else "Rule: no excluded series suffixes"
+                    ),
+                    f"Count: {len(liquid_symbols)}",
+                    f"Missing quote rows: {len(missing_quote)}",
+                    f"API calls: {quote_api_calls}",
+                ],
+                liquid_symbols,
+            )
+            print(f"[OK] Wrote {liquid_path.name} with {len(liquid_symbols)} symbols.")
+            write_universe_module(
+                MIS_V2_FILE,
+                generated_at,
+                [
+                    f"Source universe: {price_filtered_path.name}",
+                    f"Kite app used: {quote_app_name}",
+                    "Probe: live NSE quote() metrics via Kite",
+                    (
+                        f"Rule: volume >= {min_live_volume:g}"
+                        if min_live_volume > 0
+                        else "Rule: no minimum live volume"
+                    ),
+                    (
+                        f"Rule: traded_value >= Rs {min_live_traded_value_rs:g}"
+                        if min_live_traded_value_rs > 0
+                        else "Rule: no minimum live traded value"
+                    ),
+                    (
+                        f"Rule: exclude suffixes {','.join(excluded_suffixes)}"
+                        if excluded_suffixes
+                        else "Rule: no excluded series suffixes"
+                    ),
+                    f"Alias file: {MIS_V2_FILE.name}",
+                    f"Count: {len(liquid_symbols)}",
+                ],
+                liquid_symbols,
+            )
+            print(f"[OK] Wrote {MIS_V2_FILE.name} with {len(liquid_symbols)} symbols.")
+            if missing_quote:
+                print(f"[WARN] Missing quote sample: {', '.join(missing_quote[:20])}")
     if ineligible:
         sample = ", ".join(f"{symbol}:{leverage:g}" for symbol, leverage in ineligible[:20])
         print(f"[WARN] Ineligible sample: {sample}")
