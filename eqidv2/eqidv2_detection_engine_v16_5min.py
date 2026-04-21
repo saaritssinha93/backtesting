@@ -127,7 +127,7 @@ from eqidv2_runtime_paths import (
 # the top of the cycle, mutate rows to status=detected/filtered_*, atomic
 # replace at the bottom). Without this lock, SE or PF can interleave a
 # write during the cycle body and get silently clobbered.
-from eqidv2_pool_lock import pool_lock, bump_pool_rev
+from eqidv2_pool_lock import POOL_REV_FIELD, pool_lock, bump_pool_rev, load_pool_rev
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -761,16 +761,30 @@ def _pool_lifecycle_path(date_str: str) -> Path:
     return Path(RUNTIME_LIVE_SIGNALS_DIR) / POOL_LIFECYCLE_PATTERN.format(date_str)
 
 
-def _append_pool_lifecycle_event(date_str: str, event: Dict[str, Any]) -> None:
+def _append_pool_lifecycle_event(
+    date_str: str,
+    event: Dict[str, Any],
+    *,
+    pool_rev: Optional[int] = None,
+) -> None:
     """Append a single JSONL event to the daily pool_lifecycle audit file.
 
     Event shape: {"signal_id": ..., "event": "WRITTEN|PF_VERIFIED|DE_PASSED|DROPPED",
-                  "ts": "...", <extra keys>}.
+                  "ts": "...", "pool_rev": N, <extra keys>}.
+
+    strategy_v2 §J3 fix #7 — when ``pool_rev`` is provided, the event is
+    stamped with the TARGET rev the cycle's state write will commit. This
+    lets reconciliation tooling detect dangling events (audit saw a
+    mutation, but the matching state write never landed because the
+    process crashed between them). ``pool_rev=None`` events are observed
+    "pool-neutral" (e.g. NF_STALE) and do not imply a state write.
     """
     try:
         path = _pool_lifecycle_path(date_str)
         payload = dict(event)
         payload.setdefault("ts", _now_ist().strftime("%Y-%m-%dT%H:%M:%S%z"))
+        if pool_rev is not None:
+            payload.setdefault(POOL_REV_FIELD, int(pool_rev))
         line = json.dumps(payload, ensure_ascii=False) + "\n"
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
@@ -1154,6 +1168,13 @@ def _run_detection_cycle_live_parity(
     _ensure_detected_csv_exists(date_str)
 
     state = _load_pending_state(date_str)
+    # strategy_v2 §J3 fix #7 — stamp lifecycle events with the target pool_rev
+    # (= current rev + 1) the cycle's state write will commit. Pre-fix, events
+    # carried no rev, so a crash between `_append_pool_lifecycle_event` and
+    # `_write_pending_state_atomic` left audit and state mutually inconsistent
+    # with no way to detect which side won. Downstream reconciliation tooling
+    # can now compare event.pool_rev to on-disk state.pool_rev.
+    target_pool_rev = load_pool_rev(state) + 1
     signals = state.get("signals", [])
     pending_sigs = [s for s in signals if str(s.get("status", "")).lower() == "pending"]
 
@@ -1190,15 +1211,19 @@ def _run_detection_cycle_live_parity(
     if expired_sigs:
         for sig in expired_sigs:
             try:
-                _append_pool_lifecycle_event(date_str, {
-                    "event":       "DROPPED",
-                    "signal_id":   str(sig.get("signal_id", "")),
-                    "ticker":      str(sig.get("ticker", "")),
-                    "side":        str(sig.get("side", "")),
-                    "setup":       str(sig.get("setup", "")),
-                    "reason":      "expired_window_parity",
-                    "source_slot": str(sig.get("source_slot", "")),
-                })
+                _append_pool_lifecycle_event(
+                    date_str,
+                    {
+                        "event":       "DROPPED",
+                        "signal_id":   str(sig.get("signal_id", "")),
+                        "ticker":      str(sig.get("ticker", "")),
+                        "side":        str(sig.get("side", "")),
+                        "setup":       str(sig.get("setup", "")),
+                        "reason":      "expired_window_parity",
+                        "source_slot": str(sig.get("source_slot", "")),
+                    },
+                    pool_rev=target_pool_rev,
+                )
             except Exception as exc:
                 print(f"[WARN] lifecycle DROPPED append failed: {exc}", flush=True)
         print(
@@ -1401,6 +1426,7 @@ def _run_detection_cycle_live_parity(
                         "stashed_hash": stashed_hash,
                         "live_hash": live_hash,
                     },
+                    pool_rev=target_pool_rev,
                 )
             print(
                 f"[DETECT_SIG] slot={slot_ts.strftime('%H:%M')} "
@@ -1438,6 +1464,7 @@ def _run_detection_cycle_live_parity(
                             "side": str(sig.get("side", "")),
                             "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
                         },
+                        pool_rev=target_pool_rev,
                     )
             print(
                 f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | tickers=0 | filtered={len(slot_signals)}",
@@ -1527,6 +1554,7 @@ def _run_detection_cycle_live_parity(
                             "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
                             "written_to_csv": bool(wrote),
                         },
+                        pool_rev=target_pool_rev,
                     )
                 # Fix #15: per-signal outcome log.
                 print(
@@ -1553,6 +1581,7 @@ def _run_detection_cycle_live_parity(
                             "setup": str(sig.get("setup", "")),
                             "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
                         },
+                        pool_rev=target_pool_rev,
                     )
                 print(
                     f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {sig_side} -> "

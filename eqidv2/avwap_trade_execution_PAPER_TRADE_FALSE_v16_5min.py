@@ -161,6 +161,11 @@ LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE"
     "on",
 }
 LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "300"))
+# strategy_v2 §J3 fix #1 — executor sleeps until the deterministic bar-open
+# entry slot before calling execute_live_trade, so live trades align with the
+# same bar-open that backtests assume. Cap the wait so an orphan/future-dated
+# signal never blocks a thread beyond this budget.
+ENTRY_SLOT_MAX_WAIT_SEC = max(0, int(os.getenv("EQIDV2_ENTRY_SLOT_MAX_WAIT_SEC", "300")))
 TRANSIENT_API_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_TRANSIENT_API_RETRY_ATTEMPTS", "4")))
 TRANSIENT_API_RETRY_BASE_SEC = max(0.25, float(os.getenv("EQIDV2_TRANSIENT_API_RETRY_BASE_SEC", "1.0")))
 TRANSIENT_ENTRY_ORDER_RECOVER_LOOKBACK_SEC = max(
@@ -251,29 +256,36 @@ def _entry_retry_deadline(
     trade_start_ist: datetime,
     forced_close_dt: datetime,
 ) -> datetime:
-    # Anchor to Stage-2 confirmation time first — this is the definitive moment
-    # the signal was live in the two-stage pipeline (detected_time_ist/logtime_ist).
-    # For same-cycle detections (received_time == detected_time_ist) the old
-    # rebasing logic produced a deadline anchored to the stale model entry slot,
-    # causing ENTRY_SKIPPED_STALE_SIGNAL on all early-session signals.
-    base_ts = _parse_ist_signal_ts(
-        signal.get("detected_time_ist") or signal.get("logtime_ist")
+    # strategy_v2 §J3 fix #8 — anchor the retry window to whichever is later:
+    # the executor start (trade_start_ist, which is POST any §J3 #1 bar-open
+    # sleep) or the model entry slot. Pre-§J3 the anchor was detected_time_ist,
+    # which silently chopped the §J3 #1 sleep duration (up to ~5 min) off the
+    # ENTRY_RETRY_WAIT_SEC budget. For rows with no entry_datetime (legacy /
+    # malformed signals), fall back to the previous detected/received chain so
+    # we never rebase onto a stale model slot that fires ENTRY_SKIPPED_STALE
+    # on all early-session trades.
+    entry_slot_ts = _parse_ist_signal_ts(
+        signal.get("signal_entry_datetime_ist")
+        or signal.get("signal_bar_time_ist")
+        or signal.get("bar_time_ist")
     )
-    # Fall back to Stage-1 pending pool insertion time.
-    if base_ts is None:
-        base_ts = _parse_ist_signal_ts(signal.get("received_time"))
-    # Final fallback: model entry slot (legacy rows without pipeline timestamps).
-    if base_ts is None:
-        base_ts = _parse_ist_signal_ts(
-            signal.get("signal_entry_datetime_ist")
-            or signal.get("signal_bar_time_ist")
-            or signal.get("bar_time_ist")
-            or signal.get("signal_datetime")
-        )
-    if base_ts is None:
-        candidate = trade_start_ist + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC))
+    wait = max(1, ENTRY_RETRY_WAIT_SEC)
+    if entry_slot_ts is not None:
+        entry_slot_dt = entry_slot_ts.to_pydatetime()
+        anchor = trade_start_ist if trade_start_ist >= entry_slot_dt else entry_slot_dt
+        candidate = anchor + timedelta(seconds=wait)
     else:
-        candidate = base_ts.to_pydatetime() + timedelta(seconds=max(1, ENTRY_RETRY_WAIT_SEC))
+        base_ts = _parse_ist_signal_ts(
+            signal.get("detected_time_ist") or signal.get("logtime_ist")
+        )
+        if base_ts is None:
+            base_ts = _parse_ist_signal_ts(signal.get("received_time"))
+        if base_ts is None:
+            base_ts = _parse_ist_signal_ts(signal.get("signal_datetime"))
+        if base_ts is None:
+            candidate = trade_start_ist + timedelta(seconds=wait)
+        else:
+            candidate = base_ts.to_pydatetime() + timedelta(seconds=wait)
     return min(candidate, forced_close_dt)
 
 
@@ -1158,6 +1170,13 @@ mis_rejected_symbols: Set[str] = set()
 mis_rejected_symbols_lock = threading.Lock()
 closed_signal_ids_today: Set[str] = set()
 closed_tickers_today: Set[str] = set()
+# strategy_v2 §J3 fix #10 — transient admission set. Populated on dispatch to
+# prevent two concurrent signals for the same ticker racing into the same
+# slot, cleared when the worker thread exits. closed_tickers_today is the
+# permanent "traded today" block and is now only populated after an entry
+# fill is confirmed (or after a terminal skip that rules the ticker out for
+# the rest of the session, e.g. MIS_BLOCKED / RISK_LIMIT / DRY_RUN).
+dispatched_tickers: Set[str] = set()
 closed_trades_lock = threading.Lock()
 daily_pnl: Dict[str, Any] = {"total": 0.0, "wins": 0, "losses": 0, "trades": 0}
 daily_pnl_lock = threading.Lock()
@@ -2332,6 +2351,13 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                             f"tgt:{old_target:.2f}->{result.target_price:.2f}"
                         )
                 _sync_active_position("entry_filled")
+                # strategy_v2 §J3 fix #10 — promote ticker to the permanent
+                # "traded today" block only after entry fill is confirmed.
+                # Pre-fix, dispatch added the ticker immediately, so a
+                # transient broker reject would permaban the symbol for the
+                # rest of the session.
+                with closed_trades_lock:
+                    closed_tickers_today.add(ticker)
 
         # No open position to monitor
         if trade_closed:
@@ -3801,28 +3827,86 @@ def _launch_trade_thread(
     trade_semaphore: Optional[threading.Semaphore],
     resume_mode: bool = False,
 ) -> bool:
-    def _run_trade(sig=signal, sid=signal_id, is_resume=resume_mode):
+    """
+    strategy_v2 §J3 fix #9 — if ``trade_semaphore`` is not None, the caller
+    MUST have already acquired one permit on it; the worker thread is only
+    responsible for releasing that permit in its finally block. Pre-fix,
+    the thread acquired inside _run_trade, which meant signals were admitted
+    (marked executed, held ticker/margin slots) while 45+ workers queued on
+    the semaphore — if the process was killed before they drained, their
+    slots were lost for the rest of the session.
+    """
+    ticker_for_cleanup = str(signal.get("ticker", "")).upper()
+
+    def _run_trade(
+        sig=signal,
+        sid=signal_id,
+        is_resume=resume_mode,
+        tkr=ticker_for_cleanup,
+    ):
         with inflight_signals_lock:
             if sid in inflight_signals:
                 return
             inflight_signals.add(sid)
-        acquired = False
-        if trade_semaphore is not None:
-            trade_semaphore.acquire()
-            acquired = True
         try:
+            # strategy_v2 §J3 fix #1 — wait until the deterministic bar-open
+            # entry slot before calling execute_live_trade so live trades
+            # align with the same bar-open that the backtest assumes.
+            # Skipped for resumes since the trade is already mid-lifecycle.
+            if not is_resume:
+                try:
+                    entry_slot_ts = _parse_ist_signal_ts(
+                        sig.get("signal_entry_datetime_ist")
+                        or sig.get("signal_bar_time_ist")
+                        or sig.get("bar_time_ist")
+                    )
+                    if entry_slot_ts is not None:
+                        entry_slot_dt = entry_slot_ts.to_pydatetime()
+                        now_ist = datetime.now(IST)
+                        wait_sec = (entry_slot_dt - now_ist).total_seconds()
+                        if wait_sec > ENTRY_SLOT_MAX_WAIT_SEC > 0:
+                            log.warning(
+                                f"[ENTRY.SLOT] {tkr} signal_id={sid[:12]}: "
+                                f"entry_slot {entry_slot_dt.strftime('%H:%M:%S')} "
+                                f"is {wait_sec:.0f}s away "
+                                f"(> cap {ENTRY_SLOT_MAX_WAIT_SEC}s); skipping."
+                            )
+                            _log_non_executed_signal_to_csv(
+                                sig, sid, "ENTRY_SKIPPED_SLOT_TOO_FAR"
+                            )
+                            with closed_trades_lock:
+                                closed_signal_ids_today.add(sid)
+                            return
+                        if wait_sec > 0:
+                            log.info(
+                                f"[ENTRY.SLOT] {tkr} signal_id={sid[:12]}: "
+                                f"sleeping {wait_sec:.1f}s until bar-open "
+                                f"{entry_slot_dt.strftime('%H:%M:%S')}"
+                            )
+                            time.sleep(wait_sec)
+                except Exception as slot_err:
+                    log.warning(
+                        f"[ENTRY.SLOT] {tkr} signal_id={sid[:12]}: "
+                        f"slot-gate error: {slot_err}"
+                    )
             execute_live_trade(sig, resume_mode=is_resume)
         except Exception as e:
             mode = "RESUME" if is_resume else "LIVE"
             log.error(f"{mode} trade thread error for {sig.get('ticker', '?')}: {e}")
             log.error(traceback.format_exc())
         finally:
-            if acquired and trade_semaphore is not None:
+            if trade_semaphore is not None:
                 trade_semaphore.release()
             with inflight_signals_lock:
                 inflight_signals.discard(sid)
             with active_trades_lock:
                 active_trades.pop(sid, None)
+            if tkr:
+                # strategy_v2 §J3 fix #10 — release the transient admission
+                # set. If the trade filled, execute_live_trade has already
+                # promoted the ticker to closed_tickers_today.
+                with closed_trades_lock:
+                    dispatched_tickers.discard(tkr)
 
     try:
         t = threading.Thread(
@@ -3855,15 +3939,29 @@ def start_resumed_trade_monitors(
         sid = str(signal.get("signal_id", "")).strip()
         if not sid:
             continue
+        # strategy_v2 §J3 fix #9 — pre-acquire the concurrency permit before
+        # launching the thread so a blocked semaphore can't hold an admitted
+        # trade hostage in a queued state.
+        acquired_sem: Optional[threading.Semaphore] = None
+        if trade_semaphore is not None:
+            if not trade_semaphore.acquire(blocking=False):
+                log.warning(
+                    f"[RESUME] Concurrency cap reached for signal_id={sid[:12]}; "
+                    "waiting for a permit."
+                )
+                trade_semaphore.acquire()
+            acquired_sem = trade_semaphore
         ok = _launch_trade_thread(
             signal=signal,
             signal_id=sid,
-            trade_semaphore=trade_semaphore,
+            trade_semaphore=acquired_sem,
             resume_mode=True,
         )
         if ok:
             started += 1
         else:
+            if acquired_sem is not None:
+                acquired_sem.release()
             log.error(f"[RESUME] Failed to launch monitor thread for signal_id={sid[:12]}")
     return started
 
@@ -3937,7 +4035,13 @@ def process_new_signals(
         signal["side"] = side
 
         with closed_trades_lock:
-            ticker_seen_today = ticker in closed_tickers_today
+            # strategy_v2 §J3 fix #10 — block on either the permanent
+            # "filled today" set or the transient admission set so two
+            # dispatchers can't race into the same ticker.
+            ticker_seen_today = (
+                ticker in closed_tickers_today
+                or ticker in dispatched_tickers
+            )
         if ticker_seen_today:
             outcome = "ENTRY_SKIPPED_TICKER_ALREADY_TRADED_TODAY"
             log.warning(
@@ -3967,9 +4071,28 @@ def process_new_signals(
                 closed_tickers_today.add(ticker)
             continue
 
+        # strategy_v2 §J3 fix #9 — pre-acquire the concurrency permit BEFORE
+        # reserving capital or marking executed. If no permit is available,
+        # defer the signal without burning its admission state; the next
+        # dispatcher pass will retry once an in-flight trade releases its
+        # permit. Pre-fix, the permit was acquired inside the worker thread,
+        # so N-over-cap signals would queue holding ticker/margin slots.
+        acquired_sem: Optional[threading.Semaphore] = None
+        if trade_semaphore is not None:
+            if not trade_semaphore.acquire(blocking=False):
+                log.info(
+                    f"[DISPATCH.DEFER] {ticker} signal_id={signal_id[:12]} "
+                    f"deferred: concurrency cap reached "
+                    f"(max={MAX_CONCURRENT_TRADES}). Will retry on next poll."
+                )
+                continue
+            acquired_sem = trade_semaphore
+
         # Risk + margin reservation (atomic)
         allowed, reason, reserved_margin = _reserve_capacity_for_signal(signal_id, signal)
         if not allowed:
+            if acquired_sem is not None:
+                acquired_sem.release()
             log.warning(
                 f"[RISK] Rejecting {signal.get('side', '?')} "
                 f"{signal.get('ticker', '?')}: {reason}"
@@ -3998,6 +4121,8 @@ def process_new_signals(
                 f"[DRY-RUN] Would execute: {side} {ticker} @ {entry_p} | "
                 f"SL={signal.get('stop_price')} TGT={signal.get('target_price')}"
             )
+            if acquired_sem is not None:
+                acquired_sem.release()
             with closed_trades_lock:
                 closed_signal_ids_today.add(signal_id)
                 closed_tickers_today.add(ticker)
@@ -4013,10 +4138,12 @@ def process_new_signals(
         started = _launch_trade_thread(
             signal=signal,
             signal_id=sid,
-            trade_semaphore=trade_semaphore,
+            trade_semaphore=acquired_sem,
             resume_mode=False,
         )
         if not started:
+            if acquired_sem is not None:
+                acquired_sem.release()
             _release_capacity(sid)
             with executed_lock:
                 executed.discard(sid)
@@ -4025,7 +4152,10 @@ def process_new_signals(
             continue
         with closed_trades_lock:
             closed_signal_ids_today.add(signal_id)
-            closed_tickers_today.add(ticker)
+            # strategy_v2 §J3 fix #10 — transient admission only. The
+            # worker thread promotes to closed_tickers_today once the fill
+            # is confirmed, and clears dispatched_tickers in its finally.
+            dispatched_tickers.add(ticker)
 
         log.info(
             f"[DISPATCH] Launched LIVE trade: {side} {ticker} @ {entry_p} "

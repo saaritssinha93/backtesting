@@ -450,6 +450,38 @@ def _publish_slot_ready_marker(
     os.replace(tmp_path, path)
 
 
+def _read_marker_meta(path) -> tuple:
+    """
+    Return (published_at_datetime, source_str) for an existing marker file,
+    or (None, None) if the file is missing / unreadable / malformed.
+    Used by the §J3 fix #6 write-if-newer guard so a backwards clock jump
+    cannot clobber a fresher authoritative payload.
+    """
+    try:
+        if not path.exists():
+            return None, None
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw) if raw else {}
+        pub_raw = str(data.get("published_at_ist", "")).strip()
+        src = str(data.get("source", "")).strip().lower()
+        pub_dt = None
+        if pub_raw:
+            for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%dT%H:%M:%S%z"):
+                try:
+                    pub_dt = datetime.strptime(pub_raw, fmt)
+                    break
+                except Exception:
+                    pub_dt = None
+            if pub_dt is None:
+                try:
+                    pub_dt = datetime.fromisoformat(pub_raw)
+                except Exception:
+                    pub_dt = None
+        return pub_dt, src
+    except Exception:
+        return None, None
+
+
 def _publish_slot_completion_marker(
     slot_end: datetime,
     *,
@@ -470,6 +502,13 @@ def _publish_slot_completion_marker(
     SE gates on this file: `complete=True` ⇒ safe to scan; `complete=False`
     ⇒ `[ABORT] LF_INCOMPLETE`. Overwrites any earlier watcher-published
     marker for the same slot so there is exactly one source of truth.
+
+    strategy_v2 §J3 fix #6 — write-if-newer guard. A backwards clock jump
+    (NTP correction, VM migration) would otherwise let a later invocation
+    overwrite a fresher on-disk `final` marker with an older payload and
+    silently break the SE gate. If the existing marker is a `final` payload
+    with a `published_at_ist` newer than `now_ist()` by more than the
+    configured tolerance, skip the write.
     """
     failures_list = [str(f) for f in (failures or [])]
     verify_sample_list = [str(t) for t in (verification_failure_sample or [])]
@@ -482,9 +521,29 @@ def _publish_slot_completion_marker(
     ratio = (float(sample_fresh) / float(sample_checked)) if sample_checked > 0 else 0.0
 
     path = _slot_ready_marker_path(slot_end)
+    new_pub_dt = now_ist()
+
+    # §J3 fix #6 — backward-clock-skew guard.
+    existing_pub_dt, existing_src = _read_marker_meta(path)
+    skew_tolerance = timedelta(seconds=1)
+    if (
+        existing_pub_dt is not None
+        and existing_src == "final"
+        and existing_pub_dt > (new_pub_dt + skew_tolerance)
+    ):
+        print(
+            f"[READY] SKIP overwrite of 5m completion marker "
+            f"slot={slot_end.astimezone(IST).strftime('%Y-%m-%d %H:%M:%S%z')} — "
+            f"on-disk final published_at={existing_pub_dt.isoformat()} is newer "
+            f"than now={new_pub_dt.isoformat()}. Possible clock skew; keeping "
+            f"the fresher payload in place.",
+            flush=True,
+        )
+        return
+
     payload = {
         "slot_ist": slot_end.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S%z"),
-        "published_at_ist": now_ist().strftime("%Y-%m-%d %H:%M:%S%z"),
+        "published_at_ist": new_pub_dt.strftime("%Y-%m-%d %H:%M:%S%z"),
         "source": "final",
         "complete": bool(complete),
         # authoritative fetch outcome (full universe, not a sample)
