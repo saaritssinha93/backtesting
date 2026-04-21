@@ -32,11 +32,43 @@ Status files (to logs/):
   eqidv2_detection_engine_v16_5min.log
   eqidv2_detection_engine_v16_5min.status
   eqidv2_detection_engine_v16_5min.heartbeat
+
+STRATEGY V2 — DESIGN INVARIANTS (see strategy_v2.txt §F)
+========================================================
+F1. Pool row monotonicity:
+    DE never mutates immutable fields (ticker, side, setup, entry_slot,
+    entry_price, stop_price). Only outcome-side fields are updated:
+    status ∈ {detected, filtered_parity, filtered_trigger_drifted,
+    filtered_v16, ...}, filter_reason, detection_time, detection_price.
+F2. PF/DE slot equality:
+    DE's per-slot scan reads ONLY pool rows whose source_slot equals the
+    slot it is confirming. Cross-slot reach is forbidden.
+F3. No writes for past entry_slots:
+    SE enforces on the write side; DE's freshness gate
+    (`_assess_pending_parquet_freshness`) is the reader-side safety net.
+F4. One-writer-many-readers:
+    DE is the only writer of signals_<date>_v16_5min_{long,short}.csv
+    and detected_signals_<date>_v16_5min.csv. The pool JSON / CSV are
+    updated for status transitions only — SE remains the canonical
+    inserter.
+F5. Slot is the OPEN time:
+    All slot keys (`signal_datetime`, `signal_entry_datetime_ist`,
+    ready-marker filename, `source_slot`) use bar-OPEN time.
+
+DE-specific strategy-v2 hooks:
+  A1  Atomic pool CSV write (write-rename, .csv.tmp → os.replace).
+  A3 / D2  Trigger-bar OHLC drift check: compare live parquet-derived
+       md5(O|H|L|C)[:16] to the `trigger_ohlc_hash` stashed by SE. On
+       mismatch, mark `filtered_trigger_drifted` and skip (fail-closed).
+  E2  pool_lifecycle_<date>_v16_5min.jsonl audit events:
+        DE_PASSED  on every confirmed signal
+        DROPPED    with `reason=filter_reason` on every filtered row
 """
 
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import sys
@@ -55,6 +87,7 @@ import pytz
 # ---------------------------------------------------------------------------
 import avwap_combined_runner_v17f_5min as _v17f_runner  # noqa: F401
 import avwap_combined_runner_v16_5min as v16_runner
+import eqidv2_signal_id_selfcheck_v16_5min as signal_id_selfcheck
 from avwap_combined_runner_v16_5min import (
     apply_live_parity_profile,
     get_v16_filter_reason,
@@ -102,6 +135,7 @@ _LOG_FILE    = _LOG_DIR / "eqidv2_detection_engine_v16_5min.log"
 
 PENDING_JSON_PATTERN       = "pending_signals_{}_v16_5min.json"
 PENDING_CSV_PATTERN        = "pending_signals_{}_v16_5min.csv"
+POOL_LIFECYCLE_PATTERN     = "pool_lifecycle_{}_v16_5min.jsonl"
 SHORT_SIGNAL_CSV_PATTERN   = "signals_{}_v16_5min_short.csv"
 LONG_SIGNAL_CSV_PATTERN    = "signals_{}_v16_5min_long.csv"
 DETECTED_CSV_PATTERN       = "detected_signals_{}_v16_5min.csv"
@@ -111,6 +145,11 @@ NIFTYBEES_TICKER      = "NIFTYBEES"
 
 CHECK_INTERVAL_SEC    = int(os.getenv("EQIDV2_DETECTION_CHECK_INTERVAL_SEC", "60"))
 STARTUP_OFFSET_SEC    = int(os.getenv("EQIDV2_DETECTION_STARTUP_OFFSET_SEC", "30"))
+# Fix #17+ (post-2026-04-21): retry budget for signal_id self-check proof load.
+# Avoids the Stage1/Stage2 startup race where Stage 2 boots faster than Stage 1
+# writes the proof file. Total wait = TIMEOUT_SEC, polled every SLEEP_SEC.
+SELF_CHECK_PROOF_RETRY_TIMEOUT_SEC = int(os.getenv("EQIDV2_DETECTION_SELFCHECK_RETRY_TIMEOUT_SEC", "60"))
+SELF_CHECK_PROOF_RETRY_SLEEP_SEC   = max(1, int(os.getenv("EQIDV2_DETECTION_SELFCHECK_RETRY_SLEEP_SEC", "3")))
 MARKET_OPEN           = dtime(9, 15)
 # Fix #14: align with trade executor FORCED_CLOSE_TIME (15:20). Confirmations
 # after 15:20 would be rejected as ENTRY_SKIPPED_AFTER_CUTOFF by the executor,
@@ -149,6 +188,10 @@ DIRECTIONAL_NIFTY_CONTEXT_FALLBACK = str(
 NEUTRALIZE_PARTIAL_NIFTY_SESSION = str(
     os.getenv("EQIDV16_5MIN_NEUTRALIZE_PARTIAL_NIFTY_SESSION", "1")
 ).strip().lower() not in {"0", "false", "no", "off"}
+# A4 fix: if NIFTYBEES parquet's last bar is older than this many seconds vs
+# slot_ist, demote RS to neutral instead of silently using stale direction.
+# Same default as Signal Engine (420s = one 5-min bar + 2-min slack).
+NIFTY_MAX_STALE_SEC = float(os.getenv("EQIDV2_NIFTY_MAX_STALE_SEC", "420"))
 USE_READY_MARKER_HANDOFF = str(
     os.getenv("EQIDV2_DETECTION_USE_READY_MARKERS", "1")
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -178,6 +221,10 @@ PENDING_CSV_COLUMNS = [
     "quality_score", "avwap_dist_atr", "rsi_signal", "adx",
     "rs_pct", "setup", "status", "expires_at",
     "filter_reason", "detection_time", "detection_price",
+    # strategy_v2 §C1 / §A3 — trigger-bar snapshot written by SE
+    "trigger_bar_iso", "trigger_open", "trigger_high",
+    "trigger_low", "trigger_close", "trigger_volume",
+    "trigger_ohlc_hash",
 ]
 
 
@@ -372,6 +419,7 @@ def _assess_pending_parquet_freshness(
     last_row_ts = _pending_parquet_last_row_ts(df)
     age_sec = _pending_parquet_age_sec(ticker)
 
+    slot_matched = False
     if required_slot is not None:
         req_ts = pd.Timestamp(required_slot)
         if req_ts.tzinfo is None:
@@ -386,6 +434,7 @@ def _assess_pending_parquet_freshness(
                 last_row_ts,
                 f"data_incomplete (last_row={_format_ist_ts(last_row_ts)} < required_slot={_format_ist_ts(req_ts)})",
             )
+        slot_matched = True
 
     # Fix #13: use max(mtime, last_row_ts) as the freshness clock.
     # On Windows + OneDrive, os.replace/sync can leave a just-written file with
@@ -400,7 +449,11 @@ def _assess_pending_parquet_freshness(
         except Exception:
             pass
 
-    if effective_age_sec > MAX_DATA_AGE_SEC:
+    # Fix #19 (post-2026-04-21): when the parquet contains the exact required
+    # source slot, that is a stronger guarantee than wall-clock mtime age. On
+    # 5-min bars at SLOT_OFFSET_SEC=4, mtime_age naturally runs ~270s which
+    # previously tripped MAX_DATA_AGE_SEC=180 and blocked every promotion.
+    if not slot_matched and effective_age_sec > MAX_DATA_AGE_SEC:
         return (
             df,
             age_sec,
@@ -570,6 +623,19 @@ def _load_niftybees_rs(slot_ist: datetime) -> Tuple[float, bool, bool]:
         if df is None or df.empty:
             return 0.0, True, True  # no data → neutral
 
+        if NIFTY_MAX_STALE_SEC > 0:
+            is_fresh, age_sec, last_ts = base_v15.check_niftybees_freshness(
+                df, slot_ist, max_stale_sec=NIFTY_MAX_STALE_SEC
+            )
+            if not is_fresh:
+                print(
+                    f"[DETECTION_NIFTY_RS] STALE slot={slot_ist.strftime('%H:%M')} "
+                    f"last_bar={last_ts} age={age_sec:.0f}s > {NIFTY_MAX_STALE_SEC:.0f}s "
+                    f"-> neutral (allow_long=allow_short=True)",
+                    flush=True,
+                )
+                return 0.0, True, True
+
         dt = pd.to_datetime(df["date"], errors="coerce")
         if getattr(dt.dt, "tz", None) is None:
             dt = dt.dt.tz_localize("UTC")
@@ -643,6 +709,102 @@ def _pending_csv_path(date_str: str) -> Path:
     return Path(RUNTIME_LIVE_SIGNALS_DIR) / PENDING_CSV_PATTERN.format(date_str)
 
 
+# ---------------------------------------------------------------------------
+# E2 — pool lifecycle JSONL (append-only audit, see strategy_v2.txt §E2)
+# ---------------------------------------------------------------------------
+def _pool_lifecycle_path(date_str: str) -> Path:
+    return Path(RUNTIME_LIVE_SIGNALS_DIR) / POOL_LIFECYCLE_PATTERN.format(date_str)
+
+
+def _append_pool_lifecycle_event(date_str: str, event: Dict[str, Any]) -> None:
+    """Append a single JSONL event to the daily pool_lifecycle audit file.
+
+    Event shape: {"signal_id": ..., "event": "WRITTEN|PF_VERIFIED|DE_PASSED|DROPPED",
+                  "ts": "...", <extra keys>}.
+    """
+    try:
+        path = _pool_lifecycle_path(date_str)
+        payload = dict(event)
+        payload.setdefault("ts", _now_ist().strftime("%Y-%m-%dT%H:%M:%S%z"))
+        line = json.dumps(payload, ensure_ascii=False) + "\n"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception as exc:
+        print(f"[WARN] pool_lifecycle append failed: {exc}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# A3 / D2 — trigger-bar OHLC drift check (see strategy_v2.txt §A3 / §D2)
+# ---------------------------------------------------------------------------
+def _compute_live_trigger_ohlc_hash(
+    ticker: str,
+    trigger_bar_iso: str,
+) -> Optional[str]:
+    """Re-read the trigger bar from the live parquet and hash its OHLC.
+
+    Uses the same md5(O|H|L|C)[:16] scheme SE uses to stash
+    `trigger_ohlc_hash` on the pool row. Returns None if the trigger bar
+    cannot be located or parsed — caller should treat None as
+    'cannot verify' (fail-closed per §D2).
+    """
+    ticker_u = str(ticker or "").strip().upper()
+    if not ticker_u or not trigger_bar_iso:
+        return None
+    path = Path(RUNTIME_DATA_5M_DIR) / f"{ticker_u}{END_5M}"
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close"])
+    except Exception:
+        return None
+    if df.empty:
+        return None
+    try:
+        target = pd.Timestamp(trigger_bar_iso)
+        if target.tzinfo is None:
+            target = target.tz_localize(IST)
+        else:
+            target = target.tz_convert(IST)
+        target = target.floor("5min")
+        dates = pd.to_datetime(df["date"])
+        if getattr(dates.dt, "tz", None) is None:
+            dates = dates.dt.tz_localize(IST)
+        else:
+            dates = dates.dt.tz_convert(IST)
+        mask = dates == target
+        if not bool(mask.any()):
+            return None
+        row = df[mask].iloc[-1]
+        raw = (
+            f"{float(row['open']):.4f}|{float(row['high']):.4f}|"
+            f"{float(row['low']):.4f}|{float(row['close']):.4f}"
+        )
+        return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return None
+
+
+def _check_trigger_bar_drift(sig: Dict[str, Any]) -> Optional[str]:
+    """Return the live hash ONLY if it disagrees with the stashed SE hash
+    (drift case); returns None when the check passes or cannot be performed.
+
+    Callers should treat a non-None return as TRIGGER_BAR_DRIFTED per §D2
+    and skip the entry fail-closed.
+    """
+    stashed = str(sig.get("trigger_ohlc_hash", "") or "").strip().lower()
+    if not stashed:
+        return None  # no hash written — nothing to compare against
+    trigger_iso = str(sig.get("trigger_bar_iso", "") or "").strip()
+    if not trigger_iso:
+        return None
+    live_hash = _compute_live_trigger_ohlc_hash(str(sig.get("ticker", "")), trigger_iso)
+    if live_hash is None:
+        return None
+    if live_hash.lower() == stashed:
+        return None
+    return live_hash
+
+
 def _load_pending_state(date_str: str) -> Dict[str, Any]:
     path = _pending_json_path(date_str)
     if not path.exists():
@@ -661,36 +823,18 @@ def _write_pending_state_atomic(state: Dict[str, Any], date_str: str) -> None:
 
 
 def _write_pending_csv(state: Dict[str, Any], date_str: str) -> None:
+    # A1 (strategy_v2 §A1): atomic write-rename. Readers (executor / triage
+    # tooling) never see a partial CSV because os.replace is atomic on the
+    # same volume.
     path = _pending_csv_path(date_str)
+    tmp_path = path.with_suffix(".csv.tmp")
     signals = state.get("signals", [])
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=PENDING_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         for sig in signals:
-            writer.writerow({
-                "signal_id":     sig.get("signal_id", ""),
-                "ticker":        sig.get("ticker", ""),
-                "side":          sig.get("side", ""),
-                "signal_datetime": sig.get("signal_datetime", ""),
-                "signal_entry_datetime_ist": sig.get("signal_entry_datetime_ist", ""),
-                "signal_bar_time": sig.get("signal_bar_time", ""),
-                "added_at":      sig.get("added_at", ""),
-                "signal_price":  sig.get("signal_price", ""),
-                "entry_price":   sig.get("entry_price", ""),
-                "stop_price":    sig.get("stop_price", ""),
-                "target_price":  sig.get("target_price", ""),
-                "quality_score": sig.get("quality_score", ""),
-                "avwap_dist_atr": sig.get("avwap_dist_atr", ""),
-                "rsi_signal":    sig.get("rsi_signal", ""),
-                "adx":           sig.get("adx", ""),
-                "rs_pct":        sig.get("rs_pct", ""),
-                "setup":         sig.get("setup", ""),
-                "status":        sig.get("status", ""),
-                "expires_at":    sig.get("expires_at", ""),
-                "filter_reason": sig.get("filter_reason", ""),
-                "detection_time": sig.get("detection_time", ""),
-                "detection_price": sig.get("detection_price", ""),
-            })
+            writer.writerow({col: sig.get(col, "") for col in PENDING_CSV_COLUMNS})
+    os.replace(tmp_path, path)
 
 
 def _sync_pending_csv_if_needed(state: Dict[str, Any], date_str: str) -> None:
@@ -1122,6 +1266,56 @@ def _run_detection_cycle_live_parity(
             if not slot_signals:
                 continue
 
+        # A3 / D2 — trigger-bar OHLC drift check (fail-closed per strategy_v2 §D2).
+        # Runs AFTER the freshness gate: parquet is known-present, so a
+        # hash mismatch genuinely means the trigger bar's OHLC changed
+        # between SE-time and DE-time (Kite back-fill, late ticks, etc.).
+        drifted_this_slot = 0
+        drift_pass: List[Dict[str, Any]] = []
+        for sig in slot_signals:
+            live_hash = _check_trigger_bar_drift(sig)
+            if live_hash is None:
+                drift_pass.append(sig)
+                continue
+            stashed_hash = str(sig.get("trigger_ohlc_hash", "") or "").strip().lower()
+            sig["status"] = "filtered_trigger_drifted"
+            sig["filter_reason"] = "TRIGGER_BAR_DRIFTED"
+            sig["detection_time"] = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+            drifted_this_slot += 1
+            counters["filtered"] += 1
+            reason_counts["filtered_trigger_drifted:TRIGGER_BAR_DRIFTED"] += 1
+            sid = str(sig.get("signal_id", "")).strip()
+            if sid:
+                _append_pool_lifecycle_event(
+                    date_str,
+                    {
+                        "signal_id": sid,
+                        "event": "DROPPED",
+                        "reason": "TRIGGER_BAR_DRIFTED",
+                        "ticker": str(sig.get("ticker", "")),
+                        "side": str(sig.get("side", "")),
+                        "setup": str(sig.get("setup", "")),
+                        "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        "stashed_hash": stashed_hash,
+                        "live_hash": live_hash,
+                    },
+                )
+            print(
+                f"[DETECT_SIG] slot={slot_ts.strftime('%H:%M')} "
+                f"{str(sig.get('ticker', '')).upper()} {str(sig.get('side', '')).upper()} -> "
+                f"FILTERED (TRIGGER_BAR_DRIFTED stashed={stashed_hash} live={live_hash})",
+                flush=True,
+            )
+        slot_signals = drift_pass
+        if drifted_this_slot:
+            print(
+                f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | "
+                f"trigger_drift_filtered={drifted_this_slot}",
+                flush=True,
+            )
+            if not slot_signals:
+                continue
+
         tickers = sorted({str(sig.get("ticker", "")).strip().upper() for sig in slot_signals if str(sig.get("ticker", "")).strip()})
 
         if not tickers:
@@ -1130,6 +1324,19 @@ def _run_detection_cycle_live_parity(
                 sig["filter_reason"] = "missing_ticker"
                 counters["filtered"] += 1
                 reason_counts["filtered_parity:missing_ticker"] += 1
+                sid = str(sig.get("signal_id", "")).strip()
+                if sid:
+                    _append_pool_lifecycle_event(
+                        date_str,
+                        {
+                            "signal_id": sid,
+                            "event": "DROPPED",
+                            "reason": "filtered_parity:missing_ticker",
+                            "ticker": str(sig.get("ticker", "")),
+                            "side": str(sig.get("side", "")),
+                            "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        },
+                    )
             print(
                 f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | tickers=0 | filtered={len(slot_signals)}",
                 flush=True,
@@ -1205,6 +1412,20 @@ def _run_detection_cycle_live_parity(
                     slot_short_written += int(wrote)
                 elif side_upper == "LONG":
                     slot_long_written += int(wrote)
+                # E2 (strategy_v2 §E2): DE_PASSED lifecycle event.
+                if signal_id:
+                    _append_pool_lifecycle_event(
+                        date_str,
+                        {
+                            "signal_id": signal_id,
+                            "event": "DE_PASSED",
+                            "ticker": sig_ticker,
+                            "side": side_upper,
+                            "setup": str(sig.get("setup", "")),
+                            "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                            "written_to_csv": bool(wrote),
+                        },
+                    )
                 # Fix #15: per-signal outcome log.
                 print(
                     f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {side_upper} -> "
@@ -1217,6 +1438,20 @@ def _run_detection_cycle_live_parity(
                 slot_filtered += 1
                 counters["filtered"] += 1
                 reason_counts["filtered_parity:not_in_live_parity_final_set"] += 1
+                # E2: DROPPED lifecycle event on parity miss.
+                if signal_id:
+                    _append_pool_lifecycle_event(
+                        date_str,
+                        {
+                            "signal_id": signal_id,
+                            "event": "DROPPED",
+                            "reason": "filtered_parity:not_in_live_parity_final_set",
+                            "ticker": sig_ticker,
+                            "side": sig_side,
+                            "setup": str(sig.get("setup", "")),
+                            "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        },
+                    )
                 print(
                     f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {sig_side} -> "
                     f"FILTERED (not_in_live_parity_final_set)",
@@ -1723,6 +1958,91 @@ def _run_detection_cycle(
     return "processed"
 
 
+def _run_startup_signal_id_self_check() -> None:
+    session_date = _now_ist().strftime("%Y-%m-%d")
+    # Fix #18 (2026-04-21): graceful degradation — if Stage 1's proof never
+    # appears within the retry budget, log a warning and continue without the
+    # cross-stage verification. The local Stage 2 fixture check still runs so
+    # Stage 2's own signal-id hashing is validated. This avoids the crash loop
+    # observed on 2026-04-21 when the old Stage 1 wasn't writing the proof.
+    retry_deadline = time.monotonic() + float(SELF_CHECK_PROOF_RETRY_TIMEOUT_SEC)
+    proof: Optional[Dict[str, Any]] = None
+    while True:
+        try:
+            proof = signal_id_selfcheck.load_stage1_proof(session_date)
+            break
+        except FileNotFoundError:
+            if time.monotonic() >= retry_deadline:
+                print(
+                    f"[STARTUP] signal_id proof still missing after "
+                    f"{SELF_CHECK_PROOF_RETRY_TIMEOUT_SEC}s — starting without "
+                    f"cross-stage proof verification (local fixture check still runs). "
+                    f"Stage 1 must be restarted to emit its proof for full verification.",
+                    flush=True,
+                )
+                proof = None
+                break
+            print(
+                f"[STARTUP] signal_id proof not yet written by Stage 1; "
+                f"retrying in {SELF_CHECK_PROOF_RETRY_SLEEP_SEC}s "
+                f"(budget={SELF_CHECK_PROOF_RETRY_TIMEOUT_SEC}s)",
+                flush=True,
+            )
+            time.sleep(float(SELF_CHECK_PROOF_RETRY_SLEEP_SEC))
+
+    # Local Stage 2 fixture check — always run, regardless of proof availability.
+    fixture = signal_id_selfcheck.build_stage2_fixture()
+    computed_signal_id = _signal_id_from_rowlike(fixture)
+    if not computed_signal_id:
+        raise RuntimeError("signal-id self-check fixture did not compute in Stage 2")
+    if computed_signal_id != signal_id_selfcheck.EXPECTED_SIGNAL_ID:
+        raise RuntimeError(
+            "Stage 2 signal-id self-check hash mismatch: "
+            f"expected {signal_id_selfcheck.EXPECTED_SIGNAL_ID}, got {computed_signal_id}"
+        )
+
+    if proof is None:
+        print(
+            f"[STARTUP] signal_id self-check: Stage 2 local fixture OK "
+            f"(stage2_signal_id={computed_signal_id}); cross-stage proof skipped.",
+            flush=True,
+        )
+        return
+
+    proof_expected = str(proof.get("expected_signal_id", "")).strip()
+    if proof_expected != signal_id_selfcheck.EXPECTED_SIGNAL_ID:
+        raise RuntimeError(
+            "Stage 2 signal-id self-check expected hash mismatch in proof: "
+            f"expected {signal_id_selfcheck.EXPECTED_SIGNAL_ID}, got {proof_expected or '<blank>'}"
+        )
+
+    stage1_signal_id = str(proof.get("stage1_signal_id", "")).strip()
+    if not stage1_signal_id:
+        raise RuntimeError("Stage 2 signal-id self-check proof missing stage1_signal_id")
+    if stage1_signal_id != computed_signal_id:
+        raise RuntimeError(
+            "Stage 1 / Stage 2 signal-id self-check mismatch: "
+            f"stage1={stage1_signal_id}, stage2={computed_signal_id}"
+        )
+
+    fixture_meta = proof.get("fixture", {}) or {}
+    stage1_entry_time = str(proof.get("stage1_canonical_entry_time", "")).strip()
+    expected_entry_time = str(fixture_meta.get("entry_time_canonical", "")).strip()
+    if expected_entry_time and stage1_entry_time != expected_entry_time:
+        raise RuntimeError(
+            "Stage 1 proof canonical entry_time mismatch: "
+            f"expected {expected_entry_time}, got {stage1_entry_time or '<blank>'}"
+        )
+
+    proof_path = signal_id_selfcheck.proof_path_for_date(session_date)
+    print(
+        "[STARTUP] signal_id self-check passed "
+        f"| stage1_signal_id={stage1_signal_id} | stage2_signal_id={computed_signal_id} "
+        f"| proof={proof_path}",
+        flush=True,
+    )
+
+
 # ===========================================================================
 # MAIN LOOP
 # ===========================================================================
@@ -1748,6 +2068,14 @@ def main() -> None:
     if STARTUP_OFFSET_SEC > 0:
         print(f"[INFO] Startup offset: sleeping {STARTUP_OFFSET_SEC}s before first check", flush=True)
         time.sleep(float(STARTUP_OFFSET_SEC))
+
+    try:
+        _run_startup_signal_id_self_check()
+    except Exception as exc:
+        _touch_status("FAILED", phase="STARTUP_SELF_CHECK", reason=str(exc))
+        _touch_heartbeat("FAILED", phase="STARTUP_SELF_CHECK", reason=str(exc))
+        print(f"[FATAL] Startup signal_id self-check failed: {exc}", flush=True)
+        raise
 
     if DETECTION_PARITY_MODE:
         short_cfg, long_cfg = live_v16._build_v16_cfgs()

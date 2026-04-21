@@ -12,6 +12,7 @@ v17f runner patch bundle first so short-side scan logic matches v17f exactly.
 Outputs (to LIVE_SIGNALS_DIR):
   pending_signals_YYYY-MM-DD_v16_5min.json   — machine state (Detection Engine reads this)
   pending_signals_YYYY-MM-DD_v16_5min.csv    — dashboard display
+  pool_lifecycle_YYYY-MM-DD_v16_5min.jsonl   — append-only lifecycle audit (strategy_v2 §E2)
 
 Status files (to logs/):
   eqidv2_signal_engine_v16_5min.log
@@ -22,6 +23,48 @@ Key difference from live scanner:
   - NO RS filter, NO V16 post-scan filters
   - Does NOT write to signals_YYYY-MM-DD_v16_5min_long/short.csv
   - Writes ALL raw pattern matches → pending pool (deduplicated by signal_id)
+
+================================================================================
+DESIGN INVARIANTS (strategy_v2.txt §F — DO NOT VIOLATE)
+================================================================================
+F1. Pool row monotonicity:
+    Once a signal_id is written, (ticker, side, setup, entry_slot, entry_price,
+    stop_price) are immutable. Only outcome / order_id / detection_* may change
+    (and only by downstream stages — SE never rewrites a row).
+
+F2. PF/DE slot equality:
+    PF and DE for entry_slot Y consume ONLY rows where entry_slot == Y.
+    SE never produces rows whose entry_slot < now (see F3).
+
+F3. No writes for past entry_slots:
+    SE refuses to add a pool row whose entry_slot < now (clock drift, slow
+    scan). Such rows are dropped with a log line, not silently written.
+
+F4. One-writer-many-readers:
+    Pool JSON+CSV: SE is the only writer. PF/DE/executor are readers only.
+    Both files are written atomically (temp + os.replace) — see A1.
+
+F5. Slot is the OPEN time:
+    "Slot X" = bar OPEN time. Bar X closes at X+5min. entry_slot Y means the
+    order should go live as soon as possible after Y (target Y+15s).
+
+================================================================================
+DETERMINISTIC dedup (strategy_v2.txt §A2)
+================================================================================
+signal_id = base_v15._generate_signal_id(ticker, side, entry_t, setup) is
+deterministic from (ticker, side, entry_time, setup). Because entry_time is
+mechanically derived from (trigger_bar, setup-lag), this key is functionally
+equivalent to sha1(ticker|side|setup|trigger_bar) and is restart-safe.
+DO NOT change this derivation without coordinating with PF/DE/executor and
+the signal-id self-check fixture.
+
+================================================================================
+LF FRESHNESS GATE (strategy_v2.txt §B4)
+================================================================================
+_wait_for_slot_data_ready() checks (a) the scheduler ready marker written by
+LF (eqidv2_eod_scheduler_for_5mins_data_live_minimal.py) and (b) per-ticker
+parquet freshness. With SKIP_STALE_SLOT_ON_TIMEOUT=1 (default), SE skips the
+slot rather than scan against stale indicator values. This satisfies B4.
 """
 
 from __future__ import annotations
@@ -45,6 +88,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 import avwap_combined_runner_v17f_5min as _v17f_runner  # noqa: F401
 import avwap_combined_runner_v16_5min as v16_runner
+import eqidv2_signal_id_selfcheck_v16_5min as signal_id_selfcheck
 from avwap_combined_runner_v16_5min import (
     apply_live_parity_profile,
     NIFTY_RS_BOTH_MODE_THRESHOLD_LONG_PCT,
@@ -126,6 +170,11 @@ DIRECTIONAL_NIFTY_CONTEXT_FALLBACK = str(
 NEUTRALIZE_PARTIAL_NIFTY_SESSION = str(
     os.getenv("EQIDV16_5MIN_NEUTRALIZE_PARTIAL_NIFTY_SESSION", "1")
 ).strip().lower() not in {"0", "false", "no", "off"}
+# A4 fix: if NIFTYBEES parquet's last bar is older than this many seconds vs
+# slot_ist, demote RS to neutral (allow_long=allow_short=True) instead of
+# silently using stale direction. Default 420s = one 5-min bar plus a 2-min
+# slack window. Set EQIDV2_NIFTY_MAX_STALE_SEC=0 to disable the gate.
+NIFTY_MAX_STALE_SEC = float(os.getenv("EQIDV2_NIFTY_MAX_STALE_SEC", "420"))
 SCAN_SHARDS         = max(1, int(os.getenv("EQIDV16_5MIN_SCAN_SHARDS", "10")))
 SCAN_MAX_WORKERS    = max(1, int(os.getenv("EQIDV16_5MIN_SCAN_MAX_WORKERS", str(SCAN_SHARDS))))
 SNAPSHOT_MAX_WORKERS = max(1, int(os.getenv("EQIDV16_5MIN_SNAPSHOT_MAX_WORKERS", str(SCAN_MAX_WORKERS))))
@@ -175,7 +224,12 @@ PENDING_CSV_COLUMNS = [
     "quality_score", "avwap_dist_atr", "rsi_signal", "adx",
     "rs_pct", "setup", "status", "expires_at",
     "filter_reason", "detection_time", "detection_price",
+    # strategy_v2 §A2/§A3/§C1 — trigger-bar provenance + drift-detection hash
+    "trigger_bar_iso", "trigger_open", "trigger_high", "trigger_low",
+    "trigger_close", "trigger_volume", "trigger_ohlc_hash",
 ]
+
+POOL_LIFECYCLE_PATTERN = "pool_lifecycle_{}_v16_5min.jsonl"
 
 
 # ===========================================================================
@@ -557,6 +611,19 @@ def _compute_nifty_rs_at_slot(slot_ist: datetime) -> Tuple[float, bool, bool]:
         if df_nifty is None or df_nifty.empty:
             return 0.0, True, True
 
+        if NIFTY_MAX_STALE_SEC > 0:
+            is_fresh, age_sec, last_ts = base_v15.check_niftybees_freshness(
+                df_nifty, slot_ist, max_stale_sec=NIFTY_MAX_STALE_SEC
+            )
+            if not is_fresh:
+                print(
+                    f"[NIFTY_RS] STALE slot={slot_ist.strftime('%H:%M')} "
+                    f"last_bar={last_ts} age={age_sec:.0f}s > {NIFTY_MAX_STALE_SEC:.0f}s "
+                    f"-> neutral (allow_long=allow_short=True)",
+                    flush=True,
+                )
+                return 0.0, True, True
+
         today = slot_ist.date()
         dt = pd.to_datetime(df_nifty["date"], errors="coerce")
         if getattr(dt.dt, "tz", None) is None:
@@ -882,37 +949,103 @@ def _write_pending_state_atomic(state: Dict[str, Any], date_str: str) -> None:
 
 
 def _write_pending_csv(state: Dict[str, Any], date_str: str) -> None:
-    """Write dashboard-readable CSV from pending state."""
+    """Atomically write the dashboard-readable CSV (strategy_v2 §A1, §F4).
+
+    Writes to <path>.tmp then os.replace — readers (PF/DE/dashboard) only
+    ever see whole files.
+    """
     path = _pending_csv_path(date_str)
+    tmp_path = path.with_suffix(".csv.tmp")
     signals = state.get("signals", [])
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=PENDING_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         for sig in signals:
-            writer.writerow({
-                "signal_id":     sig.get("signal_id", ""),
-                "ticker":        sig.get("ticker", ""),
-                "side":          sig.get("side", ""),
-                "signal_datetime": sig.get("signal_datetime", ""),
-                "signal_entry_datetime_ist": sig.get("signal_entry_datetime_ist", ""),
-                "signal_bar_time": sig.get("signal_bar_time", ""),
-                "added_at":      sig.get("added_at", ""),
-                "signal_price":  sig.get("signal_price", ""),
-                "entry_price":   sig.get("entry_price", ""),
-                "stop_price":    sig.get("stop_price", ""),
-                "target_price":  sig.get("target_price", ""),
-                "quality_score": sig.get("quality_score", ""),
-                "avwap_dist_atr": sig.get("avwap_dist_atr", ""),
-                "rsi_signal":    sig.get("rsi_signal", ""),
-                "adx":           sig.get("adx", ""),
-                "rs_pct":        sig.get("rs_pct", ""),
-                "setup":         sig.get("setup", ""),
-                "status":        sig.get("status", ""),
-                "expires_at":    sig.get("expires_at", ""),
-                "filter_reason": sig.get("filter_reason", ""),
-                "detection_time": sig.get("detection_time", ""),
-                "detection_price": sig.get("detection_price", ""),
-            })
+            writer.writerow({col: sig.get(col, "") for col in PENDING_CSV_COLUMNS})
+    os.replace(tmp_path, path)
+
+
+def _pool_lifecycle_path(date_str: str) -> Path:
+    return Path(RUNTIME_LIVE_SIGNALS_DIR) / POOL_LIFECYCLE_PATTERN.format(date_str)
+
+
+def _append_pool_lifecycle_event(date_str: str, event: Dict[str, Any]) -> None:
+    """Append one JSON line to today's pool-lifecycle audit (strategy_v2 §E2).
+
+    Append-only and best-effort: failures must not block the SE write path.
+    """
+    try:
+        path = _pool_lifecycle_path(date_str)
+        line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as exc:
+        print(f"[WARN] pool_lifecycle append failed: {exc}", flush=True)
+
+
+_TRIGGER_BAR_PARQUET_CACHE: Dict[str, pd.DataFrame] = {}
+
+
+def _reset_trigger_bar_cache() -> None:
+    _TRIGGER_BAR_PARQUET_CACHE.clear()
+
+
+def _lookup_trigger_bar_ohlc(
+    ticker: str,
+    trigger_ts: Optional[pd.Timestamp],
+) -> Dict[str, Any]:
+    """Return trigger-bar OHLCV + hash for (ticker, trigger_ts).
+
+    Implements strategy_v2 §A3 (drift-detection hash) and §C1 (stash trigger-bar
+    OHLC in pool row so PF/DE need not refetch). Best-effort: returns empty dict
+    on any failure rather than blocking signal write.
+    """
+    out: Dict[str, Any] = {}
+    if trigger_ts is None:
+        return out
+    try:
+        df = _TRIGGER_BAR_PARQUET_CACHE.get(ticker)
+        if df is None:
+            df = _load_5m_parquet(ticker, n=TAIL_ROWS)
+            _TRIGGER_BAR_PARQUET_CACHE[ticker] = df
+        if df is None or df.empty or "date" not in df.columns:
+            return out
+        ts_series = pd.to_datetime(df["date"], errors="coerce")
+        if getattr(ts_series.dt, "tz", None) is None:
+            ts_series = ts_series.dt.tz_localize(IST)
+        else:
+            ts_series = ts_series.dt.tz_convert(IST)
+        trig = pd.Timestamp(trigger_ts)
+        if trig.tzinfo is None:
+            trig = trig.tz_localize(IST)
+        else:
+            trig = trig.tz_convert(IST)
+        match_idx = (ts_series == trig)
+        if not bool(match_idx.any()):
+            return out
+        row = df.loc[match_idx].iloc[-1]
+        o = _safe_float(row.get("open", row.get("Open", 0.0)))
+        h = _safe_float(row.get("high", row.get("High", 0.0)))
+        lo = _safe_float(row.get("low", row.get("Low", 0.0)))
+        c = _safe_float(row.get("close", row.get("Close", 0.0)))
+        v = _safe_float(row.get("volume", row.get("Volume", 0.0)))
+        import hashlib
+        # strategy_v2 §A3 — canonical 4-decimal format must match DE's
+        # _compute_live_trigger_ohlc_hash so the drift check is comparable.
+        ohlc_hash = hashlib.md5(
+            f"{o:.4f}|{h:.4f}|{lo:.4f}|{c:.4f}".encode("utf-8")
+        ).hexdigest()[:16]
+        out = {
+            "trigger_open":       round(o, 4),
+            "trigger_high":       round(h, 4),
+            "trigger_low":        round(lo, 4),
+            "trigger_close":      round(c, 4),
+            "trigger_volume":     int(v) if v == int(v) else round(v, 4),
+            "trigger_ohlc_hash":  ohlc_hash,
+        }
+    except Exception as exc:
+        print(f"[WARN] trigger_bar lookup failed for {ticker}@{trigger_ts}: {exc}", flush=True)
+    return out
 
 
 def _write_pending_pool(
@@ -921,7 +1054,7 @@ def _write_pending_pool(
     slot_ist: datetime,
     rs_pct: float,
     date_str: str,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     """
     Merge new raw scan results into the pending pool JSON/CSV.
 
@@ -932,9 +1065,13 @@ def _write_pending_pool(
 
     added = 0
     deduped = 0
-    now_str = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    dropped_past_slot = 0
+    now_ist = _now_ist()
+    now_str = now_ist.strftime("%Y-%m-%d %H:%M:%S%z")
 
     all_rows = [(r, "SHORT") for r in short_rows] + [(r, "LONG") for r in long_rows]
+
+    _reset_trigger_bar_cache()
 
     for row, side in all_rows:
         ticker = str(row.get("ticker", "")).upper().strip()
@@ -951,8 +1088,27 @@ def _write_pending_pool(
         if entry_time_ts is None:
             continue
 
+        # strategy_v2 §F3 — refuse to write rows whose entry_slot is already past.
+        try:
+            entry_dt = pd.Timestamp(entry_time_ts).to_pydatetime()
+            if entry_dt.tzinfo is None:
+                entry_dt = IST.localize(entry_dt)
+            if entry_dt < now_ist:
+                dropped_past_slot += 1
+                print(
+                    f"[SKIP] SE_PAST_SLOT ticker={ticker} side={side} "
+                    f"entry={entry_dt.isoformat()} now={now_ist.isoformat()}",
+                    flush=True,
+                )
+                continue
+        except Exception:
+            pass
+
         setup    = str(row.get("setup", ""))
         entry_t  = str(entry_time_ts)
+        # strategy_v2 §A2 — deterministic key (ticker, side, entry_time, setup).
+        # entry_time is mechanically derived from trigger_bar + setup-lag, so
+        # this is functionally equivalent to hashing the trigger bar directly.
         signal_id = base_v15._generate_signal_id(ticker, side, entry_t, setup)
 
         if signal_id in existing_ids:
@@ -966,6 +1122,11 @@ def _write_pending_pool(
 
         notional = DEFAULT_POSITION_SIZE_RS * INTRADAY_LEVERAGE
         qty = max(1, int(notional / entry_price)) if entry_price > 0 else 1
+
+        # strategy_v2 §A3 + §C1 — stash trigger-bar OHLC + drift hash so PF/DE
+        # can re-validate without a fresh Kite fetch.
+        trigger_iso = str(signal_time_ts) if signal_time_ts is not None else ""
+        trigger_fields = _lookup_trigger_bar_ohlc(ticker, signal_time_ts)
 
         pending_entry: Dict[str, Any] = {
             "signal_id":       signal_id,
@@ -997,17 +1158,97 @@ def _write_pending_pool(
             "detection_time":  None,
             "detection_price": None,
             "filter_reason":   None,
+            "trigger_bar_iso": trigger_iso,
+            "trigger_open":    trigger_fields.get("trigger_open", ""),
+            "trigger_high":    trigger_fields.get("trigger_high", ""),
+            "trigger_low":     trigger_fields.get("trigger_low", ""),
+            "trigger_close":   trigger_fields.get("trigger_close", ""),
+            "trigger_volume":  trigger_fields.get("trigger_volume", ""),
+            "trigger_ohlc_hash": trigger_fields.get("trigger_ohlc_hash", ""),
         }
         state["signals"].append(pending_entry)
         existing_ids.add(signal_id)
         added += 1
 
+        # strategy_v2 §E2 — append-only lifecycle audit.
+        _append_pool_lifecycle_event(date_str, {
+            "event":     "WRITTEN",
+            "signal_id": signal_id,
+            "ticker":    ticker,
+            "side":      side,
+            "setup":     setup,
+            "source_slot":               pending_entry["source_slot"],
+            "signal_entry_datetime_ist": entry_t,
+            "trigger_bar_iso":           trigger_iso,
+            "trigger_ohlc_hash":         trigger_fields.get("trigger_ohlc_hash", ""),
+            "ts": now_str,
+        })
+
+    if dropped_past_slot:
+        print(
+            f"[INFO] SE dropped {dropped_past_slot} row(s) with entry_slot < now (F3 guard).",
+            flush=True,
+        )
+
     state["last_updated"] = now_str
     _write_pending_state_atomic(state, date_str)
     _write_pending_csv(state, date_str)
+    _reset_trigger_bar_cache()
 
     total_pending = sum(1 for s in state["signals"] if s.get("status") == "pending")
     return added, deduped, total_pending
+
+
+def _run_startup_signal_id_self_check() -> None:
+    fixture = signal_id_selfcheck.build_stage1_fixture()
+    ticker = str(fixture.get("ticker", "")).upper().strip()
+    setup = str(fixture.get("setup", ""))
+    signal_time_raw = fixture.get("signal_time_ist", "")
+    entry_time_raw = fixture.get("entry_time_ist", "")
+    signal_time_ts = base_v15._parse_ist_timestamp(str(signal_time_raw))
+    entry_time_ts = base_v15._parse_ist_timestamp(str(entry_time_raw))
+    if signal_time_ts is None or entry_time_ts is None:
+        raise RuntimeError("signal-id self-check fixture did not parse in Stage 1")
+
+    canonical_signal_time = str(signal_time_ts)
+    canonical_entry_time = str(entry_time_ts)
+    if canonical_signal_time != signal_id_selfcheck.FIXTURE_SIGNAL_TIME_CANONICAL:
+        raise RuntimeError(
+            "Stage 1 signal-id self-check signal_time canonical mismatch: "
+            f"expected {signal_id_selfcheck.FIXTURE_SIGNAL_TIME_CANONICAL}, got {canonical_signal_time}"
+        )
+    if canonical_entry_time != signal_id_selfcheck.FIXTURE_ENTRY_TIME_CANONICAL:
+        raise RuntimeError(
+            "Stage 1 signal-id self-check entry_time canonical mismatch: "
+            f"expected {signal_id_selfcheck.FIXTURE_ENTRY_TIME_CANONICAL}, got {canonical_entry_time}"
+        )
+
+    computed_signal_id = base_v15._generate_signal_id(
+        ticker,
+        signal_id_selfcheck.FIXTURE_SIDE,
+        canonical_entry_time,
+        setup,
+    )
+    if computed_signal_id != signal_id_selfcheck.EXPECTED_SIGNAL_ID:
+        raise RuntimeError(
+            "Stage 1 signal-id self-check hash mismatch: "
+            f"expected {signal_id_selfcheck.EXPECTED_SIGNAL_ID}, got {computed_signal_id}"
+        )
+
+    now_ist = _now_ist()
+    proof_payload = signal_id_selfcheck.build_stage1_proof_payload(
+        session_date=now_ist.strftime("%Y-%m-%d"),
+        written_at=now_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+        stage1_signal_id=computed_signal_id,
+        stage1_canonical_signal_time=canonical_signal_time,
+        stage1_canonical_entry_time=canonical_entry_time,
+    )
+    proof_path = signal_id_selfcheck.write_stage1_proof(proof_payload)
+    print(
+        "[STARTUP] signal_id self-check passed "
+        f"| stage1_signal_id={computed_signal_id} | proof={proof_path}",
+        flush=True,
+    )
 
 
 # ===========================================================================
@@ -1030,6 +1271,13 @@ def main() -> None:
     )
 
     _touch_status("STARTING")
+    try:
+        _run_startup_signal_id_self_check()
+    except Exception as exc:
+        _touch_status("FAILED", phase="STARTUP_SELF_CHECK", reason=str(exc))
+        _touch_heartbeat("FAILED", phase="STARTUP_SELF_CHECK", reason=str(exc))
+        print(f"[FATAL] Startup signal_id self-check failed: {exc}", flush=True)
+        raise
     short_cfg, long_cfg = _build_v16_cfgs()
     tickers = _list_tickers_5m()
     holidays = base_v15._read_holidays_safe()

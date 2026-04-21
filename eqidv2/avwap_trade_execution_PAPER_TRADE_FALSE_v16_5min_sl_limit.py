@@ -98,6 +98,14 @@ FILL_WAIT_TIMEOUT_SEC = 60
 MAX_CANCEL_RETRIES = 3
 CANCEL_RETRY_WAIT_SEC = 2
 ENTRY_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_ENTRY_RETRY_ATTEMPTS", "2")))
+# Fix #20 (post-2026-04-21): stale-detection guard.
+LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "300"))
 ORDER_BOOK_CACHE_TTL_SEC = float(os.getenv("EQIDV2_ORDER_BOOK_CACHE_TTL_SEC", "1.0"))
 ORDER_POLL_RATE_LIMIT_BACKOFF_SEC = float(
     os.getenv("EQIDV2_ORDER_POLL_RATE_LIMIT_BACKOFF_SEC", "2.0")
@@ -127,7 +135,7 @@ DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
 # Max entry slip gate: reject LONG signals where live LTP is more than this
 # fraction above the model trigger.  Set 0.0 to disable.
 LONG_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_LONG_MAX_ENTRY_SLIP_PCT", "0.003"))
-SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.0"))
+SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.003"))
 MAX_TICK_DECIMALS = 4
 SL_LIMIT_BUFFER_PCT = float(os.getenv("EQIDV2_SL_LIMIT_BUFFER_PCT", "0.0005"))
 SL_LIMIT_FALLBACK_GRACE_SEC = float(os.getenv("EQIDV2_SL_LIMIT_FALLBACK_GRACE_SEC", "6"))
@@ -1623,6 +1631,20 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 # No open position was created; proceed to finalization for audit row.
                 pass
 
+            # Fix #20 (post-2026-04-21): stale-detection guard.
+            if (not trade_closed) and LATE_DETECTION_GUARD_ENABLE and LATE_DETECTION_MAX_LAG_SEC > 0:
+                lag_sec = _detection_lag_seconds(signal)
+                if lag_sec is not None and lag_sec > LATE_DETECTION_MAX_LAG_SEC:
+                    result.outcome = "ENTRY_SKIPPED_STALE_DETECTION"
+                    result.exit_price = signal_entry_price
+                    trade_closed = True
+                    log.warning(
+                        f"[STALE.DETECT] Skipping {ticker} {side}: detected "
+                        f"{lag_sec:.0f}s after entry slot "
+                        f"(threshold {LATE_DETECTION_MAX_LAG_SEC}s) | "
+                        f"signal_id={signal_id[:12]}"
+                    )
+
             # ---- SLIP GATE: pre-entry LTP check ----
             # Fetch current LTP and reject if it has chased too far from the model trigger.
             if (not trade_closed) and signal_entry_price > 0:
@@ -3085,6 +3107,21 @@ def _signal_ist_date(sig: dict) -> Optional[date]:
     return None
 
 
+def _detection_lag_seconds(signal: dict) -> Optional[float]:
+    """Seconds between the model entry slot and Stage 2 detection."""
+    detected = _parse_ist_signal_ts(
+        signal.get("detected_time_ist") or signal.get("logtime_ist")
+    )
+    entry_slot = _parse_ist_signal_ts(
+        signal.get("signal_entry_datetime_ist")
+        or signal.get("signal_bar_time_ist")
+        or signal.get("bar_time_ist")
+    )
+    if detected is None or entry_slot is None:
+        return None
+    return (detected - entry_slot).total_seconds()
+
+
 def _filter_today_signals(signals: List[dict]) -> Tuple[List[dict], int]:
     today = datetime.now(IST).date()
     filtered: List[dict] = []
@@ -3253,7 +3290,7 @@ def get_signal_csv_paths_for_today() -> List[str]:
 
 def read_signals_csv_multi(csv_paths: Sequence[str]) -> List[dict]:
     """
-    Read and merge signals from multiple CSV files (v15_short + v15_long).
+    Read and merge signals from multiple CSV files (short + long direction).
     Dedupe by signal_id, keeping first-seen row.
     """
     merged: Dict[str, dict] = {}
@@ -3654,7 +3691,7 @@ def main():
             "from today's live trade CSV."
         )
 
-    # Resolve today's signal CSVs (v15_short + v15_long)
+    # Resolve today's signal CSVs (short + long direction)
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     csv_paths = get_signal_csv_paths_for_today()
     log.info("Signal CSV sources: " + ", ".join(os.path.basename(p) for p in csv_paths))
@@ -3777,7 +3814,7 @@ def main():
     # Callback for watchdog
     def on_csv_change():
         nonlocal executed
-        log.info("Signal CSV changed - processing new signals from v15_short + v15_long...")
+        log.info("Signal CSV changed - processing new signals from short + long direction CSVs...")
         executed = process_new_signals(
             csv_paths, executed, trade_semaphore, dry_run=args.dry_run,
         )

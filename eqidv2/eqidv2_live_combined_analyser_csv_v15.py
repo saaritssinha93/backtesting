@@ -668,6 +668,47 @@ def read_parquet_tail(path: str, n: int = 250) -> pd.DataFrame:
             return pd.DataFrame()
 
 
+def check_niftybees_freshness(
+    df: Optional[pd.DataFrame],
+    slot_ist: datetime,
+    max_stale_sec: float = 420.0,
+) -> Tuple[bool, float, Optional[pd.Timestamp]]:
+    """Return (is_fresh, age_sec, last_bar_ts) for a NIFTYBEES 5m frame.
+
+    A bar that just closed at slot_ist has age ~ 300s (one bar back). Anything
+    older than max_stale_sec (default 420s = bar close + 2 min tolerance)
+    means at least one slot of data is missing.
+
+    On any ambiguity the function returns is_fresh=True (fail open) — callers
+    should still fall back to neutral RS, but this helper does not itself
+    cause rejections from parsing hiccups.
+    """
+    if df is None or df.empty or "date" not in df.columns:
+        return False, float("inf"), None
+    try:
+        dt = pd.to_datetime(df["date"], errors="coerce")
+        if getattr(dt.dt, "tz", None) is None:
+            dt = dt.dt.tz_localize(IST)
+        else:
+            dt = dt.dt.tz_convert(IST)
+        dt = dt.dropna()
+        if dt.empty:
+            return False, float("inf"), None
+        last_ts = pd.Timestamp(dt.iloc[-1])
+        slot_ts = pd.Timestamp(slot_ist)
+        if slot_ts.tzinfo is None:
+            slot_ts = slot_ts.tz_localize(IST)
+        else:
+            slot_ts = slot_ts.tz_convert(IST)
+        age_sec = float((slot_ts - last_ts).total_seconds())
+        if age_sec < 0:
+            age_sec = 0.0
+        is_fresh = age_sec <= float(max_stale_sec)
+        return is_fresh, age_sec, last_ts
+    except Exception:
+        return True, 0.0, None
+
+
 def list_tickers_15m() -> List[str]:
     pattern = os.path.join(DIR_15M, f"*{END_15M}")
     files = glob.glob(pattern)

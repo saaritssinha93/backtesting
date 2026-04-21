@@ -21,6 +21,7 @@ param(
     [switch]$SkipRunAfterCutoff,
     [switch]$StopRestartsAfterCutoff,
     [string]$LockFile = "",
+    [int]$LockStaleMaxSec = 180,
     [string]$SpawnRecordFile = "",
     [string]$WorkerStatusFile = "",
     [string]$WorkerHeartbeatFile = "",
@@ -485,8 +486,13 @@ function Wait-ForWorkerDiscovery {
 }
 
 function Acquire-SingletonLock {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [int]$StaleMaxSec = 180
+    )
     Ensure-ParentDir -Path $Path
+
+    $needTakeover = $false
     try {
         $script:LockStream = [System.IO.File]::Open(
             $Path,
@@ -495,12 +501,91 @@ function Acquire-SingletonLock {
             [System.IO.FileShare]::None
         )
     } catch {
-        $msg = "Another supervisor instance appears to be active for $Name (lock=$Path)."
+        $needTakeover = $true
+    }
+
+    if ($needTakeover) {
+        # Fix P4 (post-2026-04-21): stale-lock takeover.
+        # Determine whether the prior supervisor is truly alive. If its PID is gone
+        # or its spawn record has not been updated within StaleMaxSec, treat the
+        # lock as orphaned, delete it, and retry.
+        $priorPid = $null
+        try {
+            $lines = Get-Content -Path $Path -ErrorAction SilentlyContinue
+            foreach ($line in $lines) {
+                if ($line -match "^supervisor_pid=(\d+)\s*$") {
+                    $priorPid = [int]$Matches[1]
+                    break
+                }
+            }
+        } catch { }
+
+        $priorAlive = $false
+        if ($null -ne $priorPid -and $priorPid -gt 0) {
+            try {
+                $proc = Get-Process -Id $priorPid -ErrorAction SilentlyContinue
+                if ($null -ne $proc) { $priorAlive = $true }
+            } catch { }
+        }
+
+        $spawnFresh = $false
+        $spawnAgeSec = $null
+        if (-not [string]::IsNullOrWhiteSpace($SpawnRecordFile) -and (Test-Path -LiteralPath $SpawnRecordFile)) {
+            try {
+                $item = Get-Item -LiteralPath $SpawnRecordFile -ErrorAction Stop
+                $spawnAgeSec = [int]([DateTime]::UtcNow - $item.LastWriteTimeUtc).TotalSeconds
+                if ($spawnAgeSec -le $StaleMaxSec) {
+                    $spawnFresh = $true
+                }
+            } catch { }
+        }
+
+        $takeoverReason = $null
+        if (-not $priorAlive) {
+            $takeoverReason = "prior supervisor pid=$priorPid not running"
+        } elseif (-not $spawnFresh) {
+            $takeoverReason = "spawn record stale (age=${spawnAgeSec}s > ${StaleMaxSec}s)"
+        }
+
+        if ($null -eq $takeoverReason) {
+            $msg = "Another supervisor instance appears to be active for $Name (lock=$Path, pid=$priorPid, spawn_age=${spawnAgeSec}s)."
+            Write-Host $msg
+            if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
+                Add-Content -Path $script:SupervisorLogFile -Value ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg) -Encoding UTF8
+            }
+            return $false
+        }
+
+        $msg = "Taking over orphaned/stale supervisor lock for $Name ($takeoverReason; lock=$Path)."
         Write-Host $msg
         if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
             Add-Content -Path $script:SupervisorLogFile -Value ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg) -Encoding UTF8
         }
-        return $false
+        try {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+        } catch {
+            $err = "Failed to remove stale lock for $Name (lock=$Path): $($_.Exception.Message)"
+            Write-Host $err
+            if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
+                Add-Content -Path $script:SupervisorLogFile -Value ("{0} | ERROR | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $err) -Encoding UTF8
+            }
+            return $false
+        }
+        try {
+            $script:LockStream = [System.IO.File]::Open(
+                $Path,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::None
+            )
+        } catch {
+            $err = "Retry after stale-lock takeover failed for $Name (lock=$Path): $($_.Exception.Message)"
+            Write-Host $err
+            if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
+                Add-Content -Path $script:SupervisorLogFile -Value ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $err) -Encoding UTF8
+            }
+            return $false
+        }
     }
 
     $meta = @(
@@ -831,7 +916,7 @@ $script:ExpectedExeLeaf = [System.IO.Path]::GetFileName($FilePath)
 $script:ExpectedScriptToken = Get-ExpectedScriptToken -Args $normalizedArgumentList
 $script:ExpectedScriptLeaf = if ([string]::IsNullOrWhiteSpace($script:ExpectedScriptToken)) { "" } else { [System.IO.Path]::GetFileName($script:ExpectedScriptToken) }
 
-if (-not (Acquire-SingletonLock -Path $LockFile)) {
+if (-not (Acquire-SingletonLock -Path $LockFile -StaleMaxSec $LockStaleMaxSec)) {
     exit 0
 }
 

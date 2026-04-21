@@ -18,6 +18,34 @@ Status files (to logs/):
   eqidv2_pending_data_fetcher_v16_5min.log
   eqidv2_pending_data_fetcher_v16_5min.status
   eqidv2_pending_data_fetcher_v16_5min.heartbeat
+
+STRATEGY V2 — DESIGN INVARIANTS (see strategy_v2.txt §F)
+========================================================
+F1. Pool row monotonicity:
+    PF never mutates (ticker, side, setup, entry_slot, entry_price, stop_price)
+    of a signal row. Only `status`, `filter_reason`, and PF-owned outcome
+    fields may change (status∈{pending, filtered_missing_token,
+    filtered_verify_failed}).
+F2. PF/DE slot equality:
+    PF's ready-marker file name IS the entry-slot key. A marker for slot Y
+    never claims data for Y-5 or Y+5. Older-slot markers are emitted per
+    distinct pending source_slot.
+F3. No writes for past entry_slots:
+    SE (not PF) enforces this. PF forwards whatever SE wrote — if a past
+    slot sneaks in, the DE freshness gate catches it.
+F4. One-writer-many-readers:
+    PF is the only writer of slot_ready_5m_pending/*.ready.
+    PF updates the pool JSON only for status transitions
+    (pending → filtered_missing_token / filtered_verify_failed).
+    SE is the canonical writer of new pool rows; PF never inserts.
+F5. Slot is the OPEN time:
+    `ready_slot` / `source_slot` / marker filename all use bar-OPEN time.
+
+PF-specific strategy-v2 hooks (see strategy_v2.txt):
+  B3  Kite fetch retry (1s / 2s / 4s) wraps `scheduler.run_update_5m_once`.
+  E2  pool_lifecycle_<date>_v16_5min.jsonl append-only audit:
+        DROPPED    on missing_token / verify_failed transitions
+        PF_VERIFIED on ready-marker write
 """
 
 from __future__ import annotations
@@ -30,6 +58,7 @@ from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import pandas as pd
 import pytz
 
 # ---------------------------------------------------------------------------
@@ -63,8 +92,13 @@ _SCRIPT_NAME = "eqidv2_pending_data_fetcher_v16_5min.py"
 _LOG_FILE    = _LOG_DIR / "eqidv2_pending_data_fetcher_v16_5min.log"
 
 PENDING_JSON_PATTERN  = "pending_signals_{}_v16_5min.json"
+POOL_LIFECYCLE_PATTERN = "pool_lifecycle_{}_v16_5min.jsonl"
 END_5M                = "_stocks_indicators_5min.parquet"
 TOKENS_CACHE_PATH     = SCRIPT_DIR / "stocks_tokens_cache.json"
+
+# B3 — Kite fetch retry (strategy_v2 §B3): 3 retries 1s/2s/4s, total worst-case
+# added latency ~7s (still inside the LATE_ENTRY band defined in §B1).
+PENDING_FETCH_RETRY_DELAYS_SEC = (1.0, 2.0, 4.0)
 
 FETCH_INTERVAL_SEC    = int(os.getenv("EQIDV2_PENDING_FETCH_INTERVAL_SEC", "60"))
 MARKET_OPEN           = dtime(9, 15)
@@ -87,6 +121,14 @@ PENDING_RECHECK_AFTER_SEC = int(
 # Max concurrent workers for the pending-only refresh using the shared 8-app fetch path.
 PENDING_MAX_WORKERS     = int(os.getenv("EQIDV2_PENDING_FETCH_MAX_WORKERS", "8"))
 PENDING_MAX_WORKERS_PER_APP = int(os.getenv("EQIDV2_PENDING_FETCH_MAX_WORKERS_PER_APP", "8"))
+
+# A2 fix (partial-ready marker): after this many consecutive verify failures for
+# the same ticker within the same source-slot, give up on that ticker for the
+# slot — mark it `filtered_verify_failed` in the pending state and let the
+# marker proceed with the verified subset. Prevents a single persistently
+# failing ticker from starving confirmations for every other pending ticker.
+# Set to 0 to disable (restores old behaviour: marker withheld on any failure).
+VERIFY_FAIL_MAX_RETRIES = int(os.getenv("EQIDV2_PENDING_VERIFY_FAIL_MAX_RETRIES", "2"))
 
 
 # ===========================================================================
@@ -223,6 +265,177 @@ def _today_pending_json_path() -> Path:
     return Path(RUNTIME_LIVE_SIGNALS_DIR) / PENDING_JSON_PATTERN.format(date_str)
 
 
+def _load_today_pending_state() -> Dict[str, Any]:
+    path = _today_pending_json_path()
+    if not path.exists():
+        return {"date": _now_ist().strftime("%Y-%m-%d"), "last_updated": "", "signals": []}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[WARN] Could not load pending state for update: {exc}", flush=True)
+        return {"date": _now_ist().strftime("%Y-%m-%d"), "last_updated": "", "signals": []}
+
+
+def _write_today_pending_state_atomic(state: Dict[str, Any]) -> None:
+    path = _today_pending_json_path()
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+# ---------------------------------------------------------------------------
+# E2 — pool lifecycle JSONL (append-only audit, see strategy_v2.txt §E2)
+# ---------------------------------------------------------------------------
+def _pool_lifecycle_path(date_str: str) -> Path:
+    return Path(RUNTIME_LIVE_SIGNALS_DIR) / POOL_LIFECYCLE_PATTERN.format(date_str)
+
+
+def _append_pool_lifecycle_event(date_str: str, event: Dict[str, Any]) -> None:
+    """Append a single JSONL event to the daily pool_lifecycle audit file.
+
+    Event shape: {"signal_id": ..., "event": "WRITTEN|PF_VERIFIED|DE_PASSED|DROPPED",
+                  "ts": "...", <extra keys>}.
+    """
+    try:
+        path = _pool_lifecycle_path(date_str)
+        payload = dict(event)
+        payload.setdefault("ts", _now_ist().strftime("%Y-%m-%dT%H:%M:%S%z"))
+        line = json.dumps(payload, ensure_ascii=False) + "\n"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception as exc:
+        print(f"[WARN] pool_lifecycle append failed: {exc}", flush=True)
+
+
+def _emit_dropped_events(
+    affected: List[Dict[str, Any]],
+    reason: str,
+    date_str: str,
+) -> None:
+    for sig in affected:
+        sid = str(sig.get("signal_id", "")).strip()
+        if not sid:
+            continue
+        _append_pool_lifecycle_event(
+            date_str,
+            {
+                "signal_id": sid,
+                "event": "DROPPED",
+                "reason": reason,
+                "ticker": str(sig.get("ticker", "")),
+                "side": str(sig.get("side", "")),
+                "setup": str(sig.get("setup", "")),
+                "source_slot": str(sig.get("source_slot", "")),
+            },
+        )
+
+
+def _mark_missing_token_pending_signals(missing_tokens: List[str]) -> int:
+    missing_set = {
+        str(t).upper().strip()
+        for t in missing_tokens
+        if str(t).strip()
+    }
+    if not missing_set:
+        return 0
+
+    state = _load_today_pending_state()
+    signals = state.get("signals", [])
+    updated = 0
+    now_str = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    date_str = _now_ist().strftime("%Y-%m-%d")
+    affected: List[Dict[str, Any]] = []
+
+    for sig in signals:
+        if str(sig.get("status", "")).lower() != "pending":
+            continue
+        ticker = str(sig.get("ticker", "")).upper().strip()
+        if ticker not in missing_set:
+            continue
+        sig["status"] = "filtered_missing_token"
+        sig["filter_reason"] = "no_token_in_stocks_tokens_cache"
+        affected.append(sig)
+        updated += 1
+
+    if updated > 0:
+        state["last_updated"] = now_str
+        _write_today_pending_state_atomic(state)
+        _emit_dropped_events(affected, "no_token_in_stocks_tokens_cache", date_str)
+
+    return updated
+
+
+# A2 fix: per-slot verify-failure retry counts. Keyed by (slot_iso, ticker).
+_verify_fail_counts: Dict[Tuple[str, str], int] = {}
+_verify_fail_tracked_slot: Optional[str] = None
+
+
+def _update_verify_fail_counts(
+    slot_ts: Optional[datetime],
+    failed_tickers: List[str],
+) -> List[str]:
+    """Increment per-slot retry counts for verify_failed tickers and return
+    the list that have exceeded VERIFY_FAIL_MAX_RETRIES (give-up set).
+
+    Returns [] when the feature is disabled or slot_ts is missing.
+    """
+    global _verify_fail_tracked_slot
+    if VERIFY_FAIL_MAX_RETRIES <= 0 or slot_ts is None:
+        return []
+
+    slot_key = slot_ts.astimezone(IST).strftime("%Y-%m-%dT%H:%M")
+    if _verify_fail_tracked_slot != slot_key:
+        _verify_fail_counts.clear()
+        _verify_fail_tracked_slot = slot_key
+
+    give_up: List[str] = []
+    for raw in failed_tickers:
+        t = str(raw).upper().strip()
+        if not t:
+            continue
+        key = (slot_key, t)
+        _verify_fail_counts[key] = _verify_fail_counts.get(key, 0) + 1
+        if _verify_fail_counts[key] >= VERIFY_FAIL_MAX_RETRIES:
+            give_up.append(t)
+    return give_up
+
+
+def _mark_verify_failed_pending_signals(tickers: List[str]) -> int:
+    target_set = {
+        str(t).upper().strip()
+        for t in tickers
+        if str(t).strip()
+    }
+    if not target_set:
+        return 0
+
+    state = _load_today_pending_state()
+    signals = state.get("signals", [])
+    updated = 0
+    now_str = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    date_str = _now_ist().strftime("%Y-%m-%d")
+    affected: List[Dict[str, Any]] = []
+    reason = f"verify_failed_after_{VERIFY_FAIL_MAX_RETRIES}_retries_in_slot"
+
+    for sig in signals:
+        if str(sig.get("status", "")).lower() != "pending":
+            continue
+        ticker = str(sig.get("ticker", "")).upper().strip()
+        if ticker not in target_set:
+            continue
+        sig["status"] = "filtered_verify_failed"
+        sig["filter_reason"] = reason
+        affected.append(sig)
+        updated += 1
+
+    if updated > 0:
+        state["last_updated"] = now_str
+        _write_today_pending_state_atomic(state)
+        _emit_dropped_events(affected, reason, date_str)
+
+    return updated
+
+
 def _get_pending_fetch_targets() -> Tuple[List[str], Optional[datetime]]:
     """Return pending tickers plus the newest source-slot that must be present."""
     path = _today_pending_json_path()
@@ -251,6 +464,102 @@ def _get_pending_fetch_targets() -> Tuple[List[str], Optional[datetime]]:
     return tickers, latest_source_slot
 
 
+def _get_pending_source_slot_map() -> Dict[datetime, List[str]]:
+    """Return a map from each distinct pending source_slot to its tickers.
+
+    Used by the per-slot marker emission pass to ensure older slots (behind the
+    latest source_slot) also get `.ready` markers written, so detection engine's
+    slot-matched gate can see them. Without this, signals from older source
+    slots would stall indefinitely once a newer slot's signals arrive.
+    """
+    path = _today_pending_json_path()
+    if not path.exists():
+        return {}
+    slot_map: Dict[datetime, List[str]] = {}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        for sig in state.get("signals", []):
+            if str(sig.get("status", "")).lower() != "pending":
+                continue
+            ticker = str(sig.get("ticker", "")).upper().strip()
+            if not ticker:
+                continue
+            slot_ts = _pending_signal_source_slot(sig)
+            if slot_ts is None:
+                continue
+            slot_map.setdefault(slot_ts, [])
+            if ticker not in slot_map[slot_ts]:
+                slot_map[slot_ts].append(ticker)
+    except Exception as exc:
+        print(f"[WARN] Could not read pending state for slot map: {exc}", flush=True)
+        return {}
+    return slot_map
+
+
+def _slot_row_present_in_parquet(ticker: str, slot_ts: datetime) -> bool:
+    """Return True if the parquet for `ticker` already contains `slot_ts`.
+
+    Used by the older-slot marker pass: the parquet is the same one the main
+    fetch writes to, so once today's data is fetched, any historical slot_ts
+    within today's session is already present and can be re-verified cheaply.
+    """
+    ticker_u = ticker.upper().strip()
+    path = Path(RUNTIME_DATA_5M_DIR) / f"{ticker_u}_stocks_indicators_5min.parquet"
+    if not path.exists():
+        return False
+    try:
+        df = pd.read_parquet(path, columns=["date"])
+    except Exception:
+        return False
+    if df.empty:
+        return False
+    target = pd.Timestamp(slot_ts).tz_convert(IST).floor("5min")
+    try:
+        dates = pd.to_datetime(df["date"])
+        if getattr(dates.dt, "tz", None) is None:
+            dates = dates.dt.tz_localize(IST)
+        else:
+            dates = dates.dt.tz_convert(IST)
+        return bool((dates == target).any())
+    except Exception:
+        return False
+
+
+def _write_older_slot_markers(
+    slot_map: Dict[datetime, List[str]],
+    latest_source_slot: Optional[datetime],
+) -> List[datetime]:
+    """Write `.ready` markers for every pending source_slot strictly older than
+    `latest_source_slot`, provided the parquet for each ticker already has the
+    slot row. Returns the list of slots for which markers were written.
+
+    Skips slots whose marker file already exists. Partial verification still
+    emits a marker containing only the verified tickers, matching the primary
+    pass's A2-fix behavior.
+    """
+    written: List[datetime] = []
+    if not slot_map:
+        return written
+    for slot_ts, slot_tickers in sorted(slot_map.items()):
+        if latest_source_slot is not None and slot_ts >= latest_source_slot:
+            continue
+        slot_ist = slot_ts.astimezone(IST)
+        marker_path = SLOT_READY_PENDING_DIR / (slot_ist.strftime("%Y%m%d_%H%M") + ".ready")
+        if marker_path.exists():
+            continue
+        verified = [t for t in slot_tickers if _slot_row_present_in_parquet(t, slot_ts)]
+        if not verified:
+            continue
+        _write_ready_marker(slot_ts, verified)
+        written.append(slot_ts)
+        print(
+            f"[PENDING_FETCH] older_slot_marker_written | slot={slot_ist.strftime('%H:%M')} "
+            f"| tickers={len(verified)}/{len(slot_tickers)}",
+            flush=True,
+        )
+    return written
+
+
 def _get_pending_tickers() -> List[str]:
     """Read the pending JSON and return tickers with status='pending'."""
     tickers, _latest_source_slot = _get_pending_fetch_targets()
@@ -265,7 +574,11 @@ def _write_ready_marker(
     tickers: List[str],
     verify_failed_sample: Optional[List[str]] = None,
 ) -> None:
-    """Write a .ready marker only after the source-slot candle is confirmed present."""
+    """Write a .ready marker only after the source-slot candle is confirmed present.
+
+    E2: Emits a PF_VERIFIED lifecycle event per pending signal whose ticker is
+    in the ready set for this slot (strategy_v2.txt §E2).
+    """
     slot_ist = slot_ts.astimezone(IST)
     written_at_ist = _now_ist()
     fname = slot_ist.strftime("%Y%m%d_%H%M") + ".ready"
@@ -284,6 +597,40 @@ def _write_ready_marker(
     tmp_path = path.with_suffix(".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
+
+    # E2: PF_VERIFIED lifecycle event per pending signal that matched this slot.
+    try:
+        date_str = written_at_ist.strftime("%Y-%m-%d")
+        slot_iso = slot_ist.strftime("%Y-%m-%dT%H:%M:%S%z")
+        slot_key_ist = slot_ist.replace(second=0, microsecond=0)
+        ready_set = set(ready_tickers)
+        state = _load_today_pending_state()
+        for sig in state.get("signals", []):
+            tk = str(sig.get("ticker", "")).upper().strip()
+            if tk not in ready_set:
+                continue
+            sig_slot = _pending_signal_source_slot(sig)
+            if sig_slot is None:
+                continue
+            if sig_slot.astimezone(IST).replace(second=0, microsecond=0) != slot_key_ist:
+                continue
+            sid = str(sig.get("signal_id", "")).strip()
+            if not sid:
+                continue
+            _append_pool_lifecycle_event(
+                date_str,
+                {
+                    "signal_id": sid,
+                    "event": "PF_VERIFIED",
+                    "ticker": tk,
+                    "side": str(sig.get("side", "")),
+                    "setup": str(sig.get("setup", "")),
+                    "source_slot": slot_iso,
+                    "marker_written_at": payload["written_at"],
+                },
+            )
+    except Exception as exc:
+        print(f"[WARN] PF_VERIFIED lifecycle emit failed: {exc}", flush=True)
 
 
 # ===========================================================================
@@ -308,7 +655,7 @@ def _fetch_pending_tickers(
             "verify_failed_sample": [],
             "required_ready_slot": required_ready_slot,
             "verification_slot_end": None,
-            "all_ready": False,
+            "marker_ready": False,
             "missing_tokens": [],
             "fetchable_count": 0,
         }
@@ -338,7 +685,7 @@ def _fetch_pending_tickers(
             "verify_failed_sample": [],
             "required_ready_slot": required_ready_slot,
             "verification_slot_end": None,
-            "all_ready": False,
+            "marker_ready": False,
             "missing_tokens": list(missing_tokens),
             "fetchable_count": 0,
         }
@@ -361,18 +708,55 @@ def _fetch_pending_tickers(
 
         core.load_stocks_universe = _pending_loader
 
-        result = dict(
-            scheduler.run_update_5m_once(
-                max_workers=max(1, min(PENDING_MAX_WORKERS, len(fetchable))),
-                max_workers_per_app=max(1, min(PENDING_MAX_WORKERS_PER_APP, len(fetchable))),
-                report_dir=REPORT_DIR,
-                buffer_sec=0,
-                refresh_tokens=False,
-                opening_slot=True,
-                slot_end=verification_slot_end,
-                ready_marker_enabled=False,
-            ) or {}
-        )
+        # B3 — retry with exponential backoff (1s / 2s / 4s) on Kite fetch
+        # transients. Worst case adds ~7s latency; still inside LATE_ENTRY band
+        # (strategy_v2.txt §B1/§B3). A retry is triggered on:
+        #   - exception in run_update_5m_once
+        #   - verification_failed_count == fetchable count AND sample is non-empty
+        #     (implies the entire slot missed — often a transient Kite stall)
+        result: Dict[str, Any] = {}
+        attempts = 1 + len(PENDING_FETCH_RETRY_DELAYS_SEC)
+        last_exc: Optional[BaseException] = None
+        for attempt_idx in range(attempts):
+            try:
+                result = dict(
+                    scheduler.run_update_5m_once(
+                        max_workers=max(1, min(PENDING_MAX_WORKERS, len(fetchable))),
+                        max_workers_per_app=max(1, min(PENDING_MAX_WORKERS_PER_APP, len(fetchable))),
+                        report_dir=REPORT_DIR,
+                        buffer_sec=0,
+                        refresh_tokens=False,
+                        opening_slot=True,
+                        slot_end=verification_slot_end,
+                        ready_marker_enabled=False,
+                    ) or {}
+                )
+                last_exc = None
+            except Exception as exc:  # transient Kite / network failure
+                last_exc = exc
+                result = {}
+            verify_failed_this = int(result.get("verification_failed_count", 0) or 0)
+            full_slot_miss = (
+                verify_failed_this >= len(fetchable) and len(fetchable) > 0
+            )
+            if last_exc is None and not full_slot_miss:
+                break
+            if attempt_idx >= len(PENDING_FETCH_RETRY_DELAYS_SEC):
+                break
+            delay = PENDING_FETCH_RETRY_DELAYS_SEC[attempt_idx]
+            reason_txt = (
+                f"exc={type(last_exc).__name__}" if last_exc is not None
+                else f"full_slot_miss={verify_failed_this}/{len(fetchable)}"
+            )
+            print(
+                f"[PENDING_FETCH] retry attempt={attempt_idx + 1}/{len(PENDING_FETCH_RETRY_DELAYS_SEC)} "
+                f"| delay={delay:.1f}s | reason={reason_txt}",
+                flush=True,
+            )
+            time.sleep(delay)
+        if last_exc is not None:
+            # Re-raise so the outer except records the terminal failure.
+            raise last_exc
 
         verify_failed = int(result.get("verification_failed_count", 0) or 0)
         verify_failed_sample = list(result.get("verification_failure_sample", []) or [])
@@ -395,11 +779,10 @@ def _fetch_pending_tickers(
             "verify_failed_sample": verify_failed_sample,
             "required_ready_slot": ready_slot,
             "verification_slot_end": verification_slot_end,
-            "all_ready": (
+            "marker_ready": (
                 slot_proven
                 and
                 verify_failed == 0
-                and not missing_tokens
                 and len(ready_tickers) == len(fetchable)
             ),
             "missing_tokens": list(missing_tokens),
@@ -414,7 +797,7 @@ def _fetch_pending_tickers(
             "verify_failed_sample": [],
             "required_ready_slot": ready_slot,
             "verification_slot_end": verification_slot_end,
-            "all_ready": False,
+            "marker_ready": False,
             "missing_tokens": list(missing_tokens),
             "fetchable_count": len(fetchable),
         }
@@ -548,10 +931,48 @@ def main() -> None:
         verify_failed_sample = list(fetch_result.get("verify_failed_sample", []) or [])
         ready_slot = fetch_result.get("required_ready_slot")
         verification_slot_end = fetch_result.get("verification_slot_end")
-        all_ready = bool(fetch_result.get("all_ready", False))
+        marker_ready = bool(fetch_result.get("marker_ready", False))
+        missing_tokens = list(fetch_result.get("missing_tokens", []) or [])
+        missing_token_filtered = 0
+        if missing_tokens:
+            missing_token_filtered = _mark_missing_token_pending_signals(missing_tokens)
+            if missing_token_filtered > 0:
+                print(
+                    f"[PENDING_FETCH] filtered_missing_token={missing_token_filtered} "
+                    f"| tickers={sorted(set(missing_tokens))}",
+                    flush=True,
+                )
+
+        # A2 fix: give up on tickers that keep failing verification in the same
+        # slot, so the marker can proceed with the verified subset instead of
+        # starving every other pending ticker.
+        give_up_verify_failed: List[str] = []
+        verify_failed_filtered = 0
+        if (
+            VERIFY_FAIL_MAX_RETRIES > 0
+            and not marker_ready
+            and ready_tickers
+            and isinstance(ready_slot, datetime)
+        ):
+            fetchable_now = [t for t in deduplicated if t not in set(missing_tokens)]
+            failed_now = [t for t in fetchable_now if t not in set(ready_tickers)]
+            if failed_now:
+                give_up_verify_failed = _update_verify_fail_counts(ready_slot, failed_now)
+                if give_up_verify_failed:
+                    verify_failed_filtered = _mark_verify_failed_pending_signals(
+                        give_up_verify_failed
+                    )
+                    print(
+                        f"[PENDING_FETCH] filtered_verify_failed={verify_failed_filtered} "
+                        f"| tickers={sorted(set(give_up_verify_failed))} "
+                        f"| max_retries={VERIFY_FAIL_MAX_RETRIES}",
+                        flush=True,
+                    )
+                    marker_ready = True  # allow partial marker with verified subset
+
         marker_written = False
 
-        if all_ready and ready_tickers and isinstance(ready_slot, datetime):
+        if marker_ready and ready_tickers and isinstance(ready_slot, datetime):
             _write_ready_marker(
                 ready_slot,
                 ready_tickers,
@@ -566,7 +987,6 @@ def main() -> None:
                 else "unknown"
             )
             fetchable_count = int(fetch_result.get("fetchable_count", len(ready_tickers)) or 0)
-            missing_tokens = list(fetch_result.get("missing_tokens", []) or [])
             reason_bits: List[str] = []
             if missing_tokens:
                 reason_bits.append(f"missing_tokens={len(missing_tokens)}")
@@ -590,6 +1010,22 @@ def main() -> None:
             f"elapsed={elapsed:.1f}s",
             flush=True,
         )
+
+        # C3 fix: emit per-slot markers for older pending source_slots. Without
+        # this, any pending signal whose source_slot < latest_source_slot would
+        # stall forever because the detection engine requires an exact slot
+        # match on the `.ready` marker filename.
+        try:
+            slot_map = _get_pending_source_slot_map()
+            older_written = _write_older_slot_markers(slot_map, latest_source_slot)
+            if older_written:
+                print(
+                    f"[PENDING_FETCH] older_slot_markers={len(older_written)} "
+                    f"| slots={[s.astimezone(IST).strftime('%H:%M') for s in older_written]}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"[WARN] older-slot marker pass failed: {exc}", flush=True)
 
         _touch_status("RUNNING", phase="FETCH_DONE", fetched=fetched, elapsed=round(elapsed, 1))
         _touch_heartbeat("RUNNING", phase="FETCH_DONE", fetched=fetched)

@@ -43,7 +43,7 @@ if "%QUARTER_HOUR_BUFFER_SEC%"=="" set "QUARTER_HOUR_BUFFER_SEC=%BUFFER_SEC%"
 set "REFRESH_TOKENS_ARG="
 if /I "%EQIDV2_5M_REFRESH_TOKENS%"=="1" set "REFRESH_TOKENS_ARG=--refresh-tokens"
 if /I "%EQIDV2_5M_REFRESH_TOKENS%"=="true" set "REFRESH_TOKENS_ARG=--refresh-tokens"
-set "END_CUTOFF_HHMM=1535"
+set "END_CUTOFF_HHMM=1531"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
 set "MONITOR_INTERVAL_SEC=5"
@@ -57,7 +57,7 @@ cd /d "%BASE_DIR%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
   -Name "%SCRIPT_NAME%" ^
   -FilePath "%PYTHON_EXE%" ^
-  -ArgumentList "-u","%BASE_DIR%\%SCRIPT_NAME%","--max-workers","%MAX_WORKERS%","--max-workers-per-app","%MAX_WORKERS_PER_APP%","--buffer-sec","%BUFFER_SEC%","--quarter-hour-buffer-sec","%QUARTER_HOUR_BUFFER_SEC%","%REFRESH_TOKENS_ARG%" ^
+  -ArgumentList "-u","%BASE_DIR%\%SCRIPT_NAME%","--max-workers","%MAX_WORKERS%","--max-workers-per-app","%MAX_WORKERS_PER_APP%","--buffer-sec","%BUFFER_SEC%","--quarter-hour-buffer-sec","%QUARTER_HOUR_BUFFER_SEC%","--enable-opening-slot-fetch","%REFRESH_TOKENS_ARG%" ^
   -WorkDir "%BASE_DIR%" ^
   -LogFile "%LOG_FILE%" ^
   -StatusFile "%STATUS_FILE%" ^

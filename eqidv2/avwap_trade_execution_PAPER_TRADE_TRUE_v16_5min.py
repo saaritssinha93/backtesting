@@ -108,7 +108,7 @@ SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 # those chase entries.
 LONG_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_LONG_MAX_ENTRY_SLIP_PCT", "0.003"))
 # Same gate for SHORT (price must not be more than this BELOW model trigger).
-SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.0"))
+SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.003"))
 ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENABLE", "1")).strip().lower() in {
     "1",
     "true",
@@ -118,6 +118,14 @@ ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENA
 ENTRY_RETRY_NEAR_ENTRY_PCT = float(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_PCT", "0.003"))
 ENTRY_RETRY_WAIT_SEC = int(os.getenv("EQIDV2_ENTRY_RETRY_WAIT_SEC", "300"))
 ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "2"))  # per-cycle LTP poll interval (spec: Section 10)
+# Fix #20 (post-2026-04-21): stale-detection guard.
+LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "300"))
 
 
 def _build_effective_v16_5min_executor_cfgs():
@@ -200,6 +208,21 @@ def _trade_started_after_entry_deadline(
     if trade_start_ist is None or entry_retry_deadline is None:
         return False
     return trade_start_ist >= entry_retry_deadline
+
+
+def _detection_lag_seconds(signal: dict) -> Optional[float]:
+    """Seconds between the model entry slot and Stage 2 detection."""
+    detected = _parse_ist_signal_ts(
+        signal.get("detected_time_ist") or signal.get("logtime_ist")
+    )
+    entry_slot = _parse_ist_signal_ts(
+        signal.get("signal_entry_datetime_ist")
+        or signal.get("signal_bar_time_ist")
+        or signal.get("bar_time_ist")
+    )
+    if detected is None or entry_slot is None:
+        return None
+    return (detected - entry_slot).total_seconds()
 
 
 SHORT_STOP_PCT = float(
@@ -1094,6 +1117,20 @@ def simulate_trade(
             ),
         )
 
+    # Fix #20 (post-2026-04-21): stale-detection guard.
+    if (not resume_mode) and LATE_DETECTION_GUARD_ENABLE and LATE_DETECTION_MAX_LAG_SEC > 0:
+        _lag_sec = _detection_lag_seconds(signal)
+        if _lag_sec is not None and _lag_sec > LATE_DETECTION_MAX_LAG_SEC:
+            return _finalize_pre_entry_skip(
+                "ENTRY_SKIPPED_STALE_DETECTION",
+                (
+                    f"[STALE.DETECT] Skipping {ticker} {side}: detected "
+                    f"{_lag_sec:.0f}s after entry slot "
+                    f"(threshold {LATE_DETECTION_MAX_LAG_SEC}s) | "
+                    f"signal_id={signal_id[:12]}"
+                ),
+            )
+
     # Select raw entry reference price:
     # - signal_bar: use signal CSV entry_price (15m logic)
     # - ltp_on_signal: use current LTP at dispatch time; fallback to signal_bar if unavailable
@@ -1588,7 +1625,7 @@ def get_signal_csv_paths_for_today() -> List[str]:
 
 def read_signals_csv_multi(csv_paths: Sequence[str]) -> List[dict]:
     """
-    Read and merge signals from multiple CSV files (v15_short + v15_long).
+    Read and merge signals from multiple CSV files (short + long direction).
     Dedupe by signal_id, keeping first-seen row.
     """
     merged: Dict[str, dict] = {}
@@ -1728,7 +1765,7 @@ def _restore_intraday_runtime_state(
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     today_date = datetime.now(IST).date()
 
-    # Build today's signal lookup by signal_id from both v15_short + v15_long CSVs
+    # Build today's signal lookup by signal_id from both short + long direction CSVs
     signal_rows = read_signals_csv_multi(signal_csv_paths)
     signals_by_id: Dict[str, dict] = {}
     for sig in signal_rows:
@@ -2298,7 +2335,7 @@ def main():
     executed = load_executed_signals()
     log.info(f"Loaded {len(executed)} previously executed signals.")
 
-    # Resolve today's signal CSVs (v15_short + v15_long)
+    # Resolve today's signal CSVs (short + long direction)
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     csv_paths = get_signal_csv_paths_for_today()
     paper_csv_path = os.path.join(SIGNAL_DIR, PAPER_TRADE_LOG_PATTERN.format(today_str))

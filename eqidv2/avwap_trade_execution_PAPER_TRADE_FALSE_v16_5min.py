@@ -141,7 +141,7 @@ DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
 # Max entry slip gate: reject LONG signals where live LTP is more than this
 # fraction above the model trigger.  Set 0.0 to disable.
 LONG_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_LONG_MAX_ENTRY_SLIP_PCT", "0.003"))
-SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.0"))
+SHORT_MAX_ENTRY_SLIP_PCT = float(os.getenv("EQIDV2_SHORT_MAX_ENTRY_SLIP_PCT", "0.003"))
 ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENABLE", "1")).strip().lower() in {
     "1",
     "true",
@@ -151,6 +151,16 @@ ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENA
 ENTRY_RETRY_NEAR_ENTRY_PCT = float(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_PCT", "0.003"))
 ENTRY_RETRY_WAIT_SEC = int(os.getenv("EQIDV2_ENTRY_RETRY_WAIT_SEC", "300"))
 ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "2"))  # per-cycle LTP poll interval (spec: Section 10)
+# Fix #20 (post-2026-04-21): stale-detection guard — reject confirmations where
+# Stage 2 detected_time_ist lags signal_entry_datetime_ist by more than this
+# many seconds. Prevents backlog-burst confirmations from being traded as fresh.
+LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "300"))
 TRANSIENT_API_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_TRANSIENT_API_RETRY_ATTEMPTS", "4")))
 TRANSIENT_API_RETRY_BASE_SEC = max(0.25, float(os.getenv("EQIDV2_TRANSIENT_API_RETRY_BASE_SEC", "1.0")))
 TRANSIENT_ENTRY_ORDER_RECOVER_LOOKBACK_SEC = max(
@@ -274,6 +284,26 @@ def _trade_started_after_entry_deadline(
     if trade_start_ist is None or entry_retry_deadline is None:
         return False
     return trade_start_ist >= entry_retry_deadline
+
+
+def _detection_lag_seconds(signal: dict) -> Optional[float]:
+    """Seconds between the model entry slot and Stage 2 detection.
+
+    Positive = detected after the intended entry bar. Used by the executor
+    stale-guard to reject backlog-burst confirmations that would otherwise
+    look fresh based on detected_time_ist alone.
+    """
+    detected = _parse_ist_signal_ts(
+        signal.get("detected_time_ist") or signal.get("logtime_ist")
+    )
+    entry_slot = _parse_ist_signal_ts(
+        signal.get("signal_entry_datetime_ist")
+        or signal.get("signal_bar_time_ist")
+        or signal.get("bar_time_ist")
+    )
+    if detected is None or entry_slot is None:
+        return None
+    return (detected - entry_slot).total_seconds()
 
 
 def _safe_get_entry_ltp(
@@ -1980,6 +2010,23 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 # No open position was created; proceed to finalization for audit row.
                 pass
 
+            # Fix #20 (post-2026-04-21): stale-detection guard. If Stage 2
+            # detected far after the intended entry slot, treat the signal as
+            # stale — a delayed confirmation should not re-enter the market on
+            # a price action that is already in the past.
+            if (not trade_closed) and LATE_DETECTION_GUARD_ENABLE and LATE_DETECTION_MAX_LAG_SEC > 0:
+                lag_sec = _detection_lag_seconds(signal)
+                if lag_sec is not None and lag_sec > LATE_DETECTION_MAX_LAG_SEC:
+                    result.outcome = "ENTRY_SKIPPED_STALE_DETECTION"
+                    result.exit_price = signal_entry_price
+                    trade_closed = True
+                    log.warning(
+                        f"[STALE.DETECT] Skipping {ticker} {side}: detected "
+                        f"{lag_sec:.0f}s after entry slot "
+                        f"(threshold {LATE_DETECTION_MAX_LAG_SEC}s) | "
+                        f"signal_id={signal_id[:12]}"
+                    )
+
             # ---- SLIP GATE: pre-entry LTP check ----
             # Fetch current LTP and reject if it has chased too far from the model trigger.
             if (not trade_closed) and signal_entry_price > 0:
@@ -3266,11 +3313,50 @@ def _restore_intraday_runtime_state(
         closed_ids.update(stale_ids)
         traded_tickers.update(stale_tickers)
         for row in stale_restored:
+            sid = str(row.get("signal_id", "")).strip()
+            ticker = str(row.get("ticker", "")).upper().strip()
             log.warning(
                 "[RESTORE] Dropping stale tracked state "
-                f"{row.get('ticker', '?')} signal_id={str(row.get('signal_id', ''))[:12]} "
+                f"{ticker or '?'} signal_id={sid[:12]} "
                 f"(expected_qty={row.get('expected_qty', 0)}, broker_qty={row.get('broker_qty', 0)})."
             )
+            # Upsert the stuck CSV row (typically ENTRY_PENDING from a killed
+            # thread) to a terminal outcome so it does not linger forever.
+            if not sid:
+                continue
+            candidate = restore_candidates.get(sid, {}) or {}
+            base = signals_by_id.get(sid, {}) or {}
+            try:
+                abort_result = LiveTradeResult(
+                    trade_id=str(candidate.get("trade_id", "")).strip() or f"ABORT-{sid[:8]}",
+                    signal_id=sid,
+                    signal_datetime=str(candidate.get("signal_datetime", base.get("signal_datetime", ""))),
+                    signal_entry_datetime_ist=str(
+                        candidate.get("signal_entry_datetime_ist",
+                                      base.get("signal_entry_datetime_ist", ""))
+                    ),
+                    entry_time=str(candidate.get("entry_time", "")),
+                    exit_time=datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z"),
+                    ticker=ticker,
+                    side=str(candidate.get("side", base.get("side", ""))).upper(),
+                    setup=str(candidate.get("setup", base.get("setup", ""))),
+                    impulse_type=str(candidate.get("impulse_type", base.get("impulse_type", ""))),
+                    quantity=_safe_int(candidate.get("quantity", base.get("quantity", 0)), 0),
+                    entry_price=_safe_float(candidate.get("entry_price", base.get("entry_price", 0.0)), 0.0),
+                    filled_price=0.0,
+                    exit_price=_safe_float(candidate.get("entry_price", base.get("entry_price", 0.0)), 0.0),
+                    stop_price=_safe_float(candidate.get("stop_price", base.get("stop_price", 0.0)), 0.0),
+                    target_price=_safe_float(candidate.get("target_price", base.get("target_price", 0.0)), 0.0),
+                    outcome="ENTRY_ABORTED_ON_RESTART",
+                    pnl_rs=0.0,
+                    pnl_pct=0.0,
+                    quality_score=_safe_float(
+                        candidate.get("quality_score", base.get("quality_score", 0.0)), 0.0
+                    ),
+                )
+                _log_trade_result(abort_result)
+            except Exception as e:
+                log.warning(f"[RESTORE] Failed to finalize stuck CSV row for {sid[:12]}: {e}")
 
     with active_positions_lock:
         active_positions.clear()
@@ -3675,7 +3761,7 @@ def get_signal_csv_paths_for_today() -> List[str]:
 
 def read_signals_csv_multi(csv_paths: Sequence[str]) -> List[dict]:
     """
-    Read and merge signals from multiple CSV files (v15_short + v15_long).
+    Read and merge signals from multiple CSV files (short + long direction).
     Dedupe by signal_id, keeping first-seen row.
     """
     merged: Dict[str, dict] = {}
@@ -4075,7 +4161,7 @@ def main():
             "from today's live trade CSV."
         )
 
-    # Resolve today's signal CSVs (v15_short + v15_long)
+    # Resolve today's signal CSVs (short + long direction)
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     csv_paths = get_signal_csv_paths_for_today()
     log.info("Signal CSV sources: " + ", ".join(os.path.basename(p) for p in csv_paths))
@@ -4198,7 +4284,7 @@ def main():
     # Callback for watchdog
     def on_csv_change():
         nonlocal executed
-        log.info("Signal CSV changed - processing new signals from v15_short + v15_long...")
+        log.info("Signal CSV changed - processing new signals from short + long direction CSVs...")
         executed = process_new_signals(
             csv_paths, executed, trade_semaphore, dry_run=args.dry_run,
         )
