@@ -758,21 +758,11 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
     if name == "pending_signals_v16_5min":
         today_name = f"pending_signals_{today_ist}_v16_5min.csv"
         today_path = LIVE_SIGNAL_DIR / today_name
-        latest = _latest_matching_file(LIVE_SIGNAL_DIR, "pending_signals_*_v16_5min.csv")
-        if latest is not None:
-            return latest, str(Path("live_signals") / latest.name)
-        if today_path.exists():
-            return today_path, str(Path("live_signals") / today_name)
         return today_path, str(Path("live_signals") / today_name)
 
     if name == "detected_signals_v16_5min":
         today_name = f"detected_signals_{today_ist}_v16_5min.csv"
         today_path = LIVE_SIGNAL_DIR / today_name
-        latest = _latest_matching_file(LIVE_SIGNAL_DIR, "detected_signals_*_v16_5min.csv")
-        if latest is not None:
-            return latest, str(Path("live_signals") / latest.name)
-        if today_path.exists():
-            return today_path, str(Path("live_signals") / today_name)
         return today_path, str(Path("live_signals") / today_name)
 
     raise KeyError(name)
@@ -1364,6 +1354,96 @@ def _format_csv_projection(
         else:
             out_lines.append(total_line)
     return "\n".join(out_lines)
+
+
+def _format_preopen_scheduled_sessions() -> str:
+    """
+    Render the Preopen Healthcheck card body from the latest JSON report,
+    keeping ONLY scheduled-session (task_*) checks. Each row is bucketed into:
+      RAN_TODAY       — task ran today (latest run present)
+      WAITING_RUN     — enabled, first run pending OR scheduled later in session
+      NOT_RUN_TODAY   — enabled but no run today by expected time
+      FAILED          — task FAIL with other reason
+      DISABLED        — session intentionally off
+      NOT_FOUND       — schtasks query failed / task missing
+    """
+    json_path = LOG_DIR / "preopen_session_healthcheck_latest.json"
+    if not json_path.exists():
+        return "(preopen healthcheck JSON not found yet — run run_preopen_session_healthcheck.bat)"
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"(unable to read preopen healthcheck JSON: {exc})"
+
+    ts_ist = str(payload.get("ts_ist", "") or "").strip()
+    overall = str(payload.get("overall", "") or "").strip()
+    checks = payload.get("checks", []) or []
+
+    task_checks = [
+        c for c in checks
+        if isinstance(c, dict) and str(c.get("name", "")).startswith("task_")
+    ]
+    if not task_checks:
+        return (
+            f"(no scheduled-session (task_*) checks in latest report | "
+            f"ts={ts_ist} | overall={overall})"
+        )
+
+    def _bucket(status: str, detail_l: str) -> str:
+        if status == "PASS":
+            if "session not enabled" in detail_l:
+                return "DISABLED"
+            if "ran today" in detail_l:
+                return "RAN_TODAY"
+            if "first run pending" in detail_l:
+                return "WAITING_RUN"
+            if "enabled |" in detail_l or "scheduled later" in detail_l:
+                return "WAITING_RUN"
+            return "RAN_TODAY"
+        # FAIL / WARN
+        if "not found" in detail_l or "query failed" in detail_l:
+            return "NOT_FOUND"
+        if "not enabled" in detail_l:
+            return "DISABLED"
+        if "not run today" in detail_l or "not run today yet" in detail_l:
+            return "NOT_RUN_TODAY"
+        return "FAILED"
+
+    bucket_order = {
+        "FAILED": 0,
+        "NOT_RUN_TODAY": 1,
+        "NOT_FOUND": 2,
+        "WAITING_RUN": 3,
+        "RAN_TODAY": 4,
+        "DISABLED": 5,
+    }
+    counts: Dict[str, int] = {}
+    rows: list[tuple[int, str, str, str]] = []
+    for check in task_checks:
+        status = str(check.get("status", "") or "").upper()
+        detail = str(check.get("detail", "") or "")
+        name = str(check.get("name", "") or "")
+        session = name[len("task_"):] if name.startswith("task_") else name
+        b = _bucket(status, detail.lower())
+        counts[b] = counts.get(b, 0) + 1
+        rows.append((bucket_order.get(b, 99), b, session, detail))
+    rows.sort(key=lambda r: (r[0], r[2].lower()))
+
+    summary_parts = [f"{k}={counts.get(k, 0)}" for k in bucket_order if counts.get(k)]
+    summary = " | ".join(summary_parts) if summary_parts else "no sessions"
+
+    bucket_w = max(len(r[1]) for r in rows)
+    session_w = max(len(r[2]) for r in rows)
+
+    out: list[str] = []
+    out.append(f"preopen_healthcheck | ts_ist={ts_ist} | overall={overall}")
+    out.append(f"scheduled_sessions={len(task_checks)} | {summary}")
+    out.append(f"rows_shown={len(rows)} (scheduled only)")
+    out.append(f"{'bucket':{bucket_w}s} | {'session':{session_w}s} | detail")
+    out.append(f"{'-' * bucket_w}-+-{'-' * session_w}-+-{'-' * 3}")
+    for _, bucket, session, detail in rows:
+        out.append(f"{bucket:{bucket_w}s} | {session:{session_w}s} | {detail}")
+    return "\n".join(out)
 
 
 def _compute_holdings_summary(path: Path) -> tuple[float, float, float, float, float, float]:
@@ -3232,6 +3312,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                     limit_rows=5000,
                     time_only_cols={"detected_at"},
                 )
+            elif key == "preopen_healthcheck":
+                tail = _format_preopen_scheduled_sessions()
             else:
                 tail = tail_text(path, lines=lines)
             items.append(

@@ -141,9 +141,12 @@ import eqidv2_pending_data_fetcher_v16_5min as PF  # noqa: E402
 import eqidv2_detection_engine_v16_5min as DE  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Frozen-clock monkey-patch.  Every live module calls base_v15.now_ist()
-# (either directly or via its local _now_ist wrapper).  Swapping the
-# attribute on base_v15 flips the clock for SE / PF / DE in one shot.
+# Frozen-clock monkey-patch.  SE._now_ist delegates to base_v15.now_ist, but
+# PF._now_ist and DE._now_ist call datetime.now(IST) directly — so patching
+# only base_v15.now_ist leaves PF/DE running on wall-clock, which silently
+# breaks the replay when it crosses midnight IST (pool JSON date for SE vs
+# lookup date for PF/DE drift by one day, producing PF_VERIFIED=0 and
+# DE_PASSED=0 despite a populated pool).
 # ---------------------------------------------------------------------------
 _FROZEN_CLOCK: Dict[str, Optional[datetime]] = {"ts": None}
 _REAL_NOW_IST = base_v15.now_ist
@@ -165,6 +168,8 @@ def _release_clock() -> None:
 
 
 base_v15.now_ist = _replay_now_ist  # type: ignore[assignment]
+PF._now_ist = _replay_now_ist       # type: ignore[assignment]
+DE._now_ist = _replay_now_ist       # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Bypass Kite.  PF._fetch_pending_tickers calls scheduler.run_update_5m_once
