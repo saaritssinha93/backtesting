@@ -123,6 +123,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--from", dest="from_email", help="Optional From email")
     p.add_argument("--subject", default="EQIDV2 Dashboard URL", help="Email subject")
     p.add_argument("--body", default="", help="Email body")
+    p.add_argument(
+        "--body-file",
+        default="",
+        help="Path to a UTF-8 file whose contents become the email body. "
+        "When both --body and --body-file are given, --body-file wins.",
+    )
     p.add_argument("--allow-interactive-auth", action="store_true", help="Allow browser OAuth flow if token is missing/expired")
     p.add_argument("--bootstrap-only", action="store_true", help="Only create/refresh token; do not send email")
     return p.parse_args()
@@ -152,13 +158,22 @@ def main() -> int:
         print("ERROR missing_to --to is required unless --bootstrap-only is used", file=sys.stderr)
         return 4
 
+    body_value = args.body
+    if args.body_file:
+        body_path = Path(args.body_file).expanduser()
+        try:
+            body_value = body_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"ERROR body_file_read_failed {exc}", file=sys.stderr)
+            return 4
+
     try:
         message_id = _send_email(
             creds=creds,
             to_email=to_value,
             from_email=args.from_email,
             subject=args.subject,
-            body=args.body,
+            body=body_value,
         )
     except Exception as exc:
         print(f"ERROR send_failed {exc}", file=sys.stderr)

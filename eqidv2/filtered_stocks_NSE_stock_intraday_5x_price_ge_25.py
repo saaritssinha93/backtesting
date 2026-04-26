@@ -1,9 +1,9 @@
-# Auto-generated at IST: 2026-04-21 22:50:04+0530
+# Auto-generated at IST: 2026-04-22 11:49:51+0530
 # Source universe: filtered_stocks_NSE_stock_intraday_5x.py
 # Kite app used: app1
 # Probe: live NSE LTP via Kite ltp()
 # Rule: price >= Rs 25
-# Count: 1411
+# Count: 1408
 # Missing LTP: 0
 # API calls: 6
 
@@ -137,7 +137,6 @@ selected_stocks = {
     'AUROPHARMA',
     'AUTOAXLES',
     'AUTOIND',
-    'AVADHSUGAR',
     'AVALON',
     'AVANTEL',
     'AVANTIFEED',
@@ -756,7 +755,6 @@ selected_stocks = {
     'LLOYDSME',
     'LMW',
     'LODHA',
-    'LOKESHMACH',
     'LOTUSDEV',
     'LT',
     'LTF',
@@ -812,7 +810,6 @@ selected_stocks = {
     'MEDIASSIST',
     'MEDPLUS',
     'MEESHO',
-    'MEIL',
     'METROBRAND',
     'METROPOLIS',
     'MFSL',

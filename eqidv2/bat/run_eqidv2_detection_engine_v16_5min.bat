@@ -26,6 +26,11 @@ REM [ABORT] NF_STALE). Set _REQUIRE=0 only for offline replay.
 set "EQIDV2_DETECTION_NF_READY_REQUIRE=1"
 set "EQIDV2_DETECTION_NF_READY_TIMEOUT_SEC=90"
 set "EQIDV2_DETECTION_NF_READY_POLL_SEC=1"
+REM Entry-bar-verify mode (2026-04-24): per strategy_map_v16_5min.md.
+REM Must be set identically to PF so both sides agree on marker filenames and
+REM verify semantics. Rollback: unset these (or set to 0).
+set "EQIDV16_5MIN_DISABLE_LAG_SHIFT=1"
+set "EQIDV16_5MIN_DE_VERIFY_TRIGGER_BAR=0"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
 set "SCRIPT_NAME=eqidv2_detection_engine_v16_5min.py"
@@ -50,6 +55,21 @@ if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "%RUNTIME_STATUS_DIR%" mkdir "%RUNTIME_STATUS_DIR%"
 
 cd /d "%BASE_DIR%"
+
+REM P0 fix (2026-04-23): write the runtime config claim BEFORE handing off to
+REM the supervisor. The Python DE verifies its os.environ against this file at
+REM startup; mismatches log [STARTUP.CONFIG] DRIFT (soft mode by default;
+REM EQIDV2_CONFIG_CHECK_STRICT=1 makes drift a boot exit). Whitelist must
+REM include EQIDV2_DATA_5M_DIR — without it, DE silently reads the EOD
+REM `_5min_eq` parquets, scans yesterday's bars, and rejects every signal.
+"%PYTHON_EXE%" -m eqidv2_config_attestation write ^
+  --process eqidv2_detection_engine_v16_5min ^
+  --from-env EQIDV2_DATA_5M_DIR ^
+  --from-env EQIDV2_RUNTIME_ROOT ^
+  --from-env EQIDV2_LIVE_SIGNALS_DIR >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+  echo [WARN] runtime config claim write failed; continuing in soft mode>> "%LOG_FILE%"
+)
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
   -Name "%SCRIPT_NAME%" ^

@@ -14,7 +14,7 @@ loads the v17f runner patch bundle first so rescan/filter parity matches v17f.
 
 For each pending signal it does:
   1. Expiry check        — skip if past expires_at window
-  2. Load fresh parquet  — from stocks_indicators_5min_eq_pending/
+  2. Load fresh parquet  — from stocks_indicators_5min_eq_live/ (LF baseline + PF per-slot overwrites)
   3. File freshness gate — skip if data file is older than MAX_DATA_AGE_SEC
   4. Price confirmation  — current close still valid vs entry_price
   5. Pattern rescan      — re-detect the original signal in fresh data
@@ -118,6 +118,8 @@ from eqidv2_runtime_paths import (
     DATA_5M_DIR as RUNTIME_DATA_5M_DIR,
     LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
     NIFTY_SLOT_READY_DIR,
+    NIFTY_SLOT_FAIL_DIR,
+    NIFTY_OPEN_SLOT_DIR,
     SLOT_READY_PENDING_DIR,
     RUNTIME_STATUS_DIR,
 )
@@ -127,7 +129,7 @@ from eqidv2_runtime_paths import (
 # the top of the cycle, mutate rows to status=detected/filtered_*, atomic
 # replace at the bottom). Without this lock, SE or PF can interleave a
 # write during the cycle body and get silently clobbered.
-from eqidv2_pool_lock import POOL_REV_FIELD, pool_lock, bump_pool_rev, load_pool_rev
+from eqidv2_pool_lock import POOL_REV_FIELD, pool_lock, bump_pool_rev, load_pool_rev, lifecycle_lock
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -171,7 +173,7 @@ def _parse_hard_stop_hhmm(val: str) -> dtime:
 HARD_STOP             = _parse_hard_stop_hhmm(
     os.getenv("EQIDV2_DETECTION_HARD_STOP_HHMM", "15:20")
 )
-MAX_DATA_AGE_SEC      = int(os.getenv("EQIDV2_DETECTION_MAX_DATA_AGE_SEC", "180"))  # 3 min
+MAX_DATA_AGE_SEC      = int(os.getenv("EQIDV2_DETECTION_MAX_DATA_AGE_SEC", "400"))  # M3: two-stage SEE+PF handoff can legitimately push DE to ~5-6min after trigger bar; 180s was too tight.
 ALIGN_TO_5MIN_BOUNDARY = str(
     os.getenv("EQIDV2_DETECTION_ALIGN_TO_5MIN", "0")
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -186,6 +188,18 @@ NO_PENDING_RECHECK_AFTER_SEC = int(
     )
 )
 
+# DE-TRIGGER-FIX (2026-04-23): mirror of PF_VERIFY_TRIGGER_BAR on the DE side.
+# `_pending_signal_source_slot` returns `source_slot + (lag-1)*5min` which for
+# lag=1 equals the ENTRY bar open. Requiring parquet to contain that row forces
+# DE to wait until the entry bar itself has at least partial data — ~5 min after
+# the trigger bar closed. The rescanner only needs the TRIGGER bar (slot-5min,
+# which closes AT slot) to re-validate. Shifting the freshness gate by one bar
+# lets DE process as soon as PF has re-fetched the trigger bar (paired with the
+# PF-TRIGGER-FIX on the fetcher side). Flip to 0 to revert to pre-fix behaviour.
+DE_VERIFY_TRIGGER_BAR = str(
+    os.getenv("EQIDV16_5MIN_DE_VERIFY_TRIGGER_BAR", "1")
+).strip().lower() not in {"0", "false", "no", "off"}
+
 # Nifty context neutralization — must match Signal Engine live-mode behavior
 NEUTRALIZE_WEAK_NIFTY_CONTEXT = str(
     os.getenv("EQIDV16_5MIN_NEUTRALIZE_WEAK_NIFTY_CONTEXT", "1")
@@ -198,8 +212,9 @@ NEUTRALIZE_PARTIAL_NIFTY_SESSION = str(
 ).strip().lower() not in {"0", "false", "no", "off"}
 # A4 fix: if NIFTYBEES parquet's last bar is older than this many seconds vs
 # slot_ist, demote RS to neutral instead of silently using stale direction.
-# Same default as Signal Engine (420s = one 5-min bar + 2-min slack).
-NIFTY_MAX_STALE_SEC = float(os.getenv("EQIDV2_NIFTY_MAX_STALE_SEC", "420"))
+# M6 (2026-04-22): tightened default 420 -> 330 (one 5-min bar + 30s slack).
+# Prior 420s could let a stale-by-a-full-bar NF feed pass through silently.
+NIFTY_MAX_STALE_SEC = float(os.getenv("EQIDV2_NIFTY_MAX_STALE_SEC", "330"))
 # strategy_v2 C1 — NF slot-ready gate. DE refuses to run detection on a slot
 # until NF has written nifty_ready_<slot>.json. On timeout we log
 # [ABORT] NF_STALE and emit an NF_STALE lifecycle event, so a silent NF
@@ -236,7 +251,7 @@ PENDING_CSV_COLUMNS = [
     "signal_bar_time", "added_at",
     "signal_price", "entry_price", "stop_price", "target_price",
     "quality_score", "avwap_dist_atr", "rsi_signal", "adx",
-    "rs_pct", "setup", "status", "expires_at",
+    "rs_pct", "setup", "secondary_setups", "status", "expires_at",
     "filter_reason", "detection_time", "detection_price",
     # strategy_v2 §C1 / §A3 — trigger-bar snapshot written by SE
     "trigger_bar_iso", "trigger_open", "trigger_high",
@@ -444,6 +459,10 @@ def _assess_pending_parquet_freshness(
         else:
             req_ts = req_ts.tz_convert(IST)
         req_ts = req_ts.floor("5min")
+        # DE-TRIGGER-FIX: shift required_slot back one bar to the TRIGGER bar
+        # (closes AT the original slot). See DE-TRIGGER-FIX note at module top.
+        if DE_VERIFY_TRIGGER_BAR:
+            req_ts = req_ts - pd.Timedelta(minutes=5)
         if last_row_ts is None or last_row_ts < req_ts:
             return (
                 df,
@@ -629,6 +648,51 @@ def _nf_ready_marker_path(slot_ist: datetime) -> Path:
     return Path(NIFTY_SLOT_READY_DIR) / f"nifty_ready_{slot_key}.json"
 
 
+def _nf_fail_marker_path(slot_ist: datetime) -> Path:
+    """
+    M4 — path for the NF slot-fail marker for `slot_ist`. NF bat writes
+    these under NIFTY_SLOT_FAIL_DIR when its per-slot retry budget is
+    exhausted. DE checks for the marker's presence to decide whether to
+    run the slot with RS=neutral instead of aborting.
+    """
+    slot_local = slot_ist if slot_ist.tzinfo else IST.localize(slot_ist)
+    slot_key = slot_local.astimezone(IST).strftime("%Y%m%d_%H%M")
+    return Path(NIFTY_SLOT_FAIL_DIR) / f"nifty_slot_fail_{slot_key}.json"
+
+
+def _nf_slot_has_fail_marker(slot_ist: datetime) -> bool:
+    """
+    M4 — returns True iff an NF fail-marker file exists for this slot.
+    Cheap filesystem existence check; called from both the main loop gate
+    and `_load_niftybees_rs` to force RS=neutral downstream.
+    """
+    try:
+        return _nf_fail_marker_path(slot_ist).exists()
+    except Exception:
+        return False
+
+
+def _nf_open_slot_marker_path(slot_ist: datetime) -> Path:
+    """
+    Audit #2 — path for the NF open-slot marker. NF Python script writes
+    nifty_open_slot_<yyyymmdd>_<HHMM>.json under NIFTY_OPEN_SLOT_DIR for the
+    market-open slot (no prior in-day bar exists, so the regular ready
+    marker would never publish). DE consumes this marker to run detection
+    with RS=neutral instead of aborting with NF_STALE.
+    """
+    slot_local = slot_ist if slot_ist.tzinfo else IST.localize(slot_ist)
+    slot_key = slot_local.astimezone(IST).strftime("%Y%m%d_%H%M")
+    return Path(NIFTY_OPEN_SLOT_DIR) / f"nifty_open_slot_{slot_key}.json"
+
+
+def _nf_slot_has_open_marker(slot_ist: datetime) -> bool:
+    """Audit #2 — True iff an NF open-slot marker exists for this slot."""
+    try:
+        return _nf_open_slot_marker_path(slot_ist).exists()
+    except Exception:
+        return False
+
+
 def _wait_for_nifty_slot_ready(slot_ist: datetime) -> Tuple[bool, float, str]:
     """
     strategy_v2 C1 — block up to NF_READY_TIMEOUT_SEC waiting for the NF
@@ -662,6 +726,32 @@ def _load_niftybees_rs(slot_ist: datetime) -> Tuple[float, bool, bool]:
       - Fallback: use daymove direction if DIRECTIONAL_NIFTY_CONTEXT_FALLBACK
       - Error or insufficient data → neutral (allow both, fail safe)
     """
+    # M4 — if NF published a fail marker for this slot, force RS=neutral
+    # regardless of whatever stale NIFTYBEES data is on disk. This keeps
+    # the slot productive (stock-side entries can still fire) without
+    # letting a hours-old NIFTY direction silently drive the RS gate.
+    if _nf_slot_has_fail_marker(slot_ist):
+        print(
+            f"[DETECTION_NIFTY_RS] NF_FAIL_NEUTRAL slot={slot_ist.strftime('%H:%M')} "
+            f"marker={_nf_fail_marker_path(slot_ist).name} -> neutral "
+            f"(allow_long=allow_short=True)",
+            flush=True,
+        )
+        return 0.0, True, True
+
+    # Audit #2 — at the market-open slot there is no prior in-day bar, so the
+    # NIFTYBEES day-move math would fall through to the "<2 bars" branch and
+    # neutralize anyway. The open-slot marker makes this explicit so the WAIT
+    # branch in the main loop can short-circuit symmetrically (no NF_STALE).
+    if _nf_slot_has_open_marker(slot_ist):
+        print(
+            f"[DETECTION_NIFTY_RS] NF_OPEN_NEUTRAL slot={slot_ist.strftime('%H:%M')} "
+            f"marker={_nf_open_slot_marker_path(slot_ist).name} -> neutral "
+            f"(allow_long=allow_short=True, reason=market_open_no_prior_bar)",
+            flush=True,
+        )
+        return 0.0, True, True
+
     try:
         nifty_path = RUNTIME_DATA_5M_DIR / f"{NIFTYBEES_TICKER}{END_5M}"
         df = base_v15.read_parquet_tail(str(nifty_path), n=260)
@@ -779,6 +869,10 @@ def _append_pool_lifecycle_event(
     process crashed between them). ``pool_rev=None`` events are observed
     "pool-neutral" (e.g. NF_STALE) and do not imply a state write.
     """
+    # Mo2 (2026-04-22) — serialize appends across SE/SEE, PF, DE, Executor
+    # via a dedicated lifecycle_lock so two processes cannot interleave bytes
+    # within one event line on Windows. Lock is per-date; independent of the
+    # pool-JSON pool_lock to avoid adding latency to RMW cycles.
     try:
         path = _pool_lifecycle_path(date_str)
         payload = dict(event)
@@ -786,8 +880,9 @@ def _append_pool_lifecycle_event(
         if pool_rev is not None:
             payload.setdefault(POOL_REV_FIELD, int(pool_rev))
         line = json.dumps(payload, ensure_ascii=False) + "\n"
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line)
+        with lifecycle_lock(date_str):
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line)
     except Exception as exc:
         print(f"[WARN] pool_lifecycle append failed: {exc}", flush=True)
 
@@ -943,6 +1038,12 @@ def _write_confirmed_signal(
 
     signal_time = str(signal_time_ts or entry_time_ts)
     entry_time = str(entry_time_ts)
+    # Derived display field: signal bar CLOSE = signal bar OPEN + 5min (bar duration).
+    # Same instant as signal_entry_datetime_ist; included so dashboard / CSVs can
+    # show "the moment the signal actually became known" without changing the
+    # underlying bar-open convention used by replay/backtest parity.
+    _sig_close_ts = (signal_time_ts + timedelta(minutes=5)) if signal_time_ts is not None else None
+    signal_bar_close_ist = str(_sig_close_ts) if _sig_close_ts is not None else entry_time
     signal_id  = str(sig.get("signal_id", "")).strip() or base_v15._generate_signal_id(
         ticker, side, entry_time, setup
     )
@@ -968,6 +1069,7 @@ def _write_confirmed_signal(
         row = {
             "signal_id":                  signal_id,
             "signal_datetime":            signal_time,
+            "signal_bar_close_ist":       signal_bar_close_ist,
             "signal_price":               round(_safe_float(sig.get("signal_price", entry_price)), 2),
             "received_time":              received_time,
             "detected_time_ist":          detected_at_str,
@@ -999,12 +1101,15 @@ def _write_confirmed_signal(
 
 
 DETECTED_CSV_COLUMNS = [
-    "signal_id", "ticker", "side", "setup", "signal_datetime", "signal_price",
+    "signal_id", "ticker", "side", "setup",
+    "signal_datetime", "signal_bar_close_ist",
+    "signal_price",
     "signal_entry_datetime_ist",
     "detected_time", "detection_price",
     "entry_price", "stop_price", "target_price",
     "quality_score", "rsi", "adx", "quantity",
-    "lag_from_signal_sec",
+    "lag_from_signal_bar_sec",
+    "lag_from_entry_slot_sec",
 ]
 
 
@@ -1033,13 +1138,25 @@ def _write_detected_csv(detected_signals: List[Dict[str, Any]], date_str: str) -
         writer = csv.DictWriter(f, fieldnames=DETECTED_CSV_COLUMNS, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         for sig in detected_signals:
-            # Compute lag from signal to detection
-            lag_sec = ""
+            # lag_from_signal_bar_sec: detected_time - signal_datetime (signal bar OPEN).
+            # lag_from_entry_slot_sec: detected_time - signal_entry_datetime_ist (entry bar OPEN).
+            # signal_bar_close_ist: signal bar OPEN + 5min (= same instant as signal_entry_datetime_ist).
+            #   Display-only — clarifies "the moment the signal actually became known".
+            # The executor's STALE.DETECT guard uses the entry-slot lag.
+            lag_from_signal_bar_sec = ""
+            lag_from_entry_slot_sec = ""
+            signal_bar_close_ist = ""
             try:
-                sig_dt   = pd.to_datetime(sig.get("signal_datetime", ""), utc=False)
-                det_dt   = pd.to_datetime(sig.get("detection_time", ""), utc=False)
-                if sig_dt is not None and det_dt is not None and not pd.isna(sig_dt) and not pd.isna(det_dt):
-                    lag_sec = round((det_dt - sig_dt).total_seconds())
+                det_dt = pd.to_datetime(sig.get("detection_time", ""), utc=False)
+                sig_dt = pd.to_datetime(sig.get("signal_datetime", ""), utc=False)
+                ent_dt = pd.to_datetime(sig.get("signal_entry_datetime_ist", ""), utc=False)
+                if det_dt is not None and not pd.isna(det_dt):
+                    if sig_dt is not None and not pd.isna(sig_dt):
+                        lag_from_signal_bar_sec = round((det_dt - sig_dt).total_seconds())
+                    if ent_dt is not None and not pd.isna(ent_dt):
+                        lag_from_entry_slot_sec = round((det_dt - ent_dt).total_seconds())
+                if sig_dt is not None and not pd.isna(sig_dt):
+                    signal_bar_close_ist = str(sig_dt + timedelta(minutes=5))
             except Exception:
                 pass
             writer.writerow({
@@ -1048,6 +1165,7 @@ def _write_detected_csv(detected_signals: List[Dict[str, Any]], date_str: str) -
                 "side":             sig.get("side", ""),
                 "setup":            sig.get("setup", ""),
                 "signal_datetime":  sig.get("signal_datetime", ""),
+                "signal_bar_close_ist": signal_bar_close_ist,
                 "signal_price":     sig.get("signal_price", ""),
                 "signal_entry_datetime_ist": sig.get("signal_entry_datetime_ist", ""),
                 "detected_time":    sig.get("detection_time", ""),
@@ -1059,7 +1177,8 @@ def _write_detected_csv(detected_signals: List[Dict[str, Any]], date_str: str) -
                 "rsi":              sig.get("rsi_signal", ""),
                 "adx":              sig.get("adx", ""),
                 "quantity":         sig.get("quantity", ""),
-                "lag_from_signal_sec": lag_sec,
+                "lag_from_signal_bar_sec": lag_from_signal_bar_sec,
+                "lag_from_entry_slot_sec": lag_from_entry_slot_sec,
             })
 
 
@@ -1073,19 +1192,67 @@ def _normalize_ist_timestamp(value: Any) -> Optional[pd.Timestamp]:
     return pd.Timestamp(ts).tz_convert(IST) if pd.Timestamp(ts).tzinfo is not None else pd.Timestamp(ts).tz_localize(IST)
 
 
+# Mirror of SE's SETUP_LAG_BARS (same getattr-from-v16_runner pattern keeps
+# v16_runner as the single source of truth). Used to delay parity scan for
+# multi-bar-lag setups so the runner snapshot contains the bars it needs to
+# reproduce the SE confirmation. Without this, lag-2 setups got
+# `not_in_live_parity_final_set` because DE scanned a snapshot one bar shy
+# of the lag-1 confirmation bar.
+#
+# Mo4 (2026-04-22) — documentation-only note: the keys below are the LEGACY
+# v16_runner setup names (A_PULLBACK_C2_BREAK_C2_HIGH/LOW, B_HUGE_FAILED_BOUNCE,
+# B_HUGE_PULLBACK_HOLD_BREAK) and DO NOT match the SEE emit names used on the
+# wire (A_PULLBACK_C2_THEN_BREAK_C2_HIGH/LOW, B_HUGE_RED_FAILED_BOUNCE). This
+# mismatch is intentional — this dict is keyed on v16_runner names because
+# the getattr lookups target v16_runner attributes. `_setup_lag_shift` looks
+# the setup up by SEE emit-name via a normaliser, so any setup string not
+# in this dict falls back to lag=1 via `.get(..., 1)`. See §SEE-Q1a in
+# strategy_v2.txt for the full derivation and the emit->runner name map.
+SETUP_LAG_BARS: Dict[str, int] = {
+    "A_MOD_BREAK_C1_HIGH":            int(getattr(v16_runner, "LONG_LAG_BARS_A_MOD_BREAK_C1_HIGH", 1)),
+    "A_PULLBACK_C2_BREAK_C2_HIGH":    int(getattr(v16_runner, "LONG_LAG_BARS_A_PULLBACK_C2_BREAK_C2_HIGH", 2)),
+    "B_HUGE_PULLBACK_HOLD_BREAK":     int(getattr(v16_runner, "LONG_LAG_BARS_B_HUGE_PULLBACK_HOLD_BREAK", 999)),
+    "B_HUGE_C1_CLOSE_RECLAIM_BREAK":  int(getattr(v16_runner, "LONG_LAG_BARS_B_HUGE_C1_CLOSE_RECLAIM_BREAK", 2)),
+    "A_MOD_CLOSE_CONTINUATION_BREAK": int(getattr(v16_runner, "LONG_LAG_BARS_A_MOD_CLOSE_CONTINUATION_BREAK", 2)),
+    "A_MOD_BREAK_C1_LOW":             int(getattr(v16_runner, "SHORT_LAG_BARS_A_MOD_BREAK_C1_LOW", 1)),
+    "A_PULLBACK_C2_BREAK_C2_LOW":     int(getattr(v16_runner, "SHORT_LAG_BARS_A_PULLBACK_C2_BREAK_C2_LOW", 2)),
+    "B_HUGE_FAILED_BOUNCE":           int(getattr(v16_runner, "SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE", -1)),
+}
+
+
+# Entry-bar-verify mode (2026-04-24): mirror of PF's env var. When set to 1,
+# every setup's shift is 0 so trigger_slot = source_slot = entry_ist.
+# Paired with DE_VERIFY_TRIGGER_BAR=0, DE expects markers at the entry-bar
+# slot and treats verify_slot as entry_ist itself. See strategy_map_v16_5min.md.
+_DISABLE_LAG_SHIFT = str(
+    os.getenv("EQIDV16_5MIN_DISABLE_LAG_SHIFT", "0")
+).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _setup_lag_shift(setup: Any) -> timedelta:
+    if _DISABLE_LAG_SHIFT:
+        return timedelta(0)
+    lag = SETUP_LAG_BARS.get(str(setup or "").strip(), 1)
+    if lag <= 0 or lag > 4:
+        return timedelta(0)
+    return timedelta(minutes=(lag - 1) * 5)
+
+
 def _pending_signal_source_slot(sig: Dict[str, Any]) -> Optional[pd.Timestamp]:
+    shift = _setup_lag_shift(sig.get("setup", ""))
+
     source_slot = _normalize_ist_timestamp(sig.get("source_slot", ""))
     if source_slot is not None:
-        return source_slot.floor("5min")
+        return (source_slot + shift).floor("5min")
 
     added_at = _normalize_ist_timestamp(sig.get("added_at", ""))
     if added_at is not None:
-        return added_at.floor("5min")
+        return (added_at + shift).floor("5min")
 
     for key in ("signal_entry_datetime_ist", "signal_bar_time", "signal_datetime"):
         ts = _normalize_ist_timestamp(sig.get(key, ""))
         if ts is not None:
-            return ts.floor("5min")
+            return (ts + shift).floor("5min")
     return None
 
 
@@ -1252,41 +1419,17 @@ def _run_detection_cycle_live_parity(
         return "no_pending"
     _LAST_NO_PENDING_LOG_KEY_PARITY = None
 
-    # Collect pending source slots for slot-aware marker matching.
-    pending_source_slots: Set[str] = set()
-    for sig in pending_sigs:
-        slot_ts = _pending_signal_source_slot(sig)
-        if slot_ts is not None:
-            pending_source_slots.add(slot_ts.isoformat())
-
-    ready_marker = _load_latest_ready_marker(
-        now,
-        allowed_slot_keys=pending_source_slots or None,
-    )
-    ready_tickers: Optional[Set[str]] = None
-    if USE_READY_MARKER_HANDOFF:
-        if ready_marker is None:
-            print(
-                f"[DETECTION_PARITY] {now.strftime('%H:%M:%S')} | pending={len(pending_sigs)} | "
-                f"waiting_ready_marker (no fresh marker matching pending_slots="
-                f"{sorted(pending_source_slots) if pending_source_slots else '[]'})",
-                flush=True,
-            )
-            return "waiting_ready_marker"
-        ready_tickers = set(ready_marker.get("_ready_tickers", set()) or set())
-        if not ready_tickers:
-            print(
-                f"[DETECTION_PARITY] {now.strftime('%H:%M:%S')} | pending={len(pending_sigs)} | waiting_ready_marker (empty ticker set)",
-                flush=True,
-            )
-            return "waiting_ready_marker"
-
+    # PF -> DE handoff: mirror LF -> SEE pattern (exact-slot marker lookup).
+    # Each signal's trigger slot is matched independently against its own
+    # `<trigger_slot>.ready` marker via `_load_ready_marker_for_slot` inside
+    # the per-slot loop below. The former `_load_latest_ready_marker` pre-filter
+    # assumed a single fat marker at the latest source slot; with PF now fanning
+    # out one marker per trigger slot, the "latest" marker only holds its own
+    # slot's tickers and dropped every signal from other slots. Removing that
+    # gate; per-slot lookup is the sole truth source.
     slot_groups: Dict[str, Dict[str, Any]] = {}
     skipped_no_slot = 0
     for sig in pending_sigs:
-        ticker = str(sig.get("ticker", "")).strip().upper()
-        if ready_tickers is not None and ticker not in ready_tickers:
-            continue
         slot_ts = _pending_signal_source_slot(sig)
         if slot_ts is None:
             skipped_no_slot += 1
@@ -1302,15 +1445,9 @@ def _run_detection_cycle_live_parity(
         )
         return "waiting_slot_metadata"
 
-    marker_note = ""
-    if ready_marker is not None:
-        marker_note = (
-            f" | ready_tickers={len(ready_tickers or set())}"
-            f" | ready_age={ready_marker.get('_marker_age_sec', '?')}s"
-        )
     print(
         f"[DETECTION_PARITY] {now.strftime('%H:%M:%S')} | pending={len(pending_sigs)} | "
-        f"ready_slots={len(slot_groups)} | parity_mode=live_combined{marker_note}",
+        f"ready_slots={len(slot_groups)} | parity_mode=live_combined",
         flush=True,
     )
 
@@ -1321,20 +1458,11 @@ def _run_detection_cycle_live_parity(
         "slots": 0,
         "short_written": 0,
         "long_written": 0,
-        "unmatched_final": 0,
         "still_pending": 0,
         "waiting_ready": 0,
         "waiting_data": 0,
     }
     reason_counts: Counter[str] = Counter()
-    # Fix #15: per-signal waiting breakdown (ticker not in ready_tickers =
-    # waiting on Pending Fetcher; slot_wait_reasons = waiting on candle close).
-    if ready_tickers is not None:
-        for sig in pending_sigs:
-            tk = str(sig.get("ticker", "")).strip().upper()
-            if tk and tk not in ready_tickers:
-                counters["waiting_ready"] += 1
-                reason_counts["waiting_ready:ticker_not_in_ready_marker"] += 1
     for slot_key in sorted(slot_groups.keys()):
         group = slot_groups[slot_key]
         slot_ts = pd.Timestamp(group["slot"]).tz_convert(IST)
@@ -1342,11 +1470,31 @@ def _run_detection_cycle_live_parity(
         slot_signals: List[Dict[str, Any]] = list(group["signals"])
         counters["slots"] += 1
 
-        # Per-slot marker: narrow ticker set to only those confirmed ready for this exact slot.
-        slot_marker = _load_ready_marker_for_slot(slot_ts, now)
+        # Per-slot marker: PF -> DE handoff gate, same shape as LF -> SEE.
+        # Load the exact `<slot>.ready` for this trigger slot; narrow signals
+        # to tickers present in that marker. Signals whose ticker is absent
+        # (PF hasn't refetched them yet) stay pending and are tallied under
+        # waiting_ready. If the marker itself is missing, all signals for this
+        # slot count as waiting_ready and the slot is skipped for this cycle.
+        slot_marker = None
+        if USE_READY_MARKER_HANDOFF:
+            slot_marker = _load_ready_marker_for_slot(slot_ts, now)
+            if slot_marker is None:
+                counters["waiting_ready"] += len(slot_signals)
+                reason_counts["waiting_ready:slot_marker_absent"] += len(slot_signals)
+                print(
+                    f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | "
+                    f"waiting_ready_marker (no marker for slot, signals={len(slot_signals)})",
+                    flush=True,
+                )
+                continue
         if slot_marker is not None:
             slot_ready_tickers = slot_marker.get("_ready_tickers") or set()
-            slot_signals = [s for s in slot_signals if str(s.get("ticker", "")).strip().upper() in slot_ready_tickers]
+            not_ready_sigs = [s for s in slot_signals if str(s.get("ticker", "")).strip().upper() not in slot_ready_tickers]
+            if not_ready_sigs:
+                counters["waiting_ready"] += len(not_ready_sigs)
+                reason_counts["waiting_ready:ticker_not_in_ready_marker"] += len(not_ready_sigs)
+            slot_signals = [s for s in slot_signals if s not in not_ready_sigs]
             if not slot_signals:
                 print(
                     f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | slot_marker_age={slot_marker.get('_marker_age_sec', '?')}s"
@@ -1444,171 +1592,99 @@ def _run_detection_cycle_live_parity(
             if not slot_signals:
                 continue
 
-        tickers = sorted({str(sig.get("ticker", "")).strip().upper() for sig in slot_signals if str(sig.get("ticker", "")).strip()})
-
-        if not tickers:
-            for sig in slot_signals:
-                sig["status"] = "filtered_parity"
-                sig["filter_reason"] = "missing_ticker"
-                counters["filtered"] += 1
-                reason_counts["filtered_parity:missing_ticker"] += 1
-                sid = str(sig.get("signal_id", "")).strip()
-                if sid:
-                    _append_pool_lifecycle_event(
-                        date_str,
-                        {
-                            "signal_id": sid,
-                            "event": "DROPPED",
-                            "reason": "filtered_parity:missing_ticker",
-                            "ticker": str(sig.get("ticker", "")),
-                            "side": str(sig.get("side", "")),
-                            "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                        },
-                        pool_rev=target_pool_rev,
-                    )
-            print(
-                f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | tickers=0 | filtered={len(slot_signals)}",
-                flush=True,
-            )
-            continue
-
-        context_state = live_v16._build_backtest_context_state(slot_dt, short_cfg)
-        allow_long = bool(context_state["allow_long"])
-        allow_short = bool(context_state["allow_short"])
-
-        short_rows, long_rows, scan_meta = live_v16._scan_slot(
-            slot_dt,
-            short_cfg,
-            long_cfg,
-            allow_long,
-            allow_short,
-            tickers=tickers,
-        )
-        short_rows, long_rows, filter_meta = live_v16._apply_backtest_parity_filters_to_dicts(
-            short_rows,
-            long_rows,
-            short_cfg,
-            long_cfg,
-            context_state.get("mode_map", {}),
-            context_state.get("nifty_ret_map", {}),
-        )
-
-        final_rows = list(short_rows) + list(long_rows)
+        # Option A: PF pool is authoritative. SEE already applied
+        # `_apply_backtest_parity_filters_to_dicts` (V16 + V17c + V17d + V17f
+        # + NIFTY context) when building the pending pool. DE's role here is
+        # freshness (above) + trigger-bar drift (above) + direct emit. The
+        # former rescan+intersect-by-signal-id path is removed: signal-id drift
+        # and parity-set divergence (not_in_live_parity_final_set) no longer
+        # exist by construction.
         slot_detected_at_str = _now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
-        final_by_id: Dict[str, Dict[str, Any]] = {}
-        for row in final_rows:
-            signal_id = _signal_id_from_rowlike(row)
-            if signal_id:
-                final_by_id[signal_id] = row
-
-        pending_ids: Set[str] = set()
-        matched_final_ids: Set[str] = set()
-        matched_short_count = 0
-        matched_long_count = 0
         slot_short_written = 0
         slot_long_written = 0
         slot_detected = 0
         slot_filtered = 0
         slot_hhmm = slot_ts.strftime('%H:%M')
         for sig in slot_signals:
-            signal_id = str(sig.get("signal_id", "")).strip() or _signal_id_from_rowlike(sig)
-            sig_ticker = str(sig.get("ticker", "")).strip().upper() or "?"
-            sig_side = str(sig.get("side", "")).strip().upper() or "?"
-            if signal_id:
-                pending_ids.add(signal_id)
-            if signal_id and signal_id in final_by_id:
-                matched_row = final_by_id[signal_id]
-                _update_pending_signal_from_parity_row(sig, matched_row, slot_detected_at_str)
-                matched_final_ids.add(signal_id)
-                slot_detected += 1
-                counters["confirmed"] += 1
-                side_upper = str(sig.get("side", matched_row.get("side", ""))).strip().upper()
-                if side_upper == "SHORT":
-                    matched_short_count += 1
-                elif side_upper == "LONG":
-                    matched_long_count += 1
-
-                wrote = _write_confirmed_signal(
-                    sig,
-                    date_str,
-                    slot_detected_at_str,
-                    _safe_float(sig.get("entry_price", 0.0), 0.0),
-                    _safe_float(sig.get("stop_price", 0.0), 0.0),
-                    _safe_float(sig.get("target_price", 0.0), 0.0),
-                    max(1, int(_safe_float(sig.get("quantity", 1), 1))),
-                )
-                if side_upper == "SHORT":
-                    slot_short_written += int(wrote)
-                elif side_upper == "LONG":
-                    slot_long_written += int(wrote)
-                # E2 (strategy_v2 §E2): DE_PASSED lifecycle event.
-                if signal_id:
-                    _append_pool_lifecycle_event(
-                        date_str,
-                        {
-                            "signal_id": signal_id,
-                            "event": "DE_PASSED",
-                            "ticker": sig_ticker,
-                            "side": side_upper,
-                            "setup": str(sig.get("setup", "")),
-                            "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                            "written_to_csv": bool(wrote),
-                        },
-                        pool_rev=target_pool_rev,
-                    )
-                # Fix #15: per-signal outcome log.
-                print(
-                    f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {side_upper} -> "
-                    f"CONFIRMED (written={int(wrote)})",
-                    flush=True,
-                )
-            else:
+            sig_ticker = str(sig.get("ticker", "")).strip().upper()
+            side_upper = str(sig.get("side", "")).strip().upper()
+            signal_id = str(sig.get("signal_id", "")).strip()
+            if not sig_ticker:
                 sig["status"] = "filtered_parity"
-                sig["filter_reason"] = "not_in_live_parity_final_set"
-                slot_filtered += 1
+                sig["filter_reason"] = "missing_ticker"
                 counters["filtered"] += 1
-                reason_counts["filtered_parity:not_in_live_parity_final_set"] += 1
-                # E2: DROPPED lifecycle event on parity miss.
+                slot_filtered += 1
+                reason_counts["filtered_parity:missing_ticker"] += 1
                 if signal_id:
                     _append_pool_lifecycle_event(
                         date_str,
                         {
                             "signal_id": signal_id,
                             "event": "DROPPED",
-                            "reason": "filtered_parity:not_in_live_parity_final_set",
-                            "ticker": sig_ticker,
-                            "side": sig_side,
-                            "setup": str(sig.get("setup", "")),
+                            "reason": "filtered_parity:missing_ticker",
+                            "ticker": str(sig.get("ticker", "")),
+                            "side": side_upper,
                             "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
                         },
                         pool_rev=target_pool_rev,
                     )
-                print(
-                    f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {sig_side} -> "
-                    f"FILTERED (not_in_live_parity_final_set)",
-                    flush=True,
+                continue
+
+            entry_price  = _safe_float(sig.get("entry_price", 0.0), 0.0)
+            stop_price   = _safe_float(sig.get("stop_price", 0.0), 0.0)
+            target_price = _safe_float(sig.get("target_price", 0.0), 0.0)
+            signal_price = _safe_float(sig.get("signal_price", entry_price), entry_price) or entry_price
+            quantity     = max(1, int(_safe_float(sig.get("quantity", 1), 1)))
+
+            sig["status"] = "detected"
+            sig["detection_time"] = slot_detected_at_str
+            sig["detection_price"] = round(signal_price, 2)
+            sig["filter_reason"] = None
+
+            wrote = _write_confirmed_signal(
+                sig,
+                date_str,
+                slot_detected_at_str,
+                entry_price,
+                stop_price,
+                target_price,
+                quantity,
+            )
+            slot_detected += 1
+            counters["confirmed"] += 1
+            if side_upper == "SHORT":
+                slot_short_written += int(wrote)
+            elif side_upper == "LONG":
+                slot_long_written += int(wrote)
+
+            if signal_id:
+                _append_pool_lifecycle_event(
+                    date_str,
+                    {
+                        "signal_id": signal_id,
+                        "event": "DE_PASSED",
+                        "ticker": sig_ticker,
+                        "side": side_upper,
+                        "setup": str(sig.get("setup", "")),
+                        "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        "written_to_csv": bool(wrote),
+                    },
+                    pool_rev=target_pool_rev,
                 )
+            print(
+                f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {side_upper} -> "
+                f"CONFIRMED (written={int(wrote)}) [pf_authoritative]",
+                flush=True,
+            )
 
         counters["short_written"] += int(slot_short_written)
         counters["long_written"] += int(slot_long_written)
 
-        unmatched_final = sorted(set(final_by_id.keys()) - pending_ids)
-        if unmatched_final:
-            counters["unmatched_final"] += len(unmatched_final)
-            print(
-                f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | unmatched_final={len(unmatched_final)} "
-                f"(live parity produced signals missing from pending pool)",
-                flush=True,
-            )
-
         print(
-            f"[DETECTION_PARITY] slot={slot_ts.strftime('%H:%M')} | tickers={len(tickers)} "
-            f"raw_short={int(filter_meta.get('raw_short', 0))} raw_long={int(filter_meta.get('raw_long', 0))} "
-            f"final_short={int(filter_meta.get('final_short', 0))} final_long={int(filter_meta.get('final_long', 0))} "
+            f"[DETECTION_PARITY] slot={slot_hhmm} | signals={len(slot_signals)} "
             f"detected={slot_detected} filtered={slot_filtered} "
-            f"matched_short={matched_short_count} matched_long={matched_long_count} "
             f"short_written={slot_short_written} long_written={slot_long_written} "
-            f"scan_elapsed={float(scan_meta.get('scan_elapsed_sec', 0.0)):.1f}s",
+            f"mode=pf_authoritative",
             flush=True,
         )
 
@@ -1639,11 +1715,20 @@ def _run_detection_cycle_live_parity(
         f"waiting={waiting_total} (ready={counters['waiting_ready']},data={counters['waiting_data']}) | "
         f"filtered_parity={counters['filtered']} | "
         f"written=S{counters['short_written']}/L{counters['long_written']} | "
-        f"still_pending={counters['still_pending']} | unmatched_final={counters['unmatched_final']} | "
+        f"still_pending={counters['still_pending']} | "
         f"missing_slot_meta={skipped_no_slot}"
         f"{' | reasons=' + reason_summary if reason_summary else ''}",
         flush=True,
     )
+    # Outer loop's retry branch (waiting_ready_marker) re-polls every 2-5s until
+    # next_wake; "processed" marks the slot completed and sleeps until next slot.
+    # If any signal is still waiting on a PF marker / parquet row, do NOT mark
+    # the slot completed — the marker may arrive mid-slot and we must catch it
+    # in time for a lag=1 entry. The already-confirmed rows in this cycle have
+    # their pool status set to non-pending, so re-polling is cheap (their slot
+    # no longer matches the pending grouping).
+    if counters["waiting_ready"] > 0 or counters["waiting_data"] > 0:
+        return "waiting_ready_marker"
     return "processed"
 
 
@@ -2201,6 +2286,26 @@ def main() -> None:
 
     _touch_status("STARTING")
 
+    # P0 fix (2026-04-23): config attestation. Without this, DE silently reads
+    # the EOD `_5min_eq` parquets instead of intraday `_5min_eq_live`, scans
+    # yesterday's bars, and rejects every signal as filtered_parity. Soft by
+    # default (logs DRIFT, continues); EQIDV2_CONFIG_CHECK_STRICT=1 makes it
+    # sys.exit(2). EQIDV2_CONFIG_CHECK_BYPASS=1 emergency override.
+    try:
+        from eqidv2_config_attestation import verify_claim as _verify_config_claim
+        _verify_config_claim(
+            process_name="eqidv2_detection_engine_v16_5min",
+            whitelist=(
+                "EQIDV2_DATA_5M_DIR",
+                "EQIDV2_RUNTIME_ROOT",
+                "EQIDV2_LIVE_SIGNALS_DIR",
+            ),
+        )
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"[STARTUP.CONFIG] attestation_skipped err={exc!r} (non-fatal in soft mode)", flush=True)
+
     # Startup offset — run AFTER Pending Data Fetcher so fresh data is available
     if STARTUP_OFFSET_SEC > 0:
         print(f"[INFO] Startup offset: sleeping {STARTUP_OFFSET_SEC}s before first check", flush=True)
@@ -2271,14 +2376,64 @@ def main() -> None:
         # the NIFTY guard fetcher publishes its per-slot marker. On timeout we
         # emit [ABORT] NF_STALE + a lifecycle event and skip the slot so the
         # RS gate can never run against a stale NIFTYBEES parquet.
+        #
+        # M4 (2026-04-22) — if NF's per-slot retry budget was exhausted, NF
+        # writes nifty_slot_fail_<slot>.json. DE consults this marker BEFORE
+        # the ready-wait: if present, we proceed to detection with RS forced
+        # to neutral (see _load_niftybees_rs). This is strictly less bad than
+        # aborting the slot outright — stock-side entries can still fire off
+        # their own setup logic; only the NIFTY directional gate is disabled.
         nf_ready = True
         nf_waited = 0.0
         nf_marker = ""
+        nf_fail_neutral = False
         if ALIGN_TO_5MIN_BOUNDARY and slot_key is not None:
-            _touch_status("RUNNING", phase="WAIT_NF", slot=slot_display)
-            nf_ready, nf_waited, nf_marker = _wait_for_nifty_slot_ready(slot)
+            if _nf_slot_has_fail_marker(slot):
+                nf_fail_neutral = True
+                nf_marker = str(_nf_fail_marker_path(slot))
+                print(
+                    f"[DETECT] NF_FAIL_NEUTRAL slot={slot_display} "
+                    f"marker={_nf_fail_marker_path(slot).name} "
+                    f"reason=nf_retry_budget_exhausted -> detect with RS=neutral",
+                    flush=True,
+                )
+                try:
+                    date_str = slot.astimezone(IST).strftime("%Y-%m-%d")
+                    _append_pool_lifecycle_event(date_str, {
+                        "event":  "NF_FAIL_NEUTRAL",
+                        "slot":   slot_display,
+                        "marker": _nf_fail_marker_path(slot).name,
+                    })
+                except Exception as exc:
+                    print(f"[WARN] NF_FAIL_NEUTRAL lifecycle append failed: {exc}", flush=True)
+            elif _nf_slot_has_open_marker(slot):
+                # Audit #2 (2026-04-22) — market-open slot has no prior in-day
+                # bar, so the regular ready marker would never publish. NF
+                # writes a per-day open-slot marker instead; DE proceeds with
+                # RS=neutral (same downstream effect as NF_FAIL_NEUTRAL, just
+                # a different trigger).
+                nf_fail_neutral = True
+                nf_marker = str(_nf_open_slot_marker_path(slot))
+                print(
+                    f"[DETECT] NF_OPEN_NEUTRAL slot={slot_display} "
+                    f"marker={_nf_open_slot_marker_path(slot).name} "
+                    f"reason=market_open_no_prior_bar -> detect with RS=neutral",
+                    flush=True,
+                )
+                try:
+                    date_str = slot.astimezone(IST).strftime("%Y-%m-%d")
+                    _append_pool_lifecycle_event(date_str, {
+                        "event":  "NF_OPEN_NEUTRAL",
+                        "slot":   slot_display,
+                        "marker": _nf_open_slot_marker_path(slot).name,
+                    })
+                except Exception as exc:
+                    print(f"[WARN] NF_OPEN_NEUTRAL lifecycle append failed: {exc}", flush=True)
+            else:
+                _touch_status("RUNNING", phase="WAIT_NF", slot=slot_display)
+                nf_ready, nf_waited, nf_marker = _wait_for_nifty_slot_ready(slot)
 
-        if not nf_ready:
+        if (not nf_ready) and (not nf_fail_neutral):
             print(
                 f"[ABORT] NF_STALE slot={slot_display} waited={nf_waited:.1f}s "
                 f"timeout={NF_READY_TIMEOUT_SEC:.0f}s marker={nf_marker} "

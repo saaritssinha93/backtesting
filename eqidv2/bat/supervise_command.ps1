@@ -32,7 +32,21 @@ param(
     [string]$AlertEmailFrom = "",
     [string]$GmailApiScript = "",
     [string]$GmailCredentialsFile = "",
-    [string]$GmailTokenFile = ""
+    [string]$GmailTokenFile = "",
+    # M1 (2026-04-22) — open-position interlock. When a cutoff would stop the
+    # executor (SkipRunAfterCutoff on a cold start, or StopRestartsAfterCutoff
+    # after a crash), the supervisor first reads this JSON state file; if any
+    # open_trades remain, the cutoff stop is overridden and the supervisor
+    # continues to keep the executor alive. Pattern variant performs a
+    # per-day date substitution ({date:yyyy-MM-dd}).
+    [string]$OpenPositionsStateFile = "",
+    [string]$OpenPositionsStateFilePattern = "",
+    # P2 (2026-04-22) — NTP drift pre-flight. Abort supervisor start if the
+    # local clock is further than NtpMaxDriftSec from the reference server.
+    # NtpServer may be empty to disable the check.
+    [string]$NtpServer = "pool.ntp.org",
+    [double]$NtpMaxDriftSec = 30.0,
+    [int]$NtpTimeoutMs = 3000
 )
 
 Set-StrictMode -Version Latest
@@ -121,6 +135,136 @@ function Is-AfterCutoff {
     $nowInt = [int](Get-Date -Format "HHmm")
     $cutoffInt = [int]$HHmm
     return ($nowInt -ge $cutoffInt)
+}
+
+function Resolve-OpenPositionsStateFilePath {
+    # M1 — prefer explicit OpenPositionsStateFile; otherwise substitute today's
+    # IST date into OpenPositionsStateFilePattern. Returns "" if neither is
+    # configured so the interlock becomes a no-op.
+    if (-not [string]::IsNullOrWhiteSpace($OpenPositionsStateFile)) {
+        return $OpenPositionsStateFile
+    }
+    if ([string]::IsNullOrWhiteSpace($OpenPositionsStateFilePattern)) {
+        return ""
+    }
+    $istNow = [DateTime]::UtcNow
+    try {
+        $istNow = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $script:IstZone)
+    } catch { }
+    $dateStr = $istNow.ToString("yyyy-MM-dd")
+    return ($OpenPositionsStateFilePattern -replace "\{date\}", $dateStr)
+}
+
+function Test-ExecutorHasOpenPositions {
+    # M1 — returns $true if the configured open-positions JSON lists any
+    # open_trades for today. Conservative: if the file is unparseable we
+    # treat it as "no open positions" to avoid getting stuck forever on a
+    # corrupt file. Supervisor will log the parse failure.
+    $path = Resolve-OpenPositionsStateFilePath
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+        return $false
+    }
+    try {
+        $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return $false
+        }
+        $payload = $raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-LogLine -Level "WARN" -Message ("open-positions state unreadable ({0}): {1}" -f $path, $_.Exception.Message)
+        return $false
+    }
+    $rows = $null
+    try { $rows = $payload.open_trades } catch { $rows = $null }
+    if ($null -eq $rows) { return $false }
+    if ($rows -is [System.Collections.IEnumerable] -and -not ($rows -is [string])) {
+        foreach ($_row in $rows) {
+            if ($null -ne $_row) { return $true }
+        }
+        return $false
+    }
+    # Dict-shaped payload: any non-null value means an open position.
+    try {
+        $props = $rows.PSObject.Properties
+        foreach ($p in $props) {
+            if ($null -ne $p.Value) { return $true }
+        }
+    } catch { }
+    return $false
+}
+
+function Get-NtpOffsetSeconds {
+    # P2 — minimal NTPv3 client (mode 3 / client). Returns signed offset in
+    # seconds (local_clock - server_clock) or $null on failure. RTT halving
+    # is applied so the reported offset is roughly the true skew after
+    # symmetric-latency correction.
+    param(
+        [string]$Server,
+        [int]$TimeoutMs = 3000
+    )
+    if ([string]::IsNullOrWhiteSpace($Server)) {
+        return $null
+    }
+    $socket = $null
+    try {
+        $ntpData = New-Object byte[] 48
+        $ntpData[0] = 0x1B  # LI=0, VN=3, Mode=3
+        $addresses = [System.Net.Dns]::GetHostAddresses($Server)
+        if ($null -eq $addresses -or $addresses.Count -eq 0) {
+            return $null
+        }
+        $endpoint = New-Object System.Net.IPEndPoint($addresses[0], 123)
+        $socket = New-Object System.Net.Sockets.Socket(
+            [System.Net.Sockets.AddressFamily]::InterNetwork,
+            [System.Net.Sockets.SocketType]::Dgram,
+            [System.Net.Sockets.ProtocolType]::Udp
+        )
+        $socket.ReceiveTimeout = $TimeoutMs
+        $socket.SendTimeout = $TimeoutMs
+        $socket.Connect($endpoint)
+        $sentAt = [DateTime]::UtcNow
+        [void]$socket.Send($ntpData)
+        [void]$socket.Receive($ntpData)
+        $receivedAt = [DateTime]::UtcNow
+        # Transmit Timestamp field: bytes 40..47 (seconds since 1900-01-01 UTC)
+        $intPart  = [UInt64]([UInt32]$ntpData[40] -shl 24) -bor ([UInt32]$ntpData[41] -shl 16) -bor ([UInt32]$ntpData[42] -shl 8) -bor [UInt32]$ntpData[43]
+        $fracPart = [UInt64]([UInt32]$ntpData[44] -shl 24) -bor ([UInt32]$ntpData[45] -shl 16) -bor ([UInt32]$ntpData[46] -shl 8) -bor [UInt32]$ntpData[47]
+        $ms = ([double]$intPart * 1000.0) + ([double]$fracPart * 1000.0 / 4294967296.0)
+        $ntpEpoch = [DateTime]::new(1900, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+        $serverAtReceive = $ntpEpoch.AddMilliseconds($ms)
+        $rtt = ($receivedAt - $sentAt).TotalSeconds
+        $estimatedServerNow = $serverAtReceive.AddSeconds($rtt / 2.0)
+        # Positive = local clock is ahead of NTP; negative = behind.
+        return ($receivedAt - $estimatedServerNow).TotalSeconds
+    } catch {
+        Write-LogLine -Level "WARN" -Message ("NTP query to {0} failed: {1}" -f $Server, $_.Exception.Message)
+        return $null
+    } finally {
+        if ($null -ne $socket) {
+            try { $socket.Close() } catch { }
+        }
+    }
+}
+
+function Test-NtpDrift {
+    # P2 — refuse to start the supervisor if local clock drift exceeds the
+    # configured threshold. NTP unreachable is NOT fatal (logged WARN and
+    # we proceed) to avoid turning the offline network into a boot gate.
+    if ([string]::IsNullOrWhiteSpace($NtpServer) -or $NtpMaxDriftSec -le 0) {
+        return $true
+    }
+    $offset = Get-NtpOffsetSeconds -Server $NtpServer -TimeoutMs $NtpTimeoutMs
+    if ($null -eq $offset) {
+        Write-LogLine -Level "WARN" -Message ("NTP drift check skipped (server={0} unreachable); proceeding." -f $NtpServer)
+        return $true
+    }
+    $abs = [math]::Abs($offset)
+    if ($abs -gt $NtpMaxDriftSec) {
+        Write-LogLine -Level "ERROR" -Message ("NTP drift {0:F3}s exceeds threshold {1:F3}s (server={2}). Refusing to start {3}. Resync clock (w32tm /resync) and retry." -f $offset, $NtpMaxDriftSec, $NtpServer, $Name)
+        return $false
+    }
+    Write-LogLine -Level "INFO" -Message ("NTP drift {0:F3}s within threshold {1:F3}s (server={2})." -f $offset, $NtpMaxDriftSec, $NtpServer)
+    return $true
 }
 
 function Quote-CmdArg {
@@ -884,6 +1028,13 @@ Ensure-ParentDir -Path $HeartbeatFile
 $script:SupervisorLogFile = "$LogFile.supervisor.log"
 Ensure-ParentDir -Path $script:SupervisorLogFile
 
+# P2 (2026-04-22) — pre-flight NTP drift check. Runs BEFORE singleton-lock
+# acquisition so a clock-skew-triggered refusal cannot hold the lock open.
+# Non-fatal on NTP unreachable; fatal on drift > NtpMaxDriftSec.
+if (-not (Test-NtpDrift)) {
+    exit 2
+}
+
 if ([string]::IsNullOrWhiteSpace($LockFile)) {
     $LockFile = "$StatusFile.lock"
 }
@@ -923,10 +1074,18 @@ if (-not (Acquire-SingletonLock -Path $LockFile -StaleMaxSec $LockStaleMaxSec)) 
 Cleanup-OrphanedManagedProcesses
 
 if ($SkipRunAfterCutoff -and (Is-AfterCutoff -HHmm $CutoffHHmm)) {
-    Write-LogLine -Level "INFO" -Message "SKIP $Name (after cutoff $CutoffHHmm)"
-    Write-Heartbeat -State "SKIPPED_CUTOFF" -RestartCount 0 -ChildPid $null -IdleSec $null -LastLogUtc "" -Note "skip_run_after_cutoff"
-    Write-Status -Status "SKIPPED_CUTOFF" -ExitCode 0 -RestartCount 0 -Reason "after_cutoff"
-    exit 0
+    # M1 — open-position interlock. If the executor state file shows open
+    # trades, keep running even though we're past cutoff; a cold start in
+    # that window is usually a post-crash recovery that needs to manage
+    # live positions through FORCED_CLOSE_TIME.
+    if (Test-ExecutorHasOpenPositions) {
+        Write-LogLine -Level "WARN" -Message "After cutoff $CutoffHHmm but open positions present; overriding SkipRunAfterCutoff for $Name."
+    } else {
+        Write-LogLine -Level "INFO" -Message "SKIP $Name (after cutoff $CutoffHHmm, no open positions)"
+        Write-Heartbeat -State "SKIPPED_CUTOFF" -RestartCount 0 -ChildPid $null -IdleSec $null -LastLogUtc "" -Note "skip_run_after_cutoff"
+        Write-Status -Status "SKIPPED_CUTOFF" -ExitCode 0 -RestartCount 0 -Reason "after_cutoff"
+        exit 0
+    }
 }
 
 $restartCount = 0
@@ -1171,9 +1330,17 @@ while ($true) {
     }
 
     if ($StopRestartsAfterCutoff -and (Is-AfterCutoff -HHmm $CutoffHHmm)) {
-        Write-LogLine -Level "WARN" -Message "Non-zero exit after cutoff. Stopping restarts for $Name."
-        Write-Status -Status "STOPPED_AFTER_CUTOFF" -ExitCode 0 -RestartCount $restartCount -Reason "after_cutoff_nonzero_exit"
-        exit 0
+        # M1 — open-position interlock. Even after cutoff, if the executor
+        # state file shows live positions, restart anyway so the new worker
+        # can reconcile them through FORCED_CLOSE_TIME (15:20). Only stop
+        # when the book is flat.
+        if (Test-ExecutorHasOpenPositions) {
+            Write-LogLine -Level "WARN" -Message "After cutoff $CutoffHHmm but open positions present; overriding StopRestartsAfterCutoff for $Name."
+        } else {
+            Write-LogLine -Level "WARN" -Message "Non-zero exit after cutoff, book flat. Stopping restarts for $Name."
+            Write-Status -Status "STOPPED_AFTER_CUTOFF" -ExitCode 0 -RestartCount $restartCount -Reason "after_cutoff_nonzero_exit"
+            exit 0
+        }
     }
 
     $restartCount += 1

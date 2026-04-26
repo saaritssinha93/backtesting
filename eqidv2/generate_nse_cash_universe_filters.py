@@ -16,6 +16,7 @@ INTRADAY_5X_FILE = ROOT / "filtered_stocks_NSE_cash_intraday_5x.py"
 STOCK_UNIVERSE_FILE = ROOT / "filtered_stocks_NSE_stock_universe.py"
 STOCK_INTRADAY_5X_FILE = ROOT / "filtered_stocks_NSE_stock_intraday_5x.py"
 MIS_V2_FILE = ROOT / "filtered_stocks_MIS_v2.py"
+LEGACY_MIS_FILE = ROOT / "filtered_stocks_MIS.py"
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LTP_BATCH_SIZE = 250
 DEFAULT_QUOTE_BATCH_SIZE = 200
@@ -32,6 +33,18 @@ STOCK_EXCLUDE_NAME_PARTS = (
     "G-SEC",
     "GSEC",
 )
+INVALID_KITE_NSE_SYMBOLS = {
+    "AKZOINDIA",
+    "DBOL",
+    "EMBDL-BE",
+    "HILINFRA",
+    "KECL",
+    "LIKHITHA",
+    "LTIM",
+    "LYKALABS",
+    "RACE",
+    "SANGHIIND",
+}
 
 
 def _now_ist_text() -> str:
@@ -40,6 +53,19 @@ def _now_ist_text() -> str:
 
 def _normalize_symbol(value: Any) -> str:
     return str(value or "").strip().upper()
+
+
+def load_selected_stocks_from_python(path: Path) -> List[str]:
+    if not path.exists():
+        return []
+    ns: dict[str, Any] = {}
+    exec(path.read_text(encoding="utf-8-sig"), ns)
+    values = ns.get("selected_stocks", [])
+    if isinstance(values, dict):
+        items = values.keys()
+    else:
+        items = values
+    return sorted({_normalize_symbol(item) for item in items if _normalize_symbol(item)})
 
 
 def load_full_nse_cash_universe(csv_path: Path) -> List[str]:
@@ -482,6 +508,8 @@ def main() -> int:
                 liquid_symbols,
             )
             print(f"[OK] Wrote {liquid_path.name} with {len(liquid_symbols)} symbols.")
+            legacy_symbols = set(load_selected_stocks_from_python(LEGACY_MIS_FILE))
+            mis_v2_symbols = sorted((set(liquid_symbols) | legacy_symbols) - INVALID_KITE_NSE_SYMBOLS)
             write_universe_module(
                 MIS_V2_FILE,
                 generated_at,
@@ -504,12 +532,14 @@ def main() -> int:
                         if excluded_suffixes
                         else "Rule: no excluded series suffixes"
                     ),
+                    f"Legacy additions from {LEGACY_MIS_FILE.name}: {len(legacy_symbols)}",
+                    f"Removed: {len(INVALID_KITE_NSE_SYMBOLS)} live-Kite-missing NSE symbols",
                     f"Alias file: {MIS_V2_FILE.name}",
-                    f"Count: {len(liquid_symbols)}",
+                    f"Count: {len(mis_v2_symbols)}",
                 ],
-                liquid_symbols,
+                mis_v2_symbols,
             )
-            print(f"[OK] Wrote {MIS_V2_FILE.name} with {len(liquid_symbols)} symbols.")
+            print(f"[OK] Wrote {MIS_V2_FILE.name} with {len(mis_v2_symbols)} symbols.")
             if missing_quote:
                 print(f"[WARN] Missing quote sample: {', '.join(missing_quote[:20])}")
     if ineligible:

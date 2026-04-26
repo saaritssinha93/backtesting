@@ -330,6 +330,64 @@ def _nifty_slot_ready_dir() -> Path:
     )
 
 
+def _nifty_open_slot_dir() -> Path:
+    """Audit #2 — resolve the NF open-slot marker directory."""
+    runtime_root = os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2")
+    return Path(
+        os.getenv("EQIDV2_NIFTY_OPEN_SLOT_DIR", str(Path(runtime_root) / "nifty_open_slot_5m"))
+    )
+
+
+def _maybe_write_open_slot_marker(now_ist: datetime, holidays: set, logger) -> None:
+    """
+    Audit #2 (2026-04-22) — at the 09:15 market-open slot there is no prior
+    in-day bar. The regular ready-marker writer requires a confirmed last bar
+    >= end_dt, so it would never publish for slot 09:15 and DE would abort
+    with NF_STALE. Instead, when wall time is in [09:15:00, 09:20:00) on a
+    trading day, write a per-day open-slot marker that DE consumes to run
+    detection with weak_context=True / neutralize=True (RS forced neutral).
+    """
+    try:
+        if not _is_trading_day(now_ist.date(), holidays):
+            return
+        open_dt = IST_TZ.localize(datetime(
+            now_ist.year, now_ist.month, now_ist.day,
+            MARKET_OPEN_TIME.hour, MARKET_OPEN_TIME.minute, 0,
+        ))
+        next_slot_dt = open_dt + timedelta(minutes=STEP_MIN)
+        if not (open_dt <= now_ist < next_slot_dt):
+            return
+
+        marker_dir = _nifty_open_slot_dir()
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        slot_key = open_dt.strftime("%Y%m%d_%H%M")
+        marker_path = marker_dir / f"nifty_open_slot_{slot_key}.json"
+        if marker_path.exists():
+            return  # idempotent — only write once per day
+        payload = {
+            "slot_key":         slot_key,
+            "slot_open_ist":    open_dt.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "written_at_ist":   now_ist.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "nifty_rs":         0.0,
+            "weak_context":     True,
+            "neutralize":       True,
+            "reason":           "market_open_no_prior_bar",
+            "source":           "trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py",
+        }
+        tmp_path = marker_path.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, sort_keys=True)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except Exception:
+                pass
+        os.replace(tmp_path, marker_path)
+        logger.info("[OPEN_SLOT] NF open-slot marker written: %s", marker_path)
+    except Exception as exc:
+        logger.warning("NF open-slot marker write failed: %s", exc)
+
+
 def _slot_key_from_bar_end(bar_end_ts, intraday_ts: str) -> str:
     """Slot key for the marker, always keyed to bar-END (= DE slot OPEN)."""
     ts = pd.Timestamp(bar_end_ts)
@@ -447,6 +505,12 @@ def main() -> int:
     logger.info("Output directory: %s", OUT_DIR)
     logger.info("Preferred symbol: %s", args.symbol)
     logger.info("Aliases: %s", ", ".join(aliases))
+
+    # Audit #2 — publish the per-day open-slot marker first so DE can proceed
+    # with neutral RS at 09:15 even if the regular Kite fetch path later fails
+    # (no prior in-day bar exists at session open). Idempotent: only writes
+    # once per day in the [09:15:00, 09:20:00) window.
+    _maybe_write_open_slot_marker(now_ist, holidays, logger)
 
     kite = setup_kite_session()
     token = _resolve_symbol_token(kite, args.symbol, args.token_override)

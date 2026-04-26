@@ -48,16 +48,22 @@ def _lock_path(date_str: str) -> Path:
     return Path(LIVE_SIGNALS_DIR) / f"pending_signals_{date_str}_v16_5min.lock"
 
 
-@contextmanager
-def pool_lock(date_str: str, timeout: float = _LOCK_TIMEOUT_DEFAULT) -> Iterator[None]:
-    """
-    Exclusive advisory lock for the pool JSON of `date_str`.
+def _lifecycle_lock_path(date_str: str) -> Path:
+    # Mo2 — separate lockfile so lifecycle JSONL appends do NOT serialize
+    # with pool-JSON RMW sequences. Same mechanism, different path.
+    return Path(LIVE_SIGNALS_DIR) / f"pool_lifecycle_{date_str}_v16_5min.lock"
 
-    Blocks up to `timeout` seconds, then raises TimeoutError. Callers must
-    treat a timeout as a hard failure (skip the slot, surface in logs) —
-    swallowing it reintroduces the race this lock exists to prevent.
+
+@contextmanager
+def _acquire_exclusive_lock(
+    lock_path: Path,
+    timeout: float,
+) -> Iterator[None]:
     """
-    lock_path = _lock_path(date_str)
+    Shared implementation behind pool_lock and lifecycle_lock. Separated so
+    we can expose two independent locks (pool-JSON and lifecycle-JSONL)
+    without duplicating the platform-specific lock primitive code.
+    """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(lock_path, "a+b")
     start = time.monotonic()
@@ -74,7 +80,7 @@ def pool_lock(date_str: str, timeout: float = _LOCK_TIMEOUT_DEFAULT) -> Iterator
             except (BlockingIOError, OSError):
                 if time.monotonic() - start > timeout:
                     raise TimeoutError(
-                        f"pool_lock: could not acquire {lock_path} after {timeout:.1f}s"
+                        f"lock: could not acquire {lock_path} after {timeout:.1f}s"
                     )
                 time.sleep(_LOCK_POLL_SEC)
         yield
@@ -92,6 +98,36 @@ def pool_lock(date_str: str, timeout: float = _LOCK_TIMEOUT_DEFAULT) -> Iterator
             fh.close()
         except Exception:
             pass
+
+
+@contextmanager
+def lifecycle_lock(
+    date_str: str,
+    timeout: float = _LOCK_TIMEOUT_DEFAULT,
+) -> Iterator[None]:
+    """
+    Mo2 (2026-04-22) — cross-process serializer for pool_lifecycle.jsonl
+    appends. SE/SEE, PF, DE, and any future writer must wrap each JSONL
+    append in ``with lifecycle_lock(date_str):`` so two concurrent writes
+    cannot interleave bytes within a single event line on Windows. Kept
+    separate from ``pool_lock`` so audit appends do NOT serialize with
+    pool RMW cycles (which would double the contention cost on DE).
+    """
+    with _acquire_exclusive_lock(_lifecycle_lock_path(date_str), timeout):
+        yield
+
+
+@contextmanager
+def pool_lock(date_str: str, timeout: float = _LOCK_TIMEOUT_DEFAULT) -> Iterator[None]:
+    """
+    Exclusive advisory lock for the pool JSON of `date_str`.
+
+    Blocks up to `timeout` seconds, then raises TimeoutError. Callers must
+    treat a timeout as a hard failure (skip the slot, surface in logs) —
+    swallowing it reintroduces the race this lock exists to prevent.
+    """
+    with _acquire_exclusive_lock(_lock_path(date_str), timeout):
+        yield
 
 
 def load_pool_rev(state: Dict[str, Any]) -> int:

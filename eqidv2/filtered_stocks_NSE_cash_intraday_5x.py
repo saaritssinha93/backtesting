@@ -1,10 +1,10 @@
-# Auto-generated at IST: 2026-04-21 22:50:04+0530
+# Auto-generated at IST: 2026-04-22 11:49:51+0530
 # Source universe: filtered_stocks_NSE_cash_full.py
 # Kite app used: app1
 # Probe: BUY 1 share, NSE regular MIS MARKET dry-run via order_margins()
 # Rule: leverage >= 5.00x
-# Count: 1590
-# Ineligible: 7584
+# Count: 1586
+# Ineligible: 7588
 # API calls: 144
 
 selected_stocks = {
@@ -148,7 +148,6 @@ selected_stocks = {
     'AUTOBEES',
     'AUTOIETF',
     'AUTOIND',
-    'AVADHSUGAR',
     'AVALON',
     'AVANTEL',
     'AVANTIFEED',
@@ -847,7 +846,6 @@ selected_stocks = {
     'LLOYDSME',
     'LMW',
     'LODHA',
-    'LOKESHMACH',
     'LOTUSDEV',
     'LOWVOLIETF',
     'LT',
@@ -908,7 +906,6 @@ selected_stocks = {
     'MEDIASSIST',
     'MEDPLUS',
     'MEESHO',
-    'MEIL',
     'METAL',
     'METALIETF',
     'METROBRAND',
@@ -1203,7 +1200,6 @@ selected_stocks = {
     'RITCO',
     'RITES',
     'RKFORGE',
-    'RMDRIP',
     'RML',
     'ROHLTD',
     'ROLEXRINGS',

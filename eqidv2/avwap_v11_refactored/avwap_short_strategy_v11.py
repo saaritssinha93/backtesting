@@ -340,6 +340,768 @@ def _reversal_filter_short(
 
 
 # ===========================================================================
+# D_AVWAP_LOSE_REVERSAL (v17j) — SHORT mirror of LONG B_AVWAP_RECLAIM_REVERSAL.
+# Price was above AVWAP in the last 1-2 bars; current bar closes below AVWAP
+# with a decisive red body, falling RSI, K<D, ADX>=threshold, above-avg volume,
+# and the bar is before short_reversal_max_hour_ist (IST). Entry on the
+# configured lag bar via a breakdown below the lose-bar's low.
+# ===========================================================================
+def _scan_reversal_at_short(
+    df_day: pd.DataFrame,
+    i: int,
+    ticker: str,
+    day_str: str,
+    cfg: StrategyConfig,
+) -> tuple:
+    """Try the AVWAP-lose reversal SHORT setup at bar index ``i``.
+
+    Returns (trade, exit_idx) on success, (None, -1) on miss.
+    """
+    if i < 2 or (i + 2) >= len(df_day):
+        return None, -1
+
+    R = df_day.iloc[i]
+
+    # Time-of-day gate (IST)
+    R_ts = R["date"]
+    try:
+        R_hour = R_ts.tz_convert(IST).hour
+    except Exception:
+        R_hour = getattr(R_ts, "hour", 0)
+    if R_hour >= int(getattr(cfg, "short_reversal_max_hour_ist", 13)):
+        return None, -1
+
+    R_close = float(R["close"])
+    R_open = float(R["open"])
+    R_high = float(R["high"])
+    R_low = float(R["low"])
+    R_atr = float(R.get("ATR15", np.nan))
+    R_avwap = float(R.get("AVWAP", np.nan))
+
+    if not (
+        np.isfinite(R_atr)
+        and R_atr > 0
+        and np.isfinite(R_avwap)
+        and np.isfinite(R_close)
+        and np.isfinite(R_open)
+        and np.isfinite(R_high)
+        and np.isfinite(R_low)
+        and (R_high - R_low) > 0
+        and R_close > 0
+    ):
+        return None, -1
+
+    # Lose: close below AVWAP after at least one prior bar had high above.
+    if R_close >= R_avwap:
+        return None, -1
+
+    require_both = bool(getattr(cfg, "short_reversal_require_both_prior_bars", True))
+    prior_bars_ok = True if require_both else False
+    seen_any = False
+    for k in (i - 1, i - 2):
+        if k < 0:
+            prior_bars_ok = False if require_both else prior_bars_ok
+            continue
+        try:
+            prev_high = float(df_day.at[k, "high"])
+            prev_avwap = float(df_day.at[k, "AVWAP"])
+        except (KeyError, ValueError, TypeError):
+            if require_both:
+                prior_bars_ok = False
+            continue
+        above = (
+            np.isfinite(prev_high)
+            and np.isfinite(prev_avwap)
+            and prev_high >= prev_avwap
+        )
+        if require_both:
+            if not above:
+                prior_bars_ok = False
+                break
+            seen_any = True
+        else:
+            if above:
+                prior_bars_ok = True
+                break
+    if require_both and not seen_any:
+        prior_bars_ok = False
+    if not prior_bars_ok:
+        return None, -1
+
+    R_rng = R_high - R_low
+    R_body = abs(R_close - R_open)
+    body_min = float(getattr(cfg, "short_reversal_body_atr_min", 0.50))
+    if (R_body / R_atr) < body_min:
+        return None, -1
+    lower_pct = float(getattr(cfg, "short_reversal_close_lower_pct", 0.40))
+    # close must be in the lower `lower_pct` of the bar range
+    if R_close > (R_low + lower_pct * R_rng):
+        return None, -1
+
+    # Momentum: RSI below threshold and falling
+    rsi_max = float(getattr(cfg, "short_reversal_rsi_max", 50.0))
+    rsi_now = float(df_day.at[i, "RSI15"]) if "RSI15" in df_day.columns else np.nan
+    rsi_prev = float(df_day.at[i - 1, "RSI15"]) if "RSI15" in df_day.columns else np.nan
+    if not (
+        np.isfinite(rsi_now)
+        and np.isfinite(rsi_prev)
+        and rsi_now <= rsi_max
+        and rsi_now < rsi_prev
+    ):
+        return None, -1
+
+    adx_min = float(getattr(cfg, "short_reversal_adx_min", 28.0))
+    adx_now = float(df_day.at[i, "ADX15"]) if "ADX15" in df_day.columns else np.nan
+    if not (np.isfinite(adx_now) and adx_now >= adx_min):
+        return None, -1
+
+    # Trend context: close below EMA20
+    if bool(getattr(cfg, "short_reversal_require_close_lt_ema20", True)):
+        ema20_now = float(df_day.at[i, "EMA20"]) if "EMA20" in df_day.columns else np.nan
+        if not (np.isfinite(ema20_now) and R_close < ema20_now):
+            return None, -1
+
+    k_now = float(df_day.at[i, "STOCHK15"]) if "STOCHK15" in df_day.columns else np.nan
+    d_now = float(df_day.at[i, "STOCHD15"]) if "STOCHD15" in df_day.columns else np.nan
+    if not (np.isfinite(k_now) and np.isfinite(d_now) and k_now < d_now):
+        return None, -1
+
+    # Volume
+    vol_now = (
+        float(R.get("volume", 0.0))
+        if np.isfinite(R.get("volume", np.nan))
+        else 0.0
+    )
+    vol_sma = (
+        float(R.get("VOL_SMA20", 0.0))
+        if np.isfinite(R.get("VOL_SMA20", np.nan))
+        else 0.0
+    )
+    if vol_sma > 0 and vol_now < float(cfg.short_reversal_volume_min_ratio) * vol_sma:
+        return None, -1
+    vol_cap_ratio = float(getattr(cfg, "short_reversal_volume_max_ratio", 0.0) or 0.0)
+    if vol_cap_ratio > 0.0 and vol_sma > 0 and vol_now > vol_cap_ratio * vol_sma:
+        return None, -1
+
+    # Entry: breakdown below R.low on lag bar
+    buf_rev = entry_buffer(R_low, cfg)
+    trigger_rev = R_low - buf_rev
+    lag_rev = int(cfg.lag_bars_short_d_avwap_lose_reversal)
+    rev_entry_idx = -1
+
+    if lag_rev >= 0:
+        cand = i + lag_rev
+        if (
+            cand < len(df_day)
+            and in_signal_window(df_day.at[cand, "date"], cfg)
+        ):
+            lo_e = float(df_day.at[cand, "low"])
+            cl_e = float(df_day.at[cand, "close"])
+            if (
+                np.isfinite(lo_e)
+                and np.isfinite(cl_e)
+                and lo_e < trigger_rev
+                and (not cfg.require_entry_close_confirm or cl_e < trigger_rev)
+            ):
+                rev_entry_idx = cand
+    else:
+        for jj in range(i + 1, min(len(df_day), i + 4)):
+            if not in_signal_window(df_day.at[jj, "date"], cfg):
+                continue
+            lo_jj = float(df_day.at[jj, "low"])
+            cl_jj = float(df_day.at[jj, "close"])
+            if (
+                np.isfinite(lo_jj)
+                and np.isfinite(cl_jj)
+                and lo_jj < trigger_rev
+                and (not cfg.require_entry_close_confirm or cl_jj < trigger_rev)
+            ):
+                rev_entry_idx = jj
+                break
+
+    if rev_entry_idx < 0:
+        return None, -1
+    if (len(df_day) - 1 - rev_entry_idx) < int(cfg.min_bars_left_after_entry):
+        return None, -1
+
+    # Entry price selection — SHORT side uses trigger price by default
+    # (mirrors the existing SHORT _make_trade pattern in scan_one_day).
+    if bool(getattr(cfg, "entry_at_next_open", False)):
+        nxt = rev_entry_idx + 1
+        if nxt >= len(df_day):
+            return None, -1
+        ep_rev = float(df_day.at[nxt, "open"])
+    elif bool(getattr(cfg, "entry_at_bar_close", False)):
+        ep_rev = float(df_day.at[rev_entry_idx, "close"])
+    else:
+        ep_rev = float(trigger_rev)
+
+    max_slip = float(getattr(cfg, "max_entry_slip_pct", 0.0))
+    if max_slip > 0.0 and ep_rev < trigger_rev * (1.0 - max_slip):
+        return None, -1
+
+    # AVWAP distance at entry — SHORT convention: positive = below AVWAP
+    atr_entry_rev = float(df_day.at[rev_entry_idx, "ATR15"])
+    avwap_entry = (
+        float(df_day.at[rev_entry_idx, "AVWAP"])
+        if np.isfinite(df_day.at[rev_entry_idx, "AVWAP"])
+        else np.nan
+    )
+    close_entry = float(df_day.at[rev_entry_idx, "close"])
+    if (
+        np.isfinite(atr_entry_rev)
+        and atr_entry_rev > 0
+        and np.isfinite(avwap_entry)
+    ):
+        avwap_dist_atr_rev = (avwap_entry - close_entry) / atr_entry_rev
+    else:
+        avwap_dist_atr_rev = 0.0
+
+    cap = float(getattr(cfg, "signal_avwap_dist_atr_max", 0.0) or 0.0)
+    if cap > 0.0 and avwap_dist_atr_rev > cap:
+        return None, -1
+    dist_min = float(getattr(cfg, "short_reversal_avwap_dist_atr_min", 0.0) or 0.0)
+    if dist_min > 0.0 and avwap_dist_atr_rev < dist_min:
+        return None, -1
+
+    # Diagnostics for Trade row
+    ema20_R = float(R.get("EMA20", np.nan))
+    ema_gap_atr_rev = (
+        (ema20_R - R_close) / R_atr
+        if (np.isfinite(ema20_R) and R_atr > 0)
+        else 0.0
+    )
+    qscore_rev = compute_quality_score_short(
+        adx_now, avwap_dist_atr_rev, ema_gap_atr_rev, "REVERSAL"
+    )
+    atr_pct_rev = (R_atr / R_close) if R_close > 0 else 0.0
+
+    (
+        exit_idx_rev,
+        exit_time_rev,
+        exit_price_rev,
+        outcome_rev,
+        partial_taken_rev,
+    ) = simulate_exit_short(df_day, rev_entry_idx, ep_rev, cfg)
+    net_pnl_rev, gross_pnl_rev = compute_pnl_pct(
+        ep_rev, exit_price_rev, "SHORT", cfg
+    )
+
+    trade = Trade(
+        trade_date=day_str,
+        ticker=ticker,
+        side="SHORT",
+        setup="D_AVWAP_LOSE_REVERSAL",
+        impulse_type="REVERSAL",
+        signal_time_ist=R_ts,
+        entry_time_ist=df_day.at[rev_entry_idx, "date"],
+        entry_price=ep_rev,
+        sl_price=ep_rev * (1.0 + cfg.stop_pct),
+        target_price=ep_rev * (1.0 - cfg.target_pct),
+        exit_time_ist=exit_time_rev,
+        exit_price=exit_price_rev,
+        outcome=outcome_rev,
+        pnl_pct=net_pnl_rev,
+        pnl_pct_gross=gross_pnl_rev,
+        signal_price=R_close,
+        partial_exit_taken=bool(partial_taken_rev),
+        adx_signal=adx_now if np.isfinite(adx_now) else 0.0,
+        rsi_signal=rsi_now if np.isfinite(rsi_now) else 0.0,
+        stochk_signal=k_now if np.isfinite(k_now) else 0.0,
+        avwap_dist_atr_signal=avwap_dist_atr_rev,
+        ema20_gap_atr_signal=ema_gap_atr_rev,
+        atr_pct_signal=atr_pct_rev,
+        quality_score=qscore_rev,
+        india_vix=float(cfg.vix_daily.get(day_str, 0.0)),
+    )
+    return trade, int(exit_idx_rev)
+
+
+# ===========================================================================
+# C_OR_BREAKDOWN (v17k) — Opening-range breakdown SHORT (mirror of LONG OR_BO)
+# ===========================================================================
+def _scan_or_breakdown_at(
+    df_day: pd.DataFrame,
+    i: int,
+    ticker: str,
+    day_str: str,
+    cfg: StrategyConfig,
+    or_high: float,
+    or_low: float,
+    or_width_pct: float,
+) -> tuple:
+    if i < 2 or (i + 2) >= len(df_day):
+        return None, -1
+    R = df_day.iloc[i]
+    R_ts = R["date"]
+    try:
+        R_hour = R_ts.tz_convert(IST).hour
+    except Exception:
+        R_hour = getattr(R_ts, "hour", 0)
+    if R_hour >= int(getattr(cfg, "or_breakdown_max_hour_ist", 11)):
+        return None, -1
+
+    R_close = float(R["close"]); R_open = float(R["open"])
+    R_high = float(R["high"]); R_low = float(R["low"])
+    R_atr = float(R.get("ATR15", np.nan))
+
+    if not (np.isfinite(R_atr) and R_atr > 0 and (R_high - R_low) > 0 and R_close > 0):
+        return None, -1
+    if not (
+        float(getattr(cfg, "or_breakdown_min_width_pct", 0.0)) <= or_width_pct
+        <= float(getattr(cfg, "or_breakdown_max_width_pct", 99.0))
+    ):
+        return None, -1
+    # Breakdown: bar low breaks OR low and close confirms
+    if not (R_low < or_low and R_close < or_low):
+        return None, -1
+
+    adx_min = float(getattr(cfg, "or_breakdown_adx_min", 22.0))
+    adx_now = float(df_day.at[i, "ADX15"]) if "ADX15" in df_day.columns else np.nan
+    if not (np.isfinite(adx_now) and adx_now >= adx_min):
+        return None, -1
+
+    vol_now = float(R.get("volume", 0.0)) if np.isfinite(R.get("volume", np.nan)) else 0.0
+    vol_sma = float(R.get("VOL_SMA20", 0.0)) if np.isfinite(R.get("VOL_SMA20", np.nan)) else 0.0
+    if vol_sma > 0 and vol_now < float(cfg.or_breakdown_volume_min_ratio) * vol_sma:
+        return None, -1
+
+    buf = entry_buffer(R_low, cfg)
+    trigger = R_low - buf
+    lag = int(cfg.or_breakdown_lag_bars)
+    cand = i + max(lag, 1)
+    if cand >= len(df_day) or not in_signal_window(df_day.at[cand, "date"], cfg):
+        return None, -1
+    lo_e = float(df_day.at[cand, "low"])
+    cl_e = float(df_day.at[cand, "close"])
+    if not (np.isfinite(lo_e) and np.isfinite(cl_e) and lo_e < trigger
+            and (not cfg.require_entry_close_confirm or cl_e < trigger)):
+        return None, -1
+    entry_idx = cand
+    if (len(df_day) - 1 - entry_idx) < int(cfg.min_bars_left_after_entry):
+        return None, -1
+
+    ep = float(trigger)
+    atr_entry = float(df_day.at[entry_idx, "ATR15"])
+    avwap_entry = (
+        float(df_day.at[entry_idx, "AVWAP"])
+        if "AVWAP" in df_day.columns and np.isfinite(df_day.at[entry_idx, "AVWAP"]) else np.nan
+    )
+    close_entry = float(df_day.at[entry_idx, "close"])
+    avwap_dist_atr = (
+        (avwap_entry - close_entry) / atr_entry
+        if (np.isfinite(atr_entry) and atr_entry > 0 and np.isfinite(avwap_entry)) else 0.0
+    )
+    cap = float(getattr(cfg, "signal_avwap_dist_atr_max", 0.0) or 0.0)
+    if cap > 0.0 and avwap_dist_atr > cap:
+        return None, -1
+
+    ema20 = float(R.get("EMA20", np.nan))
+    ema_gap_atr = (ema20 - R_close) / R_atr if (np.isfinite(ema20) and R_atr > 0) else 0.0
+    rsi_now = float(df_day.at[i, "RSI15"]) if "RSI15" in df_day.columns else 0.0
+    k_now = float(df_day.at[i, "STOCHK15"]) if "STOCHK15" in df_day.columns else 0.0
+    qscore = compute_quality_score_short(adx_now, avwap_dist_atr, ema_gap_atr, "OR")
+    atr_pct = (R_atr / R_close) if R_close > 0 else 0.0
+
+    exit_idx, exit_time, exit_price, outcome, partial_taken = simulate_exit_short(
+        df_day, entry_idx, ep, cfg
+    )
+    net_pnl, gross_pnl = compute_pnl_pct(ep, exit_price, "SHORT", cfg)
+
+    trade = Trade(
+        trade_date=day_str, ticker=ticker, side="SHORT",
+        setup="C_OR_BREAKDOWN", impulse_type="OR",
+        signal_time_ist=R_ts, entry_time_ist=df_day.at[entry_idx, "date"],
+        entry_price=ep, sl_price=ep * (1.0 + cfg.stop_pct),
+        target_price=ep * (1.0 - cfg.target_pct),
+        exit_time_ist=exit_time, exit_price=exit_price, outcome=outcome,
+        pnl_pct=net_pnl, pnl_pct_gross=gross_pnl,
+        signal_price=R_close, partial_exit_taken=bool(partial_taken),
+        adx_signal=adx_now if np.isfinite(adx_now) else 0.0,
+        rsi_signal=rsi_now if np.isfinite(rsi_now) else 0.0,
+        stochk_signal=k_now if np.isfinite(k_now) else 0.0,
+        avwap_dist_atr_signal=avwap_dist_atr,
+        ema20_gap_atr_signal=ema_gap_atr,
+        atr_pct_signal=atr_pct,
+        quality_score=qscore,
+        india_vix=float(cfg.vix_daily.get(day_str, 0.0)),
+    )
+    return trade, int(exit_idx)
+
+
+# ===========================================================================
+# D_EMA20_REJECTION (v17k) — Pullback to EMA20 from below + bearish reject
+# ===========================================================================
+def _scan_ema20_rejection_at(
+    df_day: pd.DataFrame,
+    i: int,
+    ticker: str,
+    day_str: str,
+    cfg: StrategyConfig,
+) -> tuple:
+    if i < 2 or (i + 2) >= len(df_day):
+        return None, -1
+    R = df_day.iloc[i]
+    R_ts = R["date"]
+    try:
+        R_hour = R_ts.tz_convert(IST).hour
+    except Exception:
+        R_hour = getattr(R_ts, "hour", 0)
+    if R_hour >= int(getattr(cfg, "ema20_rejection_max_hour_ist", 14)):
+        return None, -1
+
+    R_close = float(R["close"]); R_open = float(R["open"])
+    R_high = float(R["high"]); R_low = float(R["low"])
+    R_atr = float(R.get("ATR15", np.nan))
+    R_ema20 = float(R.get("EMA20", np.nan))
+
+    if not (
+        np.isfinite(R_atr) and R_atr > 0 and np.isfinite(R_ema20)
+        and (R_high - R_low) > 0 and R_close > 0
+    ):
+        return None, -1
+
+    # Bar high must touch EMA20 (from below, within proximity)
+    proximity = float(getattr(cfg, "ema20_rejection_atr_proximity", 0.30)) * R_atr
+    if not (R_high >= R_ema20 - proximity and R_high < R_ema20 + proximity * 2.0):
+        return None, -1
+    # Must close below EMA20 (rejection downward)
+    if R_close >= R_ema20:
+        return None, -1
+    # Bearish bar with strong body
+    if R_close >= R_open:
+        return None, -1
+    body_min = float(getattr(cfg, "ema20_rejection_body_atr_min", 0.40))
+    if abs(R_close - R_open) / R_atr < body_min:
+        return None, -1
+    # Close in lower half
+    lower_pct = float(getattr(cfg, "ema20_rejection_close_lower_pct", 0.50))
+    if R_close > R_low + lower_pct * (R_high - R_low):
+        return None, -1
+
+    rsi_now = float(df_day.at[i, "RSI15"]) if "RSI15" in df_day.columns else np.nan
+    rsi_prev = float(df_day.at[i - 1, "RSI15"]) if "RSI15" in df_day.columns else np.nan
+    rsi_max = float(getattr(cfg, "ema20_rejection_rsi_max", 50.0))
+    if not (np.isfinite(rsi_now) and np.isfinite(rsi_prev) and rsi_now <= rsi_max and rsi_now < rsi_prev):
+        return None, -1
+    adx_min = float(getattr(cfg, "ema20_rejection_adx_min", 22.0))
+    adx_now = float(df_day.at[i, "ADX15"]) if "ADX15" in df_day.columns else np.nan
+    if not (np.isfinite(adx_now) and adx_now >= adx_min):
+        return None, -1
+
+    if bool(getattr(cfg, "ema20_rejection_require_close_lt_ema50", True)):
+        ema50 = float(df_day.at[i, "EMA_50"]) if "EMA_50" in df_day.columns else np.nan
+        if not (np.isfinite(ema50) and R_close < ema50):
+            return None, -1
+
+    vol_now = float(R.get("volume", 0.0)) if np.isfinite(R.get("volume", np.nan)) else 0.0
+    vol_sma = float(R.get("VOL_SMA20", 0.0)) if np.isfinite(R.get("VOL_SMA20", np.nan)) else 0.0
+    vol_min = float(getattr(cfg, "ema20_rejection_volume_min_ratio", 1.20))
+    if vol_sma > 0 and vol_now < vol_min * vol_sma:
+        return None, -1
+
+    buf = entry_buffer(R_low, cfg)
+    trigger = R_low - buf
+    lag = int(getattr(cfg, "ema20_rejection_lag_bars", 1))
+    cand = i + max(lag, 1)
+    if cand >= len(df_day) or not in_signal_window(df_day.at[cand, "date"], cfg):
+        return None, -1
+    lo_e = float(df_day.at[cand, "low"])
+    cl_e = float(df_day.at[cand, "close"])
+    if not (np.isfinite(lo_e) and np.isfinite(cl_e) and lo_e < trigger
+            and (not cfg.require_entry_close_confirm or cl_e < trigger)):
+        return None, -1
+    entry_idx = cand
+    if (len(df_day) - 1 - entry_idx) < int(cfg.min_bars_left_after_entry):
+        return None, -1
+
+    ep = float(trigger)
+    atr_entry = float(df_day.at[entry_idx, "ATR15"])
+    avwap_entry = (
+        float(df_day.at[entry_idx, "AVWAP"])
+        if "AVWAP" in df_day.columns and np.isfinite(df_day.at[entry_idx, "AVWAP"]) else np.nan
+    )
+    close_entry = float(df_day.at[entry_idx, "close"])
+    avwap_dist_atr = (
+        (avwap_entry - close_entry) / atr_entry
+        if (np.isfinite(atr_entry) and atr_entry > 0 and np.isfinite(avwap_entry)) else 0.0
+    )
+    cap = float(getattr(cfg, "signal_avwap_dist_atr_max", 0.0) or 0.0)
+    if cap > 0.0 and avwap_dist_atr > cap:
+        return None, -1
+
+    ema_gap_atr = (R_ema20 - R_close) / R_atr
+    k_now = float(df_day.at[i, "STOCHK15"]) if "STOCHK15" in df_day.columns else 0.0
+    qscore = compute_quality_score_short(adx_now, avwap_dist_atr, ema_gap_atr, "EMA20")
+    atr_pct = (R_atr / R_close) if R_close > 0 else 0.0
+
+    exit_idx, exit_time, exit_price, outcome, partial_taken = simulate_exit_short(
+        df_day, entry_idx, ep, cfg
+    )
+    net_pnl, gross_pnl = compute_pnl_pct(ep, exit_price, "SHORT", cfg)
+
+    trade = Trade(
+        trade_date=day_str, ticker=ticker, side="SHORT",
+        setup="D_EMA20_REJECTION", impulse_type="EMA20",
+        signal_time_ist=R_ts, entry_time_ist=df_day.at[entry_idx, "date"],
+        entry_price=ep, sl_price=ep * (1.0 + cfg.stop_pct),
+        target_price=ep * (1.0 - cfg.target_pct),
+        exit_time_ist=exit_time, exit_price=exit_price, outcome=outcome,
+        pnl_pct=net_pnl, pnl_pct_gross=gross_pnl,
+        signal_price=R_close, partial_exit_taken=bool(partial_taken),
+        adx_signal=adx_now if np.isfinite(adx_now) else 0.0,
+        rsi_signal=rsi_now if np.isfinite(rsi_now) else 0.0,
+        stochk_signal=k_now if np.isfinite(k_now) else 0.0,
+        avwap_dist_atr_signal=avwap_dist_atr,
+        ema20_gap_atr_signal=ema_gap_atr,
+        atr_pct_signal=atr_pct,
+        quality_score=qscore,
+        india_vix=float(cfg.vix_daily.get(day_str, 0.0)),
+    )
+    return trade, int(exit_idx)
+
+
+# ===========================================================================
+# E_VWAP_BAND_FADE (v17k) — Upper Bollinger touch + bearish reject (SHORT).
+# Mean-reversion play: bar high pierces Upper_Band, closes back below with
+# bearish body; overbought RSI; entry on lag=1 break of bar low.
+# ===========================================================================
+def _scan_vwap_band_fade_short_at(
+    df_day: pd.DataFrame,
+    i: int,
+    ticker: str,
+    day_str: str,
+    cfg: StrategyConfig,
+) -> tuple:
+    if i < 2 or (i + 2) >= len(df_day):
+        return None, -1
+    R = df_day.iloc[i]
+    R_ts = R["date"]
+    try:
+        R_hour = R_ts.tz_convert(IST).hour
+    except Exception:
+        R_hour = getattr(R_ts, "hour", 0)
+    if R_hour >= int(getattr(cfg, "vwap_band_fade_max_hour_ist", 14)):
+        return None, -1
+
+    R_close = float(R["close"]); R_open = float(R["open"])
+    R_high = float(R["high"]); R_low = float(R["low"])
+    R_atr = float(R.get("ATR15", np.nan))
+    if not (np.isfinite(R_atr) and R_atr > 0 and (R_high - R_low) > 0 and R_close > 0):
+        return None, -1
+
+    # Upper_Band touch from below + reject back below
+    R_upper_band = float(R.get("Upper_Band", np.nan))
+    if not (np.isfinite(R_upper_band) and R_high >= R_upper_band and R_close < R_upper_band):
+        return None, -1
+    # Bearish bar with strong body
+    if R_close >= R_open:
+        return None, -1
+    body_min = float(getattr(cfg, "vwap_band_fade_body_atr_min", 0.40))
+    if abs(R_close - R_open) / R_atr < body_min:
+        return None, -1
+    lower_pct = float(getattr(cfg, "vwap_band_fade_close_lower_pct", 0.50))
+    if R_close > R_low + lower_pct * (R_high - R_low):
+        return None, -1
+
+    # Overbought RSI
+    rsi_now = float(df_day.at[i, "RSI15"]) if "RSI15" in df_day.columns else np.nan
+    rsi_min = float(getattr(cfg, "vwap_band_fade_rsi_min", 60.0))
+    if not (np.isfinite(rsi_now) and rsi_now >= rsi_min):
+        return None, -1
+
+    vol_now = float(R.get("volume", 0.0)) if np.isfinite(R.get("volume", np.nan)) else 0.0
+    vol_sma = float(R.get("VOL_SMA20", 0.0)) if np.isfinite(R.get("VOL_SMA20", np.nan)) else 0.0
+    vol_min = float(getattr(cfg, "vwap_band_fade_volume_min_ratio", 1.50))
+    if vol_sma > 0 and vol_now < vol_min * vol_sma:
+        return None, -1
+
+    buf = entry_buffer(R_low, cfg)
+    trigger = R_low - buf
+    lag = int(getattr(cfg, "vwap_band_fade_lag_bars", 1))
+    cand = i + max(lag, 1)
+    if cand >= len(df_day) or not in_signal_window(df_day.at[cand, "date"], cfg):
+        return None, -1
+    lo_e = float(df_day.at[cand, "low"])
+    cl_e = float(df_day.at[cand, "close"])
+    if not (np.isfinite(lo_e) and np.isfinite(cl_e) and lo_e < trigger
+            and (not cfg.require_entry_close_confirm or cl_e < trigger)):
+        return None, -1
+    entry_idx = cand
+    if (len(df_day) - 1 - entry_idx) < int(cfg.min_bars_left_after_entry):
+        return None, -1
+
+    ep = float(trigger)
+    atr_entry = float(df_day.at[entry_idx, "ATR15"])
+    avwap_entry = (
+        float(df_day.at[entry_idx, "AVWAP"])
+        if "AVWAP" in df_day.columns and np.isfinite(df_day.at[entry_idx, "AVWAP"]) else np.nan
+    )
+    close_entry = float(df_day.at[entry_idx, "close"])
+    avwap_dist_atr = (
+        (avwap_entry - close_entry) / atr_entry
+        if (np.isfinite(atr_entry) and atr_entry > 0 and np.isfinite(avwap_entry)) else 0.0
+    )
+    cap = float(getattr(cfg, "signal_avwap_dist_atr_max", 0.0) or 0.0)
+    if cap > 0.0 and avwap_dist_atr > cap:
+        return None, -1
+
+    R_ema20 = float(R.get("EMA20", np.nan))
+    ema_gap_atr = (R_ema20 - R_close) / R_atr if (np.isfinite(R_ema20) and R_atr > 0) else 0.0
+    adx_now = float(df_day.at[i, "ADX15"]) if "ADX15" in df_day.columns else 0.0
+    k_now = float(df_day.at[i, "STOCHK15"]) if "STOCHK15" in df_day.columns else 0.0
+    qscore = compute_quality_score_short(adx_now, avwap_dist_atr, ema_gap_atr, "VWAP_BAND")
+    atr_pct = (R_atr / R_close) if R_close > 0 else 0.0
+
+    exit_idx, exit_time, exit_price, outcome, partial_taken = simulate_exit_short(
+        df_day, entry_idx, ep, cfg
+    )
+    net_pnl, gross_pnl = compute_pnl_pct(ep, exit_price, "SHORT", cfg)
+
+    trade = Trade(
+        trade_date=day_str, ticker=ticker, side="SHORT",
+        setup="E_VWAP_BAND_FADE", impulse_type="VWAP_BAND",
+        signal_time_ist=R_ts, entry_time_ist=df_day.at[entry_idx, "date"],
+        entry_price=ep, sl_price=ep * (1.0 + cfg.stop_pct),
+        target_price=ep * (1.0 - cfg.target_pct),
+        exit_time_ist=exit_time, exit_price=exit_price, outcome=outcome,
+        pnl_pct=net_pnl, pnl_pct_gross=gross_pnl,
+        signal_price=R_close, partial_exit_taken=bool(partial_taken),
+        adx_signal=adx_now if np.isfinite(adx_now) else 0.0,
+        rsi_signal=rsi_now if np.isfinite(rsi_now) else 0.0,
+        stochk_signal=k_now if np.isfinite(k_now) else 0.0,
+        avwap_dist_atr_signal=avwap_dist_atr,
+        ema20_gap_atr_signal=ema_gap_atr,
+        atr_pct_signal=atr_pct,
+        quality_score=qscore,
+        india_vix=float(cfg.vix_daily.get(day_str, 0.0)),
+    )
+    return trade, int(exit_idx)
+
+
+# ===========================================================================
+# G_LOWER_LOW_BREAK (v17k) — Break below N-bar swing low (SHORT).
+# Mirror of LONG G_HIGHER_HIGH_BREAK.
+# ===========================================================================
+def _scan_lower_low_break_at(
+    df_day: pd.DataFrame,
+    i: int,
+    ticker: str,
+    day_str: str,
+    cfg: StrategyConfig,
+) -> tuple:
+    if i < 2 or (i + 2) >= len(df_day):
+        return None, -1
+    R = df_day.iloc[i]
+    R_ts = R["date"]
+    try:
+        R_hour = R_ts.tz_convert(IST).hour
+    except Exception:
+        R_hour = getattr(R_ts, "hour", 0)
+    if R_hour >= int(getattr(cfg, "g_ll_max_hour_ist", 14)):
+        return None, -1
+
+    R_close = float(R["close"]); R_open = float(R["open"])
+    R_high = float(R["high"]); R_low = float(R["low"])
+    R_atr = float(R.get("ATR15", np.nan))
+    if not (np.isfinite(R_atr) and R_atr > 0 and (R_high - R_low) > 0 and R_close > 0):
+        return None, -1
+
+    lookback = int(getattr(cfg, "g_ll_lookback_bars", 5))
+    if i < lookback:
+        return None, -1
+    prior_lows = df_day["low"].iloc[i - lookback:i]
+    swing_low = float(prior_lows.min())
+    if not np.isfinite(swing_low):
+        return None, -1
+    # Break below swing low + close below
+    if not (R_low < swing_low and R_close < swing_low):
+        return None, -1
+
+    # Bearish bar with body
+    if R_close >= R_open:
+        return None, -1
+    body_min = float(getattr(cfg, "g_ll_body_atr_min", 0.40))
+    if abs(R_close - R_open) / R_atr < body_min:
+        return None, -1
+    lower_pct = float(getattr(cfg, "g_ll_close_lower_pct", 0.40))
+    if R_close > R_low + lower_pct * (R_high - R_low):
+        return None, -1
+
+    adx_min = float(getattr(cfg, "g_ll_adx_min", 22.0))
+    adx_now = float(df_day.at[i, "ADX15"]) if "ADX15" in df_day.columns else np.nan
+    if not (np.isfinite(adx_now) and adx_now >= adx_min):
+        return None, -1
+    vol_now = float(R.get("volume", 0.0)) if np.isfinite(R.get("volume", np.nan)) else 0.0
+    vol_sma = float(R.get("VOL_SMA20", 0.0)) if np.isfinite(R.get("VOL_SMA20", np.nan)) else 0.0
+    vol_min = float(getattr(cfg, "g_ll_volume_min_ratio", 1.30))
+    if vol_sma > 0 and vol_now < vol_min * vol_sma:
+        return None, -1
+
+    buf = entry_buffer(R_low, cfg)
+    trigger = R_low - buf
+    lag = int(getattr(cfg, "g_ll_lag_bars", 1))
+    cand = i + max(lag, 1)
+    if cand >= len(df_day) or not in_signal_window(df_day.at[cand, "date"], cfg):
+        return None, -1
+    lo_e = float(df_day.at[cand, "low"])
+    cl_e = float(df_day.at[cand, "close"])
+    if not (np.isfinite(lo_e) and np.isfinite(cl_e) and lo_e < trigger
+            and (not cfg.require_entry_close_confirm or cl_e < trigger)):
+        return None, -1
+    entry_idx = cand
+    if (len(df_day) - 1 - entry_idx) < int(cfg.min_bars_left_after_entry):
+        return None, -1
+
+    ep = float(trigger)
+    atr_entry = float(df_day.at[entry_idx, "ATR15"])
+    avwap_entry = (
+        float(df_day.at[entry_idx, "AVWAP"])
+        if "AVWAP" in df_day.columns and np.isfinite(df_day.at[entry_idx, "AVWAP"]) else np.nan
+    )
+    close_entry = float(df_day.at[entry_idx, "close"])
+    avwap_dist_atr = (
+        (avwap_entry - close_entry) / atr_entry
+        if (np.isfinite(atr_entry) and atr_entry > 0 and np.isfinite(avwap_entry)) else 0.0
+    )
+    cap = float(getattr(cfg, "signal_avwap_dist_atr_max", 0.0) or 0.0)
+    if cap > 0.0 and avwap_dist_atr > cap:
+        return None, -1
+
+    R_ema20 = float(R.get("EMA20", np.nan))
+    ema_gap_atr = (R_ema20 - R_close) / R_atr if (np.isfinite(R_ema20) and R_atr > 0) else 0.0
+    rsi_now = float(df_day.at[i, "RSI15"]) if "RSI15" in df_day.columns else 0.0
+    k_now = float(df_day.at[i, "STOCHK15"]) if "STOCHK15" in df_day.columns else 0.0
+    qscore = compute_quality_score_short(adx_now, avwap_dist_atr, ema_gap_atr, "STRUCTURE")
+    atr_pct = (R_atr / R_close) if R_close > 0 else 0.0
+
+    exit_idx, exit_time, exit_price, outcome, partial_taken = simulate_exit_short(
+        df_day, entry_idx, ep, cfg
+    )
+    net_pnl, gross_pnl = compute_pnl_pct(ep, exit_price, "SHORT", cfg)
+
+    trade = Trade(
+        trade_date=day_str, ticker=ticker, side="SHORT",
+        setup="G_LOWER_LOW_BREAK", impulse_type="STRUCTURE",
+        signal_time_ist=R_ts, entry_time_ist=df_day.at[entry_idx, "date"],
+        entry_price=ep, sl_price=ep * (1.0 + cfg.stop_pct),
+        target_price=ep * (1.0 - cfg.target_pct),
+        exit_time_ist=exit_time, exit_price=exit_price, outcome=outcome,
+        pnl_pct=net_pnl, pnl_pct_gross=gross_pnl,
+        signal_price=R_close, partial_exit_taken=bool(partial_taken),
+        adx_signal=adx_now if np.isfinite(adx_now) else 0.0,
+        rsi_signal=rsi_now if np.isfinite(rsi_now) else 0.0,
+        stochk_signal=k_now if np.isfinite(k_now) else 0.0,
+        avwap_dist_atr_signal=avwap_dist_atr,
+        ema20_gap_atr_signal=ema_gap_atr,
+        atr_pct_signal=atr_pct,
+        quality_score=qscore,
+        india_vix=float(cfg.vix_daily.get(day_str, 0.0)),
+    )
+    return trade, int(exit_idx)
+
+
+# ===========================================================================
 # SCAN ONE DAY (SHORT)
 # ===========================================================================
 def scan_one_day(
@@ -386,6 +1148,22 @@ def scan_one_day(
     day_r_total = 0.0
     cooldown_until_idx = -1
 
+    # v17k — Compute opening range once per day for C_OR_BREAKDOWN.
+    _v17k_or_high = float("nan")
+    _v17k_or_low = float("nan")
+    _v17k_or_width_pct = 0.0
+    _v17k_or_end_idx = -1
+    if getattr(cfg, "enable_setup_c_or_breakdown", False):
+        _or_n = int(getattr(cfg, "or_breakdown_window_bars", 6))
+        if len(df_day) > _or_n:
+            _or_slice = df_day.iloc[:_or_n]
+            _v17k_or_high = float(_or_slice["high"].max())
+            _v17k_or_low = float(_or_slice["low"].min())
+            _ref_close = float(df_day.iloc[0]["close"])
+            if _ref_close > 0 and np.isfinite(_v17k_or_high) and np.isfinite(_v17k_or_low):
+                _v17k_or_width_pct = (_v17k_or_high - _v17k_or_low) / _ref_close
+            _v17k_or_end_idx = _or_n
+
     tail_guard = 1 if cfg.allow_incomplete_tail else 3
     while i < len(df_day) - tail_guard:
         if len(trades) >= cfg.max_trades_per_ticker_per_day:
@@ -406,6 +1184,99 @@ def scan_one_day(
         if not in_signal_window(ts1, cfg):
             i += 1
             continue
+
+        # v17k — C_OR_BREAKDOWN
+        if (
+            getattr(cfg, "enable_setup_c_or_breakdown", False)
+            and i >= _v17k_or_end_idx
+            and np.isfinite(_v17k_or_high)
+            and np.isfinite(_v17k_or_low)
+        ):
+            or_trade, or_exit_idx = _scan_or_breakdown_at(
+                df_day, i, ticker, day_str, cfg, _v17k_or_high, _v17k_or_low, _v17k_or_width_pct
+            )
+            if or_trade is not None:
+                trades.append(or_trade)
+                risk_pct_or = max(cfg.stop_pct * 100.0, 1e-9)
+                day_r_total += float(or_trade.pnl_pct) / risk_pct_or
+                if str(or_trade.outcome).upper() == "SL":
+                    day_sl_count += 1
+                    cooldown_until_idx = max(
+                        cooldown_until_idx, int(or_exit_idx) + int(cfg.sl_cooldown_bars)
+                    )
+                i = int(or_exit_idx) + 1
+                continue
+
+        # v17k — D_EMA20_REJECTION
+        if getattr(cfg, "enable_setup_d_ema20_rejection", False):
+            ema_trade, ema_exit_idx = _scan_ema20_rejection_at(
+                df_day, i, ticker, day_str, cfg
+            )
+            if ema_trade is not None:
+                trades.append(ema_trade)
+                risk_pct_ema = max(cfg.stop_pct * 100.0, 1e-9)
+                day_r_total += float(ema_trade.pnl_pct) / risk_pct_ema
+                if str(ema_trade.outcome).upper() == "SL":
+                    day_sl_count += 1
+                    cooldown_until_idx = max(
+                        cooldown_until_idx, int(ema_exit_idx) + int(cfg.sl_cooldown_bars)
+                    )
+                i = int(ema_exit_idx) + 1
+                continue
+
+        # v17k — E_VWAP_BAND_FADE: Upper BB touch + bearish reject
+        if getattr(cfg, "enable_setup_e_vwap_band_fade", False):
+            v_trade, v_exit_idx = _scan_vwap_band_fade_short_at(
+                df_day, i, ticker, day_str, cfg
+            )
+            if v_trade is not None:
+                trades.append(v_trade)
+                risk_pct_v = max(cfg.stop_pct * 100.0, 1e-9)
+                day_r_total += float(v_trade.pnl_pct) / risk_pct_v
+                if str(v_trade.outcome).upper() == "SL":
+                    day_sl_count += 1
+                    cooldown_until_idx = max(
+                        cooldown_until_idx, int(v_exit_idx) + int(cfg.sl_cooldown_bars)
+                    )
+                i = int(v_exit_idx) + 1
+                continue
+
+        # v17k — G_LOWER_LOW_BREAK: break N-bar swing low.
+        if getattr(cfg, "enable_setup_g_lower_low_break", False):
+            g_trade, g_exit_idx = _scan_lower_low_break_at(
+                df_day, i, ticker, day_str, cfg
+            )
+            if g_trade is not None:
+                trades.append(g_trade)
+                risk_pct_g = max(cfg.stop_pct * 100.0, 1e-9)
+                day_r_total += float(g_trade.pnl_pct) / risk_pct_g
+                if str(g_trade.outcome).upper() == "SL":
+                    day_sl_count += 1
+                    cooldown_until_idx = max(
+                        cooldown_until_idx, int(g_exit_idx) + int(cfg.sl_cooldown_bars)
+                    )
+                i = int(g_exit_idx) + 1
+                continue
+
+        # v17j — D_AVWAP_LOSE_REVERSAL: independent of impulse, runs first.
+        # If a reversal entry fires, advance past the exit and skip the
+        # impulse path for this iteration.
+        if getattr(cfg, "enable_setup_d_avwap_lose_reversal", False):
+            rev_trade, rev_exit_idx = _scan_reversal_at_short(
+                df_day, i, ticker, day_str, cfg
+            )
+            if rev_trade is not None:
+                trades.append(rev_trade)
+                risk_pct_rev = max(cfg.stop_pct * 100.0, 1e-9)
+                day_r_total += float(rev_trade.pnl_pct) / risk_pct_rev
+                if str(rev_trade.outcome).upper() == "SL":
+                    day_sl_count += 1
+                    cooldown_until_idx = max(
+                        cooldown_until_idx,
+                        int(rev_exit_idx) + int(cfg.sl_cooldown_bars),
+                    )
+                i = int(rev_exit_idx) + 1
+                continue
 
         impulse = classify_red_impulse(c1, cfg)
         if impulse == "":

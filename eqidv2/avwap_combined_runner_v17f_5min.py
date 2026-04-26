@@ -169,6 +169,22 @@ def _v17f_scan_short_prepared(ticker, df_prepared, short_cfg):
 _base.scan_short_prepared = _v17f_scan_short_prepared
 
 
+# Apply v17f short-cfg adjustments at profile-build time. Without this, only
+# callers routed through scan_short_prepared see the adjusted cfg; SEE's
+# evaluate_slot_candidates path uses the raw parity-profile cfg (adx_min=30,
+# mod_impulse_min_atr=0.30) and under-emits shorts vs v17f's 25 / 0.25.
+_orig_apply_live_parity_profile = _base.apply_live_parity_profile
+
+
+def _v17f_apply_live_parity_profile(short_cfg, long_cfg):
+    short_cfg, long_cfg = _orig_apply_live_parity_profile(short_cfg, long_cfg)
+    _v17f_adjust_short_cfg(short_cfg)
+    return short_cfg, long_cfg
+
+
+_base.apply_live_parity_profile = _v17f_apply_live_parity_profile
+
+
 # ---------------------------------------------------------------------------
 # PATCH 3: add only the new v17f filters on top of the existing v17d bundle.
 # ---------------------------------------------------------------------------

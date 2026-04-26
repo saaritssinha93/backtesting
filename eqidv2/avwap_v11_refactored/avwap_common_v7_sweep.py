@@ -174,6 +174,65 @@ class StrategyConfig:
     enable_setup_b_huge_c1_close_reclaim_break: bool = False
     lag_bars_long_b_huge_c1_close_reclaim_break: int = 2
 
+    # Optional LONG reversal setup (v17g): AVWAP reclaim from below.
+    # Regime-flexible — does not require a green impulse on the signal bar.
+    # Triggers when prior bar(s) dipped below AVWAP and the current bar
+    # reclaims with bullish structure (body, momentum, volume).
+    enable_setup_b_avwap_reclaim_reversal: bool = False
+    lag_bars_long_b_avwap_reclaim_reversal: int = 1
+    reversal_volume_min_ratio: float = 1.20
+    reversal_max_hour_ist: int = 12
+    reversal_body_atr_min: float = 0.50
+    reversal_close_upper_pct: float = 0.40
+    reversal_rsi_min: float = 50.0
+    reversal_adx_min: float = 28.0
+    reversal_require_both_prior_bars: bool = True
+    reversal_require_close_gt_ema20: bool = True
+    # v17h Patch B — additional reversal gates (0 = disabled).
+    reversal_volume_max_ratio: float = 0.0
+    reversal_avwap_dist_atr_min: float = 0.0
+
+    # v17k — LONG C_OR_BREAKOUT (opening-range breakout)
+    enable_setup_c_or_breakout: bool = False
+    or_breakout_window_bars: int = 6        # 6 x 5min = first 30 min as OR
+    or_breakout_max_hour_ist: int = 11      # only fire before 11:00 IST
+    or_breakout_min_width_pct: float = 0.0050   # OR width must be >= 0.50%
+    or_breakout_max_width_pct: float = 0.0250   # and <= 2.50% (skip exhaustion gaps)
+    or_breakout_volume_min_ratio: float = 1.50
+    or_breakout_adx_min: float = 22.0
+    or_breakout_lag_bars: int = 1
+
+    # v17k — LONG D_EMA20_BOUNCE (pullback to EMA20, bullish reject)
+    enable_setup_d_ema20_bounce: bool = False
+    ema20_bounce_max_hour_ist: int = 14
+    ema20_bounce_atr_proximity: float = 0.30   # bar low within 0.30 ATR of EMA20
+    ema20_bounce_body_atr_min: float = 0.40
+    ema20_bounce_close_upper_pct: float = 0.50
+    ema20_bounce_rsi_min: float = 50.0
+    ema20_bounce_adx_min: float = 22.0
+    ema20_bounce_volume_min_ratio: float = 1.20
+    ema20_bounce_lag_bars: int = 1
+    ema20_bounce_require_close_gt_ema50: bool = True
+
+    # v17k — LONG E_VWAP_BAND_FADE (Lower BB touch + bullish reject)
+    enable_setup_e_vwap_band_fade: bool = False
+    vwap_band_fade_max_hour_ist: int = 14
+    vwap_band_fade_body_atr_min: float = 0.40
+    vwap_band_fade_close_upper_pct: float = 0.50  # close in upper half
+    vwap_band_fade_rsi_max: float = 40.0          # oversold zone
+    vwap_band_fade_volume_min_ratio: float = 1.50
+    vwap_band_fade_lag_bars: int = 1
+
+    # v17k — LONG G_HIGHER_HIGH_BREAK (swing-structure break)
+    enable_setup_g_higher_high_break: bool = False
+    g_hh_max_hour_ist: int = 14
+    g_hh_lookback_bars: int = 5            # use Recent_High over last N bars
+    g_hh_body_atr_min: float = 0.40
+    g_hh_close_upper_pct: float = 0.40
+    g_hh_adx_min: float = 22.0
+    g_hh_volume_min_ratio: float = 1.30
+    g_hh_lag_bars: int = 1
+
     # Optional VIX regime gate. If > 0, skip entries on days where India VIX exceeds this.
     # Keep 0.0 to disable.
     max_vix_for_entries: float = 0.0

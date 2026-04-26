@@ -124,7 +124,7 @@ DEFAULT_POSITION_SIZE_RS = 50_000       # Rs. margin per trade
 INTRADAY_LEVERAGE = 5.0                 # MIS leverage on Zerodha
 
 SIGNAL_CSV_COLUMNS = [
-    "signal_id", "signal_datetime", "signal_price", "received_time", "detected_time_ist", "logtime_ist", "ticker", "side",
+    "signal_id", "signal_datetime", "signal_bar_close_ist", "signal_price", "received_time", "detected_time_ist", "logtime_ist", "ticker", "side",
     "setup", "impulse_type", "entry_price", "stop_price", "target_price",
     "quality_score", "atr_pct", "rsi", "adx", "quantity",
     "signal_entry_datetime_ist", "signal_bar_time_ist",
@@ -162,7 +162,7 @@ _KITE_RETRY_AFTER_TS = 0.0
 # SCHEDULER CONFIG
 # =============================================================================
 START_TIME = dtime(9, 15)
-END_TIME = dtime(14, 40)
+END_TIME = dtime(15, 20)
 HARD_STOP_TIME = dtime(15, 40)
 
 # Timing: data fetcher (eqidv2_eod_15min_data_stocks) takes ~1 minute after each

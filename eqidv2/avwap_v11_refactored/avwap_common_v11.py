@@ -158,6 +158,70 @@ class StrategyConfig:
     lag_bars_long_a_mod_break_c1_high: int = 1
     lag_bars_long_a_pullback_c2_break_c2_high: int = 2
     lag_bars_long_b_huge_pullback_hold_break: int = -1
+
+    # v17j — SHORT AVWAP-lose reversal setup (mirror of LONG B_AVWAP_RECLAIM_REVERSAL).
+    # Price was above AVWAP, breaks below with decisive red bar + rising down-momentum.
+    # Gated off by default; v17j runner turns it on.
+    enable_setup_d_avwap_lose_reversal: bool = False
+    lag_bars_short_d_avwap_lose_reversal: int = 1
+    short_reversal_volume_min_ratio: float = 1.20
+    short_reversal_volume_max_ratio: float = 0.0  # 0 = disabled; e.g. 3.0 drops chase bars
+    short_reversal_max_hour_ist: int = 13
+    short_reversal_body_atr_min: float = 0.50
+    short_reversal_close_lower_pct: float = 0.40  # close in lower N% of bar range
+    short_reversal_rsi_max: float = 50.0
+    short_reversal_adx_min: float = 28.0
+    short_reversal_require_both_prior_bars: bool = True
+    short_reversal_require_close_lt_ema20: bool = True
+    short_reversal_avwap_dist_atr_min: float = 0.0  # 0 = disabled; e.g. 1.0 requires dist >= 1.0 ATR below AVWAP at entry
+
+    # v17k — SHORT mirror setups + new C/D family
+    # SHORT A_MOD_CLOSE_CONTINUATION_BREAK (mirror of LONG)
+    enable_setup_a_close_continuation_break_short: bool = False
+    lag_bars_short_a_close_continuation_break: int = 1
+    # SHORT B_HUGE_C1_RECLAIM_BREAK (mirror of LONG B_HUGE_C1_CLOSE_RECLAIM_BREAK)
+    enable_setup_b_huge_c1_close_reclaim_break_short: bool = False
+    lag_bars_short_b_huge_c1_close_reclaim_break: int = 2
+    # SHORT C_OR_BREAKDOWN
+    enable_setup_c_or_breakdown: bool = False
+    or_breakdown_window_bars: int = 6
+    or_breakdown_max_hour_ist: int = 11
+    or_breakdown_min_width_pct: float = 0.0050
+    or_breakdown_max_width_pct: float = 0.0250
+    or_breakdown_volume_min_ratio: float = 1.50
+    or_breakdown_adx_min: float = 22.0
+    or_breakdown_lag_bars: int = 1
+    # SHORT D_EMA20_REJECTION (mirror of LONG D_EMA20_BOUNCE)
+    enable_setup_d_ema20_rejection: bool = False
+    ema20_rejection_max_hour_ist: int = 14
+    ema20_rejection_atr_proximity: float = 0.30
+    ema20_rejection_body_atr_min: float = 0.40
+    ema20_rejection_close_lower_pct: float = 0.50
+    ema20_rejection_rsi_max: float = 50.0
+    ema20_rejection_adx_min: float = 22.0
+    ema20_rejection_volume_min_ratio: float = 1.20
+    ema20_rejection_lag_bars: int = 1
+    ema20_rejection_require_close_lt_ema50: bool = True
+
+    # v17k — SHORT E_VWAP_BAND_FADE (Upper BB touch + bearish reject)
+    enable_setup_e_vwap_band_fade: bool = False
+    vwap_band_fade_max_hour_ist: int = 14
+    vwap_band_fade_body_atr_min: float = 0.40
+    vwap_band_fade_close_lower_pct: float = 0.50
+    vwap_band_fade_rsi_min: float = 60.0   # overbought zone
+    vwap_band_fade_volume_min_ratio: float = 1.50
+    vwap_band_fade_lag_bars: int = 1
+
+    # v17k — SHORT G_LOWER_LOW_BREAK (swing-structure break)
+    enable_setup_g_lower_low_break: bool = False
+    g_ll_max_hour_ist: int = 14
+    g_ll_lookback_bars: int = 5
+    g_ll_body_atr_min: float = 0.40
+    g_ll_close_lower_pct: float = 0.40
+    g_ll_adx_min: float = 22.0
+    g_ll_volume_min_ratio: float = 1.30
+    g_ll_lag_bars: int = 1
+
     # Live-only option: allow evaluating setups even with incomplete tail bars.
     # Keep False by default to preserve existing backtest behavior.
     allow_incomplete_tail: bool = False

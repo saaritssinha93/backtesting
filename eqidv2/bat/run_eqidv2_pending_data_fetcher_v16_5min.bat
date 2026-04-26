@@ -12,10 +12,44 @@ set "EQIDV2_CACHE_5MIN_DIR=C:\TradingData\eqidv2\stocks_cache_5min_eq_live"
 set "EQIDV2_SLOT_READY_PENDING_DIR=C:\TradingData\eqidv2\slot_ready_5m_pending"
 set "EQIDV2_PENDING_FETCH_INTERVAL_SEC=2"
 set "EQIDV2_PENDING_FETCH_ALIGN_TO_5MIN=1"
-set "EQIDV2_PENDING_FETCH_SLOT_OFFSET_SEC=2"
+REM Headroom fix: PF wakes at slot+1s instead of slot+2s. Buys 1s on every
+REM cycle for the Kite fetch -> verify -> marker write sequence without
+REM eating into DE's late-lag budget. DE still wakes at slot+4s.
+set "EQIDV2_PENDING_FETCH_SLOT_OFFSET_SEC=1"
+REM Aggressive-poll mode: kill the 55s WAIT_PENDING_POOL idle band and poll
+REM the pending pool every 2s from slot+1s onward. When SEE writes a signal,
+REM PF picks it up within 2s and fetches immediately. Default behaviour
+REM (RECHECK=55s, POLL_INTERVAL=5s) was tuned for low-churn operation; this
+REM override prioritises responsiveness. Does NOT compress Kite historical_data
+REM publish delay (the dominant bar-close -> fetchable latency, ~20-50s),
+REM which is the real bottleneck in the restart-resume path.
+set "EQIDV2_PENDING_FETCH_RECHECK_AFTER_SEC=1"
+set "EQIDV2_PENDING_POOL_POLL_INTERVAL_SEC=1"
+REM Entry-bar-verify mode (2026-04-24): per strategy_map_v16_5min.md.
+REM - DISABLE_LAG_SHIFT=1 makes trigger_slot = source_slot = entry_ist for all lags
+REM - PF_VERIFY_TRIGGER_BAR=0 makes verify_slot = trigger_slot (no -5min offset)
+REM Combined: PF waits for the ENTRY bar itself to appear in parquet before
+REM writing marker. Lag=1 and lag=2 become symmetric. Marker filename is the
+REM entry slot. Rollback: unset these two vars (or set to 0).
+set "EQIDV16_5MIN_DISABLE_LAG_SHIFT=1"
+set "EQIDV16_5MIN_PF_VERIFY_TRIGGER_BAR=0"
 set "EQIDV2_PENDING_FETCH_MAX_WORKERS=64"
 set "EQIDV2_PENDING_FETCH_MAX_WORKERS_PER_APP=8"
-set "EQIDV2_5M_KITE_TIMEOUT_SEC=12"
+REM Cross-app retry ladder (2026-04-23): up to 5 attempts on 5 different Kite
+REM apps via partition_shift rotation. Delays 1,2,4,8 = worst-case +15s added
+REM to PF latency, still inside the LATE_ENTRY band per strategy_v2 §B1.
+set "EQIDV2_PENDING_FETCH_RETRY_DELAYS_SEC=1,2,4,8"
+REM Partial retry: narrow each attempt to still-failing tickers and accumulate
+REM successes across attempts. Set to 0 to fall back to all-or-nothing retry.
+set "EQIDV2_PENDING_FETCH_RETRY_PARTIAL=1"
+REM PF tail-latency cap: was 12s -> 6s -> 3s. Tier-1 fix (2026-04-23).
+REM PF only fetches a tiny pending set (typically 1-5 tickers per slot), so the
+REM per-call Kite HTTP timeout dominates tail latency. 3s is the historical
+REM_data p99 budget under normal conditions; anything slower is almost always
+REM a genuine Kite stall (network blip, partial 502, gateway pause) where
+REM failing fast and surfacing to the retry loop beats waiting. PF-scoped:
+REM LF (separate process, separate bat) keeps its own value.
+set "EQIDV2_5M_KITE_TIMEOUT_SEC=3"
 set "EQIDV2_5M_ENFORCE_SESSION_COMPLETENESS=1"
 set "EQIDV2_5M_LIVE_SLIM_MODE=1"
 set "EQIDV2_5M_LIVE_SLIM_CALENDAR_DAYS=10"
@@ -44,6 +78,21 @@ if not exist "%RUNTIME_STATUS_DIR%" mkdir "%RUNTIME_STATUS_DIR%"
 
 cd /d "%BASE_DIR%"
 
+REM P0 fix (2026-04-23): write the runtime config claim BEFORE handing off to
+REM the supervisor. The Python PF verifies its os.environ against this file at
+REM startup; mismatches log [STARTUP.CONFIG] DRIFT (soft mode by default;
+REM EQIDV2_CONFIG_CHECK_STRICT=1 makes drift a boot exit). Whitelist must
+REM include EQIDV2_DATA_5M_DIR — without it, PF can silently read/write the
+REM EOD `_5min_eq` parquets instead of intraday `_5min_eq_live`.
+"%PYTHON_EXE%" -m eqidv2_config_attestation write ^
+  --process eqidv2_pending_data_fetcher_v16_5min ^
+  --from-env EQIDV2_DATA_5M_DIR ^
+  --from-env EQIDV2_RUNTIME_ROOT ^
+  --from-env EQIDV2_LIVE_SIGNALS_DIR >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+  echo [WARN] runtime config claim write failed; continuing in soft mode>> "%LOG_FILE%"
+)
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
   -Name "%SCRIPT_NAME%" ^
   -FilePath "%PYTHON_EXE%" ^
@@ -71,7 +120,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
   -CooldownWindowSec 300 ^
   -CooldownMaxRestarts 6 ^
   -CooldownDelaySec 120 ^
-  -CutoffHHmm 1530 ^
+  -CutoffHHmm 1520 ^
   -SkipRunAfterCutoff ^
   -StopRestartsAfterCutoff
 

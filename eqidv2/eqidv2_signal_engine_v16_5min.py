@@ -119,7 +119,7 @@ from eqidv2_runtime_paths import (
     RUNTIME_STATUS_DIR,
     runtime_dir,
 )
-from eqidv2_pool_lock import pool_lock, bump_pool_rev
+from eqidv2_pool_lock import pool_lock, bump_pool_rev, lifecycle_lock
 from live_v16_5min_slot_snapshot import (
     build_slot_snapshots,
     clear_rolling_cache as clear_slot_snapshot_cache,
@@ -145,7 +145,7 @@ START_TIME          = dtime(9, 15)
 # already-past expiry under `_compute_expires_at`, so stop scanning at 13:30.
 # Detection Engine and Trade Executor remain live past this time to confirm
 # and execute signals from the last afternoon slot (13:25).
-END_TIME            = dtime(13, 30)
+END_TIME            = dtime(15, 20)
 HARD_STOP_TIME      = dtime(15, 30)
 TAIL_ROWS           = int(os.getenv("EQIDV16_5MIN_TAIL_ROWS", "260"))
 SLOT_START_OFFSET_SECONDS   = int(os.getenv("EQIDV16_5MIN_SLOT_START_OFFSET_SECONDS", "45"))
@@ -223,7 +223,7 @@ PENDING_CSV_COLUMNS = [
     "signal_bar_time", "added_at",
     "signal_price", "entry_price", "stop_price", "target_price",
     "quality_score", "avwap_dist_atr", "rsi_signal", "adx",
-    "rs_pct", "setup", "status", "expires_at",
+    "rs_pct", "setup", "secondary_setups", "status", "expires_at",
     "filter_reason", "detection_time", "detection_price",
     # strategy_v2 §A2/§A3/§C1 — trigger-bar provenance + drift-detection hash
     "trigger_bar_iso", "trigger_open", "trigger_high", "trigger_low",
@@ -1029,11 +1029,13 @@ def _append_pool_lifecycle_event(date_str: str, event: Dict[str, Any]) -> None:
 
     Append-only and best-effort: failures must not block the SE write path.
     """
+    # Mo2 (2026-04-22) — see eqidv2_pool_lock.lifecycle_lock docstring.
     try:
         path = _pool_lifecycle_path(date_str)
         line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        with lifecycle_lock(date_str):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
     except Exception as exc:
         print(f"[WARN] pool_lifecycle append failed: {exc}", flush=True)
 
@@ -1060,6 +1062,93 @@ SETUP_LAG_BARS: Dict[str, int] = {
     "B_HUGE_FAILED_BOUNCE":           int(getattr(v16_runner, "SHORT_LAG_BARS_B_HUGE_FAILED_BOUNCE", -1)),
 }
 _BAR_MINUTES = int(SLOT_MINUTES)
+
+# Same-bar multi-setup collapse (strategy_v2 §F6).
+# When SEE/SE re-evaluates a single C1 trigger bar, multiple setups can fire
+# simultaneously (e.g. MOD_C1_HI lag=1 + MOD_CONT lag=2 + PB_C2_HI lag=2).
+# Pre-fix, each emitted a distinct pending row because `setup` is part of the
+# signal_id key, leading to 2-3 orders per ticker on the same bar. We now
+# collapse to ONE row per (ticker, side, signal_bar) using this priority
+# ladder; lower number = higher priority. The remaining setups are stashed on
+# the winner's `secondary_setups` field for audit. Set
+# EQIDV2_DISABLE_SAMEBAR_COLLAPSE=1 to revert to legacy behaviour.
+SETUP_PRIORITY: Dict[str, int] = {
+    # Tier 1 — fastest, cleanest break (lag=1 from C1 close)
+    "A_MOD_BREAK_C1_HIGH":            10,
+    "A_MOD_BREAK_C1_LOW":             10,
+    # Tier 2 — strong dynamic-lag reversal
+    "B_HUGE_FAILED_BOUNCE":           20,
+    # Tier 3 — confirmed continuation (lag=2 from C1 close)
+    "A_MOD_CLOSE_CONTINUATION_BREAK": 30,
+    # Tier 4 — reclaim/reversal (lag=2 from C1 close)
+    "B_HUGE_C1_CLOSE_RECLAIM_BREAK":  40,
+    # Tier 5 — pullback fallback (lag=2 from C2 close)
+    "A_PULLBACK_C2_BREAK_C2_HIGH":    50,
+    "A_PULLBACK_C2_BREAK_C2_LOW":     50,
+    # Dead/disabled — never wins, but ranked for completeness
+    "B_HUGE_PULLBACK_HOLD_BREAK":     900,
+}
+_SAMEBAR_COLLAPSE_DISABLED = bool(int(os.environ.get("EQIDV2_DISABLE_SAMEBAR_COLLAPSE", "0") or "0"))
+
+
+def _collapse_same_bar_candidates(
+    all_rows: List[Tuple[dict, str]],
+) -> List[Tuple[dict, str, List[str]]]:
+    """Group incoming scan rows by (ticker, side, signal_bar) and keep the
+    highest-priority setup per group. Returns a list of
+    (row, side, secondary_setups_list) tuples ready for the pending-pool
+    write loop. Deterministic: ties broken by setup name (lex sort) so the
+    same input set always produces the same winner across runs."""
+    if _SAMEBAR_COLLAPSE_DISABLED:
+        return [(r, s, []) for (r, s) in all_rows]
+
+    groups: Dict[Tuple[str, str, str], List[Tuple[dict, str]]] = {}
+    for row, side in all_rows:
+        ticker = str(row.get("ticker", "")).upper().strip()
+        if not ticker:
+            continue
+        sig_t_raw = row.get(
+            "signal_time_ist",
+            row.get("signal_bar_time_ist", row.get("bar_time_ist", row.get("signal_datetime", ""))),
+        )
+        sig_t_ts = base_v15._parse_ist_timestamp(str(sig_t_raw))
+        if sig_t_ts is None:
+            continue
+        key = (ticker, side, str(sig_t_ts))
+        groups.setdefault(key, []).append((row, side))
+
+    collapsed: List[Tuple[dict, str, List[str]]] = []
+    collapsed_count = 0
+    saved_rows = 0
+    for (ticker, side, sig_t_str), rows_in_group in groups.items():
+        if len(rows_in_group) == 1:
+            collapsed.append((rows_in_group[0][0], rows_in_group[0][1], []))
+            continue
+        sorted_rows = sorted(
+            rows_in_group,
+            key=lambda rs: (
+                SETUP_PRIORITY.get(str(rs[0].get("setup", "")), 999),
+                str(rs[0].get("setup", "")),
+            ),
+        )
+        winner_row, winner_side = sorted_rows[0]
+        losers = [str(r.get("setup", "")) for r, _s in sorted_rows[1:]]
+        collapsed.append((winner_row, winner_side, losers))
+        collapsed_count += 1
+        saved_rows += len(losers)
+        print(
+            f"[COLLAPSE] {ticker} {side} signal_bar={sig_t_str} "
+            f"winner={winner_row.get('setup', '')} dropped={losers}",
+            flush=True,
+        )
+
+    if collapsed_count:
+        print(
+            f"[COLLAPSE] same-bar groups collapsed={collapsed_count} "
+            f"rows_saved={saved_rows} (priority ladder, strategy_v2 §F6)",
+            flush=True,
+        )
+    return collapsed
 
 
 def _expected_entry_bar_open(trigger_bar_iso: str, setup: str) -> Optional[datetime]:
@@ -1168,18 +1257,32 @@ def _write_pending_pool(
     with pool_lock(date_str):
         state = _load_pending_state(date_str)
         existing_ids: set = {s["signal_id"] for s in state.get("signals", [])}
+        # I-7 fix — load the persisted set of signal_ids previously dropped by
+        # the F3 guard. Same (ticker, side, entry_time, setup) tuple repeats
+        # across slots when the raw scanner re-detects a now-closed-bar
+        # pattern; without this, every slot would re-log a SKIP for the same
+        # dead signal until EOD.
+        dropped_set: set = set(state.get("dropped_past_slot_ids", []))
 
         added = 0
         deduped = 0
         dropped_past_slot = 0
+        suppressed_past_slot = 0
         now_ist = _now_ist()
         now_str = now_ist.strftime("%Y-%m-%d %H:%M:%S%z")
 
         all_rows = [(r, "SHORT") for r in short_rows] + [(r, "LONG") for r in long_rows]
 
+        # strategy_v2 §F6 — collapse same-bar multi-setup candidates to one
+        # winner per (ticker, side, signal_bar) using SETUP_PRIORITY ladder.
+        # Without this, a single trigger bar can emit 2-3 pending rows (e.g.
+        # MOD_C1_HI + MOD_CONT + PB_C2_HI on a clean breakout) and the
+        # executor would dispatch them as independent orders.
+        collapsed_rows = _collapse_same_bar_candidates(all_rows)
+
         _reset_trigger_bar_cache()
 
-        for row, side in all_rows:
+        for row, side, secondary_setups in collapsed_rows:
             ticker = str(row.get("ticker", "")).upper().strip()
             if not ticker:
                 continue
@@ -1195,6 +1298,19 @@ def _write_pending_pool(
                 continue
 
             setup = str(row.get("setup", ""))
+            entry_t  = str(entry_time_ts)
+            # strategy_v2 §A2 — deterministic key (ticker, side, entry_time, setup).
+            # entry_time is mechanically derived from trigger_bar + setup-lag, so
+            # this is functionally equivalent to hashing the trigger bar directly.
+            signal_id = base_v15._generate_signal_id(ticker, side, entry_t, setup)
+
+            # I-7 fix — short-circuit before F3 guard re-runs and re-logs.
+            if signal_id in dropped_set:
+                suppressed_past_slot += 1
+                continue
+            if signal_id in existing_ids:
+                deduped += 1
+                continue
 
             # strategy_v2 §C2 — deterministic F3 guard.
             #
@@ -1226,6 +1342,7 @@ def _write_pending_pool(
                 # and is independent of scanner column semantics.
                 if expected_entry_close < now_ist:
                     dropped_past_slot += 1
+                    dropped_set.add(signal_id)
                     print(
                         f"[SKIP] SE_PAST_SLOT ticker={ticker} side={side} setup={setup} "
                         f"entry_bar={expected_entry_open.isoformat()}..{expected_entry_close.isoformat()} "
@@ -1254,22 +1371,13 @@ def _write_pending_pool(
                 # column-based cutoff.
                 if scanner_entry_dt is not None and scanner_entry_dt < now_ist:
                     dropped_past_slot += 1
+                    dropped_set.add(signal_id)
                     print(
                         f"[SKIP] SE_PAST_SLOT_FALLBACK ticker={ticker} side={side} setup={setup} "
                         f"entry={scanner_entry_dt.isoformat()} now={now_ist.isoformat()}",
                         flush=True,
                     )
                     continue
-
-            entry_t  = str(entry_time_ts)
-            # strategy_v2 §A2 — deterministic key (ticker, side, entry_time, setup).
-            # entry_time is mechanically derived from trigger_bar + setup-lag, so
-            # this is functionally equivalent to hashing the trigger bar directly.
-            signal_id = base_v15._generate_signal_id(ticker, side, entry_t, setup)
-
-            if signal_id in existing_ids:
-                deduped += 1
-                continue
 
             entry_price  = _safe_float(row.get("entry_price", 0.0))
             signal_price = _safe_float(row.get("signal_price", entry_price))
@@ -1284,11 +1392,26 @@ def _write_pending_pool(
             trigger_iso = str(signal_time_ts) if signal_time_ts is not None else ""
             trigger_fields = _lookup_trigger_bar_ohlc(ticker, signal_time_ts)
 
+            # strategy_v2 §SEE-A10/A11 fix (lag-invariant, applies to lag 1/2/dynamic):
+            # stamp source_slot AND bucket expires_at by the entry-bar OPEN, not the
+            # producer's fire-time slot_ist. Under SE, slot_ist already == entry-bar
+            # open (§C2) so this is a no-op. Under SEE, slot_ist is the TRIGGER slot;
+            # entry_time_ts carries the true entry-bar open via early_emit's
+            # entry_iso = trigger + lag*5min. Anchoring here keeps PF's floor(),
+            # DE's (lag-1)*5min shift, and the morning/midday expiry buckets all
+            # consistent across lags.
+            _entry_pd = pd.Timestamp(entry_time_ts)
+            if _entry_pd.tzinfo is None:
+                _entry_pd = _entry_pd.tz_localize(IST)
+            else:
+                _entry_pd = _entry_pd.tz_convert(IST)
+            entry_slot_anchor = _entry_pd.floor("5min").to_pydatetime()
+
             pending_entry: Dict[str, Any] = {
                 "signal_id":       signal_id,
                 "ticker":          ticker,
                 "side":            side,
-                "source_slot":     slot_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+                "source_slot":     entry_slot_anchor.strftime("%Y-%m-%d %H:%M:%S%z"),
                 "signal_datetime": str(signal_time_ts or entry_time_ts),
                 "signal_entry_datetime_ist": entry_t,
                 "signal_bar_time": str(signal_time_ts or entry_time_ts),
@@ -1308,8 +1431,11 @@ def _write_pending_pool(
                 "entry_bar_vol_ratio": round(_safe_float(row.get("entry_bar_vol_ratio", 0.0)), 4),
                 "quantity":        qty,
                 "setup":           setup,
+                # strategy_v2 §F6 — comma-separated list of co-firing setups
+                # that lost the priority ladder; empty when no collapse occurred.
+                "secondary_setups": ",".join(secondary_setups) if secondary_setups else "",
                 "impulse_type":    str(row.get("impulse_type", "")),
-                "expires_at":      _compute_expires_at(slot_ist, side),
+                "expires_at":      _compute_expires_at(entry_slot_anchor, side),
                 "status":          "pending",
                 "detection_time":  None,
                 "detection_price": None,
@@ -1333,6 +1459,7 @@ def _write_pending_pool(
                 "ticker":    ticker,
                 "side":      side,
                 "setup":     setup,
+                "secondary_setups":          pending_entry["secondary_setups"],
                 "source_slot":               pending_entry["source_slot"],
                 "signal_entry_datetime_ist": entry_t,
                 "trigger_bar_iso":           trigger_iso,
@@ -1345,6 +1472,15 @@ def _write_pending_pool(
                 f"[INFO] SE dropped {dropped_past_slot} row(s) with entry_slot < now (F3 guard).",
                 flush=True,
             )
+        if suppressed_past_slot:
+            print(
+                f"[INFO] SE F3 suppressed {suppressed_past_slot} row(s) previously dropped (no re-log).",
+                flush=True,
+            )
+
+        # I-7 fix — persist dropped set so it survives slot transitions and
+        # process restarts (state file is rehydrated by _load_pending_state).
+        state["dropped_past_slot_ids"] = sorted(dropped_set)
 
         state["last_updated"] = now_str
         # strategy_v2 §C3 — bump monotonic pool revision before atomic replace

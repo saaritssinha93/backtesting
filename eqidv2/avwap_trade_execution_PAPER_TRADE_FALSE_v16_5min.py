@@ -108,13 +108,34 @@ FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe befo
 
 # Order monitoring
 ORDER_POLL_SEC = 1                      # per-cycle order book poll interval (spec: Section 10)
-FILL_WAIT_TIMEOUT_SEC = 60              # max wait for entry order fill
+# Mo5 (2026-04-22): bumped default 60→90 via env override. 60s was tight for
+# rate-limit retries on partially-filled orders on illiquid names; 90s gives
+# the order book cache + rate-limit backoff headroom before we cancel.
+FILL_WAIT_TIMEOUT_SEC = max(30, int(os.getenv("EQIDV2_FILL_WAIT_TIMEOUT_SEC", "90")))
 MAX_CANCEL_RETRIES = 3
 CANCEL_RETRY_WAIT_SEC = 2
 ENTRY_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_ENTRY_RETRY_ATTEMPTS", "2")))
+# Mo5 (2026-04-22): inter-retry delay between cancel-then-reissue cycles in
+# entry retry loop. 0 caused back-to-back place_order calls that sometimes
+# tripped Kite's per-second rate limit when many names retried in the same
+# 5-min slot. 1s gives enough spacing while staying well under fill timeout.
+ENTRY_RETRY_DELAY_SEC = max(0.0, float(os.getenv("EQIDV2_ENTRY_RETRY_DELAY_SEC", "1.0")))
 ORDER_BOOK_CACHE_TTL_SEC = float(os.getenv("EQIDV2_ORDER_BOOK_CACHE_TTL_SEC", "1.0"))
 ORDER_POLL_RATE_LIMIT_BACKOFF_SEC = float(
     os.getenv("EQIDV2_ORDER_POLL_RATE_LIMIT_BACKOFF_SEC", "2.0")
+)
+# 2026-04-24: Kite's per-second order budget (~10/s) can be exhausted when many
+# entries fire in the same 5-min slot; exit legs (target LIMIT + SL SLM) and
+# the safety market-close then 429 and leave positions naked. Retry with
+# exponential backoff on rate-limit errors so protective orders still reach
+# the broker.
+EXIT_LEG_RETRY_ATTEMPTS = max(1, int(os.getenv("EQIDV2_EXIT_LEG_RETRY_ATTEMPTS", "6")))
+EXIT_LEG_RETRY_BASE_BACKOFF_SEC = max(
+    0.1, float(os.getenv("EQIDV2_EXIT_LEG_RETRY_BASE_BACKOFF_SEC", "0.5"))
+)
+EXIT_LEG_RETRY_MAX_BACKOFF_SEC = max(
+    EXIT_LEG_RETRY_BASE_BACKOFF_SEC,
+    float(os.getenv("EQIDV2_EXIT_LEG_RETRY_MAX_BACKOFF_SEC", "4.0")),
 )
 GLOBAL_EOD_SWEEP_INTERVAL_SEC = max(
     1.0,
@@ -128,7 +149,11 @@ RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "1")).strip().l
     "yes",
     "on",
 }
-MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "999"))            # max simultaneous open positions
+# M2 (2026-04-22): both caps aligned to bound concurrency so a missing env var
+# cannot silently unlock unbounded execution. Defaults bumped 10 -> 20 on
+# 2026-04-24 at user request. Bats set EQIDV2_MAX_OPEN_POSITIONS and
+# EQIDV2_MAX_CONCURRENT_TRADES explicitly; keep env/code/CLI aligned.
+MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "20"))            # max simultaneous open positions
 MAX_CAPITAL_DEPLOYED_RS = float(os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "500000"))   # max total margin
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
@@ -160,7 +185,49 @@ LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE"
     "yes",
     "on",
 }
-LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "300"))
+LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "900"))
+# Tier-1 fix (2026-04-23): per-setup late-lag thresholds. Different setups have
+# different "freshness" requirements driven by their lag semantics:
+#   - lag=1 setups (A_MOD_BREAK_C1_*): break confirmed on the very next bar;
+#     stale fast — 8 min budget covers PF retry + DE backlog.
+#   - lag=2 setups (CLOSE_CONTINUATION, RECLAIM, PULLBACK_C2): tolerate a bit
+#     more lag because the trigger pattern spans two bars — 13 min budget.
+#   - dynamic (B_HUGE_RED_FAILED_BOUNCE): tracker-based, allow 15 min before
+#     declaring stale.
+# Falls back to LATE_DETECTION_MAX_LAG_SEC for any setup not in the table.
+_LATE_LAG_THRESHOLDS_BY_SETUP: Dict[str, int] = {
+    "A_MOD_BREAK_C1_HIGH":              480,
+    "A_MOD_BREAK_C1_LOW":               480,
+    "A_MOD_CLOSE_CONTINUATION_BREAK":   780,
+    "B_HUGE_C1_CLOSE_RECLAIM_BREAK":    780,
+    "A_PULLBACK_C2_THEN_BREAK_C2_HIGH": 780,
+    "A_PULLBACK_C2_THEN_BREAK_C2_LOW":  780,
+    "B_HUGE_RED_FAILED_BOUNCE":         900,
+}
+
+def _late_lag_threshold_for_setup(setup: Optional[str]) -> int:
+    if not setup:
+        return LATE_DETECTION_MAX_LAG_SEC
+    return _LATE_LAG_THRESHOLDS_BY_SETUP.get(str(setup).upper().strip(), LATE_DETECTION_MAX_LAG_SEC)
+
+# Tier-1 fix: late-skip visibility — append every stale-detection skip to a
+# daily CSV so the loud-not-silent invariant survives log rotation, and bump a
+# heartbeat counter so the supervisor can see the count without parsing logs.
+_LATE_SKIPPED_LOCK = threading.Lock()
+_late_skipped_count = 0
+# NEW-P13 (2026-04-22): pre-trade volume sanity gate. If intended quantity
+# would consume more than VOLUME_GATE_MAX_PARTICIPATION_PCT of the trigger
+# bar's traded volume, reduce the order to that fraction. If reduction would
+# drive qty below 1, skip the trade (ENTRY_SKIPPED_THIN_LIQUIDITY). The gate
+# requires the upstream signal to carry a `bar_volume` (or `c2_volume`) field;
+# if neither is present the gate logs once-per-symbol-per-day ADVISORY and
+# becomes a no-op so an upstream regression cannot silently disable it.
+VOLUME_GATE_ENABLE = str(os.getenv("EQIDV2_VOLUME_GATE_ENABLE", "1")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
+VOLUME_GATE_MAX_PARTICIPATION_PCT = max(
+    0.0001, float(os.getenv("EQIDV2_VOLUME_GATE_MAX_PARTICIPATION_PCT", "0.05"))
+)
 # strategy_v2 §J3 fix #1 — executor sleeps until the deterministic bar-open
 # entry slot before calling execute_live_trade, so live trades align with the
 # same bar-open that backtests assume. Cap the wait so an orphan/future-dated
@@ -316,6 +383,36 @@ def _detection_lag_seconds(signal: dict) -> Optional[float]:
     if detected is None or entry_slot is None:
         return None
     return (detected - entry_slot).total_seconds()
+
+
+def _append_late_skipped_csv(signal: dict, lag_sec: float, threshold_sec: int) -> None:
+    """Append one row to late_skipped_<date>_v16_5min.csv and bump heartbeat counter."""
+    global _late_skipped_count
+    try:
+        date_str = datetime.now(IST).strftime("%Y-%m-%d")
+        path = Path(SIGNAL_DIR) / f"late_skipped_{date_str}_v16_5min.csv"
+        row = {
+            "skipped_at_ist": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z"),
+            "ticker":         str(signal.get("ticker", "")),
+            "side":           str(signal.get("side", "")),
+            "setup":          str(signal.get("setup", "")),
+            "signal_id":      str(signal.get("signal_id", "")),
+            "signal_bar":     str(signal.get("signal_time_ist") or signal.get("signal_bar_time_ist") or ""),
+            "entry_slot":     str(signal.get("signal_entry_datetime_ist") or ""),
+            "detected_time":  str(signal.get("detected_time_ist") or ""),
+            "lag_sec":        f"{lag_sec:.1f}",
+            "threshold_sec":  str(threshold_sec),
+        }
+        with _LATE_SKIPPED_LOCK:
+            new_file = not path.exists()
+            with path.open("a", encoding="utf-8", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+                if new_file:
+                    writer.writeheader()
+                writer.writerow(row)
+            _late_skipped_count += 1
+    except Exception as exc:
+        log.warning(f"[LATE_SKIP] CSV append failed: {exc}")
 
 
 def _safe_get_entry_ltp(
@@ -1006,7 +1103,7 @@ def _place_exit_legs(
 
     target_order_id = ""
     try:
-        target_order_id = _place_order_with_fallback(
+        target_order_id = _place_order_with_rate_limit_retry(
             f"{ticker} target leg",
             variety=kite.VARIETY_REGULAR,
             exchange=kite.EXCHANGE_NSE,
@@ -1019,7 +1116,7 @@ def _place_exit_legs(
             validity=kite.VALIDITY_DAY,
             tag="AVWAPTarget",
         )
-        sl_order_id = _place_order_with_fallback(
+        sl_order_id = _place_order_with_rate_limit_retry(
             f"{ticker} stop leg",
             variety=kite.VARIETY_REGULAR,
             exchange=kite.EXCHANGE_NSE,
@@ -1322,6 +1419,31 @@ def _place_order_with_fallback(log_context: str, **place_kwargs: Any) -> str:
     raise RuntimeError(f"{log_context}: order placement failed without a concrete exception")
 
 
+def _place_order_with_rate_limit_retry(log_context: str, **place_kwargs: Any) -> str:
+    """Wrapper around `_place_order_with_fallback` that retries with
+    exponential backoff when Kite returns a per-second rate-limit error.
+    Non-rate-limit exceptions are re-raised unchanged so existing handling
+    (partial-order cleanup, market-close fallback) still applies."""
+    attempts = max(1, EXIT_LEG_RETRY_ATTEMPTS)
+    for attempt in range(1, attempts + 1):
+        try:
+            return _place_order_with_fallback(log_context, **place_kwargs)
+        except Exception as exc:
+            if attempt >= attempts or not _is_rate_limit_error(exc):
+                raise
+            sleep_for = min(
+                EXIT_LEG_RETRY_MAX_BACKOFF_SEC,
+                EXIT_LEG_RETRY_BASE_BACKOFF_SEC * (2 ** (attempt - 1)),
+            )
+            log.warning(
+                f"[KITE.RATE_LIMIT.RETRY] {log_context}: attempt {attempt}/{attempts} "
+                f"hit rate limit ({_sanitize_error_message(exc, limit=120)}); "
+                f"backing off {sleep_for:.2f}s"
+            )
+            time.sleep(sleep_for)
+    raise RuntimeError(f"{log_context}: rate-limit retries exhausted")
+
+
 def _recover_recent_entry_order_id(
     *,
     ticker: str,
@@ -1501,10 +1623,17 @@ def _persist_open_trades_state() -> None:
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     with active_positions_lock:
         open_rows = [dict(v) for v in active_positions.values()]
+    now_ist = datetime.now(IST)
+    # Mo6 (2026-04-22): write last_written_at as a TZ-aware ISO-8601 timestamp
+    # embedded in the JSON so crash-recovery can derive freshness from the
+    # payload itself rather than from file mtime (which AV/indexer touches can
+    # silently bump on Windows). Kept legacy `updated_at` for back-compat with
+    # any operator tooling that still parses it.
     payload = {
         "date": today_str,
         "open_trades": open_rows,
-        "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": now_ist.strftime("%Y-%m-%d %H:%M:%S"),
+        "last_written_at": now_ist.isoformat(timespec="seconds"),
     }
     _atomic_write_json(_open_trades_state_path(today_str), payload)
 
@@ -1522,6 +1651,29 @@ def _load_open_trades_state(today_str: str) -> Dict[str, Dict[str, Any]]:
 
     if str(payload.get("date", "")).strip() != today_str:
         return {}
+
+    # Mo6: prefer the embedded last_written_at timestamp; fall back to mtime
+    # only if missing (e.g., file written by an older executor build). Warn
+    # when falling back so operators notice stale-format state files.
+    last_written_iso = str(payload.get("last_written_at", "")).strip()
+    age_sec: Optional[float] = None
+    if last_written_iso:
+        try:
+            age_sec = (datetime.now(IST) - datetime.fromisoformat(last_written_iso)).total_seconds()
+        except ValueError:
+            age_sec = None
+    if age_sec is None:
+        try:
+            mtime = os.path.getmtime(state_path)
+            age_sec = max(0.0, time.time() - mtime)
+            log.warning(
+                "[RESTORE] open-trades state missing last_written_at; falling back to file mtime "
+                f"(age={age_sec:.0f}s). Older executor build wrote this file."
+            )
+        except OSError:
+            age_sec = None
+    if age_sec is not None:
+        log.info(f"[RESTORE] open-trades state age={age_sec:.0f}s ({len(payload.get('open_trades', []) or [])} rows)")
 
     rows = payload.get("open_trades", [])
     if isinstance(rows, dict):
@@ -1928,7 +2080,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
 
     def _force_market_close(tag: str, outcome: str, timeout_sec: int = 30) -> bool:
         try:
-            close_order_id = _place_order_with_fallback(
+            close_order_id = _place_order_with_rate_limit_retry(
                 f"{ticker} force close {tag}",
                 variety=kite.VARIETY_REGULAR,
                 exchange=kite.EXCHANGE_NSE,
@@ -2035,15 +2187,18 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
             # a price action that is already in the past.
             if (not trade_closed) and LATE_DETECTION_GUARD_ENABLE and LATE_DETECTION_MAX_LAG_SEC > 0:
                 lag_sec = _detection_lag_seconds(signal)
-                if lag_sec is not None and lag_sec > LATE_DETECTION_MAX_LAG_SEC:
+                setup_name = str(signal.get("setup", "")).upper().strip()
+                threshold = _late_lag_threshold_for_setup(setup_name)
+                if lag_sec is not None and lag_sec > threshold:
                     result.outcome = "ENTRY_SKIPPED_STALE_DETECTION"
                     result.exit_price = signal_entry_price
                     trade_closed = True
+                    _append_late_skipped_csv(signal, lag_sec, threshold)
                     log.warning(
-                        f"[STALE.DETECT] Skipping {ticker} {side}: detected "
+                        f"[STALE.DETECT] Skipping {ticker} {side} {setup_name}: detected "
                         f"{lag_sec:.0f}s after entry slot "
-                        f"(threshold {LATE_DETECTION_MAX_LAG_SEC}s) | "
-                        f"signal_id={signal_id[:12]}"
+                        f"(threshold {threshold}s, setup-tier; env_max={LATE_DETECTION_MAX_LAG_SEC}s) | "
+                        f"signal_id={signal_id[:12]} | total_late_skipped_today={_late_skipped_count}"
                     )
 
             # ---- SLIP GATE: pre-entry LTP check ----
@@ -2128,6 +2283,45 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                                 f"model={signal_entry_price:.2f} ltp={ltp_check:.2f} "
                                 f"slip={slip*100:.2f}% > cap={SHORT_MAX_ENTRY_SLIP_PCT*100:.2f}%"
                             )
+
+            # ---- VOLUME GATE: NEW-P13 ----
+            # Block / shrink orders that would punch through thin liquidity at the
+            # trigger bar. Requires `bar_volume` (or legacy `c2_volume`) on the
+            # signal. Missing field → no-op + ADVISORY log.
+            if (not trade_closed) and VOLUME_GATE_ENABLE and quantity > 0:
+                bar_vol_raw = signal.get("bar_volume", signal.get("c2_volume", None))
+                bar_volume: Optional[int] = None
+                try:
+                    if bar_vol_raw not in (None, ""):
+                        bar_volume = int(float(bar_vol_raw))
+                except (TypeError, ValueError):
+                    bar_volume = None
+                if bar_volume is None or bar_volume <= 0:
+                    log.info(
+                        f"[VOLUME.GATE] ADVISORY {ticker}: signal carries no bar_volume; "
+                        "gate inactive for this trade. Upstream (DE) should populate "
+                        "`bar_volume` on the trigger bar."
+                    )
+                else:
+                    cap_qty = int(bar_volume * VOLUME_GATE_MAX_PARTICIPATION_PCT)
+                    if cap_qty < quantity:
+                        if cap_qty < 1:
+                            result.outcome = "ENTRY_SKIPPED_THIN_LIQUIDITY"
+                            result.exit_price = signal_entry_price
+                            trade_closed = True
+                            log.warning(
+                                f"[VOLUME.GATE] REJECTED {ticker} {side}: "
+                                f"intended_qty={quantity} bar_volume={bar_volume} "
+                                f"cap@{VOLUME_GATE_MAX_PARTICIPATION_PCT*100:.1f}%={cap_qty}"
+                            )
+                        else:
+                            log.warning(
+                                f"[VOLUME.GATE] REDUCED {ticker} {side}: "
+                                f"intended_qty={quantity} → {cap_qty} "
+                                f"(bar_volume={bar_volume}, "
+                                f"cap@{VOLUME_GATE_MAX_PARTICIPATION_PCT*100:.1f}%)"
+                            )
+                            quantity = int(cap_qty)
 
             # ---- STEP 1: Place market entry ----
             planned_qty = int(quantity)
@@ -2247,13 +2441,19 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                         log.warning(
                             f"[LIVE][ENTRY.RETRY] {ticker} entry not filled "
                             f"(status={status_upper}, attempt={entry_attempt}/{ENTRY_RETRY_ATTEMPTS}). "
-                            "Retrying once."
+                            f"Retrying after {ENTRY_RETRY_DELAY_SEC:.1f}s."
                         )
                     else:
                         log.warning(
                             f"[LIVE][ENTRY.RETRY] {ticker} partial fill "
-                            f"{filled_qty_total}/{planned_qty}; retrying leftover {remaining_after}."
+                            f"{filled_qty_total}/{planned_qty}; retrying leftover {remaining_after} "
+                            f"after {ENTRY_RETRY_DELAY_SEC:.1f}s."
                         )
+                    # Mo5: spacing between cancel-then-reissue to avoid bursting
+                    # Kite's per-second order rate limit when many names retry
+                    # inside the same 5-min slot.
+                    if ENTRY_RETRY_DELAY_SEC > 0.0:
+                        time.sleep(ENTRY_RETRY_DELAY_SEC)
                     continue
 
                 if status_upper not in {"CANCELLED", "REJECTED", "COMPLETE"}:
@@ -4234,6 +4434,36 @@ def main():
     )
     args = parser.parse_args()
     _set_dispatch_lockdown(None)
+
+    # Audit #1 (2026-04-22) — startup config attestation. Compares the
+    # bat-written claim file against effective os.environ for the whitelist
+    # of EQIDV2_* vars that drive entry / risk / fill behaviour. Soft mode
+    # by default (logs DRIFT and continues); set EQIDV2_CONFIG_CHECK_STRICT=1
+    # to make any mismatch a boot exit. EQIDV2_CONFIG_CHECK_BYPASS=1 is the
+    # emergency override.
+    try:
+        from eqidv2_config_attestation import verify_claim as _verify_config_claim
+        _verify_config_claim(
+            process_name="avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min",
+            whitelist=(
+                "EQIDV2_LATE_DETECTION_MAX_LAG_SEC",
+                "EQIDV2_MAX_CONCURRENT_TRADES",
+                "EQIDV2_MAX_OPEN_POSITIONS",
+                "EQIDV2_FILL_WAIT_TIMEOUT_SEC",
+                "EQIDV2_ENTRY_RETRY_DELAY_SEC",
+                "EQIDV2_VOLUME_GATE_ENABLE",
+                "EQIDV2_VOLUME_GATE_MAX_PARTICIPATION_PCT",
+                "EQIDV2_RUNTIME_ROOT",
+            ),
+            logger=log,
+        )
+    except SystemExit:
+        raise
+    except Exception as exc:
+        log.warning(
+            f"[STARTUP.CONFIG] attestation_skipped err={exc!r} "
+            "(non-fatal in soft mode)"
+        )
 
     log.info("=" * 65)
     log.info("AVWAP Live Trade Executor V16 5min -- PAPER_TRADE = FALSE")

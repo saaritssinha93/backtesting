@@ -48,6 +48,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", default=None, help="Output dir (default eqidv2/replay_out_full_pipeline/<date>)")
     p.add_argument("--scan-shards",  default="16", help="Scan shards (default 16)")
     p.add_argument("--scan-workers", default="16", help="Scan max workers (default 16)")
+    p.add_argument("--engine", default="se", choices=["se", "see"],
+                   help="Signal engine: 'se' = SE._scan_slot (entry-bar close), "
+                        "'see' = SEE._see_scan_slot (trigger-bar close, early-emit)")
     return p.parse_args()
 
 
@@ -137,6 +140,7 @@ sys.path.insert(0, str(_SCRIPT_DIR))
 import eqidv2_live_combined_analyser_csv_v15 as base_v15  # noqa: E402
 import eqidv2_live_combined_analyser_csv_v16_5min as live_v16  # noqa: E402
 import eqidv2_signal_engine_v16_5min as SE  # noqa: E402
+import eqidv2_signal_early_engine_v16_5min as SEE  # noqa: E402
 import eqidv2_pending_data_fetcher_v16_5min as PF  # noqa: E402
 import eqidv2_detection_engine_v16_5min as DE  # noqa: E402
 
@@ -218,6 +222,38 @@ def _retrying_write_pending_state_atomic(state, date_str):
 SE._write_pending_state_atomic = _retrying_write_pending_state_atomic  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
+# Replay-clock guard on PF's parquet presence check.
+#
+# LIVE parquet only contains bars that have already closed. In replay the
+# same parquet is fully pre-populated with the entire trading day, so PF's
+# `_slot_row_present_in_parquet(ticker, slot_ts)` returns True for any past
+# or future `slot_ts` unconditionally. That breaks LIVE timing parity:
+# PF/DE would fire at the first slot iteration after SEE wrote the row,
+# rather than waiting for the slot when the trigger bar would actually
+# have closed in real time.
+#
+# This wrapper rejects `slot_ts > _now_ist()` so PF only considers bars
+# whose close time is <= replay wall-clock. Mirrors the LIVE constraint
+# that "bar is in parquet" implies "bar has closed".
+# ---------------------------------------------------------------------------
+_REAL_SLOT_ROW_PRESENT_IN_PARQUET = PF._slot_row_present_in_parquet
+
+
+def _clock_guarded_slot_row_present_in_parquet(ticker: str, slot_ts: datetime) -> bool:
+    clock = _FROZEN_CLOCK["ts"]
+    if clock is not None:
+        try:
+            slot_ist = slot_ts.astimezone(_IST) if slot_ts.tzinfo else _IST.localize(slot_ts)
+        except Exception:
+            slot_ist = slot_ts
+        if slot_ist > clock:
+            return False
+    return _REAL_SLOT_ROW_PRESENT_IN_PARQUET(ticker, slot_ts)
+
+
+PF._slot_row_present_in_parquet = _clock_guarded_slot_row_present_in_parquet  # type: ignore[assignment]
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 def _parse_hhmm(s: str) -> dtime:
@@ -250,7 +286,149 @@ def _count_rows(path: Path) -> int:
 
 # ---------------------------------------------------------------------------
 # Per-slot replay
+#
+# LIVE timing parity (strategy_v2 §1):
+#   PF fires every 5-min slot at `slot + PF.SLOT_OFFSET_SEC` (=2s) and
+#   processes pending rows written in PRIOR slot iterations whose
+#   `_pending_signal_trigger_slot(sig) == slot`. DE fires at
+#   `slot + DE.SLOT_OFFSET_SEC` (=4s) and matches the same way via
+#   `<trigger_slot>.ready` markers. SEE fires at
+#   `slot + SE.SLOT_START_OFFSET_SECONDS` (=45s) scanning the trigger bar
+#   that just closed AT `slot`, emitting rows with source_slot in the future.
+#
+# Therefore, within a single replay slot iteration S, the correct order is:
+#   1. PF at S+2s  — processes rows where source_slot == S (written earlier).
+#   2. DE at S+4s  — matches the markers PF just wrote.
+#   3. SEE at S+45s — writes new rows with source_slot = S + lag*5min.
+#
+# Prior versions of this driver fired SEE → PF → DE at S+45/47/49s all in
+# the same iteration S; that placed PF_VERIFIED / DE_PASSED lifecycle
+# timestamps one full bar (lag=1) or two bars (lag=2) earlier than LIVE.
 # ---------------------------------------------------------------------------
+def _run_pf_de_stage(
+    slot: datetime,
+    short_cfg_de,
+    long_cfg_de,
+    long_csv: Path,
+    short_csv: Path,
+    result: Dict[str, Any],
+) -> None:
+    """Run PF at slot+2s and DE at slot+4s.
+
+    Mirrors the LIVE pending_data_fetcher / detection_engine scheduler loops:
+    both iterate every 5-min boundary plus their own offset, operating on
+    pending rows that accumulated in earlier iterations.
+    """
+    long_before = _count_rows(long_csv)
+    short_before = _count_rows(short_csv)
+    slot_label = slot.strftime("%H:%M")
+
+    # ---------- PF — fetch + per-trigger-slot marker emission ----------
+    _set_clock(slot + timedelta(seconds=int(PF.SLOT_OFFSET_SEC)))
+    pending_tickers, latest_source_slot = PF._get_pending_fetch_targets()
+    result["pf_pending_tickers"] = len(pending_tickers)
+
+    if pending_tickers:
+        deduplicated = list(dict.fromkeys(pending_tickers))
+        full_token_cache = PF._load_token_cache()
+        token_map = {t: full_token_cache[t] for t in deduplicated if t in full_token_cache}
+        fetch_result = PF._fetch_pending_tickers(
+            deduplicated, token_map, required_ready_slot=latest_source_slot
+        )
+        ready_tickers = list(fetch_result.get("ready_tickers", []) or [])
+        missing_tokens = list(fetch_result.get("missing_tokens", []) or [])
+        if missing_tokens:
+            PF._mark_missing_token_pending_signals(missing_tokens)
+        result["pf_ready_tickers"] = len(ready_tickers)
+
+        # Per-trigger-slot fan-out — mirrors LIVE PF main loop (see
+        # pending_data_fetcher_v16_5min.py §"Per-trigger-slot fan-out").
+        # Writes one `<trigger_slot>.ready` marker per distinct DE-trigger
+        # slot (= source_slot + (lag-1)*5min), each filename matching DE's
+        # `_pending_signal_source_slot` lookup so DE's exact-slot match fires.
+        markers_written: List[datetime] = []
+        try:
+            slot_map = PF._get_pending_trigger_slot_map()
+            ready_set = set(ready_tickers) if ready_tickers else None
+            markers_written = PF._emit_per_trigger_slot_markers(slot_map, ready_set)
+        except Exception as exc:
+            print(f"[WARN] per-trigger-slot marker pass failed: {exc}", flush=True)
+
+        result["pf_marker_written"] = bool(markers_written)
+        print(
+            f"[REPLAY_PF] slot={slot_label} pending={len(deduplicated)} "
+            f"ready={len(ready_tickers)} markers_written={len(markers_written)}",
+            flush=True,
+        )
+    else:
+        print(f"[REPLAY_PF] slot={slot_label} pending=0", flush=True)
+
+    # ---------- DE — parity detection cycle ----------
+    _set_clock(slot + timedelta(seconds=int(DE.SLOT_OFFSET_SEC)))
+    cycle_result = DE._run_detection_cycle_live_parity(short_cfg_de, long_cfg_de)
+    result["de_cycle_result"] = str(cycle_result or "")
+    result["de_long_csv_rows"] = max(0, _count_rows(long_csv) - long_before)
+    result["de_short_csv_rows"] = max(0, _count_rows(short_csv) - short_before)
+
+    print(
+        f"[REPLAY_DE] slot={slot_label} result={cycle_result} "
+        f"new_long_csv={result['de_long_csv_rows']} "
+        f"new_short_csv={result['de_short_csv_rows']}",
+        flush=True,
+    )
+
+
+def _run_see_stage(
+    slot: datetime,
+    short_cfg_se,
+    long_cfg_se,
+    tickers: List[str],
+    result: Dict[str, Any],
+) -> None:
+    """Run SEE (or SE) at slot+45s, scanning trigger bar that closed AT slot."""
+    slot_label = slot.strftime("%H:%M")
+    date_str = slot.strftime("%Y-%m-%d")
+
+    _set_clock(slot + timedelta(seconds=SE.SLOT_START_OFFSET_SECONDS))
+    SE.clear_slot_snapshot_cache()
+    SE._reset_trigger_bar_cache()
+
+    rs_pct, _allow_long, _allow_short = SE._compute_nifty_rs_at_slot(slot)
+    if _ARGS.engine == "see":
+        short_rows, long_rows, _scan_meta = SEE._see_scan_slot(
+            slot,
+            short_cfg_se,
+            long_cfg_se,
+            tickers=tickers,
+            prebuilt_snapshot_meta=None,
+        )
+    else:
+        short_rows, long_rows, _scan_meta = SE._scan_slot(
+            slot,
+            short_cfg_se,
+            long_cfg_se,
+            tickers=tickers,
+            prebuilt_snapshot_meta=None,
+        )
+    result["raw_short"] = len(short_rows)
+    result["raw_long"] = len(long_rows)
+
+    added, deduped, total_pending = SE._write_pending_pool(
+        short_rows, long_rows, slot, rs_pct, date_str
+    )
+    result["pool_added"] = added
+    result["pool_deduped"] = deduped
+    result["pool_total_after"] = total_pending
+
+    engine_tag = "REPLAY_SEE" if _ARGS.engine == "see" else "REPLAY_SE"
+    print(
+        f"[{engine_tag}] slot={slot_label} raw_short={len(short_rows)} "
+        f"raw_long={len(long_rows)} added={added} deduped={deduped} "
+        f"pool_total={total_pending}",
+        flush=True,
+    )
+
+
 def _replay_slot(
     slot: datetime,
     short_cfg_se,
@@ -258,6 +436,7 @@ def _replay_slot(
     short_cfg_de,
     long_cfg_de,
     tickers: List[str],
+    run_see: bool = True,
 ) -> Dict[str, Any]:
     date_str = slot.strftime("%Y-%m-%d")
     slot_label = slot.strftime("%H:%M")
@@ -281,96 +460,16 @@ def _replay_slot(
 
     long_csv = _POOL_DIR / f"signals_{date_str}_v16_5min_long.csv"
     short_csv = _POOL_DIR / f"signals_{date_str}_v16_5min_short.csv"
-    long_before = _count_rows(long_csv)
-    short_before = _count_rows(short_csv)
 
     try:
-        # ---------- Stage 1 — SE scan + pool write (clock = T + 45s) ----------
-        _set_clock(slot + timedelta(seconds=SE.SLOT_START_OFFSET_SECONDS))
-        SE.clear_slot_snapshot_cache()
-        SE._reset_trigger_bar_cache()
-
-        rs_pct, _allow_long, _allow_short = SE._compute_nifty_rs_at_slot(slot)
-        short_rows, long_rows, _scan_meta = SE._scan_slot(
-            slot,
-            short_cfg_se,
-            long_cfg_se,
-            tickers=tickers,
-            prebuilt_snapshot_meta=None,
-        )
-        result["raw_short"] = len(short_rows)
-        result["raw_long"] = len(long_rows)
-
-        added, deduped, total_pending = SE._write_pending_pool(
-            short_rows, long_rows, slot, rs_pct, date_str
-        )
-        result["pool_added"] = added
-        result["pool_deduped"] = deduped
-        result["pool_total_after"] = total_pending
-
-        print(
-            f"[REPLAY_SE] slot={slot_label} raw_short={len(short_rows)} "
-            f"raw_long={len(long_rows)} added={added} deduped={deduped} "
-            f"pool_total={total_pending}",
-            flush=True,
-        )
-
-        # ---------- Stage 2 — PF fetch + ready marker (clock = T + 47s) ----------
-        _set_clock(slot + timedelta(seconds=SE.SLOT_START_OFFSET_SECONDS + 2))
-        pending_tickers, latest_source_slot = PF._get_pending_fetch_targets()
-        result["pf_pending_tickers"] = len(pending_tickers)
-
-        if pending_tickers:
-            deduplicated = list(dict.fromkeys(pending_tickers))
-            full_token_cache = PF._load_token_cache()
-            token_map = {t: full_token_cache[t] for t in deduplicated if t in full_token_cache}
-            fetch_result = PF._fetch_pending_tickers(
-                deduplicated, token_map, required_ready_slot=latest_source_slot
-            )
-            ready_tickers = list(fetch_result.get("ready_tickers", []) or [])
-            missing_tokens = list(fetch_result.get("missing_tokens", []) or [])
-            if missing_tokens:
-                PF._mark_missing_token_pending_signals(missing_tokens)
-            marker_ready = bool(fetch_result.get("marker_ready", False))
-            ready_slot = fetch_result.get("required_ready_slot")
-            if marker_ready and ready_tickers and isinstance(ready_slot, datetime):
-                PF._write_ready_marker(
-                    ready_slot,
-                    ready_tickers,
-                    verify_failed_sample=list(fetch_result.get("verify_failed_sample", []) or []),
-                )
-                result["pf_marker_written"] = True
-            result["pf_ready_tickers"] = len(ready_tickers)
-
-            # C3 — older-slot marker pass (matches live main loop)
-            try:
-                slot_map = PF._get_pending_source_slot_map()
-                PF._write_older_slot_markers(slot_map, latest_source_slot)
-            except Exception as exc:
-                print(f"[WARN] older-slot marker pass failed: {exc}", flush=True)
-
-            print(
-                f"[REPLAY_PF] slot={slot_label} pending={len(deduplicated)} "
-                f"ready={len(ready_tickers)} "
-                f"marker={'written' if result['pf_marker_written'] else 'withheld'}",
-                flush=True,
-            )
+        # Stages run in LIVE wall-clock order: PF(+2s) -> DE(+4s) -> SEE(+45s).
+        # PF/DE process rows written in earlier slot iterations; SEE writes
+        # new rows whose source_slot lies in future iterations.
+        _run_pf_de_stage(slot, short_cfg_de, long_cfg_de, long_csv, short_csv, result)
+        if run_see:
+            _run_see_stage(slot, short_cfg_se, long_cfg_se, tickers, result)
         else:
-            print(f"[REPLAY_PF] slot={slot_label} pending=0 (no pending pool yet)", flush=True)
-
-        # ---------- Stage 3 — DE parity cycle (clock = T + 49s) ----------
-        _set_clock(slot + timedelta(seconds=SE.SLOT_START_OFFSET_SECONDS + 4))
-        cycle_result = DE._run_detection_cycle_live_parity(short_cfg_de, long_cfg_de)
-        result["de_cycle_result"] = str(cycle_result or "")
-        result["de_long_csv_rows"] = max(0, _count_rows(long_csv) - long_before)
-        result["de_short_csv_rows"] = max(0, _count_rows(short_csv) - short_before)
-
-        print(
-            f"[REPLAY_DE] slot={slot_label} result={cycle_result} "
-            f"new_long_csv={result['de_long_csv_rows']} "
-            f"new_short_csv={result['de_short_csv_rows']}",
-            flush=True,
-        )
+            result["pool_total_after"] = _count_pool_pending(date_str)
 
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
@@ -379,6 +478,18 @@ def _replay_slot(
 
     result["elapsed_sec"] = round(time.perf_counter() - t_wall0, 2)
     return result
+
+
+def _count_pool_pending(date_str: str) -> int:
+    """Count rows with status=pending in the pool JSON (drain-slot bookkeeping)."""
+    pool_json = _POOL_DIR / f"pending_signals_{date_str}_v16_5min.json"
+    if not pool_json.exists():
+        return 0
+    try:
+        signals = json.loads(pool_json.read_text(encoding="utf-8")).get("signals", [])
+        return sum(1 for s in signals if str(s.get("status", "")).lower() == "pending")
+    except Exception:
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +506,7 @@ def main() -> int:
     print(f"  DATA_5M_DIR  : {live_v16.DIR_5M if hasattr(live_v16, 'DIR_5M') else 'n/a'}")
     print(f"  SCAN_SHARDS  : {os.environ.get('EQIDV16_5MIN_SCAN_SHARDS')}")
     print(f"  SCAN_WORKERS : {os.environ.get('EQIDV16_5MIN_SCAN_MAX_WORKERS')}")
+    print(f"  ENGINE       : {_ARGS.engine.upper()} ({'SEE._see_scan_slot' if _ARGS.engine=='see' else 'SE._scan_slot'})")
     print("=" * 72)
 
     start_t = _parse_hhmm(_ARGS.start)
@@ -424,6 +536,25 @@ def main() -> int:
     for slot in slots:
         row = _replay_slot(
             slot, short_cfg_se, long_cfg_se, short_cfg_de, long_cfg_de, tickers
+        )
+        rows.append(row)
+        with open(_TIMELINE_PATH, "a", newline="", encoding="utf-8") as tf:
+            writer = csv.DictWriter(tf, fieldnames=timeline_fields, quoting=csv.QUOTE_ALL)
+            writer.writerow(row)
+
+    # Drain slots — SEE at the final main slot writes rows with source_slot in
+    # future iterations (up to lag*5min later). Without PF/DE running on those
+    # slots, lag>=1 signals from late SEE writes would stay pending forever.
+    # Run PF/DE (no SEE) for DRAIN_SLOTS_AFTER_END 5-min boundaries past the
+    # user's end slot so those rows get processed, matching what LIVE would do
+    # naturally as its scheduler keeps firing past market close.
+    DRAIN_SLOTS_AFTER_END = 2
+    drain_cur = end_ist
+    for _ in range(DRAIN_SLOTS_AFTER_END):
+        drain_cur = drain_cur + timedelta(minutes=SE.SLOT_MINUTES)
+        row = _replay_slot(
+            drain_cur, short_cfg_se, long_cfg_se, short_cfg_de, long_cfg_de,
+            tickers, run_see=False,
         )
         rows.append(row)
         with open(_TIMELINE_PATH, "a", newline="", encoding="utf-8") as tf:

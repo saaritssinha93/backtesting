@@ -96,7 +96,9 @@ FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe befo
 POLL_INTERVAL_SEC = 5
 LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
 # 0 or negative means unlimited worker threads (no executor-side cap).
-MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V16_5MIN_MAX_CONCURRENT_TRADES", "0"))
+# M2 (2026-04-22): default aligned with live executor (10). Paper bat also sets
+# EQIDV2_PAPER_V16_5MIN_MAX_CONCURRENT_TRADES=10 explicitly for uniformity.
+MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V16_5MIN_MAX_CONCURRENT_TRADES", "10"))
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
 
 # Max entry slip gate: if the live LTP (or signal_bar fallback) is more than this
@@ -126,6 +128,26 @@ LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE"
     "on",
 }
 LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "300"))
+# Tier-1 fix (2026-04-23): per-setup late-lag thresholds. See live executor for
+# rationale (lag=1 480s, lag=2 780s, dynamic bounce 900s). Falls back to
+# LATE_DETECTION_MAX_LAG_SEC for any setup not in the table.
+_LATE_LAG_THRESHOLDS_BY_SETUP: Dict[str, int] = {
+    "A_MOD_BREAK_C1_HIGH":              480,
+    "A_MOD_BREAK_C1_LOW":               480,
+    "A_MOD_CLOSE_CONTINUATION_BREAK":   780,
+    "B_HUGE_C1_CLOSE_RECLAIM_BREAK":    780,
+    "A_PULLBACK_C2_THEN_BREAK_C2_HIGH": 780,
+    "A_PULLBACK_C2_THEN_BREAK_C2_LOW":  780,
+    "B_HUGE_RED_FAILED_BOUNCE":         900,
+}
+
+def _late_lag_threshold_for_setup(setup: Optional[str]) -> int:
+    if not setup:
+        return LATE_DETECTION_MAX_LAG_SEC
+    return _LATE_LAG_THRESHOLDS_BY_SETUP.get(str(setup).upper().strip(), LATE_DETECTION_MAX_LAG_SEC)
+
+_LATE_SKIPPED_LOCK = threading.Lock()
+_late_skipped_count = 0
 
 
 def _build_effective_v16_5min_executor_cfgs():
@@ -225,6 +247,36 @@ def _detection_lag_seconds(signal: dict) -> Optional[float]:
     return (detected - entry_slot).total_seconds()
 
 
+def _append_late_skipped_csv(signal: dict, lag_sec: float, threshold_sec: int) -> None:
+    """Append one row to late_skipped_<date>_v16_5min_PAPER.csv and bump heartbeat counter."""
+    global _late_skipped_count
+    try:
+        date_str = datetime.now(IST).strftime("%Y-%m-%d")
+        path = Path(SIGNAL_DIR) / f"late_skipped_{date_str}_v16_5min_PAPER.csv"
+        row = {
+            "skipped_at_ist": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S%z"),
+            "ticker":         str(signal.get("ticker", "")),
+            "side":           str(signal.get("side", "")),
+            "setup":          str(signal.get("setup", "")),
+            "signal_id":      str(signal.get("signal_id", "")),
+            "signal_bar":     str(signal.get("signal_time_ist") or signal.get("signal_bar_time_ist") or ""),
+            "entry_slot":     str(signal.get("signal_entry_datetime_ist") or ""),
+            "detected_time":  str(signal.get("detected_time_ist") or ""),
+            "lag_sec":        f"{lag_sec:.1f}",
+            "threshold_sec":  str(threshold_sec),
+        }
+        with _LATE_SKIPPED_LOCK:
+            new_file = not path.exists()
+            with path.open("a", encoding="utf-8", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+                if new_file:
+                    writer.writeheader()
+                writer.writerow(row)
+            _late_skipped_count += 1
+    except Exception as exc:
+        log.warning(f"[LATE_SKIP] CSV append failed: {exc}")
+
+
 SHORT_STOP_PCT = float(
     os.getenv(
         "EQIDV16_5MIN_SHORT_STOP_PCT",
@@ -278,10 +330,12 @@ RISK_LIMITS_ENABLED = str(
     "yes",
     "on",
 }
+# M2 (2026-04-22): default aligned with live executor (10). See note in
+# EQIDV2_PAPER_V16_5MIN_MAX_CONCURRENT_TRADES above.
 MAX_OPEN_POSITIONS = int(
     os.getenv(
         "EQIDV2_PAPER_V16_5MIN_MAX_OPEN_POSITIONS",
-        os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "999"),
+        os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "10"),
     )
 )
 MAX_CAPITAL_DEPLOYED_RS = float(
@@ -1118,16 +1172,20 @@ def simulate_trade(
         )
 
     # Fix #20 (post-2026-04-21): stale-detection guard.
+    # Tier-1 (2026-04-23): per-setup threshold + late_skipped CSV trail.
     if (not resume_mode) and LATE_DETECTION_GUARD_ENABLE and LATE_DETECTION_MAX_LAG_SEC > 0:
         _lag_sec = _detection_lag_seconds(signal)
-        if _lag_sec is not None and _lag_sec > LATE_DETECTION_MAX_LAG_SEC:
+        _setup_name = str(signal.get("setup", "")).upper().strip()
+        _threshold = _late_lag_threshold_for_setup(_setup_name)
+        if _lag_sec is not None and _lag_sec > _threshold:
+            _append_late_skipped_csv(signal, _lag_sec, _threshold)
             return _finalize_pre_entry_skip(
                 "ENTRY_SKIPPED_STALE_DETECTION",
                 (
-                    f"[STALE.DETECT] Skipping {ticker} {side}: detected "
+                    f"[STALE.DETECT] Skipping {ticker} {side} {_setup_name}: detected "
                     f"{_lag_sec:.0f}s after entry slot "
-                    f"(threshold {LATE_DETECTION_MAX_LAG_SEC}s) | "
-                    f"signal_id={signal_id[:12]}"
+                    f"(threshold {_threshold}s, setup-tier; env_max={LATE_DETECTION_MAX_LAG_SEC}s) | "
+                    f"signal_id={signal_id[:12]} | total_late_skipped_today={_late_skipped_count}"
                 ),
             )
 

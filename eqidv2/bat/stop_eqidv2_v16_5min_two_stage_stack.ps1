@@ -54,14 +54,23 @@ function Write-StoppedStatus {
     }
 }
 
-# Patterns to match — Signal Engine, Pending Fetcher, Detection Engine, and their supervisors
+# Patterns to match — Signal Early Engine (SEE), legacy Signal Engine (SE),
+# Pending Fetcher, Detection Engine, and their supervisors.
+# strategy_v2 §SEE-A13 fix (2026-04-22): scheduler now launches SEE
+# (eqidv2_signal_early_engine_v16_5min.py) but this stop script previously
+# only matched the legacy SE name, so the SEE process survived stop-stack.
+# Keep the legacy SE patterns for one release cycle in case replay tooling
+# or residual sessions still spawn SE.
 $patterns = @(
+    "run_eqidv2_signal_early_engine_v16_5min\.bat",
+    "eqidv2_signal_early_engine_v16_5min\.py",
     "run_eqidv2_signal_engine_v16_5min\.bat",
     "eqidv2_signal_engine_v16_5min\.py",
     "run_eqidv2_pending_data_fetcher_v16_5min\.bat",
     "eqidv2_pending_data_fetcher_v16_5min\.py",
     "run_eqidv2_detection_engine_v16_5min\.bat",
     "eqidv2_detection_engine_v16_5min\.py",
+    "supervise_command\.ps1.*eqidv2_signal_early_engine_v16_5min",
     "supervise_command\.ps1.*eqidv2_signal_engine_v16_5min",
     "supervise_command\.ps1.*eqidv2_pending_data_fetcher_v16_5min",
     "supervise_command\.ps1.*eqidv2_detection_engine_v16_5min"
@@ -107,8 +116,13 @@ foreach ($target in $targets) {
 }
 
 if (-not $Preview) {
+    # strategy_v2 §SEE-A13 fix: write SEE status first (current producer),
+    # keep legacy SE status for one release cycle so any stale supervisor
+    # polling on the old filename also sees STOPPED and does not flag a
+    # phantom failure.
+    Write-StoppedStatus -ScriptName "eqidv2_signal_early_engine_v16_5min"
     Write-StoppedStatus -ScriptName "eqidv2_signal_engine_v16_5min"
     Write-StoppedStatus -ScriptName "eqidv2_pending_data_fetcher_v16_5min"
     Write-StoppedStatus -ScriptName "eqidv2_detection_engine_v16_5min"
-    Write-LogLine -Message "Wrote STOPPED state for all two-stage engine status files."
+    Write-LogLine -Message "Wrote STOPPED state for SEE + legacy SE + PF + DE status files."
 }

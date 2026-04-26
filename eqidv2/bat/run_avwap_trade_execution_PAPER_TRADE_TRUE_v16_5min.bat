@@ -12,9 +12,20 @@ set "EQIDV16_5MIN_LONG_STOP_PCT=0.0075"
 set "EQIDV16_5MIN_SHORT_TARGET_PCT=0.0100"
 set "EQIDV16_5MIN_LONG_TARGET_PCT=0.0100"
 set "EQIDV16_5MIN_DEFAULT_POSITION_SIZE_RS=10000"
+REM I-8 + Option-A — accommodate lag-2 DE parity (slot+5min shift) plus 5-min poll cadence.
+REM Natural worst-case lag from entry_slot_open ~605s; 900s allows headroom without rejecting.
+set "EQIDV2_LATE_DETECTION_MAX_LAG_SEC=900"
+REM M2 (2026-04-22): uniform concurrency caps — see PAPER_TRADE_FALSE bat comment.
+REM Paper executor reads PAPER-specific env vars (with fallback to the generic ones),
+REM so we set both to keep env/code/CLI fully aligned.
+REM 2026-04-24: bumped 10 -> 20 to stay in lockstep with the live executor.
+set "EQIDV2_MAX_CONCURRENT_TRADES=20"
+set "EQIDV2_MAX_OPEN_POSITIONS=20"
+set "EQIDV2_PAPER_V16_5MIN_MAX_CONCURRENT_TRADES=20"
+set "EQIDV2_PAPER_V16_5MIN_MAX_OPEN_POSITIONS=20"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=avwap_trade_execution_PAPER_TRADE_TRUE_v16_5min.py"
-set "MAX_TRADES=5"
+set "MAX_TRADES=20"
 set "END_CUTOFF_HHMM=1540"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"

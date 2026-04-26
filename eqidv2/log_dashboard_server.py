@@ -95,7 +95,7 @@ LOG_FILES: Dict[str, str] = {
     "nifty_guard_fetch_v16_5min": "nifty_guard_fetcher_v16_5min.log",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.log",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.log",
-    "signal_engine_v16_5min":          "eqidv2_signal_engine_v16_5min.log",
+    "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.log",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.log",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.log",
 }
@@ -128,7 +128,7 @@ STATUS_FILES: Dict[str, str] = {
     "nifty_guard_fetch_v16_5min": "nifty_guard_fetcher_v16_5min.status",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.status",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.status",
-    "signal_engine_v16_5min":          "eqidv2_signal_engine_v16_5min.status",
+    "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.status",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.status",
 }
@@ -140,7 +140,7 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.heartbeat",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.heartbeat",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.heartbeat",
-    "signal_engine_v16_5min":          "eqidv2_signal_engine_v16_5min.heartbeat",
+    "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.heartbeat",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.heartbeat",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.heartbeat",
 }
@@ -169,8 +169,8 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "preopen_healthcheck": ("\\EQIDV2_preopen_session_healthcheck_0905",),
     "kite_holdings_today_csv": ("\\EQIDV2_kite_export_start_0915",),
     "kite_positions_day_today_csv": ("\\EQIDV2_kite_export_start_0915",),
-    "signal_engine_v16_5min":        ("\\EQIDV2_signal_engine_v16_5min_0900",),
-    "pending_signals_v16_5min":      ("\\EQIDV2_signal_engine_v16_5min_0900",),
+    "signal_early_engine_v16_5min":  ("\\EQIDV2_signal_early_engine_v16_5min_0900",),
+    "pending_signals_v16_5min":      ("\\EQIDV2_signal_early_engine_v16_5min_0900",),
     "pending_data_fetcher_v16_5min": ("\\EQIDV2_pending_data_fetcher_v16_5min_0900",),
     "detection_engine_v16_5min":     ("\\EQIDV2_detection_engine_v16_5min_0900",),
     "detected_signals_v16_5min":     ("\\EQIDV2_detection_engine_v16_5min_0900",),
@@ -182,7 +182,7 @@ _TASK_SNAPSHOT_CACHE_AT: Optional[dt.datetime] = None
 RESTARTABLE_CARDS: Dict[str, str] = {
     "nifty_guard_fetch_v16_5min":    "run_nifty_guard_fetcher_v16_5min.bat",
     "eod_5min_data":                 "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
-    "signal_engine_v16_5min":        "run_eqidv2_signal_engine_v16_5min.bat",
+    "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
     "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
     "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
@@ -1154,6 +1154,70 @@ def _extract_time_only(value: str) -> str:
     return s
 
 
+def _shift_iso_5min(value: str) -> str:
+    """
+    Display-only shift: add 5 minutes to a bar-anchored ISO/naive timestamp so
+    bar-open stamps render as bar-close. Does NOT modify source data. Preserves
+    input format (date separator and tz offset) when possible; falls back to
+    naive HH:MM[:SS] arithmetic for bare time strings. Empty/unparsable -> original.
+    """
+    s = str(value or "").strip()
+    if not s:
+        return s
+    # Full datetime: YYYY-MM-DD(T| )HH:MM(:SS)?(tz)?
+    m = re.match(
+        r"^(\d{4}-\d{2}-\d{2})([ T])(\d{2}):(\d{2})(:\d{2}(?:\.\d+)?)?([+\-]\d{2}:?\d{2}|Z)?$",
+        s,
+    )
+    if m:
+        date_s, sep, hh, mm, sec, tz = m.groups()
+        total = int(hh) * 60 + int(mm) + 5
+        nh = (total // 60) % 24
+        nm = total % 60
+        return f"{date_s}{sep}{nh:02d}:{nm:02d}{sec or ''}{tz or ''}"
+    # Bare time: HH:MM(:SS)?
+    m = re.match(r"^(\d{2}):(\d{2})(:\d{2}(?:\.\d+)?)?$", s)
+    if m:
+        hh, mm, sec = m.groups()
+        total = int(hh) * 60 + int(mm) + 5
+        nh = (total // 60) % 24
+        nm = total % 60
+        return f"{nh:02d}:{nm:02d}{sec or ''}"
+    return s
+
+
+_BAR_SLOT_RE_FULL = re.compile(
+    r"\b(slot|target_slot|signal_bar)=(\d{4}-\d{2}-\d{2})([ T])(\d{2}):(\d{2})(:\d{2})?([+\-]\d{2}:?\d{2}|Z)?"
+)
+_BAR_SLOT_RE_HHMM = re.compile(r"\b(slot|target_slot|signal_bar)=(\d{2}):(\d{2})(?![:\d])")
+
+
+def _shift_bar_slots_in_text(text: str) -> str:
+    """
+    Display-only shift on raw log tails: rewrites `slot=`, `target_slot=`, and
+    `signal_bar=` tokens so bar-open stamps render as bar-close. Wallclock
+    timestamps (which never carry these prefixes) are left untouched.
+    """
+    if not text:
+        return text
+
+    def _full(m: "re.Match[str]") -> str:
+        key, date_s, sep, hh, mm, sec, tz = m.groups()
+        total = int(hh) * 60 + int(mm) + 5
+        nh = (total // 60) % 24
+        nm = total % 60
+        return f"{key}={date_s}{sep}{nh:02d}:{nm:02d}{sec or ''}{tz or ''}"
+
+    def _hhmm(m: "re.Match[str]") -> str:
+        key, hh, mm = m.group(1), int(m.group(2)), int(m.group(3))
+        total = hh * 60 + mm + 5
+        return f"{key}={(total // 60) % 24:02d}:{total % 60:02d}"
+
+    text = _BAR_SLOT_RE_FULL.sub(_full, text)
+    text = _BAR_SLOT_RE_HHMM.sub(_hhmm, text)
+    return text
+
+
 def _to_float_or_nan(value: str) -> float:
     s = str(value or "").strip()
     if not s:
@@ -1241,6 +1305,7 @@ def _format_csv_projection(
     columns: Sequence[Tuple[str, Sequence[str]]],
     limit_rows: int = 25,
     time_only_cols: Optional[Set[str]] = None,
+    time_shift_5min_cols: Optional[Set[str]] = None,
     sort_numeric_desc_by_keys: Optional[Sequence[str]] = None,
     total_numeric_by_keys: Optional[Sequence[str]] = None,
     total_numeric_label: str = "",
@@ -1300,6 +1365,7 @@ def _format_csv_projection(
 
     rows: list[dict[str, str]] = []
     time_only_cols = set(time_only_cols or set())
+    time_shift_5min_cols = set(time_shift_5min_cols or set())
     indian_numeric_cols = set(indian_numeric_cols or set())
     indian_int_cols = set(indian_int_cols or set())
     percent_cols = set(percent_cols or set())
@@ -1314,6 +1380,8 @@ def _format_csv_projection(
                     val = ""
             else:
                 val = _pick_csv_value(row, key_candidates)
+            if col_name in time_shift_5min_cols:
+                val = _shift_iso_5min(val)
             if col_name in time_only_cols:
                 val = _extract_time_only(val)
             elif col_name in percent_cols:
@@ -1665,6 +1733,7 @@ _PENDING_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
     ("side",         ("side",)),
     ("status",       ("status",)),
     ("setup",        ("setup",)),
+    ("trigger_iso",  ("trigger_bar_iso",)),
     ("entry_ist",    ("signal_entry_datetime_ist",)),
     ("expires_at",   ("expires_at",)),
     ("entry_px",     ("entry_price",)),
@@ -1672,14 +1741,15 @@ _PENDING_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
     ("tgt_px",       ("target_price",)),
 ]
 _DETECTED_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
-    ("detected_at",  ("detected_time",)),
-    ("ticker",       ("ticker",)),
-    ("side",         ("side",)),
-    ("setup",        ("setup",)),
-    ("entry_px",     ("entry_price",)),
-    ("stop_px",      ("stop_price", "sl_price")),
-    ("tgt_px",       ("target_price",)),
-    ("lag_sec",      ("lag_from_signal_sec",)),
+    ("detected_at",   ("detected_time",)),
+    ("ticker",        ("ticker",)),
+    ("side",          ("side",)),
+    ("setup",         ("setup",)),
+    ("entry_px",      ("entry_price",)),
+    ("stop_px",       ("stop_price", "sl_price")),
+    ("tgt_px",        ("target_price",)),
+    ("lag_bar_sec",   ("lag_from_signal_bar_sec", "lag_from_signal_sec")),
+    ("lag_entry_sec", ("lag_from_entry_slot_sec",)),
 ]
 _LIVE_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
     ("signal_datetime", ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist", "created_ts_ist")),
@@ -2597,7 +2667,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const LOG_ORDER = [
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
-      "signal_engine_v16_5min",
+      "signal_early_engine_v16_5min",
       "pending_signals_v16_5min",
       "pending_data_fetcher_v16_5min",
       "detection_engine_v16_5min",
@@ -2625,7 +2695,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_1540_update"
     ];
     const LOG_TITLES = {
-      "signal_engine_v16_5min":        "V16 5min Signal Engine (Raw Pool)",
+      "signal_early_engine_v16_5min":  "V16 5min Signal Early Engine (SEE)",
       "pending_signals_v16_5min":      "V16 5min Pending Pool CSV",
       "pending_data_fetcher_v16_5min": "V16 5min Pending Data Fetcher",
       "detection_engine_v16_5min":     "V16 5min Detection Engine (Confirmation)",
@@ -2660,7 +2730,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const RESTARTABLE_CARDS = new Set([
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
-      "signal_engine_v16_5min",
+      "signal_early_engine_v16_5min",
       "detection_engine_v16_5min",
       "pending_data_fetcher_v16_5min",
       "kite_positions_day_today_csv",
@@ -3304,7 +3374,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 tail = _format_csv_projection(
                     path, _PENDING_SIGNALS_V16_COLS,
                     limit_rows=5000,
-                    time_only_cols={"added_at", "entry_ist", "expires_at"},
+                    time_only_cols={"added_at", "trigger_iso", "entry_ist", "expires_at"},
                 )
             elif key == "detected_signals_v16_5min":
                 tail = _format_csv_projection(
@@ -3314,6 +3384,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 )
             elif key == "preopen_healthcheck":
                 tail = _format_preopen_scheduled_sessions()
+            elif key in ("signal_early_engine_v16_5min", "pending_data_fetcher_v16_5min", "detection_engine_v16_5min"):
+                tail = _shift_bar_slots_in_text(tail_text(path, lines=lines))
             else:
                 tail = tail_text(path, lines=lines)
             items.append(
@@ -3526,6 +3598,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             _LIVE_SIGNALS_V16_COLS,
             limit_rows=5000,
             time_only_cols={"signal_datetime", "detected_time_ist"},
+            time_shift_5min_cols={"signal_datetime"},
         )
         items.append(
             {
@@ -3558,6 +3631,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             _LIVE_SIGNALS_V16_COLS,
             limit_rows=5000,
             time_only_cols={"signal_datetime", "detected_time_ist"},
+            time_shift_5min_cols={"signal_datetime"},
         )
         items.append(
             {

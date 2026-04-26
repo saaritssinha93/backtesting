@@ -1,9 +1,9 @@
-# Auto-generated at IST: 2026-04-21 22:50:04+0530
+# Auto-generated at IST: 2026-04-22 11:49:51+0530
 # Source universe: filtered_stocks_NSE_stock_universe.py
 # Kite app used: app1
 # Probe: BUY 1 share, NSE regular MIS MARKET dry-run via order_margins()
 # Rule: leverage >= 5.00x
-# Count: 1452
+# Count: 1448
 
 selected_stocks = {
     '20MICRONS',
@@ -140,7 +140,6 @@ selected_stocks = {
     'AUROPHARMA',
     'AUTOAXLES',
     'AUTOIND',
-    'AVADHSUGAR',
     'AVALON',
     'AVANTEL',
     'AVANTIFEED',
@@ -774,7 +773,6 @@ selected_stocks = {
     'LLOYDSME',
     'LMW',
     'LODHA',
-    'LOKESHMACH',
     'LOTUSDEV',
     'LT',
     'LTF',
@@ -830,7 +828,6 @@ selected_stocks = {
     'MEDIASSIST',
     'MEDPLUS',
     'MEESHO',
-    'MEIL',
     'METROBRAND',
     'METROPOLIS',
     'MFSL',
@@ -1086,7 +1083,6 @@ selected_stocks = {
     'RITCO',
     'RITES',
     'RKFORGE',
-    'RMDRIP',
     'RML',
     'ROHLTD',
     'ROLEXRINGS',

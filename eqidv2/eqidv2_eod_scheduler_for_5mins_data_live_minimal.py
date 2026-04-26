@@ -794,12 +794,20 @@ def _read_holidays_set() -> set:
     except Exception:
         return set()
 
-def _split_tickers_evenly(tickers: list[str], partition_count: int) -> list[list[str]]:
+def _split_tickers_evenly(
+    tickers: list[str],
+    partition_count: int,
+    shift: int = 0,
+) -> list[list[str]]:
     ordered = sorted({str(t).strip().upper() for t in tickers if str(t).strip()})
     partition_count = max(1, int(partition_count))
     partitions: list[list[str]] = [[] for _ in range(partition_count)]
+    # shift rotates the ticker->partition mapping so callers (e.g. PF retry
+    # path) can reroute the same ticker set to a different app on a subsequent
+    # attempt. shift=0 preserves the original round-robin assignment.
+    shift = int(shift) % partition_count if partition_count else 0
     for idx, ticker in enumerate(ordered):
-        partitions[idx % partition_count].append(ticker)
+        partitions[(idx + shift) % partition_count].append(ticker)
     return partitions
 
 def _app_index(app_name: str) -> int:
@@ -936,6 +944,7 @@ def _app_auth_label(app_name: str) -> str:
 def _build_working_app_partitions(
     tickers: list[str],
     token_map: dict[str, int],
+    partition_shift: int = 0,
 ) -> tuple[list[tuple[str, list[str], dict[str, int], str]], list[tuple[str, str]]]:
     working_apps: list[tuple[str, str]] = []
     failed_apps: list[tuple[str, str]] = []
@@ -958,7 +967,9 @@ def _build_working_app_partitions(
         failure_summary = " | ".join(f"{app_name}: {detail}" for app_name, detail in failed_apps) or "no auth profiles found"
         raise RuntimeError(f"No valid Kite sessions available for 5min fetch. {failure_summary}")
 
-    ticker_partitions = _split_tickers_evenly(tickers, len(working_apps))
+    ticker_partitions = _split_tickers_evenly(
+        tickers, len(working_apps), shift=partition_shift
+    )
     assignments: list[tuple[str, list[str], dict[str, int], str]] = []
     for idx, (app_name, user_name) in enumerate(working_apps):
         partition_tickers = ticker_partitions[idx]
@@ -1176,6 +1187,8 @@ def run_update_5m_once(
     ready_marker_min_fresh_ratio: float = DEFAULT_READY_MARKER_MIN_FRESH_RATIO,
     slot_sla_warn_sec: float = DEFAULT_SLOT_SLA_WARN_SEC,
     partition_timeout_sec: float = DEFAULT_PARTITION_TIMEOUT_SEC,
+    publish_completion_marker: bool = True,
+    partition_shift: int = 0,
 ) -> dict[str, object]:
     slot_started_at = time.perf_counter()
     holidays = _read_holidays_set()
@@ -1191,7 +1204,9 @@ def run_update_5m_once(
             "(attempting 09:15 opening snapshot fetch)."
         )
 
-    app_assignments, failed_apps = _build_working_app_partitions(all_tickers, token_map)
+    app_assignments, failed_apps = _build_working_app_partitions(
+        all_tickers, token_map, partition_shift=partition_shift
+    )
     active_apps = [app_name for app_name, ptickers, _, _ in app_assignments if ptickers]
 
     print(
@@ -1400,37 +1415,42 @@ def run_update_5m_once(
         except Exception as exc:
             print(f"[WARN] Failed to write 5min slot status: {exc}")
 
-        # strategy_v2 §M1 — always publish the authoritative completion marker
-        # AFTER workers join and status is written. This overwrites any earlier
+        # strategy_v2 §M1 — publish the authoritative completion marker AFTER
+        # workers join and status is written. This overwrites any earlier
         # watcher-published marker and carries the real fetch outcome so SE can
         # decide between "scan" and "[ABORT] LF_INCOMPLETE" without guessing.
-        try:
-            tickers_expected_total = int(len(all_tickers))
-            tickers_written_total = int(sum(partition_symbol_counts.values()))
-            sample_fresh = 0
-            sample_checked = 0
-            if bool(ready_marker_enabled) and 'ready_sample' in locals() and ready_sample:
-                target_slot = slot_end.astimezone(IST)
-                for ticker in ready_sample:
-                    ok, last_ts, _ = _ticker_has_required_5m_slot_data(ticker, target_slot)
-                    if last_ts is None:
-                        continue
-                    sample_checked += 1
-                    if ok:
-                        sample_fresh += 1
-            _publish_slot_completion_marker(
-                slot_end,
-                tickers_expected=tickers_expected_total,
-                tickers_written=tickers_written_total,
-                failures=failures,
-                verification_failed_count=verification_failed_count,
-                verification_failure_sample=verification_failure_sample,
-                duration_ms=float(total_elapsed_sec) * 1000.0,
-                sample_fresh=sample_fresh,
-                sample_checked=sample_checked,
-            )
-        except Exception as exc:
-            print(f"[WARN] Failed to write 5min completion marker: {exc}")
+        # P0 fix (2026-04-23): gate behind `publish_completion_marker` so the
+        # PF (which calls this with a 6-ticker pending subset) cannot clobber
+        # LF's full-universe slot_ready_5m/slot_<…>.json marker. PF passes
+        # publish_completion_marker=False; LF leaves it at the default True.
+        if bool(publish_completion_marker):
+            try:
+                tickers_expected_total = int(len(all_tickers))
+                tickers_written_total = int(sum(partition_symbol_counts.values()))
+                sample_fresh = 0
+                sample_checked = 0
+                if bool(ready_marker_enabled) and 'ready_sample' in locals() and ready_sample:
+                    target_slot = slot_end.astimezone(IST)
+                    for ticker in ready_sample:
+                        ok, last_ts, _ = _ticker_has_required_5m_slot_data(ticker, target_slot)
+                        if last_ts is None:
+                            continue
+                        sample_checked += 1
+                        if ok:
+                            sample_fresh += 1
+                _publish_slot_completion_marker(
+                    slot_end,
+                    tickers_expected=tickers_expected_total,
+                    tickers_written=tickers_written_total,
+                    failures=failures,
+                    verification_failed_count=verification_failed_count,
+                    verification_failure_sample=verification_failure_sample,
+                    duration_ms=float(total_elapsed_sec) * 1000.0,
+                    sample_fresh=sample_fresh,
+                    sample_checked=sample_checked,
+                )
+            except Exception as exc:
+                print(f"[WARN] Failed to write 5min completion marker: {exc}")
 
     if failures:
         raise RuntimeError("Parallel partition run failed: " + " | ".join(failures))
