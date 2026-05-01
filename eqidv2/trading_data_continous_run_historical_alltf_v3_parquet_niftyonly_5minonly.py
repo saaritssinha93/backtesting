@@ -102,6 +102,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fetch even when the target parquet already looks fresh.",
     )
+    p.add_argument(
+        "--skip-marker",
+        action="store_true",
+        help=(
+            "Suppress writing nifty_ready_*.json and nifty_open_slot_*.json "
+            "DE markers. Use this for SECONDARY index fetches (e.g., NIFTY 500) "
+            "so they do not overwrite the primary NIFTYBEES regime marker that "
+            "the live detection engine consumes."
+        ),
+    )
     return p.parse_args()
 
 
@@ -119,19 +129,41 @@ def _resolve_symbol_token(kite, symbol: str, token_override: Optional[int]) -> i
         return int(token_override)
 
     wanted = str(symbol).strip().upper()
+    wanted_nospace = wanted.replace(" ", "")
     instruments = pd.DataFrame(kite.instruments("NSE"))
     if instruments.empty:
         raise RuntimeError("kite.instruments('NSE') returned no rows.")
 
-    candidates = instruments[instruments["tradingsymbol"].astype(str).str.upper() == wanted]
+    ts_upper = instruments["tradingsymbol"].astype(str).str.upper()
+    name_upper = instruments["name"].astype(str).str.upper()
+    ts_nospace = ts_upper.str.replace(" ", "", regex=False)
+    name_nospace = name_upper.str.replace(" ", "", regex=False)
+
+    # 1. Exact tradingsymbol match (with original spaces).
+    candidates = instruments[ts_upper == wanted]
+    # 2. Exact tradingsymbol match ignoring whitespace
+    #    (handles "NIFTY 500" vs "NIFTY500" alias mismatches).
     if candidates.empty:
-        name_match = instruments[instruments["name"].astype(str).str.upper() == wanted]
-        candidates = name_match
+        candidates = instruments[ts_nospace == wanted_nospace]
+    # 3. Exact name match.
     if candidates.empty:
-        contains = instruments[instruments["tradingsymbol"].astype(str).str.upper().str.contains(wanted, regex=False)]
-        candidates = contains
+        candidates = instruments[name_upper == wanted]
+    # 4. Exact name match ignoring whitespace.
+    if candidates.empty:
+        candidates = instruments[name_nospace == wanted_nospace]
+    # 5. Substring contains (last-resort fuzzy).
+    if candidates.empty:
+        candidates = instruments[ts_upper.str.contains(wanted, regex=False)]
     if candidates.empty:
         raise RuntimeError(f"Could not resolve NSE token for symbol={wanted}")
+
+    # Prefer INDICES segment if multiple match (keeps index over an ETF
+    # when both exist with similar names).
+    if len(candidates) > 1 and "segment" in candidates.columns:
+        seg_upper = candidates["segment"].astype(str).str.upper()
+        idx_pref = candidates[seg_upper.str.contains("INDIC", regex=False)]
+        if not idx_pref.empty:
+            candidates = idx_pref
 
     row = candidates.iloc[0]
     return int(row["instrument_token"])
@@ -509,8 +541,13 @@ def main() -> int:
     # Audit #2 — publish the per-day open-slot marker first so DE can proceed
     # with neutral RS at 09:15 even if the regular Kite fetch path later fails
     # (no prior in-day bar exists at session open). Idempotent: only writes
-    # once per day in the [09:15:00, 09:20:00) window.
-    _maybe_write_open_slot_marker(now_ist, holidays, logger)
+    # once per day in the [09:15:00, 09:20:00) window. Suppressed for
+    # SECONDARY index runs (--skip-marker) to avoid overwriting the primary
+    # NIFTYBEES marker that DE consumes.
+    if not args.skip_marker:
+        _maybe_write_open_slot_marker(now_ist, holidays, logger)
+    else:
+        logger.info("--skip-marker: suppressing nifty_open_slot_*.json write")
 
     kite = setup_kite_session()
     token = _resolve_symbol_token(kite, args.symbol, args.token_override)
@@ -534,14 +571,15 @@ def main() -> int:
         and not opening_snapshot_missing
     ):
         logger.info("%s already fresh. Skipping fetch.", primary_alias)
-        _maybe_write_nf_marker_from_existing(
-            existing=existing,
-            end_dt=end_dt,
-            primary_alias=primary_alias,
-            out_path=primary_out,
-            intraday_ts=args.intraday_ts,
-            logger=logger,
-        )
+        if not args.skip_marker:
+            _maybe_write_nf_marker_from_existing(
+                existing=existing,
+                end_dt=end_dt,
+                primary_alias=primary_alias,
+                out_path=primary_out,
+                intraday_ts=args.intraday_ts,
+                logger=logger,
+            )
         return 0
 
     merged = existing.copy()
@@ -593,6 +631,11 @@ def main() -> int:
     # strategy_v2 C1 — only publish the NF slot-ready marker when the confirmed
     # last bar actually reaches end_dt. A partial fetch must NOT advertise the
     # slot to DE; better for DE to ABORT with NF_STALE than run RS off stale data.
+    # Suppressed entirely for SECONDARY index runs (--skip-marker).
+    if args.skip_marker:
+        logger.info("--skip-marker: suppressing nifty_ready_*.json write")
+        return 0
+
     try:
         if not merged.empty:
             last_bar = merged["date"].iloc[-1]

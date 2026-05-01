@@ -137,6 +137,8 @@ def run_replay_for_date(
     start_slot: str | None = None,
     end_slot: str | None = None,
 ) -> Dict[str, Any]:
+    if write_live_signals:
+        live_v16.DIRECT_SIGNAL_CSV_MODE = "direct"
     signal_day_str = target_day.strftime("%Y-%m-%d")
     slots = _filter_slots(_iter_slots(target_day), start_slot, end_slot)
     tickers = live_v16._list_tickers_5m()

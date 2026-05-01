@@ -17,7 +17,12 @@ set "EQIDV2_5M_LIVE_SLIM_MODE=1"
 set "EQIDV2_5M_LIVE_SLIM_CALENDAR_DAYS=10"
 set "EQIDV2_5M_BUFFER_SEC=30"
 set "EQIDV2_5M_QUARTER_HOUR_BUFFER_SEC=30"
-set "EQIDV2_5M_KITE_TIMEOUT_SEC=12"
+REM 2026-04-27 outage tuning: with 4 retries x 12s timeout x 5 batches per
+REM partition, a hung Kite endpoint took the partition to ~240s (>150s
+REM partition_timeout) and SIGKILLed every worker for 5 consecutive slots.
+REM Drop per-call timeout to 8s so worst-case per-ticker = 4*8 + backoff
+REM (~40s), keeping partitions inside the 150s SIGKILL boundary.
+set "EQIDV2_5M_KITE_TIMEOUT_SEC=8"
 set "EQIDV2_5M_PARTITION_TIMEOUT_SEC=150"
 set "EQIDV2_5M_ADAPTIVE_THROTTLE=1"
 set "EQIDV2_5M_ADAPTIVE_MIN_WORKERS=40"

@@ -238,7 +238,12 @@ def setup_kite_session() -> KiteConnect:
         access_token = f.read().strip()
     with open("api_key.txt", "r", encoding="utf-8") as f:
         api_key = f.read().split()[0]
-    kite_local = KiteConnect(api_key=api_key)
+    # Per-call HTTP timeout. Without this, requests.get() inside kiteconnect
+    # has no timeout and a hung Kite endpoint freezes the worker until the
+    # scheduler's partition_timeout SIGKILLs it (no error logged). The default
+    # `timeout=None` was the root cause of the 2026-04-27 09:45-10:25 outage.
+    kite_timeout_s = float(os.getenv("EQIDV2_KITE_HTTP_TIMEOUT_SEC", "30"))
+    kite_local = KiteConnect(api_key=api_key, timeout=kite_timeout_s)
     kite_local.set_access_token(access_token)
     return kite_local
 

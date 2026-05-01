@@ -25,14 +25,20 @@ REM publish delay (the dominant bar-close -> fetchable latency, ~20-50s),
 REM which is the real bottleneck in the restart-resume path.
 set "EQIDV2_PENDING_FETCH_RECHECK_AFTER_SEC=1"
 set "EQIDV2_PENDING_POOL_POLL_INTERVAL_SEC=1"
-REM Entry-bar-verify mode (2026-04-24): per strategy_map_v16_5min.md.
-REM - DISABLE_LAG_SHIFT=1 makes trigger_slot = source_slot = entry_ist for all lags
-REM - PF_VERIFY_TRIGGER_BAR=0 makes verify_slot = trigger_slot (no -5min offset)
-REM Combined: PF waits for the ENTRY bar itself to appear in parquet before
-REM writing marker. Lag=1 and lag=2 become symmetric. Marker filename is the
-REM entry slot. Rollback: unset these two vars (or set to 0).
+REM Closed-trigger-bar verify mode (2026-04-27): re-enables the 2026-04-23
+REM PF-TRIGGER-FIX after the 2026-04-24 entry-bar-verify reversion.
+REM - DISABLE_LAG_SHIFT=1 keeps trigger_slot = source_slot = entry_ist
+REM - PF_VERIFY_TRIGGER_BAR=1 makes verify_slot = trigger_slot - 5min
+REM Combined: PF verifies the just-CLOSED trigger bar at entry_slot+1s.
+REM Kite serves closed bars within ~1-2s; no 52s forming-bar wait.
+REM Marker filename still = entry_slot for DE compatibility. Rollback: =0.
 set "EQIDV16_5MIN_DISABLE_LAG_SHIFT=1"
-set "EQIDV16_5MIN_PF_VERIFY_TRIGGER_BAR=0"
+set "EQIDV16_5MIN_PF_VERIFY_TRIGGER_BAR=1"
+REM Stale-marker expiry: refuse to publish markers for slots whose entry
+REM time is already past MAX_PF_MARKER_LAG_SEC. Without this, a PF stall +
+REM recovery publishes 30-40min-old markers (2026-04-27 cascade: 36 trades
+REM rejected by executor late-detection gate). Default 90s; 0 disables.
+set "EQIDV16_5MIN_MAX_PF_MARKER_LAG_SEC=90"
 set "EQIDV2_PENDING_FETCH_MAX_WORKERS=64"
 set "EQIDV2_PENDING_FETCH_MAX_WORKERS_PER_APP=8"
 REM Cross-app retry ladder (2026-04-23): up to 5 attempts on 5 different Kite
@@ -88,7 +94,13 @@ REM EOD `_5min_eq` parquets instead of intraday `_5min_eq_live`.
   --process eqidv2_pending_data_fetcher_v16_5min ^
   --from-env EQIDV2_DATA_5M_DIR ^
   --from-env EQIDV2_RUNTIME_ROOT ^
-  --from-env EQIDV2_LIVE_SIGNALS_DIR >> "%LOG_FILE%" 2>&1
+  --from-env EQIDV2_LIVE_SIGNALS_DIR ^
+  --from-env EQIDV16_5MIN_PF_VERIFY_TRIGGER_BAR ^
+  --from-env EQIDV16_5MIN_DISABLE_LAG_SHIFT ^
+  --from-env EQIDV16_5MIN_MAX_PF_MARKER_LAG_SEC ^
+  --from-env EQIDV2_PENDING_FETCH_INTERVAL_SEC ^
+  --from-env EQIDV2_PENDING_FETCH_SLOT_OFFSET_SEC ^
+  --from-env EQIDV2_5M_KITE_TIMEOUT_SEC >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
   echo [WARN] runtime config claim write failed; continuing in soft mode>> "%LOG_FILE%"
 )

@@ -13,9 +13,9 @@ Scans all 1041 NSE tickers every 5 minutes using:
   - V16 anti-exhaustion post-scan filters (RSI dead zone, QS two-band, AVWAP dist cap)
   - Unified SL/TGT: 0.75% stop, 1.00% target
 
-Outputs (to LIVE_SIGNALS_DIR):
-  signals_YYYY-MM-DD_v16_5min_short.csv
-  signals_YYYY-MM-DD_v16_5min_long.csv
+Outputs default to shadow CSVs. Official executable signal CSVs are owned by
+the SEE -> PF -> DE pipeline; set EQIDV16_5MIN_DIRECT_SIGNAL_CSV_MODE=direct
+only for an explicit emergency bypass.
 
 Status files (to logs/):
   eqidv2_live_combined_analyser_csv_v16_5min.status
@@ -102,6 +102,21 @@ NIFTYBEES_TICKER = "NIFTYBEES"
 
 SHORT_SIGNAL_CSV_PATTERN = "signals_{}_v16_5min_short.csv"
 LONG_SIGNAL_CSV_PATTERN  = "signals_{}_v16_5min_long.csv"
+SHADOW_SHORT_SIGNAL_CSV_PATTERN = "shadow_signals_{}_v16_5min_short.csv"
+SHADOW_LONG_SIGNAL_CSV_PATTERN  = "shadow_signals_{}_v16_5min_long.csv"
+
+_DIRECT_SIGNAL_CSV_MODE_RAW = str(
+    os.getenv(
+        "EQIDV16_5MIN_DIRECT_SIGNAL_CSV_MODE",
+        os.getenv("EQIDV16_5MIN_SIGNAL_CSV_MODE", "shadow"),
+    )
+).strip().lower()
+if _DIRECT_SIGNAL_CSV_MODE_RAW in {"1", "true", "yes", "on", "direct", "live"}:
+    DIRECT_SIGNAL_CSV_MODE = "direct"
+elif _DIRECT_SIGNAL_CSV_MODE_RAW in {"0", "false", "no", "off", "disabled", "disable", "none"}:
+    DIRECT_SIGNAL_CSV_MODE = "disabled"
+else:
+    DIRECT_SIGNAL_CSV_MODE = "shadow"
 
 SLOT_MINUTES        = 5
 START_TIME          = dtime(9, 15)
@@ -1046,7 +1061,14 @@ def _build_backtest_context_state(slot_ist: datetime, cfg: StrategyConfig) -> Di
 # SIGNAL CSV WRITING
 # ===========================================================================
 def _signal_csv_path(signal_day_str: str, side: str) -> Path:
-    pattern = SHORT_SIGNAL_CSV_PATTERN if side.upper() == "SHORT" else LONG_SIGNAL_CSV_PATTERN
+    if DIRECT_SIGNAL_CSV_MODE == "shadow":
+        pattern = (
+            SHADOW_SHORT_SIGNAL_CSV_PATTERN
+            if side.upper() == "SHORT"
+            else SHADOW_LONG_SIGNAL_CSV_PATTERN
+        )
+    else:
+        pattern = SHORT_SIGNAL_CSV_PATTERN if side.upper() == "SHORT" else LONG_SIGNAL_CSV_PATTERN
     return Path(RUNTIME_LIVE_SIGNALS_DIR) / pattern.format(signal_day_str)
 
 
@@ -1061,6 +1083,14 @@ def _safe_float(val: Any, default: float = float("nan")) -> float:
 def _write_side_signals_csv(signals: List[dict], side: str, signal_day_str: str) -> int:
     """Write new (deduplicated) signals to the daily side CSV. Returns written count."""
     side_upper = side.upper()
+    if DIRECT_SIGNAL_CSV_MODE == "disabled":
+        count = sum(1 for s in signals if str(s.get("side", "")).upper() == side_upper)
+        print(
+            f"[V16_5MIN {side_upper} CSV] written=0 skipped={count} "
+            f"mode=disabled (PF/DE owns executable signal CSVs)",
+            flush=True,
+        )
+        return 0
     csv_path = _signal_csv_path(signal_day_str, side_upper)
 
     signals_side = [s for s in signals if str(s.get("side", "")).upper() == side_upper]
@@ -1154,7 +1184,8 @@ def _write_side_signals_csv(signals: List[dict], side: str, signal_day_str: str)
                 written += 1
 
     print(
-        f"[V16_5MIN {side_upper} CSV] written={written} skipped={skipped} path={csv_path}",
+        f"[V16_5MIN {side_upper} CSV] written={written} skipped={skipped} "
+        f"mode={DIRECT_SIGNAL_CSV_MODE} path={csv_path}",
         flush=True,
     )
     return written
@@ -1495,6 +1526,8 @@ def main() -> None:
         "EQIDV2 V16 5min Live Scanner - Anti-exhaustion filters\n"
         f"  DATA_5M_DIR : {DIR_5M}\n"
         f"  SIGNALS_DIR : {RUNTIME_LIVE_SIGNALS_DIR}\n"
+        f"  CSV_MODE    : {DIRECT_SIGNAL_CSV_MODE} "
+        "(official executable CSVs are PF/DE-owned unless mode=direct)\n"
         f"  TARGET      : SHORT={TEST_SHORT_TARGET_PCT*100:.2f}%, LONG={TEST_LONG_TARGET_PCT*100:.2f}%\n"
         "  STOP        : SHORT=0.75%, LONG=0.75%\n"
         "  CONTEXT     : backtest intraday NIFTY context + per-stock RS\n"

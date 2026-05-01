@@ -15,6 +15,9 @@ set "EQIDV16_5MIN_SLOT_READY_MARKER_MIN_FRESH_RATIO=0.98"
 set "EQIDV16_5MIN_SLOT_READY_PRIORITY_TICKERS=NIFTYBEES,SBIN,RELIANCE,TCS,HDFCBANK,ICICIBANK,INFY"
 set "EQIDV16_5MIN_SLOT_START_OFFSET_SECONDS=22"
 set "EQIDV16_5MIN_SLOT_READY_SAMPLE_SIZE=2000"
+rem Official executable signal CSVs are owned by SEE -> PF -> DE.
+rem This legacy scanner may run for audit only unless explicitly overridden.
+set "EQIDV16_5MIN_DIRECT_SIGNAL_CSV_MODE=shadow"
 
 set "LOG_DIR=%BASE_DIR%\logs"
 set "ALERT_DIR=%LOG_DIR%\alerts"

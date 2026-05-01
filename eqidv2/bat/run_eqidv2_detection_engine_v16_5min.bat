@@ -26,11 +26,14 @@ REM [ABORT] NF_STALE). Set _REQUIRE=0 only for offline replay.
 set "EQIDV2_DETECTION_NF_READY_REQUIRE=1"
 set "EQIDV2_DETECTION_NF_READY_TIMEOUT_SEC=90"
 set "EQIDV2_DETECTION_NF_READY_POLL_SEC=1"
-REM Entry-bar-verify mode (2026-04-24): per strategy_map_v16_5min.md.
-REM Must be set identically to PF so both sides agree on marker filenames and
-REM verify semantics. Rollback: unset these (or set to 0).
+REM Closed-trigger-bar verify mode (2026-04-27): re-enables the 2026-04-23
+REM DE-TRIGGER-FIX after the 2026-04-24 entry-bar-verify reversion. Must be
+REM set identically to PF so both sides agree on marker filenames and verify
+REM semantics. With DE_VERIFY_TRIGGER_BAR=1, DE accepts markers as soon as
+REM the closed trigger bar (entry_slot - 5min) is in canonical, instead of
+REM waiting for the forming entry bar's 52s Kite-publish delay. Rollback: =0.
 set "EQIDV16_5MIN_DISABLE_LAG_SHIFT=1"
-set "EQIDV16_5MIN_DE_VERIFY_TRIGGER_BAR=0"
+set "EQIDV16_5MIN_DE_VERIFY_TRIGGER_BAR=1"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
 set "SCRIPT_NAME=eqidv2_detection_engine_v16_5min.py"
@@ -66,7 +69,12 @@ REM `_5min_eq` parquets, scans yesterday's bars, and rejects every signal.
   --process eqidv2_detection_engine_v16_5min ^
   --from-env EQIDV2_DATA_5M_DIR ^
   --from-env EQIDV2_RUNTIME_ROOT ^
-  --from-env EQIDV2_LIVE_SIGNALS_DIR >> "%LOG_FILE%" 2>&1
+  --from-env EQIDV2_LIVE_SIGNALS_DIR ^
+  --from-env EQIDV16_5MIN_DE_VERIFY_TRIGGER_BAR ^
+  --from-env EQIDV16_5MIN_DISABLE_LAG_SHIFT ^
+  --from-env EQIDV2_DETECTION_CHECK_INTERVAL_SEC ^
+  --from-env EQIDV2_DETECTION_SLOT_OFFSET_SEC ^
+  --from-env EQIDV2_DETECTION_MAX_DATA_AGE_SEC >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
   echo [WARN] runtime config claim write failed; continuing in soft mode>> "%LOG_FILE%"
 )

@@ -164,6 +164,13 @@ PENDING_POOL_POLL_INTERVAL_SEC = float(
     os.getenv("EQIDV2_PENDING_POOL_POLL_INTERVAL_SEC", "5")
 )
 
+# A closed-row presence check is not enough in live parquet because some feeds
+# can materialize the forming 5-minute row before its close. Keep PF markers
+# behind the documented entry-slot clock regardless of row presence.
+BLOCK_EARLY_MARKERS = str(
+    os.getenv("EQIDV16_5MIN_BLOCK_EARLY_MARKERS", "1")
+).strip().lower() not in {"0", "false", "no", "off", ""}
+
 # Max concurrent workers for the pending-only refresh using the shared 8-app fetch path.
 PENDING_MAX_WORKERS     = int(os.getenv("EQIDV2_PENDING_FETCH_MAX_WORKERS", "8"))
 PENDING_MAX_WORKERS_PER_APP = int(os.getenv("EQIDV2_PENDING_FETCH_MAX_WORKERS_PER_APP", "8"))
@@ -189,6 +196,18 @@ VERIFY_FAIL_MAX_RETRIES = int(os.getenv("EQIDV2_PENDING_VERIFY_FAIL_MAX_RETRIES"
 PF_VERIFY_TRIGGER_BAR = str(
     os.getenv("EQIDV16_5MIN_PF_VERIFY_TRIGGER_BAR", "1")
 ).strip().lower() not in {"0", "false", "no", "off"}
+
+
+# Stale-marker expiry: refuse to publish a marker for a slot that's already
+# older than MAX_PF_MARKER_LAG_SEC. Without this guard, a PF stall + recovery
+# can publish markers for slots 30-40min in the past, which the executor's
+# late-detection gate then silently rejects (one such cascade on 2026-04-27
+# cost 36 ENTRY_SKIPPED_STALE_DETECTION). Guard fires before the parquet
+# verify so even stale-but-verifiable signals are dropped at PF, not DE.
+# Default 90s leaves headroom for healthy fetch (~2-5s) plus brief Kite blips.
+MAX_PF_MARKER_LAG_SEC = max(
+    1, int(os.getenv("EQIDV16_5MIN_MAX_PF_MARKER_LAG_SEC", "90"))
+)
 
 
 # ===========================================================================
@@ -694,9 +713,32 @@ def _emit_per_trigger_slot_markers(
     written: List[datetime] = []
     if not slot_map:
         return written
+    now_ist = datetime.now(IST)
     for slot_ts, slot_tickers in sorted(slot_map.items()):
         slot_ist = slot_ts.astimezone(IST)
         marker_path = SLOT_READY_PENDING_DIR / (slot_ist.strftime("%Y%m%d_%H%M") + ".ready")
+        if BLOCK_EARLY_MARKERS:
+            earliest_marker_ist = slot_ist + timedelta(seconds=max(0, SLOT_OFFSET_SEC))
+            early_wait_sec = (earliest_marker_ist - now_ist).total_seconds()
+            if early_wait_sec > 0:
+                print(
+                    f"[PENDING_FETCH] marker_wait_pre_entry | slot={slot_ist.strftime('%H:%M')} "
+                    f"| wait={early_wait_sec:.0f}s | tickers={len(slot_tickers)}",
+                    flush=True,
+                )
+                continue
+        # Stale-marker expiry guard: drop slots whose entry-time is already
+        # past MAX_PF_MARKER_LAG_SEC. Prevents post-stall recovery from
+        # publishing markers for 30-40min-old slots that DE/executor would
+        # then reject anyway. Logged so we can see what was dropped.
+        marker_lag_sec = (now_ist - slot_ist).total_seconds()
+        if marker_lag_sec > MAX_PF_MARKER_LAG_SEC:
+            print(
+                f"[PENDING_FETCH] marker_expired_pre_verify | slot={slot_ist.strftime('%H:%M')} "
+                f"| lag={marker_lag_sec:.0f}s > {MAX_PF_MARKER_LAG_SEC}s | tickers={len(slot_tickers)}",
+                flush=True,
+            )
+            continue
         if eligible_tickers is not None:
             candidates = [t for t in slot_tickers if t in eligible_tickers]
         else:
@@ -1066,6 +1108,7 @@ def main() -> None:
         f"  LIVE_DATA_DIR    : {RUNTIME_DATA_5M_DIR}\n"
         f"  READY_MARKER_DIR : {SLOT_READY_PENDING_DIR}\n"
         f"  INTERVAL         : {FETCH_INTERVAL_SEC}s\n"
+        f"  ENTRY_CLOCK_GATE : {BLOCK_EARLY_MARKERS} (offset={SLOT_OFFSET_SEC}s)\n"
         "  Fetches fresh 5-min data for ONLY pending pool tickers\n"
         "=" * 70,
         flush=True,

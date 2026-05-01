@@ -522,6 +522,8 @@ def _is_rate_limit_error(error: Exception) -> bool:
         or "rate limit" in text
         or "http 429" in text
         or " 429 " in f" {text} "
+        or "maximum allowed order requests" in text
+        or "maximum allowed requests per second" in text
     )
 
 
@@ -2309,7 +2311,7 @@ def _log_non_executed_signal_to_csv(signal: dict, signal_id: str, outcome: str) 
         signal_id=signal_id,
         signal_datetime=str(signal.get("signal_datetime", "")),
         signal_entry_datetime_ist=str(signal.get("signal_entry_datetime_ist", "")),
-        entry_time=now_str,
+        entry_time="",
         exit_time=now_str,
         ticker=str(signal.get("ticker", "")).upper(),
         side=str(signal.get("side", "")).upper(),

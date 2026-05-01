@@ -236,6 +236,19 @@ READY_MARKER_MAX_AGE_SEC = int(
 DETECTION_PARITY_MODE = str(
     os.getenv("EQIDV2_DETECTION_PARITY_MODE", "1")
 ).strip().lower() not in {"0", "false", "no", "off"}
+# DE-stage entry-slot lag cap. After a data-fetch outage (e.g. 2026-04-27
+# 09:45-10:25 Kite slowdown), DE drains the entire backlog of slots-old
+# signals in a single cycle. Without this filter, the executor would only
+# reject them downstream as ENTRY_SKIPPED_STALE_DETECTION, and that wave of
+# rejections still touches Kite (rate-limit hits). Filter at DE so the
+# cascade stops here. Defaults to executor's late-detection cap so config
+# stays in sync.
+DE_MAX_ENTRY_LAG_SEC = float(
+    os.getenv(
+        "EQIDV2_DE_MAX_ENTRY_LAG_SEC",
+        os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "900"),
+    )
+)
 PRICE_CONFIRM_LONG_TOLERANCE   = float(os.getenv("EQIDV2_DETECTION_LONG_PRICE_TOL", "0.005"))   # -0.5%
 PRICE_CONFIRM_SHORT_TOLERANCE  = float(os.getenv("EQIDV2_DETECTION_SHORT_PRICE_TOL", "0.005"))  # +0.5%
 INTRADAY_LEVERAGE         = 5.0
@@ -1629,6 +1642,56 @@ def _run_detection_cycle_live_parity(
                         pool_rev=target_pool_rev,
                     )
                 continue
+
+            # Entry-slot lag guard. Drop signals that are already too stale
+            # for the executor to act on (e.g. drained from a backlog after
+            # a data-fetch outage). See DE_MAX_ENTRY_LAG_SEC comment above.
+            if DE_MAX_ENTRY_LAG_SEC > 0:
+                entry_dt_raw = sig.get("signal_entry_datetime_ist", "")
+                entry_dt_parsed = base_v15._parse_ist_timestamp(str(entry_dt_raw)) if entry_dt_raw else None
+                if entry_dt_parsed is not None:
+                    try:
+                        entry_ts = pd.Timestamp(entry_dt_parsed)
+                        if entry_ts.tzinfo is None:
+                            entry_ts = entry_ts.tz_localize(IST)
+                        else:
+                            entry_ts = entry_ts.tz_convert(IST)
+                        entry_lag_sec = (now - entry_ts).total_seconds()
+                    except Exception:
+                        entry_lag_sec = 0.0
+                    if entry_lag_sec > DE_MAX_ENTRY_LAG_SEC:
+                        sig["status"] = "filtered_stale_detection"
+                        sig["filter_reason"] = (
+                            f"STALE_ENTRY_LAG entry_lag_sec={entry_lag_sec:.0f} > "
+                            f"max={DE_MAX_ENTRY_LAG_SEC:.0f}"
+                        )
+                        sig["detection_time"] = slot_detected_at_str
+                        counters["filtered"] += 1
+                        slot_filtered += 1
+                        reason_counts["filtered_stale_detection:STALE_ENTRY_LAG"] += 1
+                        if signal_id:
+                            _append_pool_lifecycle_event(
+                                date_str,
+                                {
+                                    "signal_id":   signal_id,
+                                    "event":       "DROPPED",
+                                    "reason":      "filtered_stale_detection:STALE_ENTRY_LAG",
+                                    "ticker":      sig_ticker,
+                                    "side":        side_upper,
+                                    "setup":       str(sig.get("setup", "")),
+                                    "source_slot": slot_ts.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                    "entry_lag_sec": round(entry_lag_sec, 1),
+                                    "max_lag_sec": DE_MAX_ENTRY_LAG_SEC,
+                                },
+                                pool_rev=target_pool_rev,
+                            )
+                        print(
+                            f"[DETECT_SIG] slot={slot_hhmm} {sig_ticker} {side_upper} -> "
+                            f"FILTERED (STALE_ENTRY_LAG entry_lag={entry_lag_sec:.0f}s > "
+                            f"{DE_MAX_ENTRY_LAG_SEC:.0f}s)",
+                            flush=True,
+                        )
+                        continue
 
             entry_price  = _safe_float(sig.get("entry_price", 0.0), 0.0)
             stop_price   = _safe_float(sig.get("stop_price", 0.0), 0.0)

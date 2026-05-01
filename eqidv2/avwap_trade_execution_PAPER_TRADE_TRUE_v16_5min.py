@@ -120,6 +120,7 @@ ENTRY_RETRY_NEAR_ENTRY_ENABLE = str(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_ENA
 ENTRY_RETRY_NEAR_ENTRY_PCT = float(os.getenv("EQIDV2_ENTRY_RETRY_NEAR_ENTRY_PCT", "0.003"))
 ENTRY_RETRY_WAIT_SEC = int(os.getenv("EQIDV2_ENTRY_RETRY_WAIT_SEC", "300"))
 ENTRY_RETRY_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_RETRY_POLL_SEC", "2"))  # per-cycle LTP poll interval (spec: Section 10)
+ENTRY_SLOT_MAX_WAIT_SEC = max(0, int(os.getenv("EQIDV2_ENTRY_SLOT_MAX_WAIT_SEC", "300")))
 # Fix #20 (post-2026-04-21): stale-detection guard.
 LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE", "1")).strip().lower() in {
     "1",
@@ -1107,7 +1108,8 @@ def simulate_trade(
         except Exception:
             pass
 
-    trade_id = str(signal.get("trade_id", "")).strip() or f"PT-{signal_id[:8]}-{entry_time_ist.strftime('%H%M%S')}"
+    trade_id_raw = str(signal.get("trade_id", "")).strip()
+    trade_id = trade_id_raw or f"PT-{signal_id[:8]}-{entry_time_ist.strftime('%H%M%S')}"
     today = datetime.now(IST).date()
     forced_close_dt = IST.localize(datetime.combine(today, FORCED_CLOSE_TIME))
     trade_start_ist = entry_time_ist if not resume_mode else datetime.now(IST)
@@ -1160,6 +1162,48 @@ def simulate_trade(
             active_trades.pop(signal_id, None)
         _log_live_pnl_snapshot(use_ltp, source=f"skip:{ticker}")
         return True
+
+    if not resume_mode:
+        try:
+            entry_slot_ts = _parse_ist_signal_ts(
+                signal.get("signal_entry_datetime_ist")
+                or signal.get("signal_bar_time_ist")
+                or signal.get("bar_time_ist")
+            )
+            if entry_slot_ts is not None:
+                entry_slot_dt = entry_slot_ts.to_pydatetime()
+                now_ist = datetime.now(IST)
+                wait_sec = (entry_slot_dt - now_ist).total_seconds()
+                if wait_sec > ENTRY_SLOT_MAX_WAIT_SEC > 0:
+                    return _finalize_pre_entry_skip(
+                        "ENTRY_SKIPPED_SLOT_TOO_FAR",
+                        (
+                            f"[ENTRY.SLOT] Skipping {ticker} {side}: entry slot "
+                            f"{entry_slot_dt.strftime('%H:%M:%S')} is {wait_sec:.0f}s away "
+                            f"(> cap {ENTRY_SLOT_MAX_WAIT_SEC}s)."
+                        ),
+                    )
+                if wait_sec > 0:
+                    log.info(
+                        f"[ENTRY.SLOT] {ticker} signal_id={signal_id[:12]}: "
+                        f"sleeping {wait_sec:.1f}s until bar-open "
+                        f"{entry_slot_dt.strftime('%H:%M:%S')}"
+                    )
+                    time.sleep(wait_sec)
+                    entry_time_ist = datetime.now(IST)
+                    trade_start_ist = entry_time_ist
+                    if not trade_id_raw:
+                        trade_id = f"PT-{signal_id[:8]}-{entry_time_ist.strftime('%H%M%S')}"
+                    entry_retry_deadline = _entry_retry_deadline(
+                        signal,
+                        trade_start_ist,
+                        forced_close_dt,
+                    )
+        except Exception as slot_err:
+            log.warning(
+                f"[ENTRY.SLOT] {ticker} signal_id={signal_id[:12]}: "
+                f"slot-gate error: {slot_err}"
+            )
 
     if not resume_mode and _trade_started_after_entry_deadline(trade_start_ist, entry_retry_deadline):
         return _finalize_pre_entry_skip(
