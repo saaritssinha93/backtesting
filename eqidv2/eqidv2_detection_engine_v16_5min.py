@@ -86,7 +86,19 @@ import pytz
 # V16 runner — scanner + filter helpers
 # ---------------------------------------------------------------------------
 import avwap_combined_runner_v17f_5min as _v17f_runner  # noqa: F401
+# CAND-E4 LIVE PATCH (2026-05-04): cascade-import v17C which pulls
+#   v17B -> v17p -> v17o -> ... -> v17g -> v17f -> v17d -> v17c -> v17b -> v16
+# and swaps the v16 filter hook with CANDIDATE_E_FILTER_SPEC + Cand-E4 sizing.
+# Effect: only the 8 Cand-E4 setups pass DE; rows carry `size_multiplier`
+# (1.30/1.00/0.50/0.00). Executor must skip rows where size_multiplier == 0.
+# Per-setup SL/TGT and portfolio governors remain executor-side (not patched
+# by this import).
+import avwap_combined_runner_v17C_noNF_live_5min as _v17C_runner  # noqa: F401
 import avwap_combined_runner_v16_5min as v16_runner
+# v17C's import swaps `v16_runner.runtime_dir` to write into the BACKTEST
+# output dir (outputs_v17C_noNF_live_5min/). For live DE we want signals to
+# stay in the live_signals/ folder, so restore the un-patched runtime_dir.
+v16_runner.runtime_dir = _v17C_runner._v17B._orig_runtime_dir
 import eqidv2_signal_id_selfcheck_v16_5min as signal_id_selfcheck
 from avwap_combined_runner_v16_5min import (
     apply_live_parity_profile,

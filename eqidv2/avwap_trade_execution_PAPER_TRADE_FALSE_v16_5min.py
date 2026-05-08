@@ -160,6 +160,145 @@ INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 # Concurrency
 # 0 or negative means unlimited worker threads (no executor-side cap).
 MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_MAX_CONCURRENT_TRADES", "20"))
+
+# ---------------------------------------------------------------------------
+# CAND-E4 per-setup SL/TGT overrides (R:R-protected: SL>=0.75, TGT>=0.80, R:R>=1.0)
+# Replaces the per-side cfg.stop_pct/cfg.target_pct used by DE/SEE when the
+# signal's (side, setup) is in this dict. SHORT C_OR_BREAKDOWN and SHORT
+# D_EMA20_REJECTION are dropped via size_multiplier=0 (CAND-E4 LIVE GATE
+# above), but kept here as a fallback in case size dict regresses.
+# Source: avwap_combined_runner_v17C_noNF_live_5min.py CANDIDATE_E3_SL_TGT
+# ---------------------------------------------------------------------------
+CANDIDATE_E4_SL_TGT = {
+    ("LONG",  "A_MOD_BREAK_C1_HIGH"):           (0.75, 0.80),  # R:R 1.07
+    ("LONG",  "B_AVWAP_RECLAIM_REVERSAL"):      (0.75, 0.80),  # R:R 1.07
+    ("LONG",  "B_HUGE_C1_CLOSE_RECLAIM_BREAK"): (0.75, 0.90),  # R:R 1.20
+    ("LONG",  "D_EMA20_BOUNCE"):                (0.80, 0.80),  # R:R 1.00
+    ("SHORT", "A_MOD_BREAK_C1_LOW"):            (0.80, 0.85),  # R:R 1.06
+    ("SHORT", "C_OR_BREAKDOWN"):                (0.85, 0.85),  # R:R 1.00 (sized 0)
+    ("SHORT", "D_EMA20_REJECTION"):             (0.75, 0.80),  # R:R 1.07 (sized 0)
+    ("SHORT", "G_LOWER_LOW_BREAK"):             (0.80, 0.80),  # R:R 1.00
+}
+
+
+def _candE4_per_setup_sl_tgt(side, setup, entry_price, csv_stop, csv_target):
+    """Look up Cand-E4 (SL%, TGT%) for the (side, setup) pair and recompute
+    stop/target prices from the signal's entry_price. Returns
+    (stop_price, target_price, applied) where applied is True if the dict
+    contained the (side, setup) and the override took effect.
+    Caller falls back to csv_stop/csv_target on miss or invalid entry."""
+    try:
+        ep = float(entry_price)
+    except (TypeError, ValueError):
+        return csv_stop, csv_target, False
+    if ep <= 0:
+        return csv_stop, csv_target, False
+    s = str(side).strip().upper()
+    su = str(setup).strip().upper()
+    sl_tgt = CANDIDATE_E4_SL_TGT.get((s, su))
+    if sl_tgt is None:
+        return csv_stop, csv_target, False
+    sl_frac = float(sl_tgt[0]) / 100.0
+    tg_frac = float(sl_tgt[1]) / 100.0
+    if s == "LONG":
+        new_stop = ep * (1.0 - sl_frac)
+        new_target = ep * (1.0 + tg_frac)
+    else:
+        new_stop = ep * (1.0 + sl_frac)
+        new_target = ep * (1.0 - tg_frac)
+    return new_stop, new_target, True
+
+
+# ---------------------------------------------------------------------------
+# CAND-E4 G1 (time-window) + G2 (daily side cap) governors
+#
+# G1: reject the signal if the current IST time is outside the side's
+#     allowed entry window (LONG 09:15-13:00, SHORT 09:15-14:00). Stateless.
+#
+# G2: hard cap on entries placed per side per IST trading day
+#     (LONG 15/day, SHORT 10/day). Counter persisted to JSON in SIGNAL_DIR
+#     so it survives executor restarts mid-day. Increment is atomic with
+#     the existing capital reservation.
+#
+# All env vars are optional overrides; defaults match the backtest spec.
+# ---------------------------------------------------------------------------
+CANDE4_LONG_TIME_WINDOW_LO  = float(os.getenv("EQIDV2_CANDE4_LONG_WINDOW_LO",  "9.25"))
+CANDE4_LONG_TIME_WINDOW_HI  = float(os.getenv("EQIDV2_CANDE4_LONG_WINDOW_HI",  "13.00"))
+CANDE4_SHORT_TIME_WINDOW_LO = float(os.getenv("EQIDV2_CANDE4_SHORT_WINDOW_LO", "9.25"))
+CANDE4_SHORT_TIME_WINDOW_HI = float(os.getenv("EQIDV2_CANDE4_SHORT_WINDOW_HI", "14.00"))
+CANDE4_MAX_LONG_PER_DAY     = int(os.getenv("EQIDV2_CANDE4_MAX_LONG_PER_DAY",  "15"))
+CANDE4_MAX_SHORT_PER_DAY    = int(os.getenv("EQIDV2_CANDE4_MAX_SHORT_PER_DAY", "10"))
+CANDE4_G2_COUNTERS_FILE     = os.path.join(SIGNAL_DIR, "candE4_g2_counters_v16_5min.json")
+
+_candE4_g2_lock     = threading.Lock()
+_candE4_g2_counters = {"date": "", "long": 0, "short": 0}
+
+
+def _candE4_g1_time_window_check(side):
+    """G1: reject if `now_ist` (current IST time) is outside the side's
+    intraday entry window. Returns (allowed, reason)."""
+    s = str(side).strip().upper()
+    if s == "LONG":
+        lo, hi = CANDE4_LONG_TIME_WINDOW_LO, CANDE4_LONG_TIME_WINDOW_HI
+    else:
+        lo, hi = CANDE4_SHORT_TIME_WINDOW_LO, CANDE4_SHORT_TIME_WINDOW_HI
+    now_ist = datetime.now(IST)
+    h = now_ist.hour + now_ist.minute / 60.0 + now_ist.second / 3600.0
+    if not (lo <= h <= hi):
+        return (
+            False,
+            f"candE4_G1_time_window {s} {now_ist.strftime('%H:%M')} "
+            f"outside [{lo:.2f}, {hi:.2f}]",
+        )
+    return True, "ok"
+
+
+def _candE4_g2_load_from_disk(today_str):
+    """Load persisted counter file; reset to zero if date mismatches today."""
+    try:
+        if os.path.exists(CANDE4_G2_COUNTERS_FILE):
+            with open(CANDE4_G2_COUNTERS_FILE, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if isinstance(payload, dict) and str(payload.get("date", "")) == today_str:
+                return {
+                    "date": today_str,
+                    "long": int(payload.get("long", 0)),
+                    "short": int(payload.get("short", 0)),
+                }
+    except Exception:
+        pass
+    return {"date": today_str, "long": 0, "short": 0}
+
+
+def _candE4_g2_persist():
+    try:
+        _atomic_write_json(CANDE4_G2_COUNTERS_FILE, dict(_candE4_g2_counters))
+    except Exception:
+        pass  # non-fatal -- counter still in memory
+
+
+def _candE4_g2_check_and_increment(side):
+    """G2: atomically check daily side cap and increment on accept.
+    Returns (allowed, reason). The increment persists to disk so it survives
+    executor restarts within the same trading day."""
+    s = str(side).strip().upper()
+    cap = CANDE4_MAX_LONG_PER_DAY if s == "LONG" else CANDE4_MAX_SHORT_PER_DAY
+    side_key = "long" if s == "LONG" else "short"
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    with _candE4_g2_lock:
+        if _candE4_g2_counters.get("date") != today_str:
+            fresh = _candE4_g2_load_from_disk(today_str)
+            _candE4_g2_counters.clear()
+            _candE4_g2_counters.update(fresh)
+        cur = int(_candE4_g2_counters.get(side_key, 0))
+        if cur >= cap:
+            return (
+                False,
+                f"candE4_G2_daily_cap {s} reached ({cur}/{cap})",
+            )
+        _candE4_g2_counters[side_key] = cur + 1
+        _candE4_g2_persist()
+    return True, "ok"
 # Conservative fallback so prices remain valid for common NSE 0.10/0.05 tick scripts.
 DEFAULT_TICK_SIZE = float(os.getenv("EQIDV2_DEFAULT_TICK_SIZE", "0.10"))
 
@@ -1949,6 +2088,30 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
     Atomically validate risk and reserve margin for a signal to avoid races
     between concurrent CSV callbacks/threads.
     """
+    # CAND-E4 LIVE GATE (2026-05-04): skip rows whose Detection Engine wrote
+    # size_multiplier == 0. These are setups Cand-E4 explicitly drops
+    # (currently SHORT C_OR_BREAKDOWN and SHORT D_EMA20_REJECTION -- both
+    # PF < 1.20 in fresh-data backtest, no edge). Stops them from being
+    # placed at full size in live, recovering ~30% of the backtest gap.
+    # If the column is missing (older signal CSVs), default to 1.0 (no-op).
+    size_mult_raw = signal.get("size_multiplier", 1.0)
+    try:
+        size_mult = float(size_mult_raw) if size_mult_raw not in (None, "") else 1.0
+    except (TypeError, ValueError):
+        size_mult = 1.0
+    if size_mult <= 0.0:
+        setup = str(signal.get("setup", "?"))
+        side = str(signal.get("side", "?"))
+        return False, f"candE4_size_multiplier=0 (setup={side} {setup})", 0.0
+
+    # CAND-E4 G1: time-window governor (stateless). Reject if current IST
+    # time is outside the side's intraday entry window (LONG 09:15-13:00,
+    # SHORT 09:15-14:00).
+    g1_side = str(signal.get("side", "")).strip().upper()
+    g1_ok, g1_reason = _candE4_g1_time_window_check(g1_side)
+    if not g1_ok:
+        return False, g1_reason, 0.0
+
     entry_price = _safe_float(signal.get("entry_price", 0), 0.0)
     quantity = _safe_int(signal.get("quantity", 1), 1)
     if entry_price <= 0:
@@ -1961,6 +2124,12 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
     with capital_lock:
         if signal_id in capital_deployed:
             return False, "already reserved", float(capital_deployed.get(signal_id, 0.0))
+
+        # CAND-E4 G2: daily side cap (LONG 15/day, SHORT 10/day). Atomic
+        # check+increment, persisted to disk for crash safety.
+        g2_ok, g2_reason = _candE4_g2_check_and_increment(g1_side)
+        if not g2_ok:
+            return False, g2_reason, 0.0
 
         if RISK_LIMITS_ENABLED:
             open_count = len(capital_deployed)
@@ -1996,6 +2165,22 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
     signal_stop = _safe_float(signal.get("stop_price", 0), 0.0)
     signal_target = _safe_float(signal.get("target_price", 0), 0.0)
     quantity = _safe_int(signal.get("quantity", 1), 1)
+
+    # CAND-E4 per-setup SL/TGT override: recompute stop/target from
+    # CANDIDATE_E4_SL_TGT[(side, setup)] when the dict contains the pair.
+    # Falls through to CSV values for unknown setups (no behaviour change).
+    _setup_for_candE4 = str(signal.get("setup", "")).strip().upper()
+    _csv_stop_pre, _csv_target_pre = signal_stop, signal_target
+    signal_stop, signal_target, _candE4_applied = _candE4_per_setup_sl_tgt(
+        side, _setup_for_candE4, signal_entry_price, signal_stop, signal_target,
+    )
+    if _candE4_applied:
+        log.info(
+            f"[CAND-E4_SLTGT] {ticker} {side} {_setup_for_candE4} "
+            f"entry={signal_entry_price:.2f} "
+            f"SL {_csv_stop_pre:.2f}->{signal_stop:.2f} "
+            f"TGT {_csv_target_pre:.2f}->{signal_target:.2f}"
+        )
 
     trade_start_ist = datetime.now(IST)
     default_trade_id = f"LT-{signal_id[:8]}-{trade_start_ist.strftime('%H%M%S')}"

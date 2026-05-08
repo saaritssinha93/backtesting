@@ -2110,10 +2110,30 @@ def _add_notional_pnl(df: pd.DataFrame) -> pd.DataFrame:
       - compute ROI% on capital (levered) in pnl_pct / pnl_pct_gross
       - compute rupee P&L on notional exposure in pnl_rs / pnl_rs_gross
     """
-    if df.empty:
-        return df
-
     d = df.copy()
+
+    if d.empty:
+        # Keep the downstream reporting/chart pipeline schema-stable when
+        # every candidate row is later dropped, e.g. a short diagnostic window
+        # whose remaining trades all require unavailable 1-minute exits.
+        object_cols = [
+            "trade_date", "ticker", "side", "setup", "impulse_type",
+            "signal_time_ist", "entry_time_ist", "exit_time_ist",
+            "outcome", "exit_resolution_case",
+        ]
+        numeric_cols = [
+            "entry_price", "exit_price", "pnl_pct_price",
+            "pnl_pct_gross_price", "position_size_rs", "leverage",
+            "notional_exposure_rs", "pnl_pct", "pnl_pct_gross",
+            "pnl_rs", "pnl_rs_gross",
+        ]
+        for col in object_cols:
+            if col not in d.columns:
+                d[col] = pd.Series(dtype=object)
+        for col in numeric_cols:
+            if col not in d.columns:
+                d[col] = pd.Series(dtype=float)
+        return d
 
     # ---- Ensure price-return % columns exist (unlevered) ----
     if "pnl_pct_price" not in d.columns:
@@ -3011,6 +3031,10 @@ def generate_enhanced_charts(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     saved: List[str] = []
+
+    if combined is None or combined.empty:
+        print("[INFO] No trades available - skipping enhanced chart generation.")
+        return saved
 
     # ------------ Utility helpers ----------------
     def _safe_col(df_: pd.DataFrame, col: str) -> pd.Series:

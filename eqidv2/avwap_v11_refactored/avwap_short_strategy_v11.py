@@ -1102,6 +1102,172 @@ def _scan_lower_low_break_at(
 
 
 # ===========================================================================
+# H_FAILED_BREAKOUT_TRAP (Phase 2b) -- shorts trapped breakout buyers.
+#
+# Rejection bar `i` must:
+#   * sweep above either Upper_Band[i] or Recent_High[i-1]
+#   * fail to hold (close below the level it broke)
+#   * have a large upper wick (>= cfg.fbt_min_upper_wick_pct, default 40%)
+#   * close below VWAP[i]
+#   * have hot MFI rolling over: MFI[i] >= cfg.fbt_min_mfi (70)
+#                                AND MFI[i] < MFI[i-3]
+#   * have decreasing MACD_Hist: MACD_Hist[i] < MACD_Hist[i-1]
+#   * have volume burst: volume[i] / VOL_SMA20[i] >= cfg.fbt_min_vol_ratio (1.2)
+#   * fire by entry_hour <= cfg.fbt_max_hour_ist (10)
+#
+# Entry on next bar break below rejection_low - buffer.
+#
+# Returns (None, -1) silently if any required indicator column is absent
+# from df_day -- this lets the engine run unchanged on parquets that
+# lack MFI / OBV / MACD_Hist / Upper_Band / Recent_High / VWAP.
+# ===========================================================================
+_FBT_REQUIRED_COLS = ("MFI", "MACD_Hist", "Upper_Band", "Recent_High", "VWAP")
+_FBT_WARNED_MISSING_COLS = False
+
+
+def _scan_failed_breakout_trap_at(
+    df_day: pd.DataFrame,
+    i: int,
+    ticker: str,
+    day_str: str,
+    cfg: StrategyConfig,
+) -> tuple:
+    global _FBT_WARNED_MISSING_COLS
+    if i < 4 or (i + 2) >= len(df_day):
+        return None, -1
+
+    missing = [c for c in _FBT_REQUIRED_COLS if c not in df_day.columns]
+    if missing:
+        if not _FBT_WARNED_MISSING_COLS:
+            print(f"[FBT_WARN] required cols missing from prepared df: {missing}; "
+                  f"FAILED_BREAKOUT_TRAP detection will be a no-op")
+            _FBT_WARNED_MISSING_COLS = True
+        return None, -1
+
+    R = df_day.iloc[i]
+    R_ts = R["date"]
+    try:
+        R_hour_dec = R_ts.tz_convert(IST).hour + R_ts.tz_convert(IST).minute / 60.0
+    except Exception:
+        R_hour_dec = float(getattr(R_ts, "hour", 0)) + float(getattr(R_ts, "minute", 0)) / 60.0
+    fbt_max_hour = float(getattr(cfg, "fbt_max_hour_ist", 10.75))
+    if R_hour_dec > fbt_max_hour:
+        return None, -1
+
+    R_open  = float(R["open"]);   R_close = float(R["close"])
+    R_high  = float(R["high"]);   R_low   = float(R["low"])
+    R_atr   = float(R.get("ATR15", np.nan))
+    R_vwap  = float(R.get("VWAP", np.nan))
+    R_mfi   = float(R.get("MFI", np.nan))
+    R_mh    = float(R.get("MACD_Hist", np.nan))
+    R_ub    = float(R.get("Upper_Band", np.nan))
+    R_rh_prev = float(df_day.at[i - 1, "Recent_High"]) if "Recent_High" in df_day.columns else np.nan
+
+    rng = R_high - R_low
+    if not (np.isfinite(R_atr) and R_atr > 0 and rng > 0 and R_close > 0):
+        return None, -1
+    if not np.isfinite(R_vwap) or not np.isfinite(R_mfi) or not np.isfinite(R_mh):
+        return None, -1
+
+    # 1. Sweep + fail-to-hold (above Upper_Band OR above prior-bar Recent_High)
+    swept_ub = np.isfinite(R_ub) and R_high > R_ub and R_close < R_ub
+    swept_rh = np.isfinite(R_rh_prev) and R_high > R_rh_prev and R_close < R_rh_prev
+    if not (swept_ub or swept_rh):
+        return None, -1
+
+    # 2. Large upper wick
+    upper_wick_pct = (R_high - max(R_open, R_close)) / rng * 100.0
+    if upper_wick_pct < float(getattr(cfg, "fbt_min_upper_wick_pct", 40.0)):
+        return None, -1
+
+    # 3. Close below session VWAP
+    if R_close >= R_vwap:
+        return None, -1
+
+    # 4. Hot MFI rolling over
+    if R_mfi < float(getattr(cfg, "fbt_min_mfi", 70.0)):
+        return None, -1
+    mfi_3back = float(df_day.at[i - 3, "MFI"]) if "MFI" in df_day.columns else np.nan
+    if not (np.isfinite(mfi_3back) and R_mfi < mfi_3back):
+        return None, -1
+
+    # 5. MACD_Hist decreasing
+    mh_prev = float(df_day.at[i - 1, "MACD_Hist"]) if "MACD_Hist" in df_day.columns else np.nan
+    if not (np.isfinite(mh_prev) and R_mh < mh_prev):
+        return None, -1
+
+    # 6. Volume burst
+    vol_now = float(R.get("volume", 0.0)) if np.isfinite(R.get("volume", np.nan)) else 0.0
+    vol_sma = float(R.get("VOL_SMA20", 0.0)) if np.isfinite(R.get("VOL_SMA20", np.nan)) else 0.0
+    if vol_sma > 0 and vol_now < float(getattr(cfg, "fbt_min_vol_ratio", 1.2)) * vol_sma:
+        return None, -1
+
+    # Entry trigger: next bar must break below rejection_low - buffer
+    buf = entry_buffer(R_low, cfg)
+    trigger = R_low - buf
+    lag = int(getattr(cfg, "fbt_lag_bars", 1))
+    cand = i + max(lag, 1)
+    if cand >= len(df_day) or not in_signal_window(df_day.at[cand, "date"], cfg):
+        return None, -1
+    lo_e = float(df_day.at[cand, "low"])
+    cl_e = float(df_day.at[cand, "close"])
+    if not (np.isfinite(lo_e) and np.isfinite(cl_e) and lo_e < trigger
+            and (not cfg.require_entry_close_confirm or cl_e < trigger)):
+        return None, -1
+    entry_idx = cand
+    if (len(df_day) - 1 - entry_idx) < int(cfg.min_bars_left_after_entry):
+        return None, -1
+
+    ep = float(trigger)
+    atr_entry = float(df_day.at[entry_idx, "ATR15"])
+    avwap_entry = (
+        float(df_day.at[entry_idx, "AVWAP"])
+        if "AVWAP" in df_day.columns and np.isfinite(df_day.at[entry_idx, "AVWAP"]) else np.nan
+    )
+    close_entry = float(df_day.at[entry_idx, "close"])
+    avwap_dist_atr = (
+        (avwap_entry - close_entry) / atr_entry
+        if (np.isfinite(atr_entry) and atr_entry > 0 and np.isfinite(avwap_entry)) else 0.0
+    )
+    cap = float(getattr(cfg, "signal_avwap_dist_atr_max", 0.0) or 0.0)
+    if cap > 0.0 and avwap_dist_atr > cap:
+        return None, -1
+
+    ema20 = float(R.get("EMA20", np.nan))
+    ema_gap_atr = (ema20 - R_close) / R_atr if (np.isfinite(ema20) and R_atr > 0) else 0.0
+    adx_now = float(df_day.at[i, "ADX15"]) if "ADX15" in df_day.columns else 0.0
+    rsi_now = float(df_day.at[i, "RSI15"]) if "RSI15" in df_day.columns else 0.0
+    k_now   = float(df_day.at[i, "STOCHK15"]) if "STOCHK15" in df_day.columns else 0.0
+    qscore  = compute_quality_score_short(adx_now, avwap_dist_atr, ema_gap_atr, "FBT")
+    atr_pct = (R_atr / R_close) if R_close > 0 else 0.0
+
+    exit_idx, exit_time, exit_price, outcome, partial_taken = simulate_exit_short(
+        df_day, entry_idx, ep, cfg
+    )
+    net_pnl, gross_pnl = compute_pnl_pct(ep, exit_price, "SHORT", cfg)
+
+    trade = Trade(
+        trade_date=day_str, ticker=ticker, side="SHORT",
+        setup="H_FAILED_BREAKOUT_TRAP", impulse_type="TRAP",
+        signal_time_ist=R_ts, entry_time_ist=df_day.at[entry_idx, "date"],
+        entry_price=ep, sl_price=ep * (1.0 + cfg.stop_pct),
+        target_price=ep * (1.0 - cfg.target_pct),
+        exit_time_ist=exit_time, exit_price=exit_price, outcome=outcome,
+        pnl_pct=net_pnl, pnl_pct_gross=gross_pnl,
+        signal_price=R_close, partial_exit_taken=bool(partial_taken),
+        adx_signal=adx_now if np.isfinite(adx_now) else 0.0,
+        rsi_signal=rsi_now if np.isfinite(rsi_now) else 0.0,
+        stochk_signal=k_now if np.isfinite(k_now) else 0.0,
+        avwap_dist_atr_signal=avwap_dist_atr,
+        ema20_gap_atr_signal=ema_gap_atr,
+        atr_pct_signal=atr_pct,
+        quality_score=qscore,
+        india_vix=float(cfg.vix_daily.get(day_str, 0.0)),
+    )
+    return trade, int(exit_idx)
+
+
+# ===========================================================================
 # SCAN ONE DAY (SHORT)
 # ===========================================================================
 def scan_one_day(
@@ -1256,6 +1422,23 @@ def scan_one_day(
                         cooldown_until_idx, int(g_exit_idx) + int(cfg.sl_cooldown_bars)
                     )
                 i = int(g_exit_idx) + 1
+                continue
+
+        # Phase 2b — H_FAILED_BREAKOUT_TRAP: trapped breakout buyers.
+        if getattr(cfg, "enable_setup_failed_breakout_trap", False):
+            fbt_trade, fbt_exit_idx = _scan_failed_breakout_trap_at(
+                df_day, i, ticker, day_str, cfg
+            )
+            if fbt_trade is not None:
+                trades.append(fbt_trade)
+                risk_pct_fbt = max(cfg.stop_pct * 100.0, 1e-9)
+                day_r_total += float(fbt_trade.pnl_pct) / risk_pct_fbt
+                if str(fbt_trade.outcome).upper() == "SL":
+                    day_sl_count += 1
+                    cooldown_until_idx = max(
+                        cooldown_until_idx, int(fbt_exit_idx) + int(cfg.sl_cooldown_bars)
+                    )
+                i = int(fbt_exit_idx) + 1
                 continue
 
         # v17j — D_AVWAP_LOSE_REVERSAL: independent of impulse, runs first.

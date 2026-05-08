@@ -46,7 +46,20 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # V16 runner — params, filters, scan helpers
 # ---------------------------------------------------------------------------
-import avwap_combined_runner_v17f_5min as _v17f_runner  # noqa: F401
+# 2026-05-05: import v17C cascade instead of stopping at v17f.  v17C
+# transitively imports v17p -> v17o -> ... -> v17g -> v17f -> v17d -> v17c
+# -> v17b -> v16, so all post-scan filter wraps from v17g onward (v17g/h/i/
+# j/k/m/n/o/p stage0+stage2/v17B Cand-E spec) get installed onto
+# `_apply_v16_post_scan_filters`.  Without this, SEE was emitting signals
+# (e.g. A_PULLBACK_C2_THEN_BREAK_C2_HIGH, raw A_MOD_BREAK_C1_HIGH) that the
+# validated Cand-E edge would have rejected.  The detection engine (DE)
+# relies on this pool authoritatively, so the gap propagated to live trades.
+# Side effects of importing v17C also include:
+#   * CANDIDATE_E_FILTER_SPEC swapped onto v17B
+#   * CANDIDATE_E_SIZE_MULTIPLIERS onto v17p / v17B (1.30/1.00/0.50/0.00 tiers)
+#   * Phase 2b H_FAILED_BREAKOUT_TRAP scan enabled (size 0 in Cand-E -> executor skips)
+#   * `_base.main = _v17C_main` rebind (harmless: SEE doesn't call main)
+import avwap_combined_runner_v17C_noNF_live_5min as _v17C_runner  # noqa: F401
 import avwap_combined_runner_v16_5min as v16_runner
 from avwap_combined_runner_v16_5min import (
     apply_live_parity_profile,

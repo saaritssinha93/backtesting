@@ -24,7 +24,7 @@ What remains:
 - Reports for missing files / newly appended rows
 
 Outputs (Parquet):
-- stocks_indicators_1min_eq / <TICKER>_stocks_indicators_1min.parquet
+- C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq / <TICKER>_stocks_indicators_1min.parquet
 
 Usage examples:
 - Fetch 1-min:
@@ -64,15 +64,19 @@ import requests.exceptions as _rexc
 IST_TZ = pytz.timezone("Asia/Kolkata")
 
 # Directories (only intraday)
+RUNTIME_ROOT = Path(r"C:\TradingData\eqidv2")
 DIRS = {
-    "1min": {"cache": "stocks_cache_1min_eq", "out": "stocks_indicators_1min_eq"},
+    "1min": {
+        "cache": str(RUNTIME_ROOT / "stocks_cache_1min_eq"),
+        "out": str(RUNTIME_ROOT / "stocks_indicators_1min_eq"),
+    },
 }
 for cfg in DIRS.values():
     os.makedirs(cfg["cache"], exist_ok=True)
     os.makedirs(cfg["out"], exist_ok=True)
 
 VALID_MODES = ("1min",)
-DEFAULT_MAX_WORKERS = 6
+DEFAULT_MAX_WORKERS = 10
 
 # Market timing (IST)
 MARKET_OPEN_TIME = time(9, 15)
@@ -1346,7 +1350,7 @@ def _recover_verify_failures(
             )
 
         if work_items:
-            retry_workers = min(max(1, int(max_workers)), max(1, len(work_items)), 8)
+            retry_workers = min(max(1, int(max_workers)), max(1, len(work_items)), 10)
             logger.warning(
                 "[%s][VERIFY] Recovery attempt %d/%d: refetching %d symbol(s) with max_workers=%d",
                 mode.upper(),
