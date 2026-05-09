@@ -1,0 +1,16 @@
+{
+  "_comment": "NSE F&O eligible symbols. Refresh weekly from https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O. The list below is a stub for module testing only — replace before any backtest run.",
+  "_last_refreshed": "STUB - replace before use",
+  "symbols": [
+    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
+    "BHARTIARTL", "ITC", "SBIN", "LT", "AXISBANK",
+    "KOTAKBANK", "HINDUNILVR", "BAJFINANCE", "MARUTI", "ASIANPAINT",
+    "M&M", "ULTRACEMCO", "SUNPHARMA", "TITAN", "WIPRO",
+    "HCLTECH", "NESTLEIND", "POWERGRID", "NTPC", "TATAMOTORS",
+    "TATASTEEL", "JSWSTEEL", "HINDALCO", "COALINDIA", "GRASIM",
+    "ADANIPORTS", "BAJAJFINSV", "TECHM", "DRREDDY", "CIPLA",
+    "DIVISLAB", "EICHERMOT", "HEROMOTOCO", "BRITANNIA", "BPCL",
+    "ONGC", "INDUSINDBK", "TATACONSUM", "APOLLOHOSP", "ADANIENT",
+    "BAJAJ-AUTO", "UPL", "SHREECEM", "SBILIFE", "HDFCLIFE"
+  ]
+}

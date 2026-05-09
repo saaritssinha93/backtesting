@@ -226,6 +226,8 @@ eqidv2/**
 !eqidv2/**/
 !eqidv2/**/*.py
 !eqidv2/**/*.md
+!eqidv2/configs/
+!eqidv2/configs/**
 
 # Allow ALL outputs artifacts inside eqidv2/outputs
 # (png, csv, txt, parquet, anything)
