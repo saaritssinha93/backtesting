@@ -1,0 +1,107 @@
+{
+  "_comment": "Per-stock sector + sector ETF mapping for v17D Step 2.2 sector RS computation. Refresh quarterly. Sector codes match NSE sectoral indices.",
+  "_last_refreshed": "2026-05-09 (initial)",
+  "sectors": {
+    "BANKING": {
+      "etf_symbol": "BANKBEES",
+      "index_symbol": "BANKNIFTY",
+      "stocks": [
+        "HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK",
+        "INDUSINDBK", "BANKBARODA", "PNB", "FEDERALBNK", "IDFCFIRSTB"
+      ]
+    },
+    "IT": {
+      "etf_symbol": "ITBEES",
+      "index_symbol": "NIFTYIT",
+      "stocks": [
+        "TCS", "INFY", "WIPRO", "HCLTECH", "TECHM",
+        "LTIM", "MPHASIS", "PERSISTENT", "COFORGE", "OFSS"
+      ]
+    },
+    "AUTO": {
+      "etf_symbol": "AUTOBEES",
+      "index_symbol": "NIFTYAUTO",
+      "stocks": [
+        "MARUTI", "TATAMOTORS", "M&M", "BAJAJ-AUTO", "EICHERMOT",
+        "HEROMOTOCO", "TVSMOTOR", "ASHOKLEY", "BHARATFORG", "MOTHERSON"
+      ]
+    },
+    "PHARMA": {
+      "etf_symbol": "PHARMABEES",
+      "index_symbol": "NIFTYPHARMA",
+      "stocks": [
+        "SUNPHARMA", "DRREDDY", "CIPLA", "DIVISLAB", "APOLLOHOSP",
+        "LUPIN", "AUROPHARMA", "TORNTPHARM", "BIOCON", "ZYDUSLIFE"
+      ]
+    },
+    "FMCG": {
+      "etf_symbol": "FMCGBEES",
+      "index_symbol": "NIFTYFMCG",
+      "stocks": [
+        "HINDUNILVR", "ITC", "NESTLEIND", "BRITANNIA", "TATACONSUM",
+        "DABUR", "GODREJCP", "MARICO", "COLPAL", "UBL"
+      ]
+    },
+    "METALS": {
+      "etf_symbol": "PSUBNKBEES",
+      "index_symbol": "NIFTYMETAL",
+      "stocks": [
+        "TATASTEEL", "JSWSTEEL", "HINDALCO", "COALINDIA", "VEDL",
+        "JINDALSTEL", "SAIL", "NMDC", "ADANIENT", "HINDZINC"
+      ]
+    },
+    "ENERGY": {
+      "etf_symbol": "BANKBEES",
+      "index_symbol": "NIFTYENERGY",
+      "stocks": [
+        "RELIANCE", "ONGC", "BPCL", "IOC", "NTPC",
+        "POWERGRID", "GAIL", "ADANIPOWER", "TATAPOWER", "HPCL"
+      ]
+    },
+    "CEMENT": {
+      "etf_symbol": "BANKBEES",
+      "index_symbol": "NIFTYCEMENT",
+      "stocks": [
+        "ULTRACEMCO", "SHREECEM", "GRASIM", "AMBUJACEM", "ACC",
+        "DALBHARAT", "JKCEMENT", "RAMCOCEM"
+      ]
+    },
+    "FINSERV": {
+      "etf_symbol": "BANKBEES",
+      "index_symbol": "NIFTYFINSERV",
+      "stocks": [
+        "BAJFINANCE", "BAJAJFINSV", "HDFCLIFE", "SBILIFE", "ICICIPRULI",
+        "ICICIGI", "MUTHOOTFIN", "CHOLAFIN", "PEL", "RECLTD"
+      ]
+    },
+    "INFRA": {
+      "etf_symbol": "BANKBEES",
+      "index_symbol": "NIFTYINFRA",
+      "stocks": [
+        "LT", "ADANIPORTS", "BHEL", "SIEMENS", "ABB",
+        "HAVELLS", "DLF", "GMRINFRA", "IRCTC", "CONCOR"
+      ]
+    },
+    "TELECOM": {
+      "etf_symbol": "BANKBEES",
+      "index_symbol": "NIFTYTELECOM",
+      "stocks": ["BHARTIARTL", "IDEA", "VODAFONE_IDEA"]
+    },
+    "CONSUMER_DURABLES": {
+      "etf_symbol": "BANKBEES",
+      "index_symbol": "NIFTYCONSDUR",
+      "stocks": ["TITAN", "VOLTAS", "WHIRLPOOL", "BLUESTARCO", "DIXON"]
+    },
+    "REALTY": {
+      "etf_symbol": "BANKBEES",
+      "index_symbol": "NIFTYREALTY",
+      "stocks": ["DLF", "GODREJPROP", "OBEROIRLTY", "PHOENIXLTD", "SOBHA"]
+    },
+    "OTHER": {
+      "etf_symbol": "NIFTYBEES",
+      "index_symbol": "NIFTY",
+      "stocks": ["ASIANPAINT", "PIDILITIND", "HAL", "BEL", "PFIZER",
+                 "GLENMARK", "UPL"]
+    }
+  }
+}
