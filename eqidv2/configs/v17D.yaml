@@ -1,0 +1,202 @@
+# v17D production config — single source of truth for all tunables.
+#
+# Loaded via eqidv2.v17D_config.load_config(). Every constant migrated
+# from v17C's hardcoded SETUP_CONFIG / FILTER_SPEC / governor values.
+#
+# To tune in production: edit this file, redeploy via config swap, no code
+# redeploy needed. v17D_config validates the schema on load and refuses to
+# start with invalid values.
+version: "v17D-r0"
+last_updated: "2026-05-09"
+
+# ---------------------------------------------------------------------------
+# Universe filter (Step 1.1)
+# ---------------------------------------------------------------------------
+universe:
+  price_floor_rs: 50.0
+  price_cap_rs: 5000.0
+  adv_floor_rs_cr: 50.0
+  fo_list_path: "eqidv2/configs/fo_list.json"
+
+# ---------------------------------------------------------------------------
+# Cost model (Step 1.2). Slippage by ADV bucket — both legs.
+# ---------------------------------------------------------------------------
+costs:
+  brokerage_pct: 0.0003
+  brokerage_cap_rs: 20.0
+  stt_sell_pct: 0.00025
+  nse_txn_pct: 0.0000345
+  sebi_pct: 0.000001
+  gst_pct: 0.18
+  stamp_duty_buy_pct: 0.00003
+  slippage_per_leg:
+    top100: 0.0005
+    mid: 0.0010
+    long_tail: 0.0020
+  extra_stop_slippage: 0.0003
+  adv_top100_floor_rs_cr: 500.0
+  adv_mid_floor_rs_cr: 50.0
+
+# ---------------------------------------------------------------------------
+# Kill-switch thresholds (Step 1.5)
+# ---------------------------------------------------------------------------
+kill_switch:
+  daily_dd_kill_pct: -2.5
+  weekly_dd_kill_pct: -5.0
+
+# ---------------------------------------------------------------------------
+# Logging (Step 1.6)
+# ---------------------------------------------------------------------------
+logging:
+  log_dir: "~/v17D_logs"
+  rotate_daily: true
+  streams: ["signals", "decisions", "orders", "fills", "pnl"]
+
+# ---------------------------------------------------------------------------
+# Per-setup config — migrated from v17C CANDIDATE_E_SETUP_CONFIG (Step 1.3)
+# ---------------------------------------------------------------------------
+setups:
+  # LONG
+  A_MOD_BREAK_C1_HIGH:
+    enabled: true
+    size_mult: 1.30
+    max_daily_trades: null
+    sl_pct: 0.75
+    tgt_pct: 0.80
+    notes: "E4 PF 2.38"
+  B_AVWAP_RECLAIM_REVERSAL:
+    enabled: true
+    size_mult: 1.30
+    max_daily_trades: null
+    sl_pct: 0.75
+    tgt_pct: 0.80
+    notes: "E4 PF 2.41"
+  B_HUGE_C1_CLOSE_RECLAIM_BREAK:
+    enabled: true
+    size_mult: 1.30
+    max_daily_trades: null
+    sl_pct: 0.75
+    tgt_pct: 0.90
+    notes: "E4 PF 2.49 (n=30 small)"
+  D_EMA20_BOUNCE:
+    enabled: true
+    size_mult: 1.00
+    max_daily_trades: null
+    sl_pct: 0.80
+    tgt_pct: 0.80
+    notes: "E4 PF 1.89"
+  # SHORT
+  A_MOD_BREAK_C1_LOW:
+    enabled: true
+    size_mult: 1.00
+    max_daily_trades: null
+    sl_pct: 0.80
+    tgt_pct: 0.85
+    notes: "E4 PF 2.10"
+  C_OR_BREAKDOWN:
+    enabled: false
+    size_mult: 0.00
+    max_daily_trades: 3
+    sl_pct: 0.85
+    tgt_pct: 0.85
+    notes: "E4 PF 1.00 raw; Phase 1 candidate"
+  D_EMA20_REJECTION:
+    enabled: false
+    size_mult: 0.00
+    max_daily_trades: null
+    sl_pct: 0.75
+    tgt_pct: 0.80
+    notes: "E4 PF 0.83 — DROP"
+  G_LOWER_LOW_BREAK:
+    enabled: true
+    size_mult: 0.50
+    max_daily_trades: null
+    sl_pct: 0.80
+    tgt_pct: 0.80
+    notes: "E4 PF 1.44 borderline"
+  H_FAILED_BREAKOUT_TRAP:
+    enabled: false
+    size_mult: 0.00
+    max_daily_trades: 3
+    sl_pct: 0.80
+    tgt_pct: 0.80
+    notes: "Phase 2b new short — needs backtest"
+
+# ---------------------------------------------------------------------------
+# Filter chains — Cand-E4 spec (Step 1.3 / Step 2.0 search starts from here)
+# ---------------------------------------------------------------------------
+filter_chains:
+  LONG:
+    A_MOD_BREAK_C1_HIGH:
+      - { feature: "bars_from_open",        op: "<=", value: 9.0 }
+      - { feature: "avwap_dist_atr_signal", op: ">=", value: 1.5766 }
+    B_AVWAP_RECLAIM_REVERSAL:
+      - { feature: "atr_pct_signal",        op: ">=", value: 0.0040 }
+      - { feature: "entry_bar_vol_ratio",   op: ">=", value: 0.8842 }
+    B_HUGE_C1_CLOSE_RECLAIM_BREAK:
+      - { feature: "bars_from_open",        op: "<=", value: 4.0 }
+      - { feature: "ema20_gap_atr_signal",  op: "<=", value: 3.4968 }
+      - { feature: "entry_hour",            op: "<=", value: 9.9167 }
+    D_EMA20_BOUNCE:
+      - { feature: "atr_pct_signal",        op: ">=", value: 0.0051 }
+      - { feature: "stochk_signal",         op: "<=", value: 54.0876 }
+      - { feature: "avwap_dist_atr_signal", op: ">=", value: 1.5329 }
+  SHORT:
+    A_MOD_BREAK_C1_LOW:
+      - { feature: "atr_pct_signal",        op: ">=", value: 0.0037 }
+      - { feature: "stochk_signal",         op: "<=", value: 12.4427 }
+    C_OR_BREAKDOWN:
+      - { feature: "entry_hour",            op: ">=", value: 9.9167 }
+      - { feature: "avwap_dist_atr_signal", op: "<=", value: 1.8253 }
+    D_EMA20_REJECTION:
+      - { feature: "atr_pct_signal",        op: "<=", value: 0.0047 }
+      - { feature: "quality_score",         op: "<=", value: 0.5633 }
+    G_LOWER_LOW_BREAK:
+      - { feature: "rsi_signal",            op: ">=", value: 27.3299 }
+      - { feature: "entry_hour",            op: "<=", value: 10.1667 }
+    H_FAILED_BREAKOUT_TRAP:
+      - { feature: "entry_hour",            op: "<=", value: 10.7500 }
+
+# ---------------------------------------------------------------------------
+# Portfolio governors (Step 1.4 + v17C Cand-E governors)
+# ---------------------------------------------------------------------------
+governors:
+  long_time_window: [9.25, 13.00]
+  short_time_window: [9.25, 14.00]
+  max_long_per_day: 15
+  max_short_per_day: 10
+  daily_loss_kill_streak: 4
+  setup_cool_losses: 6
+  setup_cool_window: 12
+  # Phase 1.4 additions
+  max_concurrent_per_sector_per_side: 4
+  max_long_per_sector_per_day: 6
+  net_beta_throttle_threshold: 8
+
+# ---------------------------------------------------------------------------
+# Phase 2 search constraints (Step 2.0)
+# ---------------------------------------------------------------------------
+pareto_search:
+  count_floor_per_day: 4.5
+  worst_day_floor: 2
+  min_oos_pf: 1.40
+  tier1_baseline_pf: 2.20
+  max_setups_per_family: 4
+
+# ---------------------------------------------------------------------------
+# v17D setup library — Phase 2.10 candidate sizing (initial conservative)
+# ---------------------------------------------------------------------------
+library_initial_sizing:
+  default_size_mult: 0.25
+  default_max_daily_trades: 3
+  ship_threshold_pf: 1.50
+  ship_threshold_oos_pf: 1.30
+  ship_threshold_n_min: 30
+
+# ---------------------------------------------------------------------------
+# Leverage and cost model integration
+# ---------------------------------------------------------------------------
+trading:
+  leverage: 5.0
+  default_position_size_rs: 20000
+  eod_cutoff_ist: "15:20"
