@@ -225,6 +225,7 @@ __pycache__
 eqidv2/**
 !eqidv2/**/
 !eqidv2/**/*.py
+!eqidv2/**/*.md
 
 # Allow ALL outputs artifacts inside eqidv2/outputs
 # (png, csv, txt, parquet, anything)
