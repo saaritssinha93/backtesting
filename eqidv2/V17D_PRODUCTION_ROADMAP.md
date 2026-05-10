@@ -229,6 +229,14 @@ Every box must be ticked before any live capital. Run through this in order; mar
 - [ ] Step 4.8 graveyard log file initialized — date: ____
 - [ ] Phase 4 gate: reconciliation clean, kill-switches tested — date: ____
 
+### Tax + brokerage analytics (Phase 4b)
+- [ ] Step 4b.1 daily cost breakdown table generated for full backtest — date: ____
+- [ ] Step 4b.2 per-setup efficiency: every kept setup net_per_trade >= Rs 50 — date: ____
+- [ ] Step 4b.3 tax-optimal recommendations executed (drops moved to graveyard) — date: ____
+- [ ] Step 4b.4 year-end speculative income estimate computed; CA briefed — date: ____
+- [ ] Step 4b.5 Kite contract-note reconciliation matches cost model — date: ____
+- [ ] Vol-targeted sizing floor recalibrated for cost amortization — date: ____
+
 ### Pre-live operational
 - [ ] Capital allocation decided and ring-fenced — date: ____
 - [ ] Pilot ramp schedule reviewed (0.10 → 0.30 → 0.50 → 1.00) — date: ____
@@ -296,6 +304,10 @@ Every gate in one place. Phase doesn't ship until its row passes.
 | 3 (overall) | Risk/exit gate | Sharpe up AND max-DD down >= 20% | DD doesn't drop |
 | 4.1 | Paper-trading | Paper PF within 70% of backtest PF over 20d | < 70% |
 | 4 (overall) | Live infra gate | Reconciliation clean, drift detection live, kill-switches tested | Any gap |
+| 4b.1 | Daily cost breakdown | Cost > 40% of gross flagged on < 20% of trading days | More flagged days |
+| 4b.2 | Per-setup efficiency | Each kept setup has net_per_trade >= Rs 50 and cost_pct_of_gross <= 35% | Below either |
+| 4b.3 | Tax-optimal recommendations | Setups flagged DROP actually dropped or resized | Ignored flags |
+| 4b.5 | Kite reconciliation | Broker actuals match cost model within +/-5% per component | Larger drift |
 | 5.1 | Pilot ramp | Live PF within 60% of paper PF over 14d, no production incidents | Either fails |
 | 6 (overall) | ML shadow gate | Gated PF lift >= 0.20 over 30d shadow | No lift |
 
@@ -558,6 +570,81 @@ Plain-text doc: morning startup, kill, stuck position recovery, disconnect handl
 
 ### Phase 4 gate
 20 paper-trading days complete. Reconciliation clean. Drift alerts working. Kill-switches tested at least once.
+
+---
+
+## Phase 4b — Brokerage & tax analytics (NEW, parallel Phase 4, 3 days)
+
+**Goal:** every trade and every setup has a clear cost-and-tax footprint;
+strategy choices optimize for **net-after-cost-after-tax** PnL, not gross.
+
+Indian intraday equity is taxed as **speculative business income** at slab
+rates. Speculative losses can ONLY offset future speculative gains, carried
+forward 4 years. Tax audit is mandatory at turnover > Rs 10 cr.
+
+### Step 4b.1 — Daily cost breakdown
+Per session, decompose every charge: brokerage (Zerodha cap Rs 20/order)
++ STT + GST + exchange + SEBI + stamp duty + slippage. Output: cost
+as % of gross PnL per day. Flags days where cost > 40% of gross.
+
+Module: `eqidv2.v17D_tax_analytics daily`.
+
+### Step 4b.2 — Per-strategy tax efficiency
+Per (side, setup): gross_per_trade, net_per_trade, cost_per_trade,
+cost_pct_of_gross, tax_efficiency_score (= net/gross).
+
+**Key insight surfaced:** Zerodha caps brokerage at Rs 20/order. Setups
+producing higher absolute PnL per trade have lower effective cost%.
+A setup with PF=2.0 doing Rs 80/trade is cost-inefficient (40% cost),
+while a setup with PF=2.0 doing Rs 400/trade is cost-efficient (8% cost).
+
+Module: `eqidv2.v17D_tax_analytics efficiency`.
+
+### Step 4b.3 — Tax-optimal setup recommendations
+Auto-classify each setup as KEEP / RESIZE_OR_DROP / DROP based on:
+
+- HIGH_COST_BURDEN: cost > 40% of gross
+- LOW_NET_PER_TRADE: net per trade < Rs 50
+- ORDER_TOO_SMALL_TO_AMORTIZE_BROKERAGE: gross per trade < Rs 100
+- TAX_EFFICIENCY_BELOW_50%: net / gross < 0.50
+
+Module: `eqidv2.v17D_tax_analytics recommend`.
+
+### Step 4b.4 — Year-end speculative-income estimator
+Quarterly + year-end summary:
+- Gross / net speculative income (after carry-forward setoff)
+- Tax due at slab rate (configurable, default 30%)
+- Turnover (sum of |abs PnL|) — flags audit requirement at Rs 10 cr
+- Loss carry-forward eligibility (4-year window)
+
+Module: `eqidv2.v17D_tax_analytics yearend --fy-start 2026-04-01 --slab-pct 30`.
+
+### Step 4b.5 — Kite contract-note reconciliation
+Pull Zerodha's daily contract note CSV via Kite API, reconcile broker-actual
+charges against internal cost model. Auto-tunes the cost model parameters
+when actuals drift from estimates (e.g. exchange fee structure changes).
+
+Module: `eqidv2.v17D_tax_analytics kite-reconcile`.
+
+### Phase 4b gate
+- Per-setup cost burden table printed; setups flagged DROP/RESIZE actually
+  re-evaluated and decisions logged in `SETUP_GRAVEYARD.md`.
+- Year-end FY estimate matches CA's reconciliation within Rs 1,000.
+- Kite contract-note actuals match cost model within +/-5% on each component.
+
+### What changes in production after Phase 4b
+
+1. **Setup selection criterion shifts** from "highest PF" to "highest
+   net-per-trade-Rs after costs and tax". A PF=1.8 setup doing Rs 250/trade
+   often beats a PF=2.4 setup doing Rs 60/trade.
+2. **Vol-targeted sizing recalibration** (Step 3.5) uses target_risk_rs
+   that ensures gross-per-trade > 2.5x cost — i.e. minimum order size
+   floor to amortize brokerage cap.
+3. **Setup library Tier-B gate** adds: net_per_trade_rs >= 50 in addition
+   to PF and OOS PF requirements.
+4. **Loss-harvesting logic** (NEW): if year-to-date is in profit and a
+   setup has been losing, drop it before FY end so the loss can be carried
+   forward (4-year window) for offset.
 
 ---
 
@@ -982,6 +1069,7 @@ Use one of these standard labels for the "Reason" column:
 | 2 — Signal + library | 2.5 weeks | Feature work | Phase 0 says PF marginal — skip to Phase 3 |
 | 3 — Risk/Exits | 1 week | Refinement | Phase 2 lifted PF, DD acceptable |
 | 4 — Live infra | 1.5 weeks (parallel 3) | Operational | Never skip |
+| 4b — Tax + brokerage analytics | 3 days (parallel 4) | Cost optimization | Never skip if trading taxable |
 | 5 — Pilot | 2 weeks | Validation | Never skip |
 | 6 — ML | 4+ weeks | Future work | Strategy already at target |
 

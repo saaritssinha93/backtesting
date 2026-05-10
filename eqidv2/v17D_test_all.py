@@ -36,6 +36,7 @@ MODULES = [
     ("eqidv2.v17D_vol_sizing",            False, True),
     ("eqidv2.v17D_graveyard",             False, True),
     ("eqidv2.v17D_config",                False, True),
+    ("eqidv2.v17D_tax_analytics",         False, False),  # CLI subcommands
 ]
 
 LIBRARY_TESTS = "eqidv2.v17D_setup_library.test_detectors"
