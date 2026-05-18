@@ -18,6 +18,9 @@ import io
 import sys
 import traceback
 from contextlib import redirect_stdout
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # (module_path, has_doctests, has_main_smoke_test)
 MODULES = [

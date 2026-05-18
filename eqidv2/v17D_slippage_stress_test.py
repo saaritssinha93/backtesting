@@ -82,6 +82,20 @@ def stress_test(trades: pd.DataFrame, leverage: float = 5.0) -> pd.DataFrame:
         ("REALISTIC", 1.0),
         ("PESSIMISTIC", 1.0),
     ]
+    # Per-setup sizing multiplier from the runner (Cand-E sizing tiers).
+    # If absent, fall back to flat 1.0 — caller will see the unsized PF.
+    if "candE_size_mult" in df.columns:
+        size_mult = pd.to_numeric(df["candE_size_mult"], errors="coerce").fillna(1.0)
+    elif "size_multiplier" in df.columns:
+        size_mult = pd.to_numeric(df["size_multiplier"], errors="coerce").fillna(1.0)
+    else:
+        size_mult = pd.Series(1.0, index=df.index)
+
+    # Use pre-cost gross when present (so we don't double-subtract baseline costs
+    # already baked into pnl_pct_price by the runner).
+    gross_col = "pnl_pct_gross_price" if "pnl_pct_gross_price" in df.columns else "pnl_pct_price"
+    gross_price = pd.to_numeric(df[gross_col], errors="coerce")
+
     for label, mult in scenarios:
         sl_cost = _scenario_costs_pct(label, "SL", mult)
         tgt_cost = _scenario_costs_pct(label, "TARGET", mult)
@@ -89,10 +103,9 @@ def stress_test(trades: pd.DataFrame, leverage: float = 5.0) -> pd.DataFrame:
         cost_per_row = df["outcome"].map(
             {"TARGET": tgt_cost, "SL": sl_cost, "EOD": eod_cost}
         ).fillna(tgt_cost)
-        # gross price PnL minus cost; then re-leverage
-        gross_price = pd.to_numeric(df["pnl_pct_price"], errors="coerce")
+        # gross price PnL minus cost; leverage; apply per-setup sizing
         net_price = gross_price - cost_per_row
-        net_lev = net_price * leverage
+        net_lev = net_price * leverage * size_mult
 
         n = len(df)
         win_pct = (df["outcome"] == "TARGET").mean() * 100 if n else 0.0

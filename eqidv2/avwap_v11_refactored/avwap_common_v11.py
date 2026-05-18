@@ -456,6 +456,19 @@ def read_15m_parquet(path: str, engine: str = "pyarrow") -> pd.DataFrame:
     df = df.copy()
     df["date"] = dt
     df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+    # Optional env-gated date window (propagates to worker processes).
+    # No-op unless EQIDV_DATE_FROM / EQIDV_DATE_TO is set. Used for fast
+    # last-N-months backtests without touching the data directory.
+    _dfrom = os.environ.get("EQIDV_DATE_FROM")
+    _dto = os.environ.get("EQIDV_DATE_TO")
+    if _dfrom or _dto:
+        _d = df["date"].dt.tz_convert(IST).dt.normalize()
+        if _dfrom:
+            df = df[_d >= pd.Timestamp(_dfrom).tz_localize(IST)]
+        if _dto:
+            df = df[_d <= pd.Timestamp(_dto).tz_localize(IST)]
+        df = df.reset_index(drop=True)
     return df
 
 
