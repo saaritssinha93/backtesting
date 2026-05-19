@@ -14,7 +14,7 @@ What was removed:
 - related directories and warmup settings
 
 What remains:
-- ETF universe loader (filtered_stocks_MIS.py or stocks_tickers.txt)
+- ETF universe loader (filtered_stocks_MIS_v2.py or stocks_tickers.txt)
 - Kite session setup with app pool (app1..app8)
 - Trading calendar helpers (weekends + optional holidays file)
 - Robust missing/freshness detection for intraday candles
@@ -156,7 +156,7 @@ def _normalize_ticker_list(obj) -> list[str]:
 def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, int]]:
     """
     Universe loader (ETF-ready):
-    - Preferred: filtered_stocks_MIS.py with either:
+    - Preferred: filtered_stocks_MIS_v2.py with either:
         - stocks_tokens = {SYMBOL: TOKEN, ...}
         - selected_stocks = [...]
     - Fallback: stocks_tickers.txt (one symbol per line)
@@ -173,7 +173,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
     mod: Optional[ModuleType] = None
 
     try:
-        mod = importlib.import_module("filtered_stocks_MIS")
+        mod = importlib.import_module("filtered_stocks_MIS_v2")
     except Exception:
         mod = None
 
@@ -184,7 +184,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                 token_map = {str(k).strip().upper(): int(v) for k, v in raw.items() if str(k).strip()}
                 tickers = sorted(token_map.keys())
                 if tickers:
-                    logger.info("Loaded %d symbols from filtered_stocks_MIS.stocks_tokens", len(tickers))
+                    logger.info("Loaded %d symbols from filtered_stocks_MIS_v2.stocks_tokens", len(tickers))
                     return tickers, token_map
             except Exception:
                 pass
@@ -200,12 +200,12 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                 except Exception:
                     pass
                 if tickers:
-                    logger.info("Loaded %d symbols from filtered_stocks_MIS.selected_stocks", len(tickers))
+                    logger.info("Loaded %d symbols from filtered_stocks_MIS_v2.selected_stocks", len(tickers))
                     return tickers, token_map
 
             tickers = _normalize_ticker_list(ss)
             if tickers:
-                logger.info("Loaded %d symbols from filtered_stocks_MIS.selected_stocks", len(tickers))
+                logger.info("Loaded %d symbols from filtered_stocks_MIS_v2.selected_stocks", len(tickers))
                 return tickers, token_map
 
     for base in (cwd, script_dir, parent_dir):
@@ -220,7 +220,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
     raise RuntimeError(
         "Could not load symbols.\n"
         "Fix options:\n"
-        "  1) Ensure filtered_stocks_MIS.py is importable and define either:\n"
+        "  1) Ensure filtered_stocks_MIS_v2.py is importable and define either:\n"
         "       - stocks_tokens = {SYMBOL: TOKEN, ...}   OR\n"
         "       - selected_stocks = [SYMBOL, ...] / {SYMBOL, ...} / {SYMBOL: TOKEN, ...}\n"
         "  2) Or create stocks_tickers.txt (one symbol per line) in cwd / script dir / parent dir.\n\n"
