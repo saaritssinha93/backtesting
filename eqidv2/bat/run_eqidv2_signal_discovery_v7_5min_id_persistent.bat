@@ -1,0 +1,13 @@
+@echo off
+setlocal
+
+cd /d "%~dp0.."
+set EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS=8
+set EQIDV2_SIGNAL_DISCOVERY_V7_POST_SLOT_DELAY_SEC=15
+set EQIDV2_SIGNAL_DISCOVERY_V7_SELECTION_MODE=v8_setup_compatible
+set EQIDV2_SIGNAL_DISCOVERY_V7_V8_GATE=1
+set EQIDV2_SIGNAL_DISCOVERY_V7_V8_ACCEPTED_RULES=C:\TradingData\eqidv2\outputs_ID_v8_5min_research_restore\accepted_rules.csv
+
+python eqidv2_signal_discovery_v7_5min_id_persistent.py
+
+endlocal

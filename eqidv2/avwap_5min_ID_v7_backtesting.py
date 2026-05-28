@@ -447,8 +447,13 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=v5.v2.DEFAULT_WORKERS)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--cost_bps", type=float, default=v6.DEFAULT_COST_BPS)
-    ap.add_argument("--max_trades_per_day", type=int, default=v5.v2.DEFAULT_MAX_TRADES_PER_DAY)
-    ap.add_argument("--max_same_side_per_day", type=int, default=v5.v2.DEFAULT_MAX_SAME_SIDE_PER_DAY)
+    # 2026-05-19 (temporary): daily caps disabled for v7 — emit ALL valid
+    # candidates instead of top-24 by score. Restore by reverting these two
+    # defaults to v5.v2.DEFAULT_MAX_TRADES_PER_DAY (24) and
+    # v5.v2.DEFAULT_MAX_SAME_SIDE_PER_DAY (16). v2's globals are untouched so
+    # other backtesters keep the original caps.
+    ap.add_argument("--max_trades_per_day", type=int, default=999_999)
+    ap.add_argument("--max_same_side_per_day", type=int, default=999_999)
     ap.add_argument("--refresh_baseline", action="store_true")
     ap.add_argument("--use_v5_cache", action="store_true", help="reuse the v7/v5_stage CSVs instead of rescanning raw data")
     args = ap.parse_args()

@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 from eqidv2_runtime_paths import (
     LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
     RUNTIME_STATUS_DIR,
+    runtime_dir,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -37,6 +38,11 @@ def _resolve_status_path(filename: str) -> Path:
         return off_onedrive
     return LOG_DIR / filename
 LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
+SIGNAL_DISCOVERY_V7_ROOT = runtime_dir("signal_discovery_v7_5mins_ID")
+SIGNAL_DISCOVERY_V7_LATEST_DIR = SIGNAL_DISCOVERY_V7_ROOT / "latest"
+SIGNAL_DISCOVERY_V7_CSV_DIR = SIGNAL_DISCOVERY_V7_ROOT / "csv"
+V7_RESEARCH_LAYER_ROOT = runtime_dir("live_research_v7_research_layer")
+V7_RESEARCH_LAYER_LATEST_DIR = V7_RESEARCH_LAYER_ROOT / "latest"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 IST = ZoneInfo("Asia/Kolkata")
 OPEN_LIVE_TRADES_STATE_PATTERN_V5 = "open_live_trades_state_{}_v5.json"
@@ -94,7 +100,13 @@ LOG_FILES: Dict[str, str] = {
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.log",
     "nifty_guard_fetch_v16_5min": "nifty_guard_fetcher_v16_5min.log",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.log",
+    "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.log",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.log",
+    "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID/heartbeat/candidate_tickers.status.json",
+    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID/heartbeat/entry_engine.status.json",
+    "v7_research_layer":                "live_research_v7_research_layer/latest/latest_summary.json",
+    "data_for_backtesting":             "data_for_backtesting_latest.log",
+    "backtesting_result_v7_v8":          "backtesting_result_v7_v8_latest.log",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.log",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.log",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.log",
@@ -104,10 +116,12 @@ LOG_IDS = tuple(LOG_FILES.keys()) + (
     "paper_trade_v7_sweep",
     "paper_trade_v15",
     "paper_trade_v16_5min",
+    "paper_trade_id_5min_v7",
     "kite_trade",
     "kite_trade_v7_sweep",
     "kite_trade_v15",
     "kite_trade_v16_5min",
+    "kite_trade_id_5min_v7",
     "preopen_healthcheck",
     "pending_signals_v16_5min",
     "detected_signals_v16_5min",
@@ -124,10 +138,15 @@ STATUS_FILES: Dict[str, str] = {
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.status",
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.status",
     "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.status",
+    "kite_trade_id_5min_v7": "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.status",
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.status",
     "nifty_guard_fetch_v16_5min": "nifty_guard_fetcher_v16_5min.status",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.status",
+    "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.status",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.status",
+    "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID.status",
+    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.status",
+    "v7_research_layer":                "live_research_v7_research_layer.status",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.status",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.status",
@@ -138,8 +157,13 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
     "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.heartbeat",
+    "kite_trade_id_5min_v7": "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.heartbeat",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.heartbeat",
+    "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.heartbeat",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.heartbeat",
+    "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID.heartbeat",
+    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.heartbeat",
+    "v7_research_layer":                "live_research_v7_research_layer.heartbeat",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.heartbeat",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.heartbeat",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.heartbeat",
@@ -155,6 +179,22 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "live_combined_csv_v15_new_persistent": ("\\EQIDV2_live_combined_csv_v15_new_0900",),
     "live_signals_csv_v15_new_short": ("\\EQIDV2_live_combined_csv_v15_new_0900",),
     "live_signals_csv_v15_new_long": ("\\EQIDV2_live_combined_csv_v15_new_0900",),
+    "live_combined_csv_id_5min_v7_persistent": ("\\EQIDV2_live_combined_csv_id_5min_v7_0909",),
+    "signal_discovery_v7_5min_id": ("\\EQIDV2_signal_discovery_v7_5mins_ID",),
+    "candidate_tickers_v7_5min_id": ("\\EQIDV2_signal_discovery_v7_5mins_ID",),
+    "entry_engine_1min_v5_id": ("\\EQIDV2_entry_engine_1min_v5_ID",),
+    "v7_research_layer": (
+        "\\EQIDV2_v7_research_layer_0917",
+        "\\EQIDV2_suggestions_v7_live_research_1615",
+    ),
+    "live_signals_csv_id_5min_v7_short": ("\\EQIDV2_entry_engine_1min_v5_ID",),
+    "live_signals_csv_id_5min_v7_long": ("\\EQIDV2_entry_engine_1min_v5_ID",),
+    "paper_trade_id_5min_v7": ("\\EQIDV2_paper_trade_id_5min_v7_0900",),
+    "live_papertrade_result_csv_id_5min_v7": ("\\EQIDV2_paper_trade_id_5min_v7_0900",),
+    "kite_trade_id_5min_v7": ("\\EQIDV2_live_trade_id_5min_v7_0900",),
+    "live_kite_trades_csv_id_5min_v7": ("\\EQIDV2_live_trade_id_5min_v7_0900",),
+    "data_for_backtesting": ("\\EQIDV2_data_for_backtesting_1545",),
+    "backtesting_result_v7_v8": ("\\EQIDV2_backtesting_result_v7_v8_1600",),
     "paper_trade_v15": ("\\EQIDV2_avwap_paper_trade_v15_0900",),
     "live_papertrade_result_csv_v15": ("\\EQIDV2_avwap_paper_trade_v15_0900",),
     "kite_trade_v15": ("\\EQIDV2_avwap_live_trade_v15_0905",),
@@ -185,6 +225,8 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
     "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
+    "live_combined_csv_id_5min_v7_persistent": "run_eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.bat",
+    "entry_engine_1min_v5_id": "run_eqidv2_entry_engine_1min_v5_id.bat",
     "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
     "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
     "authentication_v2":             "run_authentication_v2.bat",
@@ -575,6 +617,18 @@ def _latest_matching_file(base_dir: Path, glob_pattern: str) -> Optional[Path]:
 
 def resolve_log_target(name: str) -> Tuple[Path, str]:
     today_ist = dt.datetime.now(IST).date().isoformat()
+    if name == "signal_discovery_v7_5min_id":
+        path = SIGNAL_DISCOVERY_V7_ROOT / "heartbeat" / "candidate_tickers.status.json"
+        return path, str(Path("signal_discovery_v7_5mins_ID") / "heartbeat" / path.name)
+
+    if name == "entry_engine_1min_v5_id":
+        path = runtime_dir("entry_engine_1min_v5_ID") / "heartbeat" / "entry_engine.status.json"
+        return path, str(Path("entry_engine_1min_v5_ID") / "heartbeat" / path.name)
+
+    if name == "v7_research_layer":
+        path = V7_RESEARCH_LAYER_LATEST_DIR / "latest_summary.json"
+        return path, str(Path("live_research_v7_research_layer") / "latest" / path.name)
+
     if name in LOG_FILES:
         file_name = LOG_FILES[name]
         return LOG_DIR / file_name, file_name
@@ -712,6 +766,24 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v16_5min.log"
         return LOG_DIR / legacy_name, legacy_name
 
+    if name == "paper_trade_id_5min_v7":
+        runtime_name = f"paper_trade_execution_{today_ist}_id_5min_v7.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*_id_5min_v7.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7.log"
+        return LOG_DIR / legacy_name, legacy_name
+
     if name == "kite_trade_v16_5min":
         runtime_name = f"live_trade_execution_{today_ist}_v16_5min.log"
         runtime_path = LIVE_SIGNAL_DIR / runtime_name
@@ -728,6 +800,24 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         if latest is not None:
             return latest, latest.name
         legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "kite_trade_id_5min_v7":
+        runtime_name = f"live_trade_execution_{today_ist}_id_5min_v7.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "live_trade_execution_*_id_5min_v7.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.log"
         return LOG_DIR / legacy_name, legacy_name
 
     if name == "preopen_healthcheck":
@@ -2014,19 +2104,56 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <title>EQIDV2 Live Logs</title>
   <style>
     :root {
-      --bg-a: #0a1220;
-      --bg-b: #0f1f2f;
-      --bg-c: #0b1827;
-      --card: rgba(12, 24, 37, 0.86);
-      --line: rgba(112, 145, 179, 0.22);
-      --line-strong: rgba(112, 145, 179, 0.44);
-      --text: #edf4ff;
-      --muted: #a7bacf;
-      --ok: #0fcf9a;
-      --bad: #ff6b6b;
-      --warn: #ffbe5c;
-      --accent: #45c4ff;
-      --accent-2: #4de4c9;
+      --bg: #eef2f7;
+      --bg-soft: #f8fafc;
+      --surface: #ffffff;
+      --surface-strong: #f1f5f9;
+      --surface-muted: #e7edf5;
+      --card: #ffffff;
+      --line: #d8e0ea;
+      --line-strong: #b7c4d4;
+      --text: #172033;
+      --muted: #64748b;
+      --muted-strong: #475569;
+      --ok: #059669;
+      --bad: #dc2626;
+      --warn: #d97706;
+      --scheduled: #2563eb;
+      --disabled: #94a3b8;
+      --accent: #315a8c;
+      --accent-2: #0f766e;
+      --log-bg: #111827;
+      --log-text: #e5e7eb;
+      --log-head: #1f2937;
+      --shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+      --shadow-soft: 0 6px 18px rgba(15, 23, 42, 0.08);
+      --radius: 8px;
+    }
+
+    body[data-theme="dark"] {
+      --bg: #10141b;
+      --bg-soft: #141a23;
+      --surface: #171e28;
+      --surface-strong: #202a36;
+      --surface-muted: #1d2632;
+      --card: #171e28;
+      --line: #2f3a48;
+      --line-strong: #465467;
+      --text: #edf2f7;
+      --muted: #9aa8ba;
+      --muted-strong: #c2ccd8;
+      --ok: #10b981;
+      --bad: #ef4444;
+      --warn: #f59e0b;
+      --scheduled: #60a5fa;
+      --disabled: #64748b;
+      --accent: #7aa2d6;
+      --accent-2: #2dd4bf;
+      --log-bg: #0b1120;
+      --log-text: #e5e7eb;
+      --log-head: #162033;
+      --shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+      --shadow-soft: 0 8px 20px rgba(0, 0, 0, 0.2);
     }
 
     * { box-sizing: border-box; }
@@ -2035,48 +2162,116 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       margin: 0;
       min-height: 100vh;
       color: var(--text);
-      font-family: "Trebuchet MS", "Verdana", sans-serif;
+      font-family: "Inter", "Segoe UI", Arial, sans-serif;
       background:
-        radial-gradient(1200px 900px at 110% -10%, rgba(69, 196, 255, 0.16), transparent 58%),
-        radial-gradient(900px 700px at -10% 115%, rgba(77, 228, 201, 0.12), transparent 54%),
-        linear-gradient(145deg, var(--bg-a), var(--bg-b) 52%, var(--bg-c));
+        linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(238, 242, 247, 0.96)),
+        var(--bg);
+    }
+
+    body[data-theme="dark"] {
+      background: linear-gradient(180deg, #111827, #10141b 42%, #0f141c);
     }
 
     body::after {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0.12;
-      background-image:
-        linear-gradient(rgba(130, 170, 210, 0.12) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(130, 170, 210, 0.12) 1px, transparent 1px);
-      background-size: 26px 26px, 26px 26px;
-      mask-image: radial-gradient(circle at 50% 45%, black 35%, transparent 90%);
+      content: none;
     }
 
     header {
       position: sticky;
       top: 0;
       z-index: 20;
-      padding: 14px 16px 12px;
+      padding: 12px 16px;
       border-bottom: 1px solid var(--line);
-      background: linear-gradient(135deg, rgba(9, 19, 30, 0.94), rgba(12, 25, 38, 0.88));
-      backdrop-filter: blur(8px);
+      background: rgba(248, 250, 252, 0.94);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 6px 22px rgba(15, 23, 42, 0.07);
+    }
+
+    body[data-theme="dark"] header {
+      background: rgba(16, 20, 27, 0.94);
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .title-block {
+      min-width: 0;
     }
 
     h1 {
       margin: 0;
       font-size: 20px;
-      font-weight: 700;
-      letter-spacing: 0.2px;
-      font-family: "Palatino Linotype", "Book Antiqua", serif;
+      font-weight: 800;
+      letter-spacing: 0;
     }
 
     .sub {
       margin-top: 4px;
       font-size: 12px;
       color: var(--muted);
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .health-strip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+
+    .health-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 5px 10px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .health-pill strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .health-pill.ok {
+      border-color: rgba(5, 150, 105, 0.28);
+      background: #ecfdf5;
+      color: #047857;
+    }
+
+    .health-pill.warn {
+      border-color: rgba(217, 119, 6, 0.28);
+      background: #fffbeb;
+      color: #b45309;
+    }
+
+    .health-pill.bad {
+      border-color: rgba(220, 38, 38, 0.28);
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+
+    .health-pill.neutral {
+      border-color: var(--line);
+      background: var(--surface);
     }
 
     .toolbar {
@@ -2088,40 +2283,114 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       flex-wrap: wrap;
     }
 
+    .toolbar-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .toolbar-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
     .toolbar-note {
       font-size: 11px;
       color: var(--muted);
       border: 1px solid var(--line);
-      border-radius: 999px;
+      border-radius: var(--radius);
       padding: 5px 10px;
-      background: rgba(8, 18, 28, 0.7);
+      background: var(--surface);
+    }
+
+    .theme-toggle {
+      min-width: 78px;
+      border-color: var(--line);
+      background: var(--surface);
+      color: var(--muted-strong);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .theme-toggle:hover {
+      border-color: var(--accent);
+      background: var(--surface-strong);
+    }
+
+    .search-input {
+      width: min(320px, 42vw);
+      min-width: 180px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: none;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .search-input:focus {
+      border-color: rgba(37, 99, 235, 0.55);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.13);
+    }
+
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+
+    .filter-chip {
+      border: 1px solid var(--line);
+      color: var(--muted-strong);
+      background: var(--surface);
+      box-shadow: none;
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .filter-chip:hover {
+      transform: none;
+      box-shadow: none;
+      border-color: rgba(37, 99, 235, 0.42);
+      color: var(--text);
+    }
+
+    .filter-chip.is-active {
+      border-color: rgba(37, 99, 235, 0.55);
+      background: #eff6ff;
+      color: #1d4ed8;
     }
 
     .restart-all-btn {
-      position: absolute;
-      top: 14px;
-      right: 16px;
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      border: 1px solid rgba(121, 200, 255, 0.55);
-      background: linear-gradient(135deg, rgba(22, 55, 82, 0.95), rgba(16, 108, 150, 0.92));
-      color: #e6f2ff;
+      border: 1px solid rgba(220, 38, 38, 0.26);
+      background: color-mix(in srgb, var(--bad) 10%, var(--surface));
+      color: var(--bad);
       font-size: 12px;
       font-weight: 700;
-      letter-spacing: 0.03em;
-      padding: 7px 14px;
-      border-radius: 999px;
+      letter-spacing: 0;
+      padding: 8px 12px;
+      border-radius: var(--radius);
       cursor: pointer;
-      box-shadow: 0 4px 12px rgba(12, 58, 90, 0.45);
+      box-shadow: var(--shadow-soft);
       transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
       user-select: none;
     }
 
     .restart-all-btn:hover {
-      border-color: rgba(121, 200, 255, 0.95);
-      background: linear-gradient(135deg, rgba(30, 78, 118, 0.98), rgba(22, 130, 180, 0.98));
-      box-shadow: 0 6px 18px rgba(18, 90, 140, 0.55);
+      border-color: rgba(220, 38, 38, 0.48);
+      background: color-mix(in srgb, var(--bad) 16%, var(--surface));
+      box-shadow: var(--shadow);
       transform: translateY(-1px);
     }
 
@@ -2147,31 +2416,33 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     .restart-all-btn.is-ok {
-      border-color: rgba(15, 207, 154, 0.8);
-      background: linear-gradient(135deg, rgba(14, 84, 60, 0.95), rgba(18, 150, 110, 0.95));
+      border-color: rgba(5, 150, 105, 0.45);
+      background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+      color: var(--ok);
     }
 
     .restart-all-btn.is-err {
-      border-color: rgba(255, 107, 107, 0.8);
-      background: linear-gradient(135deg, rgba(110, 25, 25, 0.95), rgba(180, 52, 52, 0.95));
+      border-color: rgba(220, 38, 38, 0.55);
+      background: color-mix(in srgb, var(--bad) 16%, var(--surface));
+      color: var(--bad);
     }
 
     button {
-      border: 1px solid rgba(84, 204, 255, 0.5);
-      color: #081726;
+      border: 1px solid rgba(37, 99, 235, 0.32);
+      color: #ffffff;
       font-weight: 700;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      background: var(--scheduled);
       padding: 8px 12px;
-      border-radius: 10px;
+      border-radius: var(--radius);
       font-size: 13px;
       cursor: pointer;
       transition: transform 0.14s ease, box-shadow 0.14s ease;
-      box-shadow: 0 10px 22px rgba(20, 128, 167, 0.35);
+      box-shadow: var(--shadow-soft);
     }
 
     button:hover {
       transform: translateY(-1px);
-      box-shadow: 0 14px 24px rgba(20, 128, 167, 0.42);
+      box-shadow: var(--shadow);
     }
 
     .wrap {
@@ -2179,8 +2450,147 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       margin: 0 auto;
       padding: 14px;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 10px;
+    }
+
+    .snapshot-grid {
+      max-width: 1600px;
+      margin: 12px auto 0;
+      padding: 0 14px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    .snapshot-tile {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 9px 11px;
+      box-shadow: var(--shadow-soft);
+      min-height: 64px;
+    }
+
+    .snapshot-label {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .snapshot-value {
+      margin-top: 4px;
+      font-size: 20px;
+      font-weight: 850;
+      line-height: 1.1;
+      color: var(--text);
+    }
+
+    .snapshot-note {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .snapshot-tile.is-ok { border-left: 3px solid color-mix(in srgb, var(--ok) 70%, var(--line)); }
+    .snapshot-tile.is-warn { border-left: 3px solid color-mix(in srgb, var(--warn) 70%, var(--line)); }
+    .snapshot-tile.is-bad { border-left: 3px solid color-mix(in srgb, var(--bad) 70%, var(--line)); }
+    .snapshot-tile.is-info { border-left: 3px solid color-mix(in srgb, var(--scheduled) 55%, var(--line)); }
+
+    .timeline-panel {
+      margin-top: 10px;
+      border: 1px solid rgba(69, 196, 255, 0.22);
+      border-color: var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .timeline-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 11px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .timeline-title {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+
+    .timeline-note {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .timeline-track {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(128px, 1fr);
+      gap: 1px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      background: var(--line);
+    }
+
+    .timeline-step {
+      position: relative;
+      min-height: 74px;
+      padding: 10px 10px 9px 12px;
+      background: var(--surface);
+      border-top: 2px solid var(--line-strong);
+    }
+
+    .timeline-step.ok { border-top-color: var(--ok); }
+    .timeline-step.warn { border-top-color: var(--warn); }
+    .timeline-step.bad { border-top-color: var(--bad); }
+    .timeline-step.disabled { opacity: 0.62; }
+    .timeline-step.is-now {
+      background: #eff6ff;
+    }
+
+    .timeline-time {
+      font-size: 11px;
+      font-weight: 800;
+      color: #1d4ed8;
+      white-space: nowrap;
+    }
+
+    .timeline-name {
+      margin-top: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+
+    .timeline-status {
+      margin-top: 6px;
+      display: inline-flex;
+      max-width: 100%;
+      border: 1px solid rgba(112, 145, 179, 0.25);
+      border-radius: var(--radius);
+      padding: 2px 7px;
+      color: var(--muted);
+      background: var(--surface-strong);
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .section-banner {
@@ -2189,22 +2599,64 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: 10px 14px;
-      border: 1px solid rgba(69, 196, 255, 0.28);
-      border-radius: 14px;
-      background: linear-gradient(135deg, rgba(15, 38, 56, 0.9), rgba(10, 23, 36, 0.82));
-      box-shadow: 0 10px 22px rgba(1, 8, 15, 0.28);
+      position: relative;
+      padding: 8px 12px 8px 14px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      border-bottom-color: var(--line);
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .section-banner::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 3px;
+      border-radius: 999px;
+      background: var(--section-accent, var(--line-strong));
     }
 
     .section-banner.is-disabled {
-      border-color: rgba(112, 145, 179, 0.24);
-      background: linear-gradient(135deg, rgba(18, 28, 39, 0.88), rgba(10, 18, 28, 0.8));
+      border-color: transparent;
+      border-bottom-color: var(--line);
+      background: transparent;
+      --section-accent: var(--disabled);
+    }
+
+    .section-banner.market { --section-accent: #2563eb; }
+    .section-banner.v7 { --section-accent: #059669; }
+    .section-banner.research { --section-accent: #7c3aed; }
+    .section-banner.v16 { --section-accent: #d97706; }
+    .section-banner.admin { --section-accent: #64748b; }
+    .section-banner.other { --section-accent: #0f766e; }
+    .section-left {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
+    .section-action {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 11px;
+      line-height: 1;
+      background: var(--surface);
+      border-color: var(--line);
+      color: var(--text);
+      box-shadow: none;
+    }
+    .section-action:hover {
+      box-shadow: 0 8px 16px rgba(1, 8, 15, 0.22);
     }
 
     .section-title {
       font-size: 12px;
       font-weight: 800;
-      letter-spacing: 0.9px;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--text);
     }
@@ -2213,23 +2665,28 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       font-size: 11px;
       color: var(--muted);
       white-space: nowrap;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 2px 7px;
     }
 
     .card {
       position: relative;
       border: 1px solid var(--line);
-      border-radius: 14px;
-      background: linear-gradient(165deg, rgba(16, 31, 47, 0.9), var(--card));
+      border-radius: var(--radius);
+      background: var(--card);
       overflow: hidden;
-      box-shadow: 0 15px 28px rgba(1, 8, 15, 0.45);
+      box-shadow: var(--shadow-soft);
       animation: cardIn 0.33s ease both;
       transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+      min-height: 112px;
     }
 
     .card:hover {
       transform: translateY(-2px);
-      border-color: rgba(90, 182, 230, 0.45);
-      box-shadow: 0 20px 34px rgba(1, 8, 15, 0.52);
+      border-color: var(--line-strong);
+      box-shadow: var(--shadow);
     }
 
     .card::before {
@@ -2244,35 +2701,84 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .card.is-warn::before { background: var(--warn); }
     .card.is-bad::before { background: var(--bad); }
     .card.is-fullscreen::before { background: var(--accent); }
+    .card.is-disabled-compact {
+      opacity: 0.72;
+      box-shadow: none;
+    }
+    .card.is-disabled-compact:hover {
+      transform: none;
+    }
+    .card.is-disabled-compact .card-head {
+      border-bottom: 0;
+    }
+    .card.is-disabled-compact pre,
+    .card.is-disabled-compact .table-shell,
+    .card.is-disabled-compact .kill-shell {
+      display: none;
+    }
+    .card.is-disabled-compact.is-fullscreen {
+      opacity: 1;
+    }
+    .card.is-disabled-compact.is-fullscreen pre,
+    .card.is-disabled-compact.is-fullscreen .table-shell,
+    .card.is-disabled-compact.is-fullscreen .kill-shell {
+      display: block;
+    }
+    .card.is-disabled-compact.is-fullscreen .card-head {
+      border-bottom: 1px solid var(--line);
+    }
+    .card.is-log-hidden pre,
+    .card.is-log-hidden .table-shell,
+    .card.is-log-hidden .kill-shell {
+      display: none;
+    }
+    .card.is-log-hidden .card-head {
+      border-bottom: 0;
+    }
+
+    .card.is-fullscreen.is-log-hidden pre,
+    .card.is-fullscreen.is-log-hidden .table-shell,
+    .card.is-fullscreen.is-log-hidden .kill-shell {
+      display: block;
+    }
+
+    .card.is-expanded .card-head {
+      border-bottom: 1px solid var(--line);
+    }
 
     .card-head {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      gap: 8px;
-      padding: 10px 11px;
+      gap: 10px;
+      padding: 9px 11px;
       border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--surface), var(--bg-soft));
     }
 
     .card-head-left {
       display: flex;
       flex-direction: column;
       align-items: flex-start;
-      gap: 4px;
+      gap: 5px;
       min-width: 0;
       flex: 1 1 auto;
     }
 
     .name {
       font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.2px;
+      font-weight: 800;
+      letter-spacing: 0;
       max-width: 100%;
       overflow-wrap: anywhere;
+      line-height: 1.25;
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
 
     .meta {
-      margin-top: 4px;
       font-size: 11px;
       color: var(--muted);
       line-height: 1.35;
@@ -2280,33 +2786,94 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       overflow-wrap: anywhere;
     }
 
+    .compact-desc {
+      width: 100%;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .mini-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 2px;
+    }
+
+    .mini-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      border: 1px solid rgba(112, 145, 179, 0.28);
+      border-radius: var(--radius);
+      padding: 2px 7px;
+      color: var(--muted);
+      background: var(--surface-strong);
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .mini-badge.ok {
+      border-color: rgba(5, 150, 105, 0.25);
+      color: var(--ok);
+      background: color-mix(in srgb, var(--ok) 11%, var(--surface));
+    }
+
+    .mini-badge.warn {
+      border-color: rgba(217, 119, 6, 0.25);
+      color: var(--warn);
+      background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+    }
+
+    .mini-badge.bad {
+      border-color: rgba(220, 38, 38, 0.25);
+      color: var(--bad);
+      background: color-mix(in srgb, var(--bad) 11%, var(--surface));
+    }
+
     .pill {
       font-size: 10px;
       font-weight: 700;
-      border-radius: 999px;
+      border-radius: var(--radius);
       padding: 3px 8px;
       border: 1px solid var(--line);
       color: var(--muted);
-      background: rgba(8, 18, 28, 0.76);
+      background: var(--surface-strong);
       white-space: nowrap;
     }
 
     .pill.ok {
-      color: #06251a;
-      border-color: rgba(15, 207, 154, 0.5);
-      background: rgba(15, 207, 154, 0.92);
+      color: #ffffff;
+      border-color: rgba(5, 150, 105, 0.35);
+      background: var(--ok);
     }
 
     .pill.warn {
-      color: #3d2200;
-      border-color: rgba(255, 190, 92, 0.55);
-      background: rgba(255, 190, 92, 0.95);
+      color: #ffffff;
+      border-color: rgba(217, 119, 6, 0.35);
+      background: var(--warn);
+    }
+
+    .pill.info {
+      color: #ffffff;
+      border-color: color-mix(in srgb, var(--scheduled) 60%, var(--line));
+      background: var(--scheduled);
+    }
+
+    .pill.muted {
+      color: #ffffff;
+      border-color: color-mix(in srgb, var(--disabled) 60%, var(--line));
+      background: var(--disabled);
     }
 
     .pill.fail {
-      color: #2f0707;
-      border-color: rgba(255, 107, 107, 0.6);
-      background: rgba(255, 107, 107, 0.95);
+      color: #ffffff;
+      border-color: rgba(220, 38, 38, 0.35);
+      background: var(--bad);
     }
 
     .card-head-right {
@@ -2314,15 +2881,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       align-items: flex-start;
       gap: 6px;
       flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: 132px;
     }
 
     .card-toggle {
       border: 1px solid var(--line-strong);
-      color: var(--text);
+      color: var(--muted-strong);
       font-weight: 700;
-      background: rgba(8, 18, 28, 0.78);
-      padding: 4px 8px;
-      border-radius: 8px;
+      background: var(--surface);
+      padding: 4px 7px;
+      border-radius: var(--radius);
       font-size: 11px;
       cursor: pointer;
       box-shadow: none;
@@ -2333,36 +2903,49 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       transform: none;
       box-shadow: none;
       border-color: var(--accent);
-      background: rgba(12, 26, 40, 0.9);
+      background: color-mix(in srgb, var(--scheduled) 10%, var(--surface));
     }
 
     .card-toggle.is-active {
       border-color: var(--accent);
-      background: rgba(23, 61, 89, 0.9);
+      background: color-mix(in srgb, var(--scheduled) 16%, var(--surface));
+      color: var(--scheduled);
+    }
+
+    .log-toggle.is-hidden {
+      border-color: rgba(112, 145, 179, 0.42);
+      color: var(--muted);
+      background: var(--surface-strong);
+    }
+
+    .pin-toggle.is-pinned {
+      border-color: rgba(217, 119, 6, 0.35);
+      background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+      color: var(--warn);
     }
 
     .restart-btn {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      border: 1px solid rgba(121, 200, 255, 0.45);
-      background: linear-gradient(135deg, rgba(22, 55, 82, 0.92), rgba(16, 90, 130, 0.88));
-      color: #dcecff;
+      border: 1px solid rgba(37, 99, 235, 0.25);
+      background: color-mix(in srgb, var(--scheduled) 10%, var(--surface));
+      color: var(--scheduled);
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.02em;
-      padding: 4px 10px;
-      border-radius: 999px;
+      padding: 3px 8px;
+      border-radius: var(--radius);
       cursor: pointer;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+      box-shadow: none;
       transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
       user-select: none;
     }
 
     .restart-btn:hover {
-      border-color: rgba(121, 200, 255, 0.9);
-      background: linear-gradient(135deg, rgba(28, 74, 112, 0.96), rgba(18, 110, 160, 0.96));
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.32);
+      border-color: rgba(37, 99, 235, 0.45);
+      background: color-mix(in srgb, var(--scheduled) 16%, var(--surface));
+      box-shadow: var(--shadow-soft);
       transform: translateY(-1px);
     }
 
@@ -2388,15 +2971,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     .restart-btn.is-ok {
-      border-color: rgba(15, 207, 154, 0.75);
-      background: linear-gradient(135deg, rgba(14, 84, 60, 0.95), rgba(15, 140, 102, 0.95));
-      color: #e8fff5;
+      border-color: rgba(5, 150, 105, 0.35);
+      background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+      color: var(--ok);
     }
 
     .restart-btn.is-err {
-      border-color: rgba(255, 107, 107, 0.75);
-      background: linear-gradient(135deg, rgba(110, 25, 25, 0.95), rgba(170, 48, 48, 0.95));
-      color: #ffecec;
+      border-color: rgba(220, 38, 38, 0.35);
+      background: color-mix(in srgb, var(--bad) 16%, var(--surface));
+      color: var(--bad);
     }
 
     @keyframes restart-spin {
@@ -2407,9 +2990,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .kill-shell {
       margin: 8px 10px 4px;
       padding: 8px;
-      border: 1px solid rgba(255, 107, 107, 0.35);
-      border-radius: 10px;
-      background: rgba(40, 13, 13, 0.55);
+      border: 1px solid rgba(220, 38, 38, 0.25);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--bad) 8%, var(--surface));
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -2424,7 +3007,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     .kill-confirm {
       font-size: 11px;
-      color: #ffd7d7;
+      color: var(--bad);
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -2440,15 +3023,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       min-width: 130px;
       max-width: 220px;
       border: 1px solid var(--line-strong);
-      border-radius: 8px;
+      border-radius: var(--radius);
       padding: 4px 6px;
-      background: rgba(7, 16, 25, 0.9);
+      background: var(--surface);
       color: var(--text);
       font-size: 12px;
     }
 
     .kill-btn {
-      border-radius: 8px;
+      border-radius: var(--radius);
       font-size: 11px;
       padding: 5px 8px;
       box-shadow: none;
@@ -2456,15 +3039,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     .kill-btn.kill-one {
-      border-color: rgba(255, 190, 92, 0.58);
-      background: linear-gradient(135deg, #ffbe5c, #ffd388);
-      color: #2f1d06;
+      border-color: rgba(217, 119, 6, 0.28);
+      background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+      color: var(--warn);
     }
 
     .kill-btn.kill-all {
-      border-color: rgba(255, 107, 107, 0.66);
-      background: linear-gradient(135deg, #ff7f7f, #ffb0a6);
-      color: #2f0707;
+      border-color: rgba(220, 38, 38, 0.32);
+      background: color-mix(in srgb, var(--bad) 14%, var(--surface));
+      color: var(--bad);
     }
 
     .kill-btn:disabled,
@@ -2477,40 +3060,56 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       font-size: 10px;
       line-height: 1.25;
       min-height: 1.2em;
-      color: #9cebcf;
+      color: var(--ok);
       overflow-wrap: anywhere;
     }
 
     .kill-status.err {
-      color: #ff9d9d;
+      color: var(--bad);
     }
 
     pre {
       margin: 0;
-      padding: 11px;
+      padding: 9px 10px;
       white-space: pre;
       word-break: normal;
       font-size: 11px;
       line-height: 1.4;
-      max-height: 230px;
+      max-height: 190px;
       overflow-x: auto;
       overflow-y: auto;
       font-family: "Consolas", "Lucida Console", monospace;
-      background: rgba(7, 16, 25, 0.78);
+      background: var(--log-bg);
+      color: var(--log-text);
       tab-size: 4;
       scrollbar-gutter: stable both-edges;
+      border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    }
+
+    pre.log-empty {
+      color: #aab7c8;
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          color-mix(in srgb, var(--log-bg) 94%, #ffffff),
+          color-mix(in srgb, var(--log-bg) 94%, #ffffff) 10px,
+          var(--log-bg) 10px,
+          var(--log-bg) 20px
+        );
+      font-style: italic;
     }
 
     .table-shell {
       margin: 0;
-      padding: 8px;
-      max-height: 230px;
+      padding: 7px;
+      max-height: 190px;
       overflow-x: auto;
       overflow-y: auto;
       font-family: "Consolas", "Lucida Console", monospace;
       font-size: 10px;
       line-height: 1.25;
-      background: rgba(7, 16, 25, 0.78);
+      background: var(--log-bg);
+      color: var(--log-text);
       tab-size: 4;
       scrollbar-gutter: stable both-edges;
     }
@@ -2544,14 +3143,14 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       padding: 2px 5px;
       white-space: nowrap;
       text-align: left;
-      background: rgba(9, 18, 28, 0.65);
+      background: color-mix(in srgb, var(--log-bg) 88%, #ffffff);
     }
 
     .log-table thead th {
       position: sticky;
       top: 0;
       z-index: 1;
-      background: rgba(12, 24, 37, 0.96);
+      background: var(--log-head);
     }
 
     .th-sort-btn {
@@ -2559,7 +3158,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       align-items: center;
       gap: 2px;
       border: 0 !important;
-      color: var(--text) !important;
+      color: #e5e7eb !important;
       font-weight: 700;
       background: transparent !important;
       padding: 0 !important;
@@ -2572,12 +3171,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .th-sort-btn:hover {
       transform: none !important;
       box-shadow: none !important;
-      color: var(--accent) !important;
+      color: #93c5fd !important;
       text-decoration: underline;
     }
 
     .sort-mark {
-      color: var(--muted);
+      color: #94a3b8;
       font-size: 9px;
       min-width: 1.7em;
       text-align: right;
@@ -2616,7 +3215,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       position: sticky;
       top: 0;
       z-index: 2;
-      background: linear-gradient(165deg, rgba(16, 31, 47, 0.98), rgba(10, 20, 31, 0.98));
+      background: var(--surface);
     }
 
     body.has-fullscreen .card.is-fullscreen pre {
@@ -2640,6 +3239,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     @media (max-width: 720px) {
       h1 { font-size: 18px; }
+      .topbar { grid-template-columns: 1fr; }
+      .top-actions { justify-content: flex-start; }
+      .search-input { width: 100%; min-width: 0; }
+      .timeline-track { grid-auto-columns: minmax(118px, 70%); }
+      .snapshot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 10px; }
       .wrap { grid-template-columns: 1fr; padding: 10px; gap: 10px; }
       .card-head { padding: 9px 10px; }
       pre { max-height: 250px; }
@@ -2649,24 +3253,54 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 </head>
 <body>
   <header>
-    <h1>EQIDV2 Scheduled Jobs Dashboard</h1>
-    <div class="sub" id="info">loading...</div>
-    <button type="button" class="restart-all-btn" id="restartAllBtn"
-            title="Restart all managed sessions (sequential 3-step escalation per session)">
-      <span class="restart-icon" aria-hidden="true">&#x21BB;</span>
-      <span class="restart-all-label">Restart All</span>
-    </button>
-    <div class="toolbar">
-      <button id="refreshBtn" onclick="loadNow()">Refresh Now</button>
-      <div class="toolbar-note">Auto refresh every 15 seconds | Maximize and scroll horizontally for full line data</div>
+    <div class="topbar">
+      <div class="title-block">
+        <h1>EQIDV2 Live Operations</h1>
+        <div class="sub" id="info">loading...</div>
+      </div>
+      <div class="top-actions">
+        <button id="refreshBtn" onclick="loadNow()" title="Refresh dashboard now">Refresh</button>
+        <button type="button" class="theme-toggle" id="themeToggle" title="Switch dashboard theme">Theme</button>
+        <button type="button" class="filter-chip" id="problemsFirstBtn" title="Keep pinned and problem cards at the top">Problems First</button>
+        <button type="button" class="restart-all-btn" id="restartAllBtn"
+                title="Restart all managed sessions (sequential 3-step escalation per session)">
+          <span class="restart-icon" aria-hidden="true">&#x21BB;</span>
+          <span class="restart-all-label">Restart All</span>
+        </button>
+      </div>
     </div>
+    <div class="health-strip" id="healthSummary"></div>
+    <div class="toolbar">
+      <div class="toolbar-main">
+        <input class="search-input" id="cardSearch" type="search" placeholder="Search session, ticker, status, file..." autocomplete="off" />
+        <div class="filter-bar" id="statusFilters"></div>
+      </div>
+      <div class="toolbar-controls">
+        <div class="toolbar-note">Auto refresh 15s</div>
+      </div>
+    </div>
+    <div class="timeline-panel" id="todayTimeline"></div>
   </header>
+  <div class="snapshot-grid" id="opsSnapshot"></div>
   <div class="wrap" id="cards"></div>
 
   <script>
     const LOG_ORDER = [
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
+      "live_combined_csv_id_5min_v7_persistent",
+      "signal_discovery_v7_5min_id",
+      "candidate_tickers_v7_5min_id",
+      "entry_engine_1min_v5_id",
+      "v7_research_layer",
+      "live_signals_csv_id_5min_v7_short",
+      "live_signals_csv_id_5min_v7_long",
+      "live_papertrade_result_csv_id_5min_v7",
+      "paper_trade_id_5min_v7",
+      "live_kite_trades_csv_id_5min_v7",
+      "kite_trade_id_5min_v7",
+      "data_for_backtesting",
+      "backtesting_result_v7_v8",
       "signal_early_engine_v16_5min",
       "pending_signals_v16_5min",
       "pending_data_fetcher_v16_5min",
@@ -2710,6 +3344,19 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "paper_trade_v16_5min": "V16 5min Papertrade Runner Log",
       "kite_trade_v16_5min": "V16 5min Live Trade Runner Log",
       "live_combined_csv_v15_new_persistent": "Live combined (short+long) V15 new persistent scanner",
+      "live_combined_csv_id_5min_v7_persistent": "Live scanner v7 ID 5mins",
+      "signal_discovery_v7_5min_id": "Signal discovery v7 5mins ID",
+      "candidate_tickers_v7_5min_id": "Candidate tickers",
+      "entry_engine_1min_v5_id": "Entry engine 1min v7 ID",
+      "v7_research_layer": "Suggestions v7 live research",
+      "live_signals_csv_id_5min_v7_short": "Live Entries CSV ID 5mins v7 Short",
+      "live_signals_csv_id_5min_v7_long": "Live Entries CSV ID 5mins v7 Long",
+      "live_papertrade_result_csv_id_5min_v7": "V7 ID 5min Papertrade Results",
+      "paper_trade_id_5min_v7": "V7 ID 5min Papertrade Runner Log",
+      "live_kite_trades_csv_id_5min_v7": "V7 ID 5min Live Kite Trades CSV",
+      "kite_trade_id_5min_v7": "V7 ID 5min Live Trade Runner Log",
+      "data_for_backtesting": "Data for backtesting",
+      "backtesting_result_v7_v8": "Backtesting Result v7/v8",
       "nifty_guard_fetch_v15": "NIFTY Fetch V15",
       "nifty_guard_fetch_v16_5min": "NIFTY Fetch 5min",
       "live_signals_csv_v15_new_short": "Live Entries CSV V15 Short New",
@@ -2724,8 +3371,123 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "kite_trade_v15": "Live Kite Trades Log V15",
       "eod_1540_update": "Live EOD Data Fetch"
     };
+    const ACTIVE_GROUPS = [
+      {
+        title: "Market Data Readiness",
+        accent: "market",
+        ids: [
+          "nifty_guard_fetch_v16_5min",
+          "eod_5min_data",
+          "live_combined_csv_id_5min_v7_persistent"
+        ]
+      },
+      {
+        title: "Core V7 Live Flow",
+        accent: "v7",
+        ids: [
+          "signal_discovery_v7_5min_id",
+          "candidate_tickers_v7_5min_id",
+          "entry_engine_1min_v5_id",
+          "live_signals_csv_id_5min_v7_short",
+          "live_signals_csv_id_5min_v7_long",
+          "live_papertrade_result_csv_id_5min_v7",
+          "paper_trade_id_5min_v7",
+          "live_kite_trades_csv_id_5min_v7",
+          "kite_trade_id_5min_v7"
+        ]
+      },
+      {
+        title: "Data & Backtesting",
+        accent: "research",
+        ids: [
+          "data_for_backtesting",
+          "backtesting_result_v7_v8"
+        ]
+      },
+      {
+        title: "Research & Suggestions",
+        accent: "research",
+        ids: [
+          "v7_research_layer"
+        ]
+      },
+      {
+        title: "V16 / Parallel Strategy",
+        accent: "v16",
+        ids: [
+          "signal_early_engine_v16_5min",
+          "pending_signals_v16_5min",
+          "pending_data_fetcher_v16_5min",
+          "detection_engine_v16_5min",
+          "detected_signals_v16_5min",
+          "live_signals_csv_v16_5min_short",
+          "live_signals_csv_v16_5min_long",
+          "live_kite_trades_csv_v16_5min",
+          "kite_trade_v16_5min",
+          "paper_trade_v16_5min",
+          "live_papertrade_result_csv_v16_5min",
+          "live_combined_csv_v16_5min"
+        ]
+      },
+      {
+        title: "Admin & Exports",
+        accent: "admin",
+        ids: [
+          "eod_15min_data",
+          "kite_positions_day_today_csv",
+          "kite_holdings_today_csv",
+          "preopen_healthcheck",
+          "authentication_v2",
+          "eod_1540_update"
+        ]
+      }
+    ];
+    const SESSION_TIMELINE = [
+      { time: "09:00", id: "authentication_v2", label: "Auth" },
+      { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
+      { time: "09:09", id: "live_combined_csv_id_5min_v7_persistent", label: "V7 Live Scanner" },
+      { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
+      { time: "09:17", id: "v7_research_layer", label: "V7 Research Layer" },
+      { time: "09:20", id: "signal_discovery_v7_5min_id", label: "Signal Discovery" },
+      { time: "09:21", id: "entry_engine_1min_v5_id", label: "Entry Engine" },
+      { time: "09:22", id: "paper_trade_id_5min_v7", label: "Papertrade TRUE" },
+      { time: "09:22", id: "kite_trade_id_5min_v7", label: "Live Trade FALSE" },
+      { time: "15:45", id: "data_for_backtesting", label: "Data for Backtesting" },
+      { time: "16:00", id: "backtesting_result_v7_v8", label: "Backtesting Result" },
+      { time: "16:15", id: "v7_research_layer", label: "Suggestions v7 Research" },
+      { time: "17:00", id: "", label: "Dashboard Close" }
+    ];
     const API_TOKEN = __API_TOKEN_JSON__;
     let FULLSCREEN_ID = "";
+    let DISABLED_SECTION_MINIMIZED = localStorage.getItem("eqidv2_disabled_section_minimized") === "1";
+    let ACTIVE_FILTER = localStorage.getItem("eqidv2_dashboard_filter") || "all";
+    let SEARCH_QUERY = localStorage.getItem("eqidv2_dashboard_search") || "";
+    let PROBLEMS_FIRST = localStorage.getItem("eqidv2_problems_first") === "1";
+    let DASHBOARD_THEME = localStorage.getItem("eqidv2_dashboard_theme") || "light";
+    function readJsonLocalStorage(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : fallback;
+      } catch (_) {
+        return fallback;
+      }
+    }
+    let LOG_HIDDEN_BY_CARD = readJsonLocalStorage("eqidv2_log_hidden_by_card", {});
+    let LOG_EXPANDED_BY_CARD = readJsonLocalStorage("eqidv2_log_expanded_by_card", {});
+    let PINNED_CARDS = readJsonLocalStorage("eqidv2_pinned_cards", {});
+    const FILTERS = [
+      { id: "all", label: "All" },
+      { id: "problem", label: "Problem" },
+      { id: "watch", label: "Watch" },
+      { id: "v7", label: "V7" },
+      { id: "v16", label: "V16" },
+      { id: "paper", label: "Paper" },
+      { id: "live", label: "Live" },
+      { id: "research", label: "Research" },
+      { id: "disabled", label: "Disabled" }
+    ];
     const TABLE_SORT_STATE = {};
     const RESTARTABLE_CARDS = new Set([
       "nifty_guard_fetch_v16_5min",
@@ -2741,6 +3503,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const KILL_CARD_SCOPE = {
       "kite_trade_v16_5min": "false_v16_5min",
       "live_kite_trades_csv_v16_5min": "false_v16_5min",
+      "kite_trade_id_5min_v7": "false_id_5min_v7",
+      "live_kite_trades_csv_id_5min_v7": "false_id_5min_v7",
+      "paper_trade_id_5min_v7": "true_id_5min_v7",
+      "live_papertrade_result_csv_id_5min_v7": "true_id_5min_v7",
       "paper_trade_v16_5min": "true_v16_5min",
       "live_papertrade_result_csv_v16_5min": "true_v16_5min",
       "kite_trade_v15": "false_v15",
@@ -2749,8 +3515,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "live_papertrade_result_csv_v15": "true_v15"
     };
 
+    function applyTheme() {
+      const theme = DASHBOARD_THEME === "dark" ? "dark" : "light";
+      document.body.setAttribute("data-theme", theme);
+      const btn = document.getElementById("themeToggle");
+      if (btn) btn.textContent = theme === "dark" ? "Light" : "Dark";
+    }
+
     function esc(s) {
-      return (s || "")
+      return (s === null || s === undefined ? "" : String(s))
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
@@ -2768,6 +3541,29 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return LOG_TITLES[id] || id;
     }
 
+    function normalizeText(s) {
+      return String(s || "").toLowerCase();
+    }
+
+    function rowsShownFromTail(tail) {
+      const match = String(tail || "").match(/rows_shown=(\\d+)/);
+      return match ? Number(match[1] || 0) : 0;
+    }
+
+    function isPinned(cardId) {
+      return !!PINNED_CARDS[cardId];
+    }
+
+    function setPinned(cardId, pinned) {
+      if (!cardId) return;
+      if (pinned) {
+        PINNED_CARDS[cardId] = true;
+      } else {
+        delete PINNED_CARDS[cardId];
+      }
+      localStorage.setItem("eqidv2_pinned_cards", JSON.stringify(PINNED_CARDS));
+    }
+
     function statusBadge(status) {
       const s = String(status || "").toUpperCase();
       if (!s) return '<span class="pill">UNKNOWN</span>';
@@ -2775,9 +3571,289 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (s === "RESTARTING" || s === "COOLDOWN") return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "MISSING_OUTPUT") return `<span class="pill fail">${esc(s)}</span>`;
-      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED") return `<span class="pill">${esc(s)}</span>`;
-      if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED") return `<span class="pill">${esc(s)}</span>`;
+      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return `<span class="pill info">${esc(s)}</span>`;
+      if (s === "DISABLED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED") return `<span class="pill muted">${esc(s)}</span>`;
       return `<span class="pill fail">${esc(s)}</span>`;
+    }
+
+    function statusBucket(status) {
+      const s = String(status || "").toUpperCase();
+      if (s === "DISABLED") return "disabled";
+      if (s === "SUCCESS" || s === "RUNNING") return "ok";
+      if (s === "RESTARTING" || s === "COOLDOWN") return "warn";
+      if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "warn";
+      if (s === "MISSING_OUTPUT") return "bad";
+      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return "scheduled";
+      if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED") return "scheduled";
+      if (!s) return "unknown";
+      return "bad";
+    }
+
+    function renderHealthSummary(items) {
+      const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
+      for (const item of (items || [])) {
+        const bucket = statusBucket(item && item.status ? item.status.status : "");
+        counts[bucket] = (counts[bucket] || 0) + 1;
+      }
+      const total = Object.values(counts).reduce((acc, n) => acc + n, 0);
+      const pill = (cls, label, value) => (
+        `<span class="health-pill ${cls}"><strong>${esc(String(value))}</strong>${esc(label)}</span>`
+      );
+      const html = [
+        pill("neutral", "Total", total),
+        pill("ok", "Healthy", counts.ok),
+        pill("neutral", "Scheduled", counts.scheduled),
+        pill("warn", "Watch", counts.warn),
+        pill("bad", "Problem", counts.bad),
+        pill("neutral", "Disabled", counts.disabled)
+      ].join("");
+      const el = document.getElementById("healthSummary");
+      if (el) el.innerHTML = html;
+    }
+
+    function renderOpsSnapshot(items) {
+      const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
+      let fresh = 0;
+      let stale = 0;
+      let candidates = 0;
+      let paperRows = 0;
+      let liveRows = 0;
+      for (const item of (items || [])) {
+        const id = String((item && item.id) || "");
+        const bucket = statusBucket(item && item.status ? item.status.status : "");
+        counts[bucket] = (counts[bucket] || 0) + 1;
+        const age = formatAge(item && item.mtime ? item.mtime : "");
+        if (age.cls === "ok") fresh += 1;
+        if (age.cls === "bad" || age.cls === "warn") stale += 1;
+        if (id === "candidate_tickers_v7_5min_id" && item.status) {
+          candidates = Number(item.status.total_candidates || 0) || rowsShownFromTail(item.tail);
+        }
+        if (id.includes("papertrade") || id.includes("paper_trade")) {
+          paperRows += rowsShownFromTail(item.tail);
+        }
+        if (id.includes("kite_trades") || id.includes("live_kite") || id.includes("live_signals")) {
+          liveRows += rowsShownFromTail(item.tail);
+        }
+      }
+      const tile = (cls, label, value, note) => `
+        <div class="snapshot-tile ${cls}">
+          <div class="snapshot-label">${esc(label)}</div>
+          <div class="snapshot-value">${esc(String(value))}</div>
+          <div class="snapshot-note">${esc(note || "")}</div>
+        </div>
+      `;
+      const html = [
+        tile(counts.bad ? "is-bad" : "is-ok", "Problems", counts.bad, counts.bad ? "Needs action" : "No hard failures"),
+        tile(counts.warn ? "is-warn" : "is-ok", "Watch", counts.warn, "Stale, waiting, cooldown"),
+        tile("is-info", "Candidates", candidates, "Signal discovery output"),
+        tile("is-info", "Live Rows", liveRows, "Signals and Kite CSV rows"),
+        tile("is-info", "Paper Rows", paperRows, "Papertrade result rows"),
+        tile(stale > fresh ? "is-warn" : "is-ok", "Fresh Outputs", fresh, `${stale} older/missing`)
+      ].join("");
+      const el = document.getElementById("opsSnapshot");
+      if (el) el.innerHTML = html;
+    }
+
+    function nowHHMM() {
+      const d = new Date();
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      return `${hh}:${mm}`;
+    }
+
+    function statusClassForBucket(bucket) {
+      if (bucket === "ok") return "ok";
+      if (bucket === "warn") return "warn";
+      if (bucket === "bad") return "bad";
+      if (bucket === "disabled") return "disabled";
+      return "";
+    }
+
+    function renderTodayTimeline(itemsById) {
+      const now = nowHHMM();
+      let activeIdx = -1;
+      for (let i = 0; i < SESSION_TIMELINE.length; i += 1) {
+        if (SESSION_TIMELINE[i].time <= now) activeIdx = i;
+      }
+      const steps = SESSION_TIMELINE.map((step, idx) => {
+        const item = step.id ? (itemsById[step.id] || { status: {} }) : { status: { status: "SCHEDULED" } };
+        const rawStatus = step.id ? String((item.status && item.status.status) || "UNKNOWN").toUpperCase() : "SCHEDULED";
+        const bucket = statusBucket(rawStatus);
+        const cls = [statusClassForBucket(bucket), idx === activeIdx ? "is-now" : ""].filter(Boolean).join(" ");
+        const label = step.label || (step.id ? displayName(step.id) : "Step");
+        return `
+          <div class="timeline-step ${cls}">
+            <div class="timeline-time">${esc(step.time)}</div>
+            <div class="timeline-name">${esc(label)}</div>
+            <div class="timeline-status">${esc(rawStatus)}</div>
+          </div>
+        `;
+      }).join("");
+      const completed = Math.max(0, activeIdx + 1);
+      const el = document.getElementById("todayTimeline");
+      if (!el) return;
+      el.innerHTML = `
+        <div class="timeline-head">
+          <div class="timeline-title">Today Timeline</div>
+          <div class="timeline-note">${esc(completed)} / ${esc(String(SESSION_TIMELINE.length))} steps reached</div>
+        </div>
+        <div class="timeline-track">${steps}</div>
+      `;
+    }
+
+    function isLogHidden(cardId) {
+      return !!LOG_HIDDEN_BY_CARD[cardId];
+    }
+
+    function setLogHidden(cardId, hidden) {
+      if (!cardId) return;
+      if (hidden) {
+        LOG_HIDDEN_BY_CARD[cardId] = true;
+        delete LOG_EXPANDED_BY_CARD[cardId];
+      } else {
+        delete LOG_HIDDEN_BY_CARD[cardId];
+        LOG_EXPANDED_BY_CARD[cardId] = true;
+      }
+      localStorage.setItem("eqidv2_log_hidden_by_card", JSON.stringify(LOG_HIDDEN_BY_CARD));
+      localStorage.setItem("eqidv2_log_expanded_by_card", JSON.stringify(LOG_EXPANDED_BY_CARD));
+    }
+
+    function cardMatchesFilter(id, item, requestedFilter) {
+      const rawFilter = requestedFilter || ACTIVE_FILTER;
+      const filter = FILTERS.some((f) => f.id === rawFilter) ? rawFilter : "all";
+      const status = item && item.status ? item.status.status : "";
+      const bucket = statusBucket(status);
+      const title = `${id} ${displayName(id)}`.toLowerCase();
+      const query = normalizeText(SEARCH_QUERY).trim();
+      if (query) {
+        const fileName = normalizeText(item && item.file_name ? item.file_name : "");
+        const derived = normalizeText(item && item.status && item.status.derived_status ? item.status.derived_status : "");
+        const haystack = `${title} ${fileName} ${normalizeText(status)} ${derived}`;
+        const terms = query.split(/\\s+/).filter(Boolean);
+        if (!terms.every((term) => haystack.includes(term))) return false;
+      }
+      if (filter === "all") return true;
+      if (filter === "problem") return bucket === "bad";
+      if (filter === "watch") return bucket === "warn";
+      if (filter === "disabled") return bucket === "disabled";
+      if (filter === "v7") {
+        return title.includes("v7") || title.includes("id_5min") || title.includes("5mins id");
+      }
+      if (filter === "v16") return title.includes("v16");
+      if (filter === "paper") return title.includes("paper");
+      if (filter === "live") return title.includes("live") || title.includes("kite");
+      if (filter === "research") {
+        return id === "v7_research_layer" || id === "backtesting_result_v7_v8" || id === "data_for_backtesting";
+      }
+      return true;
+    }
+
+    function renderStatusFilters(itemsById, orderedIds) {
+      const counts = {};
+      for (const filter of FILTERS) counts[filter.id] = 0;
+      for (const id of orderedIds) {
+        const item = itemsById[id] || { status: {} };
+        for (const filter of FILTERS) {
+          if (cardMatchesFilter(id, item, filter.id)) counts[filter.id] += 1;
+        }
+      }
+      const el = document.getElementById("statusFilters");
+      if (!el) return;
+      el.innerHTML = FILTERS.map((filter) => {
+        const active = filter.id === ACTIVE_FILTER ? " is-active" : "";
+        return `<button type="button" class="filter-chip${active}" data-filter-id="${esc(filter.id)}">${esc(filter.label)} ${esc(String(counts[filter.id] || 0))}</button>`;
+      }).join("");
+    }
+
+    function wireStatusFilters() {
+      const buttons = document.querySelectorAll('#statusFilters .filter-chip[data-filter-id]');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+          const filter = ev.currentTarget.getAttribute('data-filter-id') || "all";
+          ACTIVE_FILTER = FILTERS.some((f) => f.id === filter) ? filter : "all";
+          localStorage.setItem("eqidv2_dashboard_filter", ACTIVE_FILTER);
+          loadNow();
+        });
+      });
+    }
+
+    function wireSearchControl() {
+      const input = document.getElementById('cardSearch');
+      if (!input || input.dataset.wired === '1') return;
+      input.dataset.wired = '1';
+      input.value = SEARCH_QUERY;
+      input.addEventListener('input', () => {
+        SEARCH_QUERY = String(input.value || "");
+        localStorage.setItem("eqidv2_dashboard_search", SEARCH_QUERY);
+        loadNow();
+      });
+    }
+
+    function wireProblemsFirstControl() {
+      const btn = document.getElementById('problemsFirstBtn');
+      if (!btn) return;
+      btn.classList.toggle('is-active', PROBLEMS_FIRST);
+      if (btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        PROBLEMS_FIRST = !PROBLEMS_FIRST;
+        localStorage.setItem("eqidv2_problems_first", PROBLEMS_FIRST ? "1" : "0");
+        btn.classList.toggle('is-active', PROBLEMS_FIRST);
+        loadNow();
+      });
+    }
+
+    function wireThemeControl() {
+      applyTheme();
+      const btn = document.getElementById('themeToggle');
+      if (!btn || btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        DASHBOARD_THEME = DASHBOARD_THEME === "dark" ? "light" : "dark";
+        localStorage.setItem("eqidv2_dashboard_theme", DASHBOARD_THEME);
+        applyTheme();
+      });
+    }
+
+    function parseLocalDate(raw) {
+      const text = String(raw || "").trim();
+      if (!text || text === "-") return null;
+      const date = new Date(text.replace(" ", "T"));
+      return Number.isFinite(date.getTime()) ? date : null;
+    }
+
+    function formatAge(rawMtime) {
+      const date = parseLocalDate(rawMtime);
+      if (!date) return { label: "output: none", cls: "bad" };
+      const ageMin = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
+      if (ageMin < 1) return { label: "output: now", cls: "ok" };
+      if (ageMin < 60) return { label: `output: ${ageMin}m`, cls: ageMin <= 20 ? "ok" : "warn" };
+      const ageHr = Math.round(ageMin / 60);
+      if (ageHr < 24) return { label: `output: ${ageHr}h`, cls: "warn" };
+      const ageDay = Math.round(ageHr / 24);
+      return { label: `output: ${ageDay}d`, cls: "bad" };
+    }
+
+    function compactNextRun(rawNextRun) {
+      const text = String(rawNextRun || "").trim();
+      if (!text) return "";
+      const parts = text.split(/\\s+/);
+      if (parts.length >= 2) return `${parts[0]} ${parts[1]}`;
+      return text;
+    }
+
+    function compactFileName(rawFileName) {
+      const text = String(rawFileName || "").trim();
+      if (!text) return "-";
+      const parts = text.split(/[\\\\/]/).filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : text;
+    }
+
+    function renderMiniBadges(item, mtime, size) {
+      const age = formatAge(mtime);
+      const badges = [`<span class="mini-badge ${age.cls}">${esc(age.label)}</span>`];
+      badges.push(`<span class="mini-badge">size: ${esc(String(size || 0))}b</span>`);
+      return `<div class="mini-badges">${badges.join("")}</div>`;
     }
 
     function cardStatusClass(status) {
@@ -2804,6 +3880,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           <span class="restart-label">Restart</span>
         </button>
       `;
+    }
+
+    function renderPinButton(cardId) {
+      const pinned = isPinned(cardId);
+      const label = pinned ? "Pinned" : "Pin";
+      const cls = pinned ? "card-toggle pin-toggle is-pinned" : "card-toggle pin-toggle";
+      return `<button type="button" class="${cls}" data-pin-id="${esc(cardId)}" title="${label} card">${label}</button>`;
     }
 
     function uniqueSorted(arr) {
@@ -2900,9 +3983,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     function sortMark(header, cardId, colIdx) {
       const st = TABLE_SORT_STATE[cardId];
-      if (!st || st.colIdx !== colIdx) return "↕";
-      if (isTickerColumn(header)) return st.dir === "asc" ? "A→Z" : "Z→A";
-      return st.dir === "asc" ? "↑" : "↓";
+      if (!st || st.colIdx !== colIdx) return "sort";
+      if (isTickerColumn(header)) return st.dir === "asc" ? "A-Z" : "Z-A";
+      return st.dir === "asc" ? "asc" : "desc";
     }
 
     function sortedRows(parsed, cardId) {
@@ -3013,12 +4096,48 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     function wireCardControls() {
-      const buttons = document.querySelectorAll('#cards .card-toggle');
+      const buttons = document.querySelectorAll('#cards .card-toggle[data-toggle-id]');
       buttons.forEach((btn) => {
         btn.addEventListener('click', (ev) => {
           const id = ev.currentTarget.getAttribute('data-toggle-id') || "";
           toggleFullscreen(id);
         });
+      });
+    }
+
+    function wirePinControls() {
+      const buttons = document.querySelectorAll('#cards .pin-toggle[data-pin-id]');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const id = ev.currentTarget.getAttribute('data-pin-id') || "";
+          if (!id) return;
+          setPinned(id, !isPinned(id));
+          loadNow();
+        });
+      });
+    }
+
+    function wireLogToggleControls() {
+      const buttons = document.querySelectorAll('#cards .log-toggle[data-log-id]');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+          const id = ev.currentTarget.getAttribute('data-log-id') || "";
+          if (!id) return;
+          setLogHidden(id, !isLogHidden(id));
+          loadNow();
+        });
+      });
+    }
+
+    function wireDisabledSectionControls() {
+      const btn = document.getElementById('disabledSectionToggle');
+      if (!btn || btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        DISABLED_SECTION_MINIMIZED = !DISABLED_SECTION_MINIMIZED;
+        localStorage.setItem("eqidv2_disabled_section_minimized", DISABLED_SECTION_MINIMIZED ? "1" : "0");
+        loadNow();
       });
     }
 
@@ -3222,9 +4341,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         document.getElementById('info').textContent = `server ${data.server_time} | auto refresh every 15s`;
+        renderHealthSummary(data.items || []);
+        renderOpsSnapshot(data.items || []);
 
         const byId = {};
         for (const item of data.items) byId[item.id] = item;
+        renderTodayTimeline(byId);
         const killSnapshot = data.kill_switch || {};
         const orderedBase = LOG_ORDER.concat(Object.keys(byId).filter((id) => !LOG_ORDER.includes(id)));
         const ordered = orderedBase
@@ -3232,10 +4354,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             const it = byId[id] || { status: {} };
             const status = String((it.status && it.status.status) || "").toUpperCase();
             const disabled = status === "DISABLED";
-            return { id, idx, disabled };
+            const bucket = statusBucket(status);
+            return { id, idx, disabled, bucket, pinned: isPinned(id) };
           })
           .sort((a, b) => {
+            if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
             if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
+            if (PROBLEMS_FIRST) {
+              const rank = { bad: 0, warn: 1, unknown: 2, scheduled: 3, ok: 4, disabled: 5 };
+              const ar = rank[a.bucket] ?? 9;
+              const br = rank[b.bucket] ?? 9;
+              if (ar !== br) return ar - br;
+            }
             return a.idx - b.idx;
           })
           .map((x) => x.id);
@@ -3246,13 +4376,22 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           return status !== "DISABLED";
         });
         const disabledOrdered = ordered.filter((id) => !activeOrdered.includes(id));
+        renderStatusFilters(byId, ordered);
+        const visibleActiveOrdered = activeOrdered.filter((id) => cardMatchesFilter(id, byId[id] || { status: {} }));
+        const visibleDisabledOrdered = disabledOrdered.filter((id) => cardMatchesFilter(id, byId[id] || { status: {} }));
 
-        function renderSectionBanner(title, note, disabled) {
-          const cls = disabled ? "section-banner is-disabled" : "section-banner";
+        function renderSectionBanner(title, note, disabled, accent) {
+          const cls = ["section-banner", disabled ? "is-disabled" : "", accent || ""].filter(Boolean).join(" ");
+          const action = disabled
+            ? `<button type="button" class="section-action" id="disabledSectionToggle">${DISABLED_SECTION_MINIMIZED ? "Show disabled" : "Hide disabled"}</button>`
+            : "";
           return `
             <div class="${cls}">
-              <div class="section-title">${esc(title)}</div>
-              <div class="section-note">${esc(note)}</div>
+              <div class="section-left">
+                <div class="section-title">${esc(title)}</div>
+                <div class="section-note">${esc(note)}</div>
+              </div>
+              ${action}
             </div>
           `;
         }
@@ -3260,58 +4399,88 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         function renderCard(id, idx) {
           const it = byId[id] || {id,exists:false,tail:""};
           const status = it.status && it.status.status ? it.status.status : "";
+          const statusUpper = String(status || "").toUpperCase();
+          const isDisabled = statusUpper === "DISABLED";
           const mtime = it.mtime || "-";
           const size = it.size_bytes || 0;
-          const statusBits = [];
-          if (it.status && it.status.provenance_flag) {
-            statusBits.push(`provenance: ${it.status.provenance_flag}`);
-          }
-          if (it.status && it.status.pid_start_ist) {
-            statusBits.push(`pid start: ${it.status.pid_start_ist}`);
-          }
-          if (it.status && it.status.scheduler_next_run) {
-            statusBits.push(`next run: ${it.status.scheduler_next_run}`);
-          }
-          if (it.status && it.status.derived_status) {
-            statusBits.push(String(it.status.derived_status));
-          }
-          const statusMeta = statusBits.length
-            ? `<div class="meta">${statusBits.map((part) => esc(part)).join(" | ")}</div>`
-            : "";
+          const nextRun = it.status && it.status.scheduler_next_run ? compactNextRun(it.status.scheduler_next_run) : "";
+          const compactDesc = [
+            `file: ${compactFileName(it.file_name || "-")}`,
+            nextRun ? `next: ${nextRun}` : "",
+            it.status && it.status.derived_status ? String(it.status.derived_status).split(";")[0].trim() : ""
+          ].filter(Boolean).join(" | ");
+          const miniBadges = renderMiniBadges(it, mtime, size);
           const cardCls = cardStatusClass(status);
           const isFs = FULLSCREEN_ID === id ? " is-fullscreen" : "";
-          const toggleLabel = FULLSCREEN_ID === id ? "Minimize" : "Maximize";
+          const disabledCompact = isDisabled && FULLSCREEN_ID !== id ? " is-disabled-compact" : "";
+          const logHidden = isLogHidden(id);
+          const logHiddenClass = logHidden ? " is-log-hidden" : "";
+          const expandedClass = logHidden ? "" : " is-expanded";
+          const toggleLabel = FULLSCREEN_ID === id ? "Min" : "Max";
           const toggleCls = FULLSCREEN_ID === id ? "card-toggle is-active" : "card-toggle";
+          const logToggleLabel = logHidden ? "Open" : "Close";
+          const logToggleCls = logHidden ? "card-toggle log-toggle is-hidden" : "card-toggle log-toggle";
           const killControls = renderKillControls(it.id, killSnapshot);
+          const logText = it.tail || (it.exists ? "(empty)" : "(log file not found yet)");
+          const isEmptyLog = /\\((empty|no rows yet|log file not found yet)\\)/i.test(String(logText).trim());
           return `
-            <div class="${cardCls}${isFs}" data-id="${esc(id)}" style="animation-delay:${Math.min(idx * 0.05, 0.55)}s">
+            <div class="${cardCls}${isFs}${disabledCompact}${logHiddenClass}${expandedClass}" data-id="${esc(id)}" style="animation-delay:${Math.min(idx * 0.05, 0.55)}s">
               <div class="card-head">
                 <div class="card-head-left">
-                  <button type="button" class="${toggleCls}" data-toggle-id="${esc(id)}">${toggleLabel}</button>
                   <div class="name">${esc(displayName(it.id))}</div>
-                  <div class="meta">file: ${esc(it.file_name || "-")} | mtime: ${esc(mtime)} | size: ${size} bytes</div>
-                  ${statusMeta}
+                  ${miniBadges}
+                  <div class="compact-desc" title="${esc(compactDesc)}">${esc(compactDesc)}</div>
                 </div>
                 <div class="card-head-right">
+                  ${renderPinButton(it.id)}
+                  <button type="button" class="${toggleCls}" data-toggle-id="${esc(id)}">${toggleLabel}</button>
+                  <button type="button" class="${logToggleCls}" data-log-id="${esc(id)}">${logToggleLabel}</button>
                   ${renderRestartButton(it.id)}
                   <div>${statusBadge(status)}</div>
                 </div>
               </div>
               ${killControls}
-              <pre>${esc(it.tail || (it.exists ? "(empty)" : "(log file not found yet)"))}</pre>
+              <pre class="${isEmptyLog ? "log-empty" : ""}">${esc(logText)}</pre>
             </div>
           `;
         }
 
         const sections = [];
         let renderIdx = 0;
-        if (activeOrdered.length) {
-          sections.push(renderSectionBanner("Active / Scheduled", `${activeOrdered.length} card(s)`, false));
-          sections.push(activeOrdered.map((id) => renderCard(id, renderIdx++)).join(''));
+        if (visibleActiveOrdered.length) {
+          const used = new Set();
+          for (const group of ACTIVE_GROUPS) {
+            const groupIds = group.ids.filter((id) => visibleActiveOrdered.includes(id));
+            if (!groupIds.length) continue;
+            groupIds.forEach((id) => used.add(id));
+            sections.push(renderSectionBanner(group.title, `${groupIds.length} active/scheduled`, false, group.accent));
+            sections.push(groupIds.map((id) => renderCard(id, renderIdx++)).join(''));
+          }
+          const otherActive = visibleActiveOrdered.filter((id) => !used.has(id));
+          if (otherActive.length) {
+            sections.push(renderSectionBanner("Other Active / Scheduled", `${otherActive.length} cards`, false, "other"));
+            sections.push(otherActive.map((id) => renderCard(id, renderIdx++)).join(''));
+          }
         }
-        if (disabledOrdered.length) {
-          sections.push(renderSectionBanner("Disabled", `${disabledOrdered.length} card(s)`, true));
-          sections.push(disabledOrdered.map((id) => renderCard(id, renderIdx++)).join(''));
+        if (visibleDisabledOrdered.length) {
+          const forceShowDisabled = ACTIVE_FILTER === "disabled";
+          const note = (DISABLED_SECTION_MINIMIZED && !forceShowDisabled)
+            ? `${visibleDisabledOrdered.length} card(s) hidden`
+            : `${visibleDisabledOrdered.length} card(s)`;
+          sections.push(renderSectionBanner("Disabled", note, true, "admin"));
+          if (forceShowDisabled || !DISABLED_SECTION_MINIMIZED) {
+            sections.push(visibleDisabledOrdered.map((id) => renderCard(id, renderIdx++)).join(''));
+          }
+        }
+        if (!sections.length) {
+          sections.push(`
+            <div class="section-banner">
+              <div class="section-left">
+                <div class="section-title">No matching sessions</div>
+                <div class="section-note">Change the filter chip above to view more cards.</div>
+              </div>
+            </div>
+          `);
         }
 
         const html = sections.join('');
@@ -3319,6 +4488,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const cards = document.getElementById('cards');
         cards.innerHTML = html;
         wireCardControls();
+        wirePinControls();
+        wireLogToggleControls();
+        wireStatusFilters();
+        wireDisabledSectionControls();
         wireRestartControls();
         wireKillSwitchControls();
         enhanceSortableTables();
@@ -3339,6 +4512,10 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
       }
     }
 
+    applyTheme();
+    wireThemeControl();
+    wireSearchControl();
+    wireProblemsFirstControl();
     wireRestartAllControl();
     loadNow();
     setInterval(loadNow, 15000);
@@ -3384,6 +4561,37 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 )
             elif key == "preopen_healthcheck":
                 tail = _format_preopen_scheduled_sessions()
+            elif key == "entry_engine_1min_v5_id":
+                entry_rows = runtime_dir("entry_engine_1min_v5_ID") / "latest" / "latest_entry_engine_rows.csv"
+                entry_cols: list[Tuple[str, Sequence[str]]] = [
+                    ("entry_time", ("entry_time_ist",)),
+                    ("ticker", ("ticker",)),
+                    ("side", ("side",)),
+                    ("setup", ("setup",)),
+                    ("entry_price", ("entry_price",)),
+                    ("sl_price", ("sl_price",)),
+                    ("target_price", ("target_price",)),
+                    ("sl_pct", ("sl_pct",)),
+                    ("target_pct", ("target_pct",)),
+                    ("exit_rule", ("exit_rule_source",)),
+                    ("score", ("score",)),
+                ]
+                projected = _format_csv_projection(
+                    entry_rows,
+                    entry_cols,
+                    limit_rows=5000,
+                    time_only_cols={"entry_time"},
+                    sort_numeric_desc_by_keys=("score",),
+                )
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_research_layer":
+                report = V7_RESEARCH_LAYER_LATEST_DIR / "latest_multi_window_suggestions.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "backtesting_result_v7_v8":
+                report = runtime_dir("backtesting_result_v7_v8", "latest", "latest_backtesting_result_v7_v8.md")
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
             elif key in ("signal_early_engine_v16_5min", "pending_data_fetcher_v16_5min", "detection_engine_v16_5min"):
                 tail = _shift_bar_slots_in_text(tail_text(path, lines=lines))
             else:
@@ -3400,8 +4608,76 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 }
             )
 
+        # Output session directly after "Signal discovery v7 5mins ID":
+        # signal-candle candidate tickers only; no entry candle/entry price.
+        candidate_latest_csv = SIGNAL_DISCOVERY_V7_LATEST_DIR / "latest_candidate_tickers.csv"
+        candidate_latest_json = SIGNAL_DISCOVERY_V7_LATEST_DIR / "latest_candidate_tickers.json"
+        try:
+            candidate_size = candidate_latest_csv.stat().st_size if candidate_latest_csv.exists() else 0
+        except OSError:
+            candidate_size = 0
+        candidate_status: Dict[str, str] = {}
+        if candidate_latest_json.exists():
+            try:
+                payload = json.loads(candidate_latest_json.read_text(encoding="utf-8", errors="replace"))
+                total_candidates = int(payload.get("total_candidates", 0) or 0)
+                candidate_status = {
+                    "status": "READY" if total_candidates > 0 else "EMPTY_OUTPUT",
+                    "session": str(payload.get("session", "Signal discovery v7 5mins ID")),
+                    "slot": str(payload.get("slot_ist", "")),
+                    "total_candidates": str(total_candidates),
+                    "long_candidates": str(payload.get("long_candidates", 0)),
+                    "short_candidates": str(payload.get("short_candidates", 0)),
+                    "json_file": str(Path("signal_discovery_v7_5mins_ID") / "latest" / candidate_latest_json.name),
+                }
+            except (OSError, json.JSONDecodeError, ValueError):
+                candidate_status = {"status": "BAD_JSON"}
+        elif candidate_latest_csv.exists():
+            candidate_status = {"status": "READY", "derived_status": "latest_csv_exists_json_missing"}
+        else:
+            candidate_status = {"status": "MISSING_OUTPUT"}
+
+        candidate_cols: list[Tuple[str, Sequence[str]]] = [
+            ("signal_time", ("signal_time_ist",)),
+            ("ticker", ("ticker",)),
+            ("side", ("side",)),
+            ("setup", ("setup",)),
+            ("signal_close", ("signal_close",)),
+            ("quality_score", ("quality_score",)),
+            ("rs_pct", ("rs_pct",)),
+            ("vol_ratio", ("vol_ratio",)),
+            ("reason", ("reason",)),
+            ("status", ("status",)),
+        ]
+        candidate_tail = _format_csv_projection(
+            candidate_latest_csv,
+            candidate_cols,
+            limit_rows=5000,
+            time_only_cols={"signal_time"},
+            sort_numeric_desc_by_keys=("quality_score",),
+        )
+        items.append(
+            {
+                "id": "candidate_tickers_v7_5min_id",
+                "file_name": str(Path("signal_discovery_v7_5mins_ID") / "latest" / candidate_latest_csv.name),
+                "exists": candidate_latest_csv.exists(),
+                "mtime": iso_mtime(candidate_latest_csv),
+                "size_bytes": candidate_size,
+                "status": candidate_status,
+                "tail": candidate_tail,
+            }
+        )
+
         # Dynamic cards: today's live signal CSV(s) used by trade execution.
         today_ist = dt.datetime.now(IST).date().isoformat()
+        entry_engine_status_for_live_csv = next(
+            (
+                dict(item.get("status") or {})
+                for item in items
+                if item.get("id") == "entry_engine_1min_v5_id"
+            ),
+            {},
+        )
         live_entries_cols: list[Tuple[str, Sequence[str]]] = [
             ("signal_datetime", ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist", "created_ts_ist")),
             ("detected_time_ist", ("detected_time_ist",)),
@@ -3572,6 +4848,60 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "size_bytes": live_size_v15_new_long,
                 "status": {},
                 "tail": live_entries_tail_v15_new_long,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV ID 5min v7 short.
+        live_csv_name_id_5min_v7_short = f"signals_{today_ist}_id_5min_v7_short.csv"
+        live_csv_path_id_5min_v7_short = LIVE_SIGNAL_DIR / live_csv_name_id_5min_v7_short
+        try:
+            live_size_id_5min_v7_short = (
+                live_csv_path_id_5min_v7_short.stat().st_size if live_csv_path_id_5min_v7_short.exists() else 0
+            )
+        except OSError:
+            live_size_id_5min_v7_short = 0
+        live_entries_tail_id_5min_v7_short = _format_csv_projection(
+            live_csv_path_id_5min_v7_short,
+            live_entries_cols,
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_id_5min_v7_short",
+                "file_name": str(Path("live_signals") / live_csv_name_id_5min_v7_short),
+                "exists": live_csv_path_id_5min_v7_short.exists(),
+                "mtime": iso_mtime(live_csv_path_id_5min_v7_short),
+                "size_bytes": live_size_id_5min_v7_short,
+                "status": dict(entry_engine_status_for_live_csv),
+                "tail": live_entries_tail_id_5min_v7_short,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV ID 5min v7 long.
+        live_csv_name_id_5min_v7_long = f"signals_{today_ist}_id_5min_v7_long.csv"
+        live_csv_path_id_5min_v7_long = LIVE_SIGNAL_DIR / live_csv_name_id_5min_v7_long
+        try:
+            live_size_id_5min_v7_long = (
+                live_csv_path_id_5min_v7_long.stat().st_size if live_csv_path_id_5min_v7_long.exists() else 0
+            )
+        except OSError:
+            live_size_id_5min_v7_long = 0
+        live_entries_tail_id_5min_v7_long = _format_csv_projection(
+            live_csv_path_id_5min_v7_long,
+            live_entries_cols,
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_id_5min_v7_long",
+                "file_name": str(Path("live_signals") / live_csv_name_id_5min_v7_long),
+                "exists": live_csv_path_id_5min_v7_long.exists(),
+                "mtime": iso_mtime(live_csv_path_id_5min_v7_long),
+                "size_bytes": live_size_id_5min_v7_long,
+                "status": dict(entry_engine_status_for_live_csv),
+                "tail": live_entries_tail_id_5min_v7_long,
             }
         )
 
@@ -3761,6 +5091,35 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
+        # Dynamic card: today's paper trade results CSV ID 5min v7.
+        paper_trade_csv_name_id_5min_v7 = f"paper_trades_{today_ist}_id_5min_v7.csv"
+        paper_trade_csv_path_id_5min_v7 = LIVE_SIGNAL_DIR / paper_trade_csv_name_id_5min_v7
+        try:
+            paper_trade_size_id_5min_v7 = (
+                paper_trade_csv_path_id_5min_v7.stat().st_size
+                if paper_trade_csv_path_id_5min_v7.exists()
+                else 0
+            )
+        except OSError:
+            paper_trade_size_id_5min_v7 = 0
+        paper_trade_tail_id_5min_v7 = _format_csv_projection(
+            paper_trade_csv_path_id_5min_v7,
+            paper_trade_cols,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_id_5min_v7",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_id_5min_v7),
+                "exists": paper_trade_csv_path_id_5min_v7.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_id_5min_v7),
+                "size_bytes": paper_trade_size_id_5min_v7,
+                "status": {},
+                "tail": paper_trade_tail_id_5min_v7,
+            }
+        )
+
         # Dynamic card: today's live Kite trades CSV.
         # V5 live executor writes live_trades_YYYY-MM-DD_v5.csv.
         live_kite_trade_csv_name_v5 = f"live_trades_{today_ist}_v5.csv"
@@ -3887,6 +5246,35 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "size_bytes": live_kite_trade_size_v16_5min,
                 "status": {},
                 "tail": live_kite_trade_tail_v16_5min,
+            }
+        )
+
+        # Dynamic card: today's live Kite trades CSV ID 5min v7.
+        live_kite_trade_csv_name_id_5min_v7 = f"live_trades_{today_ist}_id_5min_v7.csv"
+        live_kite_trade_csv_path_id_5min_v7 = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_id_5min_v7
+        try:
+            live_kite_trade_size_id_5min_v7 = (
+                live_kite_trade_csv_path_id_5min_v7.stat().st_size
+                if live_kite_trade_csv_path_id_5min_v7.exists()
+                else 0
+            )
+        except OSError:
+            live_kite_trade_size_id_5min_v7 = 0
+        live_kite_trade_tail_id_5min_v7 = _format_csv_projection(
+            live_kite_trade_csv_path_id_5min_v7,
+            live_kite_trade_cols,
+            limit_rows=5000,
+            time_only_cols={"entry_time", "exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_kite_trades_csv_id_5min_v7",
+                "file_name": str(Path("live_signals") / live_kite_trade_csv_name_id_5min_v7),
+                "exists": live_kite_trade_csv_path_id_5min_v7.exists(),
+                "mtime": iso_mtime(live_kite_trade_csv_path_id_5min_v7),
+                "size_bytes": live_kite_trade_size_id_5min_v7,
+                "status": {},
+                "tail": live_kite_trade_tail_id_5min_v7,
             }
         )
 
