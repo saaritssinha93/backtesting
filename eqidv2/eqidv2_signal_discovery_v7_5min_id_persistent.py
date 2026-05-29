@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+import numpy as np
 import pandas as pd
 
 import avwap_5min_ID_v7_candidate_scan as candidate_scan
@@ -50,6 +51,25 @@ V8_ACCEPTED_RULES_CSV = Path(
         r"C:\TradingData\eqidv2\outputs_ID_v8_5min_research_restore\accepted_rules.csv",
     )
 )
+RESEARCH_LIVE_FILTER_ENABLE = str(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_RESEARCH_FILTERS", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+    "disabled",
+}
+RESEARCH_LIVE_FILTER_MODE = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_RESEARCH_FILTER_MODE", "active").strip().lower()
+LONG_ANTI_CHASE_CLOSE_LOC_GT = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LONG_ANTI_CHASE_CLOSE_LOC_GT", "0.88"))
+LONG_ANTI_CHASE_VWAP_DIST_ATR_GT = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LONG_ANTI_CHASE_VWAP_DIST_ATR_GT", "0.52"))
+B_AVWAP_RECLAIM_RANKER_MIN = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_B_AVWAP_RECLAIM_RANKER_MIN", "0.65"))
+L_TREND_PULLBACK_PROBATION_BLOCK = str(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_L_TREND_PULLBACK_PROBATION_BLOCK", "1")
+).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+EARLY_LIVE_GATE_MIN_SCORE = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_LIVE_GATE_MIN_SCORE", "95"))
+EARLY_LIVE_GATE_MAX_PER_SIDE = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_LIVE_GATE_MAX_PER_SIDE", "4"))
+EARLY_LIVE_GATE_MAX_PER_SLOT = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_LIVE_GATE_MAX_PER_SLOT", "8"))
+RESEARCH_FILTER_VERSION = "v7_live_research_2026_05_29"
+RESEARCH_TRUTH_DIR = runtime_dir("live_research_v7_research_layer", "truth_table")
 START_TIME = base_v15.dtime(9, 15)
 END_TIME = base_v15.dtime(15, 0)
 HARD_STOP_TIME = base_v15.dtime(15, 30)
@@ -180,12 +200,20 @@ def _daily_raw_csv_path(day: str) -> Path:
     return CSV_DIR / f"raw_candidate_tickers_{day}.csv"
 
 
+def _daily_research_filter_rejected_csv_path(day: str) -> Path:
+    return CSV_DIR / f"research_filter_rejected_candidate_tickers_{day}.csv"
+
+
 def _slot_json_path(slot: pd.Timestamp) -> Path:
     return JSON_DIR / f"candidate_tickers_{_slot_key(slot)}.json"
 
 
 def _raw_slot_json_path(slot: pd.Timestamp) -> Path:
     return JSON_DIR / f"raw_candidate_tickers_{_slot_key(slot)}.json"
+
+
+def _research_filter_rejected_slot_json_path(slot: pd.Timestamp) -> Path:
+    return JSON_DIR / f"research_filter_rejected_candidate_tickers_{_slot_key(slot)}.json"
 
 
 def _daily_audit_path(day: str) -> Path:
@@ -219,6 +247,11 @@ def _append_daily_candidates(df: pd.DataFrame, day: str) -> Dict[str, int]:
 
 def _append_daily_raw_candidates(df: pd.DataFrame, day: str) -> Dict[str, int]:
     path = _daily_raw_csv_path(day)
+    return _append_candidates_to_path(df, path)
+
+
+def _append_daily_research_filter_rejections(df: pd.DataFrame, day: str) -> Dict[str, int]:
+    path = _daily_research_filter_rejected_csv_path(day)
     return _append_candidates_to_path(df, path)
 
 
@@ -413,31 +446,312 @@ def _eval_rule(row: pd.Series, rule: pd.Series) -> bool:
     )
 
 
+_RANKER_MEMORY_CACHE: Dict[str, Dict[tuple[str, str], float]] = {}
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if np.isfinite(out) else default
+
+
+def _clip01(value: Any) -> float:
+    val = _safe_float(value, 0.0)
+    return float(min(1.0, max(0.0, val)))
+
+
+def _signed_rs_score(side: Any, rs_pct: Any) -> float:
+    rs = _safe_float(rs_pct, 0.0)
+    signed = -rs if str(side or "").upper().strip() == "SHORT" else rs
+    return _clip01((signed + 1.0) / 7.0)
+
+
+def _close_location_score(side: Any, close_loc: Any) -> float:
+    loc = _safe_float(close_loc, float("nan"))
+    if not np.isfinite(loc):
+        return 0.35
+    ideal = 0.25 if str(side or "").upper().strip() == "SHORT" else 0.75
+    return _clip01(1.0 - abs(loc - ideal) / 0.75)
+
+
+def _vwap_extension_score(vwap_dist_atr: Any) -> float:
+    dist = abs(_safe_float(vwap_dist_atr, 0.0))
+    return _clip01(1.0 - max(0.0, dist - 0.5) / 5.0)
+
+
+def _truth_numeric(df: pd.DataFrame, column: str, default: float = np.nan) -> pd.Series:
+    if column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce")
+    return pd.Series(default, index=df.index, dtype="float64")
+
+
+def _setup_memory(history: pd.DataFrame) -> Dict[tuple[str, str], float]:
+    if history is None or history.empty or not {"side", "setup"}.issubset(history.columns):
+        return {}
+    mfe = _truth_numeric(history, "forward_mfe_pct")
+    mae = _truth_numeric(history, "forward_mae_pct")
+    pnl = _truth_numeric(history, "paper_pnl_rs")
+    work = history.copy()
+    work["ranker_clean_move_label"] = ((mfe >= 0.8) & (mae <= 0.8)) | (pnl > 0)
+    work["ranker_bad_move_label"] = ((mae >= 0.8) & (mfe < 0.8)) | (pnl < 0)
+
+    memory: Dict[tuple[str, str], float] = {}
+    for (side, setup), group in work.groupby(["side", "setup"], dropna=False):
+        clean = group["ranker_clean_move_label"].astype(bool)
+        bad = group["ranker_bad_move_label"].astype(bool)
+        score = (float(clean.sum()) + 1.0) / (float(clean.sum() + bad.sum()) + 2.0)
+        memory[(str(side).upper().strip(), str(setup).upper().strip())] = score
+    return memory
+
+
+def _setup_memory_for_day(day: str) -> Dict[tuple[str, str], float]:
+    day = str(day)[:10]
+    if day in _RANKER_MEMORY_CACHE:
+        return _RANKER_MEMORY_CACHE[day]
+    frames: List[pd.DataFrame] = []
+    try:
+        paths = sorted(RESEARCH_TRUTH_DIR.glob("truth_table_*.csv"))
+    except Exception:
+        paths = []
+    for path in paths:
+        path_day = path.stem.replace("truth_table_", "")
+        if path_day >= day:
+            continue
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            continue
+        if not df.empty:
+            frames.append(df)
+    history = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+    memory = _setup_memory(history)
+    _RANKER_MEMORY_CACHE[day] = memory
+    return memory
+
+
+def _heuristic_live_rank_score(row: pd.Series, setup_memory: Dict[tuple[str, str], float]) -> float:
+    side = str(row.get("side", "")).upper().strip()
+    setup = str(row.get("setup", "")).upper().strip()
+    quality = _clip01(_safe_float(row.get("quality_score"), 0.0) / 250.0)
+    rs_score = _signed_rs_score(side, row.get("rs_pct"))
+    vol_score = _clip01(_safe_float(row.get("vol_ratio"), 1.0) / 6.0)
+    atr_score = _clip01(_safe_float(row.get("atr_pct"), 0.0) / 0.006)
+    close_score = _close_location_score(side, row.get("close_loc"))
+    vwap_score = _vwap_extension_score(row.get("vwap_dist_atr"))
+    market = _safe_float(row.get("market_ret_pct"), 0.0)
+    market_score = _clip01((market + 0.20) / 0.40)
+    setup_score = setup_memory.get((side, setup), 0.50)
+    score = (
+        0.24 * quality
+        + 0.16 * rs_score
+        + 0.14 * vol_score
+        + 0.10 * atr_score
+        + 0.14 * close_score
+        + 0.12 * vwap_score
+        + 0.04 * market_score
+        + 0.06 * setup_score
+    )
+    return round(float(score), 6)
+
+
+def add_live_ranker_scores(df: pd.DataFrame, day: str) -> pd.DataFrame:
+    if df is None:
+        return pd.DataFrame()
+    out = df.copy()
+    if out.empty:
+        return out
+    memory = _setup_memory_for_day(day)
+    out["ranker_score"] = [_heuristic_live_rank_score(row, memory) for _, row in out.iterrows()]
+    out["ranker_model"] = "heuristic_v1_live_scanner"
+    return out
+
+
+def _research_filter_reasons(row: pd.Series) -> List[str]:
+    side = str(row.get("side", "")).upper().strip()
+    setup = str(row.get("setup", "")).upper().strip()
+    selection_mode = str(row.get("selection_mode", "")).lower().strip()
+    candidate_family = str(row.get("candidate_family", "")).upper().strip()
+    if setup.startswith("E_") or selection_mode.startswith("early") or candidate_family == "EARLY":
+        return []
+    if side != "LONG":
+        return []
+
+    reasons: List[str] = []
+    close_loc = _candidate_field_value(row, "close_loc")
+    vwap_dist_atr = _candidate_field_value(row, "vwap_dist_atr")
+    ranker_score = _safe_float(row.get("ranker_score"), float("nan"))
+
+    if (
+        np.isfinite(close_loc)
+        and np.isfinite(vwap_dist_atr)
+        and close_loc > LONG_ANTI_CHASE_CLOSE_LOC_GT
+        and vwap_dist_atr > LONG_ANTI_CHASE_VWAP_DIST_ATR_GT
+    ):
+        reasons.append("LONG_ANTI_CHASE_CLOSE_LOC_GT_0P88_AND_VWAP_DIST_ATR_GT_0P52")
+
+    if setup == "B_AVWAP_RECLAIM_REVERSAL" and (not np.isfinite(ranker_score) or ranker_score < B_AVWAP_RECLAIM_RANKER_MIN):
+        reasons.append("LONG_B_AVWAP_RECLAIM_RANKER_LT_0P65")
+
+    if L_TREND_PULLBACK_PROBATION_BLOCK and setup == "L_TREND_PULLBACK":
+        reasons.append("LONG_L_TREND_PULLBACK_PROBATION")
+
+    return reasons
+
+
+def apply_research_live_filters(df: pd.DataFrame, day: str) -> tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    base = add_live_ranker_scores(df, day)
+    stats: Dict[str, Any] = {
+        "research_live_filters_enabled": bool(RESEARCH_LIVE_FILTER_ENABLE),
+        "research_live_filter_mode": RESEARCH_LIVE_FILTER_MODE,
+        "research_live_filter_version": RESEARCH_FILTER_VERSION,
+        "research_live_filter_rejected": 0,
+        "research_live_filter_shadow_rejected": 0,
+        "research_live_filter_anti_chase_rejected": 0,
+        "research_live_filter_b_reclaim_ranker_rejected": 0,
+        "research_live_filter_l_trend_probation_rejected": 0,
+        "research_live_filter_long_anti_chase_close_loc_gt": LONG_ANTI_CHASE_CLOSE_LOC_GT,
+        "research_live_filter_long_anti_chase_vwap_dist_atr_gt": LONG_ANTI_CHASE_VWAP_DIST_ATR_GT,
+        "research_live_filter_b_avwap_reclaim_ranker_min": B_AVWAP_RECLAIM_RANKER_MIN,
+    }
+    if base.empty:
+        return base, base.copy(), stats
+
+    if not RESEARCH_LIVE_FILTER_ENABLE:
+        out = base.copy()
+        out["research_live_filter_status"] = "DISABLED"
+        out["research_live_filter_reason"] = ""
+        out["research_live_filter_version"] = RESEARCH_FILTER_VERSION
+        return out, out.iloc[0:0].copy(), stats
+
+    active_mode = RESEARCH_LIVE_FILTER_MODE in {"active", "block", "reject", "live", "on", "1", "true"}
+    template = base.copy()
+    template["research_live_filter_status"] = ""
+    template["research_live_filter_reason"] = ""
+    template["research_live_filter_version"] = RESEARCH_FILTER_VERSION
+    template = template.iloc[0:0].copy()
+    accepted_rows: List[Dict[str, Any]] = []
+    rejected_rows: List[Dict[str, Any]] = []
+    for _, row in base.iterrows():
+        item = row.to_dict()
+        reasons = _research_filter_reasons(row)
+        item["research_live_filter_reason"] = ";".join(reasons)
+        item["research_live_filter_version"] = RESEARCH_FILTER_VERSION
+        if reasons and active_mode:
+            item["research_live_filter_status"] = "REJECTED"
+            rejected_rows.append(item)
+        else:
+            item["research_live_filter_status"] = "SHADOW_REJECT" if reasons else "PASSED"
+            accepted_rows.append(item)
+
+    accepted = pd.DataFrame(accepted_rows) if accepted_rows else template.copy()
+    rejected = pd.DataFrame(rejected_rows) if rejected_rows else template.copy()
+    if not accepted.empty and {"candidate_id", "signal_time_ist", "ticker"}.issubset(accepted.columns):
+        accepted = candidate_scan._dedupe_candidate_frame(accepted)
+    if not rejected.empty and {"candidate_id", "signal_time_ist", "ticker"}.issubset(rejected.columns):
+        rejected = candidate_scan._dedupe_candidate_frame(rejected)
+
+    reason_text = rejected.get("research_live_filter_reason", pd.Series(dtype=str)).astype(str) if not rejected.empty else pd.Series(dtype=str)
+    shadow_text = (
+        accepted.loc[accepted.get("research_live_filter_status", "").astype(str).eq("SHADOW_REJECT"), "research_live_filter_reason"].astype(str)
+        if not accepted.empty and "research_live_filter_status" in accepted.columns
+        else pd.Series(dtype=str)
+    )
+    stats.update(
+        {
+            "research_live_filter_rejected": int(len(rejected)),
+            "research_live_filter_shadow_rejected": int(len(shadow_text)),
+            "research_live_filter_anti_chase_rejected": int(reason_text.str.contains("ANTI_CHASE").sum()),
+            "research_live_filter_b_reclaim_ranker_rejected": int(reason_text.str.contains("B_AVWAP_RECLAIM").sum()),
+            "research_live_filter_l_trend_probation_rejected": int(reason_text.str.contains("L_TREND_PULLBACK").sum()),
+        }
+    )
+    return accepted, rejected, stats
+
+
 def apply_v8_live_gate(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df.copy(), {
             "v8_live_gate_enabled": bool(V8_LIVE_GATE_ENABLE),
             "v8_live_gate_rules": 0,
             "v8_live_gate_rejected": 0,
+            "early_live_gate_candidates": 0,
+            "early_live_gate_accepted": 0,
         }
+    work = df.copy()
+    family = work["candidate_family"] if "candidate_family" in work.columns else pd.Series("", index=work.index)
+    selection_mode = work["selection_mode"] if "selection_mode" in work.columns else pd.Series("", index=work.index)
+    setup_col = work["setup"] if "setup" in work.columns else pd.Series("", index=work.index)
+    early_mask = (
+        family.astype(str).str.upper().eq("EARLY")
+        | selection_mode.astype(str).str.lower().str.startswith("early")
+        | setup_col.astype(str).str.startswith("E_")
+    )
+    early_df = work.loc[early_mask].copy()
+    standard_df = work.loc[~early_mask].copy()
+    early_candidate_count = int(len(early_df))
+    early_rows: List[Dict[str, Any]] = []
+    if not early_df.empty:
+        early_df["_early_score_num"] = pd.to_numeric(early_df.get("quality_score"), errors="coerce").fillna(0.0)
+        if "side" not in early_df.columns:
+            early_df["side"] = ""
+        early_df["side"] = early_df["side"].astype(str).str.upper().str.strip()
+        early_df = early_df.loc[early_df["_early_score_num"] >= EARLY_LIVE_GATE_MIN_SCORE].copy()
+        if not early_df.empty:
+            early_df = (
+                early_df.sort_values(["side", "_early_score_num", "ticker"], ascending=[True, False, True])
+                .groupby("side", group_keys=False)
+                .head(max(1, EARLY_LIVE_GATE_MAX_PER_SIDE))
+                .sort_values(["_early_score_num", "ticker"], ascending=[False, True])
+                .head(max(1, EARLY_LIVE_GATE_MAX_PER_SLOT))
+                .drop(columns=["_early_score_num"], errors="ignore")
+                .reset_index(drop=True)
+            )
+    for _, row in early_df.iterrows():
+        item = row.to_dict()
+        item["v8_live_gate_status"] = "EARLY_PASSED"
+        item["v8_live_gate_rule"] = "early_mode_v1_live_gate"
+        item["v8_live_gate_stage"] = "early_live_gate"
+        item["v8_live_gate_field"] = "selection_mode"
+        early_rows.append(item)
+
     if not V8_LIVE_GATE_ENABLE:
-        out = df.copy()
+        out = work.copy()
         out["v8_live_gate_status"] = "DISABLED"
-        return out, {"v8_live_gate_enabled": False, "v8_live_gate_rules": 0, "v8_live_gate_rejected": 0}
+        return out, {
+            "v8_live_gate_enabled": False,
+            "v8_live_gate_rules": 0,
+            "v8_live_gate_rejected": 0,
+            "early_live_gate_candidates": early_candidate_count,
+            "early_live_gate_accepted": int(len(early_df)),
+            "early_live_gate_rejected": int(max(0, early_candidate_count - len(early_df))),
+            "early_live_gate_min_score": EARLY_LIVE_GATE_MIN_SCORE,
+            "early_live_gate_max_per_side": EARLY_LIVE_GATE_MAX_PER_SIDE,
+            "early_live_gate_max_per_slot": EARLY_LIVE_GATE_MAX_PER_SLOT,
+        }
 
     rules = _load_live_safe_v8_rules()
     if rules.empty:
-        out = df.iloc[0:0].copy()
+        out = pd.DataFrame(early_rows)
+        if not out.empty and {"candidate_id", "signal_time_ist", "ticker"}.issubset(out.columns):
+            out = candidate_scan._dedupe_candidate_frame(out)
         return out, {
             "v8_live_gate_enabled": True,
             "v8_live_gate_rules": 0,
-            "v8_live_gate_rejected": int(len(df)),
+            "v8_live_gate_rejected": int(len(standard_df)),
             "v8_live_gate_rules_csv": str(V8_ACCEPTED_RULES_CSV),
+            "early_live_gate_candidates": early_candidate_count,
+            "early_live_gate_accepted": int(len(early_df)),
+            "early_live_gate_rejected": int(max(0, early_candidate_count - len(early_df))),
+            "early_live_gate_min_score": EARLY_LIVE_GATE_MIN_SCORE,
+            "early_live_gate_max_per_side": EARLY_LIVE_GATE_MAX_PER_SIDE,
+            "early_live_gate_max_per_slot": EARLY_LIVE_GATE_MAX_PER_SLOT,
         }
 
-    accepted: List[Dict[str, Any]] = []
+    accepted: List[Dict[str, Any]] = list(early_rows)
     rejected = 0
-    for _, row in df.iterrows():
+    for _, row in standard_df.iterrows():
         setup = str(row.get("setup", "")).strip()
         setup_rules = rules[rules["setup"].astype(str).eq(setup)]
         matched_rule: Optional[pd.Series] = None
@@ -466,6 +780,12 @@ def apply_v8_live_gate(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
         "v8_live_gate_rules": int(len(rules)),
         "v8_live_gate_rejected": int(rejected),
         "v8_live_gate_rules_csv": str(V8_ACCEPTED_RULES_CSV),
+        "early_live_gate_candidates": early_candidate_count,
+        "early_live_gate_accepted": int(len(early_rows)),
+        "early_live_gate_rejected": int(max(0, early_candidate_count - len(early_rows))),
+        "early_live_gate_min_score": EARLY_LIVE_GATE_MIN_SCORE,
+        "early_live_gate_max_per_side": EARLY_LIVE_GATE_MAX_PER_SIDE,
+        "early_live_gate_max_per_slot": EARLY_LIVE_GATE_MAX_PER_SLOT,
     }
 
 
@@ -501,11 +821,13 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         print(f"[{SESSION_NAME}] scan failed: {type(exc).__name__}: {exc}", flush=True)
         candidates = pd.DataFrame()
 
-    raw_candidates = candidates.copy() if candidates is not None else pd.DataFrame()
-    gated_candidates, gate_stats = apply_v8_live_gate(raw_candidates)
-
     day = slot.strftime("%Y-%m-%d")
+    raw_candidates = add_live_ranker_scores(candidates.copy() if candidates is not None else pd.DataFrame(), day)
+    v8_candidates, gate_stats = apply_v8_live_gate(raw_candidates)
+    gated_candidates, research_rejected, research_filter_stats = apply_research_live_filters(v8_candidates, day)
+
     raw_write_stats = _append_daily_raw_candidates(raw_candidates, day)
+    research_rejected_write_stats = _append_daily_research_filter_rejections(research_rejected, day)
     write_stats = _append_daily_candidates(gated_candidates, day)
     _write_json_snapshots(
         raw_candidates,
@@ -518,7 +840,15 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
     _write_json_snapshots(
         gated_candidates,
         slot,
-        payload_extra={"v8_live_gate_output": "gated_for_entry_engine", **gate_stats},
+        payload_extra={"v8_live_gate_output": "gated_for_entry_engine", **gate_stats, **research_filter_stats},
+    )
+    _write_json_snapshots(
+        research_rejected,
+        slot,
+        slot_json_path=_research_filter_rejected_slot_json_path(slot),
+        latest_json_name="latest_research_filter_rejected_candidate_tickers.json",
+        latest_csv_name="latest_research_filter_rejected_candidate_tickers.csv",
+        payload_extra={"v8_live_gate_output": "research_live_filter_rejected", **gate_stats, **research_filter_stats},
     )
 
     total = int(0 if gated_candidates is None else len(gated_candidates))
@@ -535,11 +865,15 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         "duplicates": int(write_stats["duplicates"]),
         "raw_written": int(raw_write_stats["written"]),
         "raw_duplicates": int(raw_write_stats["duplicates"]),
+        "research_filter_rejected_written": int(research_rejected_write_stats["written"]),
+        "research_filter_rejected_duplicates": int(research_rejected_write_stats["duplicates"]),
         "elapsed_sec": round(time.perf_counter() - started, 3),
         "csv_path": str(_daily_csv_path(day)),
         "raw_csv_path": str(_daily_raw_csv_path(day)),
+        "research_filter_rejected_csv_path": str(_daily_research_filter_rejected_csv_path(day)),
         "json_path": str(_slot_json_path(slot)),
         **gate_stats,
+        **research_filter_stats,
     }
     _append_audit(slot, summary)
     _touch_status("RUNNING", phase="SCAN_DONE", slot=slot.strftime("%H:%M"), **summary)

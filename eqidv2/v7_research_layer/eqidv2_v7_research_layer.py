@@ -31,6 +31,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from eqidv2_runtime_paths import (
+    DATA_1MIN_DIR,
     DATA_5M_DIR,
     LIVE_SIGNALS_DIR,
     NIFTY_OPEN_SLOT_DIR,
@@ -48,6 +49,7 @@ LATEST_DIR = RESEARCH_ROOT / "latest"
 HEARTBEAT_DIR = RESEARCH_ROOT / "heartbeat"
 RANKER_DIR = RESEARCH_ROOT / "ranker"
 SUGGESTIONS_DIR = RESEARCH_ROOT / "suggestions"
+EXIT_LAB_DIR = RESEARCH_ROOT / "exit_lab"
 
 SIGNAL_DISCOVERY_CSV_DIR = runtime_dir("signal_discovery_v7_5mins_ID", "csv")
 ENTRY_AUDIT_DIR = runtime_dir("entry_engine_1min_v5_ID", "audit")
@@ -59,7 +61,7 @@ LIVE_5MIN_SUPERVISOR_STATUS = REPO_ROOT / "logs" / "eqidv2_eod_scheduler_for_5mi
 LIVE_5MIN_SLOT_READY_DIR = runtime_dir("slot_ready_5m")
 
 
-for _p in (RESEARCH_ROOT, TRUTH_DIR, REPORT_DIR, LATEST_DIR, HEARTBEAT_DIR, RANKER_DIR, SUGGESTIONS_DIR):
+for _p in (RESEARCH_ROOT, TRUTH_DIR, REPORT_DIR, LATEST_DIR, HEARTBEAT_DIR, RANKER_DIR, SUGGESTIONS_DIR, EXIT_LAB_DIR):
     _p.mkdir(parents=True, exist_ok=True)
 
 
@@ -157,6 +159,15 @@ def _load_raw_candidates(day: str) -> pd.DataFrame:
 
 def _load_gated_candidates(day: str) -> pd.DataFrame:
     path = SIGNAL_DISCOVERY_CSV_DIR / f"candidate_tickers_{day}.csv"
+    df = _read_csv(path)
+    if df.empty:
+        return df
+    df = _add_key(df, time_col="signal_time_ist")
+    return df.drop_duplicates(subset=["_research_key"], keep="last").reset_index(drop=True)
+
+
+def _load_research_filter_rejections(day: str) -> pd.DataFrame:
+    path = SIGNAL_DISCOVERY_CSV_DIR / f"research_filter_rejected_candidate_tickers_{day}.csv"
     df = _read_csv(path)
     if df.empty:
         return df
@@ -349,10 +360,13 @@ def _build_reason(
     live_written: bool,
     paper_traded: bool,
     reject_reason: str,
+    research_filter_reason: str = "",
 ) -> str:
     if paper_traded:
         return ""
     if not passed_gate:
+        if research_filter_reason:
+            return research_filter_reason
         return "rejected_v8_gate"
     if reject_reason:
         return reject_reason
@@ -368,6 +382,7 @@ def _build_reason(
 def build_truth_table(day: str) -> pd.DataFrame:
     raw = _load_raw_candidates(day)
     gated = _load_gated_candidates(day)
+    research_filter_rejects = _load_research_filter_rejections(day)
     entry_raw = _load_entry_rows(day, raw=True)
     entry_selected = _load_entry_rows(day, raw=False)
     rejects = _load_entry_rejects(day)
@@ -381,6 +396,7 @@ def build_truth_table(day: str) -> pd.DataFrame:
 
     raw_map = _map_by_key(raw)
     gated_map = _map_by_key(gated)
+    research_filter_map = _map_by_key(research_filter_rejects)
     entry_raw_map = _map_by_key(entry_raw)
     entry_sel_map = _map_by_key(entry_selected)
     rejects_map = _map_by_key(rejects)
@@ -389,9 +405,10 @@ def build_truth_table(day: str) -> pd.DataFrame:
     paper_signal_map = _map_by_signal_id(paper)
 
     rows: list[dict[str, Any]] = []
-    for key in _all_research_keys(raw, gated, entry_raw, entry_selected, rejects, live, paper):
+    for key in _all_research_keys(raw, gated, research_filter_rejects, entry_raw, entry_selected, rejects, live, paper):
         cand = _row_from_map(raw_map, key)
         gated_row = _row_from_map(gated_map, key)
+        research_filter_row = _row_from_map(research_filter_map, key)
         entry_raw_row = _row_from_map(entry_raw_map, key)
         entry_sel_row = _row_from_map(entry_sel_map, key)
         reject_row = _row_from_map(rejects_map, key)
@@ -413,9 +430,18 @@ def build_truth_table(day: str) -> pd.DataFrame:
         paper_traded = not paper_row.empty
         has_entry_selected = audit_entry_selected or live_written or paper_traded
         passed_gate = not gated_row.empty or live_written or paper_traded
-        gate_source = "accepted_rules_csv" if not gated_row.empty else ("live_signal_reconciled" if live_written else ("paper_trade_reconciled" if paper_traded else ""))
+        gate_source = (
+            "accepted_rules_csv+research_live_filters"
+            if not gated_row.empty
+            else (
+                "research_live_filter_rejected"
+                if not research_filter_row.empty
+                else ("live_signal_reconciled" if live_written else ("paper_trade_reconciled" if paper_traded else ""))
+            )
+        )
         selection_source = "entry_audit" if audit_entry_selected else ("live_signal_reconciled" if live_written else ("paper_trade_reconciled" if paper_traded else ""))
         reject_reason = str(reject_row.get("reject_reason", "")) if not reject_row.empty else ""
+        research_filter_reason = str(research_filter_row.get("research_live_filter_reason", "")) if not research_filter_row.empty else ""
 
         signal_time = _first_nonblank(
             base_row,
@@ -455,6 +481,8 @@ def build_truth_table(day: str) -> pd.DataFrame:
                 "setup": _first_nonblank(base_row, ["setup"], ""),
                 "signal_time_ist": _fmt_ts(signal_time),
                 "scan_slot_ist": cand.get("scan_slot_ist", "") if not cand.empty else "",
+                "selection_mode": _first_nonblank(base_row, ["selection_mode"], ""),
+                "candidate_family": _first_nonblank(base_row, ["candidate_family"], ""),
                 "scan_created_at_ist": cand.get("created_at_ist", "") if not cand.empty else "",
                 "signal_delay_seconds": _signal_delay_seconds(signal_time, cand.get("created_at_ist", "") if not cand.empty else ""),
                 "signal_close": signal_close,
@@ -472,6 +500,9 @@ def build_truth_table(day: str) -> pd.DataFrame:
                 "v8_gate_source": gate_source,
                 "v8_live_gate_rule": gated_row.get("v8_live_gate_rule", "") if not gated_row.empty else "",
                 "v8_live_gate_stage": gated_row.get("v8_live_gate_stage", "") if not gated_row.empty else "",
+                "research_live_filter_status": _first_nonblank(gated_row, ["research_live_filter_status"], _first_nonblank(research_filter_row, ["research_live_filter_status"], cand.get("research_live_filter_status", "") if not cand.empty else "")),
+                "research_live_filter_reason": _first_nonblank(gated_row, ["research_live_filter_reason"], _first_nonblank(research_filter_row, ["research_live_filter_reason"], cand.get("research_live_filter_reason", "") if not cand.empty else "")),
+                "scanner_ranker_score": _safe_float(_first_nonblank(gated_row, ["ranker_score"], _first_nonblank(research_filter_row, ["ranker_score"], cand.get("ranker_score", np.nan) if not cand.empty else np.nan))),
                 "entry_row_built": has_entry_raw,
                 "entry_audit_selected": audit_entry_selected,
                 "entry_selected": has_entry_selected,
@@ -491,6 +522,7 @@ def build_truth_table(day: str) -> pd.DataFrame:
                 "paper_signal_id": paper_row.get("signal_id", "") if not paper_row.empty else "",
                 "paper_entry_time": paper_row.get("entry_time", "") if not paper_row.empty else "",
                 "paper_exit_time": paper_row.get("exit_time", "") if not paper_row.empty else "",
+                "paper_quantity": _safe_float(paper_row.get("quantity", np.nan)) if not paper_row.empty else np.nan,
                 "paper_entry_price": paper_entry,
                 "paper_exit_price": _safe_float(paper_row.get("exit_price", np.nan)) if not paper_row.empty else np.nan,
                 "paper_outcome": paper_row.get("outcome", "") if not paper_row.empty else "",
@@ -509,6 +541,7 @@ def build_truth_table(day: str) -> pd.DataFrame:
                     live_written=live_written,
                     paper_traded=paper_traded,
                     reject_reason=reject_reason,
+                    research_filter_reason=research_filter_reason,
                 ),
             }
         )
@@ -1082,6 +1115,499 @@ def _load_truth_days(days: list[str]) -> pd.DataFrame:
         if col in out.columns:
             out[col] = out[col].fillna(False).astype(bool)
     return out
+
+
+_ONE_MIN_CACHE: dict[str, pd.DataFrame] = {}
+EXIT_LAB_PROFILES: tuple[dict[str, Any], ...] = (
+    {"profile": "static_model", "kind": "static", "sl_pct": None, "target_pct": None},
+    {"profile": "static_tight_0p50_0p80", "kind": "static", "sl_pct": 0.50, "target_pct": 0.80},
+    {"profile": "static_balanced_0p70_1p00", "kind": "static", "sl_pct": 0.70, "target_pct": 1.00},
+    {"profile": "static_wide_1p00_1p50", "kind": "static", "sl_pct": 1.00, "target_pct": 1.50},
+    {"profile": "dynamic_be_0p60_model_target", "kind": "breakeven", "sl_pct": None, "target_pct": None, "be_trigger_pct": 0.60},
+    {"profile": "dynamic_trail_0p80_0p35", "kind": "trail", "sl_pct": None, "target_pct": None, "trail_trigger_pct": 0.80, "trail_gap_pct": 0.35},
+    {"profile": "time_stop_30m_model_sl", "kind": "time_stop", "sl_pct": None, "target_pct": None, "max_hold_min": 30},
+)
+
+
+def _load_1min_bars(ticker: Any) -> pd.DataFrame:
+    symbol = str(ticker or "").upper().strip()
+    if not symbol:
+        return pd.DataFrame()
+    if symbol in _ONE_MIN_CACHE:
+        return _ONE_MIN_CACHE[symbol]
+    path = DATA_1MIN_DIR / f"{symbol}_stocks_indicators_1min.parquet"
+    if not path.exists():
+        _ONE_MIN_CACHE[symbol] = pd.DataFrame()
+        return _ONE_MIN_CACHE[symbol]
+    try:
+        df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close", "volume"])
+    except Exception:
+        df = pd.DataFrame()
+    if not df.empty:
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        if getattr(df["date"].dt, "tz", None) is None:
+            df["date"] = df["date"].dt.tz_localize("Asia/Kolkata")
+        else:
+            df["date"] = df["date"].dt.tz_convert("Asia/Kolkata")
+        df = df.dropna(subset=["date"]).sort_values("date").drop_duplicates(subset=["date"], keep="last")
+        for col in ("open", "high", "low", "close", "volume"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.reset_index(drop=True)
+    _ONE_MIN_CACHE[symbol] = df
+    return df
+
+
+def _session_exit_cutoff(day_text: Any) -> pd.Timestamp:
+    day = pd.to_datetime(str(day_text)[:10], errors="coerce")
+    if pd.isna(day):
+        day = _now_ist()
+    return pd.Timestamp(
+        year=int(day.year),
+        month=int(day.month),
+        day=int(day.day),
+        hour=15,
+        minute=20,
+        tz="Asia/Kolkata",
+    )
+
+
+def _first_1m_entry_from_signal(bars: pd.DataFrame, signal_time: Any) -> tuple[pd.Timestamp, float, str]:
+    signal_ts = _normalise_ts(signal_time)
+    if bars.empty or pd.isna(signal_ts):
+        return pd.NaT, np.nan, "missing_1min_entry"
+    sub = bars.loc[
+        (bars["date"] >= signal_ts)
+        & (bars["date"] <= signal_ts + pd.Timedelta(minutes=5))
+    ].sort_values("date")
+    if sub.empty:
+        return pd.NaT, np.nan, "missing_1min_entry"
+    row = sub.iloc[0]
+    return _normalise_ts(row.get("date")), _safe_float(row.get("open")), "first_1min_open"
+
+
+def _exit_lab_entry(row: pd.Series, bars: pd.DataFrame) -> tuple[pd.Timestamp, float, str]:
+    if bool(row.get("paper_traded", False)):
+        entry_ts = _normalise_ts(row.get("paper_entry_time"))
+        entry_px = _safe_float(row.get("paper_entry_price"))
+        if pd.notna(entry_ts) and np.isfinite(entry_px) and entry_px > 0:
+            return entry_ts, entry_px, "paper_trade_entry"
+    entry_ts = _normalise_ts(row.get("entry_time_ist"))
+    entry_px = _safe_float(row.get("entry_price_model"))
+    if pd.notna(entry_ts) and np.isfinite(entry_px) and entry_px > 0:
+        return entry_ts, entry_px, "entry_engine_model"
+    return _first_1m_entry_from_signal(bars, row.get("signal_time_ist"))
+
+
+def _row_sl_target_pct(row: pd.Series, entry_px: float) -> tuple[float, float]:
+    sl_pct = _safe_float(row.get("sl_pct"))
+    target_pct = _safe_float(row.get("target_pct"))
+    if np.isfinite(sl_pct) and np.isfinite(target_pct) and sl_pct > 0 and target_pct > 0:
+        return float(sl_pct), float(target_pct)
+    stop_px = _safe_float(row.get("sl_price_model"))
+    target_px = _safe_float(row.get("target_price_model"))
+    side = str(row.get("side", "")).upper().strip()
+    if np.isfinite(entry_px) and entry_px > 0 and np.isfinite(stop_px) and np.isfinite(target_px):
+        if side == "SHORT":
+            sl_pct = (stop_px - entry_px) / entry_px * 100.0
+            target_pct = (entry_px - target_px) / entry_px * 100.0
+        else:
+            sl_pct = (entry_px - stop_px) / entry_px * 100.0
+            target_pct = (target_px - entry_px) / entry_px * 100.0
+    if not np.isfinite(sl_pct) or sl_pct <= 0:
+        sl_pct = 0.70
+    if not np.isfinite(target_pct) or target_pct <= 0:
+        target_pct = 1.00
+    return float(sl_pct), float(target_pct)
+
+
+def _profile_sl_target(profile: dict[str, Any], row: pd.Series, entry_px: float) -> tuple[float, float]:
+    model_sl, model_target = _row_sl_target_pct(row, entry_px)
+    sl_pct = model_sl if profile.get("sl_pct") is None else float(profile["sl_pct"])
+    target_pct = model_target if profile.get("target_pct") is None else float(profile["target_pct"])
+    return float(sl_pct), float(target_pct)
+
+
+def _ret_pct(side: str, entry_px: float, exit_px: float) -> float:
+    if not np.isfinite(entry_px) or entry_px <= 0 or not np.isfinite(exit_px):
+        return np.nan
+    if side == "SHORT":
+        return (entry_px - exit_px) / entry_px * 100.0
+    return (exit_px - entry_px) / entry_px * 100.0
+
+
+def _path_stats(side: str, path: pd.DataFrame, entry_px: float) -> tuple[float, float]:
+    if path.empty or not np.isfinite(entry_px) or entry_px <= 0:
+        return np.nan, np.nan
+    hi = pd.to_numeric(path["high"], errors="coerce").max()
+    lo = pd.to_numeric(path["low"], errors="coerce").min()
+    if side == "SHORT":
+        mfe = (entry_px - lo) / entry_px * 100.0 if np.isfinite(lo) else np.nan
+        mae = (hi - entry_px) / entry_px * 100.0 if np.isfinite(hi) else np.nan
+    else:
+        mfe = (hi - entry_px) / entry_px * 100.0 if np.isfinite(hi) else np.nan
+        mae = (entry_px - lo) / entry_px * 100.0 if np.isfinite(lo) else np.nan
+    return float(mfe), float(mae)
+
+
+def _coverage_level(path_rows: int, coverage_pct: float) -> str:
+    if path_rows <= 0:
+        return "NONE"
+    if coverage_pct >= 80.0 and path_rows >= 5:
+        return "HIGH"
+    if coverage_pct >= 45.0 and path_rows >= 3:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _empty_exit_profile_result(outcome: str = "NO_1MIN_PATH", expected_rows: float = np.nan) -> dict[str, Any]:
+    return {
+        "outcome": outcome,
+        "exit_price": np.nan,
+        "exit_time_ist": "",
+        "ret_pct": np.nan,
+        "pnl_rs_model": np.nan,
+        "path_rows": 0,
+        "expected_1min_rows": int(expected_rows) if np.isfinite(expected_rows) else np.nan,
+        "path_coverage_pct": 0.0,
+        "path_coverage_level": "NONE",
+        "mfe_pct_1min": np.nan,
+        "mae_pct_1min": np.nan,
+        "bars_held_1min": np.nan,
+        "hit_order": "",
+        "effective_sl_pct": np.nan,
+        "effective_target_pct": np.nan,
+    }
+
+
+def _simulate_exit_profile(
+    row: pd.Series,
+    profile: dict[str, Any],
+    bars: pd.DataFrame,
+    entry_ts: pd.Timestamp,
+    entry_px: float,
+) -> dict[str, Any]:
+    side = str(row.get("side", "")).upper().strip()
+    if side not in {"LONG", "SHORT"} or bars.empty or pd.isna(entry_ts) or not np.isfinite(entry_px) or entry_px <= 0:
+        return _empty_exit_profile_result()
+
+    sl_pct, target_pct = _profile_sl_target(profile, row, entry_px)
+    cutoff = _session_exit_cutoff(row.get("date", row.get("research_day", "")))
+    max_hold_min = profile.get("max_hold_min")
+    horizon = min(cutoff, entry_ts + pd.Timedelta(minutes=int(max_hold_min))) if max_hold_min else cutoff
+    expected = max(1, int(np.floor((horizon - entry_ts.floor("min")).total_seconds() / 60.0)) + 1)
+    path = bars.loc[(bars["date"] >= entry_ts.floor("min")) & (bars["date"] <= horizon)].sort_values("date").copy()
+    if path.empty:
+        result = _empty_exit_profile_result(expected_rows=expected)
+        result["effective_sl_pct"] = float(sl_pct)
+        result["effective_target_pct"] = float(target_pct)
+        return result
+
+    coverage_pct = float(min(100.0, len(path) / expected * 100.0))
+    path_mfe, path_mae = _path_stats(side, path, entry_px)
+    stop_px = entry_px * (1.0 - sl_pct / 100.0) if side == "LONG" else entry_px * (1.0 + sl_pct / 100.0)
+    target_px = entry_px * (1.0 + target_pct / 100.0) if side == "LONG" else entry_px * (1.0 - target_pct / 100.0)
+    outcome = "EOD"
+    exit_px = _safe_float(path.iloc[-1].get("close"), entry_px)
+    exit_ts = _normalise_ts(path.iloc[-1].get("date"))
+    hit_order = ""
+    kind = str(profile.get("kind", "static"))
+    best_favorable = 0.0
+
+    for _, bar in path.iterrows():
+        ts = _normalise_ts(bar.get("date"))
+        high = _safe_float(bar.get("high"))
+        low = _safe_float(bar.get("low"))
+        close = _safe_float(bar.get("close"), entry_px)
+        if side == "SHORT":
+            favorable = (entry_px - low) / entry_px * 100.0 if np.isfinite(low) else best_favorable
+            stop_hit = np.isfinite(high) and high >= stop_px
+            target_hit = np.isfinite(low) and low <= target_px
+        else:
+            favorable = (high - entry_px) / entry_px * 100.0 if np.isfinite(high) else best_favorable
+            stop_hit = np.isfinite(low) and low <= stop_px
+            target_hit = np.isfinite(high) and high >= target_px
+        best_favorable = max(best_favorable, float(favorable) if np.isfinite(favorable) else 0.0)
+
+        if stop_hit and target_hit:
+            outcome = "SL"
+            exit_px = stop_px
+            exit_ts = ts
+            hit_order = "same_bar_sl_first"
+            break
+        if stop_hit:
+            outcome = "SL"
+            exit_px = stop_px
+            exit_ts = ts
+            hit_order = "stop"
+            break
+        if target_hit:
+            outcome = "TARGET"
+            exit_px = target_px
+            exit_ts = ts
+            hit_order = "target"
+            break
+        if kind == "time_stop" and ts >= horizon:
+            outcome = "TIME"
+            exit_px = close
+            exit_ts = ts
+            hit_order = "time_stop"
+            break
+
+        if kind == "breakeven" and best_favorable >= float(profile.get("be_trigger_pct", 0.60)):
+            stop_px = max(stop_px, entry_px) if side == "LONG" else min(stop_px, entry_px)
+        elif kind == "trail" and best_favorable >= float(profile.get("trail_trigger_pct", 0.80)):
+            gap = float(profile.get("trail_gap_pct", 0.35)) / 100.0
+            if side == "SHORT" and np.isfinite(low):
+                stop_px = min(stop_px, low * (1.0 + gap))
+            elif side == "LONG" and np.isfinite(high):
+                stop_px = max(stop_px, high * (1.0 - gap))
+
+    quantity = _safe_float(row.get("paper_quantity"))
+    pnl_rs_model = np.nan
+    if np.isfinite(quantity) and quantity > 0:
+        pnl_rs_model = (entry_px - exit_px) * quantity if side == "SHORT" else (exit_px - entry_px) * quantity
+
+    return {
+        "outcome": outcome,
+        "exit_price": float(exit_px) if np.isfinite(exit_px) else np.nan,
+        "exit_time_ist": _fmt_ts(exit_ts),
+        "ret_pct": _ret_pct(side, entry_px, exit_px),
+        "pnl_rs_model": float(pnl_rs_model) if np.isfinite(pnl_rs_model) else np.nan,
+        "path_rows": int(len(path)),
+        "expected_1min_rows": int(expected),
+        "path_coverage_pct": coverage_pct,
+        "path_coverage_level": _coverage_level(int(len(path)), coverage_pct),
+        "mfe_pct_1min": path_mfe,
+        "mae_pct_1min": path_mae,
+        "bars_held_1min": int(max(0, (exit_ts - entry_ts.floor("min")).total_seconds() // 60)) if pd.notna(exit_ts) else np.nan,
+        "hit_order": hit_order,
+        "effective_sl_pct": float(sl_pct),
+        "effective_target_pct": float(target_pct),
+    }
+
+
+def build_exit_strategy_lab(day: str, truth: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, Any]]:
+    if truth is None or truth.empty:
+        empty = pd.DataFrame()
+        return empty, empty, f"# V7 Live 1-Min Exit Strategy Lab - {day}\n\nNo truth rows found.\n", {"day": day, "rows": 0}
+
+    rows: list[dict[str, Any]] = []
+    work = truth.copy()
+    if "paper_traded" not in work.columns:
+        work["paper_traded"] = False
+    if "passed_v8_gate" not in work.columns:
+        work["passed_v8_gate"] = False
+    work["paper_traded"] = work["paper_traded"].fillna(False).astype(bool)
+    work["passed_v8_gate"] = work["passed_v8_gate"].fillna(False).astype(bool)
+    for _, row in work.iterrows():
+        bars = _load_1min_bars(row.get("ticker"))
+        entry_ts, entry_px, entry_source = _exit_lab_entry(row, bars)
+        base = {
+            "date": str(row.get("date", day))[:10],
+            "research_key": row.get("research_key", ""),
+            "candidate_id": row.get("candidate_id", ""),
+            "ticker": str(row.get("ticker", "")).upper().strip(),
+            "side": str(row.get("side", "")).upper().strip(),
+            "setup": row.get("setup", ""),
+            "signal_time_ist": row.get("signal_time_ist", ""),
+            "paper_traded": bool(row.get("paper_traded", False)),
+            "passed_v8_gate": bool(row.get("passed_v8_gate", False)),
+            "reason_not_taken": row.get("reason_not_taken", ""),
+            "cohort": "ACTUAL_PAPER" if bool(row.get("paper_traded", False)) else ("PASSED_NOT_TRADED" if bool(row.get("passed_v8_gate", False)) else "REJECTED_MISSED"),
+            "entry_time_ist": _fmt_ts(entry_ts),
+            "entry_price": float(entry_px) if np.isfinite(entry_px) else np.nan,
+            "entry_source": entry_source,
+            "one_min_source": str(DATA_1MIN_DIR),
+            "one_min_last_bar": _fmt_ts(bars["date"].max()) if not bars.empty else "",
+            "paper_outcome": row.get("paper_outcome", ""),
+            "paper_pnl_rs": row.get("paper_pnl_rs", np.nan),
+            "paper_pnl_pct": row.get("paper_pnl_pct", np.nan),
+        }
+        for profile in EXIT_LAB_PROFILES:
+            sim = _simulate_exit_profile(row, profile, bars, entry_ts, entry_px)
+            rows.append({**base, "exit_profile": profile["profile"], **sim})
+
+    lab = pd.DataFrame(rows)
+    summary = _exit_lab_summary(lab)
+    report = _exit_lab_report(day, lab, summary)
+    payload = {
+        "day": day,
+        "rows": int(len(lab)),
+        "truth_rows": int(len(truth)),
+        "profiles": [p["profile"] for p in EXIT_LAB_PROFILES],
+        "one_min_dir": str(DATA_1MIN_DIR),
+        "covered_profile_rows": int(lab["path_coverage_level"].isin(["HIGH", "MEDIUM"]).sum()) if not lab.empty else 0,
+    }
+    return lab, summary, report, payload
+
+
+def _exit_lab_summary(lab: pd.DataFrame) -> pd.DataFrame:
+    if lab is None or lab.empty:
+        return pd.DataFrame()
+    work = lab.copy()
+    if "path_coverage_level" not in work.columns:
+        work["path_coverage_level"] = "NONE"
+    work["path_coverage_level"] = work["path_coverage_level"].fillna("NONE").astype(str)
+    work["ret_pct"] = pd.to_numeric(work.get("ret_pct"), errors="coerce")
+    work["mae_pct_1min"] = pd.to_numeric(work.get("mae_pct_1min"), errors="coerce")
+    work["mfe_pct_1min"] = pd.to_numeric(work.get("mfe_pct_1min"), errors="coerce")
+    work["usable_1min_path"] = work["path_coverage_level"].isin(["HIGH", "MEDIUM"])
+    rows: list[dict[str, Any]] = []
+    for (cohort, profile), group in work.groupby(["cohort", "exit_profile"], dropna=False):
+        usable = group.loc[group["usable_1min_path"]].copy()
+        ret = pd.to_numeric(usable.get("ret_pct"), errors="coerce").dropna()
+        rows.append(
+            {
+                "cohort": cohort,
+                "exit_profile": profile,
+                "rows": int(len(group)),
+                "usable_rows": int(len(usable)),
+                "unique_candidates": int(group["research_key"].nunique()),
+                "avg_ret_pct": float(ret.mean()) if not ret.empty else np.nan,
+                "median_ret_pct": float(ret.median()) if not ret.empty else np.nan,
+                "win_rate_pct": float((ret > 0).mean() * 100.0) if not ret.empty else np.nan,
+                "target_rate_pct": float((usable["outcome"].astype(str) == "TARGET").mean() * 100.0) if not usable.empty else np.nan,
+                "sl_rate_pct": float((usable["outcome"].astype(str) == "SL").mean() * 100.0) if not usable.empty else np.nan,
+                "avg_mfe_pct": float(pd.to_numeric(usable.get("mfe_pct_1min"), errors="coerce").mean()) if not usable.empty else np.nan,
+                "avg_mae_pct": float(pd.to_numeric(usable.get("mae_pct_1min"), errors="coerce").mean()) if not usable.empty else np.nan,
+            }
+        )
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(["cohort", "avg_ret_pct", "usable_rows"], ascending=[True, False, False])
+    return out
+
+
+def _exit_lab_report(day: str, lab: pd.DataFrame, summary: pd.DataFrame) -> str:
+    lines = [
+        f"# V7 Live 1-Min Exit Strategy Lab - {day}",
+        "",
+        "Scope: live paper trades plus live-generated missed candidates only. No v7/v9 backtesting comparison is used.",
+        f"1-minute source: `{DATA_1MIN_DIR}`",
+        "",
+    ]
+    if lab.empty:
+        lines.append("No exit lab rows found.")
+        return "\n".join(lines) + "\n"
+
+    coverage = lab.drop_duplicates(subset=["research_key"]).copy()
+    if "path_coverage_level" not in coverage.columns:
+        coverage["path_coverage_level"] = "NONE"
+    coverage["path_coverage_level"] = coverage["path_coverage_level"].fillna("NONE").astype(str)
+    coverage_counts = coverage["path_coverage_level"].value_counts(dropna=False).to_dict()
+    latest_1m = sorted(set(str(x) for x in coverage.get("one_min_last_bar", pd.Series(dtype=str)).dropna().astype(str) if x))[-5:]
+    lines.extend(
+        [
+            "## Coverage",
+            "",
+            f"- Truth candidates analysed: {coverage['research_key'].nunique()}",
+            f"- Actual paper candidates: {int(coverage['paper_traded'].astype(bool).sum())}",
+            f"- Potentially missed candidates: {int((~coverage['paper_traded'].astype(bool)).sum())}",
+            f"- Usable 1-minute paths: {int(coverage['path_coverage_level'].isin(['HIGH', 'MEDIUM']).sum())}",
+            f"- Coverage levels: {coverage_counts}",
+            f"- Latest observed 1-minute bars sample: {', '.join(latest_1m) if latest_1m else 'NA'}",
+            "",
+        ]
+    )
+
+    lines.extend(["## Exit Profile Leaderboard", ""])
+    if summary.empty:
+        lines.append("No usable summary rows.")
+    else:
+        lines.append("| cohort | profile | usable | avg ret | win | target | SL | avg MFE | avg MAE |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|")
+        for _, row in summary.head(30).iterrows():
+            lines.append(
+                f"| {row.get('cohort', '')} | {row.get('exit_profile', '')} | {int(row.get('usable_rows', 0))} | "
+                f"{_fmt_num(row.get('avg_ret_pct'), 3)}% | {_fmt_num(row.get('win_rate_pct'), 1)}% | "
+                f"{_fmt_num(row.get('target_rate_pct'), 1)}% | {_fmt_num(row.get('sl_rate_pct'), 1)}% | "
+                f"{_fmt_num(row.get('avg_mfe_pct'), 3)}% | {_fmt_num(row.get('avg_mae_pct'), 3)}% |"
+            )
+    lines.append("")
+
+    usable = lab.loc[lab["path_coverage_level"].isin(["HIGH", "MEDIUM"])].copy()
+    lines.extend(["## Setup-Level Exit Suggestions", ""])
+    if usable.empty:
+        lines.append("No setup-level suggestions because usable 1-minute coverage is insufficient.")
+    else:
+        setup_rows: list[dict[str, Any]] = []
+        for (cohort, side, setup, profile), group in usable.groupby(["cohort", "side", "setup", "exit_profile"], dropna=False):
+            ret = pd.to_numeric(group.get("ret_pct"), errors="coerce").dropna()
+            if len(ret) < 3:
+                continue
+            setup_rows.append(
+                {
+                    "cohort": cohort,
+                    "side": side,
+                    "setup": setup,
+                    "exit_profile": profile,
+                    "samples": int(len(ret)),
+                    "avg_ret_pct": float(ret.mean()),
+                    "win_rate_pct": float((ret > 0).mean() * 100.0),
+                    "avg_mae_pct": float(pd.to_numeric(group.get("mae_pct_1min"), errors="coerce").mean()),
+                }
+            )
+        setup_df = pd.DataFrame(setup_rows)
+        if setup_df.empty:
+            lines.append("No setup has at least 3 usable 1-minute samples yet.")
+        else:
+            best = setup_df.sort_values(["cohort", "side", "setup", "avg_ret_pct"], ascending=[True, True, True, False])
+            best = best.drop_duplicates(subset=["cohort", "side", "setup"], keep="first")
+            lines.append("| cohort | side | setup | best profile | samples | avg ret | win | avg MAE | suggestion strength |")
+            lines.append("|---|---|---|---|---:|---:|---:|---:|---|")
+            for _, row in best.sort_values(["cohort", "avg_ret_pct"], ascending=[True, False]).head(40).iterrows():
+                strength = "PAPER_EXPERIMENT" if int(row["samples"]) < 8 else "SHADOW_ONLY"
+                lines.append(
+                    f"| {row['cohort']} | {row['side']} | {row['setup']} | {row['exit_profile']} | {int(row['samples'])} | "
+                    f"{_fmt_num(row['avg_ret_pct'], 3)}% | {_fmt_num(row['win_rate_pct'], 1)}% | "
+                    f"{_fmt_num(row['avg_mae_pct'], 3)}% | {strength} |"
+                )
+    lines.append("")
+
+    missed = usable.loc[~usable["paper_traded"].astype(bool)].copy()
+    missed["ret_pct"] = pd.to_numeric(missed["ret_pct"], errors="coerce")
+    lines.extend(["## Potentially Missed Trades With Clean 1-Minute Follow-Through", ""])
+    if missed.empty:
+        lines.append("No missed candidates have usable 1-minute paths yet.")
+    else:
+        static_model = missed.loc[missed["exit_profile"].eq("static_model")].copy()
+        static_model = static_model.sort_values(["ret_pct", "mfe_pct_1min"], ascending=[False, False]).head(20)
+        lines.append("| time | ticker | side | setup | reason | model ret | MFE | MAE | coverage |")
+        lines.append("|---|---|---|---|---|---:|---:|---:|---|")
+        for _, row in static_model.iterrows():
+            lines.append(
+                f"| {row.get('signal_time_ist', '')} | {row.get('ticker', '')} | {row.get('side', '')} | "
+                f"{row.get('setup', '')} | {row.get('reason_not_taken', '')} | {_fmt_num(row.get('ret_pct'), 3)}% | "
+                f"{_fmt_num(row.get('mfe_pct_1min'), 3)}% | {_fmt_num(row.get('mae_pct_1min'), 3)}% | "
+                f"{row.get('path_coverage_level', '')} |"
+            )
+    lines.append("")
+
+    lines.extend(
+        [
+            "## Interpretation Guardrails",
+            "",
+            "- Treat LOW/NONE coverage as diagnostic only; do not promote exit rules from incomplete 1-minute paths.",
+            "- Same-bar SL/target conflicts are resolved conservatively as SL first.",
+            "- Dynamic profiles are research candidates for paper/shadow testing, not automatic live changes.",
+            "",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_multi_window_exit_strategy_lab(day: str) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, Any]]:
+    days = _available_truth_days(day)[-max(SUGGESTION_WINDOWS):]
+    truth = _load_truth_days(days)
+    if truth.empty:
+        empty = pd.DataFrame()
+        return empty, empty, f"# V7 Live 1-Min Exit Strategy Lab - Multi-Window - {day}\n\nNo historical live truth rows found.\n", {"day": day, "days": days, "rows": 0}
+    lab, summary, _, payload = build_exit_strategy_lab(day, truth)
+    report = _exit_lab_report(f"multi-window through {day}", lab, summary)
+    payload = {**payload, "day": day, "available_sessions": days, "mode": "multi_window"}
+    return lab, summary, report, payload
 
 
 def _read_kv_file(path: Path) -> dict[str, str]:
@@ -1753,6 +2279,31 @@ def build_multi_window_suggestions(day: str) -> tuple[str, pd.DataFrame, dict[st
             )
     lines.append("")
 
+    exit_summary = _read_csv(EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_summary_{day}.csv")
+    lines.extend(["## 1-Min Exit Strategy Lab Snapshot", ""])
+    lines.append(f"- Source: `{DATA_1MIN_DIR}`")
+    lines.append("- Scope: live paper trades and live-generated missed candidates only; no v7/v9 backtesting comparison.")
+    if exit_summary.empty:
+        lines.append("- Exit lab summary not available yet for this run.")
+    elif not {"cohort", "exit_profile", "usable_rows", "avg_ret_pct"}.issubset(set(exit_summary.columns)):
+        lines.append("- Exit lab summary exists but is missing expected columns; see exit_lab CSV for diagnostics.")
+    else:
+        actual = exit_summary.loc[exit_summary["cohort"].astype(str).eq("ACTUAL_PAPER")].copy()
+        missed = exit_summary.loc[~exit_summary["cohort"].astype(str).eq("ACTUAL_PAPER")].copy()
+        for label, frame in (("actual paper", actual), ("potentially missed", missed)):
+            frame["usable_rows"] = pd.to_numeric(frame.get("usable_rows"), errors="coerce").fillna(0)
+            frame["avg_ret_pct"] = pd.to_numeric(frame.get("avg_ret_pct"), errors="coerce")
+            best = frame.loc[frame["usable_rows"] >= 3].sort_values("avg_ret_pct", ascending=False).head(3)
+            if best.empty:
+                lines.append(f"- {label}: no profile has at least 3 usable 1-minute samples yet.")
+                continue
+            bits = [
+                f"{row.get('exit_profile')} ({int(row.get('usable_rows', 0))} samples, avg {_fmt_num(row.get('avg_ret_pct'), 3)}%)"
+                for _, row in best.iterrows()
+            ]
+            lines.append(f"- {label}: " + "; ".join(bits))
+    lines.append("")
+
     lines.extend(["## Operations And Flow Audit", ""])
     if not ops_rows:
         lines.append("No operations audit rows generated.")
@@ -1848,11 +2399,29 @@ def run(day: str) -> tuple[Path, Path]:
     suggestions_path = SUGGESTIONS_DIR / f"multi_window_suggestions_{day}.md"
     suggestions_csv_path = SUGGESTIONS_DIR / f"multi_window_suggestions_{day}.csv"
     suggestions_json_path = SUGGESTIONS_DIR / f"multi_window_suggestions_{day}.json"
+    exit_lab_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_{day}.csv"
+    exit_lab_summary_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_summary_{day}.csv"
+    exit_lab_report_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_{day}.md"
+    exit_lab_json_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_{day}.json"
+    exit_lab_multi_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_{day}.csv"
+    exit_lab_multi_summary_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_summary_{day}.csv"
+    exit_lab_multi_report_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_{day}.md"
+    exit_lab_multi_json_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_{day}.json"
     truth.to_csv(truth_path, index=False)
     truth.to_csv(ranker_path, index=False)
     report_text = write_report(day, truth)
     action_text = write_action_plan(day, truth)
     ranker_text = write_ranker_report(day, truth)
+    exit_lab, exit_lab_summary, exit_lab_text, exit_lab_payload = build_exit_strategy_lab(day, truth)
+    exit_lab.to_csv(exit_lab_path, index=False)
+    exit_lab_summary.to_csv(exit_lab_summary_path, index=False)
+    exit_lab_report_path.write_text(exit_lab_text, encoding="utf-8")
+    exit_lab_json_path.write_text(json.dumps(exit_lab_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    exit_lab_multi, exit_lab_multi_summary, exit_lab_multi_text, exit_lab_multi_payload = build_multi_window_exit_strategy_lab(day)
+    exit_lab_multi.to_csv(exit_lab_multi_path, index=False)
+    exit_lab_multi_summary.to_csv(exit_lab_multi_summary_path, index=False)
+    exit_lab_multi_report_path.write_text(exit_lab_multi_text, encoding="utf-8")
+    exit_lab_multi_json_path.write_text(json.dumps(exit_lab_multi_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
     suggestions_text, suggestions_df, suggestions_payload = build_multi_window_suggestions(day)
     report_path.write_text(report_text, encoding="utf-8")
     action_path.write_text(action_text, encoding="utf-8")
@@ -1865,6 +2434,14 @@ def run(day: str) -> tuple[Path, Path]:
     (LATEST_DIR / "latest_reality_gap.md").write_text(report_text, encoding="utf-8")
     (LATEST_DIR / "latest_eod_action_plan.md").write_text(action_text, encoding="utf-8")
     (LATEST_DIR / "latest_candidate_ranker.md").write_text(ranker_text, encoding="utf-8")
+    (LATEST_DIR / "latest_exit_strategy_lab_1min.csv").write_text(exit_lab.to_csv(index=False), encoding="utf-8")
+    (LATEST_DIR / "latest_exit_strategy_lab_1min_summary.csv").write_text(exit_lab_summary.to_csv(index=False), encoding="utf-8")
+    (LATEST_DIR / "latest_exit_strategy_lab_1min.md").write_text(exit_lab_text, encoding="utf-8")
+    (LATEST_DIR / "latest_exit_strategy_lab_1min.json").write_text(json.dumps(exit_lab_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    (LATEST_DIR / "latest_exit_strategy_lab_1min_multi_window.csv").write_text(exit_lab_multi.to_csv(index=False), encoding="utf-8")
+    (LATEST_DIR / "latest_exit_strategy_lab_1min_multi_window_summary.csv").write_text(exit_lab_multi_summary.to_csv(index=False), encoding="utf-8")
+    (LATEST_DIR / "latest_exit_strategy_lab_1min_multi_window.md").write_text(exit_lab_multi_text, encoding="utf-8")
+    (LATEST_DIR / "latest_exit_strategy_lab_1min_multi_window.json").write_text(json.dumps(exit_lab_multi_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
     (LATEST_DIR / "latest_multi_window_suggestions.md").write_text(suggestions_text, encoding="utf-8")
     (LATEST_DIR / "latest_multi_window_suggestions.csv").write_text(suggestions_df.to_csv(index=False), encoding="utf-8")
     (LATEST_DIR / "latest_multi_window_suggestions.json").write_text(json.dumps(suggestions_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
@@ -1875,6 +2452,19 @@ def run(day: str) -> tuple[Path, Path]:
         "action_plan": str(action_path),
         "ranker_csv": str(ranker_path),
         "ranker_report": str(ranker_report_path),
+        "exit_strategy_lab_1min": str(exit_lab_path),
+        "exit_strategy_lab_1min_summary": str(exit_lab_summary_path),
+        "exit_strategy_lab_1min_report": str(exit_lab_report_path),
+        "exit_strategy_lab_1min_json": str(exit_lab_json_path),
+        "exit_strategy_lab_1min_multi_window": str(exit_lab_multi_path),
+        "exit_strategy_lab_1min_multi_window_summary": str(exit_lab_multi_summary_path),
+        "exit_strategy_lab_1min_multi_window_report": str(exit_lab_multi_report_path),
+        "exit_strategy_lab_1min_multi_window_json": str(exit_lab_multi_json_path),
+        "exit_strategy_lab_1min_rows": int(len(exit_lab)),
+        "exit_strategy_lab_1min_usable_rows": int(exit_lab["path_coverage_level"].isin(["HIGH", "MEDIUM"]).sum()) if not exit_lab.empty else 0,
+        "exit_strategy_lab_1min_multi_window_rows": int(len(exit_lab_multi)),
+        "exit_strategy_lab_1min_multi_window_usable_rows": int(exit_lab_multi["path_coverage_level"].isin(["HIGH", "MEDIUM"]).sum()) if not exit_lab_multi.empty else 0,
+        "exit_strategy_lab_1min_source": str(DATA_1MIN_DIR),
         "multi_window_suggestions": str(suggestions_path),
         "multi_window_suggestions_csv": str(suggestions_csv_path),
         "multi_window_suggestions_json": str(suggestions_json_path),
@@ -1977,7 +2567,7 @@ def run_loop(*, start_time: str, end_time: str, interval_min: int) -> int:
         try:
             truth_path, report_path = run(day)
             summary = json.loads((LATEST_DIR / "latest_summary.json").read_text(encoding="utf-8"))
-            status_summary = {k: v for k, v in summary.items() if k != "day"}
+            status_summary = {k: v for k, v in summary.items() if k not in {"day", "truth_table", "report"}}
             _write_status(
                 "RUNNING",
                 phase="REPORT_DONE",
