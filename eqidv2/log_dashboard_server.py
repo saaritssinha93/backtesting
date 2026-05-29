@@ -1517,17 +1517,18 @@ def _format_csv_projection(
 def _format_preopen_scheduled_sessions() -> str:
     """
     Render the Preopen Healthcheck card body from the latest JSON report,
-    keeping ONLY scheduled-session (task_*) checks. Each row is bucketed into:
-      RAN_TODAY       — task ran today (latest run present)
-      WAITING_RUN     — enabled, first run pending OR scheduled later in session
-      NOT_RUN_TODAY   — enabled but no run today by expected time
-      FAILED          — task FAIL with other reason
-      DISABLED        — session intentionally off
-      NOT_FOUND       — schtasks query failed / task missing
+    keeping active/scheduled session (task_*) checks visible. Each row is
+    bucketed into:
+      RAN_TODAY       - task ran today (latest run present)
+      WAITING_RUN     - enabled, first run pending OR scheduled later in session
+      NOT_RUN_TODAY   - enabled but no run today by expected time
+      FAILED          - task FAIL with other reason
+      DISABLED        - session intentionally off
+      NOT_FOUND       - schtasks query failed / task missing
     """
     json_path = LOG_DIR / "preopen_session_healthcheck_latest.json"
     if not json_path.exists():
-        return "(preopen healthcheck JSON not found yet — run run_preopen_session_healthcheck.bat)"
+        return "(preopen healthcheck JSON not found yet - run run_preopen_session_healthcheck.bat)"
     try:
         payload = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -1543,7 +1544,7 @@ def _format_preopen_scheduled_sessions() -> str:
     ]
     if not task_checks:
         return (
-            f"(no scheduled-session (task_*) checks in latest report | "
+            f"(no active/scheduled session (task_*) checks in latest report | "
             f"ts={ts_ist} | overall={overall})"
         )
 
@@ -1576,6 +1577,7 @@ def _format_preopen_scheduled_sessions() -> str:
         "DISABLED": 5,
     }
     counts: Dict[str, int] = {}
+    hidden_disabled = 0
     rows: list[tuple[int, str, str, str]] = []
     for check in task_checks:
         status = str(check.get("status", "") or "").upper()
@@ -1584,19 +1586,28 @@ def _format_preopen_scheduled_sessions() -> str:
         session = name[len("task_"):] if name.startswith("task_") else name
         b = _bucket(status, detail.lower())
         counts[b] = counts.get(b, 0) + 1
+        if b == "DISABLED":
+            hidden_disabled += 1
+            continue
         rows.append((bucket_order.get(b, 99), b, session, detail))
     rows.sort(key=lambda r: (r[0], r[2].lower()))
 
     summary_parts = [f"{k}={counts.get(k, 0)}" for k in bucket_order if counts.get(k)]
     summary = " | ".join(summary_parts) if summary_parts else "no sessions"
 
-    bucket_w = max(len(r[1]) for r in rows)
-    session_w = max(len(r[2]) for r in rows)
-
     out: list[str] = []
     out.append(f"preopen_healthcheck | ts_ist={ts_ist} | overall={overall}")
-    out.append(f"scheduled_sessions={len(task_checks)} | {summary}")
-    out.append(f"rows_shown={len(rows)} (scheduled only)")
+    out.append(
+        f"active_or_scheduled_sessions={len(rows)} | "
+        f"total_task_checks={len(task_checks)} | hidden_disabled={hidden_disabled} | {summary}"
+    )
+    out.append(f"rows_shown={len(rows)} (active/scheduled only)")
+    if not rows:
+        out.append("(no active or scheduled sessions found in latest report)")
+        return "\n".join(out)
+
+    bucket_w = max(len(r[1]) for r in rows)
+    session_w = max(len(r[2]) for r in rows)
     out.append(f"{'bucket':{bucket_w}s} | {'session':{session_w}s} | detail")
     out.append(f"{'-' * bucket_w}-+-{'-' * session_w}-+-{'-' * 3}")
     for _, bucket, session, detail in rows:
@@ -1853,12 +1864,26 @@ _LIVE_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
 ]
 
 
+def _normalize_cli_auth_value(value: str) -> str:
+    text = (value or "").strip()
+    text = text.replace('\\"', '"')
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    return text
+
+
 class LogDashboardHandler(BaseHTTPRequestHandler):
     server_version = "EQIDV2LogDashboard/1.0"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
+
+        if parsed.path == "/favicon.ico":
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            return
 
         if not self._authorized(params):
             self._unauthorized()
@@ -1908,7 +1933,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     def _authorized(self, params: Dict[str, list[str]]) -> bool:
         api_token = getattr(self.server, "api_token", "") or ""
-        provided_token = (params.get("token") or [""])[0]
+        provided_token = _normalize_cli_auth_value((params.get("token") or [""])[0])
         if api_token and provided_token and provided_token == api_token:
             return True
 
@@ -2156,13 +2181,153 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       --shadow-soft: 0 8px 20px rgba(0, 0, 0, 0.2);
     }
 
+    body[data-theme="dark"] .snapshot-value,
+    body[data-theme="dark"] .health-pill strong,
+    body[data-theme="dark"] .name,
+    body[data-theme="dark"] .timeline-time,
+    body[data-theme="dark"] .section-title,
+    body[data-theme="dark"] h1 {
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .snapshot-note,
+    body[data-theme="dark"] .compact-desc,
+    body[data-theme="dark"] .meta,
+    body[data-theme="dark"] .toolbar-note,
+    body[data-theme="dark"] .sub,
+    body[data-theme="dark"] .section-note,
+    body[data-theme="dark"] .timeline-note,
+    body[data-theme="dark"] .timeline-name,
+    body[data-theme="dark"] .timeline-status,
+    body[data-theme="dark"] .snapshot-label,
+    body[data-theme="dark"] .kill-meta {
+      color: #cbd5e1;
+    }
+
+    body[data-theme="dark"] .health-pill,
+    body[data-theme="dark"] .snapshot-tile,
+    body[data-theme="dark"] .filter-chip,
+    body[data-theme="dark"] .theme-toggle,
+    body[data-theme="dark"] .card-toggle,
+    body[data-theme="dark"] .section-note,
+    body[data-theme="dark"] .search-input {
+      background: #1d2632;
+      color: #d7e0ec;
+    }
+
+    body[data-theme="dark"] .search-input::placeholder {
+      color: #94a3b8;
+    }
+
+    body[data-theme="dark"] .filter-chip.is-active,
+    body[data-theme="dark"] .section-jump.is-active,
+    body[data-theme="dark"] .card-toggle.is-active,
+    body[data-theme="dark"] .pin-toggle.is-pinned {
+      border-color: #60a5fa;
+      background: #2563eb;
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .restart-btn,
+    body[data-theme="dark"] .section-jump,
+    body[data-theme="dark"] .theme-toggle,
+    body[data-theme="dark"] .filter-chip,
+    body[data-theme="dark"] .card-toggle {
+      border-color: #4b5b70;
+    }
+
+    body[data-theme="dark"] .mini-badge {
+      background: #202b38;
+      color: #dbeafe;
+      border-color: #3b4a5d;
+    }
+
+    body[data-theme="dark"] .mini-badge.ok {
+      color: #6ee7b7;
+      background: rgba(16, 185, 129, 0.16);
+    }
+
+    body[data-theme="dark"] .mini-badge.warn {
+      color: #fcd34d;
+      background: rgba(245, 158, 11, 0.16);
+    }
+
+    body[data-theme="dark"] .mini-badge.bad {
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.16);
+    }
+
+    body[data-theme="dark"] .log-table td {
+      color: #f8fafc;
+      background: #111a2b;
+    }
+
+    body[data-theme="dark"] .log-table th {
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .th-sort-btn {
+      color: #ffffff !important;
+    }
+
+    body[data-theme="dark"] .table-summary {
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .table-meta,
+    body[data-theme="dark"] .sort-mark {
+      color: #cbd5e1;
+    }
+
+    body[data-theme="dark"] pre {
+      color: #f8fafc;
+    }
+
+    body[data-theme="dark"] pre.log-empty {
+      color: #d1d9e6;
+    }
+
+    body[data-theme="dark"] .timeline-step {
+      background: #171e28;
+    }
+
+    body[data-theme="dark"] .timeline-step.is-now {
+      background: #243247;
+      box-shadow: inset 0 0 0 1px #4b5b70;
+    }
+
+    body[data-theme="dark"] .timeline-step.is-now .timeline-time,
+    body[data-theme="dark"] .timeline-step.is-now .timeline-name {
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .timeline-step.is-now .timeline-status {
+      background: #111827;
+      color: #f8fafc;
+      border-color: #64748b;
+    }
+
+    body[data-theme="dark"] .card-head {
+      background: linear-gradient(180deg, #1d2632, #171e28);
+    }
+
     * { box-sizing: border-box; }
+
+    html {
+      overflow-x: hidden;
+      min-width: 0;
+    }
 
     body {
       margin: 0;
       min-height: 100vh;
       color: var(--text);
       font-family: "Inter", "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
       background:
         linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(238, 242, 247, 0.96)),
         var(--bg);
@@ -2180,7 +2345,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       position: sticky;
       top: 0;
       z-index: 20;
-      padding: 12px 16px;
+      padding: 14px 16px 12px;
       border-bottom: 1px solid var(--line);
       background: rgba(248, 250, 252, 0.94);
       backdrop-filter: blur(14px);
@@ -2194,8 +2359,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .topbar {
       display: grid;
       grid-template-columns: minmax(220px, 1fr) auto;
-      gap: 14px;
-      align-items: start;
+      gap: 16px;
+      align-items: center;
+      min-width: 0;
     }
 
     .title-block {
@@ -2204,23 +2370,26 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     h1 {
       margin: 0;
-      font-size: 20px;
+      font-size: 21px;
       font-weight: 800;
       letter-spacing: 0;
+      line-height: 1.2;
     }
 
     .sub {
       margin-top: 4px;
       font-size: 12px;
       color: var(--muted);
+      line-height: 1.35;
     }
 
     .top-actions {
       display: flex;
-      gap: 8px;
+      gap: 9px;
       align-items: center;
       justify-content: flex-end;
       flex-wrap: wrap;
+      min-width: 0;
     }
 
     .health-strip {
@@ -2228,6 +2397,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       align-items: center;
       gap: 8px;
       margin-top: 10px;
+      flex-wrap: wrap;
+      max-width: 100%;
       overflow-x: auto;
       scrollbar-width: thin;
     }
@@ -2281,6 +2452,88 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       gap: 10px;
       margin-top: 11px;
       flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .mini-status-bar {
+      position: sticky;
+      top: 0;
+      z-index: 19;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 100%;
+      overflow-x: auto;
+      padding: 7px 16px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow-soft);
+      scrollbar-width: thin;
+    }
+
+    .mini-status-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--muted-strong);
+      font-size: 11px;
+      font-weight: 750;
+      padding: 4px 8px;
+    }
+
+    .mini-status-item strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    body[data-density="compact"] .snapshot-grid {
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 7px;
+    }
+
+    body[data-density="compact"] .snapshot-tile {
+      min-height: 52px;
+      padding: 7px 9px;
+    }
+
+    body[data-density="compact"] .snapshot-value {
+      font-size: 17px;
+    }
+
+    body[data-density="compact"] .wrap {
+      grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+      gap: 8px;
+      padding: 10px;
+    }
+
+    body[data-density="compact"] .card-head {
+      padding: 7px 9px;
+    }
+
+    body[data-density="compact"] .name {
+      font-size: 12px;
+    }
+
+    body[data-density="compact"] .mini-badge,
+    body[data-density="compact"] .compact-desc,
+    body[data-density="compact"] .card-toggle,
+    body[data-density="compact"] .restart-btn {
+      font-size: 10px;
+    }
+
+    body[data-density="compact"] pre,
+    body[data-density="compact"] .table-shell {
+      max-height: 140px;
+      font-size: 10px;
+    }
+
+    body[data-density="focus"] .card:not(.is-bad):not(.is-warn) {
+      display: none;
     }
 
     .toolbar-main {
@@ -2288,6 +2541,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
+      flex: 1 1 auto;
       min-width: 0;
     }
 
@@ -2323,6 +2577,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .search-input {
       width: min(320px, 42vw);
       min-width: 180px;
+      flex: 1 1 260px;
+      max-width: 420px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
@@ -2343,6 +2599,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       align-items: center;
       gap: 7px;
       flex-wrap: wrap;
+      min-width: 0;
     }
 
     .filter-chip {
@@ -2367,6 +2624,52 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       border-color: rgba(37, 99, 235, 0.55);
       background: #eff6ff;
       color: #1d4ed8;
+    }
+
+    .section-nav {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      max-width: 100%;
+      margin-top: 10px;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-width: thin;
+    }
+
+    .section-jump {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--muted-strong);
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 750;
+      box-shadow: none;
+      white-space: nowrap;
+    }
+
+    .section-jump:hover {
+      transform: none;
+      border-color: rgba(37, 99, 235, 0.42);
+      background: var(--surface-strong);
+      box-shadow: none;
+    }
+
+    .section-jump.is-active {
+      border-color: rgba(37, 99, 235, 0.55);
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .section-jump strong {
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
     }
 
     .restart-all-btn {
@@ -2435,6 +2738,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       padding: 8px 12px;
       border-radius: var(--radius);
       font-size: 13px;
+      line-height: 1;
+      min-height: 34px;
       cursor: pointer;
       transition: transform 0.14s ease, box-shadow 0.14s ease;
       box-shadow: var(--shadow-soft);
@@ -2445,31 +2750,50 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       box-shadow: var(--shadow);
     }
 
+    button:focus-visible,
+    .search-input:focus-visible,
+    select:focus-visible,
+    input:focus-visible {
+      outline: 0;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16), var(--shadow-soft);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.62;
+      transform: none;
+      box-shadow: none;
+    }
+
     .wrap {
       max-width: 1600px;
+      width: 100%;
       margin: 0 auto;
-      padding: 14px;
+      padding: 14px 16px 18px;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr));
+      gap: 12px;
+      min-width: 0;
     }
 
     .snapshot-grid {
       max-width: 1600px;
+      width: 100%;
       margin: 12px auto 0;
-      padding: 0 14px;
+      padding: 0 16px;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      min-width: 0;
     }
 
     .snapshot-tile {
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
-      padding: 9px 11px;
+      padding: 11px 12px;
       box-shadow: var(--shadow-soft);
-      min-height: 64px;
+      min-height: 72px;
     }
 
     .snapshot-label {
@@ -2503,7 +2827,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .snapshot-tile.is-info { border-left: 3px solid color-mix(in srgb, var(--scheduled) 55%, var(--line)); }
 
     .timeline-panel {
-      margin-top: 10px;
+      width: 100%;
+      max-width: 100%;
+      margin-top: 12px;
       border: 1px solid rgba(69, 196, 255, 0.22);
       border-color: var(--line);
       border-radius: var(--radius);
@@ -2512,13 +2838,22 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       box-shadow: var(--shadow-soft);
     }
 
+    .timeline-panel.is-collapsed .timeline-track {
+      display: none;
+    }
+
+    .timeline-panel.is-collapsed .timeline-head {
+      border-bottom: 0;
+    }
+
     .timeline-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      padding: 8px 11px;
+      padding: 9px 12px;
       border-bottom: 1px solid var(--line);
+      min-width: 0;
     }
 
     .timeline-title {
@@ -2533,22 +2868,24 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       font-size: 11px;
       color: var(--muted);
       white-space: nowrap;
+      min-width: 0;
     }
 
     .timeline-track {
       display: grid;
       grid-auto-flow: column;
-      grid-auto-columns: minmax(128px, 1fr);
+      grid-auto-columns: minmax(136px, 1fr);
       gap: 1px;
       overflow-x: auto;
       scrollbar-width: thin;
       background: var(--line);
+      overscroll-behavior-x: contain;
     }
 
     .timeline-step {
       position: relative;
-      min-height: 74px;
-      padding: 10px 10px 9px 12px;
+      min-height: 78px;
+      padding: 11px 11px 10px 12px;
       background: var(--surface);
       border-top: 2px solid var(--line-strong);
     }
@@ -2600,12 +2937,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       justify-content: space-between;
       gap: 12px;
       position: relative;
-      padding: 8px 12px 8px 14px;
+      padding: 10px 12px 10px 14px;
       border: 1px solid transparent;
       border-radius: var(--radius);
       border-bottom-color: var(--line);
       background: transparent;
       box-shadow: none;
+      scroll-margin-top: 176px;
     }
 
     .section-banner::before {
@@ -2664,11 +3002,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .section-note {
       font-size: 11px;
       color: var(--muted);
-      white-space: nowrap;
+      white-space: normal;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
       padding: 2px 7px;
+      max-width: 100%;
     }
 
     .card {
@@ -2680,7 +3019,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       box-shadow: var(--shadow-soft);
       animation: cardIn 0.33s ease both;
       transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
-      min-height: 112px;
+      min-height: 128px;
+      min-width: 0;
     }
 
     .card:hover {
@@ -2728,18 +3068,37 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       border-bottom: 1px solid var(--line);
     }
     .card.is-log-hidden pre,
-    .card.is-log-hidden .table-shell,
-    .card.is-log-hidden .kill-shell {
+    .card.is-log-hidden .table-shell {
       display: none;
     }
     .card.is-log-hidden .card-head {
       border-bottom: 0;
     }
 
-    .card.is-fullscreen.is-log-hidden pre,
-    .card.is-fullscreen.is-log-hidden .table-shell,
-    .card.is-fullscreen.is-log-hidden .kill-shell {
+    .card.is-log-hidden::after {
+      content: "Log collapsed";
       display: block;
+      margin: -1px 12px 12px;
+      padding: 7px 10px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-strong);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .card.is-fullscreen.is-log-hidden pre,
+    .card.is-fullscreen.is-log-hidden .table-shell {
+      display: block;
+    }
+
+    .card.is-fullscreen.is-log-hidden::after {
+      display: none;
+    }
+
+    .card.is-disabled-compact.is-log-hidden::after {
+      display: none;
     }
 
     .card.is-expanded .card-head {
@@ -2751,7 +3110,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       justify-content: space-between;
       align-items: flex-start;
       gap: 10px;
-      padding: 9px 11px;
+      padding: 11px 12px;
       border-bottom: 1px solid var(--line);
       background: linear-gradient(180deg, var(--surface), var(--bg-soft));
     }
@@ -2773,7 +3132,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       overflow-wrap: anywhere;
       line-height: 1.25;
       display: -webkit-box;
-      -webkit-line-clamp: 1;
+      -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
@@ -2883,7 +3242,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       flex-shrink: 0;
       flex-wrap: wrap;
       justify-content: flex-end;
-      max-width: 132px;
+      max-width: 148px;
     }
 
     .card-toggle {
@@ -2891,9 +3250,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       color: var(--muted-strong);
       font-weight: 700;
       background: var(--surface);
-      padding: 4px 7px;
+      padding: 0 7px;
       border-radius: var(--radius);
       font-size: 11px;
+      min-width: 30px;
+      min-height: 28px;
       cursor: pointer;
       box-shadow: none;
       transition: border-color 0.14s ease, background 0.14s ease;
@@ -2927,14 +3288,17 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .restart-btn {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      justify-content: center;
+      gap: 0;
       border: 1px solid rgba(37, 99, 235, 0.25);
       background: color-mix(in srgb, var(--scheduled) 10%, var(--surface));
       color: var(--scheduled);
       font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-      padding: 3px 8px;
+      font-weight: 750;
+      letter-spacing: 0;
+      min-width: 30px;
+      min-height: 28px;
+      padding: 0 7px;
       border-radius: var(--radius);
       cursor: pointer;
       box-shadow: none;
@@ -2964,6 +3328,24 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       display: inline-block;
       font-size: 13px;
       line-height: 1;
+    }
+
+    .restart-btn .restart-label {
+      display: none;
+    }
+
+    .restart-btn.is-busy,
+    .restart-btn.is-ok,
+    .restart-btn.is-err {
+      min-width: 82px;
+      gap: 5px;
+      padding: 0 8px;
+    }
+
+    .restart-btn.is-busy .restart-label,
+    .restart-btn.is-ok .restart-label,
+    .restart-btn.is-err .restart-label {
+      display: inline;
     }
 
     .restart-btn.is-busy .restart-icon {
@@ -3070,12 +3452,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     pre {
       margin: 0;
-      padding: 9px 10px;
+      padding: 10px 11px;
       white-space: pre;
       word-break: normal;
       font-size: 11px;
       line-height: 1.4;
-      max-height: 190px;
+      max-height: 210px;
       overflow-x: auto;
       overflow-y: auto;
       font-family: "Consolas", "Lucida Console", monospace;
@@ -3099,10 +3481,41 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       font-style: italic;
     }
 
+    .empty-state {
+      display: grid;
+      place-items: center;
+      min-height: 74px;
+      color: #aab7c8;
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          color-mix(in srgb, var(--log-bg) 94%, #ffffff),
+          color-mix(in srgb, var(--log-bg) 94%, #ffffff) 10px,
+          var(--log-bg) 10px,
+          var(--log-bg) 20px
+        );
+      font-family: "Consolas", "Lucida Console", monospace;
+      font-size: 11px;
+      border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    }
+
+    .empty-state strong {
+      color: var(--log-text);
+      font-size: 12px;
+    }
+
+    .empty-state span {
+      display: block;
+      margin-top: 3px;
+      color: #94a3b8;
+      font-size: 10px;
+      text-align: center;
+    }
+
     .table-shell {
       margin: 0;
-      padding: 7px;
-      max-height: 190px;
+      padding: 8px;
+      max-height: 210px;
       overflow-x: auto;
       overflow-y: auto;
       font-family: "Consolas", "Lucida Console", monospace;
@@ -3112,6 +3525,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       color: var(--log-text);
       tab-size: 4;
       scrollbar-gutter: stable both-edges;
+      border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
     }
 
     .table-summary,
@@ -3121,8 +3535,14 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     .table-summary {
-      color: var(--text);
+      display: grid;
+      gap: 2px;
+      color: #dbeafe;
       margin-bottom: 6px;
+      padding: 6px 7px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: var(--radius);
+      background: rgba(15, 23, 42, 0.72);
     }
 
     .table-meta {
@@ -3140,10 +3560,29 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     .log-table th,
     .log-table td {
       border: 1px solid var(--line);
-      padding: 2px 5px;
+      padding: 3px 6px;
       white-space: nowrap;
       text-align: left;
       background: color-mix(in srgb, var(--log-bg) 88%, #ffffff);
+    }
+
+    .log-table tbody tr:nth-child(even) td {
+      background: color-mix(in srgb, var(--log-bg) 82%, #ffffff);
+    }
+
+    .log-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .log-table td.pos {
+      color: #86efac;
+      font-weight: 700;
+    }
+
+    .log-table td.neg {
+      color: #fca5a5;
+      font-weight: 700;
     }
 
     .log-table thead th {
@@ -3151,6 +3590,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       top: 0;
       z-index: 1;
       background: var(--log-head);
+      box-shadow: 0 1px 0 var(--line);
     }
 
     .th-sort-btn {
@@ -3237,17 +3677,185 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       to { opacity: 1; transform: translateY(0); }
     }
 
+    @media (max-width: 960px) {
+      .topbar {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+        width: 100%;
+        max-width: 100%;
+      }
+
+      .toolbar {
+        align-items: stretch;
+      }
+
+      .toolbar-main,
+      .toolbar-controls {
+        width: 100%;
+      }
+    }
+
     @media (max-width: 720px) {
-      h1 { font-size: 18px; }
-      .topbar { grid-template-columns: 1fr; }
-      .top-actions { justify-content: flex-start; }
-      .search-input { width: 100%; min-width: 0; }
-      .timeline-track { grid-auto-columns: minmax(118px, 70%); }
-      .snapshot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 10px; }
-      .wrap { grid-template-columns: 1fr; padding: 10px; gap: 10px; }
-      .card-head { padding: 9px 10px; }
-      pre { max-height: 250px; }
-      .table-shell { max-height: 250px; }
+      header {
+        padding: 12px 10px 10px;
+      }
+
+      h1 {
+        font-size: 18px;
+      }
+
+      .top-actions > button,
+      .top-actions .theme-toggle,
+      .top-actions .filter-chip {
+        width: 100%;
+        min-width: 0;
+        justify-content: center;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-height: 32px;
+        padding: 7px 8px;
+        font-size: 12px;
+      }
+
+      .top-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        overflow: visible;
+        gap: 6px;
+      }
+
+      .restart-all-btn {
+        justify-content: center;
+      }
+
+      .health-strip,
+      .filter-bar,
+      .mini-status-bar {
+        display: flex;
+        flex-wrap: nowrap;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        gap: 6px;
+      }
+
+      .mini-status-bar {
+        position: static;
+        padding: 8px 10px;
+      }
+
+      .toolbar-main {
+        align-items: stretch;
+      }
+
+      .search-input {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        flex-basis: 100%;
+      }
+
+      .filter-chip,
+      .health-pill,
+      .mini-status-item {
+        width: auto;
+        flex: 0 0 auto;
+        justify-content: center;
+        min-height: 28px;
+        padding-left: 6px;
+        padding-right: 6px;
+      }
+
+      .section-nav {
+        margin-top: 8px;
+      }
+
+      .section-jump {
+        min-height: 28px;
+        padding: 5px 9px;
+      }
+
+      .timeline-head {
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+
+      .timeline-note {
+        white-space: normal;
+      }
+
+      .timeline-track {
+        grid-auto-columns: minmax(134px, 64vw);
+      }
+
+      .snapshot-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding: 0 10px;
+        gap: 8px;
+      }
+
+      .snapshot-tile {
+        min-height: 74px;
+        padding: 10px;
+      }
+
+      .wrap {
+        grid-template-columns: minmax(0, 1fr);
+        padding: 10px;
+        gap: 10px;
+      }
+
+      .section-banner {
+        flex-wrap: wrap;
+        align-items: flex-start;
+        padding: 10px 10px 10px 13px;
+      }
+
+      .card-head {
+        padding: 10px;
+      }
+
+      .card-head-right {
+        max-width: 112px;
+      }
+
+      .mini-badge {
+        white-space: normal;
+      }
+
+      pre {
+        max-height: 250px;
+        font-size: 10.5px;
+      }
+
+      .table-shell {
+        max-height: 250px;
+      }
+    }
+
+    @media (max-width: 360px) {
+      .snapshot-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .top-actions > button,
+      .top-actions .theme-toggle,
+      .top-actions .filter-chip {
+        grid-column: 1 / -1;
+      }
+
+      .health-strip,
+      .filter-bar,
+      .mini-status-bar {
+        gap: 5px;
+      }
     }
   </style>
 </head>
@@ -3261,6 +3869,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       <div class="top-actions">
         <button id="refreshBtn" onclick="loadNow()" title="Refresh dashboard now">Refresh</button>
         <button type="button" class="theme-toggle" id="themeToggle" title="Switch dashboard theme">Theme</button>
+        <button type="button" class="theme-toggle" id="timelineToggle" title="Show or hide timeline">Timeline</button>
+        <button type="button" class="theme-toggle" id="densityToggle" title="Switch dashboard density">Comfort</button>
         <button type="button" class="filter-chip" id="problemsFirstBtn" title="Keep pinned and problem cards at the top">Problems First</button>
         <button type="button" class="restart-all-btn" id="restartAllBtn"
                 title="Restart all managed sessions (sequential 3-step escalation per session)">
@@ -3279,8 +3889,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         <div class="toolbar-note">Auto refresh 15s</div>
       </div>
     </div>
+    <div class="section-nav" id="sectionNav"></div>
     <div class="timeline-panel" id="todayTimeline"></div>
   </header>
+  <div class="mini-status-bar" id="miniStatusBar"></div>
   <div class="snapshot-grid" id="opsSnapshot"></div>
   <div class="wrap" id="cards"></div>
 
@@ -3344,7 +3956,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "paper_trade_v16_5min": "V16 5min Papertrade Runner Log",
       "kite_trade_v16_5min": "V16 5min Live Trade Runner Log",
       "live_combined_csv_v15_new_persistent": "Live combined (short+long) V15 new persistent scanner",
-      "live_combined_csv_id_5min_v7_persistent": "Live scanner v7 ID 5mins",
+      "live_combined_csv_id_5min_v7_persistent": "Legacy V7 Scanner",
       "signal_discovery_v7_5min_id": "Signal discovery v7 5mins ID",
       "candidate_tickers_v7_5min_id": "Candidate tickers",
       "entry_engine_1min_v5_id": "Entry engine 1min v7 ID",
@@ -3373,15 +3985,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     };
     const ACTIVE_GROUPS = [
       {
+        key: "market",
+        nav: "Market",
         title: "Market Data Readiness",
         accent: "market",
         ids: [
           "nifty_guard_fetch_v16_5min",
-          "eod_5min_data",
-          "live_combined_csv_id_5min_v7_persistent"
+          "eod_5min_data"
         ]
       },
       {
+        key: "v7",
+        nav: "V7 Flow",
         title: "Core V7 Live Flow",
         accent: "v7",
         ids: [
@@ -3397,6 +4012,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         ]
       },
       {
+        key: "backtesting",
+        nav: "Backtesting",
         title: "Data & Backtesting",
         accent: "research",
         ids: [
@@ -3405,6 +4022,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         ]
       },
       {
+        key: "research",
+        nav: "Research",
         title: "Research & Suggestions",
         accent: "research",
         ids: [
@@ -3412,6 +4031,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         ]
       },
       {
+        key: "v16",
+        nav: "V16",
         title: "V16 / Parallel Strategy",
         accent: "v16",
         ids: [
@@ -3430,6 +4051,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         ]
       },
       {
+        key: "admin",
+        nav: "Admin",
         title: "Admin & Exports",
         accent: "admin",
         ids: [
@@ -3445,7 +4068,6 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const SESSION_TIMELINE = [
       { time: "09:00", id: "authentication_v2", label: "Auth" },
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
-      { time: "09:09", id: "live_combined_csv_id_5min_v7_persistent", label: "V7 Live Scanner" },
       { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
       { time: "09:17", id: "v7_research_layer", label: "V7 Research Layer" },
       { time: "09:20", id: "signal_discovery_v7_5min_id", label: "Signal Discovery" },
@@ -3464,6 +4086,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     let SEARCH_QUERY = localStorage.getItem("eqidv2_dashboard_search") || "";
     let PROBLEMS_FIRST = localStorage.getItem("eqidv2_problems_first") === "1";
     let DASHBOARD_THEME = localStorage.getItem("eqidv2_dashboard_theme") || "light";
+    let TIMELINE_COLLAPSED = localStorage.getItem("eqidv2_timeline_collapsed") === "1";
+    let DASHBOARD_DENSITY = localStorage.getItem("eqidv2_dashboard_density") || "comfort";
     function readJsonLocalStorage(key, fallback) {
       try {
         const raw = localStorage.getItem(key);
@@ -3474,7 +4098,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         return fallback;
       }
     }
-    let LOG_HIDDEN_BY_CARD = readJsonLocalStorage("eqidv2_log_hidden_by_card", {});
+    localStorage.removeItem("eqidv2_log_hidden_by_card");
+    let LOG_HIDDEN_BY_CARD = {};
     let LOG_EXPANDED_BY_CARD = readJsonLocalStorage("eqidv2_log_expanded_by_card", {});
     let PINNED_CARDS = readJsonLocalStorage("eqidv2_pinned_cards", {});
     const FILTERS = [
@@ -3520,6 +4145,14 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       document.body.setAttribute("data-theme", theme);
       const btn = document.getElementById("themeToggle");
       if (btn) btn.textContent = theme === "dark" ? "Light" : "Dark";
+    }
+
+    function applyDensity() {
+      const allowed = new Set(["comfort", "compact", "focus"]);
+      const density = allowed.has(DASHBOARD_DENSITY) ? DASHBOARD_DENSITY : "comfort";
+      document.body.setAttribute("data-density", density);
+      const btn = document.getElementById("densityToggle");
+      if (btn) btn.textContent = density === "comfort" ? "Comfort" : (density === "compact" ? "Compact" : "Focus");
     }
 
     function esc(s) {
@@ -3611,6 +4244,35 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (el) el.innerHTML = html;
     }
 
+    function renderMiniStatus(items, serverTime) {
+      const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
+      let candidates = 0;
+      let liveRows = 0;
+      let paperRows = 0;
+      for (const item of (items || [])) {
+        const id = String((item && item.id) || "");
+        const bucket = statusBucket(item && item.status ? item.status.status : "");
+        counts[bucket] = (counts[bucket] || 0) + 1;
+        if (id === "candidate_tickers_v7_5min_id" && item.status) {
+          candidates = Number(item.status.total_candidates || 0) || rowsShownFromTail(item.tail);
+        }
+        if (id.includes("papertrade") || id.includes("paper_trade")) paperRows += rowsShownFromTail(item.tail);
+        if (id.includes("kite_trades") || id.includes("live_kite") || id.includes("live_signals")) liveRows += rowsShownFromTail(item.tail);
+      }
+      const item = (label, value) => `<span class="mini-status-item"><strong>${esc(String(value))}</strong>${esc(label)}</span>`;
+      const time = String(serverTime || "").split(" ").slice(-1)[0] || "-";
+      const html = [
+        item("Problems", counts.bad),
+        item("Watch", counts.warn),
+        item("Candidates", candidates),
+        item("Live Rows", liveRows),
+        item("Paper Rows", paperRows),
+        item("Refresh", time)
+      ].join("");
+      const el = document.getElementById("miniStatusBar");
+      if (el) el.innerHTML = html;
+    }
+
     function renderOpsSnapshot(items) {
       const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
       let fresh = 0;
@@ -3692,6 +4354,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       const completed = Math.max(0, activeIdx + 1);
       const el = document.getElementById("todayTimeline");
       if (!el) return;
+      el.classList.toggle("is-collapsed", TIMELINE_COLLAPSED);
       el.innerHTML = `
         <div class="timeline-head">
           <div class="timeline-title">Today Timeline</div>
@@ -3701,8 +4364,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       `;
     }
 
-    function isLogHidden(cardId) {
-      return !!LOG_HIDDEN_BY_CARD[cardId];
+    function isLogHidden(cardId, item) {
+      if (!cardId) return false;
+      if (LOG_HIDDEN_BY_CARD[cardId]) return true;
+      if (LOG_EXPANDED_BY_CARD[cardId]) return false;
+      return false;
     }
 
     function setLogHidden(cardId, hidden) {
@@ -3716,6 +4382,39 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       }
       localStorage.setItem("eqidv2_log_hidden_by_card", JSON.stringify(LOG_HIDDEN_BY_CARD));
       localStorage.setItem("eqidv2_log_expanded_by_card", JSON.stringify(LOG_EXPANDED_BY_CARD));
+    }
+
+    function sectionDomId(key) {
+      return `section-${String(key || "other").replace(/[^a-z0-9_-]/gi, "-").toLowerCase()}`;
+    }
+
+    function renderSectionNav(items) {
+      const el = document.getElementById("sectionNav");
+      if (!el) return;
+      const visible = (items || []).filter((it) => it && it.count > 0);
+      if (!visible.length) {
+        el.innerHTML = "";
+        return;
+      }
+      el.innerHTML = visible.map((it, idx) => `
+        <button type="button" class="section-jump${idx === 0 ? " is-active" : ""}" data-section-target="${esc(sectionDomId(it.key))}">
+          ${esc(it.label)} <strong>${esc(String(it.count))}</strong>
+        </button>
+      `).join("");
+    }
+
+    function wireSectionNav() {
+      const buttons = document.querySelectorAll("#sectionNav .section-jump");
+      buttons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.getAttribute("data-section-target") || "";
+          const target = id ? document.getElementById(id) : null;
+          if (!target) return;
+          buttons.forEach((b) => b.classList.remove("is-active"));
+          btn.classList.add("is-active");
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
     }
 
     function cardMatchesFilter(id, item, requestedFilter) {
@@ -3732,6 +4431,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const terms = query.split(/\\s+/).filter(Boolean);
         if (!terms.every((term) => haystack.includes(term))) return false;
       }
+      if (DASHBOARD_DENSITY === "focus" && bucket !== "bad" && bucket !== "warn") return false;
       if (filter === "all") return true;
       if (filter === "problem") return bucket === "bad";
       if (filter === "watch") return bucket === "warn";
@@ -3815,6 +4515,35 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       });
     }
 
+    function wireTimelineControl() {
+      const btn = document.getElementById('timelineToggle');
+      if (!btn) return;
+      btn.textContent = TIMELINE_COLLAPSED ? "Timeline +" : "Timeline -";
+      if (btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        TIMELINE_COLLAPSED = !TIMELINE_COLLAPSED;
+        localStorage.setItem("eqidv2_timeline_collapsed", TIMELINE_COLLAPSED ? "1" : "0");
+        btn.textContent = TIMELINE_COLLAPSED ? "Timeline +" : "Timeline -";
+        const panel = document.getElementById("todayTimeline");
+        if (panel) panel.classList.toggle("is-collapsed", TIMELINE_COLLAPSED);
+      });
+    }
+
+    function wireDensityControl() {
+      applyDensity();
+      const btn = document.getElementById('densityToggle');
+      if (!btn || btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        const order = ["comfort", "compact", "focus"];
+        const idx = order.indexOf(DASHBOARD_DENSITY);
+        DASHBOARD_DENSITY = order[(idx + 1 + order.length) % order.length];
+        localStorage.setItem("eqidv2_dashboard_density", DASHBOARD_DENSITY);
+        applyDensity();
+      });
+    }
+
     function parseLocalDate(raw) {
       const text = String(raw || "").trim();
       if (!text || text === "-") return null;
@@ -3884,9 +4613,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     function renderPinButton(cardId) {
       const pinned = isPinned(cardId);
-      const label = pinned ? "Pinned" : "Pin";
+      const label = pinned ? "★" : "☆";
       const cls = pinned ? "card-toggle pin-toggle is-pinned" : "card-toggle pin-toggle";
-      return `<button type="button" class="${cls}" data-pin-id="${esc(cardId)}" title="${label} card">${label}</button>`;
+      return `<button type="button" class="${cls}" data-pin-id="${esc(cardId)}" title="${pinned ? "Unpin" : "Pin"} card">${label}</button>`;
     }
 
     function uniqueSorted(arr) {
@@ -3951,6 +4680,20 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     function isTickerColumn(header) {
       return String(header || "").trim().toLowerCase() === "ticker";
+    }
+
+    function tableCellClass(header, value) {
+      const h = String(header || "").toLowerCase();
+      const text = String(value ?? "").trim();
+      const numeric = Number.isFinite(parseNumberish(text)) && !isTickerColumn(header);
+      const cls = [];
+      if (numeric) cls.push("num");
+      if (numeric && (/^[+-]/.test(text) || /(pnl|chg|change|pct|%|return)/i.test(h))) {
+        const n = parseNumberish(text);
+        if (n > 0) cls.push("pos");
+        if (n < 0) cls.push("neg");
+      }
+      return cls.join(" ");
     }
 
     function parseTabularTail(tailText) {
@@ -4040,7 +4783,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         </th>
       `).join("");
       const bodyHtml = rows.map((cells) => `
-        <tr>${parsed.headers.map((_, i) => `<td>${esc(cells[i] ?? "")}</td>`).join("")}</tr>
+        <tr>${parsed.headers.map((h, i) => `<td class="${esc(tableCellClass(h, cells[i]))}">${esc(cells[i] ?? "")}</td>`).join("")}</tr>
       `).join("");
 
       hostEl.innerHTML = `
@@ -4342,6 +5085,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const data = await res.json();
         document.getElementById('info').textContent = `server ${data.server_time} | auto refresh every 15s`;
         renderHealthSummary(data.items || []);
+        renderMiniStatus(data.items || [], data.server_time);
         renderOpsSnapshot(data.items || []);
 
         const byId = {};
@@ -4380,13 +5124,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const visibleActiveOrdered = activeOrdered.filter((id) => cardMatchesFilter(id, byId[id] || { status: {} }));
         const visibleDisabledOrdered = disabledOrdered.filter((id) => cardMatchesFilter(id, byId[id] || { status: {} }));
 
-        function renderSectionBanner(title, note, disabled, accent) {
+        function renderSectionBanner(title, note, disabled, accent, sectionKey) {
           const cls = ["section-banner", disabled ? "is-disabled" : "", accent || ""].filter(Boolean).join(" ");
           const action = disabled
             ? `<button type="button" class="section-action" id="disabledSectionToggle">${DISABLED_SECTION_MINIMIZED ? "Show disabled" : "Hide disabled"}</button>`
             : "";
           return `
-            <div class="${cls}">
+            <div class="${cls}" id="${esc(sectionDomId(sectionKey || title))}">
               <div class="section-left">
                 <div class="section-title">${esc(title)}</div>
                 <div class="section-note">${esc(note)}</div>
@@ -4413,16 +5157,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const cardCls = cardStatusClass(status);
           const isFs = FULLSCREEN_ID === id ? " is-fullscreen" : "";
           const disabledCompact = isDisabled && FULLSCREEN_ID !== id ? " is-disabled-compact" : "";
-          const logHidden = isLogHidden(id);
+          const logHidden = isLogHidden(id, it);
           const logHiddenClass = logHidden ? " is-log-hidden" : "";
           const expandedClass = logHidden ? "" : " is-expanded";
-          const toggleLabel = FULLSCREEN_ID === id ? "Min" : "Max";
+          const toggleLabel = FULLSCREEN_ID === id ? "▣" : "□";
           const toggleCls = FULLSCREEN_ID === id ? "card-toggle is-active" : "card-toggle";
-          const logToggleLabel = logHidden ? "Open" : "Close";
+          const logToggleLabel = logHidden ? "▾" : "▴";
           const logToggleCls = logHidden ? "card-toggle log-toggle is-hidden" : "card-toggle log-toggle";
           const killControls = renderKillControls(it.id, killSnapshot);
           const logText = it.tail || (it.exists ? "(empty)" : "(log file not found yet)");
           const isEmptyLog = /\\((empty|no rows yet|log file not found yet)\\)/i.test(String(logText).trim());
+          const emptyLabel = it.exists ? "No rows yet" : "Log file not found";
+          const emptyHint = it.exists ? "Waiting for the next write" : "Waiting for this session to create output";
           return `
             <div class="${cardCls}${isFs}${disabledCompact}${logHiddenClass}${expandedClass}" data-id="${esc(id)}" style="animation-delay:${Math.min(idx * 0.05, 0.55)}s">
               <div class="card-head">
@@ -4433,19 +5179,20 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 </div>
                 <div class="card-head-right">
                   ${renderPinButton(it.id)}
-                  <button type="button" class="${toggleCls}" data-toggle-id="${esc(id)}">${toggleLabel}</button>
-                  <button type="button" class="${logToggleCls}" data-log-id="${esc(id)}">${logToggleLabel}</button>
+                  <button type="button" class="${toggleCls}" data-toggle-id="${esc(id)}" title="${FULLSCREEN_ID === id ? "Exit fullscreen" : "Maximize"}">${toggleLabel}</button>
+                  <button type="button" class="${logToggleCls}" data-log-id="${esc(id)}" title="${logHidden ? "Show log" : "Hide log"}">${logToggleLabel}</button>
                   ${renderRestartButton(it.id)}
                   <div>${statusBadge(status)}</div>
                 </div>
               </div>
               ${killControls}
-              <pre class="${isEmptyLog ? "log-empty" : ""}">${esc(logText)}</pre>
+              ${isEmptyLog ? `<div class="empty-state"><div><strong>${esc(emptyLabel)}</strong><span>${esc(emptyHint)}</span></div></div>` : `<pre>${esc(logText)}</pre>`}
             </div>
           `;
         }
 
         const sections = [];
+        const navItems = [];
         let renderIdx = 0;
         if (visibleActiveOrdered.length) {
           const used = new Set();
@@ -4453,12 +5200,14 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             const groupIds = group.ids.filter((id) => visibleActiveOrdered.includes(id));
             if (!groupIds.length) continue;
             groupIds.forEach((id) => used.add(id));
-            sections.push(renderSectionBanner(group.title, `${groupIds.length} active/scheduled`, false, group.accent));
+            navItems.push({ key: group.key, label: group.nav || group.title, count: groupIds.length });
+            sections.push(renderSectionBanner(group.title, `${groupIds.length} active/scheduled`, false, group.accent, group.key));
             sections.push(groupIds.map((id) => renderCard(id, renderIdx++)).join(''));
           }
           const otherActive = visibleActiveOrdered.filter((id) => !used.has(id));
           if (otherActive.length) {
-            sections.push(renderSectionBanner("Other Active / Scheduled", `${otherActive.length} cards`, false, "other"));
+            navItems.push({ key: "other", label: "Other", count: otherActive.length });
+            sections.push(renderSectionBanner("Other Active / Scheduled", `${otherActive.length} cards`, false, "other", "other"));
             sections.push(otherActive.map((id) => renderCard(id, renderIdx++)).join(''));
           }
         }
@@ -4467,7 +5216,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const note = (DISABLED_SECTION_MINIMIZED && !forceShowDisabled)
             ? `${visibleDisabledOrdered.length} card(s) hidden`
             : `${visibleDisabledOrdered.length} card(s)`;
-          sections.push(renderSectionBanner("Disabled", note, true, "admin"));
+          navItems.push({ key: "disabled", label: "Disabled", count: visibleDisabledOrdered.length });
+          sections.push(renderSectionBanner("Disabled", note, true, "admin", "disabled"));
           if (forceShowDisabled || !DISABLED_SECTION_MINIMIZED) {
             sections.push(visibleDisabledOrdered.map((id) => renderCard(id, renderIdx++)).join(''));
           }
@@ -4484,6 +5234,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         }
 
         const html = sections.join('');
+        renderSectionNav(navItems);
+        wireSectionNav();
 
         const cards = document.getElementById('cards');
         cards.innerHTML = html;
@@ -4513,7 +5265,10 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
     }
 
     applyTheme();
+    applyDensity();
     wireThemeControl();
+    wireTimelineControl();
+    wireDensityControl();
     wireSearchControl();
     wireProblemsFirstControl();
     wireRestartAllControl();
@@ -5475,9 +6230,9 @@ def main() -> int:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     httpd = ThreadingHTTPServer((args.host, args.port), LogDashboardHandler)
-    httpd.username = args.username
-    httpd.password = args.password
-    httpd.api_token = args.api_token
+    httpd.username = _normalize_cli_auth_value(args.username)
+    httpd.password = _normalize_cli_auth_value(args.password)
+    httpd.api_token = _normalize_cli_auth_value(args.api_token)
 
     mode = "NO AUTH"
     if args.username and args.password:

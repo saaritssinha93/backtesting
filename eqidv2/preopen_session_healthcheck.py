@@ -25,6 +25,35 @@ BAT_DIR = BASE_DIR / "bat"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 V15_NEW_TASK = "EQIDV2_live_combined_csv_v15_new_0900"
 
+DASHBOARD_SESSION_TASKS = (
+    "EQIDV2_log_dashboard_start_0855",
+    "EQIDV2_authentication_v2_0900",
+    "EQIDV2_eod_5mins_data_0900",
+    "EQIDV2_eod_15mins_data_0900",
+    "EQIDV2_live_combined_csv_v15_new_0900",
+    "EQIDV2_avwap_paper_trade_v15_0900",
+    "EQIDV2_avwap_live_trade_v15_0905",
+    "EQIDV2_nifty_guard_fetch_v15_0915",
+    "EQIDV2_paper_trade_id_5min_v7_0900",
+    "EQIDV2_live_trade_id_5min_v7_0900",
+    "EQIDV2_live_combined_csv_v16_5min_0900",
+    "EQIDV2_signal_early_engine_v16_5min_0900",
+    "EQIDV2_pending_data_fetcher_v16_5min_0900",
+    "EQIDV2_detection_engine_v16_5min_0900",
+    "EQIDV2_paper_trade_v16_5min_0900",
+    "EQIDV2_live_trade_v16_5min_0900",
+    "EQIDV2_nifty_guard_fetch_v16_5min_0915",
+    "EQIDV2_signal_discovery_v7_5mins_ID",
+    "EQIDV2_entry_engine_1min_v5_ID",
+    "EQIDV2_v7_research_layer_0917",
+    "EQIDV2_data_for_backtesting_1545",
+    "EQIDV2_backtesting_result_v7_v8_1600",
+    "EQIDV2_suggestions_v7_live_research_1615",
+    "EQIDV2_kite_export_start_0915",
+    "EQIDV2_preopen_session_healthcheck_0905",
+    "EQIDV2_eod_1540_update_1540",
+)
+
 
 @dataclass
 class CheckResult:
@@ -267,6 +296,24 @@ def _extract_value(lines: List[str], prefix: str) -> str:
     return ""
 
 
+def _task_scheduled_time(task_name: str) -> Optional[dt.time]:
+    suffix = task_name.rsplit("_", 1)[-1]
+    if len(suffix) != 4 or not suffix.isdigit():
+        return None
+    hh = int(suffix[:2])
+    mm = int(suffix[2:])
+    if hh > 23 or mm > 59:
+        return None
+    return dt.time(hh, mm)
+
+
+def _task_should_have_run_today(task_name: str, now_local: dt.datetime) -> bool:
+    scheduled = _task_scheduled_time(task_name)
+    if scheduled is None:
+        return False
+    return now_local.time() >= scheduled
+
+
 def check_task_ran_today(task_name: str) -> CheckResult:
     out = _run_schtasks_query(task_name)
     label = f"task_{task_name}"
@@ -330,14 +377,20 @@ def check_task_enabled_state(
             return CheckResult(label, "PASS", inactive_detail)
         return CheckResult(label, "FAIL", f"task not enabled (state={state or 'N/A'})")
 
+    today_dmy = now_ist().strftime("%d-%m-%Y")
     if not require_run_today:
+        if last_run.startswith(today_dmy):
+            return CheckResult(
+                label,
+                "PASS",
+                f"ran today | status={status or 'N/A'} | last_run={last_run} | next_run={next_run or 'N/A'}",
+            )
         return CheckResult(
             label,
             "PASS",
             f"enabled | status={status or 'N/A'} | next_run={next_run or 'N/A'} | last_run={last_run or 'N/A'}",
         )
 
-    today_dmy = now_ist().strftime("%d-%m-%Y")
     if not last_run.startswith(today_dmy):
         never_ran = last_run.startswith("30-11-1999") or last_run.startswith("N/A")
         if never_ran:
@@ -398,70 +451,18 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     v15_nifty_log_due = now_local.time() >= dt.time(9, 15)
     v16_5min_nifty_log_due = now_local.time() >= dt.time(9, 15)
 
-    # Scheduled tasks expected to have run by 09:05.
-    preopen_tasks = [
-        "EQIDV2_log_dashboard_start_0855",
-        "EQIDV2_authentication_v2_0900",
-    ]
-    if eod_15min_enabled:
-        preopen_tasks.append("EQIDV2_eod_15mins_data_0900")
-    for task in preopen_tasks:
-        checks.append(check_task_ran_today(task))
-
-    checks.append(
-        check_task_enabled_state(
-            V15_NEW_TASK,
-            f"task_{V15_NEW_TASK}",
-            require_run_today=True,
-            inactive_ok=True,
-            inactive_detail="session not enabled",
+    # Dashboard scheduled sessions. Future slots are reported as waiting; past
+    # enabled slots must have a same-day scheduler run.
+    for task in DASHBOARD_SESSION_TASKS:
+        checks.append(
+            check_task_enabled_state(
+                task,
+                f"task_{task}",
+                require_run_today=_task_should_have_run_today(task, now_local),
+                inactive_ok=True,
+                inactive_detail="session not enabled",
+            )
         )
-    )
-    checks.append(
-        check_task_enabled_state(
-            "EQIDV2_avwap_paper_trade_v15_0900",
-            "task_EQIDV2_avwap_paper_trade_v15_0900",
-            require_run_today=True,
-            inactive_ok=True,
-            inactive_detail="session not enabled",
-        )
-    )
-    checks.append(
-        check_task_enabled_state(
-            "EQIDV2_avwap_live_trade_v15_0905",
-            "task_EQIDV2_avwap_live_trade_v15_0905",
-            require_run_today=True,
-            inactive_ok=True,
-            inactive_detail="session not enabled",
-        )
-    )
-    checks.append(
-        check_task_enabled_state(
-            "EQIDV2_nifty_guard_fetch_v15_0915",
-            "task_EQIDV2_nifty_guard_fetch_v15_0915",
-            require_run_today=False,
-            inactive_ok=True,
-            inactive_detail="session not enabled",
-        )
-    )
-    checks.append(
-        check_task_enabled_state(
-            "EQIDV2_nifty_guard_fetch_v16_5min_0915",
-            "task_EQIDV2_nifty_guard_fetch_v16_5min_0915",
-            require_run_today=False,
-            inactive_ok=True,
-            inactive_detail="session not enabled",
-        )
-    )
-    checks.append(
-        check_task_enabled_state(
-            "EQIDV2_kite_export_start_0915",
-            "task_EQIDV2_kite_export_start_0915",
-            require_run_today=False,
-            inactive_ok=True,
-            inactive_detail="session not enabled",
-        )
-    )
 
     # Dashboard sessions mapped 1:1 to live cards.
     checks.append(
