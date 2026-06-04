@@ -47,7 +47,7 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_entry_engine_1min_v5_ID",
     "EQIDV2_v7_research_layer_0917",
     "EQIDV2_data_for_backtesting_1545",
-    "EQIDV2_backtesting_result_v7_v8_1600",
+    "EQIDV2_backtesting_result_v11_1600",
     "EQIDV2_suggestions_v7_live_research_1615",
     "EQIDV2_kite_export_start_0915",
     "EQIDV2_preopen_session_healthcheck_0905",

@@ -106,7 +106,7 @@ LOG_FILES: Dict[str, str] = {
     "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID/heartbeat/entry_engine.status.json",
     "v7_research_layer":                "live_research_v7_research_layer/latest/latest_summary.json",
     "data_for_backtesting":             "data_for_backtesting_latest.log",
-    "backtesting_result_v7_v8":          "backtesting_result_v7_v8_latest.log",
+    "backtesting_result_v11":            "backtesting_result_v11_latest.log",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.log",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.log",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.log",
@@ -194,7 +194,7 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "kite_trade_id_5min_v7": ("\\EQIDV2_live_trade_id_5min_v7_0900",),
     "live_kite_trades_csv_id_5min_v7": ("\\EQIDV2_live_trade_id_5min_v7_0900",),
     "data_for_backtesting": ("\\EQIDV2_data_for_backtesting_1545",),
-    "backtesting_result_v7_v8": ("\\EQIDV2_backtesting_result_v7_v8_1600",),
+    "backtesting_result_v11": ("\\EQIDV2_backtesting_result_v11_1600",),
     "paper_trade_v15": ("\\EQIDV2_avwap_paper_trade_v15_0900",),
     "live_papertrade_result_csv_v15": ("\\EQIDV2_avwap_paper_trade_v15_0900",),
     "kite_trade_v15": ("\\EQIDV2_avwap_live_trade_v15_0905",),
@@ -231,6 +231,7 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
     "authentication_v2":             "run_authentication_v2.bat",
     "preopen_healthcheck":           "run_preopen_session_healthcheck.bat",
+    "backtesting_result_v11":        "run_backtesting_result_v11_1600.bat",
 }
 
 
@@ -1366,6 +1367,10 @@ def _fmt_rs(value: float) -> str:
     return f"Rs.{_fmt_indian_number(value, decimals=2, signed=True)}"
 
 
+def _fmt_rs_plain(value: float) -> str:
+    return f"Rs.{_fmt_indian_number(value, decimals=2, signed=False)}"
+
+
 def _compute_holding_total_pnl_pct(row: dict[str, str]) -> str:
     qty = _to_float_or_nan(_pick_csv_value(row, ("quantity", "qty")))
     t1_qty = _to_float_or_nan(_pick_csv_value(row, ("t1_quantity",)))
@@ -1512,6 +1517,256 @@ def _format_csv_projection(
         else:
             out_lines.append(total_line)
     return "\n".join(out_lines)
+
+
+def _fmt_price(value: float) -> str:
+    if math.isnan(value):
+        return ""
+    return _fmt_indian_number(value, decimals=2, signed=False)
+
+
+def _fmt_qty(value: float) -> str:
+    if math.isnan(value):
+        return ""
+    return _fmt_indian_number(value, decimals=0, signed=False)
+
+
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _format_fixed_table(
+    rows: Sequence[dict[str, str]],
+    columns: Sequence[str],
+    *,
+    rows_meta: str,
+    summary_lines: Sequence[str] = (),
+) -> str:
+    if not rows:
+        return "\n".join([*summary_lines, rows_meta, "(no rows yet)"])
+
+    widths: dict[str, int] = {}
+    for col_name in columns:
+        max_len = max([len(col_name)] + [len(str(r.get(col_name, ""))) for r in rows])
+        widths[col_name] = min(max_len, 30)
+
+    header = " | ".join(col_name.ljust(widths[col_name]) for col_name in columns)
+    sep = "-+-".join("-" * widths[col_name] for col_name in columns)
+    body = [
+        " | ".join(
+            _clip_text(str(row.get(col_name, "")), widths[col_name]).ljust(widths[col_name])
+            for col_name in columns
+        )
+        for row in rows
+    ]
+    return "\n".join([*summary_lines, rows_meta, header, sep, *body])
+
+
+def _parse_latest_live_pnl_line(log_path: Path) -> dict[str, Any]:
+    text = tail_text(log_path, lines=250, max_bytes=300_000)
+    out: dict[str, Any] = {"ticker_pnl": {}}
+    for line in reversed(text.splitlines()):
+        if "[LIVE.PNL]" not in line:
+            continue
+        out["raw_line"] = line
+        ts_match = re.match(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})", line)
+        if ts_match:
+            out["log_time"] = ts_match.group(1)
+        open_match = re.search(r"\[LIVE\.PNL\]\s+open=(\d+)", line)
+        if open_match:
+            out["open"] = int(open_match.group(1))
+
+        tickers_match = re.search(r"\|\s*tickers=(.*?)\s*\|\s*unrealized=", line)
+        ticker_pnl: dict[str, float] = {}
+        if tickers_match:
+            for part in tickers_match.group(1).split(","):
+                if "=" not in part:
+                    continue
+                ticker, raw_val = part.rsplit("=", 1)
+                ticker = ticker.strip().upper()
+                pnl = _to_float_or_nan(raw_val)
+                if ticker and not math.isnan(pnl):
+                    ticker_pnl[ticker] = float(pnl)
+        out["ticker_pnl"] = ticker_pnl
+
+        for key in ("unrealized", "realized", "total", "deployed_margin"):
+            match = re.search(rf"\|\s*{key}=([^|]+)", line)
+            if match:
+                val = _to_float_or_nan(match.group(1))
+                if not math.isnan(val):
+                    out[key] = float(val)
+        return out
+    return out
+
+
+def _read_signal_setup_map(today_ist: str) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for side in ("short", "long"):
+        path = LIVE_SIGNAL_DIR / f"signals_{today_ist}_id_5min_v7_{side}.csv"
+        for row in _read_csv_tail_rows(path, limit=5000):
+            signal_id = str(row.get("signal_id", "")).strip()
+            if signal_id:
+                out[signal_id] = row
+    return out
+
+
+def _paper_open_pnl_from_state(row: dict[str, Any]) -> float:
+    qty = _to_float_or_nan(str(row.get("quantity", "")))
+    entry = _to_float_or_nan(str(row.get("entry_price", "")))
+    ltp = _to_float_or_nan(str(row.get("last_ltp", "")))
+    side = str(row.get("side", "")).upper().strip()
+    if math.isnan(qty) or math.isnan(entry) or math.isnan(ltp) or ltp <= 0:
+        return float("nan")
+    if side == "SHORT":
+        return (entry - ltp) * qty
+    return (ltp - entry) * qty
+
+
+def _paper_pnl_pct(pnl_rs: float, entry_price: float, qty: float) -> float:
+    if math.isnan(pnl_rs) or math.isnan(entry_price) or math.isnan(qty):
+        return float("nan")
+    invested = entry_price * qty
+    if invested <= 0:
+        return float("nan")
+    return pnl_rs * 100.0 / invested
+
+
+def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
+    state_path = LIVE_SIGNAL_DIR / f"open_trades_state_{today_ist}_id_5min_v7.json"
+    paper_csv_path = LIVE_SIGNAL_DIR / f"paper_trades_{today_ist}_id_5min_v7.csv"
+    summary_path = LIVE_SIGNAL_DIR / "paper_trade_summary_id_5min_v7.json"
+
+    state_payload = _read_json_dict(state_path)
+    open_trades_raw = state_payload.get("open_trades", [])
+    open_trades = [r for r in open_trades_raw if isinstance(r, dict)]
+    signal_rows = _read_signal_setup_map(today_ist)
+    latest_pnl = _parse_latest_live_pnl_line(log_path)
+    ticker_pnl = latest_pnl.get("ticker_pnl", {})
+    if not isinstance(ticker_pnl, dict):
+        ticker_pnl = {}
+
+    rows: list[dict[str, str]] = []
+    open_pnl_values: list[tuple[str, float]] = []
+    for trade in open_trades:
+        ticker = str(trade.get("ticker", "")).upper().strip()
+        signal_id = str(trade.get("signal_id", "")).strip()
+        signal = signal_rows.get(signal_id, {})
+        qty = _to_float_or_nan(str(trade.get("quantity", "")))
+        entry = _to_float_or_nan(str(trade.get("entry_price", "")))
+        last_ltp = _to_float_or_nan(str(trade.get("last_ltp", "")))
+        pnl = _to_float_or_nan(str(ticker_pnl.get(ticker, ""))) if ticker else float("nan")
+        if math.isnan(pnl):
+            pnl = _paper_open_pnl_from_state(trade)
+        pnl_pct = _paper_pnl_pct(pnl, entry, qty)
+        if ticker and not math.isnan(pnl):
+            open_pnl_values.append((ticker, float(pnl)))
+        rows.append(
+            {
+                "state": "OPEN",
+                "ticker": ticker,
+                "side": str(trade.get("side", "")).upper(),
+                "setup": str(signal.get("setup", "")),
+                "qty": _fmt_qty(qty),
+                "entry": _fmt_price(entry),
+                "ltp_exit": _fmt_price(last_ltp),
+                "pnl_rs": _fmt_rs(pnl) if not math.isnan(pnl) else "",
+                "pnl_pct": _fmt_pct(pnl_pct) if not math.isnan(pnl_pct) else "",
+                "sl": _fmt_price(_to_float_or_nan(str(trade.get("stop_price", "")))),
+                "tgt": _fmt_price(_to_float_or_nan(str(trade.get("target_price", "")))),
+                "time": _extract_time_only(str(trade.get("entry_time", ""))),
+                "update": _extract_time_only(str(trade.get("last_ltp_time", state_payload.get("updated_at", "")))),
+            }
+        )
+
+    closed_rows = _read_csv_tail_rows(paper_csv_path, limit=20)
+    closed_pnl_total = 0.0
+    closed_count_for_pnl = 0
+    wins = losses = skipped = 0
+    for row in closed_rows:
+        outcome = str(row.get("outcome", "")).upper().strip()
+        pnl = _to_float_or_nan(row.get("pnl_rs", ""))
+        if not math.isnan(pnl):
+            closed_pnl_total += float(pnl)
+            closed_count_for_pnl += 1
+            if pnl > 0:
+                wins += 1
+            elif pnl < 0:
+                losses += 1
+        if "SKIP" in outcome:
+            skipped += 1
+        rows.append(
+            {
+                "state": outcome or "CLOSED",
+                "ticker": str(row.get("ticker", "")).upper(),
+                "side": str(row.get("side", "")).upper(),
+                "setup": str(row.get("setup", "")),
+                "qty": _fmt_qty(_to_float_or_nan(row.get("quantity", ""))),
+                "entry": _fmt_price(_to_float_or_nan(row.get("entry_price", ""))),
+                "ltp_exit": _fmt_price(_to_float_or_nan(row.get("exit_price", ""))),
+                "pnl_rs": _fmt_rs(pnl) if not math.isnan(pnl) else "",
+                "pnl_pct": _fmt_pct(_to_float_or_nan(row.get("pnl_pct", ""))) if row.get("pnl_pct") else "",
+                "sl": _fmt_price(_to_float_or_nan(row.get("stop_price", ""))),
+                "tgt": _fmt_price(_to_float_or_nan(row.get("target_price", ""))),
+                "time": _extract_time_only(str(row.get("entry_time", ""))),
+                "update": _extract_time_only(str(row.get("exit_time", ""))),
+            }
+        )
+
+    def _state_rank(row: dict[str, str]) -> tuple[int, float, str]:
+        state = row.get("state", "")
+        pnl = _to_float_or_nan(row.get("pnl_rs", ""))
+        pnl_sort = float(pnl) if not math.isnan(pnl) else 0.0
+        return (0 if state == "OPEN" else 1, pnl_sort, row.get("ticker", ""))
+
+    rows = sorted(rows, key=_state_rank)
+    columns = ("state", "ticker", "side", "setup", "qty", "entry", "ltp_exit", "pnl_rs", "pnl_pct", "sl", "tgt", "time", "update")
+
+    unrealized = latest_pnl.get("unrealized")
+    if not isinstance(unrealized, (int, float)):
+        unrealized = sum(v for _, v in open_pnl_values)
+    realized = latest_pnl.get("realized")
+    total = latest_pnl.get("total")
+    deployed = latest_pnl.get("deployed_margin")
+    summary_payload = _read_json_dict(summary_path)
+    if not isinstance(realized, (int, float)):
+        realized = _to_float_or_nan(str(summary_payload.get("total_pnl_rs", "")))
+    if not isinstance(total, (int, float)) and isinstance(unrealized, (int, float)) and isinstance(realized, (int, float)):
+        total = float(unrealized) + float(realized)
+
+    best = max(open_pnl_values, key=lambda x: x[1], default=("", float("nan")))
+    worst = min(open_pnl_values, key=lambda x: x[1], default=("", float("nan")))
+    updated = str(latest_pnl.get("log_time") or state_payload.get("updated_at") or "").strip()
+    open_count = latest_pnl.get("open", len(open_trades))
+    summary_lines = [
+        (
+            f"V7 ID 5min Papertrade | updated={updated or 'n/a'} | "
+            f"open={open_count} | realized={_fmt_rs(float(realized)) if isinstance(realized, (int, float)) and not math.isnan(float(realized)) else 'n/a'} | "
+            f"unrealized={_fmt_rs(float(unrealized)) if isinstance(unrealized, (int, float)) and not math.isnan(float(unrealized)) else 'n/a'} | "
+            f"total={_fmt_rs(float(total)) if isinstance(total, (int, float)) and not math.isnan(float(total)) else 'n/a'}"
+        ),
+        (
+            f"deployed_margin={_fmt_rs_plain(float(deployed)) if isinstance(deployed, (int, float)) and not math.isnan(float(deployed)) else 'n/a'} | "
+            f"closed_rows={len(closed_rows)} | wins={wins} | losses={losses} | skipped={skipped} | "
+            f"closed_csv_pnl={_fmt_rs(closed_pnl_total) if closed_count_for_pnl else 'n/a'}"
+        ),
+    ]
+    if open_pnl_values:
+        summary_lines.append(
+            f"worst_open={worst[0]} {_fmt_rs(worst[1])} | best_open={best[0]} {_fmt_rs(best[1])}"
+        )
+
+    return _format_fixed_table(
+        rows,
+        columns,
+        rows_meta=f"rows_shown={len(rows)} (open first by PnL, then latest closed)",
+        summary_lines=summary_lines,
+    )
 
 
 def _format_preopen_scheduled_sessions() -> str:
@@ -3912,7 +4167,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "live_kite_trades_csv_id_5min_v7",
       "kite_trade_id_5min_v7",
       "data_for_backtesting",
-      "backtesting_result_v7_v8",
+      "backtesting_result_v11",
       "signal_early_engine_v16_5min",
       "pending_signals_v16_5min",
       "pending_data_fetcher_v16_5min",
@@ -3968,7 +4223,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "live_kite_trades_csv_id_5min_v7": "V7 ID 5min Live Kite Trades CSV",
       "kite_trade_id_5min_v7": "V7 ID 5min Live Trade Runner Log",
       "data_for_backtesting": "Data for backtesting",
-      "backtesting_result_v7_v8": "Backtesting Result v7/v8",
+      "backtesting_result_v11": "Backtesting Result v11",
       "nifty_guard_fetch_v15": "NIFTY Fetch V15",
       "nifty_guard_fetch_v16_5min": "NIFTY Fetch 5min",
       "live_signals_csv_v15_new_short": "Live Entries CSV V15 Short New",
@@ -4018,7 +4273,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         accent: "research",
         ids: [
           "data_for_backtesting",
-          "backtesting_result_v7_v8"
+          "backtesting_result_v11"
         ]
       },
       {
@@ -4075,7 +4330,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:22", id: "paper_trade_id_5min_v7", label: "Papertrade TRUE" },
       { time: "09:22", id: "kite_trade_id_5min_v7", label: "Live Trade FALSE" },
       { time: "15:45", id: "data_for_backtesting", label: "Data for Backtesting" },
-      { time: "16:00", id: "backtesting_result_v7_v8", label: "Backtesting Result" },
+      { time: "16:00", id: "backtesting_result_v11", label: "Backtesting Result v11" },
       { time: "16:15", id: "v7_research_layer", label: "Suggestions v7 Research" },
       { time: "17:00", id: "", label: "Dashboard Close" }
     ];
@@ -4443,7 +4698,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (filter === "paper") return title.includes("paper");
       if (filter === "live") return title.includes("live") || title.includes("kite");
       if (filter === "research") {
-        return id === "v7_research_layer" || id === "backtesting_result_v7_v8" || id === "data_for_backtesting";
+        return id === "v7_research_layer" || id === "backtesting_result_v11" || id === "data_for_backtesting";
       }
       return true;
     }
@@ -5343,9 +5598,13 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 report = V7_RESEARCH_LAYER_LATEST_DIR / "latest_multi_window_suggestions.md"
                 projected = tail_text(report, lines=lines)
                 tail = projected if projected else tail_text(path, lines=lines)
-            elif key == "backtesting_result_v7_v8":
-                report = runtime_dir("backtesting_result_v7_v8", "latest", "latest_backtesting_result_v7_v8.md")
+            elif key == "backtesting_result_v11":
+                report = runtime_dir("backtesting_result_v11", "latest", "latest_backtesting_result_v11.md")
                 projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "paper_trade_id_5min_v7":
+                today_ist = dt.datetime.now(IST).date().isoformat()
+                projected = _format_v7_id_papertrade_runner_view(path, today_ist)
                 tail = projected if projected else tail_text(path, lines=lines)
             elif key in ("signal_early_engine_v16_5min", "pending_data_fetcher_v16_5min", "detection_engine_v16_5min"):
                 tail = _shift_bar_slots_in_text(tail_text(path, lines=lines))

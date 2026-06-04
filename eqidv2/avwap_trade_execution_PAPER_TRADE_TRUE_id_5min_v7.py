@@ -57,9 +57,10 @@ def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):  # n
     return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
 _socket.getaddrinfo = _ipv4_only_getaddrinfo
 
+import numpy as np
 import pandas as pd
 import pytz
-from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
+from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR, runtime_dir
 
 try:
     from watchdog.observers import Observer
@@ -74,6 +75,7 @@ except ImportError:
 IST = pytz.timezone("Asia/Kolkata")
 
 SIGNAL_DIR = str(RUNTIME_LIVE_SIGNALS_DIR)
+CANDIDATE_CSV_DIR = runtime_dir("signal_discovery_v7_5mins_ID", "csv")
 SIGNAL_CSV_PATTERNS = ("signals_{}_id_5min_v7_short.csv", "signals_{}_id_5min_v7_long.csv")
 PAPER_TRADE_LOG_PATTERN = "paper_trades_{}_id_5min_v7.csv"
 PAPER_TRADE_EXEC_LOG_PATTERN = "paper_trade_execution_{}_id_5min_v7.log"
@@ -91,9 +93,8 @@ FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe befo
 POLL_INTERVAL_SEC = 5
 LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
 # 0 or negative means unlimited worker threads (no executor-side cap).
-# M2 (2026-04-22): default aligned with live executor (10). Paper bat also sets
-# EQIDV2_PAPER_V7_ID_5MIN_MAX_CONCURRENT_TRADES=10 explicitly for uniformity.
-MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V7_ID_5MIN_MAX_CONCURRENT_TRADES", "10"))
+# V7 paper/research sessions need broad coverage across simultaneous setups.
+MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V7_ID_5MIN_MAX_CONCURRENT_TRADES", "100"))
 
 # ---------------------------------------------------------------------------
 # v8 research parity
@@ -413,8 +414,7 @@ DEFAULT_POSITION_SIZE = float(
 )
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
 
-# Exposure limits
-# Keep paper defaults aligned with the real v15 executor unless explicitly overridden.
+# Exposure limits for the broad V7 paper/research runner.
 RISK_LIMITS_ENABLED = str(
     os.getenv(
         "EQIDV2_PAPER_V7_ID_5MIN_ENABLE_RISK_LIMITS",
@@ -426,20 +426,35 @@ RISK_LIMITS_ENABLED = str(
     "yes",
     "on",
 }
-# M2 (2026-04-22): default aligned with live executor (10). See note in
-# EQIDV2_PAPER_V7_ID_5MIN_MAX_CONCURRENT_TRADES above.
 MAX_OPEN_POSITIONS = int(
     os.getenv(
         "EQIDV2_PAPER_V7_ID_5MIN_MAX_OPEN_POSITIONS",
-        os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "10"),
+        os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "100"),
     )
 )
 MAX_CAPITAL_DEPLOYED_RS = float(
     os.getenv(
         "EQIDV2_PAPER_V7_ID_5MIN_MAX_CAPITAL_DEPLOYED_RS",
-        os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "500000"),
+        os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "2000000"),
     )
 )
+
+# Research suggestions are promoted into PAPER_TRADE_TRUE first. These gates do
+# not affect live/scanner signal creation; they only log paper skip rows so the
+# next research session can prove or reject the idea.
+RESEARCH_PAPER_GATES_ENABLED = str(os.getenv("EQIDV2_PAPER_V7_RESEARCH_GATES_ENABLED", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ANTI_CHASE_LONG_CLOSE_LOC_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_CLOSE_LOC_MIN", "0.88"))
+ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN", "0.52"))
+B_AVWAP_RECLAIM_MIN_RANKER_SCORE = float(os.getenv("EQIDV2_PAPER_V7_B_AVWAP_MIN_RANKER_SCORE", "0.65"))
+RESEARCH_PAPER_GATE_VERSION = "v7_research_2026_06_03"
+
+_candidate_context_cache_lock = threading.Lock()
+_candidate_context_cache: Dict[str, Tuple[float, Dict[str, dict]]] = {}
 
 # Leave unset so quantity is taken from the signal row when present.
 _FORCE_ENTRY_QUANTITY_RAW = str(os.getenv("EQIDV7_ID_5MIN_FORCE_ENTRY_QUANTITY", "")).strip()
@@ -531,6 +546,12 @@ log = setup_logging()
 kite = None
 _ltp_last_error_by_ticker: Dict[str, str] = {}
 _ltp_error_lock = threading.Lock()
+_ltp_cache_by_ticker: Dict[str, Tuple[float, float]] = {}
+_ltp_cache_lock = threading.Lock()
+_ltp_batch_refresh_lock = threading.Lock()
+_ltp_last_batch_refresh_monotonic = 0.0
+LTP_CACHE_TTL_SEC = float(os.getenv("EQIDV2_LTP_CACHE_TTL_SEC", "2.0"))
+LTP_BATCH_MIN_INTERVAL_SEC = float(os.getenv("EQIDV2_LTP_BATCH_MIN_INTERVAL_SEC", "1.0"))
 
 
 def _normalize_ticker_symbol(ticker: str) -> str:
@@ -573,6 +594,46 @@ def get_last_ltp_error(ticker: str) -> str:
         return ""
     with _ltp_error_lock:
         return str(_ltp_last_error_by_ticker.get(key, ""))
+
+
+def _get_cached_ltp(ticker: str, max_age_sec: Optional[float] = None) -> Optional[float]:
+    key = _normalize_ticker_symbol(ticker)
+    if not key:
+        return None
+    max_age = max(0.1, float(max_age_sec if max_age_sec is not None else LTP_CACHE_TTL_SEC))
+    now_mono = time.monotonic()
+    with _ltp_cache_lock:
+        row = _ltp_cache_by_ticker.get(key)
+    if row is None:
+        return None
+    value, updated_mono = row
+    if now_mono - updated_mono <= max_age and value > 0:
+        return float(value)
+    return None
+
+
+def _cache_ltp_value(ticker: str, ltp: float) -> None:
+    key = _normalize_ticker_symbol(ticker)
+    if not key or ltp <= 0:
+        return
+    with _ltp_cache_lock:
+        _ltp_cache_by_ticker[key] = (float(ltp), time.monotonic())
+
+
+def _active_ltp_tickers(requested_ticker: str) -> List[str]:
+    tickers: Set[str] = set()
+    requested = _normalize_ticker_symbol(requested_ticker)
+    if requested:
+        tickers.add(requested)
+    try:
+        with active_positions_lock:
+            for pos in active_positions.values():
+                key = _normalize_ticker_symbol(str(pos.get("ticker", "")))
+                if key:
+                    tickers.add(key)
+    except NameError:
+        pass
+    return sorted(tickers)
 
 _kite_session_lock = threading.Lock()
 _kite_last_refresh_monotonic = 0.0
@@ -680,8 +741,90 @@ def _extract_ltp_from_payload(ticker: str, data: object, instruments: List[str])
     return None
 
 
+def _refresh_ltp_batch(tickers: Sequence[str]) -> bool:
+    global _ltp_last_batch_refresh_monotonic
+
+    normalized = sorted({_normalize_ticker_symbol(t) for t in tickers if _normalize_ticker_symbol(t)})
+    if not normalized:
+        return False
+
+    if kite is None:
+        setup_kite_session(reason="ltp_batch_refresh", force=False)
+        if kite is None:
+            for t in normalized:
+                _set_ltp_error(t, "kite_session_unavailable")
+            return False
+
+    now_mono = time.monotonic()
+    if now_mono - _ltp_last_batch_refresh_monotonic < max(0.1, LTP_BATCH_MIN_INTERVAL_SEC):
+        return False
+    _ltp_last_batch_refresh_monotonic = now_mono
+
+    ticker_to_instruments: Dict[str, List[str]] = {}
+    instruments: List[str] = []
+    seen_instruments: Set[str] = set()
+    for ticker in normalized:
+        candidates = _ltp_instrument_candidates(ticker)
+        if not candidates:
+            continue
+        ticker_to_instruments[ticker] = candidates
+        for inst in candidates:
+            if inst not in seen_instruments:
+                seen_instruments.add(inst)
+                instruments.append(inst)
+
+    if not instruments:
+        return False
+
+    def _apply_payload(payload: object) -> bool:
+        any_hit = False
+        for ticker, candidates in ticker_to_instruments.items():
+            ltp = _extract_ltp_from_payload(ticker, payload, candidates)
+            if ltp is not None:
+                _cache_ltp_value(ticker, float(ltp))
+                any_hit = True
+        return any_hit
+
+    try:
+        data = kite.ltp(instruments if len(instruments) > 1 else instruments[0])
+        return _apply_payload(data)
+    except Exception as e:
+        if _is_kite_auth_error(e) and _refresh_kite_session("ltp batch auth error", force=False) and kite is not None:
+            try:
+                data = kite.ltp(instruments if len(instruments) > 1 else instruments[0])
+                return _apply_payload(data)
+            except Exception as e2:
+                for t in normalized:
+                    _set_ltp_error(t, f"ltp_batch_error={e2}")
+        else:
+            for t in normalized:
+                _set_ltp_error(t, f"ltp_batch_error={e}")
+    return False
+
+
 def get_ltp(ticker: str) -> Optional[float]:
     """Get last traded price from Kite with NSE/BSE fallback."""
+    cached = _get_cached_ltp(ticker)
+    if cached is not None:
+        return cached
+
+    batch_tickers = _active_ltp_tickers(ticker)
+    if len(batch_tickers) >= 5:
+        acquired = _ltp_batch_refresh_lock.acquire(timeout=max(0.2, LTP_CACHE_TTL_SEC))
+        try:
+            cached = _get_cached_ltp(ticker)
+            if cached is not None:
+                return cached
+            if acquired:
+                _refresh_ltp_batch(batch_tickers)
+        finally:
+            if acquired:
+                _ltp_batch_refresh_lock.release()
+        cached = _get_cached_ltp(ticker, max_age_sec=max(LTP_CACHE_TTL_SEC * 2.0, 1.0))
+        if cached is not None:
+            return cached
+        return None
+
     if kite is None:
         setup_kite_session(reason=f"ltp_request ticker={ticker}", force=False)
         if kite is None:
@@ -695,6 +838,7 @@ def get_ltp(ticker: str) -> Optional[float]:
         data = kite.ltp(instruments if len(instruments) > 1 else instruments[0])
         ltp = _extract_ltp_from_payload(ticker, data, instruments)
         if ltp is not None:
+            _cache_ltp_value(ticker, float(ltp))
             return ltp
     except Exception as e:
         if _is_kite_auth_error(e) and _refresh_kite_session(f"ltp auth error ticker={ticker}", force=False) and kite is not None:
@@ -702,6 +846,7 @@ def get_ltp(ticker: str) -> Optional[float]:
                 data = kite.ltp(instruments if len(instruments) > 1 else instruments[0])
                 ltp = _extract_ltp_from_payload(ticker, data, instruments)
                 if ltp is not None:
+                    _cache_ltp_value(ticker, float(ltp))
                     return ltp
             except Exception as e2:
                 _set_ltp_error(ticker, f"ltp_error={e2}")
@@ -714,6 +859,7 @@ def get_ltp(ticker: str) -> Optional[float]:
         data_q = kite.quote(instruments)
         ltp = _extract_ltp_from_payload(ticker, data_q, instruments)
         if ltp is not None:
+            _cache_ltp_value(ticker, float(ltp))
             return ltp
         _set_ltp_error(ticker, f"no_valid_last_price candidates={','.join(instruments)}")
     except Exception as e:
@@ -722,6 +868,7 @@ def get_ltp(ticker: str) -> Optional[float]:
                 data_q = kite.quote(instruments)
                 ltp = _extract_ltp_from_payload(ticker, data_q, instruments)
                 if ltp is not None:
+                    _cache_ltp_value(ticker, float(ltp))
                     return ltp
             except Exception as e2:
                 _set_ltp_error(ticker, f"quote_error={e2}")
@@ -846,6 +993,243 @@ def _safe_int(value: object, default: int = 1) -> int:
         return parsed if parsed > 0 else int(default)
     except Exception:
         return int(default)
+
+
+def _normalise_signal_ts_text(value: object) -> str:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return str(value or "").strip()
+    ts = pd.Timestamp(parsed)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize(IST)
+    else:
+        ts = ts.tz_convert(IST)
+    offset = ts.strftime("%z")
+    return f"{ts.strftime('%Y-%m-%d %H:%M:%S')}{offset[:3]}:{offset[3:]}"
+
+
+def _signal_context_key(row: dict) -> str:
+    signal_time = (
+        row.get("signal_entry_datetime_ist")
+        or row.get("signal_bar_time_ist")
+        or row.get("signal_datetime")
+        or row.get("signal_time_ist")
+        or ""
+    )
+    return "|".join(
+        [
+            str(row.get("ticker", "")).strip().upper(),
+            str(row.get("side", "")).strip().upper(),
+            str(row.get("setup", "")).strip(),
+            _normalise_signal_ts_text(signal_time),
+        ]
+    )
+
+
+def _signal_day(signal: dict) -> str:
+    for key in ("signal_entry_datetime_ist", "signal_bar_time_ist", "signal_datetime", "signal_time_ist"):
+        ts = pd.to_datetime(signal.get(key, ""), errors="coerce")
+        if pd.notna(ts):
+            stamp = pd.Timestamp(ts)
+            if stamp.tzinfo is None:
+                stamp = stamp.tz_localize(IST)
+            else:
+                stamp = stamp.tz_convert(IST)
+            return stamp.strftime("%Y-%m-%d")
+    return _today_ist_str()
+
+
+def _candidate_context_for_day(day: str) -> Dict[str, dict]:
+    path = Path(CANDIDATE_CSV_DIR) / f"candidate_tickers_{day}.csv"
+    try:
+        mtime = path.stat().st_mtime if path.exists() else -1.0
+    except OSError:
+        mtime = -1.0
+    with _candidate_context_cache_lock:
+        cached = _candidate_context_cache.get(day)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+
+    mapping: Dict[str, dict] = {}
+    if mtime >= 0:
+        try:
+            df = pd.read_csv(path, low_memory=False)
+        except Exception as exc:
+            log.warning(f"[RESEARCH.GATE] candidate context read failed: {path} | {exc}")
+            df = pd.DataFrame()
+        if not df.empty:
+            for _, row in df.iterrows():
+                data = row.to_dict()
+                key = _signal_context_key(data)
+                if key.strip("|"):
+                    mapping[key] = data
+
+    with _candidate_context_cache_lock:
+        _candidate_context_cache[day] = (mtime, mapping)
+    return mapping
+
+
+def _enriched_signal_context(signal: dict) -> dict:
+    out = dict(signal)
+    if not RESEARCH_PAPER_GATES_ENABLED:
+        return out
+    lookup = _candidate_context_for_day(_signal_day(signal))
+    candidate = lookup.get(_signal_context_key(signal))
+    if not candidate:
+        return out
+    for col in (
+        "close_loc",
+        "vwap_dist_atr",
+        "ranker_score",
+        "ranker_model",
+        "vol_ratio",
+        "rs_pct",
+        "market_ret_pct",
+        "regime",
+        "research_shadow_status",
+        "research_shadow_reason",
+    ):
+        if col in candidate and str(out.get(col, "")).strip() == "":
+            out[col] = candidate.get(col)
+    return out
+
+
+def _research_paper_gate(signal: dict) -> Tuple[bool, str, str]:
+    if not RESEARCH_PAPER_GATES_ENABLED:
+        return False, "", ""
+    ctx = _enriched_signal_context(signal)
+    side = str(ctx.get("side", "")).strip().upper()
+    setup = str(ctx.get("setup", "")).strip().upper()
+    ticker = str(ctx.get("ticker", "")).strip().upper()
+    close_loc = _safe_float(ctx.get("close_loc", ""), float("nan"))
+    vwap_dist_atr = _safe_float(ctx.get("vwap_dist_atr", ""), float("nan"))
+    ranker_score = _safe_float(ctx.get("ranker_score", ""), float("nan"))
+
+    if (
+        side == "LONG"
+        and close_loc > ANTI_CHASE_LONG_CLOSE_LOC_MIN
+        and vwap_dist_atr > ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN
+    ):
+        return (
+            True,
+            "ENTRY_SKIPPED_RESEARCH_ANTI_CHASE_LONG",
+            (
+                f"[RESEARCH.GATE] Skipping {ticker} LONG {setup}: anti-chase paper gate "
+                f"close_loc={close_loc:.3f} > {ANTI_CHASE_LONG_CLOSE_LOC_MIN:.3f} and "
+                f"vwap_dist_atr={vwap_dist_atr:.3f} > {ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN:.3f} "
+                f"| version={RESEARCH_PAPER_GATE_VERSION}"
+            ),
+        )
+
+    if (
+        side == "LONG"
+        and setup == "B_AVWAP_RECLAIM_REVERSAL"
+        and np.isfinite(ranker_score)
+        and ranker_score < B_AVWAP_RECLAIM_MIN_RANKER_SCORE
+    ):
+        return (
+            True,
+            "ENTRY_SKIPPED_RESEARCH_B_AVWAP_RANKER_GATE",
+            (
+                f"[RESEARCH.GATE] Skipping {ticker} LONG {setup}: paper ranker gate "
+                f"ranker_score={ranker_score:.3f} < {B_AVWAP_RECLAIM_MIN_RANKER_SCORE:.3f} "
+                f"| version={RESEARCH_PAPER_GATE_VERSION}"
+            ),
+        )
+
+    return False, "", ""
+
+
+def _record_pre_entry_skip(
+    signal: dict,
+    outcome_name: str,
+    warning_message: str,
+    use_ltp: bool,
+    trade_start_ist: Optional[datetime] = None,
+    release_capacity: bool = False,
+    clear_active_trade: bool = False,
+) -> bool:
+    ticker = str(signal.get("ticker", "")).strip().upper()
+    side = str(signal.get("side", "")).strip().upper()
+    signal_id = str(signal.get("signal_id", "")).strip()
+    if not ticker or side not in {"LONG", "SHORT"} or not signal_id:
+        log.error(
+            f"[SIM] invalid skip payload; skipping | signal_id={signal_id} "
+            f"| ticker={ticker} | side={side} | outcome={outcome_name}"
+        )
+        if release_capacity:
+            _release_capacity(signal_id)
+        return False
+
+    signal_entry_price = _safe_float(signal.get("entry_price", 0.0), 0.0)
+    stop_price = _safe_float(signal.get("stop_price", 0.0), 0.0)
+    target_price = _safe_float(signal.get("target_price", 0.0), 0.0)
+    quantity = _safe_int(signal.get("quantity", 1), 1)
+    setup = str(signal.get("setup", ""))
+    impulse = str(signal.get("impulse_type", ""))
+    stop_price, target_price, _ = _candE4_per_setup_sl_tgt(
+        side,
+        setup,
+        signal_entry_price,
+        stop_price,
+        target_price,
+    )
+
+    entry_time_ist = trade_start_ist or datetime.now(IST)
+    exit_time_ist = datetime.now(IST)
+    trade_id_raw = str(signal.get("trade_id", "")).strip()
+    trade_id = trade_id_raw or f"PT-{signal_id[:8]}-{entry_time_ist.strftime('%H%M%S')}"
+
+    trade = PaperTrade(
+        trade_id=trade_id,
+        signal_id=signal_id,
+        signal_datetime=str(signal.get("signal_datetime", "")),
+        signal_entry_datetime_ist=str(signal.get("signal_entry_datetime_ist", "")),
+        entry_time=entry_time_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+        exit_time=exit_time_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+        ticker=ticker,
+        side=side,
+        setup=setup,
+        impulse_type=impulse,
+        quantity=quantity,
+        entry_price=round(signal_entry_price, 2),
+        exit_price=round(signal_entry_price, 2),
+        stop_price=round(stop_price, 2),
+        target_price=round(target_price, 2),
+        outcome=outcome_name,
+        pnl_rs=0.0,
+        pnl_pct=0.0,
+        quality_score=_safe_float(signal.get("quality_score", 0), 0.0),
+        p_win=_safe_float(signal.get("p_win", 0.0), 0.0),
+        confidence_multiplier=_safe_float(signal.get("confidence_multiplier", 1.0), 1.0),
+    )
+    _log_trade(trade)
+
+    with daily_pnl_lock:
+        daily_pnl["total"] += 0.0
+        daily_pnl["trades"] += 1
+        day_total = float(daily_pnl["total"])
+        day_wins = int(daily_pnl["wins"])
+        day_losses = int(daily_pnl["losses"])
+        _save_summary()
+
+    log.warning(warning_message)
+    log.info(
+        f"[SIM] RESULT {side} {ticker} | {outcome_name} | "
+        f"P&L: Rs.+0.00 (+0.00%) | Day total: Rs.{day_total:+,.2f} "
+        f"({day_wins}W/{day_losses}L)"
+    )
+
+    if release_capacity:
+        _release_capacity(signal_id)
+    with active_positions_lock:
+        active_positions.pop(signal_id, None)
+    if clear_active_trade:
+        with active_trades_lock:
+            active_trades.pop(signal_id, None)
+    _persist_open_trades_state()
+    _log_live_pnl_snapshot(use_ltp, source=f"skip:{ticker}")
+    return True
 
 
 def _today_ist_str() -> str:
@@ -1141,11 +1525,6 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
         if signal_id in capital_deployed:
             return False, "already_reserved_or_open", 0.0
 
-        # CAND-E4 G2: daily side cap.
-        g2_ok, g2_reason = _candE4_g2_check_and_increment(g1_side)
-        if not g2_ok:
-            return False, g2_reason, 0.0
-
         if RISK_LIMITS_ENABLED:
             open_count = len(capital_deployed)
             total_deployed = float(sum(capital_deployed.values()))
@@ -1162,6 +1541,12 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
                     ),
                     0.0,
                 )
+
+        # CAND-E4 G2: daily side cap. Increment only after capacity/margin
+        # checks pass so rejected signals do not consume quota.
+        g2_ok, g2_reason = _candE4_g2_check_and_increment(g1_side)
+        if not g2_ok:
+            return False, g2_reason, 0.0
 
         capital_deployed[signal_id] = margin
 
@@ -1250,52 +1635,15 @@ def simulate_trade(
     entry_retry_deadline = _entry_retry_deadline(signal, trade_start_ist, forced_close_dt)
 
     def _finalize_pre_entry_skip(outcome_name: str, warning_message: str) -> bool:
-        exit_time_ist = datetime.now(IST)
-        trade = PaperTrade(
-            trade_id=trade_id,
-            signal_id=signal_id,
-            signal_datetime=str(signal.get("signal_datetime", "")),
-            signal_entry_datetime_ist=str(signal.get("signal_entry_datetime_ist", "")),
-            entry_time=trade_start_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
-            exit_time=exit_time_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
-            ticker=ticker,
-            side=side,
-            setup=setup,
-            impulse_type=impulse,
-            quantity=quantity,
-            entry_price=round(signal_entry_price, 2),
-            exit_price=round(signal_entry_price, 2),
-            stop_price=round(stop_price, 2),
-            target_price=round(target_price, 2),
-            outcome=outcome_name,
-            pnl_rs=0.0,
-            pnl_pct=0.0,
-            quality_score=_safe_float(signal.get("quality_score", 0), 0.0),
-            p_win=_safe_float(signal.get("p_win", 0.0), 0.0),
-            confidence_multiplier=_safe_float(signal.get("confidence_multiplier", 1.0), 1.0),
+        return _record_pre_entry_skip(
+            signal=signal,
+            outcome_name=outcome_name,
+            warning_message=warning_message,
+            use_ltp=use_ltp,
+            trade_start_ist=trade_start_ist,
+            release_capacity=True,
+            clear_active_trade=True,
         )
-        _log_trade(trade)
-
-        with daily_pnl_lock:
-            daily_pnl["total"] += 0.0
-            daily_pnl["trades"] += 1
-            day_total = float(daily_pnl["total"])
-            day_wins = int(daily_pnl["wins"])
-            day_losses = int(daily_pnl["losses"])
-            _save_summary()
-
-        log.warning(warning_message)
-        log.info(
-            f"[SIM] RESULT {side} {ticker} | {outcome_name} | "
-            f"P&L: Rs.+0.00 (+0.00%) | Day total: Rs.{day_total:+,.2f} "
-            f"({day_wins}W/{day_losses}L)"
-        )
-
-        _release_capacity(signal_id)
-        with active_trades_lock:
-            active_trades.pop(signal_id, None)
-        _log_live_pnl_snapshot(use_ltp, source=f"skip:{ticker}")
-        return True
 
     if not resume_mode:
         try:
@@ -1410,12 +1758,17 @@ def simulate_trade(
                     f"| ltp={raw_entry:.2f}"
                 )
             else:
-                log.warning(
-                    f"[ENTRY.RETRY] Timed out for {ticker} {side} | signal_id={signal_id[:12]} "
-                    f"| signal={signal_entry_price:.2f} | "
-                    f"last_ltp={(float(waited_ltp) if waited_ltp else float(raw_entry)):.2f}"
+                last_ltp = float(waited_ltp) if waited_ltp else float(raw_entry)
+                return _finalize_pre_entry_skip(
+                    "ENTRY_SKIPPED_PRICE_NOT_NEAR",
+                    (
+                        f"[ENTRY.RETRY] Skipping {ticker} {side}: price did not return "
+                        f"within {ENTRY_RETRY_NEAR_ENTRY_PCT*100:.2f}% of signal entry "
+                        f"before freshness deadline {entry_retry_deadline.strftime('%H:%M:%S')} "
+                        f"| signal_id={signal_id[:12]} | signal={signal_entry_price:.2f} "
+                        f"| last_ltp={last_ltp:.2f}"
+                    ),
                 )
-                return False
 
     # --- Max entry slip gate ---
     # Reject signals where the actual fill price has already deviated too far from
@@ -1426,21 +1779,27 @@ def simulate_trade(
         if side == "LONG" and LONG_MAX_ENTRY_SLIP_PCT > 0.0:
             slip = (raw_entry - signal_entry_price) / signal_entry_price
             if slip > LONG_MAX_ENTRY_SLIP_PCT:
-                log.warning(
-                    f"[SLIP.GATE] REJECTED ticker={ticker} | side=LONG | signal_id={signal_id[:12]} | "
-                    f"model_trigger={signal_entry_price:.2f} | raw_entry={raw_entry:.2f} | "
-                    f"slip={slip*100:.2f}% > cap={LONG_MAX_ENTRY_SLIP_PCT*100:.2f}%"
+                return _finalize_pre_entry_skip(
+                    "ENTRY_SKIPPED_MAX_ENTRY_SLIP",
+                    (
+                        f"[SLIP.GATE] Skipping {ticker} LONG: live entry drifted beyond cap "
+                        f"| signal_id={signal_id[:12]} | model_trigger={signal_entry_price:.2f} "
+                        f"| raw_entry={raw_entry:.2f} | slip={slip*100:.2f}% "
+                        f"> cap={LONG_MAX_ENTRY_SLIP_PCT*100:.2f}%"
+                    ),
                 )
-                return False
         elif side == "SHORT" and SHORT_MAX_ENTRY_SLIP_PCT > 0.0:
             slip = (signal_entry_price - raw_entry) / signal_entry_price
             if slip > SHORT_MAX_ENTRY_SLIP_PCT:
-                log.warning(
-                    f"[SLIP.GATE] REJECTED ticker={ticker} | side=SHORT | signal_id={signal_id[:12]} | "
-                    f"model_trigger={signal_entry_price:.2f} | raw_entry={raw_entry:.2f} | "
-                    f"slip={slip*100:.2f}% > cap={SHORT_MAX_ENTRY_SLIP_PCT*100:.2f}%"
+                return _finalize_pre_entry_skip(
+                    "ENTRY_SKIPPED_MAX_ENTRY_SLIP",
+                    (
+                        f"[SLIP.GATE] Skipping {ticker} SHORT: live entry drifted beyond cap "
+                        f"| signal_id={signal_id[:12]} | model_trigger={signal_entry_price:.2f} "
+                        f"| raw_entry={raw_entry:.2f} | slip={slip*100:.2f}% "
+                        f"> cap={SHORT_MAX_ENTRY_SLIP_PCT*100:.2f}%"
+                    ),
                 )
-                return False
 
     if resume_mode:
         entry_price = _safe_float(signal.get("entry_price_exec", signal.get("entry_price", raw_entry)), raw_entry)
@@ -2334,8 +2693,51 @@ def process_new_signals(
             if signal_id in inflight_signals:
                 continue
 
+        signal = _enriched_signal_context(signal)
+        skip_by_research, skip_outcome, skip_message = _research_paper_gate(signal)
+        if skip_by_research:
+            if _record_pre_entry_skip(
+                signal=signal,
+                outcome_name=skip_outcome,
+                warning_message=skip_message + f" | signal_id={signal_id[:12]}",
+                use_ltp=use_ltp,
+                trade_start_ist=datetime.now(IST),
+                release_capacity=False,
+                clear_active_trade=False,
+            ):
+                with executed_lock:
+                    executed.add(signal_id)
+                    executed_changed = True
+            continue
+
         allowed, reason, reserved_margin = _reserve_capacity_for_signal(signal_id, signal)
         if not allowed:
+            now_ist = datetime.now(IST)
+            forced_close_dt = IST.localize(datetime.combine(now_ist.date(), FORCED_CLOSE_TIME))
+            entry_retry_deadline = _entry_retry_deadline(signal, now_ist, forced_close_dt)
+            if reason.startswith("max open positions reached") and _trade_started_after_entry_deadline(
+                now_ist,
+                entry_retry_deadline,
+            ):
+                if _record_pre_entry_skip(
+                    signal=signal,
+                    outcome_name="ENTRY_SKIPPED_CAPACITY_TIMEOUT",
+                    warning_message=(
+                        f"[CAPACITY] Skipping {signal.get('ticker', '?')} "
+                        f"{signal.get('side', '?')}: open-position limit stayed full "
+                        f"until freshness deadline {entry_retry_deadline.strftime('%H:%M:%S')} "
+                        f"| reason={reason} | signal_id={signal_id[:12]}"
+                    ),
+                    use_ltp=use_ltp,
+                    trade_start_ist=now_ist,
+                    release_capacity=False,
+                    clear_active_trade=False,
+                ):
+                    with executed_lock:
+                        executed.add(signal_id)
+                        executed_changed = True
+                continue
+
             log.warning(
                 f"[RISK] Rejecting {signal.get('side', '?')} "
                 f"{signal.get('ticker', '?')}: {reason}"

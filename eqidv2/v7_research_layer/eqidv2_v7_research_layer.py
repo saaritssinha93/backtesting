@@ -40,6 +40,8 @@ from eqidv2_runtime_paths import (
     RUNTIME_STATUS_DIR,
     runtime_dir,
 )
+import avwap_5min_ID_v7_candidate_scan as candidate_scan
+import eqidv2_v11_live_overlay as v11_live_overlay
 
 
 RESEARCH_ROOT = runtime_dir("live_research_v7_research_layer")
@@ -59,6 +61,35 @@ NIFTY_STATUS_FILE = REPO_ROOT / "logs" / "nifty_guard_fetcher_v16_5min.status"
 LIVE_5MIN_STATUS_JSON = REPO_ROOT / "logs" / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"
 LIVE_5MIN_SUPERVISOR_STATUS = REPO_ROOT / "logs" / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status"
 LIVE_5MIN_SLOT_READY_DIR = runtime_dir("slot_ready_5m")
+BACKTEST_RESULT_V11_ROOT = runtime_dir("backtesting_result_v11")
+
+
+def _v7_live_setup_universe() -> list[str]:
+    """Setups the current v7 live scanner can emit into the research layer."""
+    blocked_early = {
+        str(x).upper().strip()
+        for x in getattr(candidate_scan, "EARLY_BLOCKED_SETUPS", set())
+        if str(x).strip()
+    }
+    allowed = {
+        str(x).upper().strip()
+        for x in getattr(candidate_scan, "ALLOWED_SETUPS", set())
+        if str(x).strip()
+    }
+    excluded = {
+        str(x).upper().strip()
+        for x in getattr(candidate_scan, "EXCLUDED_SETUPS", set())
+        if str(x).strip()
+    }
+    v11_overlay = {
+        str(x).upper().strip()
+        for x in v11_live_overlay.v11_override_setup_universe(v11_live_overlay.DEFAULT_SELECTED_STRATEGY_PROFILE)
+        if str(x).strip()
+    }
+    return sorted((allowed - excluded - blocked_early) | v11_overlay)
+
+
+V7_LIVE_SETUP_UNIVERSE = _v7_live_setup_universe()
 
 
 for _p in (RESEARCH_ROOT, TRUTH_DIR, REPORT_DIR, LATEST_DIR, HEARTBEAT_DIR, RANKER_DIR, SUGGESTIONS_DIR, EXIT_LAB_DIR):
@@ -148,6 +179,19 @@ def _safe_float(value: Any, default: float = np.nan) -> float:
     return out if np.isfinite(out) else default
 
 
+def _bool_series(df: pd.DataFrame, col: str, default: bool = False) -> pd.Series:
+    if df.empty or col not in df.columns:
+        return pd.Series(default, index=df.index, dtype=bool)
+    raw = df[col]
+    if pd.api.types.is_bool_dtype(raw):
+        return raw.fillna(default).astype(bool)
+    text = raw.fillna("").astype(str).str.strip().str.lower()
+    true_values = {"1", "true", "t", "yes", "y"}
+    false_values = {"0", "false", "f", "no", "n", ""}
+    out = text.map(lambda v: True if v in true_values else (False if v in false_values else default))
+    return out.astype(bool)
+
+
 def _load_raw_candidates(day: str) -> pd.DataFrame:
     path = SIGNAL_DISCOVERY_CSV_DIR / f"raw_candidate_tickers_{day}.csv"
     df = _read_csv(path)
@@ -168,6 +212,24 @@ def _load_gated_candidates(day: str) -> pd.DataFrame:
 
 def _load_research_filter_rejections(day: str) -> pd.DataFrame:
     path = SIGNAL_DISCOVERY_CSV_DIR / f"research_filter_rejected_candidate_tickers_{day}.csv"
+    df = _read_csv(path)
+    if df.empty:
+        return df
+    df = _add_key(df, time_col="signal_time_ist")
+    return df.drop_duplicates(subset=["_research_key"], keep="last").reset_index(drop=True)
+
+
+def _load_v11_overlay_candidates(day: str) -> pd.DataFrame:
+    path = SIGNAL_DISCOVERY_CSV_DIR / f"v11_overlay_candidate_tickers_{day}.csv"
+    df = _read_csv(path)
+    if df.empty:
+        return df
+    df = _add_key(df, time_col="signal_time_ist")
+    return df.drop_duplicates(subset=["_research_key"], keep="last").reset_index(drop=True)
+
+
+def _load_v11_overlay_rejections(day: str) -> pd.DataFrame:
+    path = SIGNAL_DISCOVERY_CSV_DIR / f"v11_overlay_rejected_candidate_tickers_{day}.csv"
     df = _read_csv(path)
     if df.empty:
         return df
@@ -383,6 +445,8 @@ def build_truth_table(day: str) -> pd.DataFrame:
     raw = _load_raw_candidates(day)
     gated = _load_gated_candidates(day)
     research_filter_rejects = _load_research_filter_rejections(day)
+    v11_overlay = _load_v11_overlay_candidates(day)
+    v11_overlay_rejects = _load_v11_overlay_rejections(day)
     entry_raw = _load_entry_rows(day, raw=True)
     entry_selected = _load_entry_rows(day, raw=False)
     rejects = _load_entry_rejects(day)
@@ -390,13 +454,19 @@ def build_truth_table(day: str) -> pd.DataFrame:
     paper = _load_paper_trades(day)
 
     if raw.empty:
-        raw = gated.copy()
+        raw = _read_many([]) if gated.empty and v11_overlay.empty and v11_overlay_rejects.empty else pd.concat(
+            [df for df in (gated, v11_overlay, v11_overlay_rejects) if not df.empty],
+            ignore_index=True,
+            sort=False,
+        ).drop_duplicates(subset=["_research_key"], keep="last").reset_index(drop=True)
     if raw.empty:
         return pd.DataFrame()
 
     raw_map = _map_by_key(raw)
     gated_map = _map_by_key(gated)
     research_filter_map = _map_by_key(research_filter_rejects)
+    v11_overlay_map = _map_by_key(v11_overlay)
+    v11_overlay_reject_map = _map_by_key(v11_overlay_rejects)
     entry_raw_map = _map_by_key(entry_raw)
     entry_sel_map = _map_by_key(entry_selected)
     rejects_map = _map_by_key(rejects)
@@ -405,10 +475,23 @@ def build_truth_table(day: str) -> pd.DataFrame:
     paper_signal_map = _map_by_signal_id(paper)
 
     rows: list[dict[str, Any]] = []
-    for key in _all_research_keys(raw, gated, research_filter_rejects, entry_raw, entry_selected, rejects, live, paper):
+    for key in _all_research_keys(
+        raw,
+        gated,
+        research_filter_rejects,
+        v11_overlay,
+        v11_overlay_rejects,
+        entry_raw,
+        entry_selected,
+        rejects,
+        live,
+        paper,
+    ):
         cand = _row_from_map(raw_map, key)
         gated_row = _row_from_map(gated_map, key)
         research_filter_row = _row_from_map(research_filter_map, key)
+        v11_overlay_row = _row_from_map(v11_overlay_map, key)
+        v11_overlay_reject_row = _row_from_map(v11_overlay_reject_map, key)
         entry_raw_row = _row_from_map(entry_raw_map, key)
         entry_sel_row = _row_from_map(entry_sel_map, key)
         reject_row = _row_from_map(rejects_map, key)
@@ -420,35 +503,46 @@ def build_truth_table(day: str) -> pd.DataFrame:
             paper_row = paper_by_signal
 
         base_row = cand
-        for fallback in (gated_row, entry_raw_row, entry_sel_row, live_row, paper_row):
+        for fallback in (v11_overlay_row, v11_overlay_reject_row, gated_row, entry_raw_row, entry_sel_row, live_row, paper_row):
             if base_row.empty and not fallback.empty:
                 base_row = fallback
+        candidate_row = cand
+        if candidate_row.empty:
+            candidate_row = v11_overlay_row if not v11_overlay_row.empty else v11_overlay_reject_row
 
         has_entry_raw = not entry_raw_row.empty
         audit_entry_selected = not entry_sel_row.empty
         live_written = not live_row.empty
         paper_traded = not paper_row.empty
         has_entry_selected = audit_entry_selected or live_written or paper_traded
-        passed_gate = not gated_row.empty or live_written or paper_traded
-        gate_source = (
-            "accepted_rules_csv+research_live_filters"
-            if not gated_row.empty
-            else (
-                "research_live_filter_rejected"
-                if not research_filter_row.empty
-                else ("live_signal_reconciled" if live_written else ("paper_trade_reconciled" if paper_traded else ""))
-            )
-        )
+        passed_gate = not gated_row.empty or not v11_overlay_row.empty or live_written or paper_traded
+        if not v11_overlay_row.empty:
+            gate_source = "v11_backtesting_overlay_passed"
+        elif not v11_overlay_reject_row.empty:
+            gate_source = "v11_backtesting_overlay_rejected"
+        elif not gated_row.empty:
+            gate_source = "accepted_rules_csv+research_live_filters"
+        elif not research_filter_row.empty:
+            gate_source = "research_live_filter_rejected"
+        elif live_written:
+            gate_source = "live_signal_reconciled"
+        elif paper_traded:
+            gate_source = "paper_trade_reconciled"
+        else:
+            gate_source = ""
         selection_source = "entry_audit" if audit_entry_selected else ("live_signal_reconciled" if live_written else ("paper_trade_reconciled" if paper_traded else ""))
         reject_reason = str(reject_row.get("reject_reason", "")) if not reject_row.empty else ""
         research_filter_reason = str(research_filter_row.get("research_live_filter_reason", "")) if not research_filter_row.empty else ""
+        v11_reject_reason = str(v11_overlay_reject_row.get("v11_selected_strategy_reject_reason", "")) if not v11_overlay_reject_row.empty else ""
+        if v11_reject_reason and not research_filter_reason:
+            research_filter_reason = v11_reject_reason
 
         signal_time = _first_nonblank(
             base_row,
             ["signal_time_ist", "bar_time_ist", "signal_entry_datetime_ist", "signal_datetime"],
             "",
         )
-        signal_close = _safe_float(_first_nonblank(cand, ["signal_close", "signal_price", "entry_price"], np.nan))
+        signal_close = _safe_float(_first_nonblank(candidate_row, ["signal_close", "signal_price", "entry_price"], np.nan))
         entry_price = _safe_float(_first_nonblank(entry_sel_row, ["entry_price"], np.nan))
         if not np.isfinite(entry_price):
             entry_price = _safe_float(_first_nonblank(entry_raw_row, ["entry_price"], np.nan))
@@ -480,29 +574,49 @@ def build_truth_table(day: str) -> pd.DataFrame:
                 "side": _first_nonblank(base_row, ["side"], ""),
                 "setup": _first_nonblank(base_row, ["setup"], ""),
                 "signal_time_ist": _fmt_ts(signal_time),
-                "scan_slot_ist": cand.get("scan_slot_ist", "") if not cand.empty else "",
+                "scan_slot_ist": candidate_row.get("scan_slot_ist", "") if not candidate_row.empty else "",
                 "selection_mode": _first_nonblank(base_row, ["selection_mode"], ""),
                 "candidate_family": _first_nonblank(base_row, ["candidate_family"], ""),
-                "scan_created_at_ist": cand.get("created_at_ist", "") if not cand.empty else "",
-                "signal_delay_seconds": _signal_delay_seconds(signal_time, cand.get("created_at_ist", "") if not cand.empty else ""),
+                "scan_created_at_ist": candidate_row.get("created_at_ist", "") if not candidate_row.empty else "",
+                "signal_delay_seconds": _signal_delay_seconds(signal_time, candidate_row.get("created_at_ist", "") if not candidate_row.empty else ""),
                 "signal_close": signal_close,
                 "quality_score": _safe_float(_first_nonblank(base_row, ["quality_score", "score"], np.nan)),
-                "rs_pct": _safe_float(cand.get("rs_pct")) if not cand.empty else np.nan,
-                "market_ret_pct": _safe_float(cand.get("market_ret_pct")) if not cand.empty else np.nan,
-                "regime": cand.get("regime", "") if not cand.empty else "",
-                "vol_ratio": _safe_float(cand.get("vol_ratio")) if not cand.empty else np.nan,
-                "atr_pct": _safe_float(cand.get("atr_pct")) if not cand.empty else np.nan,
-                "body_pct": _safe_float(cand.get("body_pct")) if not cand.empty else np.nan,
-                "close_loc": _safe_float(cand.get("close_loc")) if not cand.empty else np.nan,
-                "vwap_dist_atr": _safe_float(cand.get("vwap_dist_atr")) if not cand.empty else np.nan,
-                "candidate_reason": cand.get("reason", "") if not cand.empty else "",
+                "rs_pct": _safe_float(candidate_row.get("rs_pct")) if not candidate_row.empty else np.nan,
+                "market_ret_pct": _safe_float(candidate_row.get("market_ret_pct")) if not candidate_row.empty else np.nan,
+                "regime": candidate_row.get("regime", "") if not candidate_row.empty else "",
+                "vol_ratio": _safe_float(candidate_row.get("vol_ratio")) if not candidate_row.empty else np.nan,
+                "atr_pct": _safe_float(candidate_row.get("atr_pct")) if not candidate_row.empty else np.nan,
+                "body_pct": _safe_float(candidate_row.get("body_pct")) if not candidate_row.empty else np.nan,
+                "close_loc": _safe_float(candidate_row.get("close_loc")) if not candidate_row.empty else np.nan,
+                "vwap_dist_atr": _safe_float(candidate_row.get("vwap_dist_atr")) if not candidate_row.empty else np.nan,
+                "candidate_reason": candidate_row.get("reason", "") if not candidate_row.empty else "",
                 "passed_v8_gate": passed_gate,
                 "v8_gate_source": gate_source,
                 "v8_live_gate_rule": gated_row.get("v8_live_gate_rule", "") if not gated_row.empty else "",
                 "v8_live_gate_stage": gated_row.get("v8_live_gate_stage", "") if not gated_row.empty else "",
-                "research_live_filter_status": _first_nonblank(gated_row, ["research_live_filter_status"], _first_nonblank(research_filter_row, ["research_live_filter_status"], cand.get("research_live_filter_status", "") if not cand.empty else "")),
-                "research_live_filter_reason": _first_nonblank(gated_row, ["research_live_filter_reason"], _first_nonblank(research_filter_row, ["research_live_filter_reason"], cand.get("research_live_filter_reason", "") if not cand.empty else "")),
-                "scanner_ranker_score": _safe_float(_first_nonblank(gated_row, ["ranker_score"], _first_nonblank(research_filter_row, ["ranker_score"], cand.get("ranker_score", np.nan) if not cand.empty else np.nan))),
+                "research_live_filter_status": _first_nonblank(
+                    gated_row,
+                    ["research_live_filter_status"],
+                    _first_nonblank(
+                        research_filter_row,
+                        ["research_live_filter_status"],
+                        "V11_BACKTESTING_REJECTED" if not v11_overlay_reject_row.empty else (candidate_row.get("research_live_filter_status", "") if not candidate_row.empty else ""),
+                    ),
+                ),
+                "research_live_filter_reason": _first_nonblank(
+                    gated_row,
+                    ["research_live_filter_reason"],
+                    _first_nonblank(
+                        research_filter_row,
+                        ["research_live_filter_reason"],
+                        research_filter_reason if research_filter_reason else (candidate_row.get("research_live_filter_reason", "") if not candidate_row.empty else ""),
+                    ),
+                ),
+                "v11_live_overlay_status": _first_nonblank(v11_overlay_row, ["v11_live_overlay_status"], _first_nonblank(v11_overlay_reject_row, ["v11_live_overlay_status"], "")),
+                "v11_selected_strategy_profile": _first_nonblank(v11_overlay_row, ["v11_selected_strategy_profile"], _first_nonblank(v11_overlay_reject_row, ["v11_selected_strategy_profile"], "")),
+                "v11_selected_strategy_rule": _first_nonblank(v11_overlay_row, ["v11_selected_strategy_rule"], ""),
+                "v11_selected_strategy_reject_reason": v11_reject_reason,
+                "scanner_ranker_score": _safe_float(_first_nonblank(gated_row, ["ranker_score"], _first_nonblank(research_filter_row, ["ranker_score"], _first_nonblank(candidate_row, ["ranker_score"], np.nan)))),
                 "entry_row_built": has_entry_raw,
                 "entry_audit_selected": audit_entry_selected,
                 "entry_selected": has_entry_selected,
@@ -565,9 +679,12 @@ def _summary_counts(truth: pd.DataFrame) -> dict[str, Any]:
     traded = truth["paper_traded"].astype(bool)
     audit_selected = truth.get("entry_audit_selected", truth["entry_selected"]).astype(bool)
     raw_mask = truth.get("scan_created_at_ist", pd.Series("", index=truth.index)).fillna("").astype(str).str.len() > 0
+    v11_status = truth.get("v11_live_overlay_status", pd.Series("", index=truth.index)).fillna("").astype(str).str.upper()
     return {
         "research_rows_total": int(len(truth)),
         "raw_candidates": int(raw_mask.sum()),
+        "v11_overlay_passed": int((v11_status == "PASSED").sum()),
+        "v11_overlay_rejected": int((v11_status == "REJECTED").sum()),
         "passed_v8_gate": int(truth["passed_v8_gate"].sum()),
         "entry_rows": int(truth["entry_row_built"].sum()),
         "selected_entries": int(truth["entry_selected"].sum()),
@@ -1976,9 +2093,388 @@ def _fmt_pf(value: Any) -> str:
     return _fmt_num(val, 2)
 
 
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists() or path.stat().st_size <= 2:
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    val = _safe_float(value, np.nan)
+    if not np.isfinite(val):
+        return default
+    return int(val)
+
+
+def _summary_metric(summary: dict[str, Any], key: str, default: float = 0.0) -> float:
+    if not isinstance(summary, dict):
+        return default
+    return _safe_float(summary.get(key, default), default)
+
+
+def _top_setup_gap_rows(df: pd.DataFrame, pnl_col: str, limit: int = 5) -> list[dict[str, Any]]:
+    if df.empty or "setup" not in df.columns:
+        return []
+    work = df.copy()
+    if "side" not in work.columns:
+        work["side"] = ""
+    work["_pnl_for_gap"] = pd.to_numeric(work.get(pnl_col, pd.Series(0.0, index=work.index)), errors="coerce").fillna(0.0)
+    rows: list[dict[str, Any]] = []
+    for (side, setup), group in work.groupby(["side", "setup"], dropna=False):
+        pnl = group["_pnl_for_gap"]
+        rows.append(
+            {
+                "side": str(side or ""),
+                "setup": str(setup or ""),
+                "trades": int(len(group)),
+                "wins": int((pnl > 0).sum()),
+                "losses": int((pnl < 0).sum()),
+                "net_pnl_rs": float(pnl.sum()),
+                "profit_factor": _profit_factor(pnl),
+            }
+        )
+    return sorted(rows, key=lambda r: (abs(float(r.get("net_pnl_rs", 0.0))), int(r.get("trades", 0))), reverse=True)[:limit]
+
+
+def _v11_comparison_suggestion_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if payload.get("status") != "OK":
+        return []
+    rows: list[dict[str, Any]] = []
+    matched = _safe_int(payload.get("matched"))
+    paper_only = _safe_int(payload.get("paper_only"))
+    v11_only = _safe_int(payload.get("v11_only"))
+    paper_trades = _safe_int(payload.get("paper_trades"))
+    v11_trades = _safe_int(payload.get("v11_trades"))
+    match_vs_paper = _safe_float(payload.get("match_rate_vs_paper_pct"), 0.0)
+    pnl_gap = _safe_float(payload.get("pnl_gap_v11_minus_paper_rs"), 0.0)
+
+    if paper_trades > 0 and match_vs_paper < 80.0:
+        rows.append(
+            {
+                "window_sessions": 0,
+                "level": "SHADOW_ONLY",
+                "side": "COMPARISON",
+                "setup": "V11_VS_V7_SIGNAL_MATCH",
+                "evidence": f"matched {matched}/{paper_trades} paper trades; v11 trades {v11_trades}, paper-only {paper_only}, v11-only {v11_only}",
+                "suggestion_type": "v11_live_parity_match_gap",
+                "proposed_change": "Keep v11 comparison report-only until signal-key, entry-time, and executor skip differences are audited.",
+                "apply_to": "research report / parity audit",
+                "approval_required": "NO",
+            }
+        )
+    if paper_only > 0:
+        rows.append(
+            {
+                "window_sessions": 0,
+                "level": "PAPER_EXPERIMENT",
+                "side": "COMPARISON",
+                "setup": "PAPER_ONLY_VS_V11",
+                "evidence": f"{paper_only} V7 paper trades were absent from v11 live_parity.",
+                "suggestion_type": "audit_paper_only_vs_v11",
+                "proposed_change": "Bucket paper-only trades by setup/reason before using v11 backtest misses as strategy evidence.",
+                "apply_to": "comparison report",
+                "approval_required": "NO",
+            }
+        )
+    if v11_only > 0:
+        rows.append(
+            {
+                "window_sessions": 0,
+                "level": "VIRTUAL_BACKTEST_ONLY",
+                "side": "COMPARISON",
+                "setup": "V11_ONLY_VS_PAPER",
+                "evidence": f"{v11_only} v11 live_parity trades were absent from V7 paper.",
+                "suggestion_type": "audit_v11_only_vs_paper",
+                "proposed_change": "Inspect whether these were real paper skips, dedupe/capacity effects, or v11 candidate-source differences.",
+                "apply_to": "comparison report",
+                "approval_required": "NO",
+            }
+        )
+    if abs(pnl_gap) >= 1000.0:
+        rows.append(
+            {
+                "window_sessions": 0,
+                "level": "PAPER_EXPERIMENT",
+                "side": "COMPARISON",
+                "setup": "V11_PNL_MODEL_PARITY",
+                "evidence": f"v11 minus paper net PnL gap Rs {_fmt_num(pnl_gap)}.",
+                "suggestion_type": "audit_v11_pnl_model_gap",
+                "proposed_change": "Compare matched-trade entry/exit prices before accepting v11 backtest PnL as live-paper equivalent.",
+                "apply_to": "backtest parity audit",
+                "approval_required": "NO",
+            }
+        )
+    return rows
+
+
+def _v11_backtesting_comparison(day: str) -> tuple[list[str], dict[str, Any], list[dict[str, Any]]]:
+    latest_json = BACKTEST_RESULT_V11_ROOT / "latest" / "latest_backtesting_result_v11.json"
+    summary = _read_json(latest_json)
+    lines = ["## V11 Backtesting Vs V7 Live Papertrade", ""]
+    if not summary:
+        payload = {
+            "status": "MISSING",
+            "day": day,
+            "latest_json": str(latest_json),
+            "note": "Backtesting Result v11 output is not available yet.",
+        }
+        lines.append(f"- Status: {payload['note']}")
+        lines.append(f"- Expected source: `{latest_json}`")
+        lines.append("")
+        return lines, payload, []
+
+    summary_day = str(summary.get("day", ""))
+    if summary_day != day:
+        payload = {
+            "status": "STALE",
+            "day": day,
+            "latest_day": summary_day,
+            "latest_json": str(latest_json),
+            "note": "Latest Backtesting Result v11 is for a different day.",
+        }
+        lines.append(f"- Status: stale. Latest v11 comparison is for `{summary_day}`, not `{day}`.")
+        lines.append(f"- Source: `{latest_json}`")
+        lines.append("")
+        return lines, payload, []
+
+    out_dir_text = str(summary.get("out_dir", "") or "")
+    out_dir = Path(out_dir_text) if out_dir_text else BACKTEST_RESULT_V11_ROOT / day
+    v11_summary = summary.get("v11_summary", {}) if isinstance(summary.get("v11_summary"), dict) else {}
+    paper_summary = summary.get("paper_summary", {}) if isinstance(summary.get("paper_summary"), dict) else {}
+    matched = _safe_int(summary.get("matched"))
+    v11_only = _safe_int(summary.get("v11_only"))
+    paper_only = _safe_int(summary.get("paper_only"))
+    v11_trades = _safe_int(v11_summary.get("trades"))
+    paper_trades = _safe_int(paper_summary.get("trades"))
+    match_vs_paper = (matched / paper_trades * 100.0) if paper_trades > 0 else np.nan
+    match_vs_v11 = (matched / v11_trades * 100.0) if v11_trades > 0 else np.nan
+    near_paper_5m = _safe_int(summary.get("paper_only_nearest_v11_within_5min"))
+    near_paper_15m = _safe_int(summary.get("paper_only_nearest_v11_within_15min"))
+    near_v11_5m = _safe_int(summary.get("v11_only_nearest_paper_within_5min"))
+    near_v11_15m = _safe_int(summary.get("v11_only_nearest_paper_within_15min"))
+    matched_pnl_gap = _safe_float(summary.get("matched_pnl_gap_v11_minus_paper_rs"), 0.0)
+    v11_net = _summary_metric(v11_summary, "net")
+    paper_net = _summary_metric(paper_summary, "net")
+    pnl_gap = v11_net - paper_net
+
+    paper_only_df = _read_csv(out_dir / "paper_only_vs_v11.csv")
+    v11_only_df = _read_csv(out_dir / "v11_only_vs_paper.csv")
+    matched_df = _read_csv(out_dir / "matched_v11_vs_paper.csv")
+    paper_only_top = _top_setup_gap_rows(paper_only_df, "pnl_rs")
+    v11_only_top = _top_setup_gap_rows(v11_only_df, "v6_net_pnl_rs")
+
+    payload: dict[str, Any] = {
+        "status": "OK",
+        "day": day,
+        "latest_json": str(latest_json),
+        "report": str(summary.get("report", "")),
+        "out_dir": str(out_dir),
+        "exit_code": _safe_int(summary.get("exit_code")),
+        "v11_trades": v11_trades,
+        "paper_trades": paper_trades,
+        "matched": matched,
+        "v11_only": v11_only,
+        "paper_only": paper_only,
+        "paper_only_nearest_v11_within_5min": near_paper_5m,
+        "paper_only_nearest_v11_within_15min": near_paper_15m,
+        "v11_only_nearest_paper_within_5min": near_v11_5m,
+        "v11_only_nearest_paper_within_15min": near_v11_15m,
+        "matched_pnl_gap_v11_minus_paper_rs": matched_pnl_gap,
+        "match_rate_vs_paper_pct": float(match_vs_paper) if np.isfinite(match_vs_paper) else np.nan,
+        "match_rate_vs_v11_pct": float(match_vs_v11) if np.isfinite(match_vs_v11) else np.nan,
+        "v11_net_pnl_rs": v11_net,
+        "paper_net_pnl_rs": paper_net,
+        "pnl_gap_v11_minus_paper_rs": pnl_gap,
+        "v11_profit_factor": _summary_metric(v11_summary, "pf", np.nan),
+        "paper_profit_factor": _summary_metric(paper_summary, "pf", np.nan),
+        "matched_rows_available": int(len(matched_df)),
+        "paper_only_top_setups": paper_only_top,
+        "v11_only_top_setups": v11_only_top,
+    }
+
+    lines.append(f"- Source: `{latest_json}`")
+    lines.append(f"- v11 output dir: `{out_dir}`")
+    lines.append(f"- v11 report: `{summary.get('report', '')}`")
+    lines.append("")
+    lines.append("| source | trades | wins | losses | net pnl | PF |")
+    lines.append("|---|---:|---:|---:|---:|---:|")
+    lines.append(
+        f"| Backtesting Result v11 | {v11_trades} | {_safe_int(v11_summary.get('wins'))} | "
+        f"{_safe_int(v11_summary.get('losses'))} | Rs {_fmt_num(v11_net)} | {_fmt_pf(v11_summary.get('pf'))} |"
+    )
+    lines.append(
+        f"| V7 live papertrade | {paper_trades} | {_safe_int(paper_summary.get('wins'))} | "
+        f"{_safe_int(paper_summary.get('losses'))} | Rs {_fmt_num(paper_net)} | {_fmt_pf(paper_summary.get('pf'))} |"
+    )
+    lines.append("")
+    lines.append("| reconciliation | count | rate |")
+    lines.append("|---|---:|---:|")
+    lines.append(f"| matched exact signal keys | {matched} | {_fmt_num(match_vs_paper, 1)}% of paper / {_fmt_num(match_vs_v11, 1)}% of v11 |")
+    lines.append(f"| v11-only trades | {v11_only} | {_fmt_num((v11_only / max(v11_trades, 1)) * 100.0, 1)}% of v11 |")
+    lines.append(f"| paper-only trades | {paper_only} | {_fmt_num((paper_only / max(paper_trades, 1)) * 100.0, 1)}% of paper |")
+    lines.append(f"| paper-only nearest v11 within 5m / 15m | {near_paper_5m} / {near_paper_15m} | timestamp-drift audit |")
+    lines.append(f"| v11-only nearest paper within 5m / 15m | {near_v11_5m} / {near_v11_15m} | timestamp-drift audit |")
+    lines.append(f"| exact-match PnL gap, v11 minus paper | Rs {_fmt_num(matched_pnl_gap)} | matched-trade audit |")
+    lines.append(f"| PnL gap, v11 minus paper | Rs {_fmt_num(pnl_gap)} | report-only |")
+    lines.append("")
+    if paper_only_top:
+        lines.append("Top V7 paper-only setup buckets:")
+        lines.append("")
+        lines.append("| side | setup | trades | wins | losses | net pnl | PF |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|")
+        for row in paper_only_top:
+            lines.append(
+                f"| {row.get('side', '')} | {row.get('setup', '')} | {int(row.get('trades', 0))} | "
+                f"{int(row.get('wins', 0))} | {int(row.get('losses', 0))} | Rs {_fmt_num(row.get('net_pnl_rs'))} | "
+                f"{_fmt_pf(row.get('profit_factor'))} |"
+            )
+        lines.append("")
+    if v11_only_top:
+        lines.append("Top v11-only setup buckets:")
+        lines.append("")
+        lines.append("| side | setup | trades | wins | losses | net pnl | PF |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|")
+        for row in v11_only_top:
+            lines.append(
+                f"| {row.get('side', '')} | {row.get('setup', '')} | {int(row.get('trades', 0))} | "
+                f"{int(row.get('wins', 0))} | {int(row.get('losses', 0))} | Rs {_fmt_num(row.get('net_pnl_rs'))} | "
+                f"{_fmt_pf(row.get('profit_factor'))} |"
+            )
+        lines.append("")
+    lines.append(
+        "- Interpretation: this is an extra parity/comparison layer. Keep the existing v7 live research analysis separate, and use this section to decide whether v11 backtest behavior is close enough to live paper before applying strategy changes."
+    )
+    lines.append("")
+    return lines, payload, _v11_comparison_suggestion_rows(payload)
+
+
+def _setup_coverage_status(row: pd.Series) -> str:
+    if int(row.get("paper_trades", 0)) > 0:
+        return "PAPER_TRADED"
+    if int(row.get("live_signals", 0)) > 0:
+        return "LIVE_SIGNAL_NO_PAPER"
+    if int(row.get("selected_entries", 0)) > 0:
+        return "ENTRY_SELECTED_NO_SIGNAL"
+    if int(row.get("entry_rows", 0)) > 0:
+        return "ENTRY_ROW_ONLY"
+    if int(row.get("passed_v8_gate", 0)) > 0:
+        return "GATED_ONLY"
+    if int(row.get("raw_candidates", 0)) > 0:
+        return "RAW_ONLY"
+    return "NO_ROWS_IN_WINDOW"
+
+
+def _setup_coverage_table(df: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "setup",
+        "observed_sides",
+        "first_day",
+        "last_day",
+        "research_rows",
+        "raw_candidates",
+        "passed_v8_gate",
+        "entry_rows",
+        "selected_entries",
+        "live_signals",
+        "paper_trades",
+        "paper_pnl_rs",
+        "profit_factor",
+        "coverage_status",
+    ]
+    setup_universe = set(V7_LIVE_SETUP_UNIVERSE)
+    if not df.empty and "setup" in df.columns:
+        setup_universe.update(
+            str(x).upper().strip()
+            for x in df["setup"].dropna().astype(str)
+            if str(x).strip()
+        )
+    if not setup_universe:
+        return pd.DataFrame(columns=columns)
+
+    work = df.copy()
+    if not work.empty:
+        work["_setup_norm"] = work.get("setup", pd.Series("", index=work.index)).fillna("").astype(str).str.upper().str.strip()
+        work["_side_norm"] = work.get("side", pd.Series("", index=work.index)).fillna("").astype(str).str.upper().str.strip()
+        work["_day_norm"] = work.get("date", pd.Series("", index=work.index)).fillna("").astype(str).str[:10]
+
+    rows: list[dict[str, Any]] = []
+    for setup in sorted(setup_universe):
+        if work.empty:
+            sub = pd.DataFrame()
+        else:
+            sub = work.loc[work["_setup_norm"].eq(setup)].copy()
+        if sub.empty:
+            rec = {
+                "setup": setup,
+                "observed_sides": "",
+                "first_day": "",
+                "last_day": "",
+                "research_rows": 0,
+                "raw_candidates": 0,
+                "passed_v8_gate": 0,
+                "entry_rows": 0,
+                "selected_entries": 0,
+                "live_signals": 0,
+                "paper_trades": 0,
+                "paper_pnl_rs": 0.0,
+                "profit_factor": np.nan,
+            }
+            rec["coverage_status"] = _setup_coverage_status(pd.Series(rec))
+            rows.append(rec)
+            continue
+
+        raw_mask = sub.get("scan_created_at_ist", pd.Series("", index=sub.index)).fillna("").astype(str).str.len() > 0
+        passed = _bool_series(sub, "passed_v8_gate")
+        entry_rows = _bool_series(sub, "entry_row_built")
+        selected = _bool_series(sub, "entry_selected")
+        live = _bool_series(sub, "live_signal_written")
+        paper = _bool_series(sub, "paper_traded")
+        pnl = pd.to_numeric(sub.get("paper_pnl_rs", pd.Series(0.0, index=sub.index)), errors="coerce").fillna(0.0)
+        traded_pnl = pnl.loc[paper]
+        days = sorted(
+            d for d in sub["_day_norm"].dropna().astype(str).unique().tolist()
+            if d and d.lower() not in {"nan", "none", "nat"}
+        )
+        sides = sorted(
+            s for s in sub["_side_norm"].dropna().astype(str).unique().tolist()
+            if s and s.lower() not in {"nan", "none", "nat"}
+        )
+        rec = {
+            "setup": setup,
+            "observed_sides": ",".join(sides),
+            "first_day": days[0] if days else "",
+            "last_day": days[-1] if days else "",
+            "research_rows": int(len(sub)),
+            "raw_candidates": int(raw_mask.sum()),
+            "passed_v8_gate": int(passed.sum()),
+            "entry_rows": int(entry_rows.sum()),
+            "selected_entries": int(selected.sum()),
+            "live_signals": int(live.sum()),
+            "paper_trades": int(paper.sum()),
+            "paper_pnl_rs": float(traded_pnl.sum()) if not traded_pnl.empty else 0.0,
+            "profit_factor": _profit_factor(traded_pnl) if not traded_pnl.empty else np.nan,
+        }
+        rec["coverage_status"] = _setup_coverage_status(pd.Series(rec))
+        rows.append(rec)
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _coverage_side_label(observed_sides: Any) -> str:
+    sides = [s for s in str(observed_sides or "").split(",") if s]
+    if len(sides) == 1:
+        return sides[0]
+    return "BOTH" if sides else "UNKNOWN"
+
+
 def _window_summary(window: int, days: list[str], df: pd.DataFrame) -> dict[str, Any]:
-    traded = df.loc[df.get("paper_traded", False).astype(bool)].copy() if not df.empty else pd.DataFrame()
+    traded = df.loc[_bool_series(df, "paper_traded")].copy() if not df.empty else pd.DataFrame()
     pnl = pd.to_numeric(traded.get("paper_pnl_rs", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+    coverage = _setup_coverage_table(df)
     return {
         "window_sessions": window,
         "actual_sessions": len(days),
@@ -1990,6 +2486,10 @@ def _window_summary(window: int, days: list[str], df: pd.DataFrame) -> dict[str,
         "losses": int((pnl < 0).sum()),
         "net_pnl_rs": float(pnl.sum()),
         "profit_factor": _profit_factor(pnl) if not pnl.empty else np.nan,
+        "v7_live_setup_universe": int(len(V7_LIVE_SETUP_UNIVERSE)),
+        "setups_seen": int((coverage["research_rows"] > 0).sum()) if not coverage.empty else 0,
+        "setups_gated": int((coverage["passed_v8_gate"] > 0).sum()) if not coverage.empty else 0,
+        "setups_paper_traded": int((coverage["paper_trades"] > 0).sum()) if not coverage.empty else 0,
     }
 
 
@@ -2016,7 +2516,7 @@ def _suggestion_level(window: int, trades: int, net: float, pf: float, kind: str
 def _build_setup_suggestions(window: int, df: pd.DataFrame) -> list[dict[str, Any]]:
     if df.empty or "paper_traded" not in df.columns:
         return []
-    traded = df.loc[df["paper_traded"].astype(bool)].copy()
+    traded = df.loc[_bool_series(df, "paper_traded")].copy()
     if traded.empty:
         return []
     traded["paper_pnl_rs"] = pd.to_numeric(traded["paper_pnl_rs"], errors="coerce").fillna(0.0)
@@ -2072,7 +2572,7 @@ def _build_setup_suggestions(window: int, df: pd.DataFrame) -> list[dict[str, An
 def _build_indicator_suggestions(window: int, df: pd.DataFrame) -> list[dict[str, Any]]:
     if df.empty or "paper_traded" not in df.columns:
         return []
-    traded = df.loc[df["paper_traded"].astype(bool)].copy()
+    traded = df.loc[_bool_series(df, "paper_traded")].copy()
     if traded.empty:
         return []
     traded["paper_pnl_rs"] = pd.to_numeric(traded["paper_pnl_rs"], errors="coerce").fillna(0.0)
@@ -2137,6 +2637,57 @@ def _build_indicator_suggestions(window: int, df: pd.DataFrame) -> list[dict[str
     return rows
 
 
+def _build_setup_coverage_suggestions(window: int, df: pd.DataFrame) -> list[dict[str, Any]]:
+    coverage = _setup_coverage_table(df)
+    if coverage.empty:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    active = coverage.loc[
+        (pd.to_numeric(coverage["research_rows"], errors="coerce").fillna(0) > 0)
+        & (pd.to_numeric(coverage["paper_trades"], errors="coerce").fillna(0) == 0)
+    ].copy()
+    if active.empty:
+        return rows
+
+    active["raw_candidates"] = pd.to_numeric(active["raw_candidates"], errors="coerce").fillna(0).astype(int)
+    active["passed_v8_gate"] = pd.to_numeric(active["passed_v8_gate"], errors="coerce").fillna(0).astype(int)
+    active["selected_entries"] = pd.to_numeric(active["selected_entries"], errors="coerce").fillna(0).astype(int)
+    active["live_signals"] = pd.to_numeric(active["live_signals"], errors="coerce").fillna(0).astype(int)
+    active["research_rows"] = pd.to_numeric(active["research_rows"], errors="coerce").fillna(0).astype(int)
+
+    for _, row in active.iterrows():
+        raw = int(row["raw_candidates"])
+        gated = int(row["passed_v8_gate"])
+        selected = int(row["selected_entries"])
+        live = int(row["live_signals"])
+        if gated >= 3:
+            suggestion_type = "audit_active_untraded_setup"
+            proposed = "Keep research-only; inspect entry-engine, live-signal, and executor drop-off before setup-level promotion or restriction."
+        elif raw >= 10 and gated == 0:
+            suggestion_type = "audit_gate_filtered_setup"
+            proposed = "Keep research-only; review rejected forward outcomes and gate reasons before relaxing this setup."
+        else:
+            continue
+        rows.append(
+            {
+                "window_sessions": window,
+                "level": "VIRTUAL_BACKTEST_ONLY",
+                "side": _coverage_side_label(row.get("observed_sides", "")),
+                "setup": str(row.get("setup", "")).upper().strip(),
+                "evidence": (
+                    f"{int(row['research_rows'])} rows, raw {raw}, gated {gated}, "
+                    f"selected {selected}, live {live}, paper 0"
+                ),
+                "suggestion_type": suggestion_type,
+                "proposed_change": proposed,
+                "apply_to": "research audit only",
+                "approval_required": "NO",
+            }
+        )
+    return rows
+
+
 def _dedupe_suggestions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     priority = {
         "REAL_CHANGE_READY": 5,
@@ -2179,14 +2730,18 @@ def build_multi_window_suggestions(day: str) -> tuple[str, pd.DataFrame, dict[st
         summary_rows.append(_window_summary(window, days, df))
         suggestion_rows.extend(_build_setup_suggestions(window, df))
         suggestion_rows.extend(_build_indicator_suggestions(window, df))
+        suggestion_rows.extend(_build_setup_coverage_suggestions(window, df))
 
     largest_days = available_days[-max(SUGGESTION_WINDOWS):]
     largest_df = _load_truth_days(largest_days)
+    setup_coverage = _setup_coverage_table(largest_df)
     nifty_df = _nifty_context(largest_days, day)
     live_5min = _live_5min_context(day)
     regime_df = _regime_pf_table(largest_df)
     current_truth = _read_csv(TRUTH_DIR / f"truth_table_{day}.csv")
     ops_rows = _ops_audit_rows(day, truth=current_truth, live_5min=live_5min, nifty_df=nifty_df)
+    v11_comparison_lines, v11_comparison_payload, v11_comparison_suggestions = _v11_backtesting_comparison(day)
+    suggestion_rows.extend(v11_comparison_suggestions)
     if not nifty_df.empty:
         current_nifty = nifty_df.loc[nifty_df["day"] == day]
         if not current_nifty.empty and str(current_nifty.iloc[0].get("health", "")) != "OK":
@@ -2265,6 +2820,40 @@ def build_multi_window_suggestions(day: str) -> tuple[str, pd.DataFrame, dict[st
         )
     lines.append("")
 
+    lines.extend(["## All V7 Live Setup Coverage", ""])
+    lines.append(
+        "- Universe source: `(avwap_5min_ID_v7_candidate_scan.ALLOWED_SETUPS - EXCLUDED_SETUPS - EARLY_BLOCKED_SETUPS) + eqidv2_v11_live_overlay.V11_PROFILE_SETUP_UNIVERSE`."
+    )
+    if setup_coverage.empty:
+        lines.append("- No setup universe or truth rows available yet.")
+    else:
+        seen_count = int((setup_coverage["research_rows"] > 0).sum())
+        gated_count = int((setup_coverage["passed_v8_gate"] > 0).sum())
+        traded_count = int((setup_coverage["paper_trades"] > 0).sum())
+        lines.append(
+            f"- Coverage over largest available window: {seen_count}/{len(setup_coverage)} setups seen, "
+            f"{gated_count} gated, {traded_count} paper-traded."
+        )
+        lines.append("")
+        lines.append("| setup | sides | first | last | rows | raw | gated | entries | live | paper | pnl | PF | status |")
+        lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+        coverage_view = setup_coverage.sort_values(
+            ["paper_trades", "live_signals", "selected_entries", "passed_v8_gate", "raw_candidates", "setup"],
+            ascending=[False, False, False, False, False, True],
+        )
+        for _, row in coverage_view.iterrows():
+            lines.append(
+                f"| {row.get('setup', '')} | {row.get('observed_sides', '')} | {row.get('first_day', '')} | "
+                f"{row.get('last_day', '')} | {int(row.get('research_rows', 0))} | "
+                f"{int(row.get('raw_candidates', 0))} | {int(row.get('passed_v8_gate', 0))} | "
+                f"{int(row.get('selected_entries', 0))} | {int(row.get('live_signals', 0))} | "
+                f"{int(row.get('paper_trades', 0))} | Rs {_fmt_num(row.get('paper_pnl_rs'))} | "
+                f"{_fmt_pf(row.get('profit_factor'))} | {row.get('coverage_status', '')} |"
+            )
+    lines.append("")
+
+    lines.extend(v11_comparison_lines)
+
     lines.extend(["## Concrete Suggestions", ""])
     if suggestions.empty:
         lines.append("No concrete suggestions generated yet. Continue collecting sessions.")
@@ -2282,7 +2871,7 @@ def build_multi_window_suggestions(day: str) -> tuple[str, pd.DataFrame, dict[st
     exit_summary = _read_csv(EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_summary_{day}.csv")
     lines.extend(["## 1-Min Exit Strategy Lab Snapshot", ""])
     lines.append(f"- Source: `{DATA_1MIN_DIR}`")
-    lines.append("- Scope: live paper trades and live-generated missed candidates only; no v7/v9 backtesting comparison.")
+    lines.append("- Scope: v7 live raw/gated candidates, v11 overlay pass/reject rows, entry-audit rows, live paper trades, live-generated missed candidates, v11 backtesting comparison output when available, and the full current v7 live setup universe.")
     if exit_summary.empty:
         lines.append("- Exit lab summary not available yet for this run.")
     elif not {"cohort", "exit_profile", "usable_rows", "avg_ret_pct"}.issubset(set(exit_summary.columns)):
@@ -2382,9 +2971,18 @@ def build_multi_window_suggestions(day: str) -> tuple[str, pd.DataFrame, dict[st
         "shadow_only_count": int((suggestions.get("level", pd.Series(dtype=str)) == "SHADOW_ONLY").sum()) if not suggestions.empty else 0,
         "paper_experiment_count": int((suggestions.get("level", pd.Series(dtype=str)) == "PAPER_EXPERIMENT").sum()) if not suggestions.empty else 0,
         "operations_audit": ops_rows,
+        "v11_backtesting_comparison": v11_comparison_payload,
         "live_5min_context": live_5min,
         "nifty_context": nifty_df.to_dict("records") if not nifty_df.empty else [],
         "regime_pf": regime_df.to_dict("records") if not regime_df.empty else [],
+        "v7_live_setup_universe": V7_LIVE_SETUP_UNIVERSE,
+        "setup_coverage": setup_coverage.to_dict("records") if not setup_coverage.empty else [],
+        "setup_coverage_summary": {
+            "universe_setups": int(len(setup_coverage)) if not setup_coverage.empty else int(len(V7_LIVE_SETUP_UNIVERSE)),
+            "seen_setups": int((setup_coverage["research_rows"] > 0).sum()) if not setup_coverage.empty else 0,
+            "gated_setups": int((setup_coverage["passed_v8_gate"] > 0).sum()) if not setup_coverage.empty else 0,
+            "paper_traded_setups": int((setup_coverage["paper_trades"] > 0).sum()) if not setup_coverage.empty else 0,
+        },
     }
     return "\n".join(lines) + "\n", suggestions, payload
 
@@ -2470,6 +3068,18 @@ def run(day: str) -> tuple[Path, Path]:
         "multi_window_suggestions_json": str(suggestions_json_path),
         "multi_window_suggestion_count": int(suggestions_payload.get("suggestion_count", 0)),
         "multi_window_real_change_ready_count": int(suggestions_payload.get("real_change_ready_count", 0)),
+        "v7_live_setup_universe_count": int(
+            suggestions_payload.get("setup_coverage_summary", {}).get("universe_setups", len(V7_LIVE_SETUP_UNIVERSE))
+        ),
+        "v7_live_setups_seen_count": int(
+            suggestions_payload.get("setup_coverage_summary", {}).get("seen_setups", 0)
+        ),
+        "v7_live_setups_gated_count": int(
+            suggestions_payload.get("setup_coverage_summary", {}).get("gated_setups", 0)
+        ),
+        "v7_live_setups_paper_traded_count": int(
+            suggestions_payload.get("setup_coverage_summary", {}).get("paper_traded_setups", 0)
+        ),
         **_summary_counts(truth),
     }
     (LATEST_DIR / "latest_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")

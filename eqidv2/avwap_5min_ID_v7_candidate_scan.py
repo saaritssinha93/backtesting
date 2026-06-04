@@ -99,6 +99,22 @@ EARLY_VWAP_SHORT_MIN_RS_PCT = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_
 EARLY_VWAP_SHORT_MIN_CLOSE_LOC = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_VWAP_SHORT_MIN_CLOSE_LOC", "0.08"))
 EARLY_VWAP_SHORT_MAX_ATR_PCT = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_VWAP_SHORT_MAX_ATR_PCT", "0.008"))
 
+RESEARCH_SHADOW_VERSION = "v7_research_2026_06_03"
+RESEARCH_PROBATION_SETUPS = {
+    x.strip().upper()
+    for x in os.getenv(
+        "EQIDV2_SIGNAL_DISCOVERY_V7_RESEARCH_PROBATION_SETUPS",
+        "T_TREND_DAY_EMA_STAIR_SHORT,C_OR_BREAKDOWN,L_TREND_PULLBACK",
+    ).split(",")
+    if x.strip()
+}
+RESEARCH_ANTI_CHASE_LONG_CLOSE_LOC_MIN = float(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ANTI_CHASE_LONG_CLOSE_LOC_MIN", "0.88")
+)
+RESEARCH_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN = float(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN", "0.52")
+)
+
 
 def _ensure_ist_ts(ts: Any) -> pd.Timestamp:
     out = pd.Timestamp(ts)
@@ -633,7 +649,54 @@ def _finite_or_blank(x: Any) -> Any:
     return v if np.isfinite(v) else ""
 
 
-def candidates_to_dataframe(rows_in: Iterable[Tuple["v2.Candidate", Dict[str, Any]]], scan_slot_ist: Any) -> pd.DataFrame:
+def _research_shadow_metadata(side: str, setup: str, close_loc: Any, vwap_dist_atr: Any) -> Dict[str, str]:
+    side_u = str(side).upper().strip()
+    setup_u = str(setup).upper().strip()
+    reasons: List[str] = []
+    actions: List[str] = []
+    status = ""
+    try:
+        close_loc_f = float(close_loc)
+    except Exception:
+        close_loc_f = np.nan
+    try:
+        vwap_dist_f = float(vwap_dist_atr)
+    except Exception:
+        vwap_dist_f = np.nan
+
+    if setup_u in RESEARCH_PROBATION_SETUPS:
+        status = "PROBATION"
+        reasons.append("weak_setup_from_v7_live_research")
+        actions.append("scanner_shadow_only_no_block")
+
+    if (
+        side_u == "LONG"
+        and np.isfinite(close_loc_f)
+        and np.isfinite(vwap_dist_f)
+        and close_loc_f > RESEARCH_ANTI_CHASE_LONG_CLOSE_LOC_MIN
+        and vwap_dist_f > RESEARCH_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN
+    ):
+        status = status or "PAPER_EXPERIMENT"
+        reasons.append(
+            f"anti_chase_long close_loc>{RESEARCH_ANTI_CHASE_LONG_CLOSE_LOC_MIN:.2f} "
+            f"vwap_dist_atr>{RESEARCH_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN:.2f}"
+        )
+        actions.append("paper_gate_active_scanner_shadow_only")
+
+    return {
+        "research_shadow_status": status,
+        "research_shadow_reason": ";".join(reasons),
+        "research_shadow_action": ";".join(actions),
+        "research_shadow_version": RESEARCH_SHADOW_VERSION if reasons else "",
+    }
+
+
+def candidates_to_dataframe(
+    rows_in: Iterable[Tuple["v2.Candidate", Dict[str, Any]]],
+    scan_slot_ist: Any,
+    *,
+    dedupe: bool = True,
+) -> pd.DataFrame:
     scan_slot = _ensure_ist_ts(scan_slot_ist)
     created_at = pd.Timestamp.now(tz=IST_TZ)
     rows: List[Dict[str, Any]] = []
@@ -680,10 +743,19 @@ def candidates_to_dataframe(rows_in: Iterable[Tuple["v2.Candidate", Dict[str, An
             "status": "CANDIDATE",
             "created_at_ist": _fmt_ist(created_at),
             "diagnostics_json": json.dumps(diag, default=str),
+            **_research_shadow_metadata(side, setup, c.close_loc, c.vwap_dist_atr),
         })
     if not rows:
         return pd.DataFrame()
-    return _dedupe_candidate_frame(pd.DataFrame(rows))
+    out = pd.DataFrame(rows)
+    if dedupe:
+        return _dedupe_candidate_frame(out)
+    out["quality_score"] = pd.to_numeric(out.get("quality_score", 0.0), errors="coerce").fillna(0.0)
+    return (
+        out.sort_values(["signal_time_ist", "ticker", "quality_score", "setup"], ascending=[True, True, False, True])
+        .drop_duplicates(subset=["candidate_id"], keep="first")
+        .reset_index(drop=True)
+    )
 
 
 def _dedupe_candidate_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -739,8 +811,12 @@ def _worker_init() -> None:
         _WORKER_MARKET_CTX = {}
 
 
-def _worker_scan(payload: Tuple[str, str]) -> List[Dict[str, Any]]:
-    ticker, slot_iso = payload
+def _worker_scan(payload: Tuple[str, str] | Tuple[str, str, bool]) -> List[Dict[str, Any]]:
+    if len(payload) >= 3:
+        ticker, slot_iso, dedupe = payload
+    else:
+        ticker, slot_iso = payload
+        dedupe = True
     global _WORKER_MARKET_CTX
     if _WORKER_MARKET_CTX is None:
         _worker_init()
@@ -750,7 +826,7 @@ def _worker_scan(payload: Tuple[str, str]) -> List[Dict[str, Any]]:
         return []
     if not out:
         return []
-    return candidates_to_dataframe(out, pd.Timestamp(slot_iso)).to_dict("records")
+    return candidates_to_dataframe(out, pd.Timestamp(slot_iso), dedupe=bool(dedupe)).to_dict("records")
 
 
 def scan_slot_candidates(
@@ -758,6 +834,8 @@ def scan_slot_candidates(
     tickers: Iterable[str],
     market_ctx: Optional[Dict[str, Dict[str, Any]]] = None,
     max_workers: Optional[int] = None,
+    *,
+    dedupe: bool = True,
 ) -> pd.DataFrame:
     slot_ts = _ensure_ist_ts(slot_ist)
     tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
@@ -773,10 +851,10 @@ def scan_slot_candidates(
             except Exception:
                 found = []
             if found:
-                rows.extend(candidates_to_dataframe(found, slot_ts).to_dict("records"))
+                rows.extend(candidates_to_dataframe(found, slot_ts, dedupe=dedupe).to_dict("records"))
     else:
         slot_iso = slot_ts.isoformat()
-        payloads = [(ticker, slot_iso) for ticker in tickers]
+        payloads = [(ticker, slot_iso, bool(dedupe)) for ticker in tickers]
         with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init) as ex:
             for result in ex.map(_worker_scan, payloads, chunksize=24):
                 if result:
@@ -784,7 +862,7 @@ def scan_slot_candidates(
 
     if not rows:
         return pd.DataFrame()
-    df = _dedupe_candidate_frame(pd.DataFrame(rows))
+    df = _dedupe_candidate_frame(pd.DataFrame(rows)) if dedupe else pd.DataFrame(rows).drop_duplicates(subset=["candidate_id"], keep="first")
     if df.empty:
         return pd.DataFrame()
     return df.sort_values(["quality_score", "ticker"], ascending=[False, True]).reset_index(drop=True)
