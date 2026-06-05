@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -66,6 +67,9 @@ EXCLUDED_SETUPS = {
 
 # Parallel scan: number of worker processes for scan_slot. 0/1 = sequential.
 DEFAULT_SCAN_WORKERS = max(1, int(os.getenv("EQIDV2_ID5MIN_V7_SCAN_WORKERS", "8")))
+ENTRY_WINDOW_START = pd.Timestamp(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_START", "09:30")).time()
+ENTRY_WINDOW_END = pd.Timestamp(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END", "14:00")).time()
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "5"))
 # Emission window: at each scan, emit candidates whose signal bar is within
 # this many minutes before the latest available bar (and thus has a successor
 # bar for entry). A window (not a single bar) makes emission robust to a
@@ -73,6 +77,24 @@ DEFAULT_SCAN_WORKERS = max(1, int(os.getenv("EQIDV2_ID5MIN_V7_SCAN_WORKERS", "8"
 # the previous bar still fires, and when the late bar arrives next slot it
 # fires too. CSV dedup (signal_id) prevents double-writing.
 EMIT_WINDOW_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_EMIT_WINDOW_MIN", "15"))
+
+
+def _fmt_ist(ts: Any) -> str:
+    out = _ensure_ist_ts(ts)
+    offset = out.strftime("%z")
+    return f"{out.strftime('%Y-%m-%d %H:%M:%S')}{offset[:3]}:{offset[3:]}"
+
+
+def _candidate_entry_ts(c: "v2.Candidate") -> pd.Timestamp:
+    raw = getattr(c, "entry_ts", None)
+    if raw is None:
+        raw = pd.Timestamp(c.signal_ts) + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+    return _ensure_ist_ts(raw).floor("min")
+
+
+def _entry_window_ok(entry_ts: Any) -> bool:
+    t = _ensure_ist_ts(entry_ts).time()
+    return ENTRY_WINDOW_START <= t <= ENTRY_WINDOW_END
 
 
 def _read_one(fp: Path) -> Optional[pd.DataFrame]:
@@ -144,6 +166,13 @@ def scan_ticker_live(
     if df.empty:
         return []
 
+    # Trim to 3 calendar days before _prepare_5m: reduces compute from ~10 days to ~2-3
+    # trading days (~9x speedup). 3 days safely covers the previous trading day on Mondays.
+    _trim_start = (slot_ts - pd.Timedelta(days=3)).normalize()
+    df = df[df["date"] >= _trim_start].copy()
+    if df.empty:
+        return []
+
     if "date_only" not in df.columns:
         df["date_only"] = df["date"].dt.tz_convert(IST_TZ).dt.date
 
@@ -196,6 +225,8 @@ def scan_ticker_live(
         c_ts = pd.Timestamp(c.signal_ts)
         if c_ts.tz is None:
             c_ts = c_ts.tz_localize(IST_TZ)
+        if not _entry_window_ok(_candidate_entry_ts(c)):
+            continue
         if window_start <= c_ts < latest_bar:
             out.append(c)
     return out
@@ -232,11 +263,9 @@ def candidates_to_dataframe(candidates: Iterable["v2.Candidate"]) -> pd.DataFram
         bar_ts = pd.Timestamp(c.signal_ts)
         if bar_ts.tz is None:
             bar_ts = bar_ts.tz_localize(IST_TZ)
-        # Format with colon in offset (e.g. +05:30 not +0530) to match the
-        # backtester's signal_ts string format. Python's %z drops the colon
-        # by default; the slice trick inserts it.
-        offset = bar_ts.strftime("%z")
-        bar_time_str = f"{bar_ts.strftime('%Y-%m-%d %H:%M:%S')}{offset[:3]}:{offset[3:]}"
+        entry_ts = _candidate_entry_ts(c)
+        bar_time_str = _fmt_ist(bar_ts)
+        entry_time_str = _fmt_ist(entry_ts)
         diag = {
             "atr_pct": _finite_or_none(c.atr_pct),
             "close": _finite_or_none(c.signal_close),
@@ -257,6 +286,7 @@ def candidates_to_dataframe(candidates: Iterable["v2.Candidate"]) -> pd.DataFram
                 "side": str(c.side).upper(),
                 "setup": str(c.setup),
                 "bar_time_ist": bar_time_str,
+                "entry_time_ist": entry_time_str,
                 "entry_price": entry_price,
                 "sl_price": sl_price,
                 "target_price": tgt_price,
@@ -297,6 +327,31 @@ def invalidate_market_context() -> None:
 # so the large NIFTY context dict is never pickled per task. Workers read the
 # live store directly; v2 is pointed at LIVE_5M_DIR with v5's overrides.
 _WORKER_MARKET_CTX: Optional[Dict[str, Dict[str, Any]]] = None
+_WORKER_LAST_SLOT_ISO: Optional[str] = None
+
+# Persistent ProcessPool — reused across slots to avoid Windows spawn overhead (~5-15s/slot).
+_SCAN_POOL: Optional[ProcessPoolExecutor] = None
+_SCAN_POOL_WORKERS: int = 0
+_SCAN_POOL_DAY: Optional[str] = None
+
+
+def _replace_scan_pool(workers: int, today_str: str) -> None:
+    global _SCAN_POOL, _SCAN_POOL_WORKERS, _SCAN_POOL_DAY
+    if _SCAN_POOL is not None:
+        try:
+            _SCAN_POOL.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+    _SCAN_POOL = ProcessPoolExecutor(max_workers=workers, initializer=_worker_init)
+    _SCAN_POOL_WORKERS = workers
+    _SCAN_POOL_DAY = today_str
+
+
+def _get_scan_pool(workers: int, today_str: str) -> ProcessPoolExecutor:
+    global _SCAN_POOL, _SCAN_POOL_WORKERS, _SCAN_POOL_DAY
+    if _SCAN_POOL is None or _SCAN_POOL_WORKERS != workers or _SCAN_POOL_DAY != today_str:
+        _replace_scan_pool(workers, today_str)
+    return _SCAN_POOL
 
 
 def _worker_init() -> None:
@@ -314,9 +369,16 @@ def _worker_init() -> None:
 
 def _worker_scan(payload: Tuple[str, str]) -> List[Dict[str, Any]]:
     ticker, slot_iso = payload
-    global _WORKER_MARKET_CTX
+    global _WORKER_MARKET_CTX, _WORKER_LAST_SLOT_ISO
     if _WORKER_MARKET_CTX is None:
         _worker_init()
+    elif _WORKER_LAST_SLOT_ISO != slot_iso:
+        # Refresh NIFTY market context once per slot per worker.
+        try:
+            _WORKER_MARKET_CTX = v2._load_market_context()
+        except Exception:
+            pass
+    _WORKER_LAST_SLOT_ISO = slot_iso
     try:
         cands = scan_ticker_live(ticker, pd.Timestamp(slot_iso), _WORKER_MARKET_CTX or {})
     except Exception:
@@ -352,10 +414,34 @@ def scan_slot(
     else:
         slot_iso = slot_ts.isoformat()
         payloads = [(t, slot_iso) for t in tickers]
-        with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init) as ex:
-            for res in ex.map(_worker_scan, payloads, chunksize=24):
+        today_str = slot_ts.date().isoformat()
+        _t0 = time.perf_counter()
+        pool = _get_scan_pool(workers, today_str)
+        _t1 = time.perf_counter()
+        try:
+            for res in pool.map(_worker_scan, payloads, chunksize=24):
                 if res:
                     rows.extend(res)
+        except Exception as exc:
+            print(
+                f"[v7_live_scan] pool error ({type(exc).__name__}); sequential fallback this slot",
+                flush=True,
+            )
+            _replace_scan_pool(workers, today_str)
+            if market_ctx is None:
+                market_ctx = build_market_context_once()
+            for tkr in tickers:
+                try:
+                    c_list = scan_ticker_live(tkr, slot_ts, market_ctx)
+                except Exception:
+                    c_list = []
+                if c_list:
+                    rows.extend(candidates_to_dataframe(c_list).to_dict("records"))
+        _t2 = time.perf_counter()
+        print(
+            f"[v7_live_scan] n={len(tickers)} pool_get={_t1-_t0:.3f}s scan={_t2-_t1:.3f}s total={_t2-_t0:.3f}s",
+            flush=True,
+        )
 
     if not rows:
         return pd.DataFrame(), pd.DataFrame()

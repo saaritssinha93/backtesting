@@ -16,7 +16,7 @@ import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,7 @@ HEARTBEAT_DIR = SESSION_ROOT / "heartbeat"
 SLOT_MINUTES = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SLOT_MINUTES", "5"))
 POST_SLOT_DELAY_SEC = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_POST_SLOT_DELAY_SEC", "15"))
 DEFAULT_SCAN_WORKERS = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS", "8"))
+TIER123_SCAN_WORKERS = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS", str(DEFAULT_SCAN_WORKERS)))
 V8_LIVE_GATE_ENABLE = str(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_V8_GATE", "1")).strip().lower() not in {
     "0",
     "false",
@@ -60,8 +61,8 @@ RESEARCH_LIVE_FILTER_ENABLE = str(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_RESEARCH
     "disabled",
 }
 RESEARCH_LIVE_FILTER_MODE = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_RESEARCH_FILTER_MODE", "active").strip().lower()
-LONG_ANTI_CHASE_CLOSE_LOC_GT = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LONG_ANTI_CHASE_CLOSE_LOC_GT", "0.88"))
-LONG_ANTI_CHASE_VWAP_DIST_ATR_GT = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LONG_ANTI_CHASE_VWAP_DIST_ATR_GT", "0.52"))
+LONG_ANTI_CHASE_CLOSE_LOC_GT = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LONG_ANTI_CHASE_CLOSE_LOC_GT", "0.97"))
+LONG_ANTI_CHASE_VWAP_DIST_ATR_GT = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LONG_ANTI_CHASE_VWAP_DIST_ATR_GT", "3.50"))
 B_AVWAP_RECLAIM_RANKER_MIN = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_B_AVWAP_RECLAIM_RANKER_MIN", "0.65"))
 L_TREND_PULLBACK_PROBATION_BLOCK = str(
     os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_L_TREND_PULLBACK_PROBATION_BLOCK", "1")
@@ -118,6 +119,9 @@ RESEARCH_TRUTH_DIR = runtime_dir("live_research_v7_research_layer", "truth_table
 START_TIME = base_v15.dtime(9, 15)
 END_TIME = base_v15.dtime(15, 0)
 HARD_STOP_TIME = base_v15.dtime(15, 30)
+ENTRY_WINDOW_START_TIME = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_START", "09:30").strip()
+ENTRY_WINDOW_END_TIME = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END", "14:00").strip()
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN", "5"))
 
 LIVE_SAFE_RULE_FIELDS = {
     "_signal_hour",
@@ -212,6 +216,40 @@ def _ensure_ist_ts(ts: Any) -> pd.Timestamp:
     else:
         out = out.tz_convert(base_v15.IST)
     return out
+
+
+def _entry_window_ok_for_signal_ts(signal_ts: Any) -> bool:
+    entry_ts = _ensure_ist_ts(signal_ts).floor("min") + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+    t = entry_ts.time()
+    start_t = _parse_hhmm(ENTRY_WINDOW_START_TIME, "09:30")
+    end_t = _parse_hhmm(ENTRY_WINDOW_END_TIME, "14:00")
+    return start_t <= t <= end_t
+
+
+def _row_signal_ts(row: pd.Series) -> Optional[pd.Timestamp]:
+    for key in ("signal_time_ist", "bar_time_ist", "signal_bar_time_ist", "signal_datetime"):
+        raw = row.get(key, "")
+        if not str(raw or "").strip():
+            continue
+        try:
+            return _ensure_ist_ts(raw).floor("min")
+        except Exception:
+            continue
+    return None
+
+
+def _filter_entry_window(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    if df is None or df.empty:
+        return pd.DataFrame(), 0
+    keep: List[bool] = []
+    rejected = 0
+    for _, row in df.iterrows():
+        signal_ts = _row_signal_ts(row)
+        ok = signal_ts is not None and _entry_window_ok_for_signal_ts(signal_ts)
+        keep.append(bool(ok))
+        if not ok:
+            rejected += 1
+    return df.loc[keep].reset_index(drop=True), rejected
 
 
 def _next_slot_after(now: datetime) -> datetime:
@@ -628,6 +666,27 @@ def _select_uncovered_fallback_rows(rows: List[Dict[str, Any]]) -> pd.DataFrame:
 
 _RANKER_MEMORY_CACHE: Dict[str, Dict[tuple[str, str], float]] = {}
 
+# Universe: load once per trading day (filtered_stocks glob or CSV — cheap but wasteful per-slot).
+_UNIVERSE_CACHE_BY_DAY: Dict[str, List[str]] = {}
+
+
+def _load_universe_for_day(day: str) -> List[str]:
+    if day not in _UNIVERSE_CACHE_BY_DAY:
+        _UNIVERSE_CACHE_BY_DAY.clear()
+        _UNIVERSE_CACHE_BY_DAY[day] = _load_universe()
+    return _UNIVERSE_CACHE_BY_DAY[day]
+
+
+# v8 rules: loaded once per session (CSV never changes intraday).
+_V8_RULES_CACHE: Optional[pd.DataFrame] = None
+
+
+def _load_live_safe_v8_rules_cached() -> pd.DataFrame:
+    global _V8_RULES_CACHE
+    if _V8_RULES_CACHE is None:
+        _V8_RULES_CACHE = _load_live_safe_v8_rules()
+    return _V8_RULES_CACHE
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -773,7 +832,11 @@ def _research_filter_reasons(row: pd.Series) -> List[str]:
         and close_loc > LONG_ANTI_CHASE_CLOSE_LOC_GT
         and vwap_dist_atr > LONG_ANTI_CHASE_VWAP_DIST_ATR_GT
     ):
-        reasons.append("LONG_ANTI_CHASE_CLOSE_LOC_GT_0P88_AND_VWAP_DIST_ATR_GT_0P52")
+        reasons.append(
+            "LONG_ANTI_CHASE_"
+            f"CLOSE_LOC_GT_{LONG_ANTI_CHASE_CLOSE_LOC_GT:.2f}_"
+            f"VWAP_DIST_ATR_GT_{LONG_ANTI_CHASE_VWAP_DIST_ATR_GT:.2f}"
+        )
 
     if setup == "B_AVWAP_RECLAIM_REVERSAL" and (not np.isfinite(ranker_score) or ranker_score < B_AVWAP_RECLAIM_RANKER_MIN):
         reasons.append("LONG_B_AVWAP_RECLAIM_RANKER_LT_0P65")
@@ -913,7 +976,7 @@ def apply_v8_live_gate(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
         )
         return out, stats
 
-    rules = _load_live_safe_v8_rules()
+    rules = _load_live_safe_v8_rules_cached()
     if rules.empty:
         out = pd.DataFrame(early_rows)
         if not out.empty and {"candidate_id", "signal_time_ist", "ticker"}.issubset(out.columns):
@@ -1044,13 +1107,15 @@ def _append_audit(slot: pd.Timestamp, summary: Dict[str, Any]) -> None:
 
 def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[str, Any]:
     slot = _ensure_ist_ts(slot_ts).floor("min")
-    tickers = _load_universe()
+    day = slot.strftime("%Y-%m-%d")
+    tickers = _load_universe_for_day(day)
     started = time.perf_counter()
     try:
         market_ctx = candidate_scan.build_market_context_once()
     except Exception as exc:
         market_ctx = {}
         print(f"[{SESSION_NAME}] market context failed: {type(exc).__name__}: {exc}", flush=True)
+    _t_after_ctx = time.perf_counter()
 
     try:
         scanned_candidates = candidate_scan.scan_slot_candidates(
@@ -1069,8 +1134,12 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         print(f"[{SESSION_NAME}] scan failed: {type(exc).__name__}: {exc}", flush=True)
         candidates = pd.DataFrame()
         scanned_candidates = pd.DataFrame()
-
-    day = slot.strftime("%Y-%m-%d")
+    _t_after_scan = time.perf_counter()
+    print(
+        f"[{SESSION_NAME} timing] market_ctx={_t_after_ctx-started:.3f}s "
+        f"main_scan={_t_after_scan-_t_after_ctx:.3f}s",
+        flush=True,
+    )
     raw_candidates = add_live_ranker_scores(candidates.copy() if candidates is not None else pd.DataFrame(), day)
     raw_candidates_for_v11 = add_live_ranker_scores(
         scanned_candidates.copy() if scanned_candidates is not None else pd.DataFrame(),
@@ -1093,6 +1162,7 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
                     ab_gate_profile=V11_BACKTESTING_OVERLAY_AB_GATE_PROFILE,
                 )
             )
+            _t_tier123_start = time.perf_counter()
             tier_candidates = pd.DataFrame()
             tier_rejected = pd.DataFrame()
             tier_stats: Dict[str, Any] = {}
@@ -1102,7 +1172,12 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
                     tickers,
                     market_ctx=market_ctx,
                     profile=V11_BACKTESTING_OVERLAY_PROFILE,
+                    max_workers=TIER123_SCAN_WORKERS,
                 )
+            print(
+                f"[{SESSION_NAME} timing] tier123_scan={time.perf_counter()-_t_tier123_start:.3f}s",
+                flush=True,
+            )
             overlay_frames = [df for df in (v11_profile_candidates, tier_candidates) if df is not None and not df.empty]
             rejected_frames = [df for df in (v11_profile_rejected, tier_rejected) if df is not None and not df.empty]
             v11_overlay_candidates = pd.concat(overlay_frames, ignore_index=True, sort=False) if overlay_frames else pd.DataFrame()
@@ -1125,6 +1200,7 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
                     "v11_live_overlay_rejected_total": 0,
                 }
             )
+    _t_postproc_start = time.perf_counter()
     v8_candidates, gate_stats = apply_v8_live_gate(raw_candidates)
     gated_candidates, research_rejected, research_filter_stats = apply_research_live_filters(v8_candidates, day)
     regular_v7_gated_candidates = int(0 if gated_candidates is None else len(gated_candidates))
@@ -1135,7 +1211,10 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
             profile=V11_BACKTESTING_OVERLAY_PROFILE,
         )
     v11_overlay_stats["regular_v7_gated_candidates_before_v11_override"] = regular_v7_gated_candidates
-    v11_overlay_stats["final_candidates_after_v11_override"] = int(0 if gated_candidates is None else len(gated_candidates))
+    v11_overlay_stats["final_candidates_before_entry_window"] = int(0 if gated_candidates is None else len(gated_candidates))
+    gated_candidates, entry_window_rejected_final = _filter_entry_window(gated_candidates)
+    v11_overlay_stats["final_candidates_after_v11_override"] = int(len(gated_candidates))
+    _t_write_start = time.perf_counter()
 
     raw_write_stats = _append_daily_raw_candidates(raw_candidates, day)
     research_rejected_write_stats = _append_daily_research_filter_rejections(research_rejected, day)
@@ -1209,7 +1288,13 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         "v11_overlay_duplicates": int(v11_overlay_write_stats["duplicates"]),
         "v11_overlay_rejected_written": int(v11_overlay_rejected_write_stats["written"]),
         "v11_overlay_rejected_duplicates": int(v11_overlay_rejected_write_stats["duplicates"]),
+        "entry_window_start": ENTRY_WINDOW_START_TIME,
+        "entry_window_end": ENTRY_WINDOW_END_TIME,
+        "entry_signal_to_entry_lag_min": int(ENTRY_SIGNAL_TO_ENTRY_LAG_MIN),
+        "entry_window_rejected_final": int(entry_window_rejected_final),
         "elapsed_sec": round(time.perf_counter() - started, 3),
+        "_timing_postproc_sec": round(_t_write_start - _t_postproc_start, 3),
+        "_timing_writes_sec": round(time.perf_counter() - _t_write_start, 3),
         "csv_path": str(_daily_csv_path(day)),
         "raw_csv_path": str(_daily_raw_csv_path(day)),
         "research_filter_rejected_csv_path": str(_daily_research_filter_rejected_csv_path(day)),
@@ -1240,7 +1325,17 @@ def main() -> None:
     holidays = base_v15._read_holidays_safe()
     print(f"[LIVE] {SESSION_NAME}", flush=True)
     print(f"[INFO] root={SESSION_ROOT}", flush=True)
-    print(f"[INFO] scan_workers={int(args.scan_workers)} post_slot_delay={int(args.post_slot_delay_sec)}s", flush=True)
+    print(
+        f"[INFO] scan_workers={int(args.scan_workers)} "
+        f"tier123_scan_workers={int(TIER123_SCAN_WORKERS)} "
+        f"post_slot_delay={int(args.post_slot_delay_sec)}s",
+        flush=True,
+    )
+    print(
+        f"[INFO] entry_window={ENTRY_WINDOW_START_TIME}-{ENTRY_WINDOW_END_TIME} "
+        f"signal_to_entry_lag={ENTRY_SIGNAL_TO_ENTRY_LAG_MIN}m",
+        flush=True,
+    )
 
     if args.replay_slots:
         summaries = []

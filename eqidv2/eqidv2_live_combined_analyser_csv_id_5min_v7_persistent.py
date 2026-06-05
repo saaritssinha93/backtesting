@@ -85,6 +85,47 @@ SESSION_RUNTIME_DIR_NAME = "live_id_5min_v7_persistent"
 START_TIME = base_v15.START_TIME
 END_TIME = base_v15.dtime(15, 0)
 HARD_STOP_TIME = base_v15.dtime(15, 30)
+ENTRY_WINDOW_START_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_START", "09:30").strip()
+ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END", "14:00").strip()
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "5"))
+
+
+def _parse_hhmm_time(value: str, default: str):
+    raw = str(value or default).strip()
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return datetime.strptime(default, "%H:%M").time()
+
+
+ENTRY_WINDOW_START = _parse_hhmm_time(ENTRY_WINDOW_START_RAW, "09:30")
+ENTRY_WINDOW_END = _parse_hhmm_time(ENTRY_WINDOW_END_RAW, "14:00")
+
+
+def _entry_time_from_signal_row(row: pd.Series, bar_time_ts: datetime) -> datetime:
+    for key in ("entry_time_ist", "entry_ts", "entry_datetime_ist"):
+        raw = row.get(key, "")
+        parsed = base_v15._parse_ist_timestamp(str(raw)) if str(raw or "").strip() else None
+        if parsed is not None:
+            return parsed
+    legacy_entry_raw = row.get("signal_entry_datetime_ist", "")
+    legacy_entry_ts = (
+        base_v15._parse_ist_timestamp(str(legacy_entry_raw))
+        if str(legacy_entry_raw or "").strip()
+        else None
+    )
+    if legacy_entry_ts is not None:
+        if abs((legacy_entry_ts - bar_time_ts).total_seconds()) < 1:
+            return bar_time_ts + timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+        return legacy_entry_ts
+    return bar_time_ts + timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+
+
+def _entry_window_ok(entry_time_ts: datetime) -> bool:
+    t = entry_time_ts.astimezone(base_v15.IST).time()
+    return ENTRY_WINDOW_START <= t <= ENTRY_WINDOW_END
 
 
 def _safe_float(value: Any, default: float = np.nan) -> float:
@@ -209,6 +250,7 @@ def _write_side_signals_csv(
     skipped_duplicate_id = 0
     skipped_intraday_ticker = 0
     skipped_missing_time = 0
+    skipped_entry_window = 0
 
     with base_v15._locked_signal_csv(str(csv_path)):
         base_v15._ensure_signal_csv_schema(str(csv_path))
@@ -236,10 +278,15 @@ def _write_side_signals_csv(
                 if not ticker or bar_time_ts is None:
                     skipped_missing_time += 1
                     continue
+                entry_time_ts = _entry_time_from_signal_row(row, bar_time_ts)
+                if not _entry_window_ok(entry_time_ts):
+                    skipped_entry_window += 1
+                    continue
                 if ticker in existing_tickers or ticker in run_tickers:
                     skipped_intraday_ticker += 1
                     continue
                 bar_time = str(bar_time_ts)
+                entry_time = str(entry_time_ts)
                 dedupe_key = base_v15._signal_dedupe_key(ticker, side_upper, bar_time, setup)
                 if dedupe_key in existing_keys or dedupe_key in run_keys:
                     skipped_duplicate_key += 1
@@ -299,7 +346,7 @@ def _write_side_signals_csv(
                     "rsi": round(rsi_val, 2),
                     "adx": round(adx_val, 2),
                     "quantity": int(qty),
-                    "signal_entry_datetime_ist": bar_time,
+                    "signal_entry_datetime_ist": entry_time,
                     "signal_bar_time_ist": bar_time,
                 }
                 writer.writerow(out_row)
@@ -313,7 +360,8 @@ def _write_side_signals_csv(
         f"[ID5MIN_V7 {side_upper} CSV] scanned={len(df_side)} written={written} "
         f"skipped_dup_key={skipped_duplicate_key} skipped_dup_id={skipped_duplicate_id} "
         f"skipped_intraday_ticker={skipped_intraday_ticker} "
-        f"skipped_missing_time={skipped_missing_time} path={csv_path}",
+        f"skipped_missing_time={skipped_missing_time} skipped_entry_window={skipped_entry_window} "
+        f"entry_window={ENTRY_WINDOW_START_RAW}-{ENTRY_WINDOW_END_RAW} path={csv_path}",
         flush=True,
     )
     return written
@@ -444,6 +492,7 @@ def _run_slot_scan(
     except Exception as exc:
         market_ctx = {}
         print(f"[ID5MIN_V7] market_ctx load failed: {type(exc).__name__}: {exc}", flush=True)
+    _t_after_ctx = time.perf_counter()
 
     try:
         short_df, long_df = v7_live_scan.scan_slot(slot_ist, tickers, market_ctx)
@@ -452,6 +501,11 @@ def _run_slot_scan(
         long_df = pd.DataFrame()
         print(f"[ID5MIN_V7] scan_slot failed: {type(exc).__name__}: {exc}", flush=True)
     scan_elapsed = time.perf_counter() - scan_started
+    print(
+        f"[ID5MIN_V7 timing] market_ctx={_t_after_ctx-scan_started:.3f}s "
+        f"scan_slot={scan_elapsed-(_t_after_ctx-scan_started):.3f}s total_scan={scan_elapsed:.3f}s",
+        flush=True,
+    )
 
     signal_day_str = slot_ist.strftime("%Y-%m-%d")
     raw_short_rows = int(0 if short_df is None else len(short_df))
@@ -482,6 +536,9 @@ def _run_slot_scan(
         "long_rows": int(0 if long_df is None else len(long_df)),
         "short_written": int(short_written),
         "long_written": int(long_written),
+        "entry_window_start": ENTRY_WINDOW_START_RAW,
+        "entry_window_end": ENTRY_WINDOW_END_RAW,
+        "entry_signal_to_entry_lag_min": int(ENTRY_SIGNAL_TO_ENTRY_LAG_MIN),
         "end_to_end_elapsed_sec": round(scan_elapsed, 3),
     }
     summary_path = _session_summary_dir(slot_runtime_root) / f"slot_summary_{slot_key(slot_ist)}.json"

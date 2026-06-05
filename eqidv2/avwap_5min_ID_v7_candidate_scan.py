@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -109,10 +110,10 @@ RESEARCH_PROBATION_SETUPS = {
     if x.strip()
 }
 RESEARCH_ANTI_CHASE_LONG_CLOSE_LOC_MIN = float(
-    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ANTI_CHASE_LONG_CLOSE_LOC_MIN", "0.88")
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ANTI_CHASE_LONG_CLOSE_LOC_MIN", "0.97")
 )
 RESEARCH_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN = float(
-    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN", "0.52")
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN", "3.50")
 )
 
 
@@ -590,6 +591,13 @@ def scan_ticker_signal_candle(
     if df.empty:
         return []
 
+    # Trim to 3 calendar days before _prepare_5m: reduces compute from ~10 days to ~2-3
+    # trading days (~9x speedup). 3 days safely covers the previous trading day on Mondays.
+    _trim_start = (slot_ts - pd.Timedelta(days=3)).normalize()
+    df = df[df["date"] >= _trim_start].copy()
+    if df.empty:
+        return []
+
     try:
         prepared = v2._prepare_5m(df)
     except Exception:
@@ -783,7 +791,7 @@ def _dedupe_candidate_frame(df: pd.DataFrame) -> pd.DataFrame:
 _MARKET_CTX_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
-def build_market_context_once() -> Dict[str, Dict[str, Any]]:
+def build_market_context_once() -> Dict[str, Dict[str, Any]]:  # noqa: F811
     global _MARKET_CTX_CACHE
     if not _MARKET_CTX_CACHE:
         v2.DATA_ROOT_5M = LIVE_5M_DIR
@@ -796,6 +804,32 @@ def build_market_context_once() -> Dict[str, Dict[str, Any]]:
 
 
 _WORKER_MARKET_CTX: Optional[Dict[str, Dict[str, Any]]] = None
+_WORKER_LAST_SLOT_ISO: Optional[str] = None
+
+# Persistent ProcessPool — reused across slots to avoid Windows spawn overhead (~5-15s/slot).
+# Recreated at day change so workers get fresh market context for the new trading day.
+_SCAN_POOL: Optional[ProcessPoolExecutor] = None
+_SCAN_POOL_WORKERS: int = 0
+_SCAN_POOL_DAY: Optional[str] = None
+
+
+def _replace_scan_pool(workers: int, today_str: str) -> None:
+    global _SCAN_POOL, _SCAN_POOL_WORKERS, _SCAN_POOL_DAY
+    if _SCAN_POOL is not None:
+        try:
+            _SCAN_POOL.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+    _SCAN_POOL = ProcessPoolExecutor(max_workers=workers, initializer=_worker_init)
+    _SCAN_POOL_WORKERS = workers
+    _SCAN_POOL_DAY = today_str
+
+
+def _get_scan_pool(workers: int, today_str: str) -> ProcessPoolExecutor:
+    global _SCAN_POOL, _SCAN_POOL_WORKERS, _SCAN_POOL_DAY
+    if _SCAN_POOL is None or _SCAN_POOL_WORKERS != workers or _SCAN_POOL_DAY != today_str:
+        _replace_scan_pool(workers, today_str)
+    return _SCAN_POOL
 
 
 def _worker_init() -> None:
@@ -817,9 +851,16 @@ def _worker_scan(payload: Tuple[str, str] | Tuple[str, str, bool]) -> List[Dict[
     else:
         ticker, slot_iso = payload
         dedupe = True
-    global _WORKER_MARKET_CTX
+    global _WORKER_MARKET_CTX, _WORKER_LAST_SLOT_ISO
     if _WORKER_MARKET_CTX is None:
         _worker_init()
+    elif _WORKER_LAST_SLOT_ISO != slot_iso:
+        # Refresh NIFTY market context once per slot per worker (keeps market_ret fresh).
+        try:
+            _WORKER_MARKET_CTX = v2._load_market_context()
+        except Exception:
+            pass
+    _WORKER_LAST_SLOT_ISO = slot_iso
     try:
         out = scan_ticker_signal_candle(ticker, pd.Timestamp(slot_iso), _WORKER_MARKET_CTX or {})
     except Exception:
@@ -855,10 +896,34 @@ def scan_slot_candidates(
     else:
         slot_iso = slot_ts.isoformat()
         payloads = [(ticker, slot_iso, bool(dedupe)) for ticker in tickers]
-        with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init) as ex:
-            for result in ex.map(_worker_scan, payloads, chunksize=24):
+        today_str = slot_ts.date().isoformat()
+        _t0 = time.perf_counter()
+        pool = _get_scan_pool(workers, today_str)
+        _t1 = time.perf_counter()
+        try:
+            for result in pool.map(_worker_scan, payloads, chunksize=24):
                 if result:
                     rows.extend(result)
+        except Exception as exc:
+            print(
+                f"[candidate_scan] pool error ({type(exc).__name__}); sequential fallback this slot",
+                flush=True,
+            )
+            _replace_scan_pool(workers, today_str)
+            if market_ctx is None:
+                market_ctx = build_market_context_once()
+            for ticker in tickers:
+                try:
+                    found = scan_ticker_signal_candle(ticker, slot_ts, market_ctx)
+                except Exception:
+                    found = []
+                if found:
+                    rows.extend(candidates_to_dataframe(found, slot_ts, dedupe=dedupe).to_dict("records"))
+        _t2 = time.perf_counter()
+        print(
+            f"[candidate_scan] n={len(tickers)} pool_get={_t1-_t0:.3f}s scan={_t2-_t1:.3f}s total={_t2-_t0:.3f}s",
+            flush=True,
+        )
 
     if not rows:
         return pd.DataFrame()
