@@ -88,6 +88,14 @@ HARD_STOP_TIME = base_v15.dtime(15, 30)
 ENTRY_WINDOW_START_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_START", "09:30").strip()
 ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END", "14:00").strip()
 ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "5"))
+MAX_ENTRY_TO_DETECTION_LAG_SEC = float(
+    os.getenv("EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC", "75")
+)
+# This retired scanner shares its CSV writer with the active 1-minute entry
+# engine. Keep the scanner itself shadow-only unless explicitly enabled.
+LEGACY_LIVE_CSV_WRITE_ENABLED = str(
+    os.getenv("EQIDV2_ID5MIN_V7_LEGACY_WRITE_LIVE_CSVS", "0")
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_hhmm_time(value: str, default: str):
@@ -244,13 +252,16 @@ def _write_side_signals_csv(
         return 0
 
     csv_path = _signal_csv_path(signal_day_str, side_upper)
-    received_time = base_v15.now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
+    received_ts = base_v15.now_ist()
+    received_time = received_ts.strftime("%Y-%m-%d %H:%M:%S%z")
     written = 0
     skipped_duplicate_key = 0
     skipped_duplicate_id = 0
     skipped_intraday_ticker = 0
     skipped_missing_time = 0
     skipped_entry_window = 0
+    skipped_stale_entry = 0
+    skipped_future_entry = 0
 
     with base_v15._locked_signal_csv(str(csv_path)):
         base_v15._ensure_signal_csv_schema(str(csv_path))
@@ -282,6 +293,14 @@ def _write_side_signals_csv(
                 if not _entry_window_ok(entry_time_ts):
                     skipped_entry_window += 1
                     continue
+                entry_to_detection_lag_sec = (received_ts - entry_time_ts).total_seconds()
+                if MAX_ENTRY_TO_DETECTION_LAG_SEC > 0:
+                    if entry_to_detection_lag_sec < 0:
+                        skipped_future_entry += 1
+                        continue
+                    if entry_to_detection_lag_sec > MAX_ENTRY_TO_DETECTION_LAG_SEC:
+                        skipped_stale_entry += 1
+                        continue
                 if ticker in existing_tickers or ticker in run_tickers:
                     skipped_intraday_ticker += 1
                     continue
@@ -330,7 +349,10 @@ def _write_side_signals_csv(
 
                 out_row = {
                     "signal_id": signal_id,
-                    "signal_datetime": bar_time,
+                    # V7 executors and dashboard treat signal_datetime as the
+                    # executable handoff time. The source candle is retained
+                    # separately in signal_bar_time_ist.
+                    "signal_datetime": entry_time,
                     "received_time": received_time,
                     "detected_time_ist": received_time,
                     "logtime_ist": received_time,
@@ -361,6 +383,8 @@ def _write_side_signals_csv(
         f"skipped_dup_key={skipped_duplicate_key} skipped_dup_id={skipped_duplicate_id} "
         f"skipped_intraday_ticker={skipped_intraday_ticker} "
         f"skipped_missing_time={skipped_missing_time} skipped_entry_window={skipped_entry_window} "
+        f"skipped_stale_entry={skipped_stale_entry} skipped_future_entry={skipped_future_entry} "
+        f"max_entry_to_detection_lag_sec={MAX_ENTRY_TO_DETECTION_LAG_SEC:g} "
         f"entry_window={ENTRY_WINDOW_START_RAW}-{ENTRY_WINDOW_END_RAW} path={csv_path}",
         flush=True,
     )
@@ -539,6 +563,8 @@ def _run_slot_scan(
         "entry_window_start": ENTRY_WINDOW_START_RAW,
         "entry_window_end": ENTRY_WINDOW_END_RAW,
         "entry_signal_to_entry_lag_min": int(ENTRY_SIGNAL_TO_ENTRY_LAG_MIN),
+        "max_entry_to_detection_lag_sec": float(MAX_ENTRY_TO_DETECTION_LAG_SEC),
+        "legacy_live_csv_write_enabled": bool(LEGACY_LIVE_CSV_WRITE_ENABLED),
         "end_to_end_elapsed_sec": round(scan_elapsed, 3),
     }
     summary_path = _session_summary_dir(slot_runtime_root) / f"slot_summary_{slot_key(slot_ist)}.json"
@@ -625,7 +651,9 @@ def main() -> None:
     print(f"[INFO] runtime_root={runtime_root}", flush=True)
     print(
         f"[INFO] snapshot_workers={int(args.snapshot_workers)} scan_workers={int(args.scan_workers)} "
-        f"shard_count={int(args.shard_count)} slot_minutes={SLOT_MINUTES}",
+        f"shard_count={int(args.shard_count)} slot_minutes={SLOT_MINUTES} "
+        f"legacy_live_csv_write_enabled={LEGACY_LIVE_CSV_WRITE_ENABLED} "
+        f"max_entry_to_detection_lag_sec={MAX_ENTRY_TO_DETECTION_LAG_SEC:g}",
         flush=True,
     )
 
@@ -686,6 +714,7 @@ def main() -> None:
             snapshot_workers=int(args.snapshot_workers),
             scan_workers=int(args.scan_workers),
             shard_count=int(args.shard_count),
+            write_live_csvs=LEGACY_LIVE_CSV_WRITE_ENABLED,
         )
         slot_elapsed = time.perf_counter() - slot_started
         base_v15._touch_runtime_status(

@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 import eqidv2_signal_discovery_v7_5min_id_persistent as live_discovery
+import eqidv2_entry_engine_1min_v5_id as live_entry_engine
 import avwap_5min_ID_v7_candidate_scan as candidate_scan
 import avwap_5min_ID_v5_backtesting as v5
 import avwap_5min_ID_v6_backtesting as v6
@@ -321,6 +322,63 @@ def _v7_entry_engine_raw_rows(candidates: pd.DataFrame) -> tuple[pd.DataFrame, p
     return pd.DataFrame(rows), pd.DataFrame(rejects)
 
 
+@lru_cache(maxsize=None)
+def _load_1m_for_live_entry_engine(ticker: str) -> pd.DataFrame | None:
+    path = v6.DATA_1M_DIR / f"{str(ticker).upper()}_stocks_indicators_1min.parquet"
+    if not path.exists():
+        return None
+    columns = ["date", "open", "high", "low", "close", "volume", "RSI", "ADX"]
+    try:
+        try:
+            df = pd.read_parquet(path, columns=columns)
+        except Exception:
+            df = pd.read_parquet(path)
+    except Exception:
+        return None
+    if df.empty or "date" not in df.columns:
+        return None
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if getattr(df["date"].dt, "tz", None) is None:
+        df["date"] = df["date"].dt.tz_localize("UTC").dt.tz_convert("Asia/Kolkata")
+    else:
+        df["date"] = df["date"].dt.tz_convert("Asia/Kolkata")
+    return df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+
+def _live_entry_raw_by_ticker(candidates: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    if candidates is None or candidates.empty or "ticker" not in candidates.columns:
+        return {}
+    raw: dict[str, pd.DataFrame] = {}
+    for ticker in sorted({str(x).upper().strip() for x in candidates["ticker"] if str(x).strip()}):
+        df = _load_1m_for_live_entry_engine(ticker)
+        if df is not None and not df.empty:
+            raw[ticker] = df
+    return raw
+
+
+def _apply_live_entry_engine_filters(
+    raw_entries: pd.DataFrame,
+    raw_by_ticker: dict[str, pd.DataFrame],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if raw_entries is None or raw_entries.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    work = raw_entries.copy()
+    sig = pd.to_datetime(work.get("signal_time_ist"), errors="coerce")
+    if getattr(sig.dt, "tz", None) is None:
+        sig = sig.dt.tz_localize("Asia/Kolkata")
+    else:
+        sig = sig.dt.tz_convert("Asia/Kolkata")
+    work["pre_momentum_cutoff_ist"] = sig.map(lambda x: _fmt_ist(x + pd.Timedelta(seconds=live_entry_engine.ENTRY_DELAY_SEC)))
+
+    v11_entries, v11_rejected, _ = live_entry_engine._apply_v11_entry_overlay(work)
+    pre_entries, pre_rejected, _ = live_entry_engine._apply_pre_entry_momentum_gate(v11_entries, raw_by_ticker)
+    rejected_frames = [df for df in (v11_rejected, pre_rejected) if df is not None and not df.empty]
+    rejected = pd.concat(rejected_frames, ignore_index=True, sort=False) if rejected_frames else pd.DataFrame()
+    return pre_entries, rejected
+
+
 def _select_v7_entry_engine_signals(raw_entries: pd.DataFrame) -> pd.DataFrame:
     if raw_entries is None or raw_entries.empty:
         return pd.DataFrame()
@@ -368,7 +426,21 @@ def _select_v7_entry_engine_signals(raw_entries: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns=["_score_num", "_signal_ts", "_day", "_slot"], errors="ignore").reset_index(drop=True)
 
 
-def _build_v7_entry_engine_signals(candidates: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _build_v7_entry_engine_signals(
+    candidates: pd.DataFrame,
+    *,
+    live_entry_filters: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if live_entry_filters:
+        raw_by_ticker = _live_entry_raw_by_ticker(candidates)
+        raw_entries = live_entry_engine._build_entry_rows(candidates, raw_by_ticker) if raw_by_ticker else pd.DataFrame()
+        fetch_rejects = live_entry_engine._entry_reject_audit(candidates, raw_by_ticker)
+        filtered_entries, live_rejects = _apply_live_entry_engine_filters(raw_entries, raw_by_ticker)
+        reject_frames = [df for df in (fetch_rejects, live_rejects) if df is not None and not df.empty]
+        rejects = pd.concat(reject_frames, ignore_index=True, sort=False) if reject_frames else pd.DataFrame()
+        selected = _select_v7_entry_engine_signals(filtered_entries)
+        return selected, raw_entries, rejects
+
     raw_entries, rejects = _v7_entry_engine_raw_rows(candidates)
     selected = _select_v7_entry_engine_signals(raw_entries)
     return selected, raw_entries, rejects
@@ -1532,7 +1604,8 @@ def _run_historical_full_day(args: argparse.Namespace) -> int:
     pipeline = _apply_v7_live_strategy(raw_candidates, historical_date)
     live_like_candidates = pipeline["live_like_candidates"]
     entry_engine_signals, entry_engine_raw, entry_engine_rejects = _build_v7_entry_engine_signals(
-        pipeline["pre_dedupe_live_candidates"]
+        pipeline["pre_dedupe_live_candidates"],
+        live_entry_filters=bool(args.live_entry_filters),
     )
     pipeline["ranked_raw_candidates"].to_csv(out_dir / "historical_full_day_ranked_raw_candidates.csv", index=False)
     pipeline["v8_gated_candidates"].to_csv(out_dir / "historical_full_day_v8_gated_candidates.csv", index=False)
@@ -1590,6 +1663,7 @@ def _run_historical_full_day(args: argparse.Namespace) -> int:
             f"candidate_snapshot_dir={snapshot_dir}\n"
             f"candidate_5m_dir={data_root}\n"
             f"entry_fill_model={args.entry_fill_model}\n"
+            f"live_entry_filters={bool(args.live_entry_filters)}\n"
             "entry_model=v7 1-minute entry engine, next 1-minute open after 5-minute signal\n"
             "candidate_source=candidate_scan.scan_slot_candidates regenerated from historical 5-minute bars\n"
             "live_strategy_pipeline=add_live_ranker_scores -> apply_v8_live_gate -> apply_research_live_filters\n"
@@ -1622,6 +1696,7 @@ def _run_historical_full_day(args: argparse.Namespace) -> int:
         f"candidate_snapshot_dir={snapshot_dir}\n"
         f"candidate_5m_dir={data_root}\n"
         f"entry_fill_model={args.entry_fill_model}\n"
+        f"live_entry_filters={bool(args.live_entry_filters)}\n"
         "entry_model=v7 1-minute entry engine, next 1-minute open after 5-minute signal\n"
         "candidate_source=candidate_scan.scan_slot_candidates regenerated from historical 5-minute bars\n"
         "live_strategy_pipeline=add_live_ranker_scores -> apply_v8_live_gate -> apply_research_live_filters\n"
@@ -1696,7 +1771,8 @@ def _run_historical_all_available(args: argparse.Namespace) -> int:
 
         pipeline = _apply_v7_live_strategy(raw_candidates, day)
         entry_engine_signals, entry_engine_raw, entry_engine_rejects = _build_v7_entry_engine_signals(
-            pipeline["pre_dedupe_live_candidates"]
+            pipeline["pre_dedupe_live_candidates"],
+            live_entry_filters=bool(args.live_entry_filters),
         )
         for key, filename, bucket in [
             ("ranked_raw_candidates", "ranked_raw_candidates.csv", ranked_frames),
@@ -1784,6 +1860,7 @@ def _run_historical_all_available(args: argparse.Namespace) -> int:
         "candidate_5m_dir_selection=primary root when date exists there, else fallback root\n"
         f"data_1m_dir={v6.DATA_1M_DIR}\n"
         f"entry_fill_model={args.entry_fill_model}\n"
+        f"live_entry_filters={bool(args.live_entry_filters)}\n"
         "entry_model=v7 1-minute entry engine, next 1-minute open after 5-minute signal\n"
         "candidate_source=candidate_scan.scan_slot_candidates regenerated from historical 5-minute bars\n"
         "live_strategy_pipeline=add_live_ranker_scores -> apply_v8_live_gate -> apply_research_live_filters\n"
@@ -1957,6 +2034,11 @@ def main() -> int:
             "ltp_on_signal_1m_open mirrors the live bat's ltp_on_signal mode using "
             "the next 1-minute open plus v7 slippage/rebased SL-target."
         ),
+    )
+    ap.add_argument(
+        "--live_entry_filters",
+        action="store_true",
+        help="apply the live entry-engine v11 overlay and pre-entry momentum gate before historical selection",
     )
     args = ap.parse_args()
 

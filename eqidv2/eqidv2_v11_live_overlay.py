@@ -10,6 +10,8 @@ can apply the same setup rules.
 from __future__ import annotations
 
 import math
+import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
@@ -90,6 +92,15 @@ TIER123_MR_FADE_LONG_MIN_VOL_RATIO = 2.473917
 TIER123_MR_FADE_SHORT_MAX_VOL_RATIO = 1.698991
 TIER123_MR_FADE_SHORT_MIN_QUALITY_SCORE = 60.674989
 TIER123_MAX_RAW_PER_SETUP = 2500
+TIER123_LIVE_SCAN_WORKERS = max(
+    1,
+    int(
+        os.getenv(
+            "EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS",
+            os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS", "8"),
+        )
+    ),
+)
 
 SELECTED_STRATEGY_PROFILE_CHOICES = (
     "none",
@@ -874,11 +885,12 @@ def _scan_tier123_ticker_slot(
         df["date"] = df["date"].dt.tz_localize(IST_TZ)
     else:
         df["date"] = df["date"].dt.tz_convert(IST_TZ)
-    df = df.loc[df["date"] <= slot_ts].copy()
+    day_start = slot_ts.normalize()
+    df = df.loc[(df["date"] >= day_start) & (df["date"] <= slot_ts)].copy()
     if df.empty:
         return []
     prepared = _tier123_prepare_5m(df)
-    day_df = prepared.loc[prepared["date"].dt.strftime("%Y-%m-%d").eq(slot_ts.strftime("%Y-%m-%d"))].copy()
+    day_df = prepared
     if len(day_df) < 15:
         return []
     day_df = day_df.reset_index(drop=True)
@@ -932,6 +944,7 @@ def _scan_tier123_ticker_slot(
         np.isfinite(ema20)
         and np.isfinite(ema50)
         and np.isfinite(ema20_slope)
+        and minute >= TIER123_T_STAIR_SHORT_MIN_SIGNAL_MINUTE
         and minute <= TIER123_T_STAIR_SHORT_MAX_SIGNAL_MINUTE
         and regime in {"BEAR", "TREND"}
         and ema20_slope < 0
@@ -994,6 +1007,26 @@ def _scan_tier123_ticker_slot(
     return rows
 
 
+_TIER123_WORKER_MARKET_CTX: Dict[str, Dict[str, Any]] = {}
+
+
+def _tier123_worker_init(market_ctx: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
+    global _TIER123_WORKER_MARKET_CTX
+    _TIER123_WORKER_MARKET_CTX = market_ctx or {}
+
+
+def _tier123_worker_scan(payload: tuple[str, str]) -> list[dict]:
+    ticker, slot_iso = payload
+    try:
+        return _scan_tier123_ticker_slot(
+            str(ticker).upper(),
+            pd.Timestamp(slot_iso),
+            _TIER123_WORKER_MARKET_CTX,
+        )
+    except Exception:
+        return []
+
+
 def _tier123_probe_gate(raw: pd.DataFrame) -> pd.DataFrame:
     if raw is None or raw.empty:
         return pd.DataFrame() if raw is None else raw
@@ -1017,10 +1050,15 @@ def scan_tier123_live_slot(
     *,
     market_ctx: Optional[Dict[str, Dict[str, Any]]] = None,
     profile: str | None = DEFAULT_SELECTED_STRATEGY_PROFILE,
+    max_workers: Optional[int] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
     profile_n = _normalise_selected_strategy_profile(profile)
     stats: Dict[str, Any] = {
         "v11_tier123_live_enabled": bool(profile_n == TIER123_BALANCED_PROFILE),
+        "v11_tier123_live_scan_workers": 0,
+        "v11_tier123_live_scan_mode": "disabled",
+        "v11_tier123_live_tickers_scanned": 0,
+        "v11_tier123_live_scan_elapsed_sec": 0.0,
         "v11_tier123_live_raw_candidates": 0,
         "v11_tier123_live_probe_gated": 0,
         "v11_tier123_live_selected": 0,
@@ -1030,15 +1068,71 @@ def scan_tier123_live_slot(
         return pd.DataFrame(), pd.DataFrame(), stats
 
     slot_ts = _normalise_ts(slot).floor("min")
+    started = pd.Timestamp.now()
+    signal_minute = float(slot_ts.hour * 60 + slot_ts.minute)
+    tier123_first_signal_minute = min(660.0, TIER123_T_STAIR_SHORT_MIN_SIGNAL_MINUTE)
+    if signal_minute < tier123_first_signal_minute:
+        stats.update(
+            {
+                "v11_tier123_live_scan_mode": "time_window_skipped",
+                "v11_tier123_live_skip_reason": (
+                    f"signal_minute {signal_minute:.0f} before tier123 first eligible minute "
+                    f"{tier123_first_signal_minute:.0f}"
+                ),
+                "v11_tier123_live_scan_elapsed_sec": round(
+                    (pd.Timestamp.now() - started).total_seconds(),
+                    3,
+                ),
+            }
+        )
+        return pd.DataFrame(), pd.DataFrame(), stats
+    eligible_tickers = [
+        str(ticker).strip().upper()
+        for ticker in tickers
+        if str(ticker).strip()
+        and not str(ticker).strip().upper().startswith("NIFTY")
+        and not str(ticker).strip().upper().endswith("BEES")
+    ]
+    configured_workers = int(max_workers if max_workers is not None else TIER123_LIVE_SCAN_WORKERS)
+    workers = min(max(1, configured_workers), max(1, len(eligible_tickers)))
+    stats.update(
+        {
+            "v11_tier123_live_scan_workers": int(workers),
+            "v11_tier123_live_scan_mode": "parallel_process_pool" if workers > 1 else "serial",
+            "v11_tier123_live_tickers_scanned": int(len(eligible_tickers)),
+        }
+    )
     rows: list[dict] = []
-    for ticker in tickers:
-        ticker_s = str(ticker).strip().upper()
-        if not ticker_s or ticker_s.startswith("NIFTY") or ticker_s.endswith("BEES"):
-            continue
+    if workers <= 1:
+        for ticker_s in eligible_tickers:
+            try:
+                rows.extend(_scan_tier123_ticker_slot(ticker_s, slot_ts, market_ctx))
+            except Exception:
+                continue
+    else:
+        payloads = [(ticker_s, slot_ts.isoformat()) for ticker_s in eligible_tickers]
         try:
-            rows.extend(_scan_tier123_ticker_slot(ticker_s, slot_ts, market_ctx))
-        except Exception:
-            continue
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_tier123_worker_init,
+                initargs=(market_ctx or {},),
+            ) as ex:
+                for result in ex.map(_tier123_worker_scan, payloads, chunksize=24):
+                    if result:
+                        rows.extend(result)
+        except Exception as exc:
+            rows = []
+            stats["v11_tier123_live_scan_mode"] = "serial_fallback"
+            stats["v11_tier123_live_parallel_error"] = f"{type(exc).__name__}: {exc}"
+            for ticker_s in eligible_tickers:
+                try:
+                    rows.extend(_scan_tier123_ticker_slot(ticker_s, slot_ts, market_ctx))
+                except Exception:
+                    continue
+    stats["v11_tier123_live_scan_elapsed_sec"] = round(
+        (pd.Timestamp.now() - started).total_seconds(),
+        3,
+    )
     raw = pd.DataFrame(rows)
     stats["v11_tier123_live_raw_candidates"] = int(len(raw))
     gated = _tier123_probe_gate(raw)

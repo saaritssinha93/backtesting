@@ -41,8 +41,13 @@ LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
 SIGNAL_DISCOVERY_V7_ROOT = runtime_dir("signal_discovery_v7_5mins_ID")
 SIGNAL_DISCOVERY_V7_LATEST_DIR = SIGNAL_DISCOVERY_V7_ROOT / "latest"
 SIGNAL_DISCOVERY_V7_CSV_DIR = SIGNAL_DISCOVERY_V7_ROOT / "csv"
+SLOT_READY_5M_DIR = runtime_dir("slot_ready_5m")
 V7_RESEARCH_LAYER_ROOT = runtime_dir("live_research_v7_research_layer")
 V7_RESEARCH_LAYER_LATEST_DIR = V7_RESEARCH_LAYER_ROOT / "latest"
+DAILY_LIVE_V7_RESEARCH_ROOT = runtime_dir("daily_live_v7_research_session")
+DAILY_LIVE_V7_RESEARCH_LATEST_DIR = DAILY_LIVE_V7_RESEARCH_ROOT / "latest"
+V7_PRE_MOMENTUM_FILTER_ANALYST_ROOT = runtime_dir("v7_pre_momentum_filter_analyst")
+V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR = V7_PRE_MOMENTUM_FILTER_ANALYST_ROOT / "latest"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 IST = ZoneInfo("Asia/Kolkata")
 OPEN_LIVE_TRADES_STATE_PATTERN_V5 = "open_live_trades_state_{}_v5.json"
@@ -105,6 +110,8 @@ LOG_FILES: Dict[str, str] = {
     "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID/heartbeat/candidate_tickers.status.json",
     "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID/heartbeat/entry_engine.status.json",
     "v7_research_layer":                "live_research_v7_research_layer/latest/latest_summary.json",
+    "daily_live_v7_research_session":   "daily_live_v7_research_session/latest/latest_daily_live_v7_research.md",
+    "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst/latest/latest_v7_pre_momentum_filter_analyst.md",
     "data_for_backtesting":             "data_for_backtesting_latest.log",
     "backtesting_result_v11":            "backtesting_result_v11_latest.log",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.log",
@@ -147,6 +154,8 @@ STATUS_FILES: Dict[str, str] = {
     "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID.status",
     "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.status",
     "v7_research_layer":                "live_research_v7_research_layer.status",
+    "daily_live_v7_research_session":   "daily_live_v7_research_session.status",
+    "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.status",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.status",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.status",
@@ -164,6 +173,8 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID.heartbeat",
     "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.heartbeat",
     "v7_research_layer":                "live_research_v7_research_layer.heartbeat",
+    "daily_live_v7_research_session":   "daily_live_v7_research_session.heartbeat",
+    "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.heartbeat",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.heartbeat",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.heartbeat",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.heartbeat",
@@ -187,6 +198,8 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
         "\\EQIDV2_v7_research_layer_0917",
         "\\EQIDV2_suggestions_v7_live_research_1615",
     ),
+    "daily_live_v7_research_session": ("\\EQIDV2_daily_live_v7_research_0917",),
+    "v7_pre_momentum_filter_analyst": ("\\EQIDV2_v7_pre_momentum_filter_analyst_0917",),
     "live_signals_csv_id_5min_v7_short": ("\\EQIDV2_entry_engine_1min_v5_ID",),
     "live_signals_csv_id_5min_v7_long": ("\\EQIDV2_entry_engine_1min_v5_ID",),
     "paper_trade_id_5min_v7": ("\\EQIDV2_paper_trade_id_5min_v7_0900",),
@@ -225,8 +238,8 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
     "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
-    "live_combined_csv_id_5min_v7_persistent": "run_eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.bat",
     "entry_engine_1min_v5_id": "run_eqidv2_entry_engine_1min_v5_id.bat",
+    "v7_pre_momentum_filter_analyst": "run_eqidv2_v7_pre_momentum_filter_analyst.bat",
     "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
     "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
     "authentication_v2":             "run_authentication_v2.bat",
@@ -629,6 +642,14 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
     if name == "v7_research_layer":
         path = V7_RESEARCH_LAYER_LATEST_DIR / "latest_summary.json"
         return path, str(Path("live_research_v7_research_layer") / "latest" / path.name)
+
+    if name == "daily_live_v7_research_session":
+        path = DAILY_LIVE_V7_RESEARCH_LATEST_DIR / "latest_daily_live_v7_research.md"
+        return path, str(Path("daily_live_v7_research_session") / "latest" / path.name)
+
+    if name == "v7_pre_momentum_filter_analyst":
+        path = V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.md"
+        return path, str(Path("v7_pre_momentum_filter_analyst") / "latest" / path.name)
 
     if name in LOG_FILES:
         file_name = LOG_FILES[name]
@@ -1547,6 +1568,7 @@ def _format_fixed_table(
     *,
     rows_meta: str,
     summary_lines: Sequence[str] = (),
+    column_max_widths: Optional[dict[str, int]] = None,
 ) -> str:
     if not rows:
         return "\n".join([*summary_lines, rows_meta, "(no rows yet)"])
@@ -1554,7 +1576,8 @@ def _format_fixed_table(
     widths: dict[str, int] = {}
     for col_name in columns:
         max_len = max([len(col_name)] + [len(str(r.get(col_name, ""))) for r in rows])
-        widths[col_name] = min(max_len, 30)
+        max_width = int((column_max_widths or {}).get(col_name, 30))
+        widths[col_name] = min(max_len, max_width)
 
     header = " | ".join(col_name.ljust(widths[col_name]) for col_name in columns)
     sep = "-+-".join("-" * widths[col_name] for col_name in columns)
@@ -1635,6 +1658,1215 @@ def _paper_pnl_pct(pnl_rs: float, entry_price: float, qty: float) -> float:
     if invested <= 0:
         return float("nan")
     return pnl_rs * 100.0 / invested
+
+
+def _v7_monitor_slot_label(value: object) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    m = re.search(r"\b\d{4}-\d{2}-\d{2}[ T](\d{2}):(\d{2})", s)
+    if not m:
+        m = re.search(r"\b(\d{2}):(\d{2})(?::\d{2})?", s)
+    if not m:
+        return ""
+    hour = int(m.group(1))
+    minute = int(m.group(2))
+    return f"{hour:02d}:{(minute // 5) * 5:02d}"
+
+
+def _v7_monitor_slot_from_path(path: Path, date_key: str) -> str:
+    m = re.search(rf"_{re.escape(date_key)}_(\d{{2}})(\d{{2}})", path.stem)
+    if not m:
+        return ""
+    return f"{int(m.group(1)):02d}:{(int(m.group(2)) // 5) * 5:02d}"
+
+
+def _v7_monitor_slot_rows(path: Path, date_key: str, field: str, slots: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    slot = _v7_monitor_slot_from_path(path, date_key)
+    rows = _read_csv_tail_rows(path, limit=20000)
+    if slot:
+        rec = slots.setdefault(slot, {"slot": slot})
+        rec[field] = max(int(rec.get(field, 0) or 0), len(rows))
+    return rows
+
+
+def _v7_monitor_num(row: dict[str, str], keys: Sequence[str]) -> float:
+    return _to_float_or_nan(_pick_csv_value(row, keys))
+
+
+def _v7_monitor_add_avg(bucket: dict[str, Any], name: str, value: float) -> None:
+    if math.isnan(value):
+        return
+    bucket[f"{name}_sum"] = float(bucket.get(f"{name}_sum", 0.0) or 0.0) + float(value)
+    bucket[f"{name}_n"] = int(bucket.get(f"{name}_n", 0) or 0) + 1
+
+
+def _v7_monitor_avg(bucket: dict[str, Any], name: str) -> float:
+    count = int(bucket.get(f"{name}_n", 0) or 0)
+    if count <= 0:
+        return float("nan")
+    return float(bucket.get(f"{name}_sum", 0.0) or 0.0) / count
+
+
+def _v7_monitor_fmt_avg(bucket: dict[str, Any], name: str, decimals: int = 2, signed: bool = False) -> str:
+    value = _v7_monitor_avg(bucket, name)
+    if math.isnan(value):
+        return ""
+    return _fmt_indian_number(value, decimals=decimals, signed=signed)
+
+
+def _v7_monitor_setup_key(row: dict[str, str]) -> tuple[str, str]:
+    side = str(row.get("side", "")).upper().strip()
+    setup = str(row.get("setup", "")).strip()
+    return side, setup
+
+
+def _v7_monitor_setup_bucket(
+    setup_stats: dict[tuple[str, str], dict[str, Any]],
+    row: dict[str, str],
+) -> Optional[dict[str, Any]]:
+    side, setup = _v7_monitor_setup_key(row)
+    if not side and not setup:
+        return None
+    bucket = setup_stats.setdefault(
+        (side, setup),
+        {
+            "side": side,
+            "setup": setup,
+            "raw": 0,
+            "potential": 0,
+            "entry_raw": 0,
+            "v11_rej": 0,
+            "pre_rej": 0,
+            "pre_pass": 0,
+            "entries": 0,
+            "signals": 0,
+            "paper": 0,
+            "open": 0,
+            "target": 0,
+            "sl": 0,
+            "eod": 0,
+            "skips": 0,
+            "pnl": 0.0,
+            "pnl_n": 0,
+        },
+    )
+    for avg_name, keys in (
+        ("q", ("quality_score", "score")),
+        ("rank", ("ranker_score",)),
+        ("rs", ("rs_pct",)),
+        ("vol", ("vol_ratio",)),
+        ("atr", ("atr_pct",)),
+        ("pre", ("pre_entry_momentum_score",)),
+        ("adx", ("pre1_adx", "sig5_adx_calc", "adx")),
+        ("rsi", ("pre1_rsi_dir", "sig5_rsi_dir", "rsi")),
+    ):
+        _v7_monitor_add_avg(bucket, avg_name, _v7_monitor_num(row, keys))
+    return bucket
+
+
+def _v7_monitor_add_setup_count(
+    setup_stats: dict[tuple[str, str], dict[str, Any]],
+    row: dict[str, str],
+    field: str,
+    qty: int = 1,
+) -> None:
+    bucket = _v7_monitor_setup_bucket(setup_stats, row)
+    if bucket is None:
+        return
+    bucket[field] = int(bucket.get(field, 0) or 0) + qty
+
+
+def _v7_monitor_outcome_bucket(outcome: object) -> str:
+    text = str(outcome or "").upper().strip()
+    if not text:
+        return ""
+    if "TARGET" in text or text == "TGT":
+        return "target"
+    if text == "SL" or "STOP" in text:
+        return "sl"
+    if "EOD" in text or "SQUARE" in text or text in {"CLOSED", "EXIT"}:
+        return "eod"
+    if "SKIP" in text:
+        return "skips"
+    if text == "OPEN":
+        return "open"
+    return ""
+
+
+def _v7_monitor_parse_dt(value: object) -> Optional[dt.datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parsed = _parse_status_datetime(text)
+    if parsed is not None:
+        return parsed
+    cleaned = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", text)
+    try:
+        out = dt.datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+    if out.tzinfo is None:
+        out = out.replace(tzinfo=IST)
+    return out.astimezone(IST)
+
+
+def _v7_monitor_fmt_duration(start: object, end: object, *, now: Optional[dt.datetime] = None) -> str:
+    start_dt = _v7_monitor_parse_dt(start)
+    end_dt = _v7_monitor_parse_dt(end) if end else None
+    if start_dt is None:
+        return ""
+    if end_dt is None:
+        end_dt = now or dt.datetime.now(IST)
+    total_sec = max(0, int((end_dt - start_dt).total_seconds()))
+    minutes = total_sec // 60
+    seconds = total_sec % 60
+    if minutes >= 60:
+        return f"{minutes // 60}h{minutes % 60:02d}m"
+    return f"{minutes}m{seconds:02d}s"
+
+
+def _v7_monitor_sec_between(start: object, end: object) -> float:
+    start_dt = _v7_monitor_parse_dt(start)
+    end_dt = _v7_monitor_parse_dt(end)
+    if start_dt is None or end_dt is None:
+        return float("nan")
+    return max(0.0, (end_dt - start_dt).total_seconds())
+
+
+def _v7_monitor_fmt_sec(value: float) -> str:
+    if math.isnan(value):
+        return ""
+    return _fmt_indian_number(float(value), decimals=2)
+
+
+def _v7_monitor_slot_key_from_time(value: object) -> str:
+    parsed = _v7_monitor_parse_dt(value)
+    if parsed is None:
+        return ""
+    floored = parsed.replace(minute=(parsed.minute // 5) * 5, second=0, microsecond=0)
+    return floored.strftime("%Y%m%d_%H%M")
+
+
+def _v7_monitor_raw_fetch_lag_sec(slot_time: object, ticker: object) -> float:
+    slot_dt = _v7_monitor_parse_dt(slot_time)
+    slot_key = _v7_monitor_slot_key_from_time(slot_time)
+    symbol = str(ticker or "").upper().strip()
+    if slot_dt is None or not slot_key or not symbol:
+        return float("nan")
+    raw_path = runtime_dir("entry_engine_1min_v5_ID") / "slot_raw_1min" / slot_key / f"{symbol}_raw_1min.parquet"
+    if not raw_path.exists():
+        return float("nan")
+    try:
+        raw_mtime = dt.datetime.fromtimestamp(raw_path.stat().st_mtime, tz=IST)
+    except OSError:
+        return float("nan")
+    return max(0.0, (raw_mtime - slot_dt).total_seconds())
+
+
+def _v7_monitor_slot_dt(today_ist: str, slot: str) -> Optional[dt.datetime]:
+    try:
+        return dt.datetime.strptime(f"{today_ist} {slot}", "%Y-%m-%d %H:%M").replace(tzinfo=IST)
+    except ValueError:
+        return None
+
+
+def _v7_monitor_mtime(path: Path) -> Optional[dt.datetime]:
+    try:
+        return dt.datetime.fromtimestamp(path.stat().st_mtime, tz=IST)
+    except OSError:
+        return None
+
+
+def _v7_monitor_executor_events(log_path: Path, *, live: bool) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+    events: dict[str, dict[str, str]] = {}
+    failures: dict[str, str] = {}
+    if not log_path.exists():
+        return events, failures
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return events, failures
+    for line in lines:
+        ts_match = re.match(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:,\d+)?)", line)
+        sid_match = re.search(r"\bsignal_id=([A-Za-z0-9_-]+)", line)
+        if sid_match is None:
+            continue
+        signal_id = sid_match.group(1).strip()
+        ticker_match = re.search(r"\bticker=([A-Za-z0-9&._-]+)", line)
+        ticker = ticker_match.group(1).upper() if ticker_match else ""
+        event_match = "[LIVE][ENTRY.REBASE]" in line if live else "[ENTRY.NEW]" in line
+        if event_match and ts_match:
+            events[signal_id] = {
+                "time": ts_match.group(1).replace(",", "."),
+                "ticker": ticker,
+                "line": line,
+            }
+        upper_line = line.upper()
+        if any(token in upper_line for token in ("[ERROR", "[SKIP", "[REJECT", "FAILED")):
+            failures[signal_id] = re.sub(r"^\S+\s+\S+\s+\|\s+\w+\s+\|\s*", "", line).strip()
+    return events, failures
+
+
+def _v7_monitor_find_signal_event(events: dict[str, dict[str, str]], signal_id: str) -> Optional[dict[str, str]]:
+    signal_id = str(signal_id or "").strip()
+    if not signal_id:
+        return None
+    if signal_id in events:
+        return events[signal_id]
+    for event_id, event in events.items():
+        if signal_id.startswith(event_id) or event_id.startswith(signal_id):
+            return event
+    return None
+
+
+def _v7_monitor_task_disabled(status: dict[str, str]) -> bool:
+    values = (
+        status.get("scheduler_status"),
+        status.get("scheduler_state"),
+        status.get("status"),
+    )
+    return any(str(value or "").strip().upper() == "DISABLED" for value in values)
+
+
+def _v7_monitor_status_for(card_id: str, task_snapshot: Dict[str, Dict[str, str]]) -> Dict[str, str]:
+    status = parse_status_file(_resolve_status_path(STATUS_FILES[card_id])) if card_id in STATUS_FILES else {}
+    heartbeat = parse_status_file(_resolve_status_path(HEARTBEAT_FILES[card_id])) if card_id in HEARTBEAT_FILES else {}
+    if heartbeat:
+        status = merge_runtime_status(status, heartbeat)
+    status = apply_scheduler_status(card_id, status, task_snapshot)
+    status = infer_pid_session_provenance(card_id, status)
+    return status
+
+
+def _format_v7_live_5min_monitor(
+    today_ist: str,
+    task_snapshot: Dict[str, Dict[str, str]],
+) -> tuple[str, Dict[str, str]]:
+    date_key = today_ist.replace("-", "")
+    now_ist = dt.datetime.now(IST)
+    entry_root = runtime_dir("entry_engine_1min_v5_ID")
+    entry_audit_dir = entry_root / "audit"
+    latest_summary_path = entry_root / "latest" / "latest_summary.json"
+    latest_summary = _read_json_dict(latest_summary_path)
+    slots: dict[str, dict[str, Any]] = {}
+    setup_stats: dict[tuple[str, str], dict[str, Any]] = {}
+    detail_rows: list[dict[str, str]] = []
+
+    def _slot_rec(slot: str) -> dict[str, Any]:
+        rec = slots.setdefault(slot, {"slot": slot})
+        for set_field in (
+            "tickers",
+            "scan_raw_tickers",
+            "potential_tickers",
+            "scan_v11_rej_tickers",
+            "research_rej_tickers",
+            "entry_raw_tickers",
+            "entry_tickers",
+            "signal_tickers",
+            "signal_ids",
+            "paper_tickers",
+            "live_tickers",
+        ):
+            rec.setdefault(set_field, set())
+        for field in (
+            "scan_raw",
+            "potential",
+            "scan_v11_rej",
+            "research_rej",
+            "entry_raw",
+            "v11_rej",
+            "pre_rej",
+            "pre_pass",
+            "entries",
+            "signals",
+            "paper",
+            "target",
+            "sl",
+            "eod",
+            "skips",
+            "open",
+            "pnl",
+            "pnl_n",
+            "short_written",
+            "long_written",
+            "short_sig",
+            "long_sig",
+        ):
+            rec.setdefault(field, 0)
+        return rec
+
+    def _add_scanner_rows(path: Path, field: str) -> int:
+        rows = _read_csv_tail_rows(path, limit=50000)
+        for row in rows:
+            slot = _v7_monitor_slot_label(_pick_csv_value(row, ("scan_slot_ist", "signal_time_ist", "created_at_ist")))
+            if not slot:
+                continue
+            rec = _slot_rec(slot)
+            rec[field] = int(rec.get(field, 0) or 0) + 1
+            ticker = str(row.get("ticker", "")).upper().strip()
+            if ticker:
+                rec["tickers"].add(ticker)
+                rec[f"{field}_tickers"].add(ticker)
+            setup_field = {
+                "scan_raw": "raw",
+                "potential": "potential",
+                "scan_v11_rej": "v11_rej",
+                "research_rej": "research_rej",
+            }.get(field)
+            if setup_field:
+                _v7_monitor_add_setup_count(setup_stats, row, setup_field)
+        return len(rows)
+
+    raw_candidates_path = SIGNAL_DISCOVERY_V7_CSV_DIR / f"raw_candidate_tickers_{today_ist}.csv"
+    candidate_path = SIGNAL_DISCOVERY_V7_CSV_DIR / f"candidate_tickers_{today_ist}.csv"
+    scan_v11_rej_path = SIGNAL_DISCOVERY_V7_CSV_DIR / f"v11_overlay_rejected_candidate_tickers_{today_ist}.csv"
+    research_rej_path = SIGNAL_DISCOVERY_V7_CSV_DIR / f"research_filter_rejected_candidate_tickers_{today_ist}.csv"
+    raw_scan_total = _add_scanner_rows(raw_candidates_path, "scan_raw")
+    potential_total = _add_scanner_rows(candidate_path, "potential")
+    scan_v11_rej_total = _add_scanner_rows(scan_v11_rej_path, "scan_v11_rej")
+    research_rej_total = _add_scanner_rows(research_rej_path, "research_rej")
+    scanner_audit_paths = sorted(
+        (SIGNAL_DISCOVERY_V7_ROOT / "audit").glob(f"candidate_tickers_audit_{today_ist}*.csv"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0.0,
+    )
+    scanner_audit_rows: list[dict[str, str]] = []
+    for scanner_audit_path in scanner_audit_paths:
+        scanner_audit_rows.extend(_read_csv_tail_rows(scanner_audit_path, limit=5000))
+    for row in scanner_audit_rows:
+        slot = _v7_monitor_slot_label(row.get("slot_ist", ""))
+        if not slot:
+            continue
+        rec = _slot_rec(slot)
+        scan_sec = _to_float_or_nan(row.get("elapsed_sec", ""))
+        scan_lag = _v7_monitor_sec_between(row.get("slot_ist", ""), row.get("created_at_ist", ""))
+        if not math.isnan(scan_sec):
+            rec["scan_sec"] = float(scan_sec)
+        if not math.isnan(scan_lag):
+            rec["scan_lag_sec"] = float(scan_lag)
+        rec["scan_created"] = _extract_time_only(str(row.get("created_at_ist", "")))
+        rec["scanner_audit_seen"] = True
+        for source_key, target_key in (
+            ("candidate_count", "candidate_count"),
+            ("raw_candidate_count", "raw_candidate_count"),
+            ("v11_tier123_live_scan_elapsed_sec", "tier123_scan_sec"),
+        ):
+            value = _to_float_or_nan(str(row.get(source_key, "")))
+            if not math.isnan(value):
+                rec[target_key] = int(value) if source_key != "v11_tier123_live_scan_elapsed_sec" else float(value)
+
+    for marker_path in sorted(SLOT_READY_5M_DIR.glob(f"slot_{date_key}_*.json")):
+        marker = _read_json_dict(marker_path)
+        slot = _v7_monitor_slot_label(marker.get("slot_ist") or marker_path.stem)
+        if not slot:
+            path_match = re.search(r"_(\d{2})(\d{2})$", marker_path.stem)
+            slot = f"{path_match.group(1)}:{path_match.group(2)}" if path_match else ""
+        if not slot:
+            continue
+        rec = _slot_rec(slot)
+        rec["fetch_marker_seen"] = True
+        rec["fetch_complete"] = bool(marker.get("complete"))
+        fetch_failed = _to_float_or_nan(str(marker.get("tickers_failed", "0")))
+        verify_failed = _to_float_or_nan(str(marker.get("verification_failed_count", "0")))
+        rec["fetch_failed"] = 0 if math.isnan(fetch_failed) else int(fetch_failed)
+        rec["fetch_verify_failed"] = 0 if math.isnan(verify_failed) else int(verify_failed)
+        fetch_lag = _v7_monitor_sec_between(marker.get("slot_ist", ""), marker.get("published_at_ist", ""))
+        if not math.isnan(fetch_lag):
+            rec["fetch_lag_sec"] = float(fetch_lag)
+        duration_ms = _to_float_or_nan(str(marker.get("duration_ms", "")))
+        if not math.isnan(duration_ms):
+            rec["fetch_duration_sec"] = float(duration_ms) / 1000.0
+
+    audit_jsonl = entry_audit_dir / f"entry_engine_audit_{today_ist}.jsonl"
+    audit_slots = 0
+    pre_version_seen = ""
+    if audit_jsonl.exists():
+        try:
+            lines = audit_jsonl.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            slot = _v7_monitor_slot_label(payload.get("slot_ist") or payload.get("candidate_snapshot_slot_ist"))
+            if not slot:
+                continue
+            audit_slots += 1
+            rec = _slot_rec(slot)
+            rec["entry_audit_seen"] = True
+            rec["candidate_snapshot_ready"] = bool(payload.get("candidate_snapshot_ready"))
+            rec["pre_momentum_gate_enabled"] = bool(payload.get("pre_momentum_gate_enabled"))
+            rec["raw_fetch_failures"] = int(payload.get("raw_fetch_failures", 0) or 0)
+            for source_key, target_key in (
+                ("candidate_count", "candidate_count"),
+                ("tickers_requested", "tickers_requested"),
+                ("tickers_fetched", "tickers_fetched"),
+                ("raw_entry_rows", "entry_raw"),
+                ("v11_entry_rejected_rows", "v11_rej"),
+                ("pre_momentum_rejected_rows", "pre_rej"),
+                ("pre_momentum_filtered_entry_rows", "pre_pass"),
+                ("selected_entry_rows", "entries"),
+                ("entry_rows", "entry_rows"),
+                ("short_written", "short_written"),
+                ("long_written", "long_written"),
+            ):
+                value = _to_float_or_nan(str(payload.get(source_key, "")))
+                if not math.isnan(value):
+                    rec[target_key] = int(value)
+            if not int(rec.get("entries", 0) or 0) and int(rec.get("entry_rows", 0) or 0):
+                rec["entries"] = int(rec.get("entry_rows", 0) or 0)
+            rec["signals"] = int(rec.get("short_written", 0) or 0) + int(rec.get("long_written", 0) or 0)
+            for source_key, target_key in (
+                ("elapsed_sec", "elapsed_sec"),
+                ("candidate_wait_sec", "candidate_wait_sec"),
+                ("candidate_load_elapsed_sec", "candidate_load_sec"),
+                ("raw_fetch_elapsed_sec", "raw_fetch_sec"),
+                ("entry_scan_elapsed_sec", "entry_scan_sec"),
+                ("entry_reject_audit_elapsed_sec", "entry_reject_sec"),
+                ("v11_entry_overlay_elapsed_sec", "v11_sec"),
+                ("pre_momentum_gate_elapsed_sec", "pre_gate_sec"),
+                ("entry_select_elapsed_sec", "select_sec"),
+                ("audit_csv_write_elapsed_sec", "audit_csv_sec"),
+                ("setup_exit_rules_write_elapsed_sec", "rules_csv_sec"),
+                ("live_signal_csv_write_elapsed_sec", "live_csv_sec"),
+                ("short_signal_write_elapsed_sec", "short_csv_sec"),
+                ("long_signal_write_elapsed_sec", "long_csv_sec"),
+            ):
+                value = _to_float_or_nan(str(payload.get(source_key, "")))
+                if not math.isnan(value):
+                    rec[target_key] = float(value)
+            rec["raw_fetch_mode"] = str(payload.get("raw_fetch_mode", rec.get("raw_fetch_mode", "")) or "")
+            if payload.get("pre_momentum_version"):
+                pre_version_seen = str(payload.get("pre_momentum_version", ""))
+                rec["pre_version"] = pre_version_seen
+
+    for path in sorted(entry_audit_dir.glob(f"entry_rows_raw_candidates_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "entry_raw", slots)
+        slot = _v7_monitor_slot_from_path(path, date_key)
+        rec = _slot_rec(slot) if slot else None
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "entry_raw")
+            ticker = str(row.get("ticker", "")).upper().strip()
+            if rec is not None and ticker:
+                rec["entry_raw_tickers"].add(ticker)
+    for path in sorted(entry_audit_dir.glob(f"entry_rejected_v11_overlay_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "v11_rej", slots)
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "v11_rej")
+    for path in sorted(entry_audit_dir.glob(f"entry_rejected_pre_momentum_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "pre_rej", slots)
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "pre_rej")
+    for path in sorted(entry_audit_dir.glob(f"entry_rows_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "entries", slots)
+        slot = _v7_monitor_slot_from_path(path, date_key)
+        rec = _slot_rec(slot) if slot else None
+        completed_at = _v7_monitor_mtime(path)
+        if rec is not None and completed_at is not None:
+            rec["entry_completed_at"] = completed_at
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "entries")
+            _v7_monitor_add_setup_count(setup_stats, row, "pre_pass")
+            ticker = str(row.get("ticker", "")).upper().strip()
+            if rec is not None and ticker:
+                rec["entry_tickers"].add(ticker)
+            signal_time = _pick_csv_value(row, ("signal_time_ist", "bar_time_ist"))
+            raw_fetch_lag = _v7_monitor_raw_fetch_lag_sec(signal_time, row.get("ticker", ""))
+            detail_rows.append(
+                {
+                    "state": "ENTRY",
+                    "ticker": str(row.get("ticker", "")).upper(),
+                    "side": str(row.get("side", "")).upper(),
+                    "setup": str(row.get("setup", "")),
+                    "signal": _extract_time_only(signal_time),
+                    "entry": _fmt_price(_v7_monitor_num(row, ("entry_price", "v7_signal_entry_price"))),
+                    "sl": _fmt_price(_v7_monitor_num(row, ("sl_price", "v7_signal_stop_price"))),
+                    "target": _fmt_price(_v7_monitor_num(row, ("target_price", "v7_signal_target_price"))),
+                    "qty": _fmt_qty(_v7_monitor_num(row, ("quantity",))),
+                    "pnl": "",
+                    "outcome": "",
+                    "fetch_lag": _v7_monitor_fmt_sec(raw_fetch_lag),
+                    "csv_lag": "",
+                    "entry_lag": "",
+                    "dur": "",
+                }
+            )
+
+    signal_slot_counts: dict[str, int] = {}
+    for side in ("short", "long"):
+        signal_path = LIVE_SIGNAL_DIR / f"signals_{today_ist}_id_5min_v7_{side}.csv"
+        for row in _read_csv_tail_rows(signal_path, limit=5000):
+            slot = _v7_monitor_slot_label(
+                _pick_csv_value(row, ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist"))
+            )
+            if slot:
+                signal_slot_counts[slot] = int(signal_slot_counts.get(slot, 0) or 0) + 1
+                rec = _slot_rec(slot)
+                if side == "short":
+                    rec["short_sig"] = int(rec.get("short_sig", 0) or 0) + 1
+                else:
+                    rec["long_sig"] = int(rec.get("long_sig", 0) or 0) + 1
+                signal_lag = _v7_monitor_sec_between(
+                    _pick_csv_value(row, ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist")),
+                    _pick_csv_value(row, ("detected_time_ist", "logtime_ist", "received_time")),
+                )
+                if not math.isnan(signal_lag):
+                    rec["sig_csv_lag_sec"] = max(float(rec.get("sig_csv_lag_sec", 0.0) or 0.0), float(signal_lag))
+                signal_id = str(row.get("signal_id", "")).strip()
+                ticker = str(row.get("ticker", "")).upper().strip()
+                if signal_id:
+                    rec["signal_ids"].add(signal_id)
+                if ticker:
+                    rec["signal_tickers"].add(ticker)
+            _v7_monitor_add_setup_count(setup_stats, row, "signals")
+            signal_time = _pick_csv_value(row, ("signal_datetime", "signal_entry_datetime_ist"))
+            raw_fetch_lag = _v7_monitor_raw_fetch_lag_sec(signal_time, row.get("ticker", ""))
+            csv_lag = _v7_monitor_sec_between(
+                signal_time,
+                _pick_csv_value(row, ("detected_time_ist", "logtime_ist", "received_time")),
+            )
+            detail_rows.append(
+                {
+                    "state": "SIGNAL",
+                    "ticker": str(row.get("ticker", "")).upper(),
+                    "side": str(row.get("side", "")).upper(),
+                    "setup": str(row.get("setup", "")),
+                    "signal": _extract_time_only(signal_time),
+                    "entry": _fmt_price(_v7_monitor_num(row, ("entry_price",))),
+                    "sl": _fmt_price(_v7_monitor_num(row, ("stop_price", "_stop_price"))),
+                    "target": _fmt_price(_v7_monitor_num(row, ("target_price",))),
+                    "qty": _fmt_qty(_v7_monitor_num(row, ("quantity",))),
+                    "pnl": "",
+                    "outcome": "",
+                    "fetch_lag": _v7_monitor_fmt_sec(raw_fetch_lag),
+                    "csv_lag": _v7_monitor_fmt_sec(csv_lag),
+                    "entry_lag": "",
+                    "dur": "",
+                }
+            )
+    for slot, count in signal_slot_counts.items():
+        rec = _slot_rec(slot)
+        rec["signals"] = max(int(rec.get("signals", 0) or 0), count)
+
+    def _add_trade_row(row: dict[str, str], state: str) -> None:
+        signal_time = _pick_csv_value(row, ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist"))
+        slot = _v7_monitor_slot_label(signal_time or row.get("entry_time", ""))
+        if slot:
+            rec = _slot_rec(slot)
+            rec["paper"] = int(rec.get("paper", 0) or 0) + 1
+            entry_lag = _v7_monitor_sec_between(signal_time, row.get("entry_time", ""))
+            if not math.isnan(entry_lag):
+                rec["entry_lag_sec"] = max(float(rec.get("entry_lag_sec", 0.0) or 0.0), float(entry_lag))
+        outcome_key = _v7_monitor_outcome_bucket(row.get("outcome", state))
+        pnl = _v7_monitor_num(row, ("pnl_rs", "pnl"))
+        if slot:
+            rec = _slot_rec(slot)
+            if outcome_key:
+                rec[outcome_key] = int(rec.get(outcome_key, 0) or 0) + 1
+            if not math.isnan(pnl):
+                rec["pnl"] = float(rec.get("pnl", 0.0) or 0.0) + float(pnl)
+                rec["pnl_n"] = int(rec.get("pnl_n", 0) or 0) + 1
+        _v7_monitor_add_setup_count(setup_stats, row, "paper")
+        setup_bucket = _v7_monitor_setup_bucket(setup_stats, row)
+        if setup_bucket is not None:
+            if outcome_key:
+                setup_bucket[outcome_key] = int(setup_bucket.get(outcome_key, 0) or 0) + 1
+            if not math.isnan(pnl):
+                setup_bucket["pnl"] = float(setup_bucket.get("pnl", 0.0) or 0.0) + float(pnl)
+                setup_bucket["pnl_n"] = int(setup_bucket.get("pnl_n", 0) or 0) + 1
+        detail_rows.append(
+            {
+                "state": state,
+                "ticker": str(row.get("ticker", "")).upper(),
+                "side": str(row.get("side", "")).upper(),
+                "setup": str(row.get("setup", "")),
+                "signal": _extract_time_only(signal_time),
+                "entry": _fmt_price(_v7_monitor_num(row, ("entry_price", "filled_price"))),
+                "sl": _fmt_price(_v7_monitor_num(row, ("stop_price",))),
+                "target": _fmt_price(_v7_monitor_num(row, ("target_price",))),
+                "qty": _fmt_qty(_v7_monitor_num(row, ("quantity",))),
+                "pnl": _fmt_rs(pnl) if not math.isnan(pnl) else "",
+                "outcome": str(row.get("outcome", "") or state),
+                "fetch_lag": _v7_monitor_fmt_sec(_v7_monitor_raw_fetch_lag_sec(signal_time, row.get("ticker", ""))),
+                "csv_lag": "",
+                "entry_lag": _v7_monitor_fmt_sec(_v7_monitor_sec_between(signal_time, row.get("entry_time", ""))),
+                "dur": _v7_monitor_fmt_duration(row.get("entry_time", ""), row.get("exit_time", ""), now=now_ist),
+            }
+        )
+
+    paper_path = LIVE_SIGNAL_DIR / f"paper_trades_{today_ist}_id_5min_v7.csv"
+    for row in _read_csv_tail_rows(paper_path, limit=5000):
+        _add_trade_row(row, str(row.get("outcome", "") or "PAPER").upper())
+
+    live_trade_path = LIVE_SIGNAL_DIR / f"live_trades_{today_ist}_id_5min_v7.csv"
+    for row in _read_csv_tail_rows(live_trade_path, limit=5000):
+        _add_trade_row(row, f"LIVE_{str(row.get('outcome', '') or 'TRADE').upper()}")
+
+    signal_rows = _read_signal_setup_map(today_ist)
+    state_payload = _read_json_dict(LIVE_SIGNAL_DIR / f"open_trades_state_{today_ist}_id_5min_v7.json")
+    latest_log_path = LIVE_SIGNAL_DIR / f"paper_trade_execution_{today_ist}_id_5min_v7.log"
+    latest_pnl = _parse_latest_live_pnl_line(latest_log_path)
+    ticker_pnl = latest_pnl.get("ticker_pnl", {}) if isinstance(latest_pnl.get("ticker_pnl", {}), dict) else {}
+    for trade in [r for r in state_payload.get("open_trades", []) if isinstance(r, dict)]:
+        signal_id = str(trade.get("signal_id", "")).strip()
+        signal = signal_rows.get(signal_id, {})
+        merged_row = {
+            "ticker": str(trade.get("ticker", "") or signal.get("ticker", "")),
+            "side": str(trade.get("side", "") or signal.get("side", "")),
+            "setup": str(signal.get("setup", "")),
+            "signal_datetime": str(signal.get("signal_datetime", "") or signal.get("signal_entry_datetime_ist", "")),
+            "entry_time": str(trade.get("entry_time", "")),
+            "entry_price": str(trade.get("entry_price", "")),
+            "stop_price": str(trade.get("stop_price", "")),
+            "target_price": str(trade.get("target_price", "")),
+            "quantity": str(trade.get("quantity", "")),
+            "outcome": "OPEN",
+        }
+        ticker = str(merged_row["ticker"]).upper().strip()
+        pnl = _to_float_or_nan(str(ticker_pnl.get(ticker, ""))) if ticker else float("nan")
+        if math.isnan(pnl):
+            pnl = _paper_open_pnl_from_state(trade)
+        if not math.isnan(pnl):
+            merged_row["pnl_rs"] = str(pnl)
+        _add_trade_row(merged_row, "OPEN")
+
+    paper_log_path = LIVE_SIGNAL_DIR / f"paper_trade_execution_{today_ist}_id_5min_v7.log"
+    live_log_path = LIVE_SIGNAL_DIR / f"live_trade_execution_{today_ist}_id_5min_v7.log"
+    paper_events, paper_failures = _v7_monitor_executor_events(paper_log_path, live=False)
+    live_events, live_failures = _v7_monitor_executor_events(live_log_path, live=True)
+    for trade in [r for r in state_payload.get("open_trades", []) if isinstance(r, dict)]:
+        signal_id = str(trade.get("signal_id", "")).strip()
+        if signal_id and _v7_monitor_find_signal_event(paper_events, signal_id) is None:
+            paper_events[signal_id] = {
+                "time": str(trade.get("entry_time", "")),
+                "ticker": str(trade.get("ticker", "")).upper(),
+                "line": "open_trades_state",
+            }
+
+    paper_task_status = _v7_monitor_status_for("paper_trade_id_5min_v7", task_snapshot)
+    live_task_status = _v7_monitor_status_for("kite_trade_id_5min_v7", task_snapshot)
+    paper_disabled = _v7_monitor_task_disabled(paper_task_status)
+    live_disabled = _v7_monitor_task_disabled(live_task_status)
+
+    flow_rows: list[dict[str, str]] = []
+    for slot in sorted(slots):
+        rec = slots[slot]
+        slot_dt = _v7_monitor_slot_dt(today_ist, slot)
+        if slot_dt is None:
+            continue
+        entry_anchor = slot_dt + dt.timedelta(seconds=60)
+        due_fetch = now_ist >= slot_dt + dt.timedelta(seconds=60)
+        due_entry = now_ist >= entry_anchor + dt.timedelta(seconds=75)
+        reasons: list[str] = []
+
+        fetch_lag = _to_float_or_nan(str(rec.get("fetch_lag_sec", "")))
+        fetch_ok = bool(rec.get("fetch_marker_seen")) and bool(rec.get("fetch_complete")) and not math.isnan(fetch_lag)
+        if fetch_ok:
+            fetch_state = "YES" if fetch_lag <= 60.0 else "LATE"
+            if fetch_lag > 60.0:
+                reasons.append(f"fetch_late={fetch_lag:.1f}s")
+            if int(rec.get("fetch_failed", 0) or 0) or int(rec.get("fetch_verify_failed", 0) or 0):
+                fetch_state = "NO"
+                reasons.append(
+                    f"fetch_fail={int(rec.get('fetch_failed', 0) or 0)},"
+                    f"verify={int(rec.get('fetch_verify_failed', 0) or 0)}"
+                )
+        elif due_fetch:
+            fetch_state = "NO"
+            reasons.append("fetch_marker_missing")
+        else:
+            fetch_state = "WAIT"
+
+        scan_lag = _to_float_or_nan(str(rec.get("scan_lag_sec", "")))
+        scan_sec = _to_float_or_nan(str(rec.get("scan_sec", "")))
+        scan_seen = bool(rec.get("scanner_audit_seen"))
+        if scan_seen and not math.isnan(scan_lag):
+            scan_state = "YES" if scan_lag <= 60.0 else "LATE"
+            if scan_lag > 60.0:
+                reasons.append(f"candidate_late={scan_lag:.1f}s")
+        elif due_fetch:
+            scan_state = "NO"
+            reasons.append("candidate_snapshot_missing")
+        else:
+            scan_state = "WAIT"
+        # Scanner and fetcher run on independent cadences (the scanner does not
+        # gate on slot_ready_5m), so they routinely finish within a second or two
+        # of each other and the scanner's audit row simply flushes first. That
+        # marker-ordering skew is noise; only a meaningfully-early scan (the
+        # scanner finished well before the fetch published, i.e. it likely read
+        # pre-/partially-fetched data) is a real ordering risk worth a WARN.
+        SCAN_BEFORE_FETCH_TOLERANCE_SEC = 10.0
+        if fetch_ok and scan_seen and scan_lag + SCAN_BEFORE_FETCH_TOLERANCE_SEC < fetch_lag:
+            reasons.append(f"scan_before_fetch={fetch_lag - scan_lag:.1f}s")
+
+        candidate_count = int(rec.get("candidate_count", rec.get("potential", 0)) or 0)
+        candidate_state = (
+            f"YES({candidate_count})" if scan_seen and not math.isnan(scan_lag) and scan_lag <= 60.0
+            else f"LATE({candidate_count})" if scan_seen
+            else "NO"
+        )
+
+        entry_seen = bool(rec.get("entry_audit_seen"))
+        completed_at = rec.get("entry_completed_at")
+        entry_after_anchor = (
+            max(0.0, (completed_at - entry_anchor).total_seconds())
+            if isinstance(completed_at, dt.datetime)
+            else float("nan")
+        )
+        requested = int(rec.get("tickers_requested", 0) or 0)
+        fetched = int(rec.get("tickers_fetched", 0) or 0)
+        entries = int(rec.get("entries", 0) or 0)
+        signals = int(rec.get("signals", 0) or 0)
+        pre_enabled_for_slot = bool(rec.get("pre_momentum_gate_enabled"))
+        if entry_seen:
+            engine_state = "YES" if candidate_count else "YES/NO_CAND"
+            if not bool(rec.get("candidate_snapshot_ready")):
+                engine_state = "NO"
+                reasons.append("entry_snapshot_not_ready")
+            if requested != fetched or int(rec.get("raw_fetch_failures", 0) or 0):
+                engine_state = "NO"
+                reasons.append(
+                    f"1m_fetch={fetched}/{requested},fail={int(rec.get('raw_fetch_failures', 0) or 0)}"
+                )
+            if candidate_count and not pre_enabled_for_slot:
+                engine_state = "NO"
+                reasons.append("pre_momentum_disabled")
+            if entries != signals:
+                engine_state = "NO"
+                reasons.append(f"entry_signal_mismatch={entries}/{signals}")
+        elif due_entry:
+            engine_state = "NO"
+            reasons.append("entry_audit_missing")
+        else:
+            engine_state = "WAIT"
+
+        engine_path = "/".join(
+            (
+                "L:Y" if entry_seen and bool(rec.get("candidate_snapshot_ready")) else "L:N",
+                "F:Y" if entry_seen and requested == fetched and not int(rec.get("raw_fetch_failures", 0) or 0) else "F:N",
+                "S:Y" if entry_seen else "S:N",
+                "P:Y" if pre_enabled_for_slot else "P:N",
+                "C:Y" if entry_seen and entries == signals else "C:N",
+            )
+        )
+
+        signal_ids = sorted(str(value) for value in rec.get("signal_ids", set()))
+        paper_event_list = [
+            event for signal_id in signal_ids
+            if (event := _v7_monitor_find_signal_event(paper_events, signal_id)) is not None
+        ]
+        live_event_list = [
+            event for signal_id in signal_ids
+            if (event := _v7_monitor_find_signal_event(live_events, signal_id)) is not None
+        ]
+
+        def _executor_delay(events: list[dict[str, str]]) -> float:
+            values = [
+                max(0.0, (_v7_monitor_parse_dt(event.get("time")) - entry_anchor).total_seconds())
+                for event in events
+                if _v7_monitor_parse_dt(event.get("time")) is not None
+            ]
+            return max(values) if values else float("nan")
+
+        paper_delay = _executor_delay(paper_event_list)
+        live_delay = _executor_delay(live_event_list)
+        if not signal_ids:
+            paper_state = "N/A"
+            live_state = "OFF" if live_disabled else "N/A"
+        elif paper_disabled:
+            paper_state = "OFF"
+            reasons.append("PAPER_TRADE_TRUE task disabled")
+        elif len(paper_event_list) == len(signal_ids):
+            paper_state = "YES"
+        elif paper_event_list:
+            paper_state = "PART"
+            reasons.append(f"paper_partial={len(paper_event_list)}/{len(signal_ids)}")
+        else:
+            paper_state = "NO"
+            paper_reason = next(
+                (
+                    reason for signal_id in signal_ids
+                    for event_id, reason in paper_failures.items()
+                    if signal_id.startswith(event_id) or event_id.startswith(signal_id)
+                ),
+                "",
+            )
+            reasons.append(paper_reason or "paper_signal_not_consumed")
+
+        if signal_ids and live_disabled:
+            live_state = "OFF"
+        elif not signal_ids:
+            live_state = "N/A"
+        elif len(live_event_list) == len(signal_ids):
+            live_state = "YES"
+        elif live_event_list:
+            live_state = "PART"
+            reasons.append(f"live_partial={len(live_event_list)}/{len(signal_ids)}")
+        else:
+            live_state = "NO"
+            live_reason = next(
+                (
+                    reason for signal_id in signal_ids
+                    for event_id, reason in live_failures.items()
+                    if signal_id.startswith(event_id) or event_id.startswith(signal_id)
+                ),
+                "",
+            )
+            reasons.append(live_reason or "live_signal_not_consumed")
+
+        potential_tickers = sorted(rec.get("potential_tickers", set()))
+        entry_tickers = sorted(rec.get("entry_tickers", set()))
+        signal_tickers = sorted(rec.get("signal_tickers", set()))
+        paper_tickers = sorted(
+            {str(event.get("ticker", "")).upper() for event in paper_event_list if event.get("ticker")}
+        )
+        live_tickers = sorted(
+            {str(event.get("ticker", "")).upper() for event in live_event_list if event.get("ticker")}
+        )
+        ticker_flow = (
+            f"C:{','.join(potential_tickers) or '-'}>"
+            f"E:{','.join(entry_tickers) or '-'}>"
+            f"S:{','.join(signal_tickers) or '-'}>"
+            f"P:{','.join(paper_tickers) or '-'}>"
+            f"L:{','.join(live_tickers) or '-'}"
+        )
+        hard_failure = any(
+            state in {"NO", "LATE", "PART"}
+            for state in (fetch_state, scan_state, engine_state, paper_state, live_state)
+            if state not in {"OFF", "N/A", "YES/NO_CAND"}
+        )
+        waiting = any(state == "WAIT" for state in (fetch_state, scan_state, engine_state))
+        flow_state = (
+            "WAIT"
+            if waiting
+            else "BLOCKED"
+            if hard_failure
+            else "WARN"
+            if reasons
+            else "PASS"
+            if signal_ids
+            else "IDLE"
+        )
+        flow_rows.append(
+            {
+                "slot": slot,
+                "fetch5m": fetch_state,
+                "fetch_s": _v7_monitor_fmt_sec(fetch_lag),
+                "scan5m": scan_state,
+                "scan_s": _v7_monitor_fmt_sec(scan_sec),
+                "cand_print": candidate_state,
+                "cand_s": _v7_monitor_fmt_sec(scan_lag),
+                "engine1m": engine_state,
+                "eng_s+1m": _v7_monitor_fmt_sec(entry_after_anchor),
+                "L/F/S/P/C": engine_path,
+                "entries/sig": f"{entries}/{signals}",
+                "paper_T": paper_state,
+                "paper_s+1m": _v7_monitor_fmt_sec(paper_delay),
+                "paper_F": live_state,
+                "live_s+1m": _v7_monitor_fmt_sec(live_delay),
+                "flow": flow_state,
+                "blocker/reason": "; ".join(dict.fromkeys(reasons)) or "-",
+                "tickers C>E>S>P>L": ticker_flow,
+            }
+        )
+    flow_rows = flow_rows[-24:]
+
+    slot_rows: list[dict[str, str]] = []
+    for slot in sorted(slots):
+        rec = slots[slot]
+        tickers = rec.get("tickers")
+        ticker_count = len(tickers) if isinstance(tickers, set) else 0
+        pnl = float(rec.get("pnl", 0.0) or 0.0)
+        pnl_n = int(rec.get("pnl_n", 0) or 0)
+        elapsed = _to_float_or_nan(str(rec.get("elapsed_sec", "")))
+        raw_fetch = _to_float_or_nan(str(rec.get("raw_fetch_sec", "")))
+        wait = _to_float_or_nan(str(rec.get("candidate_wait_sec", "")))
+        load = _to_float_or_nan(str(rec.get("candidate_load_sec", "")))
+        entry_scan = _to_float_or_nan(str(rec.get("entry_scan_sec", "")))
+        audit_csv = _to_float_or_nan(str(rec.get("audit_csv_sec", "")))
+        live_csv = _to_float_or_nan(str(rec.get("live_csv_sec", "")))
+        scan_lag = _to_float_or_nan(str(rec.get("scan_lag_sec", "")))
+        scan_sec = _to_float_or_nan(str(rec.get("scan_sec", "")))
+        sig_lag = _to_float_or_nan(str(rec.get("sig_csv_lag_sec", "")))
+        entry_lag = _to_float_or_nan(str(rec.get("entry_lag_sec", "")))
+        slot_rows.append(
+            {
+                "slot": slot,
+                "tickers": str(ticker_count or rec.get("tickers_requested", "") or ""),
+                "scan_lag": _v7_monitor_fmt_sec(scan_lag),
+                "scan_sec": _v7_monitor_fmt_sec(scan_sec),
+                "scan_raw": str(int(rec.get("scan_raw", 0) or 0)),
+                "pot": str(int(rec.get("potential", 0) or rec.get("candidate_count", 0) or 0)),
+                "scan_v11rej": str(int(rec.get("scan_v11_rej", 0) or 0)),
+                "res_rej": str(int(rec.get("research_rej", 0) or 0)),
+                "entry_raw": str(int(rec.get("entry_raw", 0) or 0)),
+                "v11_rej": str(int(rec.get("v11_rej", 0) or 0)),
+                "pre_rej": str(int(rec.get("pre_rej", 0) or 0)),
+                "pre_pass": str(int(rec.get("pre_pass", 0) or 0)),
+                "entries": str(int(rec.get("entries", 0) or 0)),
+                "sig": str(int(rec.get("signals", 0) or 0)),
+                "short": str(int(rec.get("short_written", 0) or rec.get("short_sig", 0) or 0)),
+                "long": str(int(rec.get("long_written", 0) or rec.get("long_sig", 0) or 0)),
+                "paper": str(int(rec.get("paper", 0) or 0)),
+                "tgt": str(int(rec.get("target", 0) or 0)),
+                "sl": str(int(rec.get("sl", 0) or 0)),
+                "eod": str(int(rec.get("eod", 0) or 0)),
+                "open": str(int(rec.get("open", 0) or 0)),
+                "pnl": _fmt_rs(pnl) if pnl_n else "",
+                "entry_sec": _v7_monitor_fmt_sec(elapsed),
+                "load": _v7_monitor_fmt_sec(load if not math.isnan(load) else wait),
+                "fetch": _fmt_indian_number(raw_fetch, decimals=2) if not math.isnan(raw_fetch) else "",
+                "cand_wait": _v7_monitor_fmt_sec(wait),
+                "scan": _v7_monitor_fmt_sec(entry_scan),
+                "audit_csv": _v7_monitor_fmt_sec(audit_csv),
+                "live_csv": _v7_monitor_fmt_sec(live_csv),
+                "sig_lag": _v7_monitor_fmt_sec(sig_lag),
+                "entry_lag": _v7_monitor_fmt_sec(entry_lag),
+            }
+        )
+    slot_rows = slot_rows[-24:]
+
+    setup_rows: list[dict[str, str]] = []
+    for bucket in setup_stats.values():
+        pnl = float(bucket.get("pnl", 0.0) or 0.0)
+        pnl_n = int(bucket.get("pnl_n", 0) or 0)
+        setup_rows.append(
+            {
+                "side": str(bucket.get("side", "")),
+                "setup": str(bucket.get("setup", "")),
+                "raw": str(int(bucket.get("raw", 0) or 0)),
+                "pot": str(int(bucket.get("potential", 0) or 0)),
+                "entry_raw": str(int(bucket.get("entry_raw", 0) or 0)),
+                "pre_rej": str(int(bucket.get("pre_rej", 0) or 0)),
+                "pre_pass": str(int(bucket.get("pre_pass", 0) or 0)),
+                "entries": str(int(bucket.get("entries", 0) or 0)),
+                "sig": str(int(bucket.get("signals", 0) or 0)),
+                "paper": str(int(bucket.get("paper", 0) or 0)),
+                "T/SL/EOD": f"{int(bucket.get('target', 0) or 0)}/{int(bucket.get('sl', 0) or 0)}/{int(bucket.get('eod', 0) or 0)}",
+                "pnl": _fmt_rs(pnl) if pnl_n else "",
+                "q": _v7_monitor_fmt_avg(bucket, "q", decimals=1),
+                "rank": _v7_monitor_fmt_avg(bucket, "rank", decimals=3),
+                "rs": _v7_monitor_fmt_avg(bucket, "rs", decimals=2, signed=True),
+                "vol": _v7_monitor_fmt_avg(bucket, "vol", decimals=2),
+                "atr": _v7_monitor_fmt_avg(bucket, "atr", decimals=4),
+                "pre": _v7_monitor_fmt_avg(bucket, "pre", decimals=1),
+                "adx": _v7_monitor_fmt_avg(bucket, "adx", decimals=1),
+                "rsi": _v7_monitor_fmt_avg(bucket, "rsi", decimals=1),
+            }
+        )
+    setup_rows.sort(
+        key=lambda r: (
+            -_to_float_or_nan(r.get("entries", "0")),
+            -_to_float_or_nan(r.get("sig", "0")),
+            -_to_float_or_nan(r.get("pot", "0")),
+            r.get("side", ""),
+            r.get("setup", ""),
+        )
+    )
+    setup_rows = setup_rows[:18]
+    detail_rows = detail_rows[-30:]
+
+    session_rows: list[dict[str, str]] = []
+    for card_id, label in (
+        ("signal_discovery_v7_5min_id", "scanner"),
+        ("entry_engine_1min_v5_id", "entry"),
+        ("live_combined_csv_id_5min_v7_persistent", "legacy_scan"),
+        ("v7_research_layer", "research"),
+        ("daily_live_v7_research_session", "daily_research"),
+        ("v7_pre_momentum_filter_analyst", "pre_mom_analyst"),
+        ("paper_trade_id_5min_v7", "paper"),
+        ("kite_trade_id_5min_v7", "kite"),
+    ):
+        status = _v7_monitor_status_for(card_id, task_snapshot)
+        started = (
+            _parse_status_datetime(status.get("start_ts_utc"))
+            or _parse_status_datetime(status.get("start_ts"))
+            or _parse_status_datetime(status.get("worker_start_utc"))
+        )
+        runtime = _v7_monitor_fmt_duration(started.isoformat(), "", now=now_ist) if started else ""
+        heartbeat_age = str(status.get("heartbeat_idle_sec", "")).strip()
+        session_rows.append(
+            {
+                "session": label,
+                "status": str(status.get("status") or status.get("scheduler_status") or ""),
+                "phase": str(status.get("phase") or status.get("heartbeat_state") or ""),
+                "pid": str(status.get("pid", "")),
+                "runtime": runtime,
+                "hb_idle": heartbeat_age,
+                "slot": str(status.get("slot") or status.get("target_slot") or status.get("candidate_snapshot_slot_ist") or ""),
+                "next": str(status.get("scheduler_next_run", "")),
+            }
+        )
+
+    total_pnl = sum(float(rec.get("pnl", 0.0) or 0.0) for rec in slots.values())
+    total_pnl_n = sum(int(rec.get("pnl_n", 0) or 0) for rec in slots.values())
+    latest_slot = str(latest_summary.get("slot_ist") or latest_summary.get("candidate_snapshot_slot_ist") or "")
+    latest_slot_label = _v7_monitor_slot_label(latest_slot)
+    pre_version = str(
+        latest_summary.get("pre_momentum_version")
+        or latest_summary.get("pre_momentum_gate_version")
+        or pre_version_seen
+        or ""
+    )
+    pre_enabled = str(latest_summary.get("pre_momentum_gate_enabled", "")).strip()
+    v11_enabled = str(latest_summary.get("v11_entry_overlay_enabled", "")).strip()
+    status = {
+        "status": "READY" if slots or latest_summary else "WAITING_OUTPUT",
+        "session": "V7 ID 5min live monitor",
+        "slot": latest_slot,
+        "scan_raw": str(raw_scan_total),
+        "potential": str(potential_total),
+        "pre_momentum_gate": "ON" if pre_enabled.lower() == "true" else pre_enabled,
+        "v11_entry_overlay": "ON" if v11_enabled.lower() == "true" else v11_enabled,
+        "flow_status": flow_rows[-1]["flow"] if flow_rows else "WAIT",
+    }
+
+    summary_lines = [
+        (
+            f"V7 ID 5min live monitor | date={today_ist} | latest_slot={latest_slot_label or 'n/a'} | "
+            f"scanner_raw={raw_scan_total} | potential={potential_total} | "
+            f"scan_v11_rej={scan_v11_rej_total} | research_rej={research_rej_total}"
+        ),
+        (
+            f"entry_audit_slots={audit_slots} | pre_momentum_gate={status['pre_momentum_gate'] or 'n/a'} | "
+            f"pre_version={pre_version or 'n/a'} | v11_entry_overlay={status['v11_entry_overlay'] or 'n/a'} | "
+            f"paper/live_pnl={_fmt_rs(total_pnl) if total_pnl_n else 'n/a'}"
+        ),
+        (
+            "timing_sec: scan_lag=slot_to_candidate_publish | scan_sec=scanner_elapsed | "
+            "entry_sec=1min_engine_total | load=candidate_load_or_wait | fetch=raw_1m_fetch | "
+            "scan=entry_row_scan | audit_csv=entry_audit_print | live_csv=short_long_signal_print | "
+            "sig_lag=signal_csv_write | entry_lag=paper/live_entry_after_signal"
+        ),
+    ]
+    flow_table = _format_fixed_table(
+        flow_rows,
+        (
+            "slot",
+            "fetch5m",
+            "fetch_s",
+            "scan5m",
+            "scan_s",
+            "cand_print",
+            "cand_s",
+            "engine1m",
+            "eng_s+1m",
+            "L/F/S/P/C",
+            "entries/sig",
+            "paper_T",
+            "paper_s+1m",
+            "paper_F",
+            "live_s+1m",
+            "flow",
+            "blocker/reason",
+            "tickers C>E>S>P>L",
+        ),
+        rows_meta=f"brief end-to-end flow rows_shown={len(flow_rows)} (latest 24 slots)",
+        summary_lines=(
+            "SLA: fetch/candidate publish <=60s from 5m slot; engine/executors measured from slot+60s.",
+            "L/F/S/P/C = candidate load / raw 1m fetch / entry scan / pre-momentum / signal CSV.",
+            "OFF is intentional task disablement; N/A means no signal required that executor for the slot.",
+        ),
+        column_max_widths={
+            "blocker/reason": 72,
+            "tickers C>E>S>P>L": 110,
+        },
+    )
+    slot_table = _format_fixed_table(
+        slot_rows,
+        (
+            "slot",
+            "tickers",
+            "scan_lag",
+            "scan_sec",
+            "scan_raw",
+            "pot",
+            "scan_v11rej",
+            "res_rej",
+            "entry_raw",
+            "v11_rej",
+            "pre_rej",
+            "pre_pass",
+            "entries",
+            "sig",
+            "short",
+            "long",
+            "paper",
+            "tgt",
+            "sl",
+            "eod",
+            "open",
+            "pnl",
+            "entry_sec",
+            "load",
+            "fetch",
+            "cand_wait",
+            "scan",
+            "audit_csv",
+            "live_csv",
+            "sig_lag",
+            "entry_lag",
+        ),
+        rows_meta=f"5-min slot funnel rows_shown={len(slot_rows)} (latest 24 slots)",
+        summary_lines=summary_lines,
+    )
+    setup_table = _format_fixed_table(
+        setup_rows,
+        (
+            "side",
+            "setup",
+            "raw",
+            "pot",
+            "entry_raw",
+            "pre_rej",
+            "pre_pass",
+            "entries",
+            "sig",
+            "paper",
+            "T/SL/EOD",
+            "pnl",
+            "q",
+            "rank",
+            "rs",
+            "vol",
+            "atr",
+            "pre",
+            "adx",
+            "rsi",
+        ),
+        rows_meta=f"setup/indicator rows_shown={len(setup_rows)} (top by entries, signals, potential)",
+    )
+    detail_table = _format_fixed_table(
+        detail_rows,
+        (
+            "state",
+            "ticker",
+            "side",
+            "setup",
+            "signal",
+            "entry",
+            "sl",
+            "target",
+            "qty",
+            "pnl",
+            "outcome",
+            "fetch_lag",
+            "csv_lag",
+            "entry_lag",
+            "dur",
+        ),
+        rows_meta=f"latest entry/trade detail rows_shown={len(detail_rows)} (signals, entries, paper/live/open)",
+    )
+    session_table = _format_fixed_table(
+        session_rows,
+        ("session", "status", "phase", "pid", "runtime", "hb_idle", "slot", "next"),
+        rows_meta=f"active session timing rows_shown={len(session_rows)}",
+    )
+    return "\n\n".join((flow_table, slot_table, setup_table, detail_table, session_table)), status
 
 
 def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
@@ -4141,7 +5373,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         <div class="filter-bar" id="statusFilters"></div>
       </div>
       <div class="toolbar-controls">
-        <div class="toolbar-note">Auto refresh 15s</div>
+        <div class="toolbar-note">Auto refresh 15s | 5-min monitor</div>
       </div>
     </div>
     <div class="section-nav" id="sectionNav"></div>
@@ -4159,7 +5391,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "signal_discovery_v7_5min_id",
       "candidate_tickers_v7_5min_id",
       "entry_engine_1min_v5_id",
+      "v7_live_5min_monitor",
       "v7_research_layer",
+      "daily_live_v7_research_session",
+      "v7_pre_momentum_filter_analyst",
       "live_signals_csv_id_5min_v7_short",
       "live_signals_csv_id_5min_v7_long",
       "live_papertrade_result_csv_id_5min_v7",
@@ -4215,7 +5450,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "signal_discovery_v7_5min_id": "Signal discovery v7 5mins ID",
       "candidate_tickers_v7_5min_id": "Candidate tickers",
       "entry_engine_1min_v5_id": "Entry engine 1min v7 ID",
+      "v7_live_5min_monitor": "V7 ID 5min Live Monitor",
       "v7_research_layer": "Suggestions v7 live research",
+      "daily_live_v7_research_session": "Daily Live V7 Research",
+      "v7_pre_momentum_filter_analyst": "v7 pre momentum filter analyst",
       "live_signals_csv_id_5min_v7_short": "Live Entries CSV ID 5mins v7 Short",
       "live_signals_csv_id_5min_v7_long": "Live Entries CSV ID 5mins v7 Long",
       "live_papertrade_result_csv_id_5min_v7": "V7 ID 5min Papertrade Results",
@@ -4258,6 +5496,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "signal_discovery_v7_5min_id",
           "candidate_tickers_v7_5min_id",
           "entry_engine_1min_v5_id",
+          "v7_live_5min_monitor",
           "live_signals_csv_id_5min_v7_short",
           "live_signals_csv_id_5min_v7_long",
           "live_papertrade_result_csv_id_5min_v7",
@@ -4282,7 +5521,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         title: "Research & Suggestions",
         accent: "research",
         ids: [
-          "v7_research_layer"
+          "v7_research_layer",
+          "daily_live_v7_research_session",
+          "v7_pre_momentum_filter_analyst"
         ]
       },
       {
@@ -4325,6 +5566,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
       { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
       { time: "09:17", id: "v7_research_layer", label: "V7 Research Layer" },
+      { time: "09:17", id: "daily_live_v7_research_session", label: "Daily Live V7 Research" },
+      { time: "09:17", id: "v7_pre_momentum_filter_analyst", label: "V7 Pre-Momentum Analyst" },
       { time: "09:20", id: "signal_discovery_v7_5min_id", label: "Signal Discovery" },
       { time: "09:21", id: "entry_engine_1min_v5_id", label: "Entry Engine" },
       { time: "09:22", id: "paper_trade_id_5min_v7", label: "Papertrade TRUE" },
@@ -4698,7 +5941,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (filter === "paper") return title.includes("paper");
       if (filter === "live") return title.includes("live") || title.includes("kite");
       if (filter === "research") {
-        return id === "v7_research_layer" || id === "backtesting_result_v11" || id === "data_for_backtesting";
+        return id === "v7_research_layer"
+          || id === "daily_live_v7_research_session"
+          || id === "v7_pre_momentum_filter_analyst"
+          || id === "backtesting_result_v11"
+          || id === "data_for_backtesting";
       }
       return true;
     }
@@ -5544,6 +6791,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
     def _snapshot(self, lines: int) -> Dict[str, object]:
         items = []
         task_snapshot = load_task_scheduler_snapshot()
+        today_ist = dt.datetime.now(IST).date().isoformat()
         for key in LOG_IDS:
             path, file_name = resolve_log_target(key)
             status = parse_status_file(_resolve_status_path(STATUS_FILES[key])) if key in STATUS_FILES else {}
@@ -5596,6 +6844,14 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 tail = projected if projected else tail_text(path, lines=lines)
             elif key == "v7_research_layer":
                 report = V7_RESEARCH_LAYER_LATEST_DIR / "latest_multi_window_suggestions.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "daily_live_v7_research_session":
+                report = DAILY_LIVE_V7_RESEARCH_LATEST_DIR / "latest_daily_live_v7_research.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_pre_momentum_filter_analyst":
+                report = V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.md"
                 projected = tail_text(report, lines=lines)
                 tail = projected if projected else tail_text(path, lines=lines)
             elif key == "backtesting_result_v11":
@@ -5682,8 +6938,25 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
+        monitor_path = runtime_dir("entry_engine_1min_v5_ID") / "latest" / "latest_summary.json"
+        monitor_tail, monitor_status = _format_v7_live_5min_monitor(today_ist, task_snapshot)
+        try:
+            monitor_size = monitor_path.stat().st_size if monitor_path.exists() else 0
+        except OSError:
+            monitor_size = 0
+        items.append(
+            {
+                "id": "v7_live_5min_monitor",
+                "file_name": str(Path("entry_engine_1min_v5_ID") / "latest" / monitor_path.name),
+                "exists": monitor_path.exists(),
+                "mtime": iso_mtime(monitor_path),
+                "size_bytes": monitor_size,
+                "status": monitor_status,
+                "tail": monitor_tail,
+            }
+        )
+
         # Dynamic cards: today's live signal CSV(s) used by trade execution.
-        today_ist = dt.datetime.now(IST).date().isoformat()
         entry_engine_status_for_live_csv = next(
             (
                 dict(item.get("status") or {})

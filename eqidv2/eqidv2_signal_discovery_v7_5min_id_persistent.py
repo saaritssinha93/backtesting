@@ -38,6 +38,28 @@ HEARTBEAT_DIR = SESSION_ROOT / "heartbeat"
 
 SLOT_MINUTES = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SLOT_MINUTES", "5"))
 POST_SLOT_DELAY_SEC = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_POST_SLOT_DELAY_SEC", "15"))
+
+# Feed-completion gate. The 5-min indicator feed
+# (eqidv2_eod_scheduler_for_5mins_data_live_minimal) finishes writing each slot's
+# bar at ~slot+45-60s. Scanning before that reads pre-bar files and silently drops
+# A/B/C/etc setups. Instead of guessing a fixed post-slot delay, poll the feed's
+# status.json and wait until it reports the current slot complete (timeout-bounded).
+FEED_GATE_ENABLE = str(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+    "disabled",
+}
+FEED_STATUS_JSON = Path(
+    os.getenv(
+        "EQIDV2_SIGNAL_DISCOVERY_V7_FEED_STATUS_JSON",
+        str(Path(__file__).resolve().parent / "logs" / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"),
+    )
+)
+FEED_GATE_MAX_WAIT_SEC = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MAX_WAIT_SEC", "90"))
+FEED_GATE_POLL_SEC = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_POLL_SEC", "2"))
+FEED_GATE_MIN_DELAY_SEC = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MIN_DELAY_SEC", "5"))
 DEFAULT_SCAN_WORKERS = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS", "8"))
 TIER123_SCAN_WORKERS = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS", str(DEFAULT_SCAN_WORKERS)))
 V8_LIVE_GATE_ENABLE = str(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_V8_GATE", "1")).strip().lower() not in {
@@ -216,6 +238,64 @@ def _ensure_ist_ts(ts: Any) -> pd.Timestamp:
     else:
         out = out.tz_convert(base_v15.IST)
     return out
+
+
+def _read_feed_status_slot() -> Tuple[Optional[pd.Timestamp], str]:
+    """Return (last completed slot reported by the 5-min feed, overall_state).
+
+    Returns (None, "") if the status file is missing/unreadable/unparseable so the
+    caller treats the feed as not-yet-ready and keeps polling until the timeout.
+    """
+    try:
+        data = json.loads(FEED_STATUS_JSON.read_text(encoding="utf-8"))
+    except Exception:
+        return None, ""
+    raw_slot = data.get("slot_ist")
+    state = str(data.get("overall_state", "") or "")
+    if not raw_slot:
+        return None, state
+    try:
+        return _ensure_ist_ts(raw_slot).floor(f"{SLOT_MINUTES}min"), state
+    except Exception:
+        return None, state
+
+
+def _wait_for_feed_slot(slot: pd.Timestamp) -> bool:
+    """Block until the feed reports `slot` written, or until the timeout elapses.
+
+    Returns True if the feed confirmed the slot, False if it timed out (in which
+    case the caller scans anyway on whatever data is present — degraded, but the
+    session never hangs if the feed dies).
+    """
+    slot_floor = slot.floor(f"{SLOT_MINUTES}min")
+    # Small floor so we don't hammer the file the instant the slot opens while the
+    # feed is still mid-fetch; counts toward the overall budget.
+    if FEED_GATE_MIN_DELAY_SEC > 0:
+        time.sleep(min(FEED_GATE_MIN_DELAY_SEC, max(0, FEED_GATE_MAX_WAIT_SEC)))
+    deadline = time.monotonic() + max(0, FEED_GATE_MAX_WAIT_SEC - FEED_GATE_MIN_DELAY_SEC)
+    waited_from = time.monotonic()
+    last_feed_slot: Optional[pd.Timestamp] = None
+    while True:
+        feed_slot, state = _read_feed_status_slot()
+        last_feed_slot = feed_slot
+        if feed_slot is not None and feed_slot >= slot_floor:
+            elapsed = time.monotonic() - waited_from + FEED_GATE_MIN_DELAY_SEC
+            print(
+                f"[FEED] slot {slot.strftime('%H:%M')} ready "
+                f"(feed_slot={feed_slot.strftime('%H:%M')} state={state or 'NA'}) "
+                f"after ~{elapsed:.0f}s",
+                flush=True,
+            )
+            return True
+        if time.monotonic() >= deadline:
+            last = last_feed_slot.strftime("%H:%M") if last_feed_slot is not None else "NONE"
+            print(
+                f"[FEED][WARN] timeout after {FEED_GATE_MAX_WAIT_SEC}s waiting for feed slot "
+                f"{slot.strftime('%H:%M')} (last feed_slot={last}); scanning on available data",
+                flush=True,
+            )
+            return False
+        time.sleep(max(0.5, FEED_GATE_POLL_SEC))
 
 
 def _entry_window_ok_for_signal_ts(signal_ts: Any) -> bool:
@@ -1336,6 +1416,14 @@ def main() -> None:
         f"signal_to_entry_lag={ENTRY_SIGNAL_TO_ENTRY_LAG_MIN}m",
         flush=True,
     )
+    if FEED_GATE_ENABLE:
+        print(
+            f"[INFO] feed_gate=ON status={FEED_STATUS_JSON} "
+            f"max_wait={FEED_GATE_MAX_WAIT_SEC}s poll={FEED_GATE_POLL_SEC}s min_delay={FEED_GATE_MIN_DELAY_SEC}s",
+            flush=True,
+        )
+    else:
+        print(f"[INFO] feed_gate=OFF (fixed post_slot_delay={int(args.post_slot_delay_sec)}s)", flush=True)
 
     if args.replay_slots:
         summaries = []
@@ -1385,8 +1473,16 @@ def main() -> None:
             print("[STOP] End-time reached for today. Exiting.", flush=True)
             return
 
-        print(f"[WAIT] slot={slot.strftime('%H:%M')} post-slot delay {int(args.post_slot_delay_sec)}s", flush=True)
-        time.sleep(max(0, int(args.post_slot_delay_sec)))
+        if FEED_GATE_ENABLE:
+            print(
+                f"[WAIT] slot={slot.strftime('%H:%M')} waiting for 5-min feed completion "
+                f"(max {FEED_GATE_MAX_WAIT_SEC}s)",
+                flush=True,
+            )
+            _wait_for_feed_slot(slot)
+        else:
+            print(f"[WAIT] slot={slot.strftime('%H:%M')} post-slot delay {int(args.post_slot_delay_sec)}s", flush=True)
+            time.sleep(max(0, int(args.post_slot_delay_sec)))
         _touch_status("RUNNING", phase="SCAN", slot=slot.strftime("%H:%M"))
         _touch_heartbeat("RUNNING", phase="SCAN", slot=slot.strftime("%H:%M"))
         summary = run_slot(slot, scan_workers=int(args.scan_workers))

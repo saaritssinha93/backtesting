@@ -89,6 +89,23 @@ MARKET_OPEN = dt_time(9, 15)
 MARKET_CLOSE = dt_time(15, 30)
 FORCED_CLOSE_TIME = dt_time(15, 20)  # aligned closer to backtest EOD; safe before broker auto-square-off
 
+
+def _parse_hhmm_time(value: str, default: str) -> dt_time:
+    raw = str(value or default).strip()
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return datetime.strptime(default, "%H:%M").time()
+
+
+ENTRY_WINDOW_START_RAW = os.getenv("EQIDV2_PAPER_V7_ENTRY_WINDOW_START", "09:30").strip()
+ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_PAPER_V7_ENTRY_WINDOW_END", "14:00").strip()
+ENTRY_WINDOW_START = _parse_hhmm_time(ENTRY_WINDOW_START_RAW, "09:30")
+ENTRY_WINDOW_END = _parse_hhmm_time(ENTRY_WINDOW_END_RAW, "14:00")
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_PAPER_V7_ENTRY_LAG_MIN", "5"))
+
 # Simulation
 POLL_INTERVAL_SEC = 5
 LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
@@ -236,10 +253,9 @@ LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE"
     "yes",
     "on",
 }
-LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "300"))
-# Tier-1 fix (2026-04-23): per-setup late-lag thresholds. See live executor for
-# rationale (lag=1 480s, lag=2 780s, dynamic bounce 900s). Falls back to
-# LATE_DETECTION_MAX_LAG_SEC for any setup not in the table.
+LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "75"))
+# Historical setup thresholds are retained only as lower optional limits. The
+# environment limit is the universal hard ceiling for every setup.
 _LATE_LAG_THRESHOLDS_BY_SETUP: Dict[str, int] = {
     "A_MOD_BREAK_C1_HIGH":              480,
     "A_MOD_BREAK_C1_LOW":               480,
@@ -251,9 +267,11 @@ _LATE_LAG_THRESHOLDS_BY_SETUP: Dict[str, int] = {
 }
 
 def _late_lag_threshold_for_setup(setup: Optional[str]) -> int:
-    if not setup:
-        return LATE_DETECTION_MAX_LAG_SEC
-    return _LATE_LAG_THRESHOLDS_BY_SETUP.get(str(setup).upper().strip(), LATE_DETECTION_MAX_LAG_SEC)
+    setup_threshold = _LATE_LAG_THRESHOLDS_BY_SETUP.get(
+        str(setup or "").upper().strip(),
+        LATE_DETECTION_MAX_LAG_SEC,
+    )
+    return min(setup_threshold, LATE_DETECTION_MAX_LAG_SEC)
 
 _LATE_SKIPPED_LOCK = threading.Lock()
 _late_skipped_count = 0
@@ -448,13 +466,34 @@ RESEARCH_PAPER_GATES_ENABLED = str(os.getenv("EQIDV2_PAPER_V7_RESEARCH_GATES_ENA
     "yes",
     "on",
 }
-ANTI_CHASE_LONG_CLOSE_LOC_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_CLOSE_LOC_MIN", "0.88"))
-ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN", "0.52"))
+ANTI_CHASE_LONG_CLOSE_LOC_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_CLOSE_LOC_MIN", "0.97"))
+ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN", "3.50"))
 B_AVWAP_RECLAIM_MIN_RANKER_SCORE = float(os.getenv("EQIDV2_PAPER_V7_B_AVWAP_MIN_RANKER_SCORE", "0.65"))
-RESEARCH_PAPER_GATE_VERSION = "v7_research_2026_06_03"
+DAILY_LOSS_BRAKE_ENABLED = str(os.getenv("EQIDV2_PAPER_V7_DAILY_LOSS_BRAKE_ENABLED", "0")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+DAILY_LOSS_BRAKE_RS = abs(float(os.getenv("EQIDV2_PAPER_V7_DAILY_LOSS_BRAKE_RS", "7500")))
+C_OR_BREAKOUT_TIME_STOP_ENABLED = str(
+    os.getenv("EQIDV2_PAPER_V7_C_OR_BREAKOUT_TIME_STOP_ENABLED", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+C_OR_BREAKOUT_TIME_STOP_MIN = max(0, int(float(os.getenv("EQIDV2_PAPER_V7_C_OR_BREAKOUT_TIME_STOP_MIN", "30"))))
+C_OR_BREAKOUT_SESSION_CAP_ENABLED = str(
+    os.getenv("EQIDV2_PAPER_V7_C_OR_BREAKOUT_SESSION_CAP_ENABLED", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+C_OR_BREAKOUT_SESSION_CAP = max(0, int(float(os.getenv("EQIDV2_PAPER_V7_C_OR_BREAKOUT_SESSION_CAP", "50"))))
+C_OR_BREAKOUT_SESSION_CAP_COUNTER_FILE = os.path.join(
+    SIGNAL_DIR,
+    "c_or_breakout_session_cap_counter_id_5min_v7_paper.json",
+)
+RESEARCH_PAPER_GATE_VERSION = "v7_research_2026_06_04_pf_sl_eod"
 
 _candidate_context_cache_lock = threading.Lock()
 _candidate_context_cache: Dict[str, Tuple[float, Dict[str, dict]]] = {}
+_c_or_session_cap_lock = threading.Lock()
+_c_or_session_cap_counter: dict = {"date": "", "signal_ids": []}
 
 # Leave unset so quantity is taken from the signal row when present.
 _FORCE_ENTRY_QUANTITY_RAW = str(os.getenv("EQIDV7_ID_5MIN_FORCE_ENTRY_QUANTITY", "")).strip()
@@ -1140,6 +1179,138 @@ def _research_paper_gate(signal: dict) -> Tuple[bool, str, str]:
     return False, "", ""
 
 
+def _daily_loss_brake_gate(signal: dict) -> Tuple[bool, str, str]:
+    if not DAILY_LOSS_BRAKE_ENABLED or DAILY_LOSS_BRAKE_RS <= 0:
+        return False, "", ""
+    with daily_pnl_lock:
+        day_total = float(daily_pnl.get("total", 0.0))
+    if day_total > -DAILY_LOSS_BRAKE_RS:
+        return False, "", ""
+
+    ticker = str(signal.get("ticker", "")).strip().upper()
+    side = str(signal.get("side", "")).strip().upper()
+    setup = str(signal.get("setup", "")).strip().upper()
+    return (
+        True,
+        "ENTRY_SKIPPED_DAILY_LOSS_BRAKE",
+        (
+            f"[RISK.BRAKE] Skipping new entry {side} {ticker} {setup}: "
+            f"daily paper PnL {_fmt_rs_signed(day_total)} <= "
+            f"-{_fmt_rs(DAILY_LOSS_BRAKE_RS)} | version={RESEARCH_PAPER_GATE_VERSION}"
+        ),
+    )
+
+
+def _today_ist_str() -> str:
+    return datetime.now(IST).strftime("%Y-%m-%d")
+
+
+def _c_or_session_cap_enabled_for_signal(signal: dict) -> bool:
+    setup = str(signal.get("setup", "")).strip().upper()
+    return bool(C_OR_BREAKOUT_SESSION_CAP_ENABLED and C_OR_BREAKOUT_SESSION_CAP > 0 and setup == "C_OR_BREAKOUT")
+
+
+def _c_or_session_cap_load(today_str: str) -> dict:
+    try:
+        if os.path.exists(C_OR_BREAKOUT_SESSION_CAP_COUNTER_FILE):
+            with open(C_OR_BREAKOUT_SESSION_CAP_COUNTER_FILE, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if isinstance(payload, dict) and str(payload.get("date", "")) == today_str:
+                raw_ids = payload.get("signal_ids", [])
+                if isinstance(raw_ids, list):
+                    signal_ids = [str(x).strip() for x in raw_ids if str(x).strip()]
+                else:
+                    signal_ids = []
+                return {"date": today_str, "signal_ids": sorted(set(signal_ids))}
+    except Exception as exc:
+        log.warning(f"[C_OR.CAP] Failed to load session cap counter: {exc}")
+    return {"date": today_str, "signal_ids": []}
+
+
+def _c_or_session_cap_persist() -> None:
+    try:
+        tmp = C_OR_BREAKOUT_SESSION_CAP_COUNTER_FILE + ".tmp"
+        payload = {
+            "date": str(_c_or_session_cap_counter.get("date", "")),
+            "signal_ids": sorted(set(str(x) for x in _c_or_session_cap_counter.get("signal_ids", []) if str(x))),
+            "count": len(set(str(x) for x in _c_or_session_cap_counter.get("signal_ids", []) if str(x))),
+            "cap": int(C_OR_BREAKOUT_SESSION_CAP),
+            "updated_at_ist": datetime.now(IST).isoformat(),
+        }
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+        os.replace(tmp, C_OR_BREAKOUT_SESSION_CAP_COUNTER_FILE)
+    except Exception as exc:
+        log.warning(f"[C_OR.CAP] Failed to persist session cap counter: {exc}")
+
+
+def _c_or_session_cap_prepare(today_str: Optional[str] = None) -> None:
+    today = today_str or _today_ist_str()
+    if _c_or_session_cap_counter.get("date") == today:
+        return
+    fresh = _c_or_session_cap_load(today)
+    _c_or_session_cap_counter.clear()
+    _c_or_session_cap_counter.update(fresh)
+
+
+def _c_or_session_cap_count() -> int:
+    return len(set(str(x) for x in _c_or_session_cap_counter.get("signal_ids", []) if str(x)))
+
+
+def _c_or_breakout_session_cap_gate(signal: dict) -> Tuple[bool, str, str]:
+    if not _c_or_session_cap_enabled_for_signal(signal):
+        return False, "", ""
+    today = _today_ist_str()
+    with _c_or_session_cap_lock:
+        _c_or_session_cap_prepare(today)
+        count = _c_or_session_cap_count()
+    if count < C_OR_BREAKOUT_SESSION_CAP:
+        return False, "", ""
+
+    ticker = str(signal.get("ticker", "")).strip().upper()
+    side = str(signal.get("side", "")).strip().upper()
+    return (
+        True,
+        "ENTRY_SKIPPED_C_OR_SATURATION_CAP",
+        (
+            f"[C_OR.CAP] Skipping new entry {side} {ticker} C_OR_BREAKOUT: "
+            f"session accepted-entry cap reached ({count}/{C_OR_BREAKOUT_SESSION_CAP}) | "
+            f"version={RESEARCH_PAPER_GATE_VERSION}"
+        ),
+    )
+
+
+def _c_or_session_cap_increment(signal_id: str, signal: dict) -> Tuple[bool, str]:
+    if not signal_id or not _c_or_session_cap_enabled_for_signal(signal):
+        return True, "not_applicable"
+    today = _today_ist_str()
+    with _c_or_session_cap_lock:
+        _c_or_session_cap_prepare(today)
+        ids = set(str(x) for x in _c_or_session_cap_counter.get("signal_ids", []) if str(x))
+        if signal_id in ids:
+            return True, f"already_counted {len(ids)}/{C_OR_BREAKOUT_SESSION_CAP}"
+        if len(ids) >= C_OR_BREAKOUT_SESSION_CAP:
+            return False, f"C_OR_BREAKOUT session cap reached ({len(ids)}/{C_OR_BREAKOUT_SESSION_CAP})"
+        ids.add(signal_id)
+        _c_or_session_cap_counter["signal_ids"] = sorted(ids)
+        _c_or_session_cap_persist()
+        return True, f"counted {len(ids)}/{C_OR_BREAKOUT_SESSION_CAP}"
+
+
+def _c_or_session_cap_decrement(signal_id: str) -> None:
+    if not signal_id or not C_OR_BREAKOUT_SESSION_CAP_ENABLED:
+        return
+    today = _today_ist_str()
+    with _c_or_session_cap_lock:
+        _c_or_session_cap_prepare(today)
+        ids = set(str(x) for x in _c_or_session_cap_counter.get("signal_ids", []) if str(x))
+        if signal_id not in ids:
+            return
+        ids.discard(signal_id)
+        _c_or_session_cap_counter["signal_ids"] = sorted(ids)
+        _c_or_session_cap_persist()
+
+
 def _record_pre_entry_skip(
     signal: dict,
     outcome_name: str,
@@ -1577,6 +1748,7 @@ def simulate_trade(
         log.error(f"[SIM] invalid signal payload; skipping | signal_id={signal_id} | ticker={ticker} | side={side}")
         if pre_reserved_margin is not None:
             _release_capacity(signal_id)
+            _c_or_session_cap_decrement(signal_id)
         return False
 
     signal_entry_price = _safe_float(signal.get("entry_price", 0.0), 0.0)
@@ -1605,6 +1777,7 @@ def simulate_trade(
         )
         if pre_reserved_margin is not None:
             _release_capacity(signal_id)
+            _c_or_session_cap_decrement(signal_id)
         return False
 
     signal_time = str(signal.get("signal_entry_datetime_ist") or signal.get("signal_datetime") or "")
@@ -1635,7 +1808,7 @@ def simulate_trade(
     entry_retry_deadline = _entry_retry_deadline(signal, trade_start_ist, forced_close_dt)
 
     def _finalize_pre_entry_skip(outcome_name: str, warning_message: str) -> bool:
-        return _record_pre_entry_skip(
+        recorded = _record_pre_entry_skip(
             signal=signal,
             outcome_name=outcome_name,
             warning_message=warning_message,
@@ -1644,6 +1817,8 @@ def simulate_trade(
             release_capacity=True,
             clear_active_trade=True,
         )
+        _c_or_session_cap_decrement(signal_id)
+        return recorded
 
     if not resume_mode:
         try:
@@ -1697,8 +1872,7 @@ def simulate_trade(
             ),
         )
 
-    # Fix #20 (post-2026-04-21): stale-detection guard.
-    # Tier-1 (2026-04-23): per-setup threshold + late_skipped CSV trail.
+    # Universal entry-slot freshness guard with a late_skipped CSV trail.
     if (not resume_mode) and LATE_DETECTION_GUARD_ENABLE and LATE_DETECTION_MAX_LAG_SEC > 0:
         _lag_sec = _detection_lag_seconds(signal)
         _setup_name = str(signal.get("setup", "")).upper().strip()
@@ -1710,7 +1884,7 @@ def simulate_trade(
                 (
                     f"[STALE.DETECT] Skipping {ticker} {side} {_setup_name}: detected "
                     f"{_lag_sec:.0f}s after entry slot "
-                    f"(threshold {_threshold}s, setup-tier; env_max={LATE_DETECTION_MAX_LAG_SEC}s) | "
+                    f"(universal threshold {_threshold}s) | "
                     f"signal_id={signal_id[:12]} | total_late_skipped_today={_late_skipped_count}"
                 ),
             )
@@ -1869,8 +2043,24 @@ def simulate_trade(
             f"entry={entry_price:.2f} | sl={stop_price:.2f} | tgt={target_price:.2f} | qty={quantity} | "
             f"invested={_fmt_rs(invested)} | margin={_fmt_rs(margin)} | src={entry_source_used} | "
             f"open_positions={open_positions} | deployed_margin={_fmt_rs(deployed_margin)}"
-        )
+    )
     _log_live_pnl_snapshot(use_ltp, source=f"entry:{ticker}")
+
+    c_or_time_stop_dt: Optional[datetime] = None
+    if (
+        C_OR_BREAKOUT_TIME_STOP_ENABLED
+        and C_OR_BREAKOUT_TIME_STOP_MIN > 0
+        and _setup_for_candE4 == "C_OR_BREAKOUT"
+    ):
+        time_stop_start_ist = entry_time_ist if resume_mode else datetime.now(IST)
+        candidate_dt = time_stop_start_ist + timedelta(minutes=C_OR_BREAKOUT_TIME_STOP_MIN)
+        if candidate_dt < forced_close_dt:
+            c_or_time_stop_dt = candidate_dt
+            log.info(
+                f"[TIME.STOP] Armed {side} {ticker} C_OR_BREAKOUT "
+                f"{C_OR_BREAKOUT_TIME_STOP_MIN}m time stop at "
+                f"{c_or_time_stop_dt.strftime('%H:%M:%S')} | ID={trade_id}"
+            )
 
     exit_price = entry_price
     outcome = "MONITORING"
@@ -1938,6 +2128,15 @@ def simulate_trade(
             break
 
         if ltp is None:
+            if c_or_time_stop_dt is not None and now_ist >= c_or_time_stop_dt:
+                exit_price = float(last_valid_ltp) if last_valid_ltp is not None else entry_price
+                outcome = "TIME_STOP_30M"
+                close_src = "last_ltp" if last_valid_ltp is not None else "entry_fallback"
+                log.info(
+                    f"[SIM] TIME STOP {side} {ticker} @ {exit_price:.2f} "
+                    f"(C_OR_BREAKOUT {C_OR_BREAKOUT_TIME_STOP_MIN}m, src={close_src}) | ID={trade_id}"
+                )
+                break
             if ltp_miss_count == 1 or (ltp_miss_count % 12 == 0):
                 last_err = get_last_ltp_error(ticker)
                 log.warning(
@@ -1970,6 +2169,16 @@ def simulate_trade(
                 outcome = "TARGET"
                 log.info(f"[SIM] TARGET HIT {side} {ticker} @ {exit_price} (LTP={ltp}) | ID={trade_id}")
                 break
+
+        if c_or_time_stop_dt is not None and now_ist >= c_or_time_stop_dt:
+            exit_price = float(last_valid_ltp) if last_valid_ltp is not None else entry_price
+            outcome = "TIME_STOP_30M"
+            close_src = "last_ltp" if last_valid_ltp is not None else "entry_fallback"
+            log.info(
+                f"[SIM] TIME STOP {side} {ticker} @ {exit_price:.2f} "
+                f"(C_OR_BREAKOUT {C_OR_BREAKOUT_TIME_STOP_MIN}m, src={close_src}) | ID={trade_id}"
+            )
+            break
 
         time.sleep(POLL_INTERVAL_SEC)
 
@@ -2161,6 +2370,59 @@ def _parse_ist_signal_ts(value: object) -> Optional[pd.Timestamp]:
         return ts
     except Exception:
         return None
+
+
+def _entry_window_reference_ts(signal: dict) -> Optional[pd.Timestamp]:
+    for key in ("entry_time_ist", "entry_ts", "entry_datetime_ist", "entry_datetime"):
+        ts = _parse_ist_signal_ts(signal.get(key, ""))
+        if ts is not None:
+            return ts.floor("min")
+
+    entry_ts = _parse_ist_signal_ts(signal.get("signal_entry_datetime_ist", ""))
+    bar_ts = None
+    for key in ("signal_bar_time_ist", "bar_time_ist"):
+        bar_ts = _parse_ist_signal_ts(signal.get(key, ""))
+        if bar_ts is not None:
+            break
+
+    if entry_ts is not None:
+        if bar_ts is not None and abs((entry_ts - bar_ts).total_seconds()) < 1:
+            return bar_ts.floor("min") + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+        return entry_ts.floor("min")
+    if bar_ts is not None:
+        return bar_ts.floor("min") + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+
+    signal_ts = _parse_ist_signal_ts(signal.get("signal_datetime", ""))
+    if signal_ts is not None:
+        return signal_ts.floor("min") + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+    return None
+
+
+def _entry_time_window_gate(signal: dict) -> Tuple[bool, str, str]:
+    entry_ts = _entry_window_reference_ts(signal)
+    if entry_ts is None:
+        entry_ts = pd.Timestamp(datetime.now(IST)).floor("min")
+        reference_source = "current_time_fallback"
+    else:
+        reference_source = "signal_entry_time"
+
+    entry_t = entry_ts.time()
+    if ENTRY_WINDOW_START <= entry_t <= ENTRY_WINDOW_END:
+        return False, "", ""
+
+    ticker = str(signal.get("ticker", "")).strip().upper()
+    side = str(signal.get("side", "")).strip().upper()
+    setup = str(signal.get("setup", "")).strip().upper()
+    return (
+        True,
+        "ENTRY_SKIPPED_ENTRY_TIME_WINDOW",
+        (
+            f"[ENTRY.WINDOW] Skipping {side} {ticker} {setup}: "
+            f"entry_time={entry_ts.strftime('%H:%M')} outside "
+            f"{ENTRY_WINDOW_START_RAW}-{ENTRY_WINDOW_END_RAW} IST "
+            f"| source={reference_source}"
+        ),
+    )
 
 
 def _signal_ist_date(sig: dict) -> Optional[datetime.date]:
@@ -2694,12 +2956,60 @@ def process_new_signals(
                 continue
 
         signal = _enriched_signal_context(signal)
+        skip_by_entry_window, entry_window_outcome, entry_window_message = _entry_time_window_gate(signal)
+        if skip_by_entry_window:
+            if _record_pre_entry_skip(
+                signal=signal,
+                outcome_name=entry_window_outcome,
+                warning_message=entry_window_message + f" | signal_id={signal_id[:12]}",
+                use_ltp=use_ltp,
+                trade_start_ist=datetime.now(IST),
+                release_capacity=False,
+                clear_active_trade=False,
+            ):
+                with executed_lock:
+                    executed.add(signal_id)
+                    executed_changed = True
+            continue
+
         skip_by_research, skip_outcome, skip_message = _research_paper_gate(signal)
         if skip_by_research:
             if _record_pre_entry_skip(
                 signal=signal,
                 outcome_name=skip_outcome,
                 warning_message=skip_message + f" | signal_id={signal_id[:12]}",
+                use_ltp=use_ltp,
+                trade_start_ist=datetime.now(IST),
+                release_capacity=False,
+                clear_active_trade=False,
+            ):
+                with executed_lock:
+                    executed.add(signal_id)
+                    executed_changed = True
+            continue
+
+        skip_by_daily_brake, brake_outcome, brake_message = _daily_loss_brake_gate(signal)
+        if skip_by_daily_brake:
+            if _record_pre_entry_skip(
+                signal=signal,
+                outcome_name=brake_outcome,
+                warning_message=brake_message + f" | signal_id={signal_id[:12]}",
+                use_ltp=use_ltp,
+                trade_start_ist=datetime.now(IST),
+                release_capacity=False,
+                clear_active_trade=False,
+            ):
+                with executed_lock:
+                    executed.add(signal_id)
+                    executed_changed = True
+            continue
+
+        skip_by_c_or_cap, c_or_cap_outcome, c_or_cap_message = _c_or_breakout_session_cap_gate(signal)
+        if skip_by_c_or_cap:
+            if _record_pre_entry_skip(
+                signal=signal,
+                outcome_name=c_or_cap_outcome,
+                warning_message=c_or_cap_message + f" | signal_id={signal_id[:12]}",
                 use_ltp=use_ltp,
                 trade_start_ist=datetime.now(IST),
                 release_capacity=False,
@@ -2744,6 +3054,28 @@ def process_new_signals(
             )
             continue
 
+        cap_counted = False
+        c_or_count_ok, c_or_count_reason = _c_or_session_cap_increment(signal_id, signal)
+        if not c_or_count_ok:
+            if _record_pre_entry_skip(
+                signal=signal,
+                outcome_name="ENTRY_SKIPPED_C_OR_SATURATION_CAP",
+                warning_message=(
+                    f"[C_OR.CAP] Skipping {signal.get('side', '?')} {signal.get('ticker', '?')} "
+                    f"C_OR_BREAKOUT after capacity reservation: {c_or_count_reason} | "
+                    f"signal_id={signal_id[:12]}"
+                ),
+                use_ltp=use_ltp,
+                trade_start_ist=datetime.now(IST),
+                release_capacity=True,
+                clear_active_trade=False,
+            ):
+                with executed_lock:
+                    executed.add(signal_id)
+                    executed_changed = True
+            continue
+        cap_counted = _c_or_session_cap_enabled_for_signal(signal)
+
         # Mark executed only after reservation succeeds; if launch fails this is reverted.
         with executed_lock:
             executed.add(signal_id)
@@ -2761,6 +3093,8 @@ def process_new_signals(
         )
         if not started:
             _release_capacity(signal_id)
+            if cap_counted:
+                _c_or_session_cap_decrement(signal_id)
             with executed_lock:
                 executed.discard(signal_id)
                 executed_changed = True
@@ -2769,11 +3103,17 @@ def process_new_signals(
 
         new_count += 1
 
+        c_or_cap_log = (
+            f" | c_or_cap={c_or_count_reason}"
+            if c_or_count_reason != "not_applicable"
+            else ""
+        )
         log.info(
             f"[DISPATCH] Launched simulation for "
             f"{signal.get('side', '?')} {signal.get('ticker', '?')} "
             f"@ {signal.get('entry_price', '?')} | p_win={signal.get('p_win', '?')} | "
-            f"reserved_margin={_fmt_rs(reserved_margin)} | ID={signal_id[:12]}"
+            f"reserved_margin={_fmt_rs(reserved_margin)}"
+            f"{c_or_cap_log} | ID={signal_id[:12]}"
         )
 
     if executed_changed:
@@ -2914,6 +3254,10 @@ def main():
     log.info(f"  Mode            : SIMULATION (no real orders)")
     log.info(f"  LTP polling     : {'Enabled' if use_ltp else 'Disabled'}")
     log.info(f"  Entry source    : {args.entry_price_source}")
+    log.info(
+        f"  Entry window    : {ENTRY_WINDOW_START_RAW}-{ENTRY_WINDOW_END_RAW} IST "
+        f"(signal-to-entry lag fallback={ENTRY_SIGNAL_TO_ENTRY_LAG_MIN}m)"
+    )
     log.info(f"  Max concurrent  : {args.max_trades}")
     log.info(f"  Starting capital: Rs.{args.capital:,.0f}")
     log.info(f"  Signal dir      : {os.path.abspath(SIGNAL_DIR)}/")
@@ -2941,6 +3285,22 @@ def main():
         )
     else:
         log.warning("  Risk limits     : DISABLED (no max-open / margin cap checks)")
+    log.info(
+        "  Research gates  : "
+        f"{'ENABLED' if RESEARCH_PAPER_GATES_ENABLED else 'DISABLED'} | "
+        f"anti_chase_long close_loc>{ANTI_CHASE_LONG_CLOSE_LOC_MIN:.2f}, "
+        f"vwap_dist_atr>{ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN:.2f} | "
+        f"version={RESEARCH_PAPER_GATE_VERSION}"
+    )
+    log.info(
+        "  V7 PF/SL guards : "
+        f"daily_loss_brake={'ENABLED' if DAILY_LOSS_BRAKE_ENABLED else 'DISABLED'} "
+        f"at -{_fmt_rs(DAILY_LOSS_BRAKE_RS)} | "
+        f"C_OR_BREAKOUT_time_stop={'ENABLED' if C_OR_BREAKOUT_TIME_STOP_ENABLED else 'DISABLED'} "
+        f"{C_OR_BREAKOUT_TIME_STOP_MIN}m | "
+        f"C_OR_BREAKOUT_session_cap={'ENABLED' if C_OR_BREAKOUT_SESSION_CAP_ENABLED else 'DISABLED'} "
+        f"{C_OR_BREAKOUT_SESSION_CAP}"
+    )
     log.info("=" * 65)
 
     if args.entry_price_source == "ltp_on_signal" and not use_ltp:

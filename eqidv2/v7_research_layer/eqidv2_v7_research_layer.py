@@ -42,6 +42,7 @@ from eqidv2_runtime_paths import (
 )
 import avwap_5min_ID_v7_candidate_scan as candidate_scan
 import eqidv2_v11_live_overlay as v11_live_overlay
+from eqidv2_v7_light_ops import run_light_ops
 
 
 RESEARCH_ROOT = runtime_dir("live_research_v7_research_layer")
@@ -52,6 +53,8 @@ HEARTBEAT_DIR = RESEARCH_ROOT / "heartbeat"
 RANKER_DIR = RESEARCH_ROOT / "ranker"
 SUGGESTIONS_DIR = RESEARCH_ROOT / "suggestions"
 EXIT_LAB_DIR = RESEARCH_ROOT / "exit_lab"
+OPS_DIR = RESEARCH_ROOT / "ops_audit"
+DEEP_ANALYSIS_DIR = RESEARCH_ROOT / "deep_analysis"
 
 SIGNAL_DISCOVERY_CSV_DIR = runtime_dir("signal_discovery_v7_5mins_ID", "csv")
 ENTRY_AUDIT_DIR = runtime_dir("entry_engine_1min_v5_ID", "audit")
@@ -92,8 +95,68 @@ def _v7_live_setup_universe() -> list[str]:
 V7_LIVE_SETUP_UNIVERSE = _v7_live_setup_universe()
 
 
-for _p in (RESEARCH_ROOT, TRUTH_DIR, REPORT_DIR, LATEST_DIR, HEARTBEAT_DIR, RANKER_DIR, SUGGESTIONS_DIR, EXIT_LAB_DIR):
+for _p in (RESEARCH_ROOT, TRUTH_DIR, REPORT_DIR, LATEST_DIR, HEARTBEAT_DIR, RANKER_DIR, SUGGESTIONS_DIR, EXIT_LAB_DIR, OPS_DIR, DEEP_ANALYSIS_DIR):
     _p.mkdir(parents=True, exist_ok=True)
+
+
+DEEP_ANALYSIS_NUMERIC_FIELDS = [
+    "signal_minute",
+    "upper_wick_pct",
+    "lower_wick_pct",
+    "wick_skew_pct",
+    "signal_range_pct",
+    "market_abs_ret_pct",
+    "pre_bars",
+    "pre1_mom_r",
+    "pre2_mom_r",
+    "pre3_mom_r",
+    "pre5_mom_r",
+    "pre10_mom_r",
+    "pre15_mom_r",
+    "pre3_close_pos",
+    "pre3_dir_count",
+    "pre3_body_sum_r",
+    "pre3_range_r",
+    "pre3_vol_ratio20",
+    "pre5_close_pos",
+    "pre5_dir_count",
+    "pre5_body_sum_r",
+    "pre5_range_r",
+    "pre5_vol_ratio20",
+    "pre10_close_pos",
+    "pre10_dir_count",
+    "pre10_body_sum_r",
+    "pre10_range_r",
+    "pre10_vol_ratio20",
+    "pre15_close_pos",
+    "pre15_dir_count",
+    "pre15_body_sum_r",
+    "pre15_range_r",
+    "pre15_vol_ratio20",
+    "pre1_body_r",
+    "pre1_close_pos",
+    "pre1_range_r",
+    "pre1_dir",
+    "pre1_adx",
+    "pre1_rsi_dir",
+    "pre_entry_momentum_score",
+    "sig5_body_r",
+    "sig5_range_r",
+    "sig5_close_pos",
+    "sig5_adx_calc",
+    "sig5_rsi_dir",
+    "sig5_vol_ratio20",
+]
+
+DEEP_ANALYSIS_TEXT_FIELDS = [
+    "pre_momentum_cutoff_ist",
+    "pre_momentum_gate_version",
+    "pre_momentum_gate_rule",
+    "pre_momentum_gate_pass",
+    "pre_momentum_gate_reason",
+    "v11_live_entry_overlay_status",
+    "v11_live_entry_overlay_version",
+]
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
@@ -168,6 +231,16 @@ def _first_nonblank(row: pd.Series, cols: list[str], default: Any = "") -> Any:
             value = row.get(col)
             if pd.notna(value) and str(value) != "":
                 return value
+    return default
+
+
+def _first_from_rows(rows: list[pd.Series], cols: list[str], default: Any = "") -> Any:
+    for row in rows:
+        if row is None or row.empty:
+            continue
+        value = _first_nonblank(row, cols, default=None)
+        if value is not None and pd.notna(value) and str(value) != "":
+            return value
     return default
 
 
@@ -564,6 +637,15 @@ def build_truth_table(day: str) -> pd.DataFrame:
             signal_close,
             bars=3,
         )
+        indicator_sources = [entry_sel_row, reject_row, entry_raw_row, gated_row, research_filter_row, candidate_row]
+        deep_numeric = {
+            col: _safe_float(_first_from_rows(indicator_sources, [col], np.nan))
+            for col in DEEP_ANALYSIS_NUMERIC_FIELDS
+        }
+        deep_text = {
+            col: _first_from_rows(indicator_sources, [col], "")
+            for col in DEEP_ANALYSIS_TEXT_FIELDS
+        }
 
         rows.append(
             {
@@ -614,7 +696,7 @@ def build_truth_table(day: str) -> pd.DataFrame:
                 ),
                 "v11_live_overlay_status": _first_nonblank(v11_overlay_row, ["v11_live_overlay_status"], _first_nonblank(v11_overlay_reject_row, ["v11_live_overlay_status"], "")),
                 "v11_selected_strategy_profile": _first_nonblank(v11_overlay_row, ["v11_selected_strategy_profile"], _first_nonblank(v11_overlay_reject_row, ["v11_selected_strategy_profile"], "")),
-                "v11_selected_strategy_rule": _first_nonblank(v11_overlay_row, ["v11_selected_strategy_rule"], ""),
+                "v11_selected_strategy_rule": _first_from_rows([v11_overlay_row, entry_sel_row, reject_row, entry_raw_row], ["v11_selected_strategy_rule"], ""),
                 "v11_selected_strategy_reject_reason": v11_reject_reason,
                 "scanner_ranker_score": _safe_float(_first_nonblank(gated_row, ["ranker_score"], _first_nonblank(research_filter_row, ["ranker_score"], _first_nonblank(candidate_row, ["ranker_score"], np.nan)))),
                 "entry_row_built": has_entry_raw,
@@ -648,6 +730,8 @@ def build_truth_table(day: str) -> pd.DataFrame:
                 "forward_mfe_pct": fwd.get("forward_mfe_pct", np.nan),
                 "forward_mae_pct": fwd.get("forward_mae_pct", np.nan),
                 "forward_close_ret_pct": fwd.get("forward_close_ret_pct", np.nan),
+                **deep_numeric,
+                **deep_text,
                 "reason_not_taken": _build_reason(
                     passed_gate=passed_gate,
                     entry_raw=has_entry_raw,
@@ -716,6 +800,356 @@ def _setup_risk_label(side: Any, setup: Any, count: int, pnl: float, pf: float) 
     if pnl < 0:
         return "WATCH"
     return "HEALTHY"
+
+
+def _truth_bool_series(df: pd.DataFrame, col: str, default: bool = False) -> pd.Series:
+    if df.empty or col not in df.columns:
+        return pd.Series(default, index=df.index, dtype=bool)
+    raw = df[col]
+    if pd.api.types.is_bool_dtype(raw):
+        return raw.fillna(default).astype(bool)
+    text = raw.fillna("").astype(str).str.strip().str.lower()
+    true_values = {"1", "true", "t", "yes", "y", "passed", "pass"}
+    false_values = {"0", "false", "f", "no", "n", "rejected", "reject", ""}
+    return text.map(lambda v: True if v in true_values else (False if v in false_values else default)).astype(bool)
+
+
+def _num_col(df: pd.DataFrame, col: str, default: float = np.nan) -> pd.Series:
+    if df.empty:
+        return pd.Series(dtype=float)
+    if col not in df.columns:
+        return pd.Series(default, index=df.index, dtype=float)
+    return pd.to_numeric(df[col], errors="coerce")
+
+
+def _text_col(df: pd.DataFrame, col: str) -> pd.Series:
+    if df.empty:
+        return pd.Series(dtype=str)
+    if col not in df.columns:
+        return pd.Series("", index=df.index, dtype=str)
+    return df[col].fillna("").astype(str)
+
+
+def _side_dir_for_frame(df: pd.DataFrame) -> pd.Series:
+    side = _text_col(df, "side").str.upper().str.strip()
+    return side.map(lambda x: -1.0 if x == "SHORT" else 1.0).astype(float)
+
+
+def _side_close_loc(df: pd.DataFrame, col: str) -> pd.Series:
+    value = _num_col(df, col)
+    short_mask = _text_col(df, "side").str.upper().str.strip().eq("SHORT")
+    return value.where(~short_mask, 1.0 - value)
+
+
+def _deep_stage_counts(group: pd.DataFrame) -> dict[str, int]:
+    pre_reject_reason = _text_col(group, "pre_momentum_gate_reason")
+    reject_reason = _text_col(group, "entry_reject_reason")
+    return {
+        "potential_raw": int(len(group)),
+        "passed_gate": int(_truth_bool_series(group, "passed_v8_gate").sum()),
+        "entry_raw": int(_truth_bool_series(group, "entry_row_built").sum()),
+        "pre_momentum_rejected": int(
+            (
+                reject_reason.eq("pre_entry_momentum_gate")
+                | (
+                    pre_reject_reason.str.len().gt(0)
+                    & ~(_truth_bool_series(group, "entry_selected") | _truth_bool_series(group, "paper_traded"))
+                )
+            ).sum()
+        ),
+        "selected_entries": int(_truth_bool_series(group, "entry_selected").sum()),
+        "live_signals": int(_truth_bool_series(group, "live_signal_written").sum()),
+        "paper_trades": int(_truth_bool_series(group, "paper_traded").sum()),
+    }
+
+
+def _outcome_counts(traded: pd.DataFrame) -> dict[str, int]:
+    if traded.empty:
+        return {"target_count": 0, "sl_count": 0, "eod_count": 0, "time_stop_count": 0}
+    outcome = _text_col(traded, "paper_outcome").str.upper()
+    target = outcome.str.contains("TARGET", regex=False)
+    sl = outcome.eq("SL") | outcome.str.contains("STOP", regex=False)
+    time_stop = outcome.str.contains("TIME_STOP", regex=False)
+    eod = outcome.str.contains("EOD", regex=False) | (~target & ~sl & ~time_stop)
+    return {
+        "target_count": int(target.sum()),
+        "sl_count": int(sl.sum()),
+        "eod_count": int(eod.sum()),
+        "time_stop_count": int(time_stop.sum()),
+    }
+
+
+def _mean_value(df: pd.DataFrame, col: str) -> float:
+    return float(_num_col(df, col).mean()) if not df.empty else np.nan
+
+
+def _avg_for_mask(df: pd.DataFrame, values: pd.Series, mask: pd.Series) -> float:
+    if df.empty:
+        return np.nan
+    aligned = pd.to_numeric(values.reindex(df.index), errors="coerce")
+    return float(aligned.loc[mask.reindex(df.index).fillna(False)].mean())
+
+
+def _top_count_text(series: pd.Series, limit: int = 2) -> str:
+    if series.empty:
+        return ""
+    clean = series.fillna("").astype(str).str.strip()
+    counts = clean.loc[clean.ne("")].value_counts().head(limit)
+    if counts.empty:
+        return ""
+    return "; ".join(f"{idx} ({int(val)})" for idx, val in counts.items())
+
+
+def _short_note(text: str, max_len: int = 135) -> str:
+    clean = " ".join(str(text or "").replace("|", "/").split())
+    if len(clean) <= max_len:
+        return clean
+    return clean[: max(0, max_len - 3)].rstrip() + "..."
+
+
+def _indicator_separators(group: pd.DataFrame, good: pd.Series, bad: pd.Series) -> dict[str, float]:
+    side_dir = _side_dir_for_frame(group)
+    features = {
+        "pre_score_gap": _num_col(group, "pre_entry_momentum_score"),
+        "pre2_side_mom_gap": side_dir * _num_col(group, "pre2_mom_r"),
+        "sig5_adx_gap": _num_col(group, "sig5_adx_calc"),
+        "sig5_vol_gap": _num_col(group, "sig5_vol_ratio20").fillna(_num_col(group, "vol_ratio")),
+        "side_close_loc_gap": _side_close_loc(group, "sig5_close_pos").fillna(_side_close_loc(group, "close_loc")),
+        "rs_side_gap": side_dir * _num_col(group, "rs_pct"),
+    }
+    gaps: dict[str, float] = {}
+    for name, values in features.items():
+        gaps[name] = _avg_for_mask(group, values, good) - _avg_for_mask(group, values, bad)
+    abs_vwap = _num_col(group, "vwap_dist_atr").abs()
+    gaps["bad_extra_vwap_extension"] = _avg_for_mask(group, abs_vwap, bad) - _avg_for_mask(group, abs_vwap, good)
+    return gaps
+
+
+def _deep_common_mistake(
+    *,
+    setup: str,
+    stages: dict[str, int],
+    outcome: dict[str, int],
+    net: float,
+    eod_avg_pnl: float,
+    gaps: dict[str, float],
+    top_reasons: str,
+    top_pre_reasons: str,
+) -> str:
+    if stages["paper_trades"] <= 0:
+        if stages["potential_raw"] > 0 and stages["passed_gate"] <= 0:
+            return f"No final entries; scanner/gate rejected this setup. Main reason: {top_reasons or top_pre_reasons or 'not enough reason detail'}."
+        if stages["pre_momentum_rejected"] > 0:
+            return f"No final entries after pre-momentum. Main reject: {top_pre_reasons or top_reasons or 'pre-momentum gate'}."
+        return "No final entries yet; keep as funnel/coverage diagnostic."
+    notes: list[str] = []
+    if outcome["sl_count"] > 0:
+        if gaps.get("bad_extra_vwap_extension", 0.0) > 0.50:
+            notes.append("SL rows are more extended from VWAP than winners")
+        if gaps.get("pre_score_gap", 0.0) > 8.0:
+            notes.append("losers have weaker pre-entry momentum score")
+        if gaps.get("pre2_side_mom_gap", 0.0) > 0.12:
+            notes.append("losers have weaker 2-bar side momentum")
+        if gaps.get("side_close_loc_gap", 0.0) > 0.12:
+            notes.append("losers close worse for trade direction")
+        if gaps.get("sig5_adx_gap", 0.0) > 4.0:
+            notes.append("losers have weaker signal-bar ADX")
+        if gaps.get("sig5_vol_gap", 0.0) > 0.60:
+            notes.append("losers have weaker signal-bar volume participation")
+    if outcome["eod_count"] > 0 and np.isfinite(eod_avg_pnl) and eod_avg_pnl < 0:
+        notes.append("EOD bucket is negative drag")
+    if not notes and net < 0:
+        notes.append("negative expectancy but no single indicator explains it yet")
+    if not notes:
+        notes.append("no repeated mistake pattern yet")
+    return "; ".join(notes[:3])
+
+
+def _deep_correctness_pattern(group: pd.DataFrame, good: pd.Series, bad: pd.Series, outcome: dict[str, int]) -> str:
+    if int(good.sum()) <= 0:
+        return "No winning/target sample yet."
+    gaps = _indicator_separators(group, good, bad)
+    strengths: list[tuple[str, float, str]] = [
+        ("pre-entry momentum", gaps.get("pre_score_gap", np.nan), "higher"),
+        ("2-bar side momentum", gaps.get("pre2_side_mom_gap", np.nan), "higher"),
+        ("signal ADX", gaps.get("sig5_adx_gap", np.nan), "higher"),
+        ("signal volume", gaps.get("sig5_vol_gap", np.nan), "higher"),
+        ("directional close location", gaps.get("side_close_loc_gap", np.nan), "better"),
+        ("less VWAP extension", gaps.get("bad_extra_vwap_extension", np.nan), "cleaner"),
+    ]
+    strengths = [x for x in strengths if np.isfinite(x[1]) and x[1] > (0.10 if x[0] != "pre-entry momentum" else 5.0)]
+    if strengths:
+        names = ", ".join(f"{name} {label}" for name, _, label in strengths[:3])
+        return f"Correct entries cluster when {names}."
+    if outcome["target_count"] > 0:
+        return "Targets exist, but winners and losers look similar on current indicators."
+    return "Positive rows exist, but target-specific pattern is still thin."
+
+
+def _deep_improvement_focus(stages: dict[str, int], outcome: dict[str, int], net: float, pf: float, mistake: str) -> str:
+    if stages["paper_trades"] <= 0:
+        return "Use as shadow coverage; do not loosen until missed-forward outcomes prove clean."
+    sl_rate = outcome["sl_count"] / max(1, stages["paper_trades"])
+    eod_rate = outcome["eod_count"] / max(1, stages["paper_trades"])
+    if sl_rate >= 0.35:
+        return "Add/tighten setup-specific pre-momentum and anti-chase checks before increasing size."
+    if eod_rate >= 0.50 and net <= 0:
+        return "Study time-stop or EOD handoff; avoid letting non-progress trades wait to close."
+    if np.isfinite(pf) and pf < 1.0:
+        return "Keep paper/probation and compare rejected winners before changing live rules."
+    if "no repeated mistake" in mistake:
+        return "Keep current logic; collect more rows before changing thresholds."
+    return "Use the mistake pattern as a shadow rule candidate, then replay before promotion."
+
+
+def build_deep_analysis(day: str, truth: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if truth is None or truth.empty:
+        empty = pd.DataFrame()
+        return empty, {"day": day, "rows": 0, "setup_rows": 0}
+    work = truth.copy()
+    work["side"] = _text_col(work, "side").replace({"nan": ""}).str.strip()
+    work["setup"] = _text_col(work, "setup").replace({"nan": ""}).str.strip()
+    work.loc[work["side"].eq(""), "side"] = "UNKNOWN_SIDE"
+    work.loc[work["setup"].eq(""), "setup"] = "UNKNOWN_SETUP"
+    for col in ("paper_traded", "passed_v8_gate", "entry_row_built", "entry_selected", "live_signal_written"):
+        work[col] = _truth_bool_series(work, col)
+    work["paper_pnl_rs"] = _num_col(work, "paper_pnl_rs").fillna(0.0)
+    rows: list[dict[str, Any]] = []
+    for (side, setup), group in work.groupby(["side", "setup"], dropna=False):
+        stages = _deep_stage_counts(group)
+        traded = group.loc[group["paper_traded"].astype(bool)].copy()
+        outcome = _outcome_counts(traded)
+        pnl = _num_col(traded, "paper_pnl_rs").fillna(0.0) if not traded.empty else pd.Series(dtype=float)
+        net = float(pnl.sum()) if not pnl.empty else 0.0
+        setup_pf = _profit_factor(pnl) if not pnl.empty else np.nan
+        good = (group["paper_pnl_rs"] > 0) | _text_col(group, "paper_outcome").str.upper().str.contains("TARGET", regex=False)
+        bad = (group["paper_pnl_rs"] < 0) | _text_col(group, "paper_outcome").str.upper().eq("SL")
+        eod_mask = group["paper_traded"].astype(bool) & _text_col(group, "paper_outcome").str.upper().str.contains("EOD", regex=False)
+        gaps = _indicator_separators(group, good, bad)
+        top_reason = _top_count_text(_text_col(group.loc[~group["paper_traded"].astype(bool)], "reason_not_taken"))
+        top_pre_reason = _top_count_text(_text_col(group, "pre_momentum_gate_reason"))
+        eod_avg_pnl = float(group.loc[eod_mask, "paper_pnl_rs"].mean()) if bool(eod_mask.any()) else np.nan
+        mistake = _deep_common_mistake(
+            setup=str(setup),
+            stages=stages,
+            outcome=outcome,
+            net=net,
+            eod_avg_pnl=eod_avg_pnl,
+            gaps=gaps,
+            top_reasons=top_reason,
+            top_pre_reasons=top_pre_reason,
+        )
+        correctness = _deep_correctness_pattern(group, good, bad, outcome)
+        focus = _deep_improvement_focus(stages, outcome, net, setup_pf, mistake)
+        rows.append(
+            {
+                "date": day,
+                "side": side,
+                "setup": setup,
+                **stages,
+                **outcome,
+                "wins": int((pnl > 0).sum()) if not pnl.empty else 0,
+                "losses": int((pnl < 0).sum()) if not pnl.empty else 0,
+                "net_pnl_rs": net,
+                "profit_factor": setup_pf,
+                "avg_quality_score": _mean_value(group, "quality_score"),
+                "avg_ranker_score": _mean_value(group, "ranker_score"),
+                "avg_entry_distance_pct": _mean_value(traded, "entry_distance_pct"),
+                "avg_forward_mfe_pct": _mean_value(group, "forward_mfe_pct"),
+                "avg_forward_mae_pct": _mean_value(group, "forward_mae_pct"),
+                "good_avg_pre_entry_momentum_score": _avg_for_mask(group, _num_col(group, "pre_entry_momentum_score"), good),
+                "bad_avg_pre_entry_momentum_score": _avg_for_mask(group, _num_col(group, "pre_entry_momentum_score"), bad),
+                "good_avg_pre2_side_mom_r": _avg_for_mask(group, _side_dir_for_frame(group) * _num_col(group, "pre2_mom_r"), good),
+                "bad_avg_pre2_side_mom_r": _avg_for_mask(group, _side_dir_for_frame(group) * _num_col(group, "pre2_mom_r"), bad),
+                "good_avg_sig5_adx_calc": _avg_for_mask(group, _num_col(group, "sig5_adx_calc"), good),
+                "bad_avg_sig5_adx_calc": _avg_for_mask(group, _num_col(group, "sig5_adx_calc"), bad),
+                "good_avg_side_close_loc": _avg_for_mask(group, _side_close_loc(group, "sig5_close_pos").fillna(_side_close_loc(group, "close_loc")), good),
+                "bad_avg_side_close_loc": _avg_for_mask(group, _side_close_loc(group, "sig5_close_pos").fillna(_side_close_loc(group, "close_loc")), bad),
+                "good_avg_abs_vwap_dist_atr": _avg_for_mask(group, _num_col(group, "vwap_dist_atr").abs(), good),
+                "bad_avg_abs_vwap_dist_atr": _avg_for_mask(group, _num_col(group, "vwap_dist_atr").abs(), bad),
+                "good_avg_sig5_vol_ratio20": _avg_for_mask(group, _num_col(group, "sig5_vol_ratio20").fillna(_num_col(group, "vol_ratio")), good),
+                "bad_avg_sig5_vol_ratio20": _avg_for_mask(group, _num_col(group, "sig5_vol_ratio20").fillna(_num_col(group, "vol_ratio")), bad),
+                "pre_score_good_bad_gap": gaps.get("pre_score_gap", np.nan),
+                "pre2_side_mom_good_bad_gap": gaps.get("pre2_side_mom_gap", np.nan),
+                "sig5_adx_good_bad_gap": gaps.get("sig5_adx_gap", np.nan),
+                "sig5_vol_good_bad_gap": gaps.get("sig5_vol_gap", np.nan),
+                "side_close_loc_good_bad_gap": gaps.get("side_close_loc_gap", np.nan),
+                "bad_extra_vwap_extension": gaps.get("bad_extra_vwap_extension", np.nan),
+                "top_not_taken_reason": top_reason,
+                "top_pre_momentum_reject_reason": top_pre_reason,
+                "common_mistake": mistake,
+                "correctness_pattern": correctness,
+                "improvement_focus": focus,
+            }
+        )
+    deep = pd.DataFrame(rows)
+    if not deep.empty:
+        deep = deep.sort_values(["net_pnl_rs", "paper_trades", "potential_raw"], ascending=[True, False, False]).reset_index(drop=True)
+    payload = {
+        "day": day,
+        "rows": int(len(truth)),
+        "setup_rows": int(len(deep)),
+        "paper_traded_setups": int((deep.get("paper_trades", pd.Series(dtype=float)) > 0).sum()) if not deep.empty else 0,
+        "negative_setup_rows": int((deep.get("net_pnl_rs", pd.Series(dtype=float)) < 0).sum()) if not deep.empty else 0,
+    }
+    return deep, payload
+
+
+def _deep_pf_text(value: Any) -> str:
+    val = _safe_float(value)
+    if np.isinf(val):
+        return "inf"
+    if not np.isfinite(val):
+        return "NA"
+    return _fmt_num(val, 2)
+
+
+def deep_analysis_report(day: str, truth: pd.DataFrame, *, standalone: bool = True, limit: int = 25) -> str:
+    deep, payload = build_deep_analysis(day, truth)
+    lines = [f"# V7 Deep Analysis Block - {day}" if standalone else "## Deep Analysis Block", ""]
+    lines.extend(
+        [
+            "This block follows each setup from potential raw candidate to final paper entry, then compares outcomes against the scanner, entry, pre-momentum, and exit result fields.",
+            "",
+        ]
+    )
+    if deep.empty:
+        lines.append("No setup rows available for deep analysis.")
+        return "\n".join(lines) + "\n"
+    lines.extend(
+        [
+            f"- Truth rows analysed: {payload['rows']}",
+            f"- Setup rows: {payload['setup_rows']}",
+            f"- Paper-traded setups: {payload['paper_traded_setups']}",
+            f"- Negative setup rows: {payload['negative_setup_rows']}",
+            "",
+            "| side | setup | funnel raw/gate/entry/paper | T/SL/EOD | pnl | PF | common mistake | correctness | improvement |",
+            "|---|---|---:|---:|---:|---:|---|---|---|",
+        ]
+    )
+    for _, row in deep.head(limit).iterrows():
+        funnel = (
+            f"{int(row.get('potential_raw', 0))}/"
+            f"{int(row.get('passed_gate', 0))}/"
+            f"{int(row.get('selected_entries', 0))}/"
+            f"{int(row.get('paper_trades', 0))}"
+        )
+        outcome = f"{int(row.get('target_count', 0))}/{int(row.get('sl_count', 0))}/{int(row.get('eod_count', 0))}"
+        lines.append(
+            f"| {row.get('side', '')} | {row.get('setup', '')} | {funnel} | {outcome} | "
+            f"Rs {_fmt_num(row.get('net_pnl_rs'))} | {_deep_pf_text(row.get('profit_factor'))} | "
+            f"{_short_note(row.get('common_mistake'))} | {_short_note(row.get('correctness_pattern'))} | "
+            f"{_short_note(row.get('improvement_focus'))} |"
+        )
+    lines.append("")
+    lines.extend(
+        [
+            "Legend: funnel is raw candidates / passed scanner gate / selected entry rows / final paper trades. T/SL/EOD is target / stop-loss / EOD-like outcomes.",
+            "Use this as an improvement map only. Promote a rule only after replay/shadow proof, especially when setup samples are small.",
+            "",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 def _clip01(value: Any) -> float:
@@ -998,6 +1432,8 @@ def write_report(day: str, truth: pd.DataFrame) -> str:
             f"{int(row['passed_v8_gate'])} | {int(row['paper_trades'])} | Rs {_fmt_num(row['paper_pnl_rs'])} | "
             f"{pf_text} | {risk_text} |"
         )
+    lines.append("")
+    lines.append(deep_analysis_report(day, truth, standalone=False, limit=20).rstrip())
     lines.append("")
 
     audit_gap = truth.loc[
@@ -3005,11 +3441,16 @@ def run(day: str) -> tuple[Path, Path]:
     exit_lab_multi_summary_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_summary_{day}.csv"
     exit_lab_multi_report_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_{day}.md"
     exit_lab_multi_json_path = EXIT_LAB_DIR / f"exit_strategy_lab_1min_multi_window_{day}.json"
+    deep_analysis_path = DEEP_ANALYSIS_DIR / f"deep_analysis_block_{day}.csv"
+    deep_analysis_report_path = DEEP_ANALYSIS_DIR / f"deep_analysis_block_{day}.md"
+    deep_analysis_json_path = DEEP_ANALYSIS_DIR / f"deep_analysis_block_{day}.json"
     truth.to_csv(truth_path, index=False)
     truth.to_csv(ranker_path, index=False)
     report_text = write_report(day, truth)
     action_text = write_action_plan(day, truth)
     ranker_text = write_ranker_report(day, truth)
+    deep_df, deep_payload = build_deep_analysis(day, truth)
+    deep_text = deep_analysis_report(day, truth, standalone=True, limit=50)
     exit_lab, exit_lab_summary, exit_lab_text, exit_lab_payload = build_exit_strategy_lab(day, truth)
     exit_lab.to_csv(exit_lab_path, index=False)
     exit_lab_summary.to_csv(exit_lab_summary_path, index=False)
@@ -3021,6 +3462,9 @@ def run(day: str) -> tuple[Path, Path]:
     exit_lab_multi_report_path.write_text(exit_lab_multi_text, encoding="utf-8")
     exit_lab_multi_json_path.write_text(json.dumps(exit_lab_multi_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
     suggestions_text, suggestions_df, suggestions_payload = build_multi_window_suggestions(day)
+    deep_df.to_csv(deep_analysis_path, index=False)
+    deep_analysis_report_path.write_text(deep_text, encoding="utf-8")
+    deep_analysis_json_path.write_text(json.dumps(deep_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
     report_path.write_text(report_text, encoding="utf-8")
     action_path.write_text(action_text, encoding="utf-8")
     ranker_report_path.write_text(ranker_text, encoding="utf-8")
@@ -3040,6 +3484,9 @@ def run(day: str) -> tuple[Path, Path]:
     (LATEST_DIR / "latest_exit_strategy_lab_1min_multi_window_summary.csv").write_text(exit_lab_multi_summary.to_csv(index=False), encoding="utf-8")
     (LATEST_DIR / "latest_exit_strategy_lab_1min_multi_window.md").write_text(exit_lab_multi_text, encoding="utf-8")
     (LATEST_DIR / "latest_exit_strategy_lab_1min_multi_window.json").write_text(json.dumps(exit_lab_multi_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    (LATEST_DIR / "latest_deep_analysis_block.csv").write_text(deep_df.to_csv(index=False), encoding="utf-8")
+    (LATEST_DIR / "latest_deep_analysis_block.md").write_text(deep_text, encoding="utf-8")
+    (LATEST_DIR / "latest_deep_analysis_block.json").write_text(json.dumps(deep_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
     (LATEST_DIR / "latest_multi_window_suggestions.md").write_text(suggestions_text, encoding="utf-8")
     (LATEST_DIR / "latest_multi_window_suggestions.csv").write_text(suggestions_df.to_csv(index=False), encoding="utf-8")
     (LATEST_DIR / "latest_multi_window_suggestions.json").write_text(json.dumps(suggestions_payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
@@ -3058,6 +3505,12 @@ def run(day: str) -> tuple[Path, Path]:
         "exit_strategy_lab_1min_multi_window_summary": str(exit_lab_multi_summary_path),
         "exit_strategy_lab_1min_multi_window_report": str(exit_lab_multi_report_path),
         "exit_strategy_lab_1min_multi_window_json": str(exit_lab_multi_json_path),
+        "deep_analysis_block": str(deep_analysis_path),
+        "deep_analysis_block_report": str(deep_analysis_report_path),
+        "deep_analysis_block_json": str(deep_analysis_json_path),
+        "deep_analysis_setup_rows": int(deep_payload.get("setup_rows", 0)),
+        "deep_analysis_paper_traded_setups": int(deep_payload.get("paper_traded_setups", 0)),
+        "deep_analysis_negative_setup_rows": int(deep_payload.get("negative_setup_rows", 0)),
         "exit_strategy_lab_1min_rows": int(len(exit_lab)),
         "exit_strategy_lab_1min_usable_rows": int(exit_lab["path_coverage_level"].isin(["HIGH", "MEDIUM"]).sum()) if not exit_lab.empty else 0,
         "exit_strategy_lab_1min_multi_window_rows": int(len(exit_lab_multi)),
@@ -3105,6 +3558,60 @@ def _write_status(status: str, **extra: Any) -> None:
     (RUNTIME_STATUS_DIR / "live_research_v7_research_layer.heartbeat").write_text(kv_text, encoding="utf-8")
 
 
+def _light_ops_console_lines(summary: dict[str, Any]) -> list[str]:
+    fetch = summary.get("fetch", {}) if isinstance(summary.get("fetch"), dict) else {}
+    signal = summary.get("signal", {}) if isinstance(summary.get("signal"), dict) else {}
+    entry = summary.get("entry", {}) if isinstance(summary.get("entry"), dict) else {}
+    pre = summary.get("pre_momentum", {}) if isinstance(summary.get("pre_momentum"), dict) else {}
+    paper = summary.get("paper", {}) if isinstance(summary.get("paper"), dict) else {}
+    recs = summary.get("recommendations", [])
+    if not isinstance(recs, list):
+        recs = []
+
+    lines = [
+        (
+            "[v7_research_layer ops] "
+            f"5m_fetch={fetch.get('duration_sec', '')}s "
+            f"state={fetch.get('overall_state', '')}/{fetch.get('sla_state', '')} "
+            f"written={fetch.get('tickers_written', 0)}/{fetch.get('tickers_expected', 0)}"
+        ),
+        (
+            "[v7_research_layer ops] "
+            f"scanner_slot={signal.get('slot_ist', '')} "
+            f"publish_delay={signal.get('publish_delay_sec', '')}s "
+            f"raw={signal.get('raw_candidates', 0)} "
+            f"v11_in={signal.get('v11_input', 0)} "
+            f"selected={signal.get('v11_selected', 0)} "
+            f"tier123={signal.get('tier123_scan_elapsed_sec', '')}s/{signal.get('tier123_workers', 0)}w"
+        ),
+        (
+            "[v7_research_layer ops] "
+            f"entry_slot={entry.get('slot_ist', '')} "
+            f"raw_fetch={entry.get('raw_fetch_elapsed_sec', '')}s "
+            f"entries={entry.get('entry_rows', 0)} "
+            f"pre_pass={entry.get('pre_momentum_output_rows', 0)}/{entry.get('pre_momentum_input_rows', 0)} "
+            f"latest_nan_rejects={pre.get('latest_nan_rejects', 0)}"
+        ),
+        (
+            "[v7_research_layer ops] "
+            f"paper_traded={paper.get('paper_traded_rows', 0)} "
+            f"target={paper.get('targets', 0)} "
+            f"sl={paper.get('sl', 0)} "
+            f"open={paper.get('open_trades', 0)} "
+            f"slow_open={paper.get('slow_open_trades', 0)} "
+            f"anti_chase_skips={paper.get('anti_chase_skips', 0)}"
+        ),
+    ]
+    for rec in recs[:6]:
+        if isinstance(rec, dict):
+            lines.append(
+                "[v7_research_layer suggestion] "
+                f"{rec.get('severity', '')} {rec.get('area', '')}: "
+                f"{rec.get('finding', '')} -> {rec.get('suggestion', '')}"
+            )
+    return lines
+
+
 def _parse_today_time(day: dt.date, value: str) -> pd.Timestamp:
     parsed = dt.datetime.strptime(str(value), "%H:%M:%S").time()
     return pd.Timestamp(dt.datetime.combine(day, parsed), tz="Asia/Kolkata")
@@ -3130,7 +3637,7 @@ def _next_run_time(now: pd.Timestamp, start: pd.Timestamp, end: pd.Timestamp, in
     return candidate
 
 
-def run_loop(*, start_time: str, end_time: str, interval_min: int) -> int:
+def run_loop(*, start_time: str, end_time: str, interval_min: int, light_ops: bool = False) -> int:
     today = _now_ist().date()
     start = _parse_today_time(today, start_time)
     end = _parse_today_time(today, end_time)
@@ -3138,6 +3645,7 @@ def run_loop(*, start_time: str, end_time: str, interval_min: int) -> int:
     _write_status(
         "RUNNING",
         phase="LOOP_START",
+        mode="light_ops" if light_ops else "full_research",
         start_time=start_time,
         end_time=end_time,
         interval_min=int(interval_min),
@@ -3155,6 +3663,7 @@ def run_loop(*, start_time: str, end_time: str, interval_min: int) -> int:
         _write_status(
             "RUNNING",
             phase="WAIT",
+            mode="light_ops" if light_ops else "full_research",
             next_run_ist=_fmt_ts(next_run),
             wait_sec=round(wait_sec, 1),
             start_time=start_time,
@@ -3173,23 +3682,45 @@ def run_loop(*, start_time: str, end_time: str, interval_min: int) -> int:
             continue
         last_run_key = run_key
         day = next_run.strftime("%Y-%m-%d")
-        _write_status("RUNNING", phase="BUILD_REPORT", run_time_ist=run_key, day=day)
+        _write_status("RUNNING", phase="BUILD_LIGHT_OPS" if light_ops else "BUILD_REPORT", mode="light_ops" if light_ops else "full_research", run_time_ist=run_key, day=day)
         try:
-            truth_path, report_path = run(day)
-            summary = json.loads((LATEST_DIR / "latest_summary.json").read_text(encoding="utf-8"))
-            status_summary = {k: v for k, v in summary.items() if k not in {"day", "truth_table", "report"}}
-            _write_status(
-                "RUNNING",
-                phase="REPORT_DONE",
-                run_time_ist=run_key,
-                day=day,
-                truth_table=str(truth_path),
-                report=str(report_path),
-                **status_summary,
-            )
-            print(f"[v7_research_layer loop] {run_key} wrote {truth_path}", flush=True)
+            if light_ops:
+                report_path, json_path = run_light_ops(day)
+                summary = json.loads((LATEST_DIR / "latest_live_ops_snapshot.json").read_text(encoding="utf-8"))
+                _write_status(
+                    "RUNNING",
+                    phase="LIGHT_OPS_DONE",
+                    mode="light_ops",
+                    run_time_ist=run_key,
+                    day=day,
+                    report=str(report_path),
+                    json=str(json_path),
+                    latest_signal_slot=summary.get("signal", {}).get("slot_ist", ""),
+                    latest_entry_slot=summary.get("entry", {}).get("slot_ist", ""),
+                    paper_open_trades=summary.get("paper", {}).get("open_trades", 0),
+                    paper_slow_open_trades=summary.get("paper", {}).get("slow_open_trades", 0),
+                    pre_momentum_nan_rejects=summary.get("pre_momentum", {}).get("nan_rejects", 0),
+                )
+                print(f"[v7_research_layer loop] {run_key} wrote light ops {report_path}", flush=True)
+                for line in _light_ops_console_lines(summary):
+                    print(line, flush=True)
+            else:
+                truth_path, report_path = run(day)
+                summary = json.loads((LATEST_DIR / "latest_summary.json").read_text(encoding="utf-8"))
+                status_summary = {k: v for k, v in summary.items() if k not in {"day", "truth_table", "report"}}
+                _write_status(
+                    "RUNNING",
+                    phase="REPORT_DONE",
+                    mode="full_research",
+                    run_time_ist=run_key,
+                    day=day,
+                    truth_table=str(truth_path),
+                    report=str(report_path),
+                    **status_summary,
+                )
+                print(f"[v7_research_layer loop] {run_key} wrote {truth_path}", flush=True)
         except Exception as exc:
-            _write_status("ERROR", phase="REPORT_FAILED", run_time_ist=run_key, error=f"{type(exc).__name__}: {exc}")
+            _write_status("ERROR", phase="REPORT_FAILED", mode="light_ops" if light_ops else "full_research", run_time_ist=run_key, error=f"{type(exc).__name__}: {exc}")
             print(f"[v7_research_layer loop] ERROR {type(exc).__name__}: {exc}", flush=True)
         time.sleep(1.0)
 
@@ -3202,12 +3733,21 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Build V7 ID 5-min research-layer truth table and report")
     ap.add_argument("--date", default=_default_day(), help="Trading date YYYY-MM-DD; default today IST")
     ap.add_argument("--loop", action="store_true", help="Run repeatedly during the market session")
+    ap.add_argument("--light-ops", action="store_true", help="In loop mode, run lightweight operations diagnostics only")
     ap.add_argument("--start-time", default="09:17:30", help="Loop start time HH:MM:SS IST")
     ap.add_argument("--end-time", default="16:00:00", help="Loop end time HH:MM:SS IST")
     ap.add_argument("--interval-min", type=int, default=15, help="Loop interval in minutes")
     args = ap.parse_args()
     if args.loop:
-        return run_loop(start_time=str(args.start_time), end_time=str(args.end_time), interval_min=int(args.interval_min))
+        return run_loop(start_time=str(args.start_time), end_time=str(args.end_time), interval_min=int(args.interval_min), light_ops=bool(args.light_ops))
+    if args.light_ops:
+        report_path, json_path = run_light_ops(str(args.date))
+        summary = json.loads((LATEST_DIR / "latest_live_ops_snapshot.json").read_text(encoding="utf-8"))
+        print(f"[v7_research_layer] wrote light ops {report_path}")
+        print(f"[v7_research_layer] wrote light ops {json_path}")
+        for line in _light_ops_console_lines(summary):
+            print(line, flush=True)
+        return 0
     truth_path, report_path = run(str(args.date))
     print(f"[v7_research_layer] wrote {truth_path}")
     print(f"[v7_research_layer] wrote {report_path}")

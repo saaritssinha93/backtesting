@@ -2,20 +2,18 @@
 setlocal
 
 cd /d "%~dp0.."
+REM One-shot REPLAY of past slots into the LIVE candidate CSVs. Mirrors the
+REM production env from run_eqidv2_signal_discovery_v7_5min_id_persistent.bat so
+REM replayed candidates match live tuning. Pass slots as args, e.g.:
+REM   run_eqidv2_signal_discovery_v7_replay_today.bat "2026-06-05 10:55" "2026-06-05 11:00" ...
 set EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS=16
 set EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS=16
-REM The 5-min indicator feed (eqidv2_eod_scheduler_for_5mins_data_live_minimal)
-REM finishes writing each slot's bar at ~slot+45-60s (SLA-WARN range). The scan
-REM MUST start after that or it reads pre-bar files and misses A/B/C/etc setups.
-REM 75s guarantees the scan window is entirely after feed completion.
-set EQIDV2_SIGNAL_DISCOVERY_V7_POST_SLOT_DELAY_SEC=75
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_START=09:30
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END=14:00
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN=5
 set EQIDV2_SIGNAL_DISCOVERY_V7_SELECTION_MODE=v8_setup_compatible
 set EQIDV2_SIGNAL_DISCOVERY_V7_V8_GATE=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_V8_ACCEPTED_RULES=C:\TradingData\eqidv2\outputs_ID_v8_5min_research_restore\accepted_rules.csv
-REM Keep V11 tier123 enabled, but the Python scanner time-gates and parallelizes it.
 set EQIDV2_SIGNAL_DISCOVERY_V7_V11_TIER123=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_RESEARCH_FILTERS=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_RESEARCH_FILTER_MODE=active
@@ -55,6 +53,6 @@ set EQIDV2_SIGNAL_DISCOVERY_V7_UNCOVERED_FALLBACK_MAX_PER_SLOT=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_UNCOVERED_FALLBACK_ALLOWED_SIDES=SHORT
 set EQIDV2_SIGNAL_DISCOVERY_V7_UNCOVERED_FALLBACK_ALLOWED_SETUPS=A_MOD_BREAK_C1_LOW,C_OR_BREAKDOWN,A_PULLBACK_C2_THEN_BREAK_C2_LOW,B_HUGE_RED_FAILED_BOUNCE,D_AVWAP_LOSE_REVERSAL,G_LOWER_LOW_BREAK
 
-"C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe" -u eqidv2_signal_discovery_v7_5min_id_persistent.py
+"C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe" -u eqidv2_signal_discovery_v7_5min_id_persistent.py --replay-slots %*
 
 endlocal

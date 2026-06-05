@@ -53,7 +53,7 @@ MARKET_OPEN = dtime(9, 15)
 END_TIME = dtime(15, 1)
 HARD_STOP = dtime(15, 35)
 ENTRY_DELAY_SEC = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DELAY_SEC", "60"))
-ENTRY_DUE_GRACE_SEC = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DUE_GRACE_SEC", "90"))
+ENTRY_DUE_GRACE_CONFIG_SEC = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DUE_GRACE_SEC", "90"))
 POLL_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_POLL_SEC", "1.0"))
 KITE_INTERVAL = "minute"
 RAW_FETCH_PARALLEL_APPS_ENABLED = str(
@@ -66,6 +66,23 @@ RAW_FETCH_APP_COUNT = max(1, min(8, int(os.getenv("EQIDV2_ENTRY_ENGINE_RAW_FETCH
 ENTRY_SEARCH_MAX_DELAY_MIN = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V7_MAX_DELAY_MIN", "5"))
 CANDIDATE_WAIT_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_SEC", "75"))
 CANDIDATE_WAIT_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_POLL_SEC", "2"))
+MAX_SIGNAL_HANDOFF_LAG_SEC = float(
+    os.getenv(
+        "EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC",
+        str(v7_persistent.MAX_ENTRY_TO_DETECTION_LAG_SEC),
+    )
+)
+ENTRY_PROCESS_RESERVE_SEC = float(
+    os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_PROCESS_RESERVE_SEC", "5")
+)
+ENTRY_DUE_GRACE_SEC = (
+    min(
+        ENTRY_DUE_GRACE_CONFIG_SEC,
+        max(0, int(MAX_SIGNAL_HANDOFF_LAG_SEC - ENTRY_DELAY_SEC)),
+    )
+    if MAX_SIGNAL_HANDOFF_LAG_SEC > 0
+    else ENTRY_DUE_GRACE_CONFIG_SEC
+)
 V11_BACKTESTING_OVERLAY_ENABLE = str(
     os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_V11_BACKTESTING_OVERLAY", "1")
 ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
@@ -286,7 +303,19 @@ def _latest_candidate_snapshot_slot() -> Optional[pd.Timestamp]:
 
 def _load_candidates_for_slot_with_wait(slot: pd.Timestamp) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     slot = _ensure_ist_ts(slot).floor("min")
-    wait_budget = max(0.0, float(CANDIDATE_WAIT_SEC))
+    configured_wait_budget = max(0.0, float(CANDIDATE_WAIT_SEC))
+    handoff_deadline = (
+        slot + pd.Timedelta(seconds=MAX_SIGNAL_HANDOFF_LAG_SEC)
+        if MAX_SIGNAL_HANDOFF_LAG_SEC > 0
+        else None
+    )
+    if handoff_deadline is None:
+        wait_budget = configured_wait_budget
+    else:
+        remaining_for_wait = (
+            handoff_deadline - _ensure_ist_ts(v7_persistent.base_v15.now_ist())
+        ).total_seconds() - max(0.0, ENTRY_PROCESS_RESERVE_SEC)
+        wait_budget = min(configured_wait_budget, max(0.0, remaining_for_wait))
     poll = max(0.25, float(CANDIDATE_WAIT_POLL_SEC))
     started = time.perf_counter()
     waited = False
@@ -300,10 +329,16 @@ def _load_candidates_for_slot_with_wait(slot: pd.Timestamp) -> Tuple[pd.DataFram
                 "candidate_wait_enabled": bool(wait_budget > 0),
                 "candidate_wait_sec": round(time.perf_counter() - started, 3),
                 "candidate_wait_budget_sec": float(wait_budget),
+                "candidate_wait_configured_budget_sec": float(configured_wait_budget),
                 "candidate_wait_poll_sec": float(poll),
                 "candidate_wait_used": bool(waited),
                 "candidate_snapshot_slot_ist": _fmt_ist(snapshot_slot) if snapshot_slot is not None else "",
                 "candidate_snapshot_ready": bool(snapshot_ready),
+                "signal_handoff_deadline_ist": (
+                    _fmt_ist(handoff_deadline) if handoff_deadline is not None else ""
+                ),
+                "max_signal_handoff_lag_sec": float(MAX_SIGNAL_HANDOFF_LAG_SEC),
+                "entry_process_reserve_sec": float(ENTRY_PROCESS_RESERVE_SEC),
             }
             return df, wait_stats
         waited = True
@@ -539,10 +574,16 @@ def _indicator_path(ticker: str, timeframe: str) -> Optional[Path]:
         path = DATA_1MIN_DIR / f"{symbol}_stocks_indicators_1min.parquet"
         return path if path.exists() else None
     path = DATA_5M_DIR / f"{symbol}_stocks_indicators_5min.parquet"
-    if path.exists():
-        return path
     fallback = runtime_dir("stocks_indicators_5min_eq_live") / f"{symbol}_stocks_indicators_5min.parquet"
-    return fallback if fallback.exists() else None
+    if os.getenv("EQIDV2_DATA_5M_DIR"):
+        if path.exists():
+            return path
+        return fallback if fallback.exists() else None
+
+    candidates = [candidate for candidate in (path, fallback) if candidate.exists()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: candidate.stat().st_mtime)
 
 
 def _load_indicator_bars(ticker: str, timeframe: str) -> Optional[pd.DataFrame]:
@@ -1058,22 +1099,36 @@ def _filter_new_intraday_tickers(entry_df: pd.DataFrame, slot: pd.Timestamp) -> 
     return pd.DataFrame(keep).drop(columns=["_score_num"], errors="ignore").reset_index(drop=True)
 
 
-def _write_live_entry_csvs(entry_df: pd.DataFrame, slot: pd.Timestamp) -> Tuple[int, int]:
+def _write_live_entry_csvs(entry_df: pd.DataFrame, slot: pd.Timestamp) -> Tuple[int, int, float, float, float]:
     if entry_df.empty:
-        return 0, 0
+        return 0, 0, 0.0, 0.0, 0.0
+    write_started = time.perf_counter()
     day = _ensure_ist_ts(slot).strftime("%Y-%m-%d")
     short_df = entry_df[entry_df["side"].astype(str).str.upper().eq("SHORT")].copy()
     long_df = entry_df[entry_df["side"].astype(str).str.upper().eq("LONG")].copy()
+    short_started = time.perf_counter()
     short_written = v7_persistent._write_side_signals_csv(short_df, side="SHORT", signal_day_str=day)
+    short_elapsed = time.perf_counter() - short_started
+    long_started = time.perf_counter()
     long_written = v7_persistent._write_side_signals_csv(long_df, side="LONG", signal_day_str=day)
-    return int(short_written), int(long_written)
+    long_elapsed = time.perf_counter() - long_started
+    return (
+        int(short_written),
+        int(long_written),
+        round(short_elapsed, 3),
+        round(long_elapsed, 3),
+        round(time.perf_counter() - write_started, 3),
+    )
 
 
 def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]:
     global _last_raw_fetch_stats
     slot = _ensure_ist_ts(slot_ts).floor("min")
     t0 = time.perf_counter()
+    stage_started = time.perf_counter()
     candidates, candidate_wait_stats = _load_candidates_for_slot_with_wait(slot)
+    candidate_load_elapsed_sec = round(time.perf_counter() - stage_started, 3)
+    raw_fetch_wrapper_started = time.perf_counter()
     if not candidates.empty:
         raw_by_ticker = _fetch_raw_for_candidates(candidates, slot)
     else:
@@ -1087,26 +1142,38 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
             "raw_fetch_app_elapsed_sec": {},
         }
         raw_by_ticker = {}
+    raw_fetch_wrapper_elapsed_sec = round(time.perf_counter() - raw_fetch_wrapper_started, 3)
+    stage_started = time.perf_counter()
     raw_entries = _build_entry_rows(candidates, raw_by_ticker) if raw_by_ticker else pd.DataFrame()
+    entry_scan_elapsed_sec = round(time.perf_counter() - stage_started, 3)
+    stage_started = time.perf_counter()
     entry_fetch_rejected = _entry_reject_audit(candidates, raw_by_ticker)
+    entry_reject_audit_elapsed_sec = round(time.perf_counter() - stage_started, 3)
+    stage_started = time.perf_counter()
     v11_filtered_entries, v11_entry_rejected, v11_entry_stats = _apply_v11_entry_overlay(raw_entries)
+    v11_entry_overlay_elapsed_sec = round(time.perf_counter() - stage_started, 3)
     if not v11_filtered_entries.empty:
         v11_filtered_entries = v11_filtered_entries.copy()
         v11_filtered_entries["pre_momentum_cutoff_ist"] = _fmt_ist(
             slot + pd.Timedelta(seconds=ENTRY_DELAY_SEC)
         )
+    stage_started = time.perf_counter()
     pre_momentum_entries, pre_momentum_rejected, pre_momentum_stats = _apply_pre_entry_momentum_gate(
         v11_filtered_entries,
         raw_by_ticker,
     )
+    pre_momentum_gate_elapsed_sec = round(time.perf_counter() - stage_started, 3)
     rejected_frames = [
         df for df in (entry_fetch_rejected, v11_entry_rejected, pre_momentum_rejected)
         if df is not None and not df.empty
     ]
     rejected_entries = pd.concat(rejected_frames, ignore_index=True, sort=False) if rejected_frames else pd.DataFrame()
+    stage_started = time.perf_counter()
     selected_entries = _select_executable_entries(pre_momentum_entries)
     entries = _filter_new_intraday_tickers(selected_entries, slot)
+    entry_select_elapsed_sec = round(time.perf_counter() - stage_started, 3)
 
+    csv_write_started = time.perf_counter()
     latest_entries_csv = LATEST_DIR / "latest_entry_engine_rows.csv"
     entries.to_csv(latest_entries_csv, index=False)
     slot_entries_csv = AUDIT_DIR / f"entry_rows_{_slot_key(slot)}.csv"
@@ -1119,6 +1186,8 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
     v11_entry_rejected.to_csv(v11_entry_rejected_csv, index=False)
     pre_momentum_rejected_csv = AUDIT_DIR / f"entry_rejected_pre_momentum_{_slot_key(slot)}.csv"
     pre_momentum_rejected.to_csv(pre_momentum_rejected_csv, index=False)
+    audit_csv_write_elapsed_sec = round(time.perf_counter() - csv_write_started, 3)
+    rules_write_started = time.perf_counter()
     setup_exit_rules = (
         v11_live_overlay.live_exit_rules(v6.SETUP_EXIT_RULES, V11_BACKTESTING_OVERLAY_PROFILE)
         if V11_BACKTESTING_OVERLAY_ENABLE
@@ -1127,10 +1196,20 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
     pd.DataFrame(
         [{"setup": k, "sl_pct": v[0], "target_pct": v[1]} for k, v in sorted(setup_exit_rules.items())]
     ).to_csv(LATEST_DIR / "setup_exit_rules_v8.csv", index=False)
+    setup_exit_rules_write_elapsed_sec = round(time.perf_counter() - rules_write_started, 3)
 
     short_written = long_written = 0
+    short_signal_write_elapsed_sec = 0.0
+    long_signal_write_elapsed_sec = 0.0
+    live_signal_csv_write_elapsed_sec = 0.0
     if write_live_entries and not entries.empty:
-        short_written, long_written = _write_live_entry_csvs(entries, slot)
+        (
+            short_written,
+            long_written,
+            short_signal_write_elapsed_sec,
+            long_signal_write_elapsed_sec,
+            live_signal_csv_write_elapsed_sec,
+        ) = _write_live_entry_csvs(entries, slot)
 
     raw_fetch_stats = dict(_last_raw_fetch_stats)
     raw_fetch_stats["raw_fetch_app_partitions_json"] = json.dumps(
@@ -1165,6 +1244,18 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
         "v11_entry_rejected_csv": str(v11_entry_rejected_csv),
         "entry_search_max_delay_min": int(ENTRY_SEARCH_MAX_DELAY_MIN),
         "elapsed_sec": round(time.perf_counter() - t0, 3),
+        "candidate_load_elapsed_sec": candidate_load_elapsed_sec,
+        "raw_fetch_wrapper_elapsed_sec": raw_fetch_wrapper_elapsed_sec,
+        "entry_scan_elapsed_sec": entry_scan_elapsed_sec,
+        "entry_reject_audit_elapsed_sec": entry_reject_audit_elapsed_sec,
+        "v11_entry_overlay_elapsed_sec": v11_entry_overlay_elapsed_sec,
+        "pre_momentum_gate_elapsed_sec": pre_momentum_gate_elapsed_sec,
+        "entry_select_elapsed_sec": entry_select_elapsed_sec,
+        "audit_csv_write_elapsed_sec": audit_csv_write_elapsed_sec,
+        "setup_exit_rules_write_elapsed_sec": setup_exit_rules_write_elapsed_sec,
+        "live_signal_csv_write_elapsed_sec": live_signal_csv_write_elapsed_sec,
+        "short_signal_write_elapsed_sec": short_signal_write_elapsed_sec,
+        "long_signal_write_elapsed_sec": long_signal_write_elapsed_sec,
         **candidate_wait_stats,
         **raw_fetch_stats,
         **v11_entry_stats,

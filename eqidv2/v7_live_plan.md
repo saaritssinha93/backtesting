@@ -1,19 +1,21 @@
 # V7 Live Strategy, Flow, And Plan
 
-Last updated: 2026-05-29
+Last updated: 2026-06-05
 
-This document describes the current `Signal discovery v7 5mins ID` live paper system, including scanner logic, entry flow, paper execution, research outputs, current early-mode tightening, and future investigation priorities.
+This document describes the current `Signal discovery v7 5mins ID` live system, including 5-minute live fetch, scanner logic, entry flow, paper/live execution, research outputs, current early-mode tightening, and future investigation priorities.
 
 ## 1. Scope
 
-V7 live is a paper-trading research/live-validation pipeline for intraday 5-minute setups.
+V7 live is a research/live-validation pipeline for intraday 5-minute setups. The active production wiring is the ID 5-minute v7 session, not the retired v7 sweep scheduler.
 
 It is not one single file. It is a staged system:
 
-1. 5-minute candidate discovery writes candidate tickers only.
-2. 1-minute entry engine converts candidates into executable signal rows.
-3. Paper executor simulates paper trades from the signal rows.
-4. Research layer reconciles raw candidates, gated candidates, entries, live signals, paper trades, missed trades, and 1-minute exit paths.
+1. 5-minute live fetch keeps live indicator parquet files current and publishes slot-ready markers.
+2. 5-minute candidate discovery writes candidate tickers only.
+3. 1-minute entry engine converts candidates into executable signal rows.
+4. `PAPER_TRADE_TRUE` executor simulates paper trades from the signal rows.
+5. `PAPER_TRADE_FALSE` executor places real Zerodha/Kite orders from the same signal rows when enabled.
+6. Research layer reconciles raw candidates, gated candidates, entries, live signals, paper/live trades, missed trades, and 1-minute exit paths.
 
 The current live research policy is:
 
@@ -24,11 +26,21 @@ The current live research policy is:
 
 ## 2. Main Files
 
+### 5-Minute Live Fetch
+
+- File: `eqidv2_eod_scheduler_for_5mins_data_live_minimal.py`
+- Runner: `bat/run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat`
+- Scheduler: `bat/schedule_eqidv2_eod_scheduler_for_5mins_data_live_minimal_weekday.bat`
+- Task: `EQIDV2_eod_5mins_data_0900`
+- Output root: `C:\TradingData\eqidv2`
+- 5-minute data directory: `C:\TradingData\eqidv2\stocks_indicators_5min_eq_live`
+
 ### Live Scanner
 
 - File: `eqidv2_signal_discovery_v7_5min_id_persistent.py`
 - Candidate scanner helper: `avwap_5min_ID_v7_candidate_scan.py`
 - Runner: `bat/run_eqidv2_signal_discovery_v7_5min_id_persistent.bat`
+- Scheduler: `bat/schedule_eqidv2_id_5min_v7_live_weekday.bat`
 - Runtime root: `C:\TradingData\eqidv2\signal_discovery_v7_5mins_ID`
 
 ### 1-Minute Entry Engine
@@ -37,11 +49,18 @@ The current live research policy is:
 - Runner: `bat/run_eqidv2_entry_engine_1min_v5_id.bat`
 - Runtime root: `C:\TradingData\eqidv2\entry_engine_1min_v5_ID`
 
-### Paper Executor
+### Paper Executor (`PAPER_TRADE_TRUE`)
 
 - File: `avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7.py`
 - Runner: `bat/run_avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7.bat`
 - Signal directory: `live_signals`
+
+### Live Executor (`PAPER_TRADE_FALSE`)
+
+- File: `avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.py`
+- Runner: `bat/run_avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.bat`
+- Signal directory: `live_signals`
+- Order mode: real Zerodha/Kite MIS orders
 
 ### Research Layer
 
@@ -60,7 +79,7 @@ The current live research policy is:
 
 ### 5-Minute Live Stock Data
 
-Scanner source:
+The 5-minute live fetch writes this directory, and the scanner reads it:
 
 `C:\TradingData\eqidv2\stocks_indicators_5min_eq_live`
 
@@ -92,6 +111,10 @@ Market open: `09:15 IST`
 
 Current V7 flow:
 
+- The active v7 schedule is `bat/schedule_eqidv2_id_5min_v7_live_weekday.bat`.
+- `bat/schedule_eqidv2_v7_sweep_weekday.bat` and `bat/schedule_eqidv2_v7_sweep_live_weekday.bat` are retired and intentionally disabled.
+- 5-minute live fetch task starts at `09:00`.
+- Signal discovery, 1-minute entry engine, paper executor, and live executor tasks also start at `09:00`.
 - Signal discovery runner starts scheduling from `09:15`.
 - Practical signal evaluation starts at `09:30`.
 - Early mode is active from `09:30` to `11:00`.
@@ -104,9 +127,54 @@ Current V7 flow:
 
 ## 5. High-Level Flow
 
+### Step 0: 5-Minute Live Fetch
+
+The live fetch task is the first session dependency. It runs continuously through the live day and updates 5-minute indicator parquet files.
+
+Task and runner:
+
+- Task: `EQIDV2_eod_5mins_data_0900`
+- Runner: `bat/run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat`
+- Script: `eqidv2_eod_scheduler_for_5mins_data_live_minimal.py`
+
+Important runtime settings:
+
+- Runtime root: `C:\TradingData\eqidv2`
+- Data output: `C:\TradingData\eqidv2\stocks_indicators_5min_eq_live`
+- Cache output: `C:\TradingData\eqidv2\stocks_cache_5min_eq_live`
+- Opening slot fetch: enabled
+- Base slot buffer: `2` seconds
+- Quarter-hour slot buffer: `2` seconds
+- Worker policy: `320` total workers, `40` per app
+- Supervisor cutoff: `15:31`
+
+Slot readiness:
+
+- Writes freshness/status under `logs` and `runtime_status`.
+- Publishes slot-ready markers under `C:\TradingData\eqidv2\slot_ready_5m`.
+- Marker format: `slot_<YYYYMMDD_HHMM>.json`
+- Signal discovery and downstream stages should be treated as dependent on fresh 5-minute slot data.
+
 ### Step 1: Signal Discovery
 
 The scanner evaluates completed 5-minute candles.
+
+Task and runner:
+
+- Task: `EQIDV2_signal_discovery_v7_5mins_ID`
+- Runner: `bat/run_eqidv2_signal_discovery_v7_5min_id_persistent.bat`
+- Script: `eqidv2_signal_discovery_v7_5min_id_persistent.py`
+
+Key live settings:
+
+- Post-slot delay: `5` seconds
+- Entry window: `09:30` to `14:00`
+- Entry lag: `5` minutes
+- Selection mode: `v8_setup_compatible`
+- V8 live gate: enabled
+- Research filters: active
+- Early mode: enabled
+- Short focus: enabled, allowed side `SHORT`
 
 It writes:
 
@@ -119,7 +187,7 @@ It writes:
 - Latest snapshots:
   `C:\TradingData\eqidv2\signal_discovery_v7_5mins_ID\latest`
 
-The scanner writes candidate tickers only. It does not attach entry price or execute trades.
+The scanner writes candidate tickers only. It does not attach executable entry price and does not execute trades.
 
 Important live behavior:
 
@@ -159,6 +227,12 @@ These filters are configured in:
 
 The entry engine consumes latest candidate ticker snapshots and writes executable signal rows.
 
+Task and runner:
+
+- Task: `EQIDV2_entry_engine_1min_v5_ID`
+- Runner: `bat/run_eqidv2_entry_engine_1min_v5_id.bat`
+- Script: `eqidv2_entry_engine_1min_v5_id.py`
+
 Inputs:
 
 - `latest_candidate_tickers.json`
@@ -170,15 +244,24 @@ Entry logic:
 - Searches for first 1-minute bar from signal time through `+5` minutes.
 - Uses the 1-minute bar open as entry price.
 - Attaches setup-specific SL/target rule from `avwap_5min_ID_v6_backtesting.py`.
+- Applies pre-entry momentum gates before writing signal CSV rows.
 
 Outputs:
 
 - `live_signals/signals_<YYYY-MM-DD>_id_5min_v7_short.csv`
 - `live_signals/signals_<YYYY-MM-DD>_id_5min_v7_long.csv`
 
-### Step 5: Paper Executor
+These two CSV files are the shared handoff into both executors.
+
+### Step 5: Paper Executor (`PAPER_TRADE_TRUE`)
 
 The paper executor reads the long and short signal CSVs and simulates paper trades.
+
+Task and runner:
+
+- Task: `EQIDV2_paper_trade_id_5min_v7_0900`
+- Runner: `bat/run_avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7.bat`
+- Script: `avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7.py`
 
 Runner defaults from BAT:
 
@@ -187,9 +270,13 @@ Runner defaults from BAT:
 - Short stop: `0.75%`
 - Long target: `1.00%`
 - Short target: `1.00%`
-- Max trades argument: `20`
-- Max concurrent/open positions configured to `20`
+- Max trades argument: `100`
+- Max concurrent/open positions configured to `100`
+- Max capital deployed: `Rs 20,00,000`
 - Entry price source: `ltp_on_signal`
+- Entry window: `09:30` to `14:00`
+- Forced close: `15:20`
+- Runner cutoff: `15:40`
 
 Outputs:
 
@@ -197,7 +284,39 @@ Outputs:
 - `live_signals/paper_trade_summary_id_5min_v7.json`
 - `live_signals/executed_signals_paper_id_5min_v7.json`
 
-### Step 6: Research Layer
+### Step 6: Live Executor (`PAPER_TRADE_FALSE`)
+
+The live executor reads the same long and short signal CSVs and places real Zerodha/Kite MIS orders. This is the real-money lane; it should be enabled only when the session is intentionally live.
+
+Task and runner:
+
+- Task: `EQIDV2_live_trade_id_5min_v7_0900`
+- Runner: `bat/run_avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.bat`
+- Script: `avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.py`
+
+Runner defaults from BAT:
+
+- Long stop: `0.75%`
+- Short stop: `0.75%`
+- Long target: `1.00%`
+- Short target: `1.00%`
+- Max trades argument: `20`
+- Max concurrent/open positions configured to `20`
+- Force entry quantity: `1`
+- Late detection max lag: `900` seconds
+- Entry order: market MIS
+- Exit protection: target LIMIT plus stop-loss order
+- Entry cutoff and forced close: `15:20`
+- Supervisor cutoff: `15:45`
+
+Outputs:
+
+- `live_signals/live_trades_<YYYY-MM-DD>_id_5min_v7.csv`
+- `live_signals/live_trade_summary_id_5min_v7.json`
+- `live_signals/open_live_trades_state_<YYYY-MM-DD>_id_5min_v7.json`
+- `live_signals/executed_signals_live_id_5min_v7.json`
+
+### Step 7: Research Layer
 
 The research layer reconciles the full funnel:
 
@@ -207,8 +326,9 @@ The research layer reconciles the full funnel:
 4. Entry engine raw/selected rows.
 5. Live signal rows.
 6. Paper trade rows.
-7. Forward MFE/MAE from 1-minute data.
-8. Exit strategy lab results.
+7. Live trade rows when `PAPER_TRADE_FALSE` is enabled.
+8. Forward MFE/MAE from 1-minute data.
+9. Exit strategy lab results.
 
 Main outputs:
 
@@ -460,6 +580,41 @@ Future ranker work:
 
 ## 12. Operational Checklist
 
+### V7 ID 5min Live Monitor Flow Check
+
+The `V7 ID 5min Live Monitor` dashboard card starts with a brief per-slot
+end-to-end flow table. It reads the actual slot-ready markers, scanner audit,
+entry-engine audit and CSV mtimes, signal CSVs, executor logs, open-trade state,
+and paper/live trade CSVs.
+
+The table checks:
+
+| Check | SLA / interpretation |
+|---|---|
+| `fetch5m`, `fetch_s` | The final `slot_ready_5m` marker must be complete within 60 seconds of the 5-minute slot. |
+| `scan5m`, `scan_s` | Scanner elapsed time. The scanner audit must exist for the slot. |
+| `cand_print`, `cand_s` | Candidate snapshot, including a valid zero-candidate snapshot, must publish within 60 seconds of the slot. |
+| `engine1m`, `eng_s+1m` | Entry-engine completion time measured after `slot + 1 minute`. |
+| `L/F/S/P/C` | Candidate load, raw 1-minute fetch, entry scan, pre-momentum gate, and signal CSV handoff. |
+| `entries/sig` | Selected entry rows compared with rows written to the long/short signal CSVs. |
+| `paper_T`, `paper_s+1m` | `PAPER_TRADE_TRUE` consumption and entry-log/state time after `slot + 1 minute`. |
+| `paper_F`, `live_s+1m` | `PAPER_TRADE_FALSE` consumption and live-entry time after `slot + 1 minute`. |
+| `tickers C>E>S>P>L` | Ticker continuity through candidate, entry, signal, paper, and live lanes. |
+| `blocker/reason` | Concise reason for a late, missing, partial, mismatched, or unsafe handoff. |
+
+Flow states:
+
+- `PASS`: a signal completed every enabled required stage.
+- `IDLE`: fetch, scanner, and entry engine completed normally, but no candidate required execution.
+- `WARN`: the slot completed but has a timing/order risk, such as scanner publication before the final fetch-ready marker.
+- `BLOCKED`: an SLA was missed or a required enabled stage did not complete.
+- `WAIT`: the slot has not reached the stage deadline yet.
+- `OFF`: the executor task is intentionally disabled. This is not treated as a processing failure.
+- `N/A`: no signal was produced, so the executor had nothing to consume.
+
+The detailed slot funnel, setup table, ticker/entry detail, and session-health
+tables remain below the brief flow check for investigation.
+
 ### Before Market
 
 1. Confirm auth/token sessions are healthy.
@@ -467,7 +622,8 @@ Future ranker work:
 3. Start or confirm the v7 signal discovery session.
 4. Start or confirm the 1-minute entry engine.
 5. Start or confirm the paper executor.
-6. Confirm dashboard cards are not stale.
+6. Start or confirm the live executor only when real orders are intended.
+7. Confirm dashboard cards are not stale.
 
 ### During Early Window
 
@@ -510,8 +666,8 @@ Use this promotion ladder:
 2. Paper experiment.
 3. Scanner shadow.
 4. Scanner active.
-5. Live false.
-6. Live true only after clean sustained proof.
+5. `PAPER_TRADE_TRUE` live paper validation.
+6. `PAPER_TRADE_FALSE` small real live only after clean sustained proof.
 
 Do not promote a change when:
 
@@ -639,4 +795,3 @@ Expected behavior:
 - Quality should be better.
 - No trade is forced. Quiet early windows are acceptable.
 - The three active early setups should dominate early paper trades.
-

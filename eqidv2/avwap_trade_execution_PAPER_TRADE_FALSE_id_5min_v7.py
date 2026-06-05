@@ -309,16 +309,9 @@ LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE"
     "yes",
     "on",
 }
-LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "900"))
-# Tier-1 fix (2026-04-23): per-setup late-lag thresholds. Different setups have
-# different "freshness" requirements driven by their lag semantics:
-#   - lag=1 setups (A_MOD_BREAK_C1_*): break confirmed on the very next bar;
-#     stale fast — 8 min budget covers PF retry + DE backlog.
-#   - lag=2 setups (CLOSE_CONTINUATION, RECLAIM, PULLBACK_C2): tolerate a bit
-#     more lag because the trigger pattern spans two bars — 13 min budget.
-#   - dynamic (B_HUGE_RED_FAILED_BOUNCE): tracker-based, allow 15 min before
-#     declaring stale.
-# Falls back to LATE_DETECTION_MAX_LAG_SEC for any setup not in the table.
+LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "75"))
+# Historical setup thresholds are retained only as lower optional limits. The
+# environment limit is the universal hard ceiling for every setup.
 _LATE_LAG_THRESHOLDS_BY_SETUP: Dict[str, int] = {
     "A_MOD_BREAK_C1_HIGH":              480,
     "A_MOD_BREAK_C1_LOW":               480,
@@ -330,9 +323,11 @@ _LATE_LAG_THRESHOLDS_BY_SETUP: Dict[str, int] = {
 }
 
 def _late_lag_threshold_for_setup(setup: Optional[str]) -> int:
-    if not setup:
-        return LATE_DETECTION_MAX_LAG_SEC
-    return _LATE_LAG_THRESHOLDS_BY_SETUP.get(str(setup).upper().strip(), LATE_DETECTION_MAX_LAG_SEC)
+    setup_threshold = _LATE_LAG_THRESHOLDS_BY_SETUP.get(
+        str(setup or "").upper().strip(),
+        LATE_DETECTION_MAX_LAG_SEC,
+    )
+    return min(setup_threshold, LATE_DETECTION_MAX_LAG_SEC)
 
 # Tier-1 fix: late-skip visibility — append every stale-detection skip to a
 # daily CSV so the loud-not-silent invariant survives log rotation, and bump a
@@ -2357,7 +2352,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                     log.warning(
                         f"[STALE.DETECT] Skipping {ticker} {side} {setup_name}: detected "
                         f"{lag_sec:.0f}s after entry slot "
-                        f"(threshold {threshold}s, setup-tier; env_max={LATE_DETECTION_MAX_LAG_SEC}s) | "
+                        f"(universal threshold {threshold}s) | "
                         f"signal_id={signal_id[:12]} | total_late_skipped_today={_late_skipped_count}"
                     )
 
