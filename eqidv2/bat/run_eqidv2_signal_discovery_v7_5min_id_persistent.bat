@@ -1,9 +1,41 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 
-cd /d "%~dp0.."
+set "BASE_DIR=%~dp0.."
+set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
+if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
+set "LOG_DIR=%BASE_DIR%\logs"
+set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
+set "SCRIPT_NAME=eqidv2_signal_discovery_v7_5min_id_persistent.py"
+set "STATUS_FILE=%RUNTIME_STATUS_DIR%\signal_discovery_v7_5mins_ID.status"
+set "HEARTBEAT_FILE=%RUNTIME_STATUS_DIR%\signal_discovery_v7_5mins_ID.heartbeat"
+set "END_CUTOFF_HHMM=1530"
+set "MAX_RESTARTS=20"
+set "RESTART_DELAY_SEC=15"
+set /a RESTART_COUNT=0
+
+for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"') do set "TODAY_IST=%%a"
+if not defined TODAY_IST set "TODAY_IST=%DATE%"
+for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmmss')"') do set "RUN_HMS=%%a"
+if not defined RUN_HMS set "RUN_HMS=unknown"
+set "LOG_FILE=%LOG_DIR%\eqidv2_signal_discovery_v7_5min_id_persistent_%TODAY_IST%_%RUN_HMS%.log"
+
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+if not exist "%RUNTIME_STATUS_DIR%" mkdir "%RUNTIME_STATUS_DIR%"
+
+cd /d "%BASE_DIR%"
 set EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS=16
 set EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS=16
+REM Main V7 and Tier123 scans are independent; overlap them to meet T+1:30.
+set EQIDV2_SIGNAL_DISCOVERY_V7_PARALLEL_SCAN_BRANCHES=1
+REM Skip optional Tier123 when feed latency leaves too little T+1:30 budget.
+set EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_LATEST_START_LAG_SEC=40
+REM A few illiquid symbols may legitimately have no candle for a slot.
+REM Authentication, partition, and broader verification failures remain blocked.
+set EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MAX_VERIFICATION_FAILURES=5
 REM The 5-min indicator feed (eqidv2_eod_scheduler_for_5mins_data_live_minimal)
 REM finishes writing each slot's bar at ~slot+45-60s (SLA-WARN range). The scan
 REM MUST start after that or it reads pre-bar files and misses A/B/C/etc setups.
@@ -11,7 +43,7 @@ REM 75s guarantees the scan window is entirely after feed completion.
 set EQIDV2_SIGNAL_DISCOVERY_V7_POST_SLOT_DELAY_SEC=75
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_START=09:30
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END=14:00
-set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN=5
+set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_SELECTION_MODE=v8_setup_compatible
 set EQIDV2_SIGNAL_DISCOVERY_V7_V8_GATE=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_V8_ACCEPTED_RULES=C:\TradingData\eqidv2\outputs_ID_v8_5min_research_restore\accepted_rules.csv
@@ -55,6 +87,61 @@ set EQIDV2_SIGNAL_DISCOVERY_V7_UNCOVERED_FALLBACK_MAX_PER_SLOT=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_UNCOVERED_FALLBACK_ALLOWED_SIDES=SHORT
 set EQIDV2_SIGNAL_DISCOVERY_V7_UNCOVERED_FALLBACK_ALLOWED_SETUPS=A_MOD_BREAK_C1_LOW,C_OR_BREAKDOWN,A_PULLBACK_C2_THEN_BREAK_C2_LOW,B_HUGE_RED_FAILED_BOUNCE,D_AVWAP_LOSE_REVERSAL,G_LOWER_LOW_BREAK
 
-"C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe" -u eqidv2_signal_discovery_v7_5min_id_persistent.py
+for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmm')"') do set "NOW_HHMM=%%a"
+if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
+  echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^)
+  echo [%DATE% %TIME%] SKIP %SCRIPT_NAME% ^(current HHmm=!NOW_HHMM!, cutoff=%END_CUTOFF_HHMM%^)>>"%LOG_FILE%"
+  call :WRITE_STATUS SKIPPED_CUTOFF 0
+  endlocal & exit /b 0
+)
 
-endlocal
+echo [%DATE% %TIME%] START %SCRIPT_NAME%
+echo [%DATE% %TIME%] START %SCRIPT_NAME%>>"%LOG_FILE%"
+echo [INFO] Auto-restart enabled: max_restarts=%MAX_RESTARTS%, retry_delay=%RESTART_DELAY_SEC%s, cutoff=%END_CUTOFF_HHMM%>>"%LOG_FILE%"
+
+:RUN_LOOP
+"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" >>"%LOG_FILE%" 2>&1
+set "EXIT_CODE=%ERRORLEVEL%"
+
+echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=!EXIT_CODE!^)
+echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=!EXIT_CODE!^)>>"%LOG_FILE%"
+
+if "!EXIT_CODE!"=="0" goto DONE
+
+for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmm')"') do set "NOW_HHMM=%%a"
+if !NOW_HHMM! GEQ %END_CUTOFF_HHMM% (
+  echo [WARN] Crash after cutoff ^(HHmm=!NOW_HHMM!^). Not restarting.>>"%LOG_FILE%"
+  set "EXIT_CODE=0"
+  call :WRITE_STATUS STOPPED_AFTER_CUTOFF !EXIT_CODE!
+  goto DONE
+)
+
+set /a RESTART_COUNT+=1
+if !RESTART_COUNT! GTR %MAX_RESTARTS% (
+  echo [ERROR] Max restarts exceeded for %SCRIPT_NAME% ^(attempts=!RESTART_COUNT!^).>>"%LOG_FILE%"
+  call :WRITE_STATUS CRASHED !EXIT_CODE!
+  goto DONE
+)
+
+echo [WARN] %SCRIPT_NAME% crashed ^(exit=!EXIT_CODE!^). Restart !RESTART_COUNT!/%MAX_RESTARTS% in %RESTART_DELAY_SEC%s...>>"%LOG_FILE%"
+call :WRITE_STATUS RESTARTING !EXIT_CODE!
+timeout /t %RESTART_DELAY_SEC% >nul
+goto RUN_LOOP
+
+:WRITE_STATUS
+for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm:ss"') do set "RUN_TS=%%a"
+>"%STATUS_FILE%" echo status=%~1
+>>"%STATUS_FILE%" echo script=%SCRIPT_NAME%
+>>"%STATUS_FILE%" echo ts=!RUN_TS!
+>>"%STATUS_FILE%" echo restart_count=!RESTART_COUNT!
+>>"%STATUS_FILE%" echo exit_code=%~2
+>>"%STATUS_FILE%" echo cutoff_hhmm=%END_CUTOFF_HHMM%
+>>"%STATUS_FILE%" echo log_file=%LOG_FILE%
+>"%HEARTBEAT_FILE%" echo state=%~1
+>>"%HEARTBEAT_FILE%" echo script=%SCRIPT_NAME%
+>>"%HEARTBEAT_FILE%" echo ts=!RUN_TS!
+>>"%HEARTBEAT_FILE%" echo restart_count=!RESTART_COUNT!
+exit /b 0
+
+:DONE
+endlocal & exit /b %EXIT_CODE%

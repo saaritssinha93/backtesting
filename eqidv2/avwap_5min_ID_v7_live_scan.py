@@ -69,7 +69,7 @@ EXCLUDED_SETUPS = {
 DEFAULT_SCAN_WORKERS = max(1, int(os.getenv("EQIDV2_ID5MIN_V7_SCAN_WORKERS", "8")))
 ENTRY_WINDOW_START = pd.Timestamp(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_START", "09:30")).time()
 ENTRY_WINDOW_END = pd.Timestamp(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END", "14:00")).time()
-ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "5"))
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "1"))
 # Emission window: at each scan, emit candidates whose signal bar is within
 # this many minutes before the latest available bar (and thus has a successor
 # bar for entry). A window (not a single bar) makes emission robust to a

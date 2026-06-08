@@ -14,6 +14,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -60,8 +61,24 @@ FEED_STATUS_JSON = Path(
 FEED_GATE_MAX_WAIT_SEC = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MAX_WAIT_SEC", "90"))
 FEED_GATE_POLL_SEC = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_POLL_SEC", "2"))
 FEED_GATE_MIN_DELAY_SEC = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MIN_DELAY_SEC", "5"))
+FEED_GATE_MAX_VERIFICATION_FAILURES = max(
+    0,
+    int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MAX_VERIFICATION_FAILURES", "5")),
+)
+# reject_slot: skip scan entirely on feed timeout (default, fail-closed).
+# degraded_scan: scan on whatever data is present (emergency fallback only).
+FEED_TIMEOUT_ACTION = os.getenv(
+    "EQIDV2_SIGNAL_DISCOVERY_V7_FEED_TIMEOUT_ACTION", "reject_slot"
+).strip().lower()
 DEFAULT_SCAN_WORKERS = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS", "8"))
 TIER123_SCAN_WORKERS = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS", str(DEFAULT_SCAN_WORKERS)))
+PARALLEL_SCAN_BRANCHES_ENABLE = str(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_PARALLEL_SCAN_BRANCHES", "1")
+).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+TIER123_LATEST_START_LAG_SEC = max(
+    0.0,
+    float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_LATEST_START_LAG_SEC", "40")),
+)
 V8_LIVE_GATE_ENABLE = str(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_V8_GATE", "1")).strip().lower() not in {
     "0",
     "false",
@@ -143,7 +160,7 @@ END_TIME = base_v15.dtime(15, 0)
 HARD_STOP_TIME = base_v15.dtime(15, 30)
 ENTRY_WINDOW_START_TIME = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_START", "09:30").strip()
 ENTRY_WINDOW_END_TIME = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END", "14:00").strip()
-ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN", "5"))
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN", "1"))
 
 LIVE_SAFE_RULE_FIELDS = {
     "_signal_hour",
@@ -186,6 +203,7 @@ def _parse_hhmm(value: str, default: str) -> Any:
 def _set_status_env() -> None:
     os.environ["EQIDV2_RUNTIME_STATUS_FILE"] = str(RUNTIME_STATUS_DIR / f"{SESSION_SLUG}.status")
     os.environ["EQIDV2_RUNTIME_HEARTBEAT_FILE"] = str(RUNTIME_STATUS_DIR / f"{SESSION_SLUG}.heartbeat")
+    os.environ["EQIDV2_RUNTIME_SCRIPT_NAME"] = Path(__file__).name
 
 
 def _touch_status(status: str, **extra: Any) -> None:
@@ -240,34 +258,61 @@ def _ensure_ist_ts(ts: Any) -> pd.Timestamp:
     return out
 
 
-def _read_feed_status_slot() -> Tuple[Optional[pd.Timestamp], str]:
-    """Return (last completed slot reported by the 5-min feed, overall_state).
-
-    Returns (None, "") if the status file is missing/unreadable/unparseable so the
-    caller treats the feed as not-yet-ready and keeps polling until the timeout.
-    """
+def _read_feed_status_slot() -> Tuple[Optional[pd.Timestamp], str, int, Tuple[str, ...]]:
+    """Return the feed slot, state, verification count, and partition failures."""
     try:
         data = json.loads(FEED_STATUS_JSON.read_text(encoding="utf-8"))
     except Exception:
-        return None, ""
-    raw_slot = data.get("slot_ist")
-    state = str(data.get("overall_state", "") or "")
+        return None, "", 0, ()
+    raw_slot = data.get("slot_ist") or data.get("last_slot_ist")
+    state = str(data.get("overall_state") or data.get("state") or "")
+    verification_failed_count = int(data.get("verification_failed_count", 0) or 0)
+    failures = tuple(str(item) for item in (data.get("failures", []) or []))
     if not raw_slot:
-        return None, state
+        return None, state, verification_failed_count, failures
     try:
-        return _ensure_ist_ts(raw_slot).floor(f"{SLOT_MINUTES}min"), state
+        return (
+            _ensure_ist_ts(raw_slot).floor(f"{SLOT_MINUTES}min"),
+            state,
+            verification_failed_count,
+            failures,
+        )
     except Exception:
-        return None, state
+        return None, state, verification_failed_count, failures
 
 
-def _wait_for_feed_slot(slot: pd.Timestamp) -> bool:
+def _feed_state_is_ready(
+    state: str,
+    verification_failed_count: int = 0,
+    failures: Tuple[str, ...] = (),
+) -> bool:
+    state_upper = str(state or "").strip().upper()
+    if state_upper in {
+        "OK",
+        "WARN",
+        "DONE",
+        "SUCCESS",
+        "COMPLETE",
+        "COMPLETED",
+        "READY",
+    }:
+        return True
+    verification_only = bool(failures) and all("verify_failed=" in item for item in failures)
+    return (
+        state_upper == "FAIL"
+        and verification_only
+        and 0 < int(verification_failed_count) <= FEED_GATE_MAX_VERIFICATION_FAILURES
+    )
+
+
+def _wait_for_feed_slot(slot: Any) -> bool:
     """Block until the feed reports `slot` written, or until the timeout elapses.
 
     Returns True if the feed confirmed the slot, False if it timed out (in which
     case the caller scans anyway on whatever data is present — degraded, but the
     session never hangs if the feed dies).
     """
-    slot_floor = slot.floor(f"{SLOT_MINUTES}min")
+    slot_floor = _ensure_ist_ts(slot).floor(f"{SLOT_MINUTES}min")
     # Small floor so we don't hammer the file the instant the slot opens while the
     # feed is still mid-fetch; counts toward the overall budget.
     if FEED_GATE_MIN_DELAY_SEC > 0:
@@ -276,10 +321,21 @@ def _wait_for_feed_slot(slot: pd.Timestamp) -> bool:
     waited_from = time.monotonic()
     last_feed_slot: Optional[pd.Timestamp] = None
     while True:
-        feed_slot, state = _read_feed_status_slot()
+        feed_slot, state, verification_failed_count, failures = _read_feed_status_slot()
         last_feed_slot = feed_slot
-        if feed_slot is not None and feed_slot >= slot_floor:
+        if (
+            feed_slot is not None
+            and feed_slot >= slot_floor
+            and _feed_state_is_ready(state, verification_failed_count, failures)
+        ):
             elapsed = time.monotonic() - waited_from + FEED_GATE_MIN_DELAY_SEC
+            if str(state).strip().upper() == "FAIL":
+                print(
+                    f"[FEED][WARN] accepting slot with {verification_failed_count} "
+                    f"verification-only stale symbol(s); "
+                    f"limit={FEED_GATE_MAX_VERIFICATION_FAILURES}",
+                    flush=True,
+                )
             print(
                 f"[FEED] slot {slot.strftime('%H:%M')} ready "
                 f"(feed_slot={feed_slot.strftime('%H:%M')} state={state or 'NA'}) "
@@ -291,7 +347,7 @@ def _wait_for_feed_slot(slot: pd.Timestamp) -> bool:
             last = last_feed_slot.strftime("%H:%M") if last_feed_slot is not None else "NONE"
             print(
                 f"[FEED][WARN] timeout after {FEED_GATE_MAX_WAIT_SEC}s waiting for feed slot "
-                f"{slot.strftime('%H:%M')} (last feed_slot={last}); scanning on available data",
+                f"{slot.strftime('%H:%M')} (last feed_slot={last} state={state or 'NA'})",
                 flush=True,
             )
             return False
@@ -753,6 +809,7 @@ _UNIVERSE_CACHE_BY_DAY: Dict[str, List[str]] = {}
 def _load_universe_for_day(day: str) -> List[str]:
     if day not in _UNIVERSE_CACHE_BY_DAY:
         _UNIVERSE_CACHE_BY_DAY.clear()
+        _RANKER_MEMORY_CACHE.clear()
         _UNIVERSE_CACHE_BY_DAY[day] = _load_universe()
     return _UNIVERSE_CACHE_BY_DAY[day]
 
@@ -1197,6 +1254,36 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         print(f"[{SESSION_NAME}] market context failed: {type(exc).__name__}: {exc}", flush=True)
     _t_after_ctx = time.perf_counter()
 
+    scan_start_lag_sec = max(0.0, (base_v15.now_ist() - slot.to_pydatetime()).total_seconds())
+    tier123_for_slot = bool(
+        V11_BACKTESTING_OVERLAY_INCLUDE_TIER123
+        and scan_start_lag_sec <= TIER123_LATEST_START_LAG_SEC
+    )
+    if V11_BACKTESTING_OVERLAY_INCLUDE_TIER123 and not tier123_for_slot:
+        print(
+            f"[{SESSION_NAME} timing] tier123 skipped: scan_start_lag={scan_start_lag_sec:.1f}s "
+            f"> latest_start_lag={TIER123_LATEST_START_LAG_SEC:.1f}s",
+            flush=True,
+        )
+
+    tier123_executor: Optional[ThreadPoolExecutor] = None
+    tier123_future = None
+    tier123_started = time.perf_counter()
+    if (
+        PARALLEL_SCAN_BRANCHES_ENABLE
+        and V11_BACKTESTING_OVERLAY_ENABLE
+        and tier123_for_slot
+    ):
+        tier123_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="v7-tier123")
+        tier123_future = tier123_executor.submit(
+            v11_live_overlay.scan_tier123_live_slot,
+            slot,
+            tickers,
+            market_ctx=market_ctx,
+            profile=V11_BACKTESTING_OVERLAY_PROFILE,
+            max_workers=TIER123_SCAN_WORKERS,
+        )
+
     try:
         scanned_candidates = candidate_scan.scan_slot_candidates(
             slot,
@@ -1231,6 +1318,9 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         "v11_live_overlay_enabled": bool(V11_BACKTESTING_OVERLAY_ENABLE),
         "v11_live_overlay_profile": V11_BACKTESTING_OVERLAY_PROFILE,
         "v11_live_overlay_include_tier123": bool(V11_BACKTESTING_OVERLAY_INCLUDE_TIER123),
+        "v11_live_overlay_tier123_eligible_this_slot": bool(tier123_for_slot),
+        "v11_live_overlay_scan_start_lag_sec": round(scan_start_lag_sec, 3),
+        "v11_live_overlay_tier123_latest_start_lag_sec": float(TIER123_LATEST_START_LAG_SEC),
         "v11_live_overlay_raw_all_setup_candidates": int(0 if raw_candidates_for_v11 is None else len(raw_candidates_for_v11)),
     }
     if V11_BACKTESTING_OVERLAY_ENABLE:
@@ -1242,20 +1332,39 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
                     ab_gate_profile=V11_BACKTESTING_OVERLAY_AB_GATE_PROFILE,
                 )
             )
-            _t_tier123_start = time.perf_counter()
             tier_candidates = pd.DataFrame()
             tier_rejected = pd.DataFrame()
-            tier_stats: Dict[str, Any] = {}
-            if V11_BACKTESTING_OVERLAY_INCLUDE_TIER123:
-                tier_candidates, tier_rejected, tier_stats = v11_live_overlay.scan_tier123_live_slot(
-                    slot,
-                    tickers,
-                    market_ctx=market_ctx,
-                    profile=V11_BACKTESTING_OVERLAY_PROFILE,
-                    max_workers=TIER123_SCAN_WORKERS,
-                )
+            tier_stats: Dict[str, Any] = {
+                "v11_tier123_live_enabled": bool(tier123_for_slot),
+                "v11_tier123_live_scan_mode": (
+                    "pending" if tier123_for_slot else "deadline_budget_skipped"
+                ),
+                "v11_tier123_live_skip_reason": (
+                    ""
+                    if tier123_for_slot
+                    else (
+                        f"scan_start_lag {scan_start_lag_sec:.1f}s exceeded "
+                        f"{TIER123_LATEST_START_LAG_SEC:.1f}s"
+                    )
+                ),
+            }
+            if tier123_for_slot:
+                if tier123_future is not None:
+                    tier_candidates, tier_rejected, tier_stats = tier123_future.result()
+                else:
+                    tier123_started = time.perf_counter()
+                    tier_candidates, tier_rejected, tier_stats = v11_live_overlay.scan_tier123_live_slot(
+                        slot,
+                        tickers,
+                        market_ctx=market_ctx,
+                        profile=V11_BACKTESTING_OVERLAY_PROFILE,
+                        max_workers=TIER123_SCAN_WORKERS,
+                    )
             print(
-                f"[{SESSION_NAME} timing] tier123_scan={time.perf_counter()-_t_tier123_start:.3f}s",
+                f"[{SESSION_NAME} timing] "
+                f"tier123_branch_elapsed={time.perf_counter()-tier123_started:.3f}s "
+                f"parallel_branches={bool(tier123_future is not None)} "
+                f"tier123_for_slot={tier123_for_slot}",
                 flush=True,
             )
             overlay_frames = [df for df in (v11_profile_candidates, tier_candidates) if df is not None and not df.empty]
@@ -1280,17 +1389,31 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
                     "v11_live_overlay_rejected_total": 0,
                 }
             )
+        finally:
+            if tier123_executor is not None:
+                tier123_executor.shutdown(wait=True)
     _t_postproc_start = time.perf_counter()
     v8_candidates, gate_stats = apply_v8_live_gate(raw_candidates)
-    gated_candidates, research_rejected, research_filter_stats = apply_research_live_filters(v8_candidates, day)
-    regular_v7_gated_candidates = int(0 if gated_candidates is None else len(gated_candidates))
+    # Tag V8-sourced candidates so rejection reports can identify which source
+    # was affected by downstream policy filters.
+    if v8_candidates is not None and not v8_candidates.empty and "candidate_source" not in v8_candidates.columns:
+        v8_candidates = v8_candidates.copy()
+        v8_candidates["candidate_source"] = "V7_V8"
+    pre_merge_v8_count = int(0 if v8_candidates is None else len(v8_candidates))
+    # Merge V11 candidates BEFORE applying research/policy filters so that every
+    # candidate — regardless of source — passes through short-focus, anti-chase,
+    # and probation checks exactly once.
     if V11_BACKTESTING_OVERLAY_ENABLE:
-        gated_candidates = v11_live_overlay.merge_v7_and_v11_candidates(
-            gated_candidates,
+        merged_candidates = v11_live_overlay.merge_v7_and_v11_candidates(
+            v8_candidates,
             v11_overlay_candidates,
             profile=V11_BACKTESTING_OVERLAY_PROFILE,
         )
-    v11_overlay_stats["regular_v7_gated_candidates_before_v11_override"] = regular_v7_gated_candidates
+    else:
+        merged_candidates = v8_candidates if v8_candidates is not None else pd.DataFrame()
+    gated_candidates, research_rejected, research_filter_stats = apply_research_live_filters(merged_candidates, day)
+    v11_overlay_stats["regular_v7_gated_candidates_before_v11_override"] = pre_merge_v8_count
+    v11_overlay_stats["post_merge_pre_filter_candidates"] = int(0 if merged_candidates is None else len(merged_candidates))
     v11_overlay_stats["final_candidates_before_entry_window"] = int(0 if gated_candidates is None else len(gated_candidates))
     gated_candidates, entry_window_rejected_final = _filter_entry_window(gated_candidates)
     v11_overlay_stats["final_candidates_after_v11_override"] = int(len(gated_candidates))
@@ -1408,6 +1531,8 @@ def main() -> None:
     print(
         f"[INFO] scan_workers={int(args.scan_workers)} "
         f"tier123_scan_workers={int(TIER123_SCAN_WORKERS)} "
+        f"parallel_scan_branches={bool(PARALLEL_SCAN_BRANCHES_ENABLE)} "
+        f"tier123_latest_start_lag={TIER123_LATEST_START_LAG_SEC:g}s "
         f"post_slot_delay={int(args.post_slot_delay_sec)}s",
         flush=True,
     )
@@ -1419,7 +1544,9 @@ def main() -> None:
     if FEED_GATE_ENABLE:
         print(
             f"[INFO] feed_gate=ON status={FEED_STATUS_JSON} "
-            f"max_wait={FEED_GATE_MAX_WAIT_SEC}s poll={FEED_GATE_POLL_SEC}s min_delay={FEED_GATE_MIN_DELAY_SEC}s",
+            f"max_wait={FEED_GATE_MAX_WAIT_SEC}s poll={FEED_GATE_POLL_SEC}s "
+            f"min_delay={FEED_GATE_MIN_DELAY_SEC}s "
+            f"max_verification_failures={FEED_GATE_MAX_VERIFICATION_FAILURES}",
             flush=True,
         )
     else:
@@ -1479,7 +1606,19 @@ def main() -> None:
                 f"(max {FEED_GATE_MAX_WAIT_SEC}s)",
                 flush=True,
             )
-            _wait_for_feed_slot(slot)
+            feed_ready = _wait_for_feed_slot(slot)
+            if not feed_ready and FEED_TIMEOUT_ACTION == "reject_slot":
+                print(
+                    f"[FEED][SKIP] slot={slot.strftime('%H:%M')} feed timed out; "
+                    f"slot skipped (FEED_TIMEOUT_ACTION=reject_slot)",
+                    flush=True,
+                )
+                _touch_status("RUNNING", phase="FEED_TIMEOUT", slot=slot.strftime("%H:%M"))
+                _touch_heartbeat("RUNNING", phase="FEED_TIMEOUT", slot=slot.strftime("%H:%M"))
+                next_slot = slot + timedelta(minutes=SLOT_MINUTES)
+                if base_v15.now_ist() < next_slot:
+                    time.sleep(1.0)
+                continue
         else:
             print(f"[WAIT] slot={slot.strftime('%H:%M')} post-slot delay {int(args.post_slot_delay_sec)}s", flush=True)
             time.sleep(max(0, int(args.post_slot_delay_sec)))

@@ -104,7 +104,7 @@ ENTRY_WINDOW_START_RAW = os.getenv("EQIDV2_PAPER_V7_ENTRY_WINDOW_START", "09:30"
 ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_PAPER_V7_ENTRY_WINDOW_END", "14:00").strip()
 ENTRY_WINDOW_START = _parse_hhmm_time(ENTRY_WINDOW_START_RAW, "09:30")
 ENTRY_WINDOW_END = _parse_hhmm_time(ENTRY_WINDOW_END_RAW, "14:00")
-ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_PAPER_V7_ENTRY_LAG_MIN", "5"))
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_PAPER_V7_ENTRY_LAG_MIN", "1"))
 
 # Simulation
 POLL_INTERVAL_SEC = 5
@@ -253,25 +253,10 @@ LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE"
     "yes",
     "on",
 }
-LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "75"))
-# Historical setup thresholds are retained only as lower optional limits. The
-# environment limit is the universal hard ceiling for every setup.
-_LATE_LAG_THRESHOLDS_BY_SETUP: Dict[str, int] = {
-    "A_MOD_BREAK_C1_HIGH":              480,
-    "A_MOD_BREAK_C1_LOW":               480,
-    "A_MOD_CLOSE_CONTINUATION_BREAK":   780,
-    "B_HUGE_C1_CLOSE_RECLAIM_BREAK":    780,
-    "A_PULLBACK_C2_THEN_BREAK_C2_HIGH": 780,
-    "A_PULLBACK_C2_THEN_BREAK_C2_LOW":  780,
-    "B_HUGE_RED_FAILED_BOUNCE":         900,
-}
+LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "30"))
 
 def _late_lag_threshold_for_setup(setup: Optional[str]) -> int:
-    setup_threshold = _LATE_LAG_THRESHOLDS_BY_SETUP.get(
-        str(setup or "").upper().strip(),
-        LATE_DETECTION_MAX_LAG_SEC,
-    )
-    return min(setup_threshold, LATE_DETECTION_MAX_LAG_SEC)
+    return LATE_DETECTION_MAX_LAG_SEC
 
 _LATE_SKIPPED_LOCK = threading.Lock()
 _late_skipped_count = 0
@@ -312,6 +297,12 @@ def _entry_retry_deadline(
     trade_start_ist: datetime,
     forced_close_dt: datetime,
 ) -> datetime:
+    # The writer's contract deadline is authoritative. Detection, polling, and
+    # near-entry retries must never extend execution beyond this timestamp.
+    contract_deadline = _parse_ist_signal_ts(signal.get("deadline_ist"))
+    if contract_deadline is not None:
+        return min(contract_deadline.to_pydatetime(), forced_close_dt)
+
     # Anchor to Stage-2 confirmation time first — this is the definitive moment
     # the signal was live in the two-stage pipeline (detected_time_ist/logtime_ist).
     # For same-cycle detections (received_time == detected_time_ist) the old
@@ -377,7 +368,7 @@ def _append_late_skipped_csv(signal: dict, lag_sec: float, threshold_sec: int) -
             "signal_bar":     str(signal.get("signal_time_ist") or signal.get("signal_bar_time_ist") or ""),
             "entry_slot":     str(signal.get("signal_entry_datetime_ist") or ""),
             "detected_time":  str(signal.get("detected_time_ist") or ""),
-            "lag_sec":        f"{lag_sec:.1f}",
+            "lag_sec":        "" if lag_sec is None else f"{lag_sec:.1f}",
             "threshold_sec":  str(threshold_sec),
         }
         with _LATE_SKIPPED_LOCK:
@@ -1201,10 +1192,6 @@ def _daily_loss_brake_gate(signal: dict) -> Tuple[bool, str, str]:
     )
 
 
-def _today_ist_str() -> str:
-    return datetime.now(IST).strftime("%Y-%m-%d")
-
-
 def _c_or_session_cap_enabled_for_signal(signal: dict) -> bool:
     setup = str(signal.get("setup", "")).strip().upper()
     return bool(C_OR_BREAKOUT_SESSION_CAP_ENABLED and C_OR_BREAKOUT_SESSION_CAP > 0 and setup == "C_OR_BREAKOUT")
@@ -1877,7 +1864,27 @@ def simulate_trade(
         _lag_sec = _detection_lag_seconds(signal)
         _setup_name = str(signal.get("setup", "")).upper().strip()
         _threshold = _late_lag_threshold_for_setup(_setup_name)
-        if _lag_sec is not None and _lag_sec > _threshold:
+        if _lag_sec is None:
+            _append_late_skipped_csv(signal, None, _threshold)
+            return _finalize_pre_entry_skip(
+                "ENTRY_SKIPPED_MALFORMED_TIMING",
+                (
+                    f"[MALFORMED] Skipping {ticker} {side} {_setup_name}: "
+                    f"lag=None (missing or unparseable detected_time_ist) | "
+                    f"signal_id={signal_id[:12]}"
+                ),
+            )
+        if _lag_sec < 0:
+            _append_late_skipped_csv(signal, _lag_sec, _threshold)
+            return _finalize_pre_entry_skip(
+                "ENTRY_SKIPPED_NEGATIVE_LAG",
+                (
+                    f"[NEGATIVE_LAG] Skipping {ticker} {side} {_setup_name}: "
+                    f"lag={_lag_sec:.1f}s (signal appears future-dated) | "
+                    f"signal_id={signal_id[:12]}"
+                ),
+            )
+        if _lag_sec > _threshold:
             _append_late_skipped_csv(signal, _lag_sec, _threshold)
             return _finalize_pre_entry_skip(
                 "ENTRY_SKIPPED_STALE_DETECTION",

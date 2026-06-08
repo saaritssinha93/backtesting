@@ -33,6 +33,8 @@ import avwap_5min_ID_v6_backtesting as v6
 import eqidv2_v11_live_overlay as v11_live_overlay
 import eqidv2_eod_scheduler_for_5mins_data_live_minimal as scheduler
 import eqidv2_live_combined_analyser_csv_id_5min_v7_persistent as v7_persistent
+import eqidv2_live_signal_writer as signal_writer
+import eqidv2_v7_signal_contract as signal_contract
 from eqidv2_runtime_paths import DATA_1MIN_DIR, DATA_5M_DIR, RUNTIME_ROOT, RUNTIME_STATUS_DIR, runtime_dir
 
 
@@ -63,8 +65,20 @@ RAW_FETCH_APP_COUNT = max(1, min(8, int(os.getenv("EQIDV2_ENTRY_ENGINE_RAW_FETCH
 
 # v8 backtesting resolves exits strictly from v6.SETUP_EXIT_RULES. The live
 # signal-discovery stage stays signal-only; SL/target are attached here.
-ENTRY_SEARCH_MAX_DELAY_MIN = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V7_MAX_DELAY_MIN", "5"))
-CANDIDATE_WAIT_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_SEC", "75"))
+#
+# T+1 execution contract:
+#   T = completed, end-labelled 5-minute signal candle.
+#   The engine wakes one wall-clock minute later and the executor fills from
+#   live LTP. Minute OHLC is used only for reference and momentum filters.
+#   Freshness is measured from intended_entry_ist=T+1 through T+1:15.
+#
+# IMPORTANT: V7 is unprofitable with its full setup set after realistic costs.
+# Do not expand beyond the proven profitable setups (production_core).
+ENTRY_SEARCH_MAX_DELAY_MIN = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V7_MAX_DELAY_MIN", "3"))
+# Minutes from signal_time_ist to intended_entry_ist.
+# Default = 1, so intended_entry_ist = signal_time + 1 minute.
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_ENTRY_LAG_MIN", "1"))
+CANDIDATE_WAIT_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_SEC", "30"))
 CANDIDATE_WAIT_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_POLL_SEC", "2"))
 MAX_SIGNAL_HANDOFF_LAG_SEC = float(
     os.getenv(
@@ -73,12 +87,12 @@ MAX_SIGNAL_HANDOFF_LAG_SEC = float(
     )
 )
 ENTRY_PROCESS_RESERVE_SEC = float(
-    os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_PROCESS_RESERVE_SEC", "5")
+    os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_PROCESS_RESERVE_SEC", "2")
 )
 ENTRY_DUE_GRACE_SEC = (
     min(
         ENTRY_DUE_GRACE_CONFIG_SEC,
-        max(0, int(MAX_SIGNAL_HANDOFF_LAG_SEC - ENTRY_DELAY_SEC)),
+        max(0, int(MAX_SIGNAL_HANDOFF_LAG_SEC - ENTRY_PROCESS_RESERVE_SEC)),
     )
     if MAX_SIGNAL_HANDOFF_LAG_SEC > 0
     else ENTRY_DUE_GRACE_CONFIG_SEC
@@ -102,7 +116,7 @@ PRE_ENTRY_MOMENTUM_GATES_ENABLED = str(
 ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 PRE_ENTRY_MOMENTUM_MISSING_ACTION = os.getenv(
     "EQIDV2_ENTRY_ENGINE_PRE_MOMENTUM_MISSING_ACTION",
-    "allow",
+    "block",
 ).strip().lower()
 PRE_ENTRY_MOMENTUM_GATE_VERSION = "v7_pre_entry_momentum_2026_06_04_t_probation"
 
@@ -304,8 +318,9 @@ def _latest_candidate_snapshot_slot() -> Optional[pd.Timestamp]:
 def _load_candidates_for_slot_with_wait(slot: pd.Timestamp) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     slot = _ensure_ist_ts(slot).floor("min")
     configured_wait_budget = max(0.0, float(CANDIDATE_WAIT_SEC))
+    intended_entry = slot + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
     handoff_deadline = (
-        slot + pd.Timedelta(seconds=MAX_SIGNAL_HANDOFF_LAG_SEC)
+        intended_entry + pd.Timedelta(seconds=MAX_SIGNAL_HANDOFF_LAG_SEC)
         if MAX_SIGNAL_HANDOFF_LAG_SEC > 0
         else None
     )
@@ -532,12 +547,26 @@ def _fetch_raw_for_candidates(candidates: pd.DataFrame, slot: pd.Timestamp) -> D
     return fetched
 
 
-def _entry_bar_for_candidate(raw_by_ticker: Dict[str, pd.DataFrame], cand: pd.Series) -> Optional[pd.Series]:
+def _entry_bar_for_candidate(
+    raw_by_ticker: Dict[str, pd.DataFrame],
+    cand: pd.Series,
+    intended_entry_ist: Optional[pd.Timestamp] = None,
+) -> Optional[pd.Series]:
+    """Return the first 1-minute reference bar at or after intended_entry_ist.
+
+    intended_entry_ist is the executable T+1 wall-clock instant.
+    If not supplied it is computed from signal_time_ist + ENTRY_SIGNAL_TO_ENTRY_LAG_MIN.
+    The paper executor uses live LTP for the actual fill.
+    """
     ticker = str(cand.get("ticker", "")).upper()
     df = raw_by_ticker.get(ticker)
     if df is None or df.empty:
         return None
-    sig = _ensure_ist_ts(cand.get("signal_time_ist"))
+
+    if intended_entry_ist is None or pd.isna(intended_entry_ist):
+        sig = _ensure_ist_ts(cand.get("signal_time_ist"))
+        intended_entry_ist = sig + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+
     dates = pd.to_datetime(df["date"], errors="coerce")
     if getattr(dates.dt, "tz", None) is None:
         dates = dates.dt.tz_localize(IST)
@@ -546,8 +575,8 @@ def _entry_bar_for_candidate(raw_by_ticker: Dict[str, pd.DataFrame], cand: pd.Se
     work = df.copy()
     work["date"] = dates
     sub = work[
-        (work["date"] >= sig)
-        & (work["date"] <= sig + pd.Timedelta(minutes=ENTRY_SEARCH_MAX_DELAY_MIN))
+        (work["date"] >= intended_entry_ist)
+        & (work["date"] <= intended_entry_ist + pd.Timedelta(minutes=ENTRY_SEARCH_MAX_DELAY_MIN))
     ].sort_values("date")
     if sub.empty:
         return None
@@ -852,7 +881,12 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             rule = v6.SETUP_EXIT_RULES.get(setup)
         if rule is None:
             continue
-        entry_bar = _entry_bar_for_candidate(raw_by_ticker, cand)
+        _sig_ts_for_lag = _ensure_ist_ts(cand.get("signal_time_ist"))
+        _intended_entry_ist = (
+            (_sig_ts_for_lag + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)).floor("min")
+            if not pd.isna(_sig_ts_for_lag) else pd.NaT
+        )
+        entry_bar = _entry_bar_for_candidate(raw_by_ticker, cand, _intended_entry_ist)
         if entry_bar is None:
             continue
         entry_price = float(entry_bar.get("open", np.nan))
@@ -897,6 +931,7 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             "setup": setup,
             "bar_time_ist": str(cand.get("signal_time_ist", "")),
             "signal_time_ist": str(cand.get("signal_time_ist", "")),
+            "intended_entry_ist": _fmt_ist(_intended_entry_ist) if not pd.isna(_intended_entry_ist) else "",
             "signal_open": cand.get("signal_open", ""),
             "signal_high": cand.get("signal_high", ""),
             "signal_low": cand.get("signal_low", ""),
@@ -1104,17 +1139,43 @@ def _write_live_entry_csvs(entry_df: pd.DataFrame, slot: pd.Timestamp) -> Tuple[
         return 0, 0, 0.0, 0.0, 0.0
     write_started = time.perf_counter()
     day = _ensure_ist_ts(slot).strftime("%Y-%m-%d")
-    short_df = entry_df[entry_df["side"].astype(str).str.upper().eq("SHORT")].copy()
-    long_df = entry_df[entry_df["side"].astype(str).str.upper().eq("LONG")].copy()
+    live_signals_dir = v7_persistent.Path(v7_persistent.LIVE_SIGNALS_DIR)
+
     short_started = time.perf_counter()
-    short_written = v7_persistent._write_side_signals_csv(short_df, side="SHORT", signal_day_str=day)
+    short_result = signal_writer.write_side_signals(
+        entry_df,
+        side="SHORT",
+        signal_day_str=day,
+        live_signals_dir=live_signals_dir,
+        writer_name="entry_engine_1min_v5_id",
+        writer_pid=os.getpid(),
+        source_session=SESSION_NAME,
+        entry_lag_min=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN,
+        max_lag_sec=float(MAX_SIGNAL_HANDOFF_LAG_SEC) if MAX_SIGNAL_HANDOFF_LAG_SEC > 0 else 30.0,
+        entry_window_start=v7_persistent.ENTRY_WINDOW_START_RAW,
+        entry_window_end=v7_persistent.ENTRY_WINDOW_END_RAW,
+    )
     short_elapsed = time.perf_counter() - short_started
+
     long_started = time.perf_counter()
-    long_written = v7_persistent._write_side_signals_csv(long_df, side="LONG", signal_day_str=day)
+    long_result = signal_writer.write_side_signals(
+        entry_df,
+        side="LONG",
+        signal_day_str=day,
+        live_signals_dir=live_signals_dir,
+        writer_name="entry_engine_1min_v5_id",
+        writer_pid=os.getpid(),
+        source_session=SESSION_NAME,
+        entry_lag_min=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN,
+        max_lag_sec=float(MAX_SIGNAL_HANDOFF_LAG_SEC) if MAX_SIGNAL_HANDOFF_LAG_SEC > 0 else 30.0,
+        entry_window_start=v7_persistent.ENTRY_WINDOW_START_RAW,
+        entry_window_end=v7_persistent.ENTRY_WINDOW_END_RAW,
+    )
     long_elapsed = time.perf_counter() - long_started
+
     return (
-        int(short_written),
-        int(long_written),
+        int(short_result.written),
+        int(long_result.written),
         round(short_elapsed, 3),
         round(long_elapsed, 3),
         round(time.perf_counter() - write_started, 3),
@@ -1197,6 +1258,30 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
         [{"setup": k, "sl_pct": v[0], "target_pct": v[1]} for k, v in sorted(setup_exit_rules.items())]
     ).to_csv(LATEST_DIR / "setup_exit_rules_v8.csv", index=False)
     setup_exit_rules_write_elapsed_sec = round(time.perf_counter() - rules_write_started, 3)
+
+    # Pre-write freshness gate: recheck timing contract at the moment of writing.
+    # detected_time_ist is intentionally set to NOW (not scanner creation time)
+    # so the lag reflects the actual wall-clock delay at the write boundary.
+    freshness_rejected_rows: list = []
+    freshness_passed_rows: list = []
+    if not entries.empty:
+        _max_lag = float(MAX_SIGNAL_HANDOFF_LAG_SEC) if MAX_SIGNAL_HANDOFF_LAG_SEC > 0 else 30.0
+        for _, _row in entries.iterrows():
+            _ok, _reason = signal_contract.validate_signal_timing_row(
+                _row.to_dict(),
+                max_lag_sec=_max_lag,
+                detected_time=v7_persistent.base_v15.now_ist(),
+            )
+            if _ok:
+                freshness_passed_rows.append(_row.to_dict())
+            else:
+                _rej = _row.to_dict()
+                _rej["reject_reason"] = f"pre_write_freshness: {_reason}"
+                freshness_rejected_rows.append(_rej)
+        entries = pd.DataFrame(freshness_passed_rows) if freshness_passed_rows else pd.DataFrame()
+    freshness_rejected_df = pd.DataFrame(freshness_rejected_rows)
+    freshness_rejected_csv = AUDIT_DIR / f"entry_rejected_freshness_{_slot_key(slot)}.csv"
+    freshness_rejected_df.to_csv(freshness_rejected_csv, index=False)
 
     short_written = long_written = 0
     short_signal_write_elapsed_sec = 0.0

@@ -102,6 +102,20 @@ TIER123_LIVE_SCAN_WORKERS = max(
     ),
 )
 
+CONSERVATIVE_SHORT_SHADOW_V1 = "conservative_short_shadow_v1"
+# Setups permitted in the shadow profile (SHORT only, shadow output only).
+CONSERVATIVE_SHORT_SHADOW_V1_SETUPS = frozenset({
+    "S_BB_SQUEEZE_SHORT",
+    "D_EMA20_REJECTION",
+    "E_ORB_BREAKOUT_SHORT",
+    "MR_CONTROLLED_VWAP_EXTREME_FADE_SHORT",
+})
+# Setups explicitly excluded (would pollute the shadow if merged candidates slip through).
+CONSERVATIVE_SHORT_SHADOW_V1_EXCLUDED = frozenset({
+    "C_OR_BREAKOUT",
+    "T_TREND_DAY_EMA_STAIR_SHORT",
+})
+
 SELECTED_STRATEGY_PROFILE_CHOICES = (
     "none",
     "production_core",
@@ -115,6 +129,7 @@ SELECTED_STRATEGY_PROFILE_CHOICES = (
     "production_core_ab_max_pnl_low_valid",
     "production_core_ab_max_pnl_low_valid_residual_overlay",
     TIER123_BALANCED_PROFILE,
+    CONSERVATIVE_SHORT_SHADOW_V1,
 )
 AB_SELECTED_STRATEGY_PROFILES = {
     "production_core_ab_probe",
@@ -435,6 +450,32 @@ def selected_strategy_mask(
     if profile_n == TIER123_BALANCED_PROFILE:
         mask |= max_pnl_residual_overlay_mask
         mask |= tier123_balanced_mask
+
+    if profile_n == CONSERVATIVE_SHORT_SHADOW_V1:
+        # Shadow-only short profile.  Uses existing per-setup thresholds from
+        # the current production profile; never merges into the entry-engine
+        # input path.  Promotion requires 30 independent live days on a fresh holdout.
+        shadow_mask = setup.isin(CONSERVATIVE_SHORT_SHADOW_V1_SETUPS)
+        shadow_mask &= ~setup.isin(CONSERVATIVE_SHORT_SHADOW_V1_EXCLUDED)
+        # Reuse production thresholds for the setups that already have them.
+        shadow_sbb = setup.eq("S_BB_SQUEEZE_SHORT") & (
+            (market_ret >= MAX_PNL_SBB_MIN_MARKET_RET_PCT)
+            | (notional >= MAX_PNL_SBB_MIN_NOTIONAL_RS)
+        )
+        shadow_d_rej = setup.eq("D_EMA20_REJECTION") & (
+            (body_pct >= MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT)
+            & (ranker_score >= MAX_PNL_D_EMA20_REJECTION_MIN_RANKER_SCORE)
+        )
+        shadow_orb = setup.eq("E_ORB_BREAKOUT_SHORT") & (
+            (market_ret >= -0.63438346)
+            & (quality_score >= 97.873364)
+            & (upper_wick_pct <= 0.014647435)
+        )
+        shadow_mr = setup.eq("MR_CONTROLLED_VWAP_EXTREME_FADE_SHORT") & (
+            (vol_ratio <= TIER123_MR_FADE_SHORT_MAX_VOL_RATIO)
+            & (quality_score >= TIER123_MR_FADE_SHORT_MIN_QUALITY_SCORE)
+        )
+        return (shadow_mask & (shadow_sbb | shadow_d_rej | shadow_orb | shadow_mr)).fillna(False)
 
     return mask.fillna(False)
 

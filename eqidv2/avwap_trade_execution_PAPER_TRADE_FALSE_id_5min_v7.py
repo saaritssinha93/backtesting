@@ -309,7 +309,7 @@ LATE_DETECTION_GUARD_ENABLE = str(os.getenv("EQIDV2_LATE_DETECTION_GUARD_ENABLE"
     "yes",
     "on",
 }
-LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "75"))
+LATE_DETECTION_MAX_LAG_SEC = int(os.getenv("EQIDV2_LATE_DETECTION_MAX_LAG_SEC", "30"))
 # Historical setup thresholds are retained only as lower optional limits. The
 # environment limit is the universal hard ceiling for every setup.
 _LATE_LAG_THRESHOLDS_BY_SETUP: Dict[str, int] = {
@@ -430,6 +430,12 @@ def _entry_retry_deadline(
     trade_start_ist: datetime,
     forced_close_dt: datetime,
 ) -> datetime:
+    # Row-level deadline_ist is the authoritative ceiling written by the signal
+    # writer (entry_engine_1min_v5_id) and must never be extended by the executor.
+    contract_deadline = _parse_ist_signal_ts(signal.get("deadline_ist"))
+    if contract_deadline is not None:
+        return min(contract_deadline.to_pydatetime(), forced_close_dt)
+
     # strategy_v2 §J3 fix #8 — anchor the retry window to whichever is later:
     # the executor start (trade_start_ist, which is POST any §J3 #1 bar-open
     # sleep) or the model entry slot. Pre-§J3 the anchor was detected_time_ist,

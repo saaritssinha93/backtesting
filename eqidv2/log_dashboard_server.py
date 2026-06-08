@@ -54,6 +54,8 @@ OPEN_LIVE_TRADES_STATE_PATTERN_V5 = "open_live_trades_state_{}_v5.json"
 OPEN_PAPER_TRADES_STATE_PATTERN_V5 = "open_trades_state_{}_v5.json"
 OPEN_LIVE_TRADES_STATE_PATTERN_V7_SWEEP = "open_live_trades_state_{}_v7_sweep.json"
 OPEN_PAPER_TRADES_STATE_PATTERN_V7_SWEEP = "open_trades_state_{}_v7_sweep.json"
+OPEN_LIVE_TRADES_STATE_PATTERN_ID_5MIN_V7 = "open_live_trades_state_{}_id_5min_v7.json"
+OPEN_PAPER_TRADES_STATE_PATTERN_ID_5MIN_V7 = "open_trades_state_{}_id_5min_v7.json"
 OPEN_LIVE_TRADES_STATE_PATTERN_V15 = "open_live_trades_state_{}_v15_new.json"
 OPEN_PAPER_TRADES_STATE_PATTERN_V15 = "open_trades_state_{}_v15_new.json"
 OPEN_LIVE_TRADES_STATE_PATTERN_V16_5MIN = "open_live_trades_state_{}_v16_5min.json"
@@ -62,6 +64,8 @@ KILL_SWITCH_LIVE_FILE_V5 = LIVE_SIGNAL_DIR / "kill_switch_false_v5.json"
 KILL_SWITCH_PAPER_FILE_V5 = LIVE_SIGNAL_DIR / "kill_switch_true_v5.json"
 KILL_SWITCH_LIVE_FILE_V7_SWEEP = LIVE_SIGNAL_DIR / "kill_switch_false_v7_sweep.json"
 KILL_SWITCH_PAPER_FILE_V7_SWEEP = LIVE_SIGNAL_DIR / "kill_switch_true_v7_sweep.json"
+KILL_SWITCH_LIVE_FILE_ID_5MIN_V7 = LIVE_SIGNAL_DIR / "kill_switch_false_id_5min_v7.json"
+KILL_SWITCH_PAPER_FILE_ID_5MIN_V7 = LIVE_SIGNAL_DIR / "kill_switch_true_id_5min_v7.json"
 KILL_SWITCH_LIVE_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_false_v15_new.json"
 KILL_SWITCH_PAPER_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_true_v15_new.json"
 KILL_SWITCH_LIVE_FILE_V16_5MIN = LIVE_SIGNAL_DIR / "kill_switch_false_v16_5min.json"
@@ -239,6 +243,9 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
     "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
     "entry_engine_1min_v5_id": "run_eqidv2_entry_engine_1min_v5_id.bat",
+    "signal_discovery_v7_5min_id": "run_eqidv2_signal_discovery_v7_5min_id_persistent.bat",
+    "v7_research_layer": "run_eqidv2_v7_research_layer.bat",
+    "daily_live_v7_research_session": "run_eqidv2_daily_live_v7_research_session.bat",
     "v7_pre_momentum_filter_analyst": "run_eqidv2_v7_pre_momentum_filter_analyst.bat",
     "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
     "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
@@ -429,6 +436,9 @@ def _read_restart_identity(card_id: str) -> Dict[str, str]:
 
 def _restart_identity_key(snapshot: Dict[str, str]) -> Tuple[str, ...]:
     return (
+        str(snapshot.get("worker_pid", "")).strip(),
+        str(snapshot.get("worker_start_ts", "")).strip(),
+        str(snapshot.get("worker_start_ts_utc", "")).strip(),
         str(snapshot.get("supervisor_run_id", "")).strip(),
         str(snapshot.get("spawn_run_id", "")).strip(),
         str(snapshot.get("supervisor_supervisor_pid", "")).strip(),
@@ -570,9 +580,19 @@ def _restart_card_session(card_id: str) -> Dict[str, Any]:
     end_rc, _ = _run_cmd_silent(["schtasks", "/End", "/TN", task_name], timeout=5.0)
     trace.append(f"end_rc={end_rc}")
     time.sleep(1.0)
-    verified = _run_and_verify(1, "Restarted via Task Scheduler and verified.", "run1")
-    if verified is not None:
-        return verified
+    pids, _, tokens = _collect_restart_candidate_pids(card_id, bat_basename)
+    for pid in pids:
+        _kill_pid_tree(pid, force=False)
+    remaining = _wait_for_pids_exit(pids, timeout=4.0)
+    trace.append(f"post_end_pids={pids}")
+    if tokens:
+        trace.append(f"tokens={sorted(tokens)}")
+    if remaining:
+        trace.append(f"post_end_remaining={remaining}")
+    else:
+        verified = _run_and_verify(1, "Restarted via Task Scheduler and verified.", "run1")
+        if verified is not None:
+            return verified
 
     # Step 2: graceful taskkill on scheduler/supervisor tree (no /F), then /Run
     pids, _, tokens = _collect_restart_candidate_pids(card_id, bat_basename)
@@ -584,10 +604,11 @@ def _restart_card_session(card_id: str) -> Dict[str, Any]:
         trace.append(f"tokens={sorted(tokens)}")
     if remaining:
         trace.append(f"graceful_remaining={remaining}")
-    time.sleep(1.2)
-    verified = _run_and_verify(2, "Graceful stop + verified start succeeded.", "run2")
-    if verified is not None:
-        return verified
+    else:
+        time.sleep(1.2)
+        verified = _run_and_verify(2, "Graceful stop + verified start succeeded.", "run2")
+        if verified is not None:
+            return verified
 
     # Step 3: force taskkill + /Run
     pids, _, _ = _collect_restart_candidate_pids(card_id, bat_basename)
@@ -597,6 +618,13 @@ def _restart_card_session(card_id: str) -> Dict[str, Any]:
     trace.append(f"force_pids={pids}")
     if remaining:
         trace.append(f"force_remaining={remaining}")
+        return {
+            "ok": False,
+            "step": 3,
+            "message": "Restart aborted because the previous session could not be stopped.",
+            "task_name": task_name,
+            "trace": " | ".join(trace),
+        }
     time.sleep(1.0)
     verified = _run_and_verify(3, "Force stop + verified start succeeded.", "run3")
     if verified is not None:
@@ -632,6 +660,11 @@ def _latest_matching_file(base_dir: Path, glob_pattern: str) -> Optional[Path]:
 def resolve_log_target(name: str) -> Tuple[Path, str]:
     today_ist = dt.datetime.now(IST).date().isoformat()
     if name == "signal_discovery_v7_5min_id":
+        latest_log = _latest_matching_file(
+            LOG_DIR, f"eqidv2_signal_discovery_v7_5min_id_persistent_{today_ist}*.log"
+        )
+        if latest_log is not None:
+            return latest_log, latest_log.name
         path = SIGNAL_DISCOVERY_V7_ROOT / "heartbeat" / "candidate_tickers.status.json"
         return path, str(Path("signal_discovery_v7_5mins_ID") / "heartbeat" / path.name)
 
@@ -2353,6 +2386,8 @@ def _format_v7_live_5min_monitor(
     live_disabled = _v7_monitor_task_disabled(live_task_status)
 
     flow_rows: list[dict[str, str]] = []
+    candidate_deadline_sec = 90.0
+    entry_audit_grace_sec = 5.0
     for slot in sorted(slots):
         rec = slots[slot]
         slot_dt = _v7_monitor_slot_dt(today_ist, slot)
@@ -2360,7 +2395,10 @@ def _format_v7_live_5min_monitor(
             continue
         entry_anchor = slot_dt + dt.timedelta(seconds=60)
         due_fetch = now_ist >= slot_dt + dt.timedelta(seconds=60)
-        due_entry = now_ist >= entry_anchor + dt.timedelta(seconds=75)
+        due_candidate = now_ist >= slot_dt + dt.timedelta(seconds=candidate_deadline_sec)
+        due_entry = now_ist >= slot_dt + dt.timedelta(
+            seconds=candidate_deadline_sec + entry_audit_grace_sec
+        )
         reasons: list[str] = []
 
         fetch_lag = _to_float_or_nan(str(rec.get("fetch_lag_sec", "")))
@@ -2385,27 +2423,24 @@ def _format_v7_live_5min_monitor(
         scan_sec = _to_float_or_nan(str(rec.get("scan_sec", "")))
         scan_seen = bool(rec.get("scanner_audit_seen"))
         if scan_seen and not math.isnan(scan_lag):
-            scan_state = "YES" if scan_lag <= 60.0 else "LATE"
-            if scan_lag > 60.0:
+            scan_state = "YES" if scan_lag <= candidate_deadline_sec else "LATE"
+            if scan_lag > candidate_deadline_sec:
                 reasons.append(f"candidate_late={scan_lag:.1f}s")
-        elif due_fetch:
+        elif due_candidate:
             scan_state = "NO"
             reasons.append("candidate_snapshot_missing")
         else:
             scan_state = "WAIT"
-        # Scanner and fetcher run on independent cadences (the scanner does not
-        # gate on slot_ready_5m), so they routinely finish within a second or two
-        # of each other and the scanner's audit row simply flushes first. That
-        # marker-ordering skew is noise; only a meaningfully-early scan (the
-        # scanner finished well before the fetch published, i.e. it likely read
-        # pre-/partially-fetched data) is a real ordering risk worth a WARN.
+        # Small marker-ordering skew is noise; only a meaningfully-early scan is
+        # an ordering risk worth surfacing.
         SCAN_BEFORE_FETCH_TOLERANCE_SEC = 10.0
         if fetch_ok and scan_seen and scan_lag + SCAN_BEFORE_FETCH_TOLERANCE_SEC < fetch_lag:
             reasons.append(f"scan_before_fetch={fetch_lag - scan_lag:.1f}s")
 
         candidate_count = int(rec.get("candidate_count", rec.get("potential", 0)) or 0)
         candidate_state = (
-            f"YES({candidate_count})" if scan_seen and not math.isnan(scan_lag) and scan_lag <= 60.0
+            f"YES({candidate_count})"
+            if scan_seen and not math.isnan(scan_lag) and scan_lag <= candidate_deadline_sec
             else f"LATE({candidate_count})" if scan_seen
             else "NO"
         )
@@ -2767,7 +2802,7 @@ def _format_v7_live_5min_monitor(
         ),
         rows_meta=f"brief end-to-end flow rows_shown={len(flow_rows)} (latest 24 slots)",
         summary_lines=(
-            "SLA: fetch/candidate publish <=60s from 5m slot; engine/executors measured from slot+60s.",
+            "SLA: fetch <=60s; candidate handoff <=90s from 5m slot (T+1:30); engine/executors measured from slot+60s.",
             "L/F/S/P/C = candidate load / raw 1m fetch / entry scan / pre-momentum / signal CSV.",
             "OFF is intentional task disablement; N/A means no signal required that executor for the slot.",
         ),
@@ -3237,6 +3272,16 @@ def _kill_switch_scope_paths(scope: str, today_ist: str) -> tuple[Path, Path]:
             LIVE_SIGNAL_DIR / OPEN_PAPER_TRADES_STATE_PATTERN_V7_SWEEP.format(today_ist),
             KILL_SWITCH_PAPER_FILE_V7_SWEEP,
         )
+    if scope == "false_id_5min_v7":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_LIVE_TRADES_STATE_PATTERN_ID_5MIN_V7.format(today_ist),
+            KILL_SWITCH_LIVE_FILE_ID_5MIN_V7,
+        )
+    if scope == "true_id_5min_v7":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_PAPER_TRADES_STATE_PATTERN_ID_5MIN_V7.format(today_ist),
+            KILL_SWITCH_PAPER_FILE_ID_5MIN_V7,
+        )
     if scope == "false_v15":
         return (
             LIVE_SIGNAL_DIR / OPEN_LIVE_TRADES_STATE_PATTERN_V15.format(today_ist),
@@ -3503,11 +3548,23 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         scope = str(payload.get("scope", "")).strip().lower()
         mode = str(payload.get("mode", "")).strip().lower()
         ticker = str(payload.get("ticker", "")).strip().upper()
-        if scope not in {"false_v5", "true_v5", "false_v7_sweep", "true_v7_sweep", "false_v15", "true_v15"}:
+        allowed_scopes = {
+            "false_v5",
+            "true_v5",
+            "false_v7_sweep",
+            "true_v7_sweep",
+            "false_id_5min_v7",
+            "true_id_5min_v7",
+            "false_v15",
+            "true_v15",
+            "false_v16_5min",
+            "true_v16_5min",
+        }
+        if scope not in allowed_scopes:
             self._send_json(
                 {
                     "ok": False,
-                    "message": "Invalid scope. Use false_v5, true_v5, false_v7_sweep, true_v7_sweep, false_v15, or true_v15.",
+                    "message": f"Invalid scope. Use one of: {', '.join(sorted(allowed_scopes))}.",
                 },
                 status=HTTPStatus.BAD_REQUEST,
             )
@@ -5618,6 +5675,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "signal_early_engine_v16_5min",
       "detection_engine_v16_5min",
       "pending_data_fetcher_v16_5min",
+      "signal_discovery_v7_5min_id",
+      "entry_engine_1min_v5_id",
+      "v7_research_layer",
+      "daily_live_v7_research_session",
+      "v7_pre_momentum_filter_analyst",
       "kite_positions_day_today_csv",
       "kite_holdings_today_csv",
       "authentication_v2",
@@ -7683,7 +7745,18 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         )
 
         kill_switch: dict[str, object] = {}
-        for scope in ("false_v5", "true_v5", "false_v7_sweep", "true_v7_sweep", "false_v15", "true_v15", "false_v16_5min", "true_v16_5min"):
+        for scope in (
+            "false_v5",
+            "true_v5",
+            "false_v7_sweep",
+            "true_v7_sweep",
+            "false_id_5min_v7",
+            "true_id_5min_v7",
+            "false_v15",
+            "true_v15",
+            "false_v16_5min",
+            "true_v16_5min",
+        ):
             state_path, command_path = _kill_switch_scope_paths(scope, today_ist)
             positions = _load_open_positions(state_path, today_ist)
             command_meta: dict[str, object] = {}

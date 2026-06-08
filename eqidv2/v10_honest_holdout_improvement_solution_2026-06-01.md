@@ -75,8 +75,8 @@ Important result: these setups exist in the raw scanner output, but they do **no
 | B_HUGE_PULLBACK_HOLD_BREAK | 0 | 0 | 0 | 0 | 0 | N/A |
 | B_HUGE_RED_FAILED_BOUNCE | 4,347 | 0 | 0 | 0 | 0 | N/A |
 
-So adding these to `production_core` would not change the current backtest results. They are not failing because PF is below 1.5; they are failing earlier because there are zero live-parity executable trades.
-
+So adding these to `production_core` would not change the current backtest results. They are not failing because PF is below 1.5; they are failing earlier because there are zero live-parity check the full v7 live flow wrt to all parameters, timing, logioc, strategy, structure, function, feasibility, latency, etc etc from dashboard  end to end and tell me issues challenges fixes and changes, small or big executable trades.
+ 
 Honesty decision: do **not** count A/B setups as production additions yet. Keep them as a separate research/probation bucket. To test them properly, we need a separate A/B rescue study that explains why the live-like gate eliminates them and validates any gate change on future or untouched data. Bypassing the live-like gate just to create trades would not be comparable to the production-core v7-live-parity result.
 
 ### A/B Probe After V11 Gate Change

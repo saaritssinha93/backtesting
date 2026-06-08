@@ -1,6 +1,6 @@
 # V7 Live Strategy, Flow, And Plan
 
-Last updated: 2026-06-05
+Last updated: 2026-06-07
 
 This document describes the current `Signal discovery v7 5mins ID` live system, including 5-minute live fetch, scanner logic, entry flow, paper/live execution, research outputs, current early-mode tightening, and future investigation priorities.
 
@@ -795,3 +795,158 @@ Expected behavior:
 - Quality should be better.
 - No trade is forced. Quiet early windows are acceptable.
 - The three active early setups should dominate early paper trades.
+
+## 17. Claude Audit Validation Addendum (2026-06-07)
+
+### 17.1 Verdict
+
+Claude found several real issues, but the proposed timing fix is not acceptable for
+the required production contract:
+
+- Signal candle: `10:00`
+- Intended entry and live LTP execution: approximately `10:01`
+- Final freshness deadline: `10:01:15`
+
+Changing the lag limit to 60 seconds would move the effective deadline to
+`10:02:00`. It would reduce rejected signals by accepting later entries, but it
+would not make the requested T+1 execution flow faster or correct.
+
+The current V7 flow remains **not safe for real orders**. Keep the real-order
+scheduled task disabled until the P0 items below are implemented and validated
+in a fresh paper session.
+
+### 17.2 Confirmed Findings
+
+1. **The T+1 plus 15-second contract is infeasible with the current serial path.**
+   The June 5 feed completed near `T+45-60s`, while signal discovery took about
+   `25-39s` for the 1,280-ticker universe with 16 workers. Feed plus discovery
+   alone commonly finishes after `T+1:15`, before entry fetch, filtering, and
+   writing are included.
+
+2. **The candidate wait budget collapses under the 15-second deadline.**
+   With a 5-second processing reserve, the maximum useful wait at `T+60s` is
+   about 10 seconds. Setting `CANDIDATE_WAIT_SEC=35` cannot create more time
+   while the final deadline remains `T+1:15`.
+
+3. **`_today_ist_str()` is defined twice in the paper executor.**
+   The definitions are currently identical and harmless, but one should be
+   removed as cleanup.
+
+4. **Discovery and entry use independent V11 profile environment variables.**
+   Both currently default to the same profile, but no cross-process assertion
+   prevents configuration drift.
+
+5. **Paper SL and target fills are optimistic.**
+   On a threshold breach, the paper executor records the exact stop or target,
+   not the observed LTP. Gap-through-stop losses are therefore understated.
+
+6. **The signal CSV schema contains the timing-contract fields.**
+   `detected_time_ist`, `intended_entry_ist`, `detection_lag_sec`, and
+   `deadline_ist` are present in `SIGNAL_CSV_COLUMNS`.
+
+7. **Short focus is active and intentional.**
+   The discovery launcher explicitly sets short focus to `SHORT`; long
+   candidates are not expected from the current active discovery policy.
+
+8. **The entry engine imports the retired scanner module for shared objects.**
+   This is structural coupling, not an immediate runtime failure.
+
+9. **Two signal-ID implementations exist.**
+   The contract's `canonical_signal_id()` and the writer's
+   `base_v15._generate_signal_id()` are intended to match but should eventually
+   be consolidated and covered by a parity test.
+
+10. **The launchers currently disagree on entry lag.**
+    Signal discovery explicitly sets `ENTRY_LAG_MIN=5`, while the entry engine
+    and paper executor set `ENTRY_LAG_MIN=1`. This affects discovery's entry
+    window checks and makes cross-stage configuration reporting inconsistent.
+    All three stages must use the same explicit value.
+
+### 17.3 Findings Already Corrected in the Current Worktree
+
+These changes are present in the current files, although they have not yet been
+validated in a normal live market session:
+
+- Feed timeout defaults to `reject_slot`; it no longer automatically scans
+  partial data after a timeout.
+- V11 candidates are merged before research filters, so short focus,
+  anti-chase, and probation filters now apply to both V7 and V11 sources.
+- Missing or negative detection lag is rejected by the paper executor.
+- The paper daily-loss brake is enabled at Rs 10,000.
+- The entry writer and paper executor are configured for a universal 15-second
+  freshness ceiling.
+
+The last runtime audit from June 5 still reflects the older 5-minute/75-second
+configuration. The current T+1/15-second worktree has therefore not yet passed a
+full live-session validation. As checked on June 7, the signal-discovery task's
+last result was `267014`, the entry task's last result was `0`, and the real-order
+task remained disabled.
+
+### 17.4 Claude Claims Rejected or Corrected
+
+- **Do not raise the lag limit to 60 seconds** while calling the system T+1 plus
+  15 seconds. That is a different execution policy.
+- **Do not set candidate wait to 35 seconds** unless the final deadline is also
+  changed. Under the current deadline, most of that configured wait is
+  unreachable.
+- The stop/target percentage variables are **not dead**. They backfill missing
+  CSV stop or target values, although the normal entry-engine path supplies
+  setup-specific values.
+- `_RANKER_MEMORY_CACHE` is not a material live memory leak because discovery
+  exits at the daily hard stop. Clearing it is minor replay/cleanup hygiene.
+- The T+1 minute-bar lookup is not classical lookahead, but the still-forming
+  `10:01` historical candle may not exist at `10:01`. Immediate execution
+  cannot depend on that candle being returned by the historical API.
+- The feed gate is not fully authoritative yet. It reads `status.json` and
+  accepts a matching slot without requiring `overall_state=OK`. The stronger
+  `slot_ready_5m` marker includes `complete`, expected/written counts, and
+  failure details.
+- The V7 ID kill-switch files are consumed by the executors, but the dashboard
+  backend does not accept the `true_id_5min_v7` or `false_id_5min_v7` scopes
+  advertised by its frontend.
+- Atomic JSON writing exists for executor state, but discovery's latest
+  candidate JSON/CSV snapshots are still direct overwrites.
+- Automatic restart exists for the paper executor launcher, not for the signal
+  discovery and entry-engine launchers.
+
+### 17.5 Exact P0 Plan for the Required T+1 Contract
+
+1. Keep the 15-second freshness deadline unchanged.
+2. Set signal discovery, entry engine, paper executor, and live executor to the
+   same explicit one-minute entry lag and fail startup on disagreement.
+3. Replace the status-only feed gate with the authoritative slot marker and
+   require `complete=true`, zero failures, and written count equal to expected
+   count.
+4. Overlap feed and discovery by scanning completed feed partitions as they are
+   published, then atomically combine results when the final marker arrives.
+5. Fuse the normal and Tier123 per-ticker work so each ticker's parquet is read
+   once while preserving every detector and filter.
+6. Make entry handoff event-driven from an atomic slot-specific manifest rather
+   than relying on a mutable latest snapshot and a short polling race.
+7. Execute from live LTP at T+1. Momentum logic must use data actually available
+   by that instant; it must not require the still-forming T+1 historical candle.
+8. Add per-slot health output and dashboard alerts for feed readiness,
+   candidates received, freshness rejections, signals written, and missed
+   deadlines.
+9. Add dashboard backend support for V7 ID paper/live kill scopes and require
+   basic authentication before exposing the dashboard publicly.
+10. Keep the real-order task disabled until at least one complete paper session
+   shows all accepted signals written by `intended_entry_ist + 15s`.
+
+If the full scan cannot meet this deadline without skipping tickers or reducing
+detector quality, the honest alternative is to adopt a later named contract
+such as T+2. A hidden 60-second tolerance must not be presented as T+1.
+
+### 17.6 P1 and P2 Follow-up
+
+- Model paper stop fills using adverse observed LTP, with separate configurable
+  slippage for stop and target exits.
+- Write latest discovery JSON and CSV through temporary files followed by
+  atomic replace.
+- Add supervisors or restart loops for discovery and entry processes.
+- Emit one startup configuration attestation containing timing values, V11
+  profile, filters, risk limits, and a configuration hash for every process.
+- Remove the duplicate date helper and retired-scanner import coupling.
+- Consolidate signal-ID generation and add a parity test.
+- Calibrate the Rs 10,000 daily brake by replaying Rs 7,500, Rs 10,000,
+  Rs 15,000, and equity-fraction alternatives before treating it as final.

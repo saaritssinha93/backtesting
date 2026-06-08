@@ -87,9 +87,9 @@ END_TIME = base_v15.dtime(15, 0)
 HARD_STOP_TIME = base_v15.dtime(15, 30)
 ENTRY_WINDOW_START_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_START", "09:30").strip()
 ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END", "14:00").strip()
-ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "5"))
+ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "1"))
 MAX_ENTRY_TO_DETECTION_LAG_SEC = float(
-    os.getenv("EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC", "75")
+    os.getenv("EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC", "30")
 )
 # This retired scanner shares its CSV writer with the active 1-minute entry
 # engine. Keep the scanner itself shadow-only unless explicitly enabled.
@@ -235,6 +235,17 @@ def _write_side_signals_csv(
     side: str,
     signal_day_str: str,
 ) -> int:
+    # Production writes must use eqidv2_live_signal_writer.write_side_signals().
+    # This function is retained only so callers that check LEGACY_LIVE_CSV_WRITE_ENABLED
+    # can still run in explicit shadow/debug mode.  Calling it when the flag is
+    # off is always a mistake — raise immediately so the error is visible.
+    if not LEGACY_LIVE_CSV_WRITE_ENABLED:
+        raise RuntimeError(
+            "_write_side_signals_csv called on the retired scanner but "
+            "EQIDV2_ID5MIN_V7_LEGACY_WRITE_LIVE_CSVS is not enabled. "
+            "Production writes must go through entry_engine_1min_v5_id via "
+            "eqidv2_live_signal_writer.write_side_signals()."
+        )
     side_upper = str(side).upper()
     if signals_df is None or signals_df.empty:
         print(f"[ID5MIN_V7 {side_upper} CSV] scanned=0 written=0", flush=True)
