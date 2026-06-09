@@ -1,7 +1,31 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 
 cd /d "%~dp0.."
+
+REM ============================================================
+REM  REPLAY SAFETY GUARD — do not run during live market hours
+REM ============================================================
+REM  This script writes to the SAME production output paths as
+REM  the live scanner (latest JSON, daily CSV, audit, status,
+REM  heartbeat). Running it while the live session is active
+REM  WILL overwrite live outputs and corrupt the dashboard.
+REM
+REM  SAFE windows: before 09:10 or after 15:45 IST.
+REM  If you need to replay during market hours, first set:
+REM    set EQIDV2_REPLAY_FORCE_MARKET_HOURS=1
+REM  That still overwrites live data — use only on a dev machine.
+REM ============================================================
+
+for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('HHmm')"') do set "NOW_HHMM=%%a"
+if not defined EQIDV2_REPLAY_FORCE_MARKET_HOURS (
+  if !NOW_HHMM! GEQ 0910 if !NOW_HHMM! LSS 1545 (
+    echo [ERROR] Replay blocked during market hours ^(HHmm=!NOW_HHMM!^).
+    echo [ERROR] Set EQIDV2_REPLAY_FORCE_MARKET_HOURS=1 to override.
+    exit /b 1
+  )
+)
+
 REM One-shot REPLAY of past slots into the LIVE candidate CSVs. Mirrors the
 REM production env from run_eqidv2_signal_discovery_v7_5min_id_persistent.bat so
 REM replayed candidates match live tuning. Pass slots as args, e.g.:
@@ -9,7 +33,7 @@ REM   run_eqidv2_signal_discovery_v7_replay_today.bat "2026-06-05 10:55" "2026-0
 set EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS=16
 set EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS=16
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_START=09:30
-set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END=14:00
+set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END=14:30
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_SELECTION_MODE=v8_setup_compatible
 set EQIDV2_SIGNAL_DISCOVERY_V7_V8_GATE=1
@@ -25,6 +49,7 @@ set EQIDV2_SIGNAL_DISCOVERY_V7_B_AVWAP_RECLAIM_RANKER_MIN=0.65
 set EQIDV2_SIGNAL_DISCOVERY_V7_L_TREND_PULLBACK_PROBATION_BLOCK=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_SHORT_FOCUS=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_SHORT_FOCUS_ALLOWED_SIDES=SHORT
+set EQIDV2_SIGNAL_DISCOVERY_V7_SHORT_FOCUS_EXEMPT_SETUPS=A_MOD_BREAK_C1_HIGH
 set EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_MODE=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_MIN_5M_TRADED_VALUE_RS=1000000
 set EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_MAX_VWAP_DIST_ATR=2.80

@@ -101,9 +101,9 @@ def _parse_hhmm_time(value: str, default: str) -> dt_time:
 
 
 ENTRY_WINDOW_START_RAW = os.getenv("EQIDV2_PAPER_V7_ENTRY_WINDOW_START", "09:30").strip()
-ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_PAPER_V7_ENTRY_WINDOW_END", "14:00").strip()
+ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_PAPER_V7_ENTRY_WINDOW_END", "14:30").strip()
 ENTRY_WINDOW_START = _parse_hhmm_time(ENTRY_WINDOW_START_RAW, "09:30")
-ENTRY_WINDOW_END = _parse_hhmm_time(ENTRY_WINDOW_END_RAW, "14:00")
+ENTRY_WINDOW_END = _parse_hhmm_time(ENTRY_WINDOW_END_RAW, "14:30")
 ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_PAPER_V7_ENTRY_LAG_MIN", "1"))
 
 # Simulation
@@ -457,6 +457,15 @@ RESEARCH_PAPER_GATES_ENABLED = str(os.getenv("EQIDV2_PAPER_V7_RESEARCH_GATES_ENA
     "yes",
     "on",
 }
+# P0.2: setups completely blocked from paper trading. Add comma-separated names to the env var to extend.
+PAPER_BLOCKED_SETUPS: frozenset = frozenset(
+    s.strip().upper()
+    for s in os.getenv(
+        "EQIDV2_PAPER_V7_BLOCKED_SETUPS",
+        "T_TREND_DAY_EMA_STAIR_SHORT",
+    ).split(",")
+    if s.strip()
+)
 ANTI_CHASE_LONG_CLOSE_LOC_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_CLOSE_LOC_MIN", "0.97"))
 ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN", "3.50"))
 B_AVWAP_RECLAIM_MIN_RANKER_SCORE = float(os.getenv("EQIDV2_PAPER_V7_B_AVWAP_MIN_RANKER_SCORE", "0.65"))
@@ -480,6 +489,13 @@ C_OR_BREAKOUT_SESSION_CAP_COUNTER_FILE = os.path.join(
     "c_or_breakout_session_cap_counter_id_5min_v7_paper.json",
 )
 RESEARCH_PAPER_GATE_VERSION = "v7_research_2026_06_04_pf_sl_eod"
+
+# P1.2: once E_VWAP_LOSE_EARLY_SHORT reaches +0.5R profit, move SL to breakeven
+# so a subsequent reversal cannot turn a winner into a full -1R loss (AWFIS pattern).
+VWAP_EARLY_SHORT_BE_STOP_ENABLED = str(
+    os.getenv("EQIDV2_PAPER_V7_VWAP_EARLY_SHORT_BE_STOP", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+VWAP_EARLY_SHORT_BE_STOP_R = float(os.getenv("EQIDV2_PAPER_V7_VWAP_EARLY_SHORT_BE_STOP_R", "0.5"))
 
 _candidate_context_cache_lock = threading.Lock()
 _candidate_context_cache: Dict[str, Tuple[float, Dict[str, dict]]] = {}
@@ -1134,6 +1150,17 @@ def _research_paper_gate(signal: dict) -> Tuple[bool, str, str]:
     close_loc = _safe_float(ctx.get("close_loc", ""), float("nan"))
     vwap_dist_atr = _safe_float(ctx.get("vwap_dist_atr", ""), float("nan"))
     ranker_score = _safe_float(ctx.get("ranker_score", ""), float("nan"))
+
+    # P0.2: hard block list — these setups never paper-trade regardless of other gates
+    if setup in PAPER_BLOCKED_SETUPS:
+        return (
+            True,
+            "ENTRY_SKIPPED_RESEARCH_SETUP_BLOCKED",
+            (
+                f"[RESEARCH.GATE] Skipping {ticker} {side} {setup}: setup is in PAPER_BLOCKED_SETUPS "
+                f"| version={RESEARCH_PAPER_GATE_VERSION}"
+            ),
+        )
 
     if (
         side == "LONG"
@@ -2074,6 +2101,13 @@ def simulate_trade(
     last_valid_ltp: Optional[float] = _safe_float(signal.get("last_ltp", 0.0), 0.0) or None
     ltp_miss_count = 0
     last_kill_switch_command_id = ""
+    # P1.2: breakeven stop state for E_VWAP_LOSE_EARLY_SHORT
+    _be_stop_applies = (
+        VWAP_EARLY_SHORT_BE_STOP_ENABLED
+        and _setup_for_candE4 == "E_VWAP_LOSE_EARLY_SHORT"
+    )
+    _be_stop_armed = False
+    _one_r = abs(entry_price - stop_price)
 
     while True:
         now_ist = datetime.now(IST)
@@ -2153,6 +2187,30 @@ def simulate_trade(
                 )
             time.sleep(POLL_INTERVAL_SEC)
             continue
+
+        # P1.2: arm breakeven stop once +0.5R profit is reached
+        if _be_stop_applies and not _be_stop_armed and _one_r > 0:
+            _be_trigger = (
+                entry_price - VWAP_EARLY_SHORT_BE_STOP_R * _one_r
+                if side == "SHORT"
+                else entry_price + VWAP_EARLY_SHORT_BE_STOP_R * _one_r
+            )
+            _profit_reached = (side == "SHORT" and ltp <= _be_trigger) or (
+                side == "LONG" and ltp >= _be_trigger
+            )
+            if _profit_reached:
+                old_stop = stop_price
+                stop_price = entry_price
+                _be_stop_armed = True
+                with active_positions_lock:
+                    if signal_id in active_positions:
+                        active_positions[signal_id]["stop_price"] = stop_price
+                _persist_open_trades_state()
+                log.info(
+                    f"[BE.STOP] Breakeven armed {side} {ticker} {_setup_for_candE4} "
+                    f"ltp={ltp:.2f} trigger={_be_trigger:.2f} "
+                    f"SL {old_stop:.2f}→{stop_price:.2f} | ID={trade_id}"
+                )
 
         if side == "SHORT":
             if ltp >= stop_price:

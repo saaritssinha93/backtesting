@@ -51,6 +51,17 @@ SLOT_FLOOD_MIN_CANDIDATES = 8
 SLOT_DOMINANT_SETUP_WARN_PCT = 80.0
 PORTFOLIO_YELLOW_NET_RS = -75_000.0
 PORTFOLIO_RED_NET_RS = -150_000.0
+# Dashboard cost model (override via env vars for accuracy)
+OPS_BROKERAGE_PER_TRADE_RS = float(
+    __import__("os").environ.get("EQIDV2_OPS_BROKERAGE_PER_TRADE_RS", "50.0")
+)
+OPS_SLIPPAGE_PCT = float(
+    __import__("os").environ.get("EQIDV2_OPS_SLIPPAGE_PCT", "0.05")
+)
+# Scanner publish deadline used for slot slack computation
+OPS_ENTRY_WINDOW_END_HHMM = __import__("os").environ.get(
+    "EQIDV2_OPS_ENTRY_WINDOW_END", "14:30"
+)
 
 for _p in (RESEARCH_ROOT, OPS_DIR, LATEST_DIR, HEARTBEAT_DIR):
     _p.mkdir(parents=True, exist_ok=True)
@@ -346,6 +357,18 @@ def _slot_flow_rows(day: str, limit: int = 8) -> pd.DataFrame:
                 "pre_mom_rejected": int(len(pre_rej)),
                 "entry_rows": int(len(entry_rows)),
                 "tier123_sec": tier123_sec,
+                # candidates that passed V11 gate but received no entry row
+                "no_entry_row_count": max(
+                    0,
+                    int(_safe_float(payload.get("v11_live_overlay_selected", payload.get("total_candidates", 0)), 0))
+                    - int(len(entry_rows)),
+                ),
+                # flag when total pipeline delay (fetch + scan) exceeds 60 s
+                "pipeline_late": (
+                    (scan_publish_delay_sec + (_safe_float(slot_ready.get("duration_ms"), np.nan) / 1000.0 if slot_ready else np.nan)) > 60.0
+                    if np.isfinite(scan_publish_delay_sec)
+                    else False
+                ),
             }
         )
     return pd.DataFrame(rows)
@@ -1134,6 +1157,22 @@ def _paper_trade_analysis(day: str, entry_rows: pd.DataFrame, cache: dict[str, p
     freshness = _add_momentum_freshness_fields(traded) if not traded.empty else pd.DataFrame()
     weak_freshness = freshness.loc[freshness.get("freshness_bucket", pd.Series(dtype=str)).eq("WEAK")].copy() if not freshness.empty else pd.DataFrame()
     strong_freshness = freshness.loc[freshness.get("freshness_bucket", pd.Series(dtype=str)).eq("STRONG")].copy() if not freshness.empty else pd.DataFrame()
+    # --- cost model ---
+    _gross_pnl = _safe_float(
+        pd.to_numeric(traded.get("pnl_rs", pd.Series(dtype=float)), errors="coerce").sum()
+        if not traded.empty else 0.0,
+        0.0,
+    )
+    _trade_count = int(len(traded))
+    _brokerage_est = _trade_count * OPS_BROKERAGE_PER_TRADE_RS
+    _slippage_est = 0.0
+    if not traded.empty and "entry_price" in traded.columns and "quantity" in traded.columns:
+        _notional = (
+            pd.to_numeric(traded["entry_price"], errors="coerce").fillna(0.0)
+            * pd.to_numeric(traded["quantity"], errors="coerce").fillna(0.0)
+        ).sum()
+        _slippage_est = float(_notional) * OPS_SLIPPAGE_PCT / 100.0
+    _net_pnl_est = _gross_pnl - _brokerage_est - _slippage_est
     summary = {
         "paper_rows": int(len(paper)),
         "paper_traded_rows": int(len(traded)),
@@ -1165,6 +1204,11 @@ def _paper_trade_analysis(day: str, entry_rows: pd.DataFrame, cache: dict[str, p
         "anti_chase_shadow_sl": int(anti_shadow_outcome.isin(["SL", "AMBIGUOUS_BOTH"]).sum()) if len(anti_shadow_outcome) else 0,
         "anti_chase_shadow_open": int(anti_shadow_outcome.eq("OPEN").sum()) if len(anti_shadow_outcome) else 0,
         "anti_chase_shadow_net_rs": _safe_float(anti_shadow_pnl.sum(), 0.0) if len(anti_shadow_pnl) else 0.0,
+        # cost model fields
+        "gross_pnl_rs": _gross_pnl,
+        "est_brokerage_rs": _brokerage_est,
+        "est_slippage_rs": _slippage_est,
+        "est_net_pnl_rs": _net_pnl_est,
     }
     return summary, paper, open_df, anti_chase_audit
 
@@ -1541,16 +1585,23 @@ def _render_markdown(
     if slot_rows.empty:
         lines.append("No recent slot rows found.")
     else:
-        lines.append("| slot | fetch s | scan pub s | tier123 s | scan overhead s | entry after scan s | raw scan | v11 in | v11 sel | pre rej | entries |")
-        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        lines.append("| slot | fetch s | scan pub s | tier123 s | overhead s | entry after s | raw | v11 in | v11 sel | no_entry | pre rej | entries | late? |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
         for _, row in slot_rows.tail(8).iterrows():
+            no_entry = int(row.get("no_entry_row_count", 0))
+            late_flag = "⚠ LATE" if row.get("pipeline_late", False) else ""
             lines.append(
                 f"| {row.get('slot', '')} | {_fmt_num(row.get('fetch_sec'), 1)} | {_fmt_num(row.get('scan_publish_delay_sec'), 1)} | "
                 f"{_fmt_num(row.get('tier123_sec'), 1)} | {_fmt_num(row.get('scanner_overhead_sec'), 1)} | "
                 f"{_fmt_num(row.get('entry_after_scan_sec'), 1)} | {int(row.get('raw_scanner_candidates', 0))} | "
                 f"{int(row.get('v11_input', 0))} | {int(row.get('v11_selected', 0))} | "
-                f"{int(row.get('pre_mom_rejected', 0))} | {int(row.get('entry_rows', 0))} |"
+                f"**{no_entry}** | {int(row.get('pre_mom_rejected', 0))} | {int(row.get('entry_rows', 0))} | {late_flag} |"
             )
+        # alert if any slot had gated candidates with no entry rows
+        _no_entry_total = int(slot_rows.get("no_entry_row_count", pd.Series(0, dtype=int)).sum())
+        if _no_entry_total > 0:
+            lines.append("")
+            lines.append(f"> **{_no_entry_total} gated candidates had no entry row today** — check entry engine for C_OR_BREAKOUT profile rule or time-window cutoff.")
     lines.append("")
 
     lines.append("## Scanner And Entry Candidates")
@@ -1623,10 +1674,38 @@ def _render_markdown(
                 f"| {row.get('scope', '')} | {row.get('feature', '')} | {int(row.get('missing_rows', 0))} | "
                 f"{int(row.get('total_rows', 0))} | {row.get('sample_tickers', '')} | {row.get('sample_setups', '')} |"
             )
+        # setup-level coverage summary: count gap rows per setup
+        _gap_by_setup: dict[str, int] = {}
+        for _, row in pre_gap_rows.iterrows():
+            for setup_str in str(row.get("sample_setups", "")).split(","):
+                s = setup_str.strip()
+                if s:
+                    _gap_by_setup[s] = _gap_by_setup.get(s, 0) + int(row.get("missing_rows", 0))
+        if _gap_by_setup:
+            lines.append("")
+            lines.append("### Missing Pre-Momentum Feature Coverage By Setup")
+            lines.append("")
+            lines.append("| setup | missing feature-row count | action |")
+            lines.append("|---|---:|---|")
+            for _s, _cnt in sorted(_gap_by_setup.items(), key=lambda kv: -kv[1]):
+                _action = "investigate 1-min bar count at signal time" if _cnt > 0 else "ok"
+                lines.append(f"| {_s} | {_cnt} | {_action} |")
     lines.append("")
 
     lines.append("## Paper SL/Target And Slow-Mover Check")
     lines.append("")
+
+    # --- cost section ---
+    lines.append("### P&L Cost Summary")
+    lines.append("")
+    lines.append("| metric | value |")
+    lines.append("|---|---:|")
+    lines.append(f"| gross paper P&L | Rs {_fmt_num(paper.get('gross_pnl_rs'), 0)} |")
+    lines.append(f"| estimated brokerage ({OPS_BROKERAGE_PER_TRADE_RS:.0f}/trade × {paper.get('paper_traded_rows', 0)} trades) | Rs {_fmt_num(paper.get('est_brokerage_rs'), 0)} |")
+    lines.append(f"| estimated slippage ({OPS_SLIPPAGE_PCT:.2f}% of notional) | Rs {_fmt_num(paper.get('est_slippage_rs'), 0)} |")
+    lines.append(f"| **estimated net P&L** | **Rs {_fmt_num(paper.get('est_net_pnl_rs'), 0)}** |")
+    lines.append("")
+
     lines.append(
         f"- Quick target <=10m: {paper.get('quick_targets_10m', 0)}; quick SL <=15m: {paper.get('quick_sl_15m', 0)}."
     )
@@ -1646,17 +1725,39 @@ def _render_markdown(
         if "entry_ts" in closed_or_recent.columns:
             closed_or_recent = closed_or_recent.sort_values("entry_ts")
         closed_or_recent = closed_or_recent.tail(20)
+        # join path quality from path_lab on signal_id where available
+        _path_view = pd.DataFrame()
+        if not path_lab.empty and "signal_id" in path_lab.columns:
+            _path_cols = [c for c in ["signal_id", "best_r", "worst_r", "giveback_r", "time_to_025r_min", "time_to_050r_min", "path_shadow_action"] if c in path_lab.columns]
+            _path_view = path_lab[_path_cols].drop_duplicates("signal_id")
+        if not _path_view.empty and "signal_id" in closed_or_recent.columns:
+            closed_or_recent = closed_or_recent.merge(_path_view, on="signal_id", how="left")
+        has_path = (
+            not _path_view.empty
+            and any(c in closed_or_recent.columns for c in ["best_r", "worst_r", "giveback_r"])
+        )
         lines.append("")
         lines.append("### Recent Paper Outcomes")
         lines.append("")
-        lines.append("| ticker | side | setup | entry | outcome | hold m | pnl | target | sl |")
-        lines.append("|---|---|---|---|---|---:|---:|---:|---:|")
+        if has_path:
+            lines.append("| ticker | side | setup | entry | outcome | hold m | pnl | target | sl | best R | worst R | giveback R | t025 m | t050 m | path action |")
+            lines.append("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+        else:
+            lines.append("| ticker | side | setup | entry | outcome | hold m | pnl | target | sl |")
+            lines.append("|---|---|---|---|---|---:|---:|---:|---:|")
         for _, row in closed_or_recent.iterrows():
-            lines.append(
+            base = (
                 f"| {row.get('ticker', '')} | {row.get('side', '')} | {row.get('setup', '')} | "
                 f"{_fmt_ts(row.get('entry_time'))} | {row.get('outcome', '')} | {_fmt_num(row.get('hold_min'), 1)} | "
                 f"{_fmt_num(row.get('pnl_rs'), 0)} | {_fmt_num(row.get('target_price'), 2)} | {_fmt_num(row.get('stop_price'), 2)} |"
             )
+            if has_path:
+                base += (
+                    f" {_fmt_num(row.get('best_r'), 2)} | {_fmt_num(row.get('worst_r'), 2)} | "
+                    f"{_fmt_num(row.get('giveback_r'), 2)} | {_fmt_num(row.get('time_to_025r_min'), 1)} | "
+                    f"{_fmt_num(row.get('time_to_050r_min'), 1)} | {row.get('path_shadow_action', '')} |"
+                )
+            lines.append(base)
     if not open_df.empty:
         view_cols = [
             "ticker",
@@ -1764,6 +1865,14 @@ def _render_markdown(
     lines.append(f"| entry after scanner publish | {_fmt_num(latency.get('entry_after_scan_sec'), 1)}s | {_fmt_num(latency.get('recent_avg_entry_after_scan_sec'), 1)}s |")
     lines.append(f"| entry raw fetch | {_fmt_num(latency.get('entry_raw_fetch_sec'), 3)}s |  |")
     lines.append(f"| bottleneck | {latency.get('bottleneck', '')} | {latency.get('note', '')} |")
+    # scanner deadline-slack: how much time is left between scan publish and entry window close
+    _pub_delay = _safe_float(signal.get("publish_delay_sec"), np.nan)
+    _entry_delay = _safe_float(entry.get("write_delay_sec"), np.nan)
+    if np.isfinite(_pub_delay):
+        _total_pipeline_sec = _pub_delay + (_entry_delay if np.isfinite(_entry_delay) else 0.0)
+        _warn_55 = "⚠ scan > 55s" if _pub_delay > 55 else ""
+        _warn_70 = " ⛔ scan > 70s" if _pub_delay > 70 else ""
+        lines.append(f"| total pipeline (scan+entry) | {_fmt_num(_total_pipeline_sec, 1)}s | {_warn_55}{_warn_70} |")
     lines.append("")
 
     lines.append("## Recommendations")

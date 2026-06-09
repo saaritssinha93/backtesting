@@ -72,6 +72,39 @@ class DashboardV7ControlsTests(unittest.TestCase):
             ):
                 self.assertTrue(scanner._wait_for_feed_slot(slot))
 
+    def test_v7_monitor_tolerates_verification_only_fetch_marker_failure(self) -> None:
+        state, ok, reasons = dashboard._v7_monitor_fetch_verdict(
+            {
+                "fetch_marker_seen": True,
+                "fetch_complete": False,
+                "fetch_failed": 1,
+                "fetch_verify_failed": 1,
+            },
+            fetch_lag=49.0,
+            due_fetch=True,
+        )
+
+        self.assertEqual(state, "YES")
+        self.assertTrue(ok)
+        self.assertIn("fetch_verify_tolerated=1/", ";".join(reasons))
+        self.assertNotIn("fetch_marker_missing", reasons)
+
+    def test_v7_monitor_blocks_non_verification_fetch_marker_failure(self) -> None:
+        state, ok, reasons = dashboard._v7_monitor_fetch_verdict(
+            {
+                "fetch_marker_seen": True,
+                "fetch_complete": False,
+                "fetch_failed": 2,
+                "fetch_verify_failed": 1,
+            },
+            fetch_lag=49.0,
+            due_fetch=True,
+        )
+
+        self.assertEqual(state, "NO")
+        self.assertFalse(ok)
+        self.assertIn("fetch_marker_incomplete fail=2,verify=1", reasons)
+
     def test_restart_never_launches_while_old_worker_survives(self) -> None:
         commands: list[list[str]] = []
 

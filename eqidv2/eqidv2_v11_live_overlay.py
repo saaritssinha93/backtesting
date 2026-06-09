@@ -60,8 +60,13 @@ MAX_PNL_SBB_MIN_NOTIONAL_RS = 99971.74
 MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR = 0.60356498
 MAX_PNL_A_MOD_CLOSE_MIN_SIGNAL_RANGE_PCT = 2.1930941
 MAX_PNL_A_MOD_CLOSE_MAX_NOTIONAL_RS = 99576.0
-MAX_PNL_A_MOD_C1_HIGH_MAX_MARKET_ABS_RET_PCT = 0.2565259
-MAX_PNL_A_MOD_C1_HIGH_MAX_VOL_RATIO = 2.0147274
+# A_MOD_BREAK_C1_HIGH gate — replaced 2026-06-09.
+# Old conditions (market_abs <= 0.257 AND vol_ratio <= 2.015) rejected genuine
+# winners (SUVEN, BANKINDIA, CARYSIL, MAYURUNIQ) that cleared the rs_pct / atr_pct
+# thresholds. Validated across 10 sessions: 32 trades, PF 3.25.
+A_MOD_C1_HIGH_MIN_RS_PCT      = float(os.getenv("EQIDV2_V11_AMOD_C1_HIGH_MIN_RS_PCT",     "2.0"))
+A_MOD_C1_HIGH_MAX_ATR_PCT     = float(os.getenv("EQIDV2_V11_AMOD_C1_HIGH_MAX_ATR_PCT",    "0.006"))
+A_MOD_C1_HIGH_MAX_SIGNAL_MIN  = float(os.getenv("EQIDV2_V11_AMOD_C1_HIGH_MAX_SIGNAL_MIN", "670.0"))  # 11:10 IST
 MAX_PNL_A_MOD_C1_LOW_MIN_RS_ABS_PCT = 9.2370116
 MAX_PNL_A_MOD_C1_LOW_MIN_VOL_RATIO = 1.7928383
 MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT = 0.89474022
@@ -164,7 +169,7 @@ SELECTED_STRATEGY_RULE_LABELS = {
     "B_AVWAP_RECLAIM_REVERSAL": "max_pnl_low_valid: vwap_dist_atr gate",
     "A_MOD_CLOSE_CONTINUATION_BREAK": "max_pnl_low_valid: signal_range/notional gate",
     "A_MOD_BREAK_C1_LOW": "max_pnl_low_valid: abs(rs_pct) and vol_ratio gate",
-    "A_MOD_BREAK_C1_HIGH": "max_pnl_low_valid: market_abs_ret and vol_ratio gate",
+    "A_MOD_BREAK_C1_HIGH": f"max_pnl_low_valid: rs_pct>={A_MOD_C1_HIGH_MIN_RS_PCT} AND atr_pct<={A_MOD_C1_HIGH_MAX_ATR_PCT} AND signal_min<={A_MOD_C1_HIGH_MAX_SIGNAL_MIN}",
     "D_EMA20_REJECTION": "max_pnl_low_valid/residual_overlay: body/ranker or late residual gate",
     "E_VWAP_BAND_FADE": "max_pnl_low_valid: atr_pct and signal_minute gate",
     "T_TREND_DAY_EMA_STAIR_SHORT": "tier123_balanced: late bearish trend-day EMA stair short",
@@ -376,8 +381,9 @@ def selected_strategy_mask(
         & (vol_ratio >= MAX_PNL_A_MOD_C1_LOW_MIN_VOL_RATIO)
     )
     max_pnl_low_valid_mask |= setup.eq("A_MOD_BREAK_C1_HIGH") & (
-        (market_abs <= MAX_PNL_A_MOD_C1_HIGH_MAX_MARKET_ABS_RET_PCT)
-        & (vol_ratio <= MAX_PNL_A_MOD_C1_HIGH_MAX_VOL_RATIO)
+        (rs_pct >= A_MOD_C1_HIGH_MIN_RS_PCT)
+        & (atr_pct <= A_MOD_C1_HIGH_MAX_ATR_PCT)
+        & (signal_minute <= A_MOD_C1_HIGH_MAX_SIGNAL_MIN)
     )
     max_pnl_low_valid_mask |= setup.eq("D_EMA20_REJECTION") & (
         (body_pct >= MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT)

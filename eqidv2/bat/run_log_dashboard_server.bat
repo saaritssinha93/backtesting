@@ -15,27 +15,17 @@ set "MAX_RESTARTS=50"
 set "RESTART_DELAY_SEC=10"
 set /a RESTART_COUNT=0
 
-if "%LOG_DASH_REQUIRE_BASIC%"=="" set "LOG_DASH_REQUIRE_BASIC=0"
+if "%LOG_DASH_REQUIRE_BASIC%"=="" set "LOG_DASH_REQUIRE_BASIC=1"
 
-if "%LOG_DASH_TOKEN%"=="" (
-  if not "%LOG_DASH_PASS%"=="" (
-    set "LOG_DASH_TOKEN=%LOG_DASH_PASS%"
-  ) else if not "%LOG_DASH_SMTP_APP_PASSWORD%"=="" (
-    set "LOG_DASH_TOKEN=%LOG_DASH_SMTP_APP_PASSWORD%"
-  ) else (
-    set "LOG_DASH_TOKEN=eqidv2"
-  )
-)
+rem Resolve credentials. Override any of these by setting the env var before starting.
+if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
+rem Default dedicated dashboard password. Change this after first login.
+if "%LOG_DASH_PASS%"=="" set "LOG_DASH_PASS=algoeqidv2"
+rem Derive token from dedicated dashboard password when not explicitly provided.
+if "%LOG_DASH_TOKEN%"=="" set "LOG_DASH_TOKEN=%LOG_DASH_PASS%"
 
 set "AUTH_ARGS=--api-token \"%LOG_DASH_TOKEN%\""
 if "%LOG_DASH_REQUIRE_BASIC%"=="1" (
-  if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
-  if "%LOG_DASH_PASS%"=="" if not "%LOG_DASH_SMTP_APP_PASSWORD%"=="" set "LOG_DASH_PASS=%LOG_DASH_SMTP_APP_PASSWORD%"
-  if "%LOG_DASH_PASS%"=="" (
-    echo [ERROR] LOG_DASH_PASS is not set while LOG_DASH_REQUIRE_BASIC=1.
-    echo [ERROR] Set LOG_DASH_PASS or LOG_DASH_SMTP_APP_PASSWORD.
-    endlocal & exit /b 2
-  )
   set "AUTH_ARGS=--username \"%LOG_DASH_USER%\" --password \"%LOG_DASH_PASS%\" --api-token \"%LOG_DASH_TOKEN%\""
 )
 

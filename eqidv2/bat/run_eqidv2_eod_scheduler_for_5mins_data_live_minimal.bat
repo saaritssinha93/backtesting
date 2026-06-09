@@ -29,11 +29,11 @@ set "EQIDV2_5M_ADAPTIVE_MIN_WORKERS=40"
 set "EQIDV2_5M_ADAPTIVE_MIN_WORKERS_PER_APP=5"
 set "EQIDV2_5M_ADAPTIVE_TOTAL_STEP=8"
 set "EQIDV2_5M_ADAPTIVE_PER_APP_STEP=1"
-set "EQIDV2_5M_ADAPTIVE_RECOVERY_OK_RATIO=0.80"
+set "EQIDV2_5M_ADAPTIVE_RECOVERY_OK_RATIO=0.90"
 set "EQIDV2_5M_ADAPTIVE_RECOVERY_STREAK=2"
 REM v2 universe (1262 syms after quarantine) takes ~22-24s/slot; bump warn from 20s to 30s
 REM so the adaptive throttle does not keep stepping workers down on cosmetic SLA breaches.
-set "EQIDV2_5M_SLOT_SLA_WARN_SEC=30"
+set "EQIDV2_5M_SLOT_SLA_WARN_SEC=50"
 set "EQIDV2_VERIFY_SAMPLE_SIZE=32"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=eqidv2_eod_scheduler_for_5mins_data_live_minimal.py"
@@ -46,8 +46,10 @@ REM 2026-05-19: settled on 320/40 after testing 32 (29s baseline) and 48 (22-31s
 REM 40 workers gives ~4 batches per partition (vs 5 at 32, 3.3 at 48) — balances
 REM speed and per-app spread. Combined with Fix A (1-slot lag tolerance), expect
 REM ~24-26s clean slots.
-set "MAX_WORKERS=320"
-set "MAX_WORKERS_PER_APP=40"
+REM 2026-06-09 V7 latency target: keep each app partition to four request batches
+REM (157 symbols / 48 workers) so feed+scanner can target ~45s wall-clock.
+set "MAX_WORKERS=384"
+set "MAX_WORKERS_PER_APP=48"
 set "BUFFER_SEC=%EQIDV2_5M_BUFFER_SEC%"
 if "%BUFFER_SEC%"=="" set "BUFFER_SEC=2"
 set "QUARTER_HOUR_BUFFER_SEC=%EQIDV2_5M_QUARTER_HOUR_BUFFER_SEC%"
@@ -90,4 +92,3 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
 
 set "EXIT_CODE=%ERRORLEVEL%"
 endlocal & exit /b %EXIT_CODE%
-

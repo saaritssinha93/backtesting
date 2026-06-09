@@ -300,7 +300,7 @@ def write_side_signals(
                     "quantity": quantity,
                     "signal_entry_datetime_ist": entry_time_str,
                     "signal_bar_time_ist": bar_time_str,
-                    "stage2_detected_at_ist": "",
+                    "stage2_detected_at_ist": str(row.get("stage2_detected_at_ist", "")),
                     # contract fields
                     "schema_version": SCHEMA_VERSION,
                     "pipeline_version": PIPELINE_VERSION,

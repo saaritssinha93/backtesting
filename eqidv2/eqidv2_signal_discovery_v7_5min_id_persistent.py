@@ -114,6 +114,17 @@ SHORT_FOCUS_ALLOWED_SIDES = {
     for part in os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SHORT_FOCUS_ALLOWED_SIDES", "SHORT").split(",")
     if part.strip()
 }
+# Setups exempt from the SHORT_FOCUS side filter. A_MOD_BREAK_C1_HIGH is LONG
+# but has a validated gate (rs_pct/atr_pct/time) so it should pass through even
+# when SHORT_FOCUS is active. Add comma-separated names to the env var to extend.
+SHORT_FOCUS_EXEMPT_SETUPS = {
+    part.strip().upper()
+    for part in os.getenv(
+        "EQIDV2_SIGNAL_DISCOVERY_V7_SHORT_FOCUS_EXEMPT_SETUPS",
+        "A_MOD_BREAK_C1_HIGH",
+    ).split(",")
+    if part.strip()
+}
 EARLY_LIVE_GATE_MIN_SCORE = float(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_LIVE_GATE_MIN_SCORE", "95"))
 EARLY_LIVE_GATE_MAX_PER_SIDE = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_LIVE_GATE_MAX_PER_SIDE", "4"))
 EARLY_LIVE_GATE_MAX_PER_SLOT = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_LIVE_GATE_MAX_PER_SLOT", "8"))
@@ -159,7 +170,7 @@ START_TIME = base_v15.dtime(9, 15)
 END_TIME = base_v15.dtime(15, 0)
 HARD_STOP_TIME = base_v15.dtime(15, 30)
 ENTRY_WINDOW_START_TIME = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_START", "09:30").strip()
-ENTRY_WINDOW_END_TIME = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END", "14:00").strip()
+ENTRY_WINDOW_END_TIME = os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END", "14:30").strip()
 ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN", "1"))
 
 LIVE_SAFE_RULE_FIELDS = {
@@ -554,6 +565,32 @@ def _append_candidates_to_path(df: pd.DataFrame, path: Path) -> Dict[str, int]:
     return {"written": int(len(write_df)), "duplicates": int(duplicates)}
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def _atomic_write_csv(path: Path, df: pd.DataFrame) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
 def _write_json_snapshots(
     df: pd.DataFrame,
     slot: pd.Timestamp,
@@ -584,13 +621,9 @@ def _write_json_snapshots(
         **(payload_extra or {}),
     }
     text = json.dumps(payload, indent=2, sort_keys=True, default=str)
-    (slot_json_path or _slot_json_path(slot)).write_text(text, encoding="utf-8")
-    (LATEST_DIR / latest_json_name).write_text(text, encoding="utf-8")
-    latest_csv = LATEST_DIR / latest_csv_name
-    if df is None:
-        pd.DataFrame().to_csv(latest_csv, index=False)
-    else:
-        df.to_csv(latest_csv, index=False)
+    _atomic_write_text(slot_json_path or _slot_json_path(slot), text)
+    _atomic_write_text(LATEST_DIR / latest_json_name, text)
+    _atomic_write_csv(LATEST_DIR / latest_csv_name, pd.DataFrame() if df is None else df)
 
 
 def _parse_rule(rule: str) -> Optional[Dict[str, Any]]:
@@ -951,7 +984,12 @@ def _research_filter_reasons(row: pd.Series) -> List[str]:
     candidate_family = str(row.get("candidate_family", "")).upper().strip()
     reasons: List[str] = []
 
-    if SHORT_FOCUS_ENABLE and SHORT_FOCUS_ALLOWED_SIDES and side not in SHORT_FOCUS_ALLOWED_SIDES:
+    if (
+        SHORT_FOCUS_ENABLE
+        and SHORT_FOCUS_ALLOWED_SIDES
+        and side not in SHORT_FOCUS_ALLOWED_SIDES
+        and setup not in SHORT_FOCUS_EXEMPT_SETUPS
+    ):
         reasons.append(f"SHORT_FOCUS_SIDE_NOT_ALLOWED_{side or 'BLANK'}")
 
     if setup.startswith("E_") or selection_mode.startswith("early") or candidate_family == "EARLY":
@@ -994,6 +1032,7 @@ def apply_research_live_filters(df: pd.DataFrame, day: str) -> tuple[pd.DataFram
         "research_live_filter_shadow_rejected": 0,
         "research_live_filter_short_focus_enabled": bool(SHORT_FOCUS_ENABLE),
         "research_live_filter_short_focus_allowed_sides": ",".join(sorted(SHORT_FOCUS_ALLOWED_SIDES)),
+        "research_live_filter_short_focus_exempt_setups": ",".join(sorted(SHORT_FOCUS_EXEMPT_SETUPS)),
         "research_live_filter_short_focus_rejected": 0,
         "research_live_filter_anti_chase_rejected": 0,
         "research_live_filter_b_reclaim_ranker_rejected": 0,
@@ -1553,6 +1592,16 @@ def main() -> None:
         print(f"[INFO] feed_gate=OFF (fixed post_slot_delay={int(args.post_slot_delay_sec)}s)", flush=True)
 
     if args.replay_slots:
+        # WARNING: replay currently writes to the same production paths as the
+        # live loop (daily CSVs, latest JSON/CSV, audit, status, heartbeat).
+        # Do not run replay while the live session is active.
+        # Full replay isolation (OutputPaths dataclass, replay_shadow/) is
+        # tracked as P0-F in v7_fix_20260608_111939.md and is not yet implemented.
+        print(
+            "[REPLAY][WARN] replay_slots writes to PRODUCTION paths. "
+            "Stop the live session before replaying.",
+            flush=True,
+        )
         summaries = []
         for raw in args.replay_slots:
             slot = _ensure_ist_ts(raw)

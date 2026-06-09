@@ -8,7 +8,7 @@ set "PYTHONUNBUFFERED=1"
 
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
 set "EQIDV2_ID5MIN_V7_ENTRY_WINDOW_START=09:30"
-set "EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END=14:00"
+set "EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END=14:30"
 set "EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN=5"
 set "EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC=75"
 REM Retired scanner is diagnostics-only; production CSVs are written by the 1-min entry engine.

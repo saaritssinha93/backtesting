@@ -86,7 +86,7 @@ START_TIME = base_v15.START_TIME
 END_TIME = base_v15.dtime(15, 0)
 HARD_STOP_TIME = base_v15.dtime(15, 30)
 ENTRY_WINDOW_START_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_START", "09:30").strip()
-ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END", "14:00").strip()
+ENTRY_WINDOW_END_RAW = os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END", "14:30").strip()
 ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "1"))
 MAX_ENTRY_TO_DETECTION_LAG_SEC = float(
     os.getenv("EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC", "30")
@@ -109,7 +109,7 @@ def _parse_hhmm_time(value: str, default: str):
 
 
 ENTRY_WINDOW_START = _parse_hhmm_time(ENTRY_WINDOW_START_RAW, "09:30")
-ENTRY_WINDOW_END = _parse_hhmm_time(ENTRY_WINDOW_END_RAW, "14:00")
+ENTRY_WINDOW_END = _parse_hhmm_time(ENTRY_WINDOW_END_RAW, "14:30")
 
 
 def _entry_time_from_signal_row(row: pd.Series, bar_time_ts: datetime) -> datetime:

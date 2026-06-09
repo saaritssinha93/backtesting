@@ -119,6 +119,13 @@ PRE_ENTRY_MOMENTUM_MISSING_ACTION = os.getenv(
     "block",
 ).strip().lower()
 PRE_ENTRY_MOMENTUM_GATE_VERSION = "v7_pre_entry_momentum_2026_06_04_t_probation"
+# P1.1: E_VWAP_LOSE_EARLY_SHORT must not fire before 09:45 IST — the first two
+# 5-minute bars (09:30, 09:35, 09:40) do not have a meaningful intraday VWAP.
+E_VWAP_EARLY_SHORT_MIN_SLOT = dtime(9, 45)
+# A_MOD_BREAK_C1_HIGH: cap to top-2 per slot ranked by vwap_dist_atr descending.
+# Validated over 10 sessions (32 trades, PF 3.25). Signal-time gate mirrors V11.
+A_MOD_C1_HIGH_MAX_SLOT = dtime(11, 10)
+A_MOD_C1_HIGH_TOP_N_PER_SLOT = int(os.getenv("EQIDV2_ENTRY_ENGINE_AMOD_C1_HIGH_TOP_N_PER_SLOT", "2"))
 
 PRE_ENTRY_MOMENTUM_SETUP_GATES: Dict[str, Tuple[Tuple[str, str, float], ...]] = {
     "B_AVWAP_RECLAIM_REVERSAL": (
@@ -135,6 +142,7 @@ PRE_ENTRY_MOMENTUM_SETUP_GATES: Dict[str, Tuple[Tuple[str, str, float], ...]] = 
     "D_EMA20_REJECTION": (
         ("pre10_mom_r", "<=", 0.156614),
         ("pre5_mom_r", ">=", 0.12493),
+        ("sig5_adx_calc", ">=", 20.0),  # P1.3: require trend presence — rejects flat/chop entries (e.g. MARICO ADX=12.38)
     ),
     "E_ORB_BREAKOUT_LONG": (
         ("pre15_vol_ratio20", "<=", 1.08301),
@@ -164,8 +172,9 @@ PRE_ENTRY_MOMENTUM_SETUP_GATES: Dict[str, Tuple[Tuple[str, str, float], ...]] = 
     ),
 }
 PRE_ENTRY_MOMENTUM_SHADOW_SETUPS = {
-    "A_MOD_BREAK_C1_HIGH",
     "C_OR_BREAKDOWN",
+    # A_MOD_BREAK_C1_HIGH removed 2026-06-09: new V11 gate (rs_pct/atr_pct/time)
+    # replaces the old market_abs/vol_ratio blocker; slot ranking caps live exposure.
 }
 
 _indicator_1m_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
@@ -864,10 +873,42 @@ def _apply_pre_entry_momentum_gate(
 
 
 def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    # A_MOD_BREAK_C1_HIGH slot pre-filter: keep top-N per slot by vwap_dist_atr
+    # desc so the strongest-momentum breakouts are selected when multiple fire
+    # simultaneously. Operates on the full batch before the per-row loop below.
+    if candidates is not None and not candidates.empty and "setup" in candidates.columns:
+        _amod_mask = candidates["setup"].astype(str).str.upper().eq("A_MOD_BREAK_C1_HIGH")
+        if _amod_mask.any() and A_MOD_C1_HIGH_TOP_N_PER_SLOT > 0:
+            _amod = candidates[_amod_mask].copy()
+            _other = candidates[~_amod_mask].copy()
+            _amod["_slot"] = _amod["signal_time_ist"].apply(
+                lambda x: _ensure_ist_ts(x).floor("5min") if pd.notna(x) else pd.NaT
+            )
+            _amod["_vdatr"] = pd.to_numeric(_amod.get("vwap_dist_atr", 0), errors="coerce").fillna(0.0)
+            _amod = (
+                _amod.sort_values("_vdatr", ascending=False)
+                .groupby("_slot", sort=False, dropna=True)
+                .head(A_MOD_C1_HIGH_TOP_N_PER_SLOT)
+                .drop(columns=["_slot", "_vdatr"])
+            )
+            candidates = pd.concat([_other, _amod], ignore_index=True)
+
     rows: List[Dict[str, Any]] = []
     for _, cand in candidates.iterrows():
         setup = str(cand.get("setup", ""))
         side = str(cand.get("side", "")).upper()
+        # P1.1: block E_VWAP_LOSE_EARLY_SHORT before the 09:45 bar (first two
+        # slots lack a reliable intraday VWAP, producing immediate adverse moves).
+        if setup.upper() == "E_VWAP_LOSE_EARLY_SHORT":
+            _sig_ts = _ensure_ist_ts(cand.get("signal_time_ist"))
+            if not pd.isna(_sig_ts) and _sig_ts.time() < E_VWAP_EARLY_SHORT_MIN_SLOT:
+                continue
+        # A_MOD_BREAK_C1_HIGH: enforce the 11:10 IST signal-time ceiling here too
+        # (mirrors the V11 overlay signal_minute <= 670 condition).
+        if setup.upper() == "A_MOD_BREAK_C1_HIGH":
+            _sig_ts = _ensure_ist_ts(cand.get("signal_time_ist"))
+            if not pd.isna(_sig_ts) and _sig_ts.time() > A_MOD_C1_HIGH_MAX_SLOT:
+                continue
         exit_override = (
             v11_live_overlay.selected_exit_override(setup, V11_BACKTESTING_OVERLAY_PROFILE)
             if V11_BACKTESTING_OVERLAY_ENABLE
@@ -887,9 +928,15 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             if not pd.isna(_sig_ts_for_lag) else pd.NaT
         )
         entry_bar = _entry_bar_for_candidate(raw_by_ticker, cand, _intended_entry_ist)
-        if entry_bar is None:
-            continue
-        entry_price = float(entry_bar.get("open", np.nan))
+        if entry_bar is not None:
+            entry_price = float(entry_bar.get("open", np.nan))
+            _entry_bar_source = "forming_t1_open_reference"
+        else:
+            # T+1 bar unavailable at fetch time (forming or not yet returned by Kite).
+            # Use signal-bar close as SL/TGT reference only; actual fill is live LTP.
+            # Executor rebases stop/target distances around the real fill price.
+            entry_price = _safe_float(cand.get("signal_close"), np.nan)
+            _entry_bar_source = "signal_bar_close_reference"
         if not np.isfinite(entry_price) or entry_price <= 0:
             continue
         sl_pct, tgt_pct = rule
@@ -903,12 +950,14 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             continue
         quantity = max(1, int(V7_SIGNAL_NOTIONAL_RS / entry_price))
         v7_signal_notional_rs = float(entry_price * quantity)
+        _entry_time_ist = _fmt_ist(entry_bar.get("date")) if entry_bar is not None else ""
         diag = {
             "source_session": SESSION_NAME,
             "signal_discovery_session": str(cand.get("scan_session", "")),
             "selection_mode": str(cand.get("selection_mode", "")),
             "signal_time_ist": str(cand.get("signal_time_ist", "")),
-            "entry_time_ist": _fmt_ist(entry_bar.get("date")),
+            "entry_time_ist": _entry_time_ist,
+            "entry_bar_source": _entry_bar_source,
             "sl_pct": sl_pct,
             "target_pct": tgt_pct,
             "exit_rule_source": rule_source,
@@ -952,8 +1001,9 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             "close_loc": cand.get("close_loc", ""),
             "vwap_dist_atr": cand.get("vwap_dist_atr", ""),
             "diagnostics_json": json.dumps(diag, default=str),
-            "entry_time_ist": _fmt_ist(entry_bar.get("date")),
-            "v7_signal_entry_time_ist": _fmt_ist(entry_bar.get("date")),
+            "entry_time_ist": _entry_time_ist,
+            "v7_signal_entry_time_ist": _entry_time_ist,
+            "entry_bar_source": _entry_bar_source,
             "v7_signal_entry_price": entry_price,
             "v7_signal_stop_price": sl_price,
             "v7_signal_target_price": target_price,
@@ -1233,6 +1283,14 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
     selected_entries = _select_executable_entries(pre_momentum_entries)
     entries = _filter_new_intraday_tickers(selected_entries, slot)
     entry_select_elapsed_sec = round(time.perf_counter() - stage_started, 3)
+
+    # Capture stage2_detected_at_ist immediately after all mandatory filters accept
+    # the candidate. This is the wall-clock time the entry engine approved it for
+    # signal writing — distinct from detected_time_ist (the later CSV-write time).
+    if not entries.empty:
+        _stage2_ts = _fmt_ist(pd.Timestamp.now(tz=IST))
+        entries = entries.copy()
+        entries["stage2_detected_at_ist"] = _stage2_ts
 
     csv_write_started = time.perf_counter()
     latest_entries_csv = LATEST_DIR / "latest_entry_engine_rows.csv"

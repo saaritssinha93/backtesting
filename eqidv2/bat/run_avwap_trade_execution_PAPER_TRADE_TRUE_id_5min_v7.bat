@@ -8,7 +8,7 @@ set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
 set "EQIDV2_PAPER_V7_ENTRY_WINDOW_START=09:30"
-set "EQIDV2_PAPER_V7_ENTRY_WINDOW_END=14:00"
+set "EQIDV2_PAPER_V7_ENTRY_WINDOW_END=14:30"
 set "EQIDV2_PAPER_V7_ENTRY_LAG_MIN=1"
 rem STOP/TARGET percentages are fallback controls in paper mode.
 rem Signal-row values from v6.SETUP_EXIT_RULES are primary; these backfill only

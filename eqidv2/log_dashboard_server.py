@@ -42,6 +42,10 @@ SIGNAL_DISCOVERY_V7_ROOT = runtime_dir("signal_discovery_v7_5mins_ID")
 SIGNAL_DISCOVERY_V7_LATEST_DIR = SIGNAL_DISCOVERY_V7_ROOT / "latest"
 SIGNAL_DISCOVERY_V7_CSV_DIR = SIGNAL_DISCOVERY_V7_ROOT / "csv"
 SLOT_READY_5M_DIR = runtime_dir("slot_ready_5m")
+V7_MONITOR_FETCH_VERIFY_TOLERANCE = max(
+    0,
+    int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MAX_VERIFICATION_FAILURES", "5")),
+)
 V7_RESEARCH_LAYER_ROOT = runtime_dir("live_research_v7_research_layer")
 V7_RESEARCH_LAYER_LATEST_DIR = V7_RESEARCH_LAYER_ROOT / "latest"
 DAILY_LIVE_V7_RESEARCH_ROOT = runtime_dir("daily_live_v7_research_session")
@@ -156,7 +160,7 @@ STATUS_FILES: Dict[str, str] = {
     "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.status",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.status",
     "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID.status",
-    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.status",
+    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.supervisor.status",
     "v7_research_layer":                "live_research_v7_research_layer.status",
     "daily_live_v7_research_session":   "daily_live_v7_research_session.status",
     "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.status",
@@ -164,6 +168,13 @@ STATUS_FILES: Dict[str, str] = {
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.status",
 }
+
+# If a heartbeat file claims RUNNING but was not touched within this many
+# seconds, the process is presumed dead and the status is overridden to
+# STALE_HB_RUNNING so the dashboard shows amber instead of green.
+HB_STALE_RUNNING_OVERRIDE_SEC: int = int(
+    os.getenv("EQIDV2_DASHBOARD_HB_STALE_SEC", "120")
+)
 
 HEARTBEAT_FILES: Dict[str, str] = {
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat",
@@ -175,7 +186,7 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.heartbeat",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.heartbeat",
     "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID.heartbeat",
-    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.heartbeat",
+    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.supervisor.heartbeat",
     "v7_research_layer":                "live_research_v7_research_layer.heartbeat",
     "daily_live_v7_research_session":   "daily_live_v7_research_session.heartbeat",
     "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.heartbeat",
@@ -1019,8 +1030,25 @@ def merge_runtime_status(status: Dict[str, str], heartbeat: Dict[str, str]) -> D
         merged["heartbeat_ts_utc"] = str(heartbeat.get("ts_utc", "")).strip()
         merged["heartbeat_idle_sec"] = str(heartbeat.get("idle_sec", "")).strip()
         merged["heartbeat_note"] = str(heartbeat.get("note", "")).strip()
+        # Newest-evidence-wins: if the heartbeat file was not touched recently,
+        # a stale RUNNING state must not override a newer worker STOPPED/CRASHED
+        # status. The file age is injected by _v7_monitor_status_for before this
+        # function is called.
+        hb_file_age = heartbeat.get("_file_age_sec")
+        hb_is_stale = (
+            hb_file_age is not None
+            and HB_STALE_RUNNING_OVERRIDE_SEC > 0
+            and float(hb_file_age) > HB_STALE_RUNNING_OVERRIDE_SEC
+        )
         if hb_state in {"RUNNING", "RESTARTING", "COOLDOWN"}:
-            merged["status"] = hb_state
+            if hb_is_stale:
+                # Stale heartbeat — do not promote dead process to green.
+                # Keep whatever the worker status file says, but annotate it.
+                merged.setdefault("status", "STALE_HB_RUNNING")
+                merged["heartbeat_stale"] = "true"
+                merged["heartbeat_file_age_sec"] = str(hb_file_age)
+            else:
+                merged["status"] = hb_state
         elif "status" not in merged:
             merged["status"] = hb_state
     return merged
@@ -1964,12 +1992,74 @@ def _v7_monitor_task_disabled(status: dict[str, str]) -> bool:
 
 def _v7_monitor_status_for(card_id: str, task_snapshot: Dict[str, Dict[str, str]]) -> Dict[str, str]:
     status = parse_status_file(_resolve_status_path(STATUS_FILES[card_id])) if card_id in STATUS_FILES else {}
-    heartbeat = parse_status_file(_resolve_status_path(HEARTBEAT_FILES[card_id])) if card_id in HEARTBEAT_FILES else {}
-    if heartbeat:
+    hb_path = _resolve_status_path(HEARTBEAT_FILES[card_id]) if card_id in HEARTBEAT_FILES else None
+    heartbeat = parse_status_file(hb_path) if hb_path else {}
+    if heartbeat and hb_path is not None:
+        # Inject heartbeat file age so merge_runtime_status can apply the
+        # staleness check (newest-evidence-wins rule).
+        try:
+            hb_age = (dt.datetime.now(dt.timezone.utc).timestamp() - hb_path.stat().st_mtime)
+            heartbeat["_file_age_sec"] = hb_age
+        except OSError:
+            pass
         status = merge_runtime_status(status, heartbeat)
     status = apply_scheduler_status(card_id, status, task_snapshot)
     status = infer_pid_session_provenance(card_id, status)
     return status
+
+
+def _v7_monitor_fetch_verdict(
+    rec: dict[str, Any],
+    *,
+    fetch_lag: float,
+    due_fetch: bool,
+) -> tuple[str, bool, list[str]]:
+    marker_seen = bool(rec.get("fetch_marker_seen"))
+    marker_complete = bool(rec.get("fetch_complete"))
+    failed = int(rec.get("fetch_failed", 0) or 0)
+    verify_failed = int(rec.get("fetch_verify_failed", 0) or 0)
+    non_verify_failed = max(0, failed - verify_failed)
+    has_lag = not math.isnan(fetch_lag)
+    verification_only_tolerated = (
+        marker_seen
+        and has_lag
+        and not marker_complete
+        and non_verify_failed == 0
+        and 0 < verify_failed <= V7_MONITOR_FETCH_VERIFY_TOLERANCE
+    )
+    fetch_ok = marker_seen and has_lag and (marker_complete or verification_only_tolerated)
+    reasons: list[str] = []
+
+    if fetch_ok:
+        fetch_state = "YES" if fetch_lag <= 60.0 else "LATE"
+        if fetch_lag > 60.0:
+            reasons.append(f"fetch_late={fetch_lag:.1f}s")
+        if verification_only_tolerated:
+            reasons.append(
+                f"fetch_verify_tolerated={verify_failed}/"
+                f"{V7_MONITOR_FETCH_VERIFY_TOLERANCE}"
+            )
+        elif failed or verify_failed:
+            fetch_state = "NO"
+            reasons.append(f"fetch_fail={failed},verify={verify_failed}")
+        return fetch_state, fetch_ok, reasons
+
+    if due_fetch:
+        if marker_seen:
+            fetch_state = "NO"
+            if not has_lag:
+                reasons.append("fetch_marker_unparseable")
+            else:
+                reasons.append(f"fetch_marker_incomplete fail={failed},verify={verify_failed}")
+                if fetch_lag > 60.0:
+                    reasons.append(f"fetch_late={fetch_lag:.1f}s")
+        else:
+            fetch_state = "NO"
+            reasons.append("fetch_marker_missing")
+    else:
+        fetch_state = "WAIT"
+
+    return fetch_state, fetch_ok, reasons
 
 
 def _format_v7_live_5min_monitor(
@@ -2402,22 +2492,12 @@ def _format_v7_live_5min_monitor(
         reasons: list[str] = []
 
         fetch_lag = _to_float_or_nan(str(rec.get("fetch_lag_sec", "")))
-        fetch_ok = bool(rec.get("fetch_marker_seen")) and bool(rec.get("fetch_complete")) and not math.isnan(fetch_lag)
-        if fetch_ok:
-            fetch_state = "YES" if fetch_lag <= 60.0 else "LATE"
-            if fetch_lag > 60.0:
-                reasons.append(f"fetch_late={fetch_lag:.1f}s")
-            if int(rec.get("fetch_failed", 0) or 0) or int(rec.get("fetch_verify_failed", 0) or 0):
-                fetch_state = "NO"
-                reasons.append(
-                    f"fetch_fail={int(rec.get('fetch_failed', 0) or 0)},"
-                    f"verify={int(rec.get('fetch_verify_failed', 0) or 0)}"
-                )
-        elif due_fetch:
-            fetch_state = "NO"
-            reasons.append("fetch_marker_missing")
-        else:
-            fetch_state = "WAIT"
+        fetch_state, fetch_ok, fetch_reasons = _v7_monitor_fetch_verdict(
+            rec,
+            fetch_lag=fetch_lag,
+            due_fetch=due_fetch,
+        )
+        reasons.extend(fetch_reasons)
 
         scan_lag = _to_float_or_nan(str(rec.get("scan_lag_sec", "")))
         scan_sec = _to_float_or_nan(str(rec.get("scan_sec", "")))
@@ -3460,8 +3540,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
     def log_message(self, fmt: str, *args) -> None:
-        # Keep stdout useful but concise.
-        super().log_message(fmt, *args)
+        # Redact ?token=... and ?...&token=... from access log lines so
+        # credentials never appear in plain-text log files.
+        import re as _re
+        sanitised = tuple(
+            _re.sub(r"([?&])token=[^&\s\"]*", r"\1token=REDACTED", str(a))
+            if isinstance(a, str) else a
+            for a in args
+        )
+        super().log_message(fmt, *sanitised)
 
     def _authorized(self, params: Dict[str, list[str]]) -> bool:
         api_token = getattr(self.server, "api_token", "") or ""
@@ -3472,7 +3559,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         username = self.server.username
         password = self.server.password
         if not username or not password:
-            return True
+            return False
 
         raw = self.headers.get("Authorization", "")
         if not raw.startswith("Basic "):
@@ -5761,6 +5848,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       const s = String(status || "").toUpperCase();
       if (!s) return '<span class="pill">UNKNOWN</span>';
       if (s === "SUCCESS" || s === "RUNNING") return `<span class="pill ok">${esc(s)}</span>`;
+      if (s === "STALE_HB_RUNNING") return `<span class="pill warn" title="Heartbeat stale — process may be dead">${esc(s)}</span>`;
       if (s === "RESTARTING" || s === "COOLDOWN") return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "MISSING_OUTPUT") return `<span class="pill fail">${esc(s)}</span>`;
@@ -6857,8 +6945,15 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         for key in LOG_IDS:
             path, file_name = resolve_log_target(key)
             status = parse_status_file(_resolve_status_path(STATUS_FILES[key])) if key in STATUS_FILES else {}
-            heartbeat = parse_status_file(_resolve_status_path(HEARTBEAT_FILES[key])) if key in HEARTBEAT_FILES else {}
-            if heartbeat:
+            _hb_path2 = _resolve_status_path(HEARTBEAT_FILES[key]) if key in HEARTBEAT_FILES else None
+            heartbeat = parse_status_file(_hb_path2) if _hb_path2 else {}
+            if heartbeat and _hb_path2 is not None:
+                try:
+                    heartbeat["_file_age_sec"] = (
+                        dt.datetime.now(dt.timezone.utc).timestamp() - _hb_path2.stat().st_mtime
+                    )
+                except OSError:
+                    pass
                 status = merge_runtime_status(status, heartbeat)
             status = infer_scanner_runtime_status(key, path, status)
             status = apply_scheduler_status(key, status, task_snapshot)
@@ -7844,6 +7939,10 @@ def main() -> int:
         mode = "BASIC AUTH ENABLED"
     if args.api_token:
         mode = mode + " + API TOKEN"
+    if mode == "NO AUTH":
+        print("[ERROR] Dashboard refused to start: no authentication configured.")
+        print("[ERROR] Set LOG_DASH_PASS in the BAT or as a User env var before starting.")
+        return 1
     print(f"[INFO] Serving EQIDV2 dashboard on http://{args.host}:{args.port} ({mode})")
     print(f"[INFO] Reading logs from: {LOG_DIR}")
 
