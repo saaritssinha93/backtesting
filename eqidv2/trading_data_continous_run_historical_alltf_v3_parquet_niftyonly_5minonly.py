@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 """
-Dedicated 5-minute NIFTY/NIFTYBEES fetcher for the backtest parquet folder.
+Dedicated 5-minute NIFTY context fetcher for the 5m parquet folder.
 
 This is a thin wrapper around the stock-only 5m fetcher so that:
 - timestamps are identical
@@ -10,8 +10,8 @@ This is a thin wrapper around the stock-only 5m fetcher so that:
 
 Examples:
     python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py
-    python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py --symbol NIFTYBEES --aliases NIFTYBEES
-    python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py --symbol NIFTYBEES --aliases NIFTYBEES,NIFTY50,NIFTY_50,NIFTY
+    python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py --symbol NIFTYBEES --aliases NIFTYBEES,NIFTYBEES_PROXY
+    python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py --symbol "NIFTY 50" --aliases "NIFTY,NIFTY50,NIFTY_50,NIFTY 50" --skip-marker
 """
 
 from __future__ import annotations
@@ -65,7 +65,10 @@ def parse_args() -> argparse.Namespace:
         "--aliases",
         type=str,
         default="NIFTYBEES",
-        help="Comma-separated output aliases. Example: NIFTYBEES,NIFTY50,NIFTY_50,NIFTY",
+        help=(
+            "Comma-separated output aliases. Use NIFTYBEES,NIFTYBEES_PROXY "
+            "for the ETF proxy, or NIFTY,NIFTY50,NIFTY_50,NIFTY 50 for the true index."
+        ),
     )
     p.add_argument(
         "--from-date",
@@ -328,6 +331,90 @@ def _load_existing_ohlc_raw(out_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+INDEX_ALIAS_NAMES = {"NIFTY", "NIFTY50", "NIFTY_50", "NIFTY 50"}
+PROXY_SYMBOL_NAMES = {"NIFTYBEES"}
+
+
+def _norm_source_name(value: object) -> str:
+    return str(value or "").strip().upper().replace(" ", "")
+
+
+def _source_meta_path(out_path: str) -> Path:
+    path = Path(out_path)
+    return path.with_name(f"{path.name}.source.json")
+
+
+def _read_source_meta(out_path: str) -> dict:
+    meta_path = _source_meta_path(out_path)
+    if not meta_path.exists():
+        return {}
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _source_meta_matches(meta: dict, symbol: str, token: int) -> bool:
+    requested = _norm_source_name(symbol)
+    source_symbol = _norm_source_name(meta.get("source_symbol") or meta.get("symbol"))
+    if source_symbol and source_symbol == requested:
+        return True
+    try:
+        return int(meta.get("instrument_token", 0)) == int(token)
+    except Exception:
+        return False
+
+
+def _should_rebuild_for_source(primary_out: str, symbol: str, token: int, primary_alias: str, logger) -> bool:
+    existing_path = Path(_resolve_existing_store_path(primary_out))
+    if not existing_path.exists():
+        return False
+
+    meta = _read_source_meta(primary_out)
+    if meta:
+        if _source_meta_matches(meta, symbol, token):
+            return False
+        logger.warning(
+            "Existing %s source metadata does not match requested symbol=%s token=%s. Rebuilding %s.",
+            primary_alias,
+            symbol,
+            token,
+            existing_path,
+        )
+        return True
+
+    requested = _norm_source_name(symbol)
+    alias = str(primary_alias or "").strip().upper()
+    if requested not in PROXY_SYMBOL_NAMES and alias in INDEX_ALIAS_NAMES:
+        logger.warning(
+            "Existing %s has no source metadata. Treating it as legacy proxy-risk data and rebuilding for %s.",
+            existing_path,
+            symbol,
+        )
+        return True
+    return False
+
+
+def _write_source_meta(out_path: str, symbol: str, token: int, aliases: list[str], logger) -> None:
+    meta_path = _source_meta_path(out_path)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "source_symbol": str(symbol).strip().upper(),
+        "source_symbol_norm": _norm_source_name(symbol),
+        "instrument_token": int(token),
+        "aliases": list(aliases),
+        "written_at_ist": datetime.now(IST_TZ).strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "source": "trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py",
+    }
+    tmp_path = meta_path.with_suffix(".json.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        os.replace(tmp_path, meta_path)
+    except Exception as exc:
+        logger.warning("Source metadata write failed for %s: %s", meta_path, exc)
+
+
 def _session_open_ts(target_ts: datetime | pd.Timestamp) -> pd.Timestamp:
     ts = pd.Timestamp(target_ts)
     if ts.tzinfo is None:
@@ -559,18 +646,32 @@ def main() -> int:
         logger.info("End cutoff <= start. Nothing to fetch.")
         return 0
 
+    alias_out_paths = {
+        alias: str(Path(OUT_DIR) / f"{alias}_stocks_indicators_5min.parquet")
+        for alias in aliases
+    }
     primary_alias = aliases[0]
-    primary_out = str(Path(OUT_DIR) / f"{primary_alias}_stocks_indicators_5min.parquet")
+    primary_out = alias_out_paths[primary_alias]
     existing = _load_existing_ohlc_raw(primary_out)
+    rebuild_for_source = _should_rebuild_for_source(primary_out, args.symbol, token, primary_alias, logger)
+    if rebuild_for_source:
+        existing = pd.DataFrame()
     opening_snapshot_missing = _missing_opening_snapshot(existing, end_dt)
+    aliases_are_fresh = all(
+        _nifty_is_exactly_fresh(out_path, now_ist, holidays, args.intraday_ts)
+        for out_path in alias_out_paths.values()
+    )
 
     if (
         (not args.no_skip)
-        and _nifty_is_exactly_fresh(primary_out, now_ist, holidays, args.intraday_ts)
+        and aliases_are_fresh
+        and not rebuild_for_source
         and not _nifty_needs_prefix_backfill(primary_out, start_dt)
         and not opening_snapshot_missing
     ):
         logger.info("%s already fresh. Skipping fetch.", primary_alias)
+        for out_path in alias_out_paths.values():
+            _write_source_meta(out_path, args.symbol, token, aliases, logger)
         if not args.skip_marker:
             _maybe_write_nf_marker_from_existing(
                 existing=existing,
@@ -622,8 +723,9 @@ def main() -> int:
     merged = _downcast_numeric_columns(merged)
 
     for alias in aliases:
-        out_path = str(Path(OUT_DIR) / f"{alias}_stocks_indicators_5min.parquet")
+        out_path = alias_out_paths[alias]
         _finalize_and_save(merged, out_path)
+        _write_source_meta(out_path, args.symbol, token, aliases, logger)
         logger.info("[SAVE] %s | rows=%d | last=%s", out_path, len(merged), merged["date"].iloc[-1])
 
     logger.info("Done. Stored NIFTY 5m parquet(s) in %s", OUT_DIR)

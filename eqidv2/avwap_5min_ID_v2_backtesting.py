@@ -231,6 +231,13 @@ def _read_ohlcv(fp: Path) -> pd.DataFrame:
     for col in ("open", "high", "low", "close", "volume"):
         if col not in df.columns:
             raise ValueError(f"{fp} missing {col}")
+    # Defensive de-dup: the _eq_live2 store has historically accumulated
+    # duplicate timestamps (moving_files used to full-row-append). Keep the
+    # freshest row per bar so a duplicated/scale-mixed source can never inflate
+    # bar counts or corrupt session VWAP/returns. keep="last" matches the live
+    # candidate-scan convention.
+    if "date" in df.columns:
+        df = df.drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
     return df
 
 
@@ -246,8 +253,9 @@ def _calc_atr(df: pd.DataFrame, lookback: int = ATR_LOOKBACK) -> pd.Series:
 
 def _calc_session_vwap(df: pd.DataFrame) -> pd.Series:
     typical = (df["high"] + df["low"] + df["close"]) / 3.0
-    pv = typical * df["volume"].clip(lower=0)
-    vol_cum = df.groupby("date_only")["volume"].cumsum().replace(0, np.nan)
+    volume = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0).fillna(0.0)
+    pv = typical * volume
+    vol_cum = volume.groupby(df["date_only"]).cumsum().replace(0, np.nan)
     pv_cum = pv.groupby(df["date_only"]).cumsum()
     return pv_cum / vol_cum
 
@@ -255,9 +263,12 @@ def _calc_session_vwap(df: pd.DataFrame) -> pd.Series:
 def _prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "ATR" not in out.columns or out["ATR"].isna().all():
-        out["ATR"] = out.groupby("date_only", group_keys=False).apply(_calc_atr)
-    if "VWAP" not in out.columns or out["VWAP"].isna().all():
-        out["VWAP"] = _calc_session_vwap(out)
+        calculated_atr = pd.Series(np.nan, index=out.index, dtype=float)
+        for _, group in out.groupby("date_only", sort=False):
+            calculated_atr.loc[group.index] = _calc_atr(group).to_numpy()
+        out["ATR"] = calculated_atr
+    out["VWAP_source"] = out["VWAP"] if "VWAP" in out.columns else np.nan
+    out["VWAP"] = _calc_session_vwap(out)
     out["Volume_SMA20"] = out.groupby("date_only")["volume"].transform(
         lambda s: s.shift(1).rolling(VWAP_LOOKBACK, min_periods=8).mean()
     )
@@ -268,7 +279,11 @@ def _prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
     out["close_loc"] = (out["close"] - out["low"]) / out["range"].replace(0, np.nan)
     out["vol_ratio"] = out["volume"] / out["Volume_SMA20"].replace(0, np.nan)
     out["atr_pct"] = out["ATR"] / out["close"].replace(0, np.nan)
-    out["vwap_dist_atr"] = (out["close"] - out["VWAP"]) / out["ATR"].replace(0, np.nan)
+    atr_floor = 0.0003 * out["close"].abs()
+    vwap_atr = out["ATR"].where(out["ATR"] >= atr_floor, atr_floor)
+    out["vwap_dist_atr"] = (
+        (out["close"] - out["VWAP"]) / vwap_atr.replace(0, np.nan)
+    ).clip(-15.0, 15.0)
     out["ema20_dist_atr"] = (out["close"] - out.get("EMA_20", out["close"])) / out["ATR"].replace(0, np.nan)
     out["upper_wick_pct"] = (out["high"] - out[["open", "close"]].max(axis=1)) / out["range"].replace(0, np.nan)
     out["lower_wick_pct"] = (out[["open", "close"]].min(axis=1) - out["low"]) / out["range"].replace(0, np.nan)

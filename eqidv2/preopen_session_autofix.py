@@ -28,7 +28,7 @@ TASK_TO_BAT: Dict[str, Path] = {
     "EQIDV2_avwap_paper_trade_v15_0900": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v15.bat",
     "EQIDV2_avwap_live_trade_v15_0905": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_FALSE_v15.bat",
     "EQIDV2_nifty_guard_fetch_v15_0915": BAT_DIR / "run_nifty_guard_fetcher_v15.bat",
-    "EQIDV2_nifty_guard_fetch_v16_5min_0915": BAT_DIR / "run_nifty_guard_fetcher_v16_5min.bat",
+    "EQIDV2_nifty_guard_fetch_v16_5min_0915": BAT_DIR / "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
 }
 
 FAIL_CHECK_TO_BAT: Dict[str, Path] = {
@@ -37,7 +37,7 @@ FAIL_CHECK_TO_BAT: Dict[str, Path] = {
     "paper_trade_v15": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v15.bat",
     "kite_trade_v15": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_FALSE_v15.bat",
     "nifty_guard_fetch_v15": BAT_DIR / "run_nifty_guard_fetcher_v15.bat",
-    "nifty_guard_fetch_v16_5min": BAT_DIR / "run_nifty_guard_fetcher_v16_5min.bat",
+    "nifty_guard_fetch_v16_5min": BAT_DIR / "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
 }
 
 

@@ -269,8 +269,8 @@ DEFAULT_ADAPTIVE_THROTTLE = str(os.getenv("EQIDV2_5M_ADAPTIVE_THROTTLE", "1")).s
 }
 DEFAULT_ADAPTIVE_MIN_WORKERS = max(8, int(os.getenv("EQIDV2_5M_ADAPTIVE_MIN_WORKERS", "40")))
 DEFAULT_ADAPTIVE_MIN_WORKERS_PER_APP = max(1, int(os.getenv("EQIDV2_5M_ADAPTIVE_MIN_WORKERS_PER_APP", "5")))
-DEFAULT_ADAPTIVE_TOTAL_STEP = max(1, int(os.getenv("EQIDV2_5M_ADAPTIVE_TOTAL_STEP", "8")))
-DEFAULT_ADAPTIVE_PER_APP_STEP = max(1, int(os.getenv("EQIDV2_5M_ADAPTIVE_PER_APP_STEP", "1")))
+DEFAULT_ADAPTIVE_TOTAL_STEP = max(1, int(os.getenv("EQIDV2_5M_ADAPTIVE_TOTAL_STEP", "32")))
+DEFAULT_ADAPTIVE_PER_APP_STEP = max(1, int(os.getenv("EQIDV2_5M_ADAPTIVE_PER_APP_STEP", "4")))
 DEFAULT_ADAPTIVE_RECOVERY_OK_RATIO = float(os.getenv("EQIDV2_5M_ADAPTIVE_RECOVERY_OK_RATIO", "0.80"))
 DEFAULT_ADAPTIVE_RECOVERY_STREAK = max(1, int(os.getenv("EQIDV2_5M_ADAPTIVE_RECOVERY_STREAK", "2")))
 DEFAULT_READY_MARKER_ENABLED = str(os.getenv("EQIDV2_5M_READY_MARKER_ENABLED", "1")).strip().lower() in {
@@ -304,6 +304,13 @@ DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY = max(
     int(os.getenv("EQIDV2_5M_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY", "2")),
 )
 SLOT_STATUS_PATH = EQIDV2_DIR / "logs" / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"
+
+
+class ParallelPartitionRunError(RuntimeError):
+    def __init__(self, message: str, summary: dict[str, object]):
+        super().__init__(message)
+        self.summary = dict(summary)
+
 
 # ---------------------------------------------------------------------
 # Opening-slot expected stamp override:
@@ -1452,10 +1459,7 @@ def run_update_5m_once(
             except Exception as exc:
                 print(f"[WARN] Failed to write 5min completion marker: {exc}")
 
-    if failures:
-        raise RuntimeError("Parallel partition run failed: " + " | ".join(failures))
-
-    return {
+    summary = {
         "total_elapsed_sec": float(total_elapsed_sec),
         "partition_elapsed_sec": partition_elapsed,
         "partition_symbol_counts": partition_symbol_counts,
@@ -1472,6 +1476,13 @@ def run_update_5m_once(
         "verification_failed_count": int(verification_failed_count),
         "verification_failure_sample": list(verification_failure_sample),
     }
+    if failures:
+        raise ParallelPartitionRunError(
+            "Parallel partition run failed: " + " | ".join(failures),
+            summary,
+        )
+
+    return summary
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -1669,6 +1680,9 @@ def main() -> None:
             )
         except Exception as e:
             print(f"[ERROR] Update failed: {e}", file=sys.stderr)
+            failure_summary = getattr(e, "summary", None)
+            if isinstance(failure_summary, dict):
+                slot_summary = dict(failure_summary)
             healthy_streak = 0
 
         if slot_summary is not None:

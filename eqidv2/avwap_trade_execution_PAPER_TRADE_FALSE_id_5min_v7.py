@@ -151,6 +151,17 @@ RISK_LIMITS_ENABLED = str(os.getenv("EQIDV2_ENABLE_RISK_LIMITS", "1")).strip().l
 MAX_OPEN_POSITIONS = int(os.getenv("EQIDV2_MAX_OPEN_POSITIONS", "20"))            # max simultaneous open positions
 MAX_CAPITAL_DEPLOYED_RS = float(os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "500000"))   # max total margin
 INTRADAY_LEVERAGE = 5.0             # MIS leverage on Zerodha
+# P1-7: gross short notional cap — prevent a book of 20 correlated shorts from
+# being one giant bet.  Expressed as NOTIONAL (not margin).  0 = disabled.
+MAX_GROSS_SHORT_NOTIONAL_RS = float(os.getenv("EQIDV2_MAX_GROSS_SHORT_NOTIONAL_RS", "1500000.0"))
+
+# Auto kill-switch: daily and per-trade loss circuit breakers
+# Defaults: Rs 10k day limit, Rs 5k per-trade limit.  Override via env.
+DAILY_LOSS_LIMIT_RS = float(os.getenv("EQIDV2_LIVE_DAILY_LOSS_LIMIT_RS", "10000.0"))
+PER_TRADE_LOSS_LIMIT_RS = float(os.getenv("EQIDV2_LIVE_PER_TRADE_LOSS_LIMIT_RS", "5000.0"))
+KILL_SWITCH_AUTO_ENABLED = str(os.getenv("EQIDV2_LIVE_KILL_SWITCH_AUTO", "1")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # Concurrency
 # 0 or negative means unlimited worker threads (no executor-side cap).
@@ -1838,6 +1849,56 @@ def _load_kill_switch_command_cached() -> Optional[Dict[str, Any]]:
         return dict(kill_switch_cache_payload) if isinstance(kill_switch_cache_payload, dict) else None
 
 
+def _auto_trip_kill_switch(pnl_rs: float, ticker: str) -> None:
+    """Auto-trip the kill switch when a daily or per-trade loss limit is breached.
+
+    Immediately sets the in-memory dispatch lockdown (blocks new entries) and
+    writes kill_switch_false_id_5min_v7.json so the dashboard and monitoring
+    can observe the event.  Open positions are NOT force-closed here — the
+    existing per-trade kill-switch monitor loop handles that via the file.
+    """
+    if not KILL_SWITCH_AUTO_ENABLED:
+        return
+
+    with daily_pnl_lock:
+        day_total = float(daily_pnl["total"])
+
+    reasons = []
+    if day_total <= -DAILY_LOSS_LIMIT_RS:
+        reasons.append(
+            f"daily_loss_limit: Rs{day_total:+,.2f} <= -Rs{DAILY_LOSS_LIMIT_RS:,.0f}"
+        )
+    if pnl_rs <= -PER_TRADE_LOSS_LIMIT_RS:
+        reasons.append(
+            f"per_trade_loss_limit: Rs{pnl_rs:+,.2f} <= -Rs{PER_TRADE_LOSS_LIMIT_RS:,.0f}"
+        )
+    if not reasons:
+        return
+
+    reason_str = "; ".join(reasons)
+    log.warning(f"[KILL_SWITCH] AUTO-TRIP {ticker}: {reason_str}")
+
+    _set_dispatch_lockdown(f"auto_circuit_breaker: {reason_str}")
+
+    payload = {
+        "command": "kill_all",
+        "command_id": f"auto_{datetime.now(IST).strftime('%Y%m%d_%H%M%S')}",
+        "reason": f"auto_circuit_breaker: {reason_str}",
+        "triggered_by": "daily_loss_circuit_breaker",
+        "ticker": ticker,
+        "day_total_rs": round(day_total, 2),
+        "trade_pnl_rs": round(pnl_rs, 2),
+        "daily_loss_limit_rs": DAILY_LOSS_LIMIT_RS,
+        "per_trade_loss_limit_rs": PER_TRADE_LOSS_LIMIT_RS,
+        "ts": datetime.now(IST).isoformat(),
+    }
+    try:
+        _atomic_write_json(KILL_SWITCH_COMMAND_FILE, payload)
+        log.warning(f"[KILL_SWITCH] File written → {KILL_SWITCH_COMMAND_FILE}")
+    except Exception as exc:
+        log.error(f"[KILL_SWITCH] Failed to write kill switch file: {exc}")
+
+
 def _get_kill_switch_for_trade(signal_id: str, ticker: str) -> Optional[Dict[str, Any]]:
     cmd = _load_kill_switch_command_cached()
     if not cmd:
@@ -2119,6 +2180,23 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
                     f"Rs.{margin:,.0f} > Rs.{MAX_CAPITAL_DEPLOYED_RS:,})",
                     0.0,
                 )
+
+            # P1-7: gross short notional cap
+            if g1_side == "SHORT" and MAX_GROSS_SHORT_NOTIONAL_RS > 0:
+                with active_positions_lock:
+                    gross_short = sum(
+                        float(pos.get("entry_price", 0)) * int(pos.get("quantity", 0))
+                        for pos in active_positions.values()
+                        if str(pos.get("side", "")).upper() == "SHORT"
+                    )
+                new_notional = float(entry_price * quantity)
+                if (gross_short + new_notional) > MAX_GROSS_SHORT_NOTIONAL_RS:
+                    return (
+                        False,
+                        f"gross short cap exceeded (open Rs.{gross_short:,.0f} + "
+                        f"Rs.{new_notional:,.0f} > Rs.{MAX_GROSS_SHORT_NOTIONAL_RS:,})",
+                        0.0,
+                    )
 
         capital_deployed[signal_id] = margin
         return True, "ok", margin
@@ -2959,6 +3037,8 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 daily_pnl["losses"] += 1
             _save_summary()
             day_total = float(daily_pnl["total"])
+
+        _auto_trip_kill_switch(result.pnl_rs, ticker)
 
         log.info(
             f"[LIVE] RESULT {side} {ticker} | {result.outcome} | "

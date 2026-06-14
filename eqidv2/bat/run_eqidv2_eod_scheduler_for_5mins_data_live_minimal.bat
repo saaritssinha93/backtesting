@@ -27,8 +27,8 @@ set "EQIDV2_5M_PARTITION_TIMEOUT_SEC=150"
 set "EQIDV2_5M_ADAPTIVE_THROTTLE=1"
 set "EQIDV2_5M_ADAPTIVE_MIN_WORKERS=40"
 set "EQIDV2_5M_ADAPTIVE_MIN_WORKERS_PER_APP=5"
-set "EQIDV2_5M_ADAPTIVE_TOTAL_STEP=8"
-set "EQIDV2_5M_ADAPTIVE_PER_APP_STEP=1"
+set "EQIDV2_5M_ADAPTIVE_TOTAL_STEP=32"
+set "EQIDV2_5M_ADAPTIVE_PER_APP_STEP=4"
 set "EQIDV2_5M_ADAPTIVE_RECOVERY_OK_RATIO=0.90"
 set "EQIDV2_5M_ADAPTIVE_RECOVERY_STREAK=2"
 REM v2 universe (1262 syms after quarantine) takes ~22-24s/slot; bump warn from 20s to 30s
@@ -46,10 +46,12 @@ REM 2026-05-19: settled on 320/40 after testing 32 (29s baseline) and 48 (22-31s
 REM 40 workers gives ~4 batches per partition (vs 5 at 32, 3.3 at 48) — balances
 REM speed and per-app spread. Combined with Fix A (1-slot lag tolerance), expect
 REM ~24-26s clean slots.
-REM 2026-06-09 V7 latency target: keep each app partition to four request batches
-REM (157 symbols / 48 workers) so feed+scanner can target ~45s wall-clock.
-set "MAX_WORKERS=384"
-set "MAX_WORKERS_PER_APP=48"
+REM 2026-06-11: 384/48 created 384 Python workers on a 16-logical-CPU host,
+REM producing 150s partition timeouts under parquet/Kite contention. Restore
+REM the measured 320/40 ceiling and let adaptive throttle step down by 32/4
+REM when a slot breaches the SLA or times out.
+set "MAX_WORKERS=320"
+set "MAX_WORKERS_PER_APP=40"
 set "BUFFER_SEC=%EQIDV2_5M_BUFFER_SEC%"
 if "%BUFFER_SEC%"=="" set "BUFFER_SEC=2"
 set "QUARTER_HOUR_BUFFER_SEC=%EQIDV2_5M_QUARTER_HOUR_BUFFER_SEC%"

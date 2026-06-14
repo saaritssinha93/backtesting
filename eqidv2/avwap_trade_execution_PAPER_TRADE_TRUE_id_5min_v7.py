@@ -61,6 +61,7 @@ import numpy as np
 import pandas as pd
 import pytz
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR, runtime_dir
+from nse_intraday_costs import CostConfig, intraday_equity_costs
 
 try:
     from watchdog.observers import Observer
@@ -225,6 +226,10 @@ def _candE4_g2_check_and_increment(side):
         _candE4_g2_persist()
     return True, "ok"
 SLIPPAGE_PCT = 0.0005  # 5 bps realistic slippage on entry
+# P2-10: exit slippage applied on SL fills and unscheduled closes (time stop,
+# kill switch, forced close).  TARGET fills are limit orders — assume filled
+# at limit.  0 = disabled (parity with old behaviour).
+EXIT_SLIPPAGE_BPS = float(os.getenv("EQIDV2_PAPER_EXIT_SLIPPAGE_BPS", "5.0"))
 
 # Max entry slip gate: if the live LTP (or signal_bar fallback) is more than this
 # fraction above the model trigger price for a LONG, the signal is rejected rather
@@ -447,6 +452,8 @@ MAX_CAPITAL_DEPLOYED_RS = float(
         os.getenv("EQIDV2_MAX_CAPITAL_DEPLOYED_RS", "2000000"),
     )
 )
+# P1-7: gross short notional cap (same env var as live for symmetric config).  0 = disabled.
+MAX_GROSS_SHORT_NOTIONAL_RS = float(os.getenv("EQIDV2_MAX_GROSS_SHORT_NOTIONAL_RS", "1500000.0"))
 
 # Research suggestions are promoted into PAPER_TRADE_TRUE first. These gates do
 # not affect live/scanner signal creation; they only log paper skip rows so the
@@ -527,8 +534,27 @@ TRADE_LOG_COLUMNS = [
     "entry_price",
     "exit_price",
     "stop_price",
+    "initial_stop_price",
     "target_price",
     "outcome",
+    "gross_pnl",
+    "total_cost",
+    "net_pnl",
+    "gross_pnl_rs",
+    "gross_pnl_pct",
+    "brokerage_rs",
+    "stt_rs",
+    "exch_txn_rs",
+    "sebi_rs",
+    "ipft_rs",
+    "stamp_rs",
+    "gst_rs",
+    "total_cost_rs",
+    "net_pnl_rs",
+    "net_pnl_pct",
+    "cost_bps_of_turnover",
+    "cost_pct_of_entry",
+    "cost_rates_as_of",
     "pnl_rs",
     "pnl_pct",
     "quality_score",
@@ -973,8 +999,27 @@ class PaperTrade:
     entry_price: float = 0.0
     exit_price: float = 0.0
     stop_price: float = 0.0
+    initial_stop_price: float = 0.0
     target_price: float = 0.0
     outcome: str = ""
+    gross_pnl: float = 0.0
+    total_cost: float = 0.0
+    net_pnl: float = 0.0
+    gross_pnl_rs: float = 0.0
+    gross_pnl_pct: float = 0.0
+    brokerage_rs: float = 0.0
+    stt_rs: float = 0.0
+    exch_txn_rs: float = 0.0
+    sebi_rs: float = 0.0
+    ipft_rs: float = 0.0
+    stamp_rs: float = 0.0
+    gst_rs: float = 0.0
+    total_cost_rs: float = 0.0
+    net_pnl_rs: float = 0.0
+    net_pnl_pct: float = 0.0
+    cost_bps_of_turnover: float = 0.0
+    cost_pct_of_entry: float = 0.0
+    cost_rates_as_of: str = ""
     pnl_rs: float = 0.0
     pnl_pct: float = 0.0
     quality_score: float = 0.0
@@ -996,13 +1041,18 @@ kill_switch_cache_mtime: float = -1.0
 kill_switch_cache_payload: Optional[dict] = None
 daily_pnl: Dict[str, float] = {
     "total": 0.0,
+    "gross_total": 0.0,
+    "total_cost": 0.0,
     "wins": 0,
     "losses": 0,
     "trades": 0,
     "gross_profit": 0.0,
     "gross_loss": 0.0,
+    "net_profit": 0.0,
+    "net_loss": 0.0,
 }
 daily_pnl_lock = threading.Lock()
+NSE_COST_CONFIG = CostConfig()
 
 # Capital / position tracking (margin, not notional Ã¢â‚¬â€ accounts for MIS leverage)
 capital_deployed: Dict[str, float] = {}   # signal_id Ã¢â€ â€™ margin blocked
@@ -1024,6 +1074,66 @@ def _calc_pnl(side: str, entry_price: float, exit_price: float, qty: int) -> Tup
         pnl_rs = (exit_price - entry_price) * qty
     pnl_pct = (pnl_rs / (entry_price * qty) * 100) if (entry_price > 0 and qty > 0) else 0.0
     return float(pnl_rs), float(pnl_pct)
+
+
+def _calc_costed_pnl(side: str, entry_price: float, exit_price: float, qty: int) -> dict:
+    gross_pnl, gross_pct = _calc_pnl(side, entry_price, exit_price, qty)
+    try:
+        b = intraday_equity_costs(
+            float(entry_price),
+            float(exit_price),
+            float(qty),
+            str(side).upper(),
+            NSE_COST_CONFIG,
+        )
+    except Exception:
+        return {
+            "gross_pnl_rs": float(gross_pnl),
+            "gross_pnl_pct": float(gross_pct),
+            "brokerage_rs": 0.0,
+            "stt_rs": 0.0,
+            "exch_txn_rs": 0.0,
+            "sebi_rs": 0.0,
+            "ipft_rs": 0.0,
+            "stamp_rs": 0.0,
+            "gst_rs": 0.0,
+            "total_cost_rs": 0.0,
+            "net_pnl_rs": float(gross_pnl),
+            "net_pnl_pct": float(gross_pct),
+            "cost_bps_of_turnover": 0.0,
+            "cost_pct_of_entry": 0.0,
+            "cost_rates_as_of": NSE_COST_CONFIG.rates_as_of,
+        }
+    entry_notional = float(entry_price) * float(qty)
+    net_pct = (float(b.net_pnl) / entry_notional * 100.0) if entry_notional > 0 else 0.0
+    return {
+        "gross_pnl_rs": float(b.gross_pnl),
+        "gross_pnl_pct": float(gross_pct),
+        "brokerage_rs": float(b.brokerage),
+        "stt_rs": float(b.stt),
+        "exch_txn_rs": float(b.exch_txn),
+        "sebi_rs": float(b.sebi),
+        "ipft_rs": float(b.ipft),
+        "stamp_rs": float(b.stamp),
+        "gst_rs": float(b.gst),
+        "total_cost_rs": float(b.total_cost),
+        "net_pnl_rs": float(b.net_pnl),
+        "net_pnl_pct": float(net_pct),
+        "cost_bps_of_turnover": float(b.cost_bps_of_turnover),
+        "cost_pct_of_entry": float(b.cost_pct_of_entry),
+        "cost_rates_as_of": NSE_COST_CONFIG.rates_as_of,
+    }
+
+
+def _row_float_first(row: dict, keys: Sequence[str], default: float = 0.0) -> float:
+    for key in keys:
+        if key not in row:
+            continue
+        raw = row.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        return _safe_float(raw, default)
+    return float(default)
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -1555,8 +1665,8 @@ def _unrealized_total_from_positions() -> float:
         qty = _safe_int(pos.get("quantity", 0), 0)
         entry_price = _safe_float(pos.get("entry_price", 0.0), 0.0)
         mark_price = _safe_float(pos.get("last_ltp", entry_price), entry_price)
-        pnl_rs, _ = _calc_pnl(side, entry_price, mark_price, qty)
-        total += float(pnl_rs)
+        costed = _calc_costed_pnl(side, entry_price, mark_price, qty)
+        total += float(costed["net_pnl_rs"])
     return float(total)
 
 
@@ -1605,8 +1715,8 @@ def _live_pnl_line(use_ltp: bool) -> str:
             if ticker:
                 ltp_na.add(ticker)
 
-        pnl_rs, _ = _calc_pnl(side, entry_price, ltp, qty)
-        ticker_unrealized[ticker] = ticker_unrealized.get(ticker, 0.0) + float(pnl_rs)
+        costed = _calc_costed_pnl(side, entry_price, ltp, qty)
+        ticker_unrealized[ticker] = ticker_unrealized.get(ticker, 0.0) + float(costed["net_pnl_rs"])
 
     unrealized_total = float(sum(ticker_unrealized.values()))
     daily = _daily_snapshot()
@@ -1727,6 +1837,23 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
                     0.0,
                 )
 
+            # P1-7: gross short notional cap
+            if g1_side == "SHORT" and MAX_GROSS_SHORT_NOTIONAL_RS > 0:
+                with active_positions_lock:
+                    gross_short = sum(
+                        float(pos.get("entry_price", 0)) * int(pos.get("quantity", 0))
+                        for pos in active_positions.values()
+                        if str(pos.get("side", "")).upper() == "SHORT"
+                    )
+                new_notional = float(entry_price * quantity)
+                if (gross_short + new_notional) > MAX_GROSS_SHORT_NOTIONAL_RS:
+                    return (
+                        False,
+                        f"gross short cap exceeded (open Rs.{gross_short:,.0f} + "
+                        f"Rs.{new_notional:,.0f} > Rs.{MAX_GROSS_SHORT_NOTIONAL_RS:,})",
+                        0.0,
+                    )
+
         # CAND-E4 G2: daily side cap. Increment only after capacity/margin
         # checks pass so rejected signals do not consume quota.
         g2_ok, g2_reason = _candE4_g2_check_and_increment(g1_side)
@@ -1736,6 +1863,19 @@ def _reserve_capacity_for_signal(signal_id: str, signal: dict) -> Tuple[bool, st
         capital_deployed[signal_id] = margin
 
     return True, "reserved", margin
+
+
+def _apply_exit_slippage(price: float, side: str, outcome: str) -> float:
+    """Worsen exit fill price for SL / unscheduled closes by EXIT_SLIPPAGE_BPS.
+
+    SL fill for LONG: price slips down → lower fill.
+    SL fill for SHORT: price slips up → higher fill.
+    TARGET fills are limit orders — no slippage assumed.
+    """
+    if EXIT_SLIPPAGE_BPS <= 0 or outcome == "TARGET":
+        return price
+    slip = price * EXIT_SLIPPAGE_BPS / 10_000.0
+    return round(price - slip if side == "LONG" else price + slip, 2)
 
 
 def _is_market_open_now(now_ist: Optional[datetime] = None) -> bool:
@@ -2108,6 +2248,7 @@ def simulate_trade(
     )
     _be_stop_armed = False
     _one_r = abs(entry_price - stop_price)
+    _initial_stop_price = stop_price
 
     while True:
         now_ist = datetime.now(IST)
@@ -2122,6 +2263,7 @@ def simulate_trade(
                     last_valid_ltp = float(ltp_now)
                 exit_price = float(last_valid_ltp) if last_valid_ltp is not None else entry_price
                 outcome = "MANUAL_KILL_SWITCH"
+                exit_price = _apply_exit_slippage(exit_price, side, outcome)
                 req_ts = str(kill_cmd.get("requested_at_ist", "")).strip()
                 log.warning(
                     f"[KILL] Kill switch exit for {side} {ticker} @ {exit_price:.2f} | "
@@ -2136,6 +2278,7 @@ def simulate_trade(
                 last_valid_ltp = float(ltp)
             exit_price = float(last_valid_ltp) if last_valid_ltp is not None else entry_price
             outcome = "EOD_CLOSE"
+            exit_price = _apply_exit_slippage(exit_price, side, outcome)
             close_src = "last_ltp" if last_valid_ltp is not None else "entry_fallback"
             log.info(
                 f"[SIM] FORCED CLOSE {side} {ticker} @ {exit_price} "
@@ -2172,6 +2315,7 @@ def simulate_trade(
             if c_or_time_stop_dt is not None and now_ist >= c_or_time_stop_dt:
                 exit_price = float(last_valid_ltp) if last_valid_ltp is not None else entry_price
                 outcome = "TIME_STOP_30M"
+                exit_price = _apply_exit_slippage(exit_price, side, outcome)
                 close_src = "last_ltp" if last_valid_ltp is not None else "entry_fallback"
                 log.info(
                     f"[SIM] TIME STOP {side} {ticker} @ {exit_price:.2f} "
@@ -2214,7 +2358,7 @@ def simulate_trade(
 
         if side == "SHORT":
             if ltp >= stop_price:
-                exit_price = stop_price
+                exit_price = _apply_exit_slippage(stop_price, side, "SL")
                 outcome = "SL"
                 log.info(f"[SIM] SL HIT {side} {ticker} @ {exit_price} (LTP={ltp}) | ID={trade_id}")
                 break
@@ -2225,7 +2369,7 @@ def simulate_trade(
                 break
         else:
             if ltp <= stop_price:
-                exit_price = stop_price
+                exit_price = _apply_exit_slippage(stop_price, side, "SL")
                 outcome = "SL"
                 log.info(f"[SIM] SL HIT {side} {ticker} @ {exit_price} (LTP={ltp}) | ID={trade_id}")
                 break
@@ -2238,6 +2382,7 @@ def simulate_trade(
         if c_or_time_stop_dt is not None and now_ist >= c_or_time_stop_dt:
             exit_price = float(last_valid_ltp) if last_valid_ltp is not None else entry_price
             outcome = "TIME_STOP_30M"
+            exit_price = _apply_exit_slippage(exit_price, side, outcome)
             close_src = "last_ltp" if last_valid_ltp is not None else "entry_fallback"
             log.info(
                 f"[SIM] TIME STOP {side} {ticker} @ {exit_price:.2f} "
@@ -2248,7 +2393,12 @@ def simulate_trade(
         time.sleep(POLL_INTERVAL_SEC)
 
     exit_time_ist = datetime.now(IST)
-    pnl_rs, pnl_pct = _calc_pnl(side, entry_price, float(exit_price), quantity)
+    costed = _calc_costed_pnl(side, entry_price, float(exit_price), quantity)
+    gross_pnl_rs = float(costed["gross_pnl_rs"])
+    gross_pnl_pct = float(costed["gross_pnl_pct"])
+    total_cost_rs = float(costed["total_cost_rs"])
+    net_pnl_rs = float(costed["net_pnl_rs"])
+    net_pnl_pct = float(costed["net_pnl_pct"])
 
     trade = PaperTrade(
         trade_id=trade_id,
@@ -2265,10 +2415,29 @@ def simulate_trade(
         entry_price=round(entry_price, 2),
         exit_price=round(exit_price, 2),
         stop_price=round(stop_price, 2),
+        initial_stop_price=round(_initial_stop_price, 2),
         target_price=round(target_price, 2),
         outcome=outcome,
-        pnl_rs=round(pnl_rs, 2),
-        pnl_pct=round(pnl_pct, 4),
+        gross_pnl=round(gross_pnl_rs, 2),
+        total_cost=round(total_cost_rs, 2),
+        net_pnl=round(net_pnl_rs, 2),
+        gross_pnl_rs=round(gross_pnl_rs, 2),
+        gross_pnl_pct=round(gross_pnl_pct, 4),
+        brokerage_rs=round(float(costed["brokerage_rs"]), 4),
+        stt_rs=round(float(costed["stt_rs"]), 4),
+        exch_txn_rs=round(float(costed["exch_txn_rs"]), 4),
+        sebi_rs=round(float(costed["sebi_rs"]), 4),
+        ipft_rs=round(float(costed["ipft_rs"]), 4),
+        stamp_rs=round(float(costed["stamp_rs"]), 4),
+        gst_rs=round(float(costed["gst_rs"]), 4),
+        total_cost_rs=round(total_cost_rs, 2),
+        net_pnl_rs=round(net_pnl_rs, 2),
+        net_pnl_pct=round(net_pnl_pct, 4),
+        cost_bps_of_turnover=round(float(costed["cost_bps_of_turnover"]), 4),
+        cost_pct_of_entry=round(float(costed["cost_pct_of_entry"]), 4),
+        cost_rates_as_of=str(costed["cost_rates_as_of"]),
+        pnl_rs=round(net_pnl_rs, 2),
+        pnl_pct=round(net_pnl_pct, 4),
         quality_score=_safe_float(signal.get("quality_score", 0), 0.0),
         p_win=_safe_float(signal.get("p_win", 0.0), 0.0),
         confidence_multiplier=_safe_float(signal.get("confidence_multiplier", 1.0), 1.0),
@@ -2277,14 +2446,20 @@ def simulate_trade(
     _log_trade(trade)
 
     with daily_pnl_lock:
-        daily_pnl["total"] += pnl_rs
+        daily_pnl["total"] += net_pnl_rs
+        daily_pnl["gross_total"] += gross_pnl_rs
+        daily_pnl["total_cost"] += total_cost_rs
         daily_pnl["trades"] += 1
-        if pnl_rs > 0:
+        if net_pnl_rs > 0:
             daily_pnl["wins"] += 1
-            daily_pnl["gross_profit"] += pnl_rs
-        elif pnl_rs < 0:
+            daily_pnl["net_profit"] += net_pnl_rs
+        elif net_pnl_rs < 0:
             daily_pnl["losses"] += 1
-            daily_pnl["gross_loss"] += pnl_rs
+            daily_pnl["net_loss"] += net_pnl_rs
+        if gross_pnl_rs > 0:
+            daily_pnl["gross_profit"] += gross_pnl_rs
+        elif gross_pnl_rs < 0:
+            daily_pnl["gross_loss"] += gross_pnl_rs
         day_total = float(daily_pnl["total"])
         day_wins = int(daily_pnl["wins"])
         day_losses = int(daily_pnl["losses"])
@@ -2292,8 +2467,9 @@ def simulate_trade(
 
     log.info(
         f"[SIM] RESULT {side} {ticker} | {outcome} | "
-        f"P&L: Rs.{pnl_rs:+,.2f} ({pnl_pct:+.2f}%) | "
-        f"Day total: Rs.{day_total:+,.2f} ({day_wins}W/{day_losses}L)"
+        f"Net P&L: Rs.{net_pnl_rs:+,.2f} ({net_pnl_pct:+.2f}%) | "
+        f"gross=Rs.{gross_pnl_rs:+,.2f} cost=Rs.{total_cost_rs:,.2f} | "
+        f"Day net: Rs.{day_total:+,.2f} ({day_wins}W/{day_losses}L)"
     )
 
     _release_capacity(signal_id)
@@ -2335,8 +2511,27 @@ def _log_trade(trade: PaperTrade) -> None:
             "entry_price": trade.entry_price,
             "exit_price": trade.exit_price,
             "stop_price": trade.stop_price,
+            "initial_stop_price": trade.initial_stop_price,
             "target_price": trade.target_price,
             "outcome": trade.outcome,
+            "gross_pnl": trade.gross_pnl,
+            "total_cost": trade.total_cost,
+            "net_pnl": trade.net_pnl,
+            "gross_pnl_rs": trade.gross_pnl_rs,
+            "gross_pnl_pct": trade.gross_pnl_pct,
+            "brokerage_rs": trade.brokerage_rs,
+            "stt_rs": trade.stt_rs,
+            "exch_txn_rs": trade.exch_txn_rs,
+            "sebi_rs": trade.sebi_rs,
+            "ipft_rs": trade.ipft_rs,
+            "stamp_rs": trade.stamp_rs,
+            "gst_rs": trade.gst_rs,
+            "total_cost_rs": trade.total_cost_rs,
+            "net_pnl_rs": trade.net_pnl_rs,
+            "net_pnl_pct": trade.net_pnl_pct,
+            "cost_bps_of_turnover": trade.cost_bps_of_turnover,
+            "cost_pct_of_entry": trade.cost_pct_of_entry,
+            "cost_rates_as_of": trade.cost_rates_as_of,
             "pnl_rs": trade.pnl_rs,
             "pnl_pct": trade.pnl_pct,
             "quality_score": trade.quality_score,
@@ -2352,11 +2547,18 @@ def _save_summary() -> None:
         summary = {
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "total_pnl_rs": round(daily_pnl["total"], 2),
+            "pnl_basis": "NET_AFTER_NSE_ID_COSTS",
+            "net_pnl_rs": round(daily_pnl["total"], 2),
+            "gross_pnl_rs": round(daily_pnl.get("gross_total", 0.0), 2),
+            "total_cost_rs": round(daily_pnl.get("total_cost", 0.0), 2),
+            "cost_rates_as_of": NSE_COST_CONFIG.rates_as_of,
             "total_trades": daily_pnl["trades"],
             "wins": daily_pnl["wins"],
             "losses": daily_pnl["losses"],
             "gross_profit_rs": round(daily_pnl.get("gross_profit", 0.0), 2),
             "gross_loss_rs": round(daily_pnl.get("gross_loss", 0.0), 2),
+            "net_profit_rs": round(daily_pnl.get("net_profit", 0.0), 2),
+            "net_loss_rs": round(daily_pnl.get("net_loss", 0.0), 2),
             "win_rate_pct": round(wr, 2),
             "last_updated": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -2631,8 +2833,12 @@ def _load_closed_ids_and_realized_summary(
     realized_trades = 0
     realized_wins = 0
     realized_losses = 0
+    gross_total = 0.0
+    total_cost = 0.0
     gross_profit = 0.0
     gross_loss = 0.0
+    net_profit = 0.0
+    net_loss = 0.0
 
     if os.path.exists(paper_csv_path) and os.path.getsize(paper_csv_path) > 0:
         try:
@@ -2653,15 +2859,23 @@ def _load_closed_ids_and_realized_summary(
                     if sid:
                         closed_ids.add(sid)
 
-                    pnl_rs = _safe_float(row.get("pnl_rs", 0.0), 0.0)
-                    realized_total += pnl_rs
+                    net_pnl_rs = _row_float_first(row, ("net_pnl_rs", "net_pnl", "pnl_rs"), 0.0)
+                    gross_pnl_rs = _row_float_first(row, ("gross_pnl_rs", "gross_pnl", "pnl_rs"), net_pnl_rs)
+                    cost_rs = _row_float_first(row, ("total_cost_rs", "total_cost"), max(0.0, gross_pnl_rs - net_pnl_rs))
+                    realized_total += net_pnl_rs
+                    gross_total += gross_pnl_rs
+                    total_cost += cost_rs
                     realized_trades += 1
-                    if pnl_rs > 0:
+                    if net_pnl_rs > 0:
                         realized_wins += 1
-                        gross_profit += pnl_rs
-                    elif pnl_rs < 0:
+                        net_profit += net_pnl_rs
+                    elif net_pnl_rs < 0:
                         realized_losses += 1
-                        gross_loss += pnl_rs
+                        net_loss += net_pnl_rs
+                    if gross_pnl_rs > 0:
+                        gross_profit += gross_pnl_rs
+                    elif gross_pnl_rs < 0:
+                        gross_loss += gross_pnl_rs
         except Exception as e:
             log.warning(f"[RESTORE] Could not parse paper trade CSV: {e}")
 
@@ -2670,8 +2884,12 @@ def _load_closed_ids_and_realized_summary(
         "realized_trades": float(realized_trades),
         "realized_wins": float(realized_wins),
         "realized_losses": float(realized_losses),
+        "gross_total": float(gross_total),
+        "total_cost": float(total_cost),
         "gross_profit": float(gross_profit),
         "gross_loss": float(gross_loss),
+        "net_profit": float(net_profit),
+        "net_loss": float(net_loss),
     }
 
 
@@ -2705,8 +2923,12 @@ def _restore_intraday_runtime_state(
         daily_pnl["trades"] = int(realized["realized_trades"])
         daily_pnl["wins"] = int(realized["realized_wins"])
         daily_pnl["losses"] = int(realized["realized_losses"])
+        daily_pnl["gross_total"] = float(realized["gross_total"])
+        daily_pnl["total_cost"] = float(realized["total_cost"])
         daily_pnl["gross_profit"] = float(realized["gross_profit"])
         daily_pnl["gross_loss"] = float(realized["gross_loss"])
+        daily_pnl["net_profit"] = float(realized["net_profit"])
+        daily_pnl["net_loss"] = float(realized["net_loss"])
         _save_summary()
 
     restored_positions: Dict[str, dict] = {}
@@ -3521,9 +3743,11 @@ def main():
             log.info(f"  Wins         : {daily_pnl['wins']}")
             log.info(f"  Losses       : {daily_pnl['losses']}")
             log.info(f"  Win rate     : {wr:.1f}%")
-            log.info(f"  Gross profit : Rs.{daily_pnl.get('gross_profit', 0.0):+,.2f}")
-            log.info(f"  Gross loss   : Rs.{daily_pnl.get('gross_loss', 0.0):+,.2f}")
-            log.info(f"  Total P&L    : Rs.{daily_pnl['total']:+,.2f}")
+            log.info(f"  Gross P&L    : Rs.{daily_pnl.get('gross_total', 0.0):+,.2f}")
+            log.info(f"  Total cost   : Rs.{daily_pnl.get('total_cost', 0.0):,.2f}")
+            log.info(f"  Net profit   : Rs.{daily_pnl.get('net_profit', 0.0):+,.2f}")
+            log.info(f"  Net loss     : Rs.{daily_pnl.get('net_loss', 0.0):+,.2f}")
+            log.info(f"  Net P&L      : Rs.{daily_pnl['total']:+,.2f}")
             log.info("=" * 55)
 
         log.info("Paper trade executor stopped.")

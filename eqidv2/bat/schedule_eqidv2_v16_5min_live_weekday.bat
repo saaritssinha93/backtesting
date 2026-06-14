@@ -16,7 +16,7 @@ set "BAT_SCANNER=%BAT_DIR%\run_eqidv2_live_combined_analyser_csv_v16_5min.bat"
 set "BAT_FETCH=%BAT_DIR%\run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat"
 set "BAT_PAPER=%BAT_DIR%\run_avwap_trade_execution_PAPER_TRADE_TRUE_v16_5min.bat"
 set "BAT_LIVE=%BAT_DIR%\run_avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.bat"
-set "BAT_NIFTY=%BAT_DIR%\run_nifty_guard_fetcher_v16_5min.bat"
+set "BAT_NIFTY=%BAT_DIR%\run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat"
 
 if not exist "%TASK_HARDENER%" (
   echo [ERROR] Missing PowerShell helper: %TASK_HARDENER%

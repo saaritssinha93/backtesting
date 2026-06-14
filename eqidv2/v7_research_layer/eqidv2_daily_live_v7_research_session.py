@@ -201,7 +201,8 @@ def _console_lines(summary: dict[str, Any]) -> list[str]:
             f"ttp_shadow={paper.get('ttp_shadow_trigger_count', 0)} "
             f"fresh_weak={paper.get('freshness_weak_trades', 0)} "
             f"quick_target_10m={paper.get('quick_targets_10m', 0)} "
-            f"quick_sl_15m={paper.get('quick_sl_15m', 0)}"
+            f"quick_sl_15m={paper.get('quick_sl_15m', 0)} "
+            f"nse_net={paper.get('v7_nse_id_net_pnl_rs', paper.get('est_net_pnl_rs', 0)):.0f}"
         ),
         (
             "[daily_live_v7_research ops] "

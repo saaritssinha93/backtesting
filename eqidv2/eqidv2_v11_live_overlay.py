@@ -53,13 +53,13 @@ AB_MAX_PNL_LOW_VALID_SETUPS = (
     "B_HUGE_C1_CLOSE_RECLAIM_BREAK",
 )
 
-AB_FILTERED_RELAXED_B_HUGE_MAX_RS_PCT = 10.7025
-AB_FILTERED_RELAXED_A_PULLBACK_MAX_MARKET_ABS_RET_PCT = 0.8354
-MAX_PNL_SBB_MIN_MARKET_RET_PCT = 0.53680868
-MAX_PNL_SBB_MIN_NOTIONAL_RS = 99971.74
-MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR = 0.60356498
-MAX_PNL_A_MOD_CLOSE_MIN_SIGNAL_RANGE_PCT = 2.1930941
-MAX_PNL_A_MOD_CLOSE_MAX_NOTIONAL_RS = 99576.0
+AB_FILTERED_RELAXED_B_HUGE_MAX_RS_PCT = 10.7
+AB_FILTERED_RELAXED_A_PULLBACK_MAX_MARKET_ABS_RET_PCT = 0.84
+MAX_PNL_SBB_MIN_MARKET_RET_PCT = 0.54
+MAX_PNL_SBB_MIN_NOTIONAL_RS = 100_000.0
+MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR = 0.60
+MAX_PNL_A_MOD_CLOSE_MIN_SIGNAL_RANGE_PCT = 2.2
+MAX_PNL_A_MOD_CLOSE_MAX_NOTIONAL_RS = 100_000.0
 # A_MOD_BREAK_C1_HIGH gate — replaced 2026-06-09.
 # Old conditions (market_abs <= 0.257 AND vol_ratio <= 2.015) rejected genuine
 # winners (SUVEN, BANKINDIA, CARYSIL, MAYURUNIQ) that cleared the rs_pct / atr_pct
@@ -67,18 +67,18 @@ MAX_PNL_A_MOD_CLOSE_MAX_NOTIONAL_RS = 99576.0
 A_MOD_C1_HIGH_MIN_RS_PCT      = float(os.getenv("EQIDV2_V11_AMOD_C1_HIGH_MIN_RS_PCT",     "2.0"))
 A_MOD_C1_HIGH_MAX_ATR_PCT     = float(os.getenv("EQIDV2_V11_AMOD_C1_HIGH_MAX_ATR_PCT",    "0.006"))
 A_MOD_C1_HIGH_MAX_SIGNAL_MIN  = float(os.getenv("EQIDV2_V11_AMOD_C1_HIGH_MAX_SIGNAL_MIN", "670.0"))  # 11:10 IST
-MAX_PNL_A_MOD_C1_LOW_MIN_RS_ABS_PCT = 9.2370116
-MAX_PNL_A_MOD_C1_LOW_MIN_VOL_RATIO = 1.7928383
-MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT = 0.89474022
-MAX_PNL_D_EMA20_REJECTION_MIN_RANKER_SCORE = 0.388264
-MAX_PNL_E_VWAP_BAND_MIN_ATR_PCT = 0.0058985269
+MAX_PNL_A_MOD_C1_LOW_MIN_RS_ABS_PCT = 9.2
+MAX_PNL_A_MOD_C1_LOW_MIN_VOL_RATIO = 1.80
+MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT = 0.89
+MAX_PNL_D_EMA20_REJECTION_MIN_RANKER_SCORE = 0.39
+MAX_PNL_E_VWAP_BAND_MIN_ATR_PCT = 0.0059
 MAX_PNL_E_VWAP_BAND_MAX_SIGNAL_MINUTE = 690
-MAX_PNL_E_VWAP_LOSE_MIN_VWAP_DIST_ATR = -1.2528935
+MAX_PNL_E_VWAP_LOSE_MIN_VWAP_DIST_ATR = -1.25
 RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_SIGNAL_MINUTE = 780.0
 RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_SIGNAL_MINUTE = 825.0
-RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_BODY_PCT = 0.92592279
-RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_WICK_SKEW_PCT = -0.064893645
-RESIDUAL_OVERLAY_SBB_MAX_SIGNAL_MINUTE = 704.5
+RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_BODY_PCT = 0.93
+RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_WICK_SKEW_PCT = -0.065
+RESIDUAL_OVERLAY_SBB_MAX_SIGNAL_MINUTE = 705
 
 TIER123_BALANCED_SETUPS = (
     "T_TREND_DAY_EMA_STAIR_SHORT",
@@ -90,12 +90,12 @@ TIER123_BALANCED_EXIT_RULES = {
     "MR_CONTROLLED_VWAP_EXTREME_FADE_LONG": (0.70, 0.80),
     "MR_CONTROLLED_VWAP_EXTREME_FADE_SHORT": (0.70, 0.80),
 }
-TIER123_T_STAIR_SHORT_MAX_MARKET_RET_PCT = -0.388704
+TIER123_T_STAIR_SHORT_MAX_MARKET_RET_PCT = -0.39
 TIER123_T_STAIR_SHORT_MIN_SIGNAL_MINUTE = 780.0
 TIER123_T_STAIR_SHORT_MAX_SIGNAL_MINUTE = 840.0
-TIER123_MR_FADE_LONG_MIN_VOL_RATIO = 2.473917
-TIER123_MR_FADE_SHORT_MAX_VOL_RATIO = 1.698991
-TIER123_MR_FADE_SHORT_MIN_QUALITY_SCORE = 60.674989
+TIER123_MR_FADE_LONG_MIN_VOL_RATIO = 2.47
+TIER123_MR_FADE_SHORT_MAX_VOL_RATIO = 1.70
+TIER123_MR_FADE_SHORT_MIN_QUALITY_SCORE = 60.7
 TIER123_MAX_RAW_PER_SETUP = 2500
 TIER123_LIVE_SCAN_WORKERS = max(
     1,
@@ -155,13 +155,12 @@ DEFAULT_AB_GATE_MAX_PER_SLOT = 2
 
 SELECTED_STRATEGY_RULE_LABELS = {
     "C_OR_BREAKOUT": "production_core: broad C_OR_BREAKOUT kept after honest holdout test",
-    "D_EMA20_BOUNCE": "production_core: vol_ratio <= 1.5975512 OR vwap_dist_atr >= -0.38557115, and signal_minute <= 705",
-    "E_ORB_BREAKOUT_LONG": "production_core: v7_signal_notional_rs >= 99937.32",
-    "E_ORB_BREAKOUT_SHORT": "production_core: market_ret_pct >= -0.63438346, quality_score >= 97.873364, upper_wick_pct <= 0.014647435; exit 0.80/1.50",
-    "L_BB_SQUEEZE_LONG": "production_core: market_abs_ret_pct <= 0.74284715 OR vol_ratio <= 3.0227043, and ranker_score >= 0.7332456",
+    "D_EMA20_BOUNCE": "production_core: vol_ratio <= 1.60 OR vwap_dist_atr >= -0.39, and signal_minute <= 705",
+    "E_ORB_BREAKOUT_LONG": "production_core: v7_signal_notional_rs >= 100000",
+    "E_ORB_BREAKOUT_SHORT": "production_core: market_ret_pct >= -0.63, quality_score >= 97.9, upper_wick_pct <= 0.015; exit 0.80/1.50",
+    "L_BB_SQUEEZE_LONG": "production_core: market_abs_ret_pct <= 0.74 OR vol_ratio <= 3.0, and ranker_score >= 0.73",
     "E_VWAP_LOSE_EARLY_SHORT": (
-        "production_core_ab_max_pnl_low_valid: vwap_dist_atr >= "
-        f"{MAX_PNL_E_VWAP_LOSE_MIN_VWAP_DIST_ATR:.7f}"
+        f"production_core_ab_max_pnl_low_valid: vwap_dist_atr >= {MAX_PNL_E_VWAP_LOSE_MIN_VWAP_DIST_ATR}"
     ),
     "S_BB_SQUEEZE_SHORT": (
         "max_pnl_low_valid/residual_overlay: market_ret/notional gate, plus residual morning S_BB"
@@ -428,18 +427,18 @@ def selected_strategy_mask(
 
     mask = setup.eq("C_OR_BREAKOUT")
     mask |= setup.eq("D_EMA20_BOUNCE") & (
-        ((vol_ratio <= 1.5975512) | (vwap_dist_atr >= -0.38557115))
+        ((vol_ratio <= 1.60) | (vwap_dist_atr >= -0.39))
         & (signal_minute <= 705)
     )
-    mask |= setup.eq("E_ORB_BREAKOUT_LONG") & (notional >= 99937.32)
+    mask |= setup.eq("E_ORB_BREAKOUT_LONG") & (notional >= 100_000.0)
     mask |= setup.eq("E_ORB_BREAKOUT_SHORT") & (
-        (market_ret >= -0.63438346)
-        & (quality_score >= 97.873364)
-        & (upper_wick_pct <= 0.014647435)
+        (market_ret >= -0.63)
+        & (quality_score >= 97.9)
+        & (upper_wick_pct <= 0.015)
     )
     mask |= setup.eq("L_BB_SQUEEZE_LONG") & (
-        ((market_abs <= 0.74284715) | (vol_ratio <= 3.0227043))
-        & (ranker_score >= 0.7332456)
+        ((market_abs <= 0.74) | (vol_ratio <= 3.0))
+        & (ranker_score >= 0.73)
     )
     if profile_n == "production_core_tiny":
         mask |= setup.eq("E_VWAP_LOSE_EARLY_SHORT") & regime.eq("BEAR")
@@ -473,9 +472,9 @@ def selected_strategy_mask(
             & (ranker_score >= MAX_PNL_D_EMA20_REJECTION_MIN_RANKER_SCORE)
         )
         shadow_orb = setup.eq("E_ORB_BREAKOUT_SHORT") & (
-            (market_ret >= -0.63438346)
-            & (quality_score >= 97.873364)
-            & (upper_wick_pct <= 0.014647435)
+            (market_ret >= -0.63)
+            & (quality_score >= 97.9)
+            & (upper_wick_pct <= 0.015)
         )
         shadow_mr = setup.eq("MR_CONTROLLED_VWAP_EXTREME_FADE_SHORT") & (
             (vol_ratio <= TIER123_MR_FADE_SHORT_MAX_VOL_RATIO)
@@ -808,7 +807,8 @@ def _tier123_prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
         out["date"] = out["date"].dt.tz_convert(IST_TZ)
     out = out.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
     out["date_only"] = out["date"].dt.strftime("%Y-%m-%d")
-    if "ATR" not in out.columns or out["ATR"].isna().all() or "VWAP" not in out.columns or out["VWAP"].isna().all():
+    out["VWAP_parquet"] = out["VWAP"] if "VWAP" in out.columns else np.nan
+    if "ATR" not in out.columns or out["ATR"].isna().all():
         out = candidate_scan.v2._prepare_5m(out)
         out["date"] = pd.to_datetime(out["date"], errors="coerce")
         if getattr(out["date"].dt, "tz", None) is None:
@@ -816,7 +816,6 @@ def _tier123_prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
         else:
             out["date"] = out["date"].dt.tz_convert(IST_TZ)
         out["date_only"] = out["date"].dt.strftime("%Y-%m-%d")
-        return out
 
     out["Volume_SMA20"] = out.groupby("date_only")["volume"].transform(
         lambda s: s.shift(1).rolling(candidate_scan.v2.VWAP_LOOKBACK, min_periods=8).mean()
@@ -831,7 +830,15 @@ def _tier123_prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
     out["lower_wick_pct"] = (out[["open", "close"]].min(axis=1) - out["low"]) / range_nonzero
     out["vol_ratio"] = out["volume"] / out["Volume_SMA20"].replace(0, np.nan)
     out["atr_pct"] = out["ATR"] / out["close"].replace(0, np.nan)
-    out["vwap_dist_atr"] = (out["close"] - out["VWAP"]) / out["ATR"].replace(0, np.nan)
+    typical = (out["high"] + out["low"] + out["close"]) / 3.0
+    cumulative_pv = (typical * out["volume"]).groupby(out["date_only"]).cumsum()
+    cumulative_volume = out["volume"].groupby(out["date_only"]).cumsum().replace(0, np.nan)
+    session_vwap = cumulative_pv / cumulative_volume
+    out["VWAP"] = session_vwap.where(session_vwap.notna(), out["VWAP_parquet"])
+    atr_floor = out["ATR"].where(out["ATR"] >= 0.0003 * out["close"], 0.0003 * out["close"])
+    out["vwap_dist_atr"] = (
+        (out["close"] - out["VWAP"]) / atr_floor.replace(0, np.nan)
+    ).clip(-15.0, 15.0)
     return out
 
 

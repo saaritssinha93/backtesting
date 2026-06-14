@@ -81,17 +81,28 @@ def _touch_runtime_heartbeat(state: str, **extra: Any) -> None:
 
 # ---- Config ------------------------------------------------------------------
 
+def _env_enabled(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
 FETCHER_SCRIPT = BASE_DIR / "trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_5minonly.py"
 
-# Primary index (existing NIFTY 50 / NIFTYBEES path)
+# Primary live-gate feed. This is an ETF proxy and intentionally owns the
+# nifty_ready_*.json marker consumed by the detection engine.
 NIFTY_SYMBOL = os.getenv("NIFTY_SYMBOL", "NIFTYBEES")
-NIFTY_ALIASES = os.getenv("NIFTY_ALIASES", "NIFTYBEES,NIFTY50,NIFTY_50,NIFTY")
+NIFTY_ALIASES = os.getenv("NIFTY_ALIASES", "NIFTYBEES,NIFTYBEES_PROXY")
+
+# True NIFTY 50 index copy. This is a secondary fetch so it cannot overwrite
+# the NIFTYBEES live-gate marker or block scanning if Kite index fetch is slow.
+NIFTY_INDEX_ENABLED = _env_enabled("EQIDV2_NF_FETCH_NIFTY_INDEX", "1")
+NIFTY_INDEX_SYMBOL = os.getenv("NIFTY_INDEX_SYMBOL", "NIFTY 50")
+NIFTY_INDEX_ALIASES = os.getenv("NIFTY_INDEX_ALIASES", "NIFTY,NIFTY50,NIFTY_50,NIFTY 50")
 
 # Secondary index (NIFTY 500). Set EQIDV2_NF_FETCH_NIFTY500=0 to disable.
 # Default ON so v17B/v17C/regime work can use NIFTY 500 as a small/mid-cap-aligned
 # regime reference. Aliases include the index symbol with space, the no-space
 # variant, and common NIFTY 500 ETFs as fallbacks.
-NIFTY500_ENABLED = os.getenv("EQIDV2_NF_FETCH_NIFTY500", "1").strip().lower() in ("1", "true", "yes", "on")
+NIFTY500_ENABLED = _env_enabled("EQIDV2_NF_FETCH_NIFTY500", "1")
 NIFTY500_SYMBOL = os.getenv("NIFTY500_SYMBOL", "NIFTY 500")
 NIFTY500_ALIASES = os.getenv("NIFTY500_ALIASES", "NIFTY 500,NIFTY500,N500,MOM500")
 
@@ -180,26 +191,45 @@ def _run_one_fetch(symbol: str, aliases: str, label: str,
 
 
 def _run_fetcher_once() -> int:
-    """Run the alltf_v3 fetcher for NIFTY 50 (NIFTYBEES) and -- if enabled --
-    NIFTY 500 sequentially. Slot-level success requires the PRIMARY (NIFTYBEES)
-    fetch to succeed; NIFTY 500 failure is logged as WARN but does not abort
-    the slot (regime engine has the F7 fallback for missing index data).
+    """Run NIFTYBEES proxy first, then true index side copies if enabled.
+
+    Slot-level success requires the PRIMARY (NIFTYBEES) fetch to succeed.
+    True NIFTY 50 and NIFTY 500 failures are logged as WARN but do not abort
+    the slot because they are research/context copies, not the live gate.
 
     PRIMARY fetch writes the nifty_ready_*.json DE marker (drives live
-    regime gate). SECONDARY (NIFTY 500) fetch is invoked with --skip-marker
-    so it does not overwrite the primary marker."""
-    rc_primary = _run_one_fetch(NIFTY_SYMBOL, NIFTY_ALIASES, "NIFTY50",
-                                  skip_marker=False)
+    regime gate). SECONDARY fetches are invoked with --skip-marker so they
+    do not overwrite the primary marker."""
+    rc_primary = _run_one_fetch(
+        NIFTY_SYMBOL,
+        NIFTY_ALIASES,
+        "NIFTYBEES_PROXY",
+        skip_marker=False,
+    )
     if rc_primary != 0:
         # Primary failed -- propagate so the supervisor retry path triggers.
         return rc_primary
+
+    if NIFTY_INDEX_ENABLED:
+        rc_index = _run_one_fetch(
+            NIFTY_INDEX_SYMBOL,
+            NIFTY_INDEX_ALIASES,
+            "NIFTY50_INDEX",
+            skip_marker=True,
+        )
+        if rc_index != 0:
+            print(
+                f"[WARN] NIFTY50_INDEX fetch failed (rc={rc_index}) but "
+                "NIFTYBEES proxy succeeded; treating slot as OK.",
+                flush=True,
+            )
 
     if NIFTY500_ENABLED:
         rc_secondary = _run_one_fetch(NIFTY500_SYMBOL, NIFTY500_ALIASES,
                                        "NIFTY500", skip_marker=True)
         if rc_secondary != 0:
-            print(f"[WARN] NIFTY500 fetch failed (rc={rc_secondary}) but NIFTY50 "
-                  f"succeeded; treating slot as OK to avoid retry-storm.",
+            print(f"[WARN] NIFTY500 fetch failed (rc={rc_secondary}) but NIFTYBEES "
+                  f"proxy succeeded; treating slot as OK to avoid retry-storm.",
                   flush=True)
             # Soft-fail: do not block the slot.
     return 0
@@ -212,8 +242,13 @@ def main() -> int:
     print(f"NIFTY guard fetcher (supervised) — v16 5min", flush=True)
     print(f"  python: {PYTHON_EXE}", flush=True)
     print(f"  fetcher: {FETCHER_SCRIPT}", flush=True)
-    print(f"  primary symbol  : {NIFTY_SYMBOL}", flush=True)
+    print(f"  primary symbol  : {NIFTY_SYMBOL}  (NIFTYBEES proxy, marker owner)", flush=True)
     print(f"  primary aliases : {NIFTY_ALIASES}", flush=True)
+    if NIFTY_INDEX_ENABLED:
+        print(f"  true index symbol  : {NIFTY_INDEX_SYMBOL}  (secondary, skip-marker)", flush=True)
+        print(f"  true index aliases : {NIFTY_INDEX_ALIASES}", flush=True)
+    else:
+        print(f"  true index         : DISABLED (EQIDV2_NF_FETCH_NIFTY_INDEX=0)", flush=True)
     if NIFTY500_ENABLED:
         print(f"  secondary symbol  : {NIFTY500_SYMBOL}  (NIFTY 500)", flush=True)
         print(f"  secondary aliases : {NIFTY500_ALIASES}", flush=True)

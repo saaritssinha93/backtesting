@@ -893,7 +893,20 @@ def calculate_adx(df, period=14):
     return adx.clip(0, 100)
 
 def calculate_vwap(df):
-    return (df["close"] * df["volume"]).cumsum() / (df["volume"].cumsum() + 1e-10)
+    # SESSION VWAP: reset each trading day, typical-price weighted. (Was a GLOBAL cumsum() that never
+    # reset per day -> VWAP anchored to the first bar of history and drifting far from price, e.g.
+    # 360ONE ~1106 vs price ~920. The backtest/live read-path recomputes session VWAP anyway; this
+    # makes the STORED parquet VWAP column correct for the future too.)
+    _tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    _vol = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0).fillna(0.0)
+    _d = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        _day = _d.dt.tz_convert(IST_TZ).dt.date
+    except (TypeError, AttributeError, NameError):
+        _day = _d.dt.date
+    _pv_cum = (_tp * _vol).groupby(_day).cumsum()
+    _vol_cum = _vol.groupby(_day).cumsum()
+    return _pv_cum / _vol_cum.where(_vol_cum != 0)
 
 def calculate_ema(close, span):
     return close.ewm(span=span, adjust=False).mean()
@@ -999,8 +1012,33 @@ def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.
 
 # ========= SAVE =========
 
+def _stamp_opening_snapshot(df: pd.DataFrame) -> pd.DataFrame:
+    """Label the 09:15 session-open row in the live slim store.
+
+    The live 5m store uses the hybrid convention: 09:15 is an opening snapshot,
+    while 09:20..15:30 are completed end-stamped 5m candles. This additive
+    column lets readers identify that row without changing OHLCV or indicators.
+    """
+    if df is None or df.empty or "date" not in df.columns:
+        return df
+    ts = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        ts = ts.dt.tz_convert(IST_TZ)
+    except (TypeError, AttributeError):
+        try:
+            ts = ts.dt.tz_localize(IST_TZ)
+        except (TypeError, AttributeError):
+            pass
+    out = df.copy()
+    out["opening_snapshot"] = (
+        (ts.dt.hour == MARKET_OPEN_TIME.hour) & (ts.dt.minute == MARKET_OPEN_TIME.minute)
+    ).fillna(False).astype(bool)
+    return out
+
+
 def _finalize_and_save(df: pd.DataFrame, out_path: str):
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    df = _stamp_opening_snapshot(df)
     ext = str(Path(out_path).suffix).lower()
 
     if ext == ".parquet":
@@ -1337,6 +1375,28 @@ def _apply_synthetic_5min_gap_fill(
     return out, filled_now
 
 
+def _contiguous_5min_stamp_ranges(
+    stamps: list[pd.Timestamp],
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    normalized = sorted({pd.Timestamp(ts).floor("min") for ts in stamps})
+    if not normalized:
+        return []
+
+    step = pd.Timedelta(minutes=5)
+    ranges: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    range_start = normalized[0]
+    range_end = normalized[0]
+    for stamp in normalized[1:]:
+        if stamp == range_end + step:
+            range_end = stamp
+            continue
+        ranges.append((range_start, range_end))
+        range_start = stamp
+        range_end = stamp
+    ranges.append((range_start, range_end))
+    return ranges
+
+
 def _fetch_missing_5min_session_rows(
     ticker: str,
     kite: KiteConnect,
@@ -1377,26 +1437,39 @@ def _fetch_missing_5min_session_rows(
                 frames.append(opening_df)
 
     end_missing = [ts for ts in normalized_missing if ts >= first_end]
-    if end_missing:
-        end_df = fetch_historical_5min_df(
+    for range_start, range_end in _contiguous_5min_stamp_ranges(end_missing):
+        # End-stamped storage shifts Kite's start-stamped bars by five minutes.
+        # Fetch only the raw-bar span needed for this missing range instead of
+        # redownloading the full session for every symbol on every live slot.
+        fetch_start = max(session_open, range_start - pd.Timedelta(minutes=5))
+        fetch_end = min(expected_ts, range_end)
+        if fetch_start >= fetch_end:
+            continue
+
+        range_df = fetch_historical_5min_df(
             kite,
             token,
-            session_open.to_pydatetime(),
-            expected_ts.to_pydatetime(),
+            fetch_start.to_pydatetime(),
+            fetch_end.to_pydatetime(),
             logger,
             "end",
         )
-        if not end_df.empty:
-            end_dt = pd.to_datetime(end_df["date"], errors="coerce")
-            if getattr(end_dt.dt, "tz", None) is None:
-                end_dt = end_dt.dt.tz_localize(IST_TZ)
+        if not range_df.empty:
+            range_dt = pd.to_datetime(range_df["date"], errors="coerce")
+            if getattr(range_dt.dt, "tz", None) is None:
+                range_dt = range_dt.dt.tz_localize(IST_TZ)
             else:
-                end_dt = end_dt.dt.tz_convert(IST_TZ)
-            mask = end_dt.isin(end_missing)
-            end_df = end_df.loc[mask].copy()
-            if not end_df.empty:
-                end_df["date"] = end_dt.loc[end_df.index]
-                frames.append(end_df)
+                range_dt = range_dt.dt.tz_convert(IST_TZ)
+            wanted = {
+                stamp
+                for stamp in end_missing
+                if range_start <= stamp <= range_end
+            }
+            mask = range_dt.isin(wanted)
+            range_df = range_df.loc[mask].copy()
+            if not range_df.empty:
+                range_df["date"] = range_dt.loc[range_df.index]
+                frames.append(range_df)
 
     if not frames:
         logger.warning(

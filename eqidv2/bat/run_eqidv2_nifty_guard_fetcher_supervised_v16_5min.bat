@@ -26,7 +26,15 @@ set "EQIDV2_NF_SLOT_MAX_RETRIES=3"
 set "EQIDV2_NF_SLOT_RETRY_DELAY_SEC=5"
 set "EQIDV2_NF_FETCH_TIMEOUT_SEC=60"
 set "NIFTY_SYMBOL=NIFTYBEES"
-set "NIFTY_ALIASES=NIFTYBEES,NIFTY50,NIFTY_50,NIFTY"
+REM Proxy primary OWNS the consumed aliases NIFTY/NIFTY50/NIFTY_50 so the live
+REM VWAP/regime context keeps a volume-bearing ETF series and stays in parity
+REM with the backtest store. True NIFTY 50 index is fetched ONLY under the
+REM NIFTY50_INDEX alias (no consumer reads it) so a zero-volume index series can
+REM never overwrite the regime aliases nor leak into _eq_live2 via moving_files.
+set "NIFTY_ALIASES=NIFTYBEES,NIFTYBEES_PROXY,NIFTY,NIFTY50,NIFTY_50"
+set "EQIDV2_NF_FETCH_NIFTY_INDEX=1"
+set "NIFTY_INDEX_SYMBOL=NIFTY 50"
+set "NIFTY_INDEX_ALIASES=NIFTY50_INDEX"
 
 set "LOG_DIR=%BASE_DIR%\logs"
 set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
@@ -64,7 +72,11 @@ REM flags so [STARTUP.CONFIG] DRIFT surfaces if the bat ever silently changes.
   --from-env EQIDV2_NF_SLOT_OFFSET_SEC ^
   --from-env EQIDV2_NF_POLL_SEC ^
   --from-env EQIDV2_NF_FETCH_TIMEOUT_SEC ^
-  --from-env NIFTY_SYMBOL >> "%LOG_FILE%" 2>&1
+  --from-env NIFTY_SYMBOL ^
+  --from-env NIFTY_ALIASES ^
+  --from-env EQIDV2_NF_FETCH_NIFTY_INDEX ^
+  --from-env NIFTY_INDEX_SYMBOL ^
+  --from-env NIFTY_INDEX_ALIASES >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
   echo [WARN] runtime config claim write failed; continuing in soft mode>> "%LOG_FILE%"
 )

@@ -117,6 +117,23 @@ def check_file_recent(
     return CheckResult(label, "PASS", f"optional stale ({age_min:.1f}m) | {path.name}")
 
 
+def latest_nifty_v16_5min_log() -> Path:
+    today = now_ist().strftime("%Y-%m-%d")
+    patterns = (
+        f"eqidv2_nifty_guard_fetcher_supervised_v16_5min_{today}*.log",
+        "eqidv2_nifty_guard_fetcher_supervised_v16_5min_*.log",
+        "nifty_guard_fetcher_v16_5min.log",
+    )
+    for pattern in patterns:
+        try:
+            matches = list(LOG_DIR.glob(pattern))
+        except OSError:
+            matches = []
+        if matches:
+            return max(matches, key=lambda p: p.stat().st_mtime)
+    return LOG_DIR / f"eqidv2_nifty_guard_fetcher_supervised_v16_5min_{today}.log"
+
+
 def check_today_file(
     pattern: str,
     required: bool,
@@ -243,6 +260,41 @@ def check_supervised_runtime_if_enabled(
     )
 
 
+def check_task_trigger_not_market_hours(task_name: str) -> CheckResult:
+    """Fail if the task is ENABLED and its actual trigger fires during market hours.
+
+    The backtesting/data-moving task EQIDV2_data_for_backtesting_1545 once had a
+    09:17:30 trigger which ran large file-moving and CPU-intensive work during the
+    live session. This check catches the mis-configuration before market open.
+    """
+    label = f"task_trigger_not_market_hours_{task_name}"
+    out = _run_schtasks_query(task_name)
+    if not out:
+        return CheckResult(label, "PASS", "task not found — no trigger to validate")
+    lines = out.splitlines()
+    state = _extract_value(lines, "Scheduled Task State")
+    if state.strip().upper() != "ENABLED":
+        return CheckResult(label, "PASS", f"task disabled — trigger not active (state={state})")
+    # Look for Start Time: HH:MM:SS in schtasks /FO LIST /V output
+    start_time_str = _extract_value(lines, "Start Time")
+    if not start_time_str:
+        return CheckResult(label, "WARN", "cannot read trigger time from schtasks output")
+    try:
+        trigger_time = dt.time.fromisoformat(start_time_str.split()[0])
+    except ValueError:
+        return CheckResult(label, "WARN", f"cannot parse trigger time: {start_time_str!r}")
+    market_open = dt.time(9, 10)
+    market_close = dt.time(15, 30)
+    if market_open <= trigger_time <= market_close:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"ENABLED task fires at {trigger_time} — INSIDE market hours {market_open}–{market_close}. "
+            f"Run bat/fix_task_trigger_backtesting_1545.bat to correct.",
+        )
+    return CheckResult(label, "PASS", f"trigger at {trigger_time} is outside market hours")
+
+
 def check_bat_exists(path: Path, label: str, detail_prefix: str = "runner wrapper present") -> CheckResult:
     if path.exists():
         return CheckResult(label, "PASS", f"{detail_prefix} | {path.name}")
@@ -253,8 +305,8 @@ def _run_schtasks_query(task_name: str) -> Optional[str]:
     candidates = [task_name]
     normalized = task_name.strip()
     if normalized:
-        root_name = f"\\{normalized.lstrip('\\')}"
         bare_name = normalized.lstrip("\\")
+        root_name = "\\" + bare_name
         for candidate in (root_name, bare_name):
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
@@ -501,7 +553,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     )
     checks.append(
         check_file_recent_if_enabled(
-            LOG_DIR / "nifty_guard_fetcher_v16_5min.log",
+            latest_nifty_v16_5min_log(),
             max_age_min=max_age_min,
             label="nifty_guard_fetch_v16_5min",
             enabled=v16_5min_nifty_enabled and v16_5min_nifty_log_due,
@@ -532,6 +584,10 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     today = now_local.strftime("%Y-%m-%d")
 
     checks.append(CheckResult("preopen_healthcheck", "PASS", "report generated now"))
+
+    # Validate that the backtesting/data-moving task does not fire during market hours.
+    # The task was once misconfigured with a 09:17:30 trigger instead of 15:45.
+    checks.append(check_task_trigger_not_market_hours("EQIDV2_data_for_backtesting_1545"))
 
     checks.append(
         check_bat_exists(

@@ -26,10 +26,13 @@ if not defined EQIDV2_REPLAY_FORCE_MARKET_HOURS (
   )
 )
 
-REM One-shot REPLAY of past slots into the LIVE candidate CSVs. Mirrors the
-REM production env from run_eqidv2_signal_discovery_v7_5min_id_persistent.bat so
-REM replayed candidates match live tuning. Pass slots as args, e.g.:
+REM One-shot REPLAY of past slots. Mirrors live tuning but writes all outputs
+REM to an isolated replay directory instead of production paths.
+REM Pass slots as args:
 REM   run_eqidv2_signal_discovery_v7_replay_today.bat "2026-06-05 10:55" "2026-06-05 11:00" ...
+REM
+REM Outputs go to: C:\TradingData\eqidv2\replay\  (not the production paths).
+set "EQIDV2_REPLAY_OUTPUT_ROOT=C:\TradingData\eqidv2\replay"
 set EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS=16
 set EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS=16
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_START=09:30

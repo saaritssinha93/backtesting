@@ -16,10 +16,13 @@ entry price discovery.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import logging
 import os
+import threading
 import time
+import urllib.request as _urlrequest
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
@@ -40,15 +43,33 @@ from eqidv2_runtime_paths import DATA_1MIN_DIR, DATA_5M_DIR, RUNTIME_ROOT, RUNTI
 
 SESSION_NAME = "Entry engine 1 min v7 ID"
 SESSION_SLUG = "entry_engine_1min_v5_ID"
-SESSION_ROOT = runtime_dir(SESSION_SLUG)
-RAW_1MIN_DIR = runtime_dir("stocks_raw_1min_entry_v5_id_live")
+
+_REPLAY_OUTPUT_ROOT_RAW = os.getenv("EQIDV2_REPLAY_OUTPUT_ROOT", "").strip()
+if _REPLAY_OUTPUT_ROOT_RAW:
+    _REPLAY_OUTPUT_ROOT = Path(_REPLAY_OUTPUT_ROOT_RAW)
+    _IS_REPLAY_ISOLATED = True
+    SESSION_ROOT = _REPLAY_OUTPUT_ROOT / SESSION_SLUG
+    RAW_1MIN_DIR = _REPLAY_OUTPUT_ROOT / "stocks_raw_1min_entry_v5_id_live"
+    _SIGNAL_DISCOVERY_ROOT_DEFAULT = _REPLAY_OUTPUT_ROOT / "signal_discovery_v7_5mins_ID"
+else:
+    _REPLAY_OUTPUT_ROOT = None
+    _IS_REPLAY_ISOLATED = False
+    SESSION_ROOT = runtime_dir(SESSION_SLUG)
+    RAW_1MIN_DIR = runtime_dir("stocks_raw_1min_entry_v5_id_live")
+    _SIGNAL_DISCOVERY_ROOT_DEFAULT = runtime_dir("signal_discovery_v7_5mins_ID")
+
 SLOT_RAW_DIR = SESSION_ROOT / "slot_raw_1min"
 AUDIT_DIR = SESSION_ROOT / "audit"
 LATEST_DIR = SESSION_ROOT / "latest"
 HEARTBEAT_DIR = SESSION_ROOT / "heartbeat"
-SIGNAL_DISCOVERY_ROOT = runtime_dir("signal_discovery_v7_5mins_ID")
+SIGNAL_DISCOVERY_ROOT = Path(
+    os.getenv("EQIDV2_ENTRY_ENGINE_SIGNAL_DISCOVERY_ROOT", str(_SIGNAL_DISCOVERY_ROOT_DEFAULT))
+)
 SIGNAL_DISCOVERY_LATEST_JSON = SIGNAL_DISCOVERY_ROOT / "latest" / "latest_candidate_tickers.json"
 SIGNAL_DISCOVERY_LATEST_CSV = SIGNAL_DISCOVERY_ROOT / "latest" / "latest_candidate_tickers.csv"
+USE_SLOT_CANDIDATE_JSON = str(
+    os.getenv("EQIDV2_ENTRY_ENGINE_USE_SLOT_CANDIDATE_JSON", "1" if _IS_REPLAY_ISOLATED else "0")
+).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
 IST = pytz.timezone("Asia/Kolkata")
 MARKET_OPEN = dtime(9, 15)
@@ -106,7 +127,62 @@ V11_BACKTESTING_OVERLAY_PROFILE = os.getenv(
 ).strip()
 V7_SIGNAL_MARGIN_RS = 20_000.0
 V7_INTRADAY_LEVERAGE = 5.0
-V7_SIGNAL_NOTIONAL_RS = V7_SIGNAL_MARGIN_RS * V7_INTRADAY_LEVERAGE
+V7_SIGNAL_NOTIONAL_RS = V7_SIGNAL_MARGIN_RS * V7_INTRADAY_LEVERAGE  # legacy fallback
+
+# P1-7: Risk-based sizing — size each trade to a fixed % of equity at the stop.
+# Defaults: 0.25% risk on Rs 2L equity, capped Rs 50k–150k notional per trade.
+# Override all three via env vars; set EQIDV2_RISK_SIZING_ENABLED=0 to revert
+# to fixed-notional (legacy) sizing.
+RISK_SIZING_ENABLED = str(os.getenv("EQIDV2_RISK_SIZING_ENABLED", "1")).strip().lower() not in {
+    "0", "false", "no", "off"
+}
+RISK_PCT_PER_TRADE = float(os.getenv("EQIDV2_RISK_PCT_PER_TRADE", "0.25"))
+RISK_EQUITY_RS = float(os.getenv("EQIDV2_RISK_EQUITY_RS", "200000.0"))
+RISK_MAX_NOTIONAL_RS = float(os.getenv("EQIDV2_RISK_MAX_NOTIONAL_RS", "150000.0"))
+RISK_MIN_NOTIONAL_RS = float(os.getenv("EQIDV2_RISK_MIN_NOTIONAL_RS", "50000.0"))
+
+# P1-7: NIFTY regime gate — halve short size when NIFTY > rising 20-day MA (daily).
+NIFTY_REGIME_GATE_ENABLED = str(os.getenv("EQIDV2_NIFTY_REGIME_GATE_ENABLED", "1")).strip().lower() not in {
+    "0", "false", "no", "off"
+}
+NIFTY_5MIN_PARQUET = os.getenv(
+    "EQIDV2_NIFTY_5MIN_PARQUET",
+    r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live\NIFTY_stocks_indicators_5min.parquet",
+)
+NIFTY_MA_DAYS = int(os.getenv("EQIDV2_NIFTY_MA_DAYS", "20"))
+NIFTY_REGIME_SHORT_SIZE_MULT = float(os.getenv("EQIDV2_NIFTY_REGIME_SHORT_SIZE_MULT", "0.5"))
+
+# P2-11: ADV liquidity cap — reject signals whose per-trade notional exceeds
+# ADV_PARTICIPATION_PCT% of the ticker's 20-day average daily traded value.
+# ADV_RS = mean(close * volume) over last ADV_LOOKBACK_DAYS trading days.
+# Default 1% participation is conservative for Rs 50cr+ ADV stocks.
+# Set EQIDV2_ADV_CAP_ENABLED=0 to disable, or raise participation for large-caps.
+ADV_CAP_ENABLED = str(os.getenv("EQIDV2_ADV_CAP_ENABLED", "1")).strip().lower() not in {
+    "0", "false", "no", "off"
+}
+ADV_PARTICIPATION_PCT = float(os.getenv("EQIDV2_ADV_PARTICIPATION_PCT", "1.0"))
+ADV_LOOKBACK_DAYS = int(os.getenv("EQIDV2_ADV_LOOKBACK_DAYS", "20"))
+ADV_DAILY_PARQUET_DIR = os.getenv(
+    "EQIDV2_ADV_DAILY_PARQUET_DIR",
+    r"C:\TradingData\eqidv2\stocks_indicators_daily_eq",
+)
+
+# P2-12: F&O ban pre-trade filter — block new SHORT entries on F&O-banned stocks.
+# NSE publishes the daily securities-in-ban-period list at ~07:00 IST.
+# Fetched once per trading day, cached in memory.  Fail-open: if the fetch fails
+# (network down, NSE URL changes), the cache stays empty and no trades are blocked.
+FNO_BAN_FILTER_ENABLED = str(os.getenv("EQIDV2_FNO_BAN_FILTER_ENABLED", "1")).strip().lower() not in {
+    "0", "false", "no", "off"
+}
+FNO_BAN_URL = os.getenv(
+    "EQIDV2_FNO_BAN_URL",
+    "https://nsearchives.nseindia.com/content/fo/fo_secban.csv",
+)
+FNO_BAN_LOCAL_FILE = os.getenv(
+    "EQIDV2_FNO_BAN_LOCAL_FILE",
+    r"C:\TradingData\eqidv2\runtime_status\fo_secban_today.csv",
+)
+FNO_BAN_FETCH_TIMEOUT_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_FNO_BAN_FETCH_TIMEOUT_SEC", "3"))
 
 # Pre-entry momentum gates promoted from the 2026-05-21..2026-06-03 live paper
 # replay. These run after the 1-minute entry bar is known but before signal CSVs
@@ -126,14 +202,24 @@ E_VWAP_EARLY_SHORT_MIN_SLOT = dtime(9, 45)
 # Validated over 10 sessions (32 trades, PF 3.25). Signal-time gate mirrors V11.
 A_MOD_C1_HIGH_MAX_SLOT = dtime(11, 10)
 A_MOD_C1_HIGH_TOP_N_PER_SLOT = int(os.getenv("EQIDV2_ENTRY_ENGINE_AMOD_C1_HIGH_TOP_N_PER_SLOT", "2"))
+# C_OR_BREAKOUT: VWAP separation floor and ATR cap derived from v8 backtest bucket
+# analysis (842 trades). avwap_dist>=2.0 → PF 2.46; atr_pct>=0.010 → PF 0.93.
+C_OR_BREAKOUT_MIN_VWAP_DIST_ATR = float(os.getenv("EQIDV2_ENTRY_ENGINE_COR_BREAKOUT_MIN_VWAP_DIST_ATR", "2.0"))
+C_OR_BREAKOUT_MAX_ATR_PCT = float(os.getenv("EQIDV2_ENTRY_ENGINE_COR_BREAKOUT_MAX_ATR_PCT", "0.010"))
+# C_OR_BREAKOUT time window: bars 1-6 (09:25-09:50) WR=33.2% (early false breaks),
+# bars 7-18 (09:55-10:40) WR=71.2% PF=1.71, bars 19+ PF=0.68. Enforce morning only.
+C_OR_BREAKOUT_MIN_SIGNAL_TIME = dtime(9, 55)
+C_OR_BREAKOUT_MAX_SIGNAL_TIME = dtime(10, 40)
 
 PRE_ENTRY_MOMENTUM_SETUP_GATES: Dict[str, Tuple[Tuple[str, str, float], ...]] = {
     "B_AVWAP_RECLAIM_REVERSAL": (
         ("pre_entry_momentum_score", "<=", 64.7678),
     ),
     "C_OR_BREAKOUT": (
-        ("sig5_adx_calc", ">=", 16.2111),
-        ("pre2_mom_r", ">=", -0.187227),
+        ("sig5_adx_calc", ">=", 25.0),      # ADX<25 → WR=23.6%
+        ("sig5_rsi_dir", ">=", 60.0),       # RSI<60 → WR=18.3% (for LONG: sig5_rsi_dir=RSI)
+        ("sig5_vol_ratio20", ">=", 1.5),    # vol<1.5x → WR=43.4%; strong breakout bar required
+        ("pre2_mom_r", ">=", -0.050),
     ),
     "D_EMA20_BOUNCE": (
         ("pre3_range_r", ">=", 0.292349),
@@ -180,6 +266,8 @@ PRE_ENTRY_MOMENTUM_SHADOW_SETUPS = {
 _indicator_1m_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
 _indicator_5m_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
 _last_raw_fetch_stats: Dict[str, Any] = {}
+_last_candidate_load_stats: Dict[str, Any] = {}
+_progress_lock = threading.Lock()
 
 
 for _p in (SESSION_ROOT, RAW_1MIN_DIR, SLOT_RAW_DIR, AUDIT_DIR, LATEST_DIR, HEARTBEAT_DIR):
@@ -197,8 +285,12 @@ def _logger() -> logging.Logger:
 
 
 def _set_status_env() -> None:
-    os.environ["EQIDV2_RUNTIME_STATUS_FILE"] = str(RUNTIME_STATUS_DIR / f"{SESSION_SLUG}.status")
-    os.environ["EQIDV2_RUNTIME_HEARTBEAT_FILE"] = str(RUNTIME_STATUS_DIR / f"{SESSION_SLUG}.heartbeat")
+    if _IS_REPLAY_ISOLATED:
+        os.environ["EQIDV2_RUNTIME_STATUS_FILE"] = str(HEARTBEAT_DIR / f"{SESSION_SLUG}.status")
+        os.environ["EQIDV2_RUNTIME_HEARTBEAT_FILE"] = str(HEARTBEAT_DIR / f"{SESSION_SLUG}.heartbeat")
+    else:
+        os.environ["EQIDV2_RUNTIME_STATUS_FILE"] = str(RUNTIME_STATUS_DIR / f"{SESSION_SLUG}.status")
+        os.environ["EQIDV2_RUNTIME_HEARTBEAT_FILE"] = str(RUNTIME_STATUS_DIR / f"{SESSION_SLUG}.heartbeat")
 
 
 def _touch_status(status: str, **extra: Any) -> None:
@@ -231,6 +323,35 @@ def _touch_heartbeat(status: str = "RUNNING", **extra: Any) -> None:
     )
 
 
+def _touch_progress(
+    phase: str,
+    *,
+    slot: Any = None,
+    status: str = "RUNNING",
+    log_line: bool = False,
+    **extra: Any,
+) -> None:
+    payload: Dict[str, Any] = {"phase": phase}
+    if slot is not None:
+        try:
+            payload["slot"] = _ensure_ist_ts(slot).strftime("%H:%M")
+        except Exception:
+            payload["slot"] = str(slot)
+    payload.update(extra)
+    try:
+        with _progress_lock:
+            _touch_status(status, **payload)
+            _touch_heartbeat(status, **payload)
+    except Exception as exc:
+        try:
+            _logger().warning("[PROGRESS] heartbeat update failed phase=%s: %s", phase, exc)
+        except Exception:
+            pass
+    if log_line:
+        detail = " ".join(f"{k}={v}" for k, v in sorted(payload.items()))
+        _logger().info("[PROGRESS] %s", detail)
+
+
 def _ensure_ist_ts(value: Any) -> pd.Timestamp:
     ts = pd.Timestamp(value)
     if ts.tz is None:
@@ -250,6 +371,38 @@ def _slot_key(slot: pd.Timestamp) -> str:
     return _ensure_ist_ts(slot).strftime("%Y%m%d_%H%M")
 
 
+def _atomic_write_csv(path: "Path", df: "pd.DataFrame") -> None:
+    """Write df to path atomically using a temp file + os.replace."""
+    import pathlib
+    p = pathlib.Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    try:
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, p)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def _atomic_write_json(path: "Path", payload: Any) -> None:
+    """Write JSON payload to path atomically using a temp file + os.replace."""
+    import pathlib
+    p = pathlib.Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        os.replace(tmp, p)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
 def _floor_5m(ts: pd.Timestamp) -> pd.Timestamp:
     ts = _ensure_ist_ts(ts)
     minute = (ts.minute // 5) * 5
@@ -267,20 +420,99 @@ def _next_entry_run_after(now: datetime) -> pd.Timestamp:
     return base_slot + pd.Timedelta(minutes=5, seconds=ENTRY_DELAY_SEC)
 
 
+def _startup_expired_slot_keys(startup_now: Any) -> set[str]:
+    """Slots already past the entry deadline when the live loop starts."""
+    startup_now_ts = _ensure_ist_ts(startup_now)
+    startup_slot = _floor_5m(
+        _ensure_ist_ts(pd.Timestamp(f"{startup_now_ts.date()} 09:15:00"))
+    ) + pd.Timedelta(minutes=5)
+    startup_floor = _floor_5m(startup_now_ts)
+    expired: set[str] = set()
+    while startup_slot <= startup_floor:
+        run_at = startup_slot + pd.Timedelta(seconds=ENTRY_DELAY_SEC)
+        if startup_now_ts > run_at + pd.Timedelta(seconds=ENTRY_DUE_GRACE_SEC):
+            expired.add(_slot_key(startup_slot))
+        startup_slot += pd.Timedelta(minutes=5)
+    return expired
+
+
+def _candidate_slot_json_path(slot: pd.Timestamp) -> Path:
+    return SIGNAL_DISCOVERY_ROOT / "json" / f"candidate_tickers_{_slot_key(slot)}.json"
+
+
+def _candidate_rows_from_json(path: Path) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    rows = payload.get("candidates", [])
+    if not isinstance(rows, list):
+        rows = []
+    return pd.DataFrame(rows), payload
+
+
 def _load_candidates_for_slot(slot: pd.Timestamp) -> pd.DataFrame:
+    global _last_candidate_load_stats
     slot = _ensure_ist_ts(slot).floor("min")
     df = pd.DataFrame()
-    if SIGNAL_DISCOVERY_LATEST_JSON.exists():
+    loaded_exact_slot_snapshot = False
+    _last_candidate_load_stats = {
+        "candidate_source": "none",
+        "candidate_source_path": "",
+        "candidate_source_slot_ist": "",
+        "candidate_source_rows": 0,
+        "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+    }
+    if USE_SLOT_CANDIDATE_JSON:
+        slot_json = _candidate_slot_json_path(slot)
+        if slot_json.exists():
+            try:
+                df, payload = _candidate_rows_from_json(slot_json)
+                loaded_exact_slot_snapshot = True
+                _last_candidate_load_stats = {
+                    "candidate_source": "slot_json",
+                    "candidate_source_path": str(slot_json),
+                    "candidate_source_slot_ist": str(payload.get("slot_ist", "")),
+                    "candidate_source_rows": int(len(df)),
+                    "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+                }
+            except Exception as exc:
+                _last_candidate_load_stats = {
+                    "candidate_source": "slot_json_error",
+                    "candidate_source_path": str(slot_json),
+                    "candidate_source_slot_ist": "",
+                    "candidate_source_rows": 0,
+                    "candidate_source_error": f"{type(exc).__name__}: {exc}",
+                    "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+                }
+                df = pd.DataFrame()
+    if not loaded_exact_slot_snapshot and SIGNAL_DISCOVERY_LATEST_JSON.exists():
         try:
-            payload = json.loads(SIGNAL_DISCOVERY_LATEST_JSON.read_text(encoding="utf-8", errors="replace"))
-            rows = payload.get("candidates", [])
-            if isinstance(rows, list):
-                df = pd.DataFrame(rows)
-        except Exception:
+            df, payload = _candidate_rows_from_json(SIGNAL_DISCOVERY_LATEST_JSON)
+            _last_candidate_load_stats = {
+                "candidate_source": "latest_json",
+                "candidate_source_path": str(SIGNAL_DISCOVERY_LATEST_JSON),
+                "candidate_source_slot_ist": str(payload.get("slot_ist", "")),
+                "candidate_source_rows": int(len(df)),
+                "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+            }
+        except Exception as exc:
+            _last_candidate_load_stats = {
+                "candidate_source": "latest_json_error",
+                "candidate_source_path": str(SIGNAL_DISCOVERY_LATEST_JSON),
+                "candidate_source_slot_ist": "",
+                "candidate_source_rows": 0,
+                "candidate_source_error": f"{type(exc).__name__}: {exc}",
+                "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+            }
             df = pd.DataFrame()
-    if df.empty and SIGNAL_DISCOVERY_LATEST_CSV.exists():
+    if not loaded_exact_slot_snapshot and df.empty and SIGNAL_DISCOVERY_LATEST_CSV.exists():
         try:
             df = pd.read_csv(SIGNAL_DISCOVERY_LATEST_CSV)
+            _last_candidate_load_stats = {
+                "candidate_source": "latest_csv",
+                "candidate_source_path": str(SIGNAL_DISCOVERY_LATEST_CSV),
+                "candidate_source_slot_ist": "",
+                "candidate_source_rows": int(len(df)),
+                "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+            }
         except Exception:
             df = pd.DataFrame()
     if df.empty:
@@ -309,6 +541,15 @@ def _load_candidates_for_slot(slot: pd.Timestamp) -> pd.DataFrame:
 
 
 def _latest_candidate_snapshot_slot() -> Optional[pd.Timestamp]:
+    source_path = Path(_last_candidate_load_stats.get("candidate_source_path", ""))
+    if USE_SLOT_CANDIDATE_JSON and source_path.exists() and source_path.name.startswith("candidate_tickers_"):
+        try:
+            payload = json.loads(source_path.read_text(encoding="utf-8", errors="replace"))
+            raw = payload.get("slot_ist")
+            if raw:
+                return _ensure_ist_ts(raw).floor("min")
+        except Exception:
+            pass
     if not SIGNAL_DISCOVERY_LATEST_JSON.exists():
         return None
     try:
@@ -369,7 +610,11 @@ def _load_candidates_for_slot_with_wait(slot: pd.Timestamp) -> Tuple[pd.DataFram
         time.sleep(poll)
 
 
-def _setup_kite_app_pool(app_count: int = RAW_FETCH_APP_COUNT) -> List[Tuple[str, Any]]:
+def _setup_kite_app_pool(
+    app_count: int = RAW_FETCH_APP_COUNT,
+    *,
+    progress_slot: Optional[pd.Timestamp] = None,
+) -> List[Tuple[str, Any]]:
     setup_map: Dict[str, Callable[[], Any]] = {}
     try:
         setup_map = dict(scheduler._setup_fn_map())
@@ -383,6 +628,7 @@ def _setup_kite_app_pool(app_count: int = RAW_FETCH_APP_COUNT) -> List[Tuple[str
         if setup_fn is None:
             continue
         try:
+            _touch_progress("RAW_SESSION_SETUP", slot=progress_slot, app=app_name)
             sessions.append((app_name, setup_fn()))
         except Exception as exc:
             print(
@@ -394,11 +640,31 @@ def _setup_kite_app_pool(app_count: int = RAW_FETCH_APP_COUNT) -> List[Tuple[str
     return sessions
 
 
-def _setup_kite_and_tokens(tickers: List[str]) -> Tuple[List[Tuple[str, Any]], Dict[str, int]]:
+def _setup_kite_and_tokens(
+    tickers: List[str],
+    *,
+    progress_slot: Optional[pd.Timestamp] = None,
+) -> Tuple[List[Tuple[str, Any]], Dict[str, int]]:
     log = _logger()
-    sessions = _setup_kite_app_pool()
+    _touch_progress("RAW_SESSION_SETUP", slot=progress_slot, tickers=len(tickers), log_line=True)
+    sessions = _setup_kite_app_pool(progress_slot=progress_slot)
+    _touch_progress(
+        "RAW_TOKEN_LOOKUP",
+        slot=progress_slot,
+        tickers=len(tickers),
+        active_apps=len(sessions),
+        log_line=True,
+    )
     tokens = scheduler.core.load_or_fetch_tokens(sessions[0][1], tickers, log, refresh=False)
     tokens = {str(k).upper(): int(v) for k, v in dict(tokens or {}).items()}
+    _touch_progress(
+        "RAW_TOKEN_LOOKUP_DONE",
+        slot=progress_slot,
+        tickers=len(tickers),
+        token_count=len(tokens),
+        active_apps=len(sessions),
+        log_line=True,
+    )
     return sessions, tokens
 
 
@@ -471,13 +737,22 @@ def _fetch_raw_partition(
     t0 = time.perf_counter()
     fetched: Dict[str, pd.DataFrame] = {}
     errors: List[Dict[str, str]] = []
-    for ticker in tickers:
+    total = int(len(tickers))
+    for idx, ticker in enumerate(tickers, start=1):
         symbol = str(ticker).upper()
         token = tokens.get(symbol)
         if not token:
             errors.append({"app": app_name, "ticker": symbol, "error": "missing_token"})
             continue
         try:
+            _touch_progress(
+                "RAW_FETCH_TICKER",
+                slot=slot,
+                app=app_name,
+                ticker=symbol,
+                ticker_idx=idx,
+                ticker_total=total,
+            )
             raw = kite.historical_data(int(token), start.to_pydatetime(), end.to_pydatetime(), KITE_INTERVAL)
         except Exception as exc:
             msg = f"{type(exc).__name__}: {exc}"
@@ -489,8 +764,17 @@ def _fetch_raw_partition(
             errors.append({"app": app_name, "ticker": symbol, "error": "empty_raw"})
             continue
         df.to_parquet(_slot_raw_path(slot, symbol), index=False)
+        _touch_progress("RAW_UPSERT_TICKER", slot=slot, app=app_name, ticker=symbol)
         _upsert_ticker_raw(symbol, df)
         fetched[symbol] = df
+        _touch_progress(
+            "RAW_FETCH_TICKER_DONE",
+            slot=slot,
+            app=app_name,
+            ticker=symbol,
+            ticker_idx=idx,
+            ticker_total=total,
+        )
     return app_name, fetched, errors, time.perf_counter() - t0
 
 
@@ -508,7 +792,8 @@ def _fetch_raw_for_candidates(candidates: pd.DataFrame, slot: pd.Timestamp) -> D
         }
         return {}
     fetch_started = time.perf_counter()
-    sessions, tokens = _setup_kite_and_tokens(tickers)
+    _touch_progress("RAW_FETCH_START", slot=slot, tickers=len(tickers), log_line=True)
+    sessions, tokens = _setup_kite_and_tokens(tickers, progress_slot=slot)
     worker_sessions = sessions if RAW_FETCH_PARALLEL_APPS_ENABLED else sessions[:1]
     if not worker_sessions:
         worker_sessions = sessions[:1]
@@ -540,6 +825,15 @@ def _fetch_raw_for_candidates(candidates: pd.DataFrame, slot: pd.Timestamp) -> D
             fetched.update(app_fetched)
             errors.extend(app_errors)
             per_app_elapsed[app_name] = round(float(elapsed), 3)
+            _touch_progress(
+                "RAW_FETCH_APP_DONE",
+                slot=slot,
+                app=app_name,
+                fetched=len(app_fetched),
+                errors=len(app_errors),
+                elapsed_sec=round(float(elapsed), 3),
+                log_line=True,
+            )
 
     _last_raw_fetch_stats = {
         "raw_fetch_mode": "parallel_app_pool" if RAW_FETCH_PARALLEL_APPS_ENABLED else "single_app",
@@ -553,6 +847,15 @@ def _fetch_raw_for_candidates(candidates: pd.DataFrame, slot: pd.Timestamp) -> D
         "raw_fetch_failures": int(len(errors)),
         "raw_fetch_missing_tokens": int(sum(1 for e in errors if e.get("error") == "missing_token")),
     }
+    _touch_progress(
+        "RAW_FETCH_DONE",
+        slot=slot,
+        tickers=len(tickers),
+        fetched=len(fetched),
+        failures=len(errors),
+        elapsed_sec=round(time.perf_counter() - fetch_started, 3),
+        log_line=True,
+    )
     return fetched
 
 
@@ -872,7 +1175,12 @@ def _apply_pre_entry_momentum_gate(
     return kept, rejected, stats
 
 
-def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+def _build_entry_rows(
+    candidates: pd.DataFrame,
+    raw_by_ticker: Dict[str, pd.DataFrame],
+    *,
+    slot: Optional[pd.Timestamp] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     # A_MOD_BREAK_C1_HIGH slot pre-filter: keep top-N per slot by vwap_dist_atr
     # desc so the strongest-momentum breakouts are selected when multiple fire
     # simultaneously. Operates on the full batch before the per-row loop below.
@@ -894,9 +1202,13 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             candidates = pd.concat([_other, _amod], ignore_index=True)
 
     rows: List[Dict[str, Any]] = []
+    adv_cap_rejected_rows: List[Dict[str, Any]] = []  # P2-15: funnel audit
+    fno_ban_rejected_rows: List[Dict[str, Any]] = []  # P2-15: funnel audit
     for _, cand in candidates.iterrows():
         setup = str(cand.get("setup", ""))
         side = str(cand.get("side", "")).upper()
+        ticker = str(cand.get("ticker", "")).upper().strip()
+        cand_id = str(cand.get("candidate_id", ""))
         # P1.1: block E_VWAP_LOSE_EARLY_SHORT before the 09:45 bar (first two
         # slots lack a reliable intraday VWAP, producing immediate adverse moves).
         if setup.upper() == "E_VWAP_LOSE_EARLY_SHORT":
@@ -909,6 +1221,21 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             _sig_ts = _ensure_ist_ts(cand.get("signal_time_ist"))
             if not pd.isna(_sig_ts) and _sig_ts.time() > A_MOD_C1_HIGH_MAX_SLOT:
                 continue
+        # C_OR_BREAKOUT: VWAP separation, volatility cap, and morning-only time window.
+        # vwap_dist>=2.0 → PF 2.46; atr_pct>=0.010 → PF 0.93.
+        # Time window 09:55-10:40: bars 1-6 WR=33.2%, bars 7-18 WR=71.2%, bars 19+ PF=0.68.
+        if setup.upper() == "C_OR_BREAKOUT":
+            _cor_vwap = _safe_float(cand.get("vwap_dist_atr"), float("nan"))
+            _cor_atr = _safe_float(cand.get("atr_pct"), float("nan"))
+            if not (np.isfinite(_cor_vwap) and _cor_vwap >= C_OR_BREAKOUT_MIN_VWAP_DIST_ATR):
+                continue
+            if np.isfinite(_cor_atr) and _cor_atr >= C_OR_BREAKOUT_MAX_ATR_PCT:
+                continue
+            _cor_sig_ts = _ensure_ist_ts(cand.get("signal_time_ist"))
+            if not pd.isna(_cor_sig_ts):
+                _cor_t = _cor_sig_ts.time()
+                if _cor_t < C_OR_BREAKOUT_MIN_SIGNAL_TIME or _cor_t > C_OR_BREAKOUT_MAX_SIGNAL_TIME:
+                    continue
         exit_override = (
             v11_live_overlay.selected_exit_override(setup, V11_BACKTESTING_OVERLAY_PROFILE)
             if V11_BACKTESTING_OVERLAY_ENABLE
@@ -948,7 +1275,45 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             target_price = entry_price * (1.0 - tgt_pct / 100.0)
         else:
             continue
-        quantity = max(1, int(V7_SIGNAL_NOTIONAL_RS / entry_price))
+        # P2-12: F&O ban filter — block new SHORT entries on banned securities
+        if side == "SHORT" and FNO_BAN_FILTER_ENABLED:
+            if slot is not None:
+                _touch_progress("FNO_BAN_CHECK", slot=slot, ticker=ticker)
+            banned = _get_fno_banned_tickers()
+            if ticker.upper() in banned:
+                _logger().info(
+                    f"[FNO.BAN] skip {ticker} SHORT — in F&O ban period today | cand={cand_id[:12]}"
+                )
+                fno_ban_rejected_rows.append({**cand.to_dict(), "reject_reason": "fno_ban_short"})
+                continue
+        quantity = _risk_based_qty(entry_price, sl_price)
+        # P1-7: halve short size on bullish NIFTY regime
+        if side == "SHORT":
+            nifty_mult = _nifty_regime_short_mult()
+            if nifty_mult < 1.0:
+                quantity = max(1, int(quantity * nifty_mult))
+        # P2-11: ADV liquidity cap — skip if notional > participation% of ADV
+        if ADV_CAP_ENABLED:
+            if slot is not None:
+                _touch_progress("ADV_CAP_CHECK", slot=slot, ticker=ticker)
+            adv_rs = _get_adv_rs(ticker)
+            if adv_rs > 0:
+                adv_cap_rs = adv_rs * ADV_PARTICIPATION_PCT / 100.0
+                proposed_notional = float(entry_price * quantity)
+                if proposed_notional > adv_cap_rs:
+                    _logger().info(
+                        f"[ADV.CAP] skip {ticker} {side} notional=Rs{proposed_notional:,.0f} "
+                        f"> {ADV_PARTICIPATION_PCT}%_ADV=Rs{adv_cap_rs:,.0f} "
+                        f"(ADV=Rs{adv_rs:,.0f}) | cand={cand_id[:12]}"
+                    )
+                    adv_cap_rejected_rows.append({
+                        **cand.to_dict(),
+                        "reject_reason": "adv_cap",
+                        "proposed_notional_rs": proposed_notional,
+                        "adv_cap_rs": adv_cap_rs,
+                        "adv_rs": adv_rs,
+                    })
+                    continue
         v7_signal_notional_rs = float(entry_price * quantity)
         _entry_time_ist = _fmt_ist(entry_bar.get("date")) if entry_bar is not None else ""
         diag = {
@@ -973,6 +1338,8 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             "close_loc": cand.get("close_loc", ""),
             "vwap_dist_atr": cand.get("vwap_dist_atr", ""),
             "v7_signal_notional_rs": v7_signal_notional_rs,
+            # P2-14: schema version of the candidate row this entry was built from
+            "candidate_schema_version": str(cand.get("candidate_schema_version", "")),
         }
         rows.append({
             "ticker": str(cand.get("ticker", "")).upper(),
@@ -1017,7 +1384,11 @@ def _build_entry_rows(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Data
             "v11_selected_strategy_profile": str(V11_BACKTESTING_OVERLAY_PROFILE),
             "v11_exit_override_applied": bool(exit_override is not None),
         })
-    return pd.DataFrame(rows)
+    return (
+        pd.DataFrame(rows),
+        pd.DataFrame(adv_cap_rejected_rows) if adv_cap_rejected_rows else pd.DataFrame(),
+        pd.DataFrame(fno_ban_rejected_rows) if fno_ban_rejected_rows else pd.DataFrame(),
+    )
 
 
 def _entry_reject_audit(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -1232,13 +1603,164 @@ def _write_live_entry_csvs(entry_df: pd.DataFrame, slot: pd.Timestamp) -> Tuple[
     )
 
 
+_nifty_regime_cache: dict = {}  # date_str -> multiplier
+
+
+def _nifty_regime_short_mult() -> float:
+    """Return 1.0 (full size) or NIFTY_REGIME_SHORT_SIZE_MULT (halved) for the
+    current trading day.  Bullish regime = NIFTY daily close > rising 20-day MA.
+    Result cached once per trading day; falls back to 1.0 on any data error.
+    """
+    if not NIFTY_REGIME_GATE_ENABLED:
+        return 1.0
+    import datetime as _dt
+    today_str = _dt.date.today().isoformat()
+    if today_str in _nifty_regime_cache:
+        return _nifty_regime_cache[today_str]
+    mult = 1.0
+    try:
+        df = pd.read_parquet(NIFTY_5MIN_PARQUET, columns=["date", "close"])
+        daily = (
+            df.assign(trade_date=df["date"].dt.normalize())
+            .groupby("trade_date", sort=True)["close"]
+            .last()
+            .reset_index()
+        )
+        daily.columns = ["trade_date", "close"]
+        daily = daily.sort_values("trade_date").tail(NIFTY_MA_DAYS + 3).reset_index(drop=True)
+        if len(daily) >= NIFTY_MA_DAYS + 1:
+            daily["ma20"] = daily["close"].rolling(NIFTY_MA_DAYS).mean()
+            last, prev = daily.iloc[-1], daily.iloc[-2]
+            if pd.notna(last["ma20"]) and pd.notna(prev["ma20"]):
+                bullish = (last["close"] > last["ma20"]) and (last["ma20"] > prev["ma20"])
+                if bullish:
+                    mult = NIFTY_REGIME_SHORT_SIZE_MULT
+    except Exception as _exc:  # noqa: BLE001
+        pass  # parquet missing or unreadable — keep full size
+    _nifty_regime_cache[today_str] = mult
+    return mult
+
+
+_fno_ban_cache: dict = {}  # date_str -> frozenset[str] of banned tickers
+_fno_ban_cache_lock = threading.Lock()
+
+
+def _get_fno_banned_tickers() -> frozenset:
+    """Return the set of F&O-banned tickers for today, fetched once and cached.
+
+    Tries a local file written today first (cached by an earlier call), then
+    falls back to a live HTTP fetch.  Returns empty frozenset on failure so that
+    bans never block trades when data is unavailable (fail-open).
+    """
+    if not FNO_BAN_FILTER_ENABLED:
+        return frozenset()
+    today_str = _dt.date.today().isoformat()
+    with _fno_ban_cache_lock:
+        if today_str in _fno_ban_cache:
+            return _fno_ban_cache[today_str]
+    banned: frozenset = frozenset()
+    try:
+        local = FNO_BAN_LOCAL_FILE
+        loaded_from = None
+        text = None
+        # Prefer a local file written today (avoids repeated HTTP in the same day)
+        if os.path.exists(local):
+            import datetime as _datetime_mod
+            mtime = _datetime_mod.date.fromtimestamp(os.path.getmtime(local))
+            if mtime.isoformat() == today_str:
+                with open(local, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+                loaded_from = "local"
+        if loaded_from is None:
+            # NSE archives stalls bare requests; send a browser User-Agent so the
+            # fetch actually returns (it 200s in ~0.2s) instead of timing out.
+            req = _urlrequest.Request(FNO_BAN_URL, headers={"User-Agent": "Mozilla/5.0"})
+            with _urlrequest.urlopen(req, timeout=max(0.5, FNO_BAN_FETCH_TIMEOUT_SEC)) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+            loaded_from = "http"
+            try:
+                with open(local, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            except Exception:
+                pass
+        # NSE fo_secban.csv is a title line then "serial,SYMBOL" rows (ragged, so it
+        # is parsed as raw text rather than with pd.read_csv); a cached or pre-written
+        # file may be one symbol per line. Take the last comma field of each line so we
+        # get the symbol regardless of layout, then drop the title line, the "SYMBOL"
+        # header, and bare serial numbers.
+        banned_syms = set()
+        for line in (text or "").splitlines():
+            sym = line.split(",")[-1].strip().upper()
+            if (sym and sym != "SYMBOL" and not sym.replace(".", "").isdigit()
+                    and not sym.startswith("SECURITIES IN BAN")):
+                banned_syms.add(sym)
+        banned = frozenset(banned_syms)
+        _logger().info(f"[FNO.BAN] loaded {len(banned)} banned tickers from {loaded_from}")
+    except Exception as exc:
+        _logger().warning(f"[FNO.BAN] fetch failed (fail-open, no trades blocked): {exc}")
+    with _fno_ban_cache_lock:
+        _fno_ban_cache[today_str] = banned
+    return banned
+
+
+_adv_cache: dict = {}  # (ticker, date_str) -> adv_rs  (0.0 = data unavailable)
+
+
+def _get_adv_rs(ticker: str) -> float:
+    """Return 20-day average daily traded value (Rs) for ticker, cached per day.
+
+    Returns 0.0 if the daily parquet is missing or has insufficient rows —
+    caller treats 0.0 as "no cap" (fail-open) so bad data never blocks a trade.
+    """
+    if not ADV_CAP_ENABLED:
+        return 0.0
+    import datetime as _dt
+    today_str = _dt.date.today().isoformat()
+    key = (ticker.upper(), today_str)
+    if key in _adv_cache:
+        return _adv_cache[key]
+    adv = 0.0
+    try:
+        path = os.path.join(ADV_DAILY_PARQUET_DIR, f"{ticker.upper()}_stocks_indicators_daily.parquet")
+        df = pd.read_parquet(path, columns=["close", "volume"])
+        df = df.dropna(subset=["close", "volume"]).tail(ADV_LOOKBACK_DAYS)
+        if len(df) >= max(1, ADV_LOOKBACK_DAYS // 2):
+            adv = float((df["close"] * df["volume"]).mean())
+    except Exception:
+        pass
+    _adv_cache[key] = adv
+    return adv
+
+
+def _risk_based_qty(entry_price: float, sl_price: float) -> int:
+    """Compute risk-based position size.  Falls back to fixed-notional on bad inputs."""
+    if not RISK_SIZING_ENABLED or entry_price <= 0 or sl_price <= 0:
+        return max(1, int(V7_SIGNAL_NOTIONAL_RS / entry_price)) if entry_price > 0 else 1
+    stop_dist = abs(entry_price - sl_price)
+    if stop_dist <= 0:
+        return max(1, int(V7_SIGNAL_NOTIONAL_RS / entry_price))
+    risk_rs = RISK_EQUITY_RS * RISK_PCT_PER_TRADE / 100.0
+    raw_qty = risk_rs / stop_dist
+    max_qty = RISK_MAX_NOTIONAL_RS / entry_price
+    min_qty = RISK_MIN_NOTIONAL_RS / entry_price
+    return max(1, int(max(min_qty, min(max_qty, raw_qty))))
+
+
 def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]:
     global _last_raw_fetch_stats
     slot = _ensure_ist_ts(slot_ts).floor("min")
     t0 = time.perf_counter()
+    _touch_progress("SLOT_START", slot=slot, log_line=True)
     stage_started = time.perf_counter()
     candidates, candidate_wait_stats = _load_candidates_for_slot_with_wait(slot)
     candidate_load_elapsed_sec = round(time.perf_counter() - stage_started, 3)
+    _touch_progress(
+        "CANDIDATES_LOADED",
+        slot=slot,
+        candidates=len(candidates),
+        elapsed_sec=candidate_load_elapsed_sec,
+        log_line=True,
+    )
     raw_fetch_wrapper_started = time.perf_counter()
     if not candidates.empty:
         raw_by_ticker = _fetch_raw_for_candidates(candidates, slot)
@@ -1255,12 +1777,33 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
         raw_by_ticker = {}
     raw_fetch_wrapper_elapsed_sec = round(time.perf_counter() - raw_fetch_wrapper_started, 3)
     stage_started = time.perf_counter()
-    raw_entries = _build_entry_rows(candidates, raw_by_ticker) if raw_by_ticker else pd.DataFrame()
+    _touch_progress(
+        "ENTRY_ROWS_BUILD",
+        slot=slot,
+        candidates=len(candidates),
+        tickers_fetched=len(raw_by_ticker),
+        log_line=True,
+    )
+    if raw_by_ticker:
+        raw_entries, adv_cap_rejected, fno_ban_rejected = _build_entry_rows(candidates, raw_by_ticker, slot=slot)
+    else:
+        raw_entries, adv_cap_rejected, fno_ban_rejected = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     entry_scan_elapsed_sec = round(time.perf_counter() - stage_started, 3)
+    _touch_progress(
+        "ENTRY_ROWS_BUILT",
+        slot=slot,
+        raw_entry_rows=len(raw_entries),
+        adv_rejected=len(adv_cap_rejected),
+        fno_rejected=len(fno_ban_rejected),
+        elapsed_sec=entry_scan_elapsed_sec,
+        log_line=True,
+    )
     stage_started = time.perf_counter()
+    _touch_progress("ENTRY_REJECT_AUDIT", slot=slot)
     entry_fetch_rejected = _entry_reject_audit(candidates, raw_by_ticker)
     entry_reject_audit_elapsed_sec = round(time.perf_counter() - stage_started, 3)
     stage_started = time.perf_counter()
+    _touch_progress("V11_ENTRY_OVERLAY", slot=slot, input_rows=len(raw_entries), log_line=True)
     v11_filtered_entries, v11_entry_rejected, v11_entry_stats = _apply_v11_entry_overlay(raw_entries)
     v11_entry_overlay_elapsed_sec = round(time.perf_counter() - stage_started, 3)
     if not v11_filtered_entries.empty:
@@ -1269,6 +1812,7 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
             slot + pd.Timedelta(seconds=ENTRY_DELAY_SEC)
         )
     stage_started = time.perf_counter()
+    _touch_progress("PRE_MOMENTUM_GATE", slot=slot, input_rows=len(v11_filtered_entries), log_line=True)
     pre_momentum_entries, pre_momentum_rejected, pre_momentum_stats = _apply_pre_entry_momentum_gate(
         v11_filtered_entries,
         raw_by_ticker,
@@ -1280,6 +1824,7 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
     ]
     rejected_entries = pd.concat(rejected_frames, ignore_index=True, sort=False) if rejected_frames else pd.DataFrame()
     stage_started = time.perf_counter()
+    _touch_progress("ENTRY_SELECT", slot=slot, input_rows=len(pre_momentum_entries), log_line=True)
     selected_entries = _select_executable_entries(pre_momentum_entries)
     entries = _filter_new_intraday_tickers(selected_entries, slot)
     entry_select_elapsed_sec = round(time.perf_counter() - stage_started, 3)
@@ -1293,18 +1838,24 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
         entries["stage2_detected_at_ist"] = _stage2_ts
 
     csv_write_started = time.perf_counter()
+    _touch_progress("AUDIT_CSV_WRITE", slot=slot, entry_rows=len(entries), log_line=True)
     latest_entries_csv = LATEST_DIR / "latest_entry_engine_rows.csv"
-    entries.to_csv(latest_entries_csv, index=False)
+    _atomic_write_csv(latest_entries_csv, entries)
     slot_entries_csv = AUDIT_DIR / f"entry_rows_{_slot_key(slot)}.csv"
-    entries.to_csv(slot_entries_csv, index=False)
+    _atomic_write_csv(slot_entries_csv, entries)
     raw_slot_entries_csv = AUDIT_DIR / f"entry_rows_raw_candidates_{_slot_key(slot)}.csv"
-    raw_entries.to_csv(raw_slot_entries_csv, index=False)
+    _atomic_write_csv(raw_slot_entries_csv, raw_entries)
     rejected_entries_csv = AUDIT_DIR / f"entry_rejected_candidates_{_slot_key(slot)}.csv"
-    rejected_entries.to_csv(rejected_entries_csv, index=False)
+    _atomic_write_csv(rejected_entries_csv, rejected_entries)
     v11_entry_rejected_csv = AUDIT_DIR / f"entry_rejected_v11_overlay_{_slot_key(slot)}.csv"
-    v11_entry_rejected.to_csv(v11_entry_rejected_csv, index=False)
+    _atomic_write_csv(v11_entry_rejected_csv, v11_entry_rejected)
     pre_momentum_rejected_csv = AUDIT_DIR / f"entry_rejected_pre_momentum_{_slot_key(slot)}.csv"
-    pre_momentum_rejected.to_csv(pre_momentum_rejected_csv, index=False)
+    _atomic_write_csv(pre_momentum_rejected_csv, pre_momentum_rejected)
+    # P2-15: funnel card — ADV cap and F&O ban reject audit CSVs
+    adv_cap_rejected_csv = AUDIT_DIR / f"entry_rejected_adv_cap_{_slot_key(slot)}.csv"
+    _atomic_write_csv(adv_cap_rejected_csv, adv_cap_rejected)
+    fno_ban_rejected_csv = AUDIT_DIR / f"entry_rejected_fno_ban_{_slot_key(slot)}.csv"
+    _atomic_write_csv(fno_ban_rejected_csv, fno_ban_rejected)
     audit_csv_write_elapsed_sec = round(time.perf_counter() - csv_write_started, 3)
     rules_write_started = time.perf_counter()
     setup_exit_rules = (
@@ -1312,9 +1863,10 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
         if V11_BACKTESTING_OVERLAY_ENABLE
         else dict(v6.SETUP_EXIT_RULES)
     )
-    pd.DataFrame(
-        [{"setup": k, "sl_pct": v[0], "target_pct": v[1]} for k, v in sorted(setup_exit_rules.items())]
-    ).to_csv(LATEST_DIR / "setup_exit_rules_v8.csv", index=False)
+    _atomic_write_csv(
+        LATEST_DIR / "setup_exit_rules_v8.csv",
+        pd.DataFrame([{"setup": k, "sl_pct": v[0], "target_pct": v[1]} for k, v in sorted(setup_exit_rules.items())]),
+    )
     setup_exit_rules_write_elapsed_sec = round(time.perf_counter() - rules_write_started, 3)
 
     # Pre-write freshness gate: recheck timing contract at the moment of writing.
@@ -1322,6 +1874,7 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
     # so the lag reflects the actual wall-clock delay at the write boundary.
     freshness_rejected_rows: list = []
     freshness_passed_rows: list = []
+    _touch_progress("FRESHNESS_GATE", slot=slot, entry_rows=len(entries), log_line=True)
     if not entries.empty:
         _max_lag = float(MAX_SIGNAL_HANDOFF_LAG_SEC) if MAX_SIGNAL_HANDOFF_LAG_SEC > 0 else 30.0
         for _, _row in entries.iterrows():
@@ -1339,13 +1892,14 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
         entries = pd.DataFrame(freshness_passed_rows) if freshness_passed_rows else pd.DataFrame()
     freshness_rejected_df = pd.DataFrame(freshness_rejected_rows)
     freshness_rejected_csv = AUDIT_DIR / f"entry_rejected_freshness_{_slot_key(slot)}.csv"
-    freshness_rejected_df.to_csv(freshness_rejected_csv, index=False)
+    _atomic_write_csv(freshness_rejected_csv, freshness_rejected_df)
 
     short_written = long_written = 0
     short_signal_write_elapsed_sec = 0.0
     long_signal_write_elapsed_sec = 0.0
     live_signal_csv_write_elapsed_sec = 0.0
     if write_live_entries and not entries.empty:
+        _touch_progress("LIVE_SIGNAL_CSV_WRITE", slot=slot, entry_rows=len(entries), log_line=True)
         (
             short_written,
             long_written,
@@ -1400,11 +1954,12 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
         "short_signal_write_elapsed_sec": short_signal_write_elapsed_sec,
         "long_signal_write_elapsed_sec": long_signal_write_elapsed_sec,
         **candidate_wait_stats,
+        **_last_candidate_load_stats,
         **raw_fetch_stats,
         **v11_entry_stats,
         **pre_momentum_stats,
     }
-    (LATEST_DIR / "latest_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    _atomic_write_json(LATEST_DIR / "latest_summary.json", summary)
     audit_path = AUDIT_DIR / f"entry_engine_audit_{slot.strftime('%Y-%m-%d')}.jsonl"
     with open(audit_path, "a", encoding="utf-8") as f:
         f.write(json.dumps({"session": SESSION_NAME, **summary}, sort_keys=True) + "\n")
@@ -1417,6 +1972,12 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=SESSION_NAME)
     ap.add_argument("--replay-slot", default="", help="Run one slot, e.g. 2026-05-21 11:10:00+05:30")
     ap.add_argument("--no-write-live-entries", action="store_true")
+    ap.add_argument(
+        "--production-replay",
+        action="store_true",
+        help="Allow --replay-slot to write to production paths (default: REFUSED "
+             "unless EQIDV2_REPLAY_OUTPUT_ROOT is set)",
+    )
     return ap.parse_args()
 
 
@@ -1426,12 +1987,24 @@ def main() -> None:
     print(f"[INFO] raw_1min_dir={RAW_1MIN_DIR}", flush=True)
 
     if args.replay_slot:
+        if not _IS_REPLAY_ISOLATED and not args.production_replay:
+            print(
+                "[ERROR] --replay-slot refused: would overwrite production outputs.\n"
+                "  Option A (recommended): set EQIDV2_REPLAY_OUTPUT_ROOT=<replay_dir>\n"
+                "  Option B (dangerous):   pass --production-replay to confirm.",
+                flush=True,
+            )
+            import sys; sys.exit(1)
+        if not _IS_REPLAY_ISOLATED:
+            print("[REPLAY][WARN] --production-replay set: writing to PRODUCTION paths.", flush=True)
         summary = run_slot(args.replay_slot, write_live_entries=not args.no_write_live_entries)
         print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
         return
 
     holidays = v7_persistent.base_v15._read_holidays_safe()
-    processed: set[str] = set()
+    # Pre-mark all expired past slots so the monitor does not show BLOCKED for
+    # slots the engine could never have fulfilled at this startup time.
+    processed: set[str] = _startup_expired_slot_keys(v7_persistent.base_v15.now_ist())
     while True:
         now = v7_persistent.base_v15.now_ist()
         _touch_status("RUNNING", phase="LOOP")

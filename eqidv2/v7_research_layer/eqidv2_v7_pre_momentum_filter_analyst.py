@@ -235,6 +235,71 @@ def _text(df: pd.DataFrame, col: str) -> pd.Series:
     return df[col].fillna("").astype(str)
 
 
+def _load_rolling_setup_stats(n_days: int = 10) -> pd.DataFrame:
+    """Aggregate last N days of setup_stats CSVs for rolling effectiveness metrics."""
+    paths = sorted(
+        SUGGESTION_DIR.glob("v7_pre_momentum_filter_setup_stats_*.csv"),
+        key=lambda p: p.name,
+        reverse=True,
+    )[:n_days]
+    parts = [_read_csv(p) for p in reversed(paths)]
+    parts = [p for p in parts if not p.empty]
+    if not parts:
+        return pd.DataFrame()
+    df = pd.concat(parts, ignore_index=True, sort=False)
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+def _rolling_effectiveness(rolling_stats: pd.DataFrame) -> pd.DataFrame:
+    """Per-setup rolling effectiveness: N-day SL rate, target rate, avg pre-score.
+
+    A setup where paper_sl / paper_trades > 0.55 with N >= 20 is a candidate for tighter gating.
+    """
+    if rolling_stats.empty or "setup" not in rolling_stats.columns:
+        return pd.DataFrame()
+    rows: list[dict[str, Any]] = []
+    for setup, grp in rolling_stats.groupby("setup", dropna=False):
+        trades_total = int(_safe_float(grp.get("paper_trades", pd.Series(dtype=float)).sum(), 0))
+        sl_total = int(_safe_float(grp.get("paper_sl", pd.Series(dtype=float)).sum(), 0))
+        target_total = int(_safe_float(grp.get("paper_target", pd.Series(dtype=float)).sum(), 0))
+        pnl_total = float(_safe_float(grp.get("paper_pnl_rs", pd.Series(dtype=float)).sum(), 0.0))
+        accepted_total = int(_safe_float(grp.get("entry_accepted_rows", pd.Series(dtype=float)).sum(), 0))
+        rejected_total = int(_safe_float(grp.get("pre_momentum_rejected_rows", pd.Series(dtype=float)).sum(), 0))
+        med_pre_score = float(
+            _safe_float(
+                _num(grp, "accepted_median_pre_score").dropna().median(), np.nan
+            )
+        )
+        sl_rate = sl_total / max(trades_total, 1)
+        target_rate = target_total / max(trades_total, 1)
+        days = int(grp["date"].nunique()) if "date" in grp.columns else len(grp)
+        adequacy = "ADEQUATE" if trades_total >= 20 else ("THIN" if trades_total >= 5 else "INSUFFICIENT")
+        rows.append(
+            {
+                "setup": setup,
+                "days": days,
+                "paper_trades": trades_total,
+                "paper_sl": sl_total,
+                "paper_target": target_total,
+                "pnl_rs": round(pnl_total, 2),
+                "sl_rate_pct": round(100.0 * sl_rate, 1),
+                "target_rate_pct": round(100.0 * target_rate, 1),
+                "accepted_total": accepted_total,
+                "pre_rejected_total": rejected_total,
+                "pass_rate_pct": round(100.0 * accepted_total / max(accepted_total + rejected_total, 1), 1),
+                "median_pre_score": round(med_pre_score, 2) if math.isfinite(med_pre_score) else None,
+                "sample_adequacy": adequacy,
+                "gate_signal": (
+                    "TIGHTEN" if sl_rate > 0.55 and trades_total >= 10
+                    else ("WATCH" if sl_rate > 0.45 and trades_total >= 5 else "OK")
+                ),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("paper_trades", ascending=False).reset_index(drop=True)
+
+
 def _latest_validation_per_setup() -> pd.DataFrame:
     patterns = [
         "v7_backend_validation*_per_setup.csv",
@@ -502,7 +567,14 @@ def _fmt_num(value: Any, digits: int = 2) -> str:
     return f"{x:,.{digits}f}"
 
 
-def _report(day: str, run_time_ist: str, regime: dict[str, Any], stats: pd.DataFrame, suggestions: pd.DataFrame) -> str:
+def _report(
+    day: str,
+    run_time_ist: str,
+    regime: dict[str, Any],
+    stats: pd.DataFrame,
+    suggestions: pd.DataFrame,
+    rolling_eff: pd.DataFrame | None = None,
+) -> str:
     lines = [
         f"# v7 pre momentum filter analyst - {day}",
         "",
@@ -549,6 +621,21 @@ def _report(day: str, run_time_ist: str, regime: dict[str, Any], stats: pd.DataF
                 f"{_fmt_num(row.get('accepted_median_sig5_adx_calc'), 2)} | {int(row.get('paper_trades', 0))} | "
                 f"Rs {_fmt_num(row.get('paper_pnl_rs'), 2)} | {int(row.get('paper_sl', 0))} |"
             )
+    if rolling_eff is not None and not rolling_eff.empty:
+        lines.extend(["", "## Rolling Effectiveness (Last 10 Days)", ""])
+        lines.append(
+            "`sl_rate_pct` > 55% with ≥ 10 trades → `gate_signal=TIGHTEN`. "
+            "`sample_adequacy`: ADEQUATE ≥ 20 trades, THIN 5–19, INSUFFICIENT < 5."
+        )
+        lines.append("")
+        cols = ["setup", "days", "paper_trades", "sl_rate_pct", "target_rate_pct", "pnl_rs",
+                "pass_rate_pct", "median_pre_score", "sample_adequacy", "gate_signal"]
+        avail = [c for c in cols if c in rolling_eff.columns]
+        lines.append("| " + " | ".join(avail) + " |")
+        lines.append("| " + " | ".join("---" for _ in avail) + " |")
+        for _, row in rolling_eff.iterrows():
+            lines.append("| " + " | ".join(str(row.get(c, "")).replace("|", "\\|") for c in avail) + " |")
+
     lines.extend(
         [
             "",
@@ -576,19 +663,23 @@ def run_analysis(day: str, *, run_time_ist: str = "") -> dict[str, Any]:
     stats = _setup_stats(day, raw, gated, accepted, rejected, paper)
     suggestions = _suggestions(stats, validation, regime)
     profile = _profile_payload(day, run_time_ist, regime, suggestions)
-    report_text = _report(day, run_time_ist, regime, stats, suggestions)
+    rolling_stats = _load_rolling_setup_stats(n_days=10)
+    rolling_eff = _rolling_effectiveness(rolling_stats)
+    report_text = _report(day, run_time_ist, regime, stats, suggestions, rolling_eff)
 
     dated = day.replace("-", "")
     report_path = SESSION_REPORTS_DIR / f"v7_pre_momentum_filter_analyst_{day}.md"
     json_path = SESSION_REPORTS_DIR / f"v7_pre_momentum_filter_analyst_{day}.json"
     csv_path = SUGGESTION_DIR / f"v7_pre_momentum_filter_suggestions_{day}.csv"
     stats_path = SUGGESTION_DIR / f"v7_pre_momentum_filter_setup_stats_{day}.csv"
+    rolling_eff_path = SESSION_LATEST_DIR / "latest_v7_pre_momentum_rolling_effectiveness.csv"
     profile_path = DYNAMIC_LATEST_DIR / "latest_dynamic_pre_momentum_profile.json"
 
     _write_text_atomic(report_path, report_text)
     _write_json_atomic(json_path, profile)
     suggestions.to_csv(csv_path, index=False)
     stats.to_csv(stats_path, index=False)
+    rolling_eff.to_csv(rolling_eff_path, index=False)
     _write_text_atomic(SESSION_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.md", report_text)
     _write_json_atomic(SESSION_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.json", profile)
     _write_text_atomic(SESSION_LATEST_DIR / "latest_v7_pre_momentum_filter_suggestions.csv", suggestions.to_csv(index=False))

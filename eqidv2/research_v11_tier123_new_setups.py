@@ -188,7 +188,21 @@ def _prepare_probe_5m(df: pd.DataFrame) -> pd.DataFrame:
     out["lower_wick_pct"] = (out[["open", "close"]].min(axis=1) - out["low"]) / range_nonzero
     out["vol_ratio"] = out["volume"] / out["Volume_SMA20"].replace(0, np.nan)
     out["atr_pct"] = out["ATR"] / out["close"].replace(0, np.nan)
-    out["vwap_dist_atr"] = (out["close"] - out["VWAP"]) / out["ATR"].replace(0, np.nan)
+    # --- VWAP FIX (2026-06-13) -------------------------------------------------------------------
+    # The 5-min source parquet's "VWAP" column is UNRELIABLE here: it is often stale/anchored, sitting
+    # ~constant far from price (e.g. 360ONE 2026-04-07: VWAP~1106 all day while price trades 906-934).
+    # That corrupts (a) vwap_dist_atr (exploded to +-50..170) AND (b) every VWAP-based detection
+    # (close>VWAP / close<VWAP) AND (c) regime (computed from NIFTY's VWAP in _market_context).
+    # Fix at the root: recompute a proper intraday SESSION VWAP (typical-price x volume, reset each day).
+    out["VWAP_parquet"] = out["VWAP"]                              # keep the raw column for reference
+    _tp = (out["high"] + out["low"] + out["close"]) / 3.0
+    _cum_pv = (_tp * out["volume"]).groupby(out["date_only"]).cumsum()
+    _cum_v = out["volume"].groupby(out["date_only"]).cumsum().replace(0, np.nan)
+    _sess_vwap = _cum_pv / _cum_v
+    out["VWAP"] = _sess_vwap.where(_sess_vwap.notna(), out["VWAP_parquet"])  # fallback if volume==0
+    # vwap_dist_atr with a tiny-ATR floor (>=0.03% of close) + sane clip, matching the production O(1) scale
+    _atr_floor = out["ATR"].where(out["ATR"] >= 0.0003 * out["close"], 0.0003 * out["close"])
+    out["vwap_dist_atr"] = ((out["close"] - out["VWAP"]) / _atr_floor.replace(0, np.nan)).clip(-15.0, 15.0)
     return out
 
 
@@ -214,7 +228,9 @@ def _read_5m(ticker: str) -> pd.DataFrame | None:
 
 
 def _market_context() -> dict[str, dict[pd.Timestamp, dict]]:
-    for ticker in ["NIFTY", "NIFTY50", "NIFTY_50", "NIFTYBEES"]:
+    # NIFTYBEES first for live parity + volume-bearing VWAP regime (true NIFTY 50
+    # index has zero volume and must not become the regime source).
+    for ticker in ["NIFTYBEES", "NIFTY", "NIFTY50", "NIFTY_50"]:
         df = _read_5m(ticker)
         if df is not None and not df.empty:
             ctx: dict[str, dict[pd.Timestamp, dict]] = {}

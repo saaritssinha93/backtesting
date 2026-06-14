@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from eqidv2_runtime_paths import DATA_1MIN_DIR, LIVE_SIGNALS_DIR, RUNTIME_STATUS_DIR, runtime_dir
+from nse_intraday_costs import CostConfig, intraday_equity_costs
 
 
 RESEARCH_ROOT = runtime_dir("live_research_v7_research_layer")
@@ -51,13 +52,7 @@ SLOT_FLOOD_MIN_CANDIDATES = 8
 SLOT_DOMINANT_SETUP_WARN_PCT = 80.0
 PORTFOLIO_YELLOW_NET_RS = -75_000.0
 PORTFOLIO_RED_NET_RS = -150_000.0
-# Dashboard cost model (override via env vars for accuracy)
-OPS_BROKERAGE_PER_TRADE_RS = float(
-    __import__("os").environ.get("EQIDV2_OPS_BROKERAGE_PER_TRADE_RS", "50.0")
-)
-OPS_SLIPPAGE_PCT = float(
-    __import__("os").environ.get("EQIDV2_OPS_SLIPPAGE_PCT", "0.05")
-)
+NSE_ID_COST_CONFIG = CostConfig()
 # Scanner publish deadline used for slot slack computation
 OPS_ENTRY_WINDOW_END_HHMM = __import__("os").environ.get(
     "EQIDV2_OPS_ENTRY_WINDOW_END", "14:30"
@@ -123,6 +118,69 @@ def _side_dir_series(df: pd.DataFrame) -> pd.Series:
         .str.upper()
         .map(lambda side: 1.0 if side == "LONG" else (-1.0 if side == "SHORT" else np.nan))
     )
+
+
+def _apply_v7_nse_id_costs(df: pd.DataFrame) -> pd.DataFrame:
+    """Append NSE intraday cost columns to closed V7 ID paper trades."""
+    if df.empty:
+        return df
+    out = df.copy()
+    cost_cols = [
+        "v7_nse_id_gross_pnl_rs",
+        "v7_nse_id_brokerage_rs",
+        "v7_nse_id_stt_rs",
+        "v7_nse_id_exch_txn_rs",
+        "v7_nse_id_sebi_rs",
+        "v7_nse_id_ipft_rs",
+        "v7_nse_id_stamp_rs",
+        "v7_nse_id_gst_rs",
+        "v7_nse_id_total_cost_rs",
+        "v7_nse_id_net_pnl_rs",
+        "v7_nse_id_cost_bps_of_turnover",
+        "v7_nse_id_cost_pct_of_entry",
+        "v7_nse_id_cost_error",
+    ]
+    for col in cost_cols:
+        if col not in out.columns:
+            out[col] = "" if col == "v7_nse_id_cost_error" else np.nan
+
+    outcome = out.get("outcome", pd.Series("", index=out.index)).fillna("").astype(str).str.upper()
+    entry = pd.to_numeric(out.get("entry_price", pd.Series(dtype=float)), errors="coerce")
+    exit_ = pd.to_numeric(out.get("exit_price", pd.Series(dtype=float)), errors="coerce")
+    qty = pd.to_numeric(out.get("quantity", pd.Series(dtype=float)), errors="coerce")
+    side = out.get("side", pd.Series("", index=out.index)).fillna("").astype(str).str.upper().str.strip()
+    eligible = (
+        ~outcome.str.startswith("ENTRY_SKIPPED")
+        & entry.gt(0)
+        & exit_.gt(0)
+        & qty.gt(0)
+        & side.isin(["LONG", "SHORT"])
+    )
+    for idx in out.index[eligible]:
+        try:
+            b = intraday_equity_costs(
+                float(entry.loc[idx]),
+                float(exit_.loc[idx]),
+                float(qty.loc[idx]),
+                str(side.loc[idx]),
+                NSE_ID_COST_CONFIG,
+            )
+        except Exception as exc:
+            out.at[idx, "v7_nse_id_cost_error"] = f"{type(exc).__name__}: {exc}"
+            continue
+        out.at[idx, "v7_nse_id_gross_pnl_rs"] = b.gross_pnl
+        out.at[idx, "v7_nse_id_brokerage_rs"] = b.brokerage
+        out.at[idx, "v7_nse_id_stt_rs"] = b.stt
+        out.at[idx, "v7_nse_id_exch_txn_rs"] = b.exch_txn
+        out.at[idx, "v7_nse_id_sebi_rs"] = b.sebi
+        out.at[idx, "v7_nse_id_ipft_rs"] = b.ipft
+        out.at[idx, "v7_nse_id_stamp_rs"] = b.stamp
+        out.at[idx, "v7_nse_id_gst_rs"] = b.gst
+        out.at[idx, "v7_nse_id_total_cost_rs"] = b.total_cost
+        out.at[idx, "v7_nse_id_net_pnl_rs"] = b.net_pnl
+        out.at[idx, "v7_nse_id_cost_bps_of_turnover"] = b.cost_bps_of_turnover
+        out.at[idx, "v7_nse_id_cost_pct_of_entry"] = b.cost_pct_of_entry
+    return out
 
 
 def _clip01(series: pd.Series) -> pd.Series:
@@ -914,7 +972,16 @@ def _portfolio_shadow_state(paper: pd.DataFrame, open_df: pd.DataFrame) -> dict[
     else:
         outcome = paper.get("outcome", pd.Series(dtype=str)).fillna("").astype(str)
         traded = paper.loc[~outcome.str.startswith("ENTRY_SKIPPED")].copy()
-    closed_pnl = pd.to_numeric(traded.get("pnl_rs", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+    pnl_source = "pnl_rs"
+    if not traded.empty and "v7_nse_id_net_pnl_rs" in traded.columns:
+        net_series = pd.to_numeric(traded["v7_nse_id_net_pnl_rs"], errors="coerce")
+        if net_series.notna().any():
+            pnl_source = "v7_nse_id_net_pnl_rs"
+            closed_pnl = net_series.fillna(pd.to_numeric(traded.get("pnl_rs", pd.Series(dtype=float)), errors="coerce")).fillna(0.0)
+        else:
+            closed_pnl = pd.to_numeric(traded.get("pnl_rs", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+    else:
+        closed_pnl = pd.to_numeric(traded.get("pnl_rs", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
     open_pnl = pd.to_numeric(open_df.get("open_unrealized_pnl_rs", pd.Series(dtype=float)), errors="coerce").fillna(0.0) if not open_df.empty else pd.Series(dtype=float)
     combined = float(closed_pnl.sum() + open_pnl.sum())
     targets = int((traded.get("outcome", pd.Series(dtype=str)) == "TARGET").sum()) if not traded.empty else 0
@@ -926,6 +993,7 @@ def _portfolio_shadow_state(paper: pd.DataFrame, open_df: pd.DataFrame) -> dict[
         state = "YELLOW_THROTTLE_SHADOW"
     return {
         "closed_pnl_rs": float(closed_pnl.sum()),
+        "closed_pnl_source": pnl_source,
         "open_unrealized_pnl_rs": float(open_pnl.sum()),
         "combined_paper_pnl_rs": combined,
         "closed_profit_factor": _profit_factor_from_series(closed_pnl) if not closed_pnl.empty else np.nan,
@@ -1103,6 +1171,8 @@ def _paper_trade_analysis(day: str, entry_rows: pd.DataFrame, cache: dict[str, p
         if not paper.empty and keep_cols:
             paper = paper.merge(entry_rows[keep_cols].drop_duplicates("_flow_key"), on="_flow_key", how="left", suffixes=("", "_entry"))
             paper = _add_momentum_freshness_fields(paper)
+    if not paper.empty:
+        paper = _apply_v7_nse_id_costs(paper)
 
     skipped_mask = paper.get("outcome", pd.Series(dtype=str)).fillna("").astype(str).str.startswith("ENTRY_SKIPPED") if not paper.empty else pd.Series(dtype=bool)
     traded = paper.loc[~skipped_mask].copy() if not paper.empty else pd.DataFrame()
@@ -1157,22 +1227,52 @@ def _paper_trade_analysis(day: str, entry_rows: pd.DataFrame, cache: dict[str, p
     freshness = _add_momentum_freshness_fields(traded) if not traded.empty else pd.DataFrame()
     weak_freshness = freshness.loc[freshness.get("freshness_bucket", pd.Series(dtype=str)).eq("WEAK")].copy() if not freshness.empty else pd.DataFrame()
     strong_freshness = freshness.loc[freshness.get("freshness_bucket", pd.Series(dtype=str)).eq("STRONG")].copy() if not freshness.empty else pd.DataFrame()
-    # --- cost model ---
-    _gross_pnl = _safe_float(
+    # --- NSE ID cost model ---
+    _trade_count = int(len(traded))
+    _paper_gross_pnl = _safe_float(
         pd.to_numeric(traded.get("pnl_rs", pd.Series(dtype=float)), errors="coerce").sum()
         if not traded.empty else 0.0,
         0.0,
     )
-    _trade_count = int(len(traded))
-    _brokerage_est = _trade_count * OPS_BROKERAGE_PER_TRADE_RS
-    _slippage_est = 0.0
-    if not traded.empty and "entry_price" in traded.columns and "quantity" in traded.columns:
-        _notional = (
-            pd.to_numeric(traded["entry_price"], errors="coerce").fillna(0.0)
-            * pd.to_numeric(traded["quantity"], errors="coerce").fillna(0.0)
-        ).sum()
-        _slippage_est = float(_notional) * OPS_SLIPPAGE_PCT / 100.0
-    _net_pnl_est = _gross_pnl - _brokerage_est - _slippage_est
+    _nse_costed = (
+        traded.loc[pd.to_numeric(traded.get("v7_nse_id_total_cost_rs", pd.Series(dtype=float)), errors="coerce").notna()].copy()
+        if not traded.empty else pd.DataFrame()
+    )
+    _nse_costed_count = int(len(_nse_costed))
+    _nse_gross_pnl = _safe_float(
+        pd.to_numeric(_nse_costed.get("v7_nse_id_gross_pnl_rs", pd.Series(dtype=float)), errors="coerce").sum()
+        if not _nse_costed.empty else _paper_gross_pnl,
+        0.0,
+    )
+    _nse_total_cost = _safe_float(
+        pd.to_numeric(_nse_costed.get("v7_nse_id_total_cost_rs", pd.Series(dtype=float)), errors="coerce").sum()
+        if not _nse_costed.empty else 0.0,
+        0.0,
+    )
+    _nse_net_pnl = _safe_float(
+        pd.to_numeric(_nse_costed.get("v7_nse_id_net_pnl_rs", pd.Series(dtype=float)), errors="coerce").sum()
+        if not _nse_costed.empty else _paper_gross_pnl,
+        0.0,
+    )
+    _nse_avg_cost_bps = _safe_float(
+        pd.to_numeric(_nse_costed.get("v7_nse_id_cost_bps_of_turnover", pd.Series(dtype=float)), errors="coerce").mean()
+        if not _nse_costed.empty else np.nan,
+        np.nan,
+    )
+    _nse_avg_cost_pct_entry = _safe_float(
+        pd.to_numeric(_nse_costed.get("v7_nse_id_cost_pct_of_entry", pd.Series(dtype=float)), errors="coerce").mean()
+        if not _nse_costed.empty else np.nan,
+        np.nan,
+    )
+    _nse_component_sums = {
+        "v7_nse_id_brokerage_rs": _safe_float(pd.to_numeric(_nse_costed.get("v7_nse_id_brokerage_rs", pd.Series(dtype=float)), errors="coerce").sum(), 0.0) if not _nse_costed.empty else 0.0,
+        "v7_nse_id_stt_rs": _safe_float(pd.to_numeric(_nse_costed.get("v7_nse_id_stt_rs", pd.Series(dtype=float)), errors="coerce").sum(), 0.0) if not _nse_costed.empty else 0.0,
+        "v7_nse_id_exch_txn_rs": _safe_float(pd.to_numeric(_nse_costed.get("v7_nse_id_exch_txn_rs", pd.Series(dtype=float)), errors="coerce").sum(), 0.0) if not _nse_costed.empty else 0.0,
+        "v7_nse_id_sebi_rs": _safe_float(pd.to_numeric(_nse_costed.get("v7_nse_id_sebi_rs", pd.Series(dtype=float)), errors="coerce").sum(), 0.0) if not _nse_costed.empty else 0.0,
+        "v7_nse_id_ipft_rs": _safe_float(pd.to_numeric(_nse_costed.get("v7_nse_id_ipft_rs", pd.Series(dtype=float)), errors="coerce").sum(), 0.0) if not _nse_costed.empty else 0.0,
+        "v7_nse_id_stamp_rs": _safe_float(pd.to_numeric(_nse_costed.get("v7_nse_id_stamp_rs", pd.Series(dtype=float)), errors="coerce").sum(), 0.0) if not _nse_costed.empty else 0.0,
+        "v7_nse_id_gst_rs": _safe_float(pd.to_numeric(_nse_costed.get("v7_nse_id_gst_rs", pd.Series(dtype=float)), errors="coerce").sum(), 0.0) if not _nse_costed.empty else 0.0,
+    }
     summary = {
         "paper_rows": int(len(paper)),
         "paper_traded_rows": int(len(traded)),
@@ -1205,10 +1305,20 @@ def _paper_trade_analysis(day: str, entry_rows: pd.DataFrame, cache: dict[str, p
         "anti_chase_shadow_open": int(anti_shadow_outcome.eq("OPEN").sum()) if len(anti_shadow_outcome) else 0,
         "anti_chase_shadow_net_rs": _safe_float(anti_shadow_pnl.sum(), 0.0) if len(anti_shadow_pnl) else 0.0,
         # cost model fields
-        "gross_pnl_rs": _gross_pnl,
-        "est_brokerage_rs": _brokerage_est,
-        "est_slippage_rs": _slippage_est,
-        "est_net_pnl_rs": _net_pnl_est,
+        "cost_model": "v7_nse_id_cost",
+        "cost_rates_as_of": NSE_ID_COST_CONFIG.rates_as_of,
+        "gross_pnl_rs": _nse_gross_pnl,
+        "paper_gross_pnl_rs": _paper_gross_pnl,
+        "v7_nse_id_costed_trades": _nse_costed_count,
+        "v7_nse_id_total_cost_rs": _nse_total_cost,
+        "v7_nse_id_net_pnl_rs": _nse_net_pnl,
+        "v7_nse_id_avg_cost_bps_of_turnover": _nse_avg_cost_bps,
+        "v7_nse_id_avg_cost_pct_of_entry": _nse_avg_cost_pct_entry,
+        **_nse_component_sums,
+        # legacy dashboard keys now point at NSE model outputs
+        "est_brokerage_rs": _nse_component_sums["v7_nse_id_brokerage_rs"],
+        "est_slippage_rs": 0.0,
+        "est_net_pnl_rs": _nse_net_pnl,
     }
     return summary, paper, open_df, anti_chase_audit
 
@@ -1700,11 +1810,60 @@ def _render_markdown(
     lines.append("")
     lines.append("| metric | value |")
     lines.append("|---|---:|")
+    lines.append(f"| cost model | V7 NSE ID cost ({paper.get('cost_rates_as_of', '')}) |")
+    lines.append(f"| costed trades | {paper.get('v7_nse_id_costed_trades', 0)} / {paper.get('paper_traded_rows', 0)} |")
     lines.append(f"| gross paper P&L | Rs {_fmt_num(paper.get('gross_pnl_rs'), 0)} |")
-    lines.append(f"| estimated brokerage ({OPS_BROKERAGE_PER_TRADE_RS:.0f}/trade × {paper.get('paper_traded_rows', 0)} trades) | Rs {_fmt_num(paper.get('est_brokerage_rs'), 0)} |")
-    lines.append(f"| estimated slippage ({OPS_SLIPPAGE_PCT:.2f}% of notional) | Rs {_fmt_num(paper.get('est_slippage_rs'), 0)} |")
-    lines.append(f"| **estimated net P&L** | **Rs {_fmt_num(paper.get('est_net_pnl_rs'), 0)}** |")
+    lines.append(f"| NSE statutory + brokerage cost | Rs {_fmt_num(paper.get('v7_nse_id_total_cost_rs'), 0)} |")
+    lines.append(f"| brokerage component | Rs {_fmt_num(paper.get('v7_nse_id_brokerage_rs'), 0)} |")
+    lines.append(f"| STT / stamp / GST | Rs {_fmt_num(paper.get('v7_nse_id_stt_rs'), 0)} / Rs {_fmt_num(paper.get('v7_nse_id_stamp_rs'), 0)} / Rs {_fmt_num(paper.get('v7_nse_id_gst_rs'), 0)} |")
+    lines.append(f"| avg cost | {_fmt_num(paper.get('v7_nse_id_avg_cost_bps_of_turnover'), 2)} bps turnover / {_fmt_num(paper.get('v7_nse_id_avg_cost_pct_of_entry'), 3)}% entry notional |")
+    lines.append(f"| **V7 NSE ID net P&L** | **Rs {_fmt_num(paper.get('v7_nse_id_net_pnl_rs'), 0)}** |")
     lines.append("")
+
+    if not paper_rows.empty and "setup" in paper_rows.columns:
+        lines.append("### Per-Setup Net PnL Attribution")
+        lines.append("")
+        lines.append("Exact per-setup breakdown for strategy improvement decisions. "
+                     "`win_rate` = TARGET/(TARGET+SL) for closed trades. "
+                     "`net_pf` = net wins / |net losses| (net-of-cost).")
+        lines.append("")
+        _attr_rows: list[dict[str, Any]] = []
+        for _setup, _grp in paper_rows.groupby("setup", dropna=False):
+            _out = _grp.get("outcome", pd.Series(dtype=str)).fillna("").astype(str).str.upper()
+            _closed = _grp.loc[_out.isin(["TARGET", "SL"])].copy()
+            _tgt = int((_out == "TARGET").sum())
+            _sl_n = int((_out == "SL").sum())
+            _net_col = _grp.get("v7_nse_id_net_pnl_rs", pd.Series(dtype=float))
+            if pd.to_numeric(_net_col, errors="coerce").notna().sum() == 0:
+                _net_col = _grp.get("pnl_rs", pd.Series(dtype=float))
+            _net_vals = pd.to_numeric(_net_col, errors="coerce").fillna(0.0)
+            _net_wins = float(_net_vals[_net_vals > 0].sum())
+            _net_losses = float(-_net_vals[_net_vals < 0].sum())
+            _net_pf = (_net_wins / _net_losses) if _net_losses > 0 else (float("inf") if _net_wins > 0 else 0.0)
+            _win_rate = _tgt / max(_tgt + _sl_n, 1) if (_tgt + _sl_n) > 0 else float("nan")
+            _cost_total = float(
+                pd.to_numeric(_grp.get("v7_nse_id_total_cost_rs", pd.Series(dtype=float)), errors="coerce").fillna(0.0).sum()
+            )
+            _attr_rows.append(
+                {
+                    "setup": _setup,
+                    "trades": int(len(_grp)),
+                    "T": _tgt,
+                    "SL": _sl_n,
+                    "open": int(len(_grp)) - _tgt - _sl_n,
+                    "win_rate%": f"{100.0 * _win_rate:.1f}" if not math.isnan(_win_rate) else "N/A",
+                    "net_pnl_rs": f"{float(_net_vals.sum()):.0f}",
+                    "cost_rs": f"{_cost_total:.0f}",
+                    "net_pf": f"{_net_pf:.3f}" if np.isfinite(_net_pf) else "inf",
+                }
+            )
+        _attr_df = pd.DataFrame(_attr_rows).sort_values("trades", ascending=False)
+        _acols = list(_attr_df.columns)
+        lines.append("| " + " | ".join(_acols) + " |")
+        lines.append("| " + " | ".join("---" for _ in _acols) + " |")
+        for _, _row in _attr_df.iterrows():
+            lines.append("| " + " | ".join(str(_row.get(c, "")).replace("|", "\\|") for c in _acols) + " |")
+        lines.append("")
 
     lines.append(
         f"- Quick target <=10m: {paper.get('quick_targets_10m', 0)}; quick SL <=15m: {paper.get('quick_sl_15m', 0)}."
@@ -1740,16 +1899,23 @@ def _render_markdown(
         lines.append("### Recent Paper Outcomes")
         lines.append("")
         if has_path:
-            lines.append("| ticker | side | setup | entry | outcome | hold m | pnl | target | sl | best R | worst R | giveback R | t025 m | t050 m | path action |")
-            lines.append("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+            lines.append("| ticker | side | setup | entry | outcome | hold m | gross | cost | net | target | sl | best R | worst R | giveback R | t025 m | t050 m | path action |")
+            lines.append("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
         else:
-            lines.append("| ticker | side | setup | entry | outcome | hold m | pnl | target | sl |")
-            lines.append("|---|---|---|---|---|---:|---:|---:|---:|")
+            lines.append("| ticker | side | setup | entry | outcome | hold m | gross | cost | net | target | sl |")
+            lines.append("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|")
         for _, row in closed_or_recent.iterrows():
+            _gross = row.get("v7_nse_id_gross_pnl_rs")
+            if pd.isna(_gross):
+                _gross = row.get("pnl_rs")
+            _net = row.get("v7_nse_id_net_pnl_rs")
+            if pd.isna(_net):
+                _net = row.get("pnl_rs")
             base = (
                 f"| {row.get('ticker', '')} | {row.get('side', '')} | {row.get('setup', '')} | "
                 f"{_fmt_ts(row.get('entry_time'))} | {row.get('outcome', '')} | {_fmt_num(row.get('hold_min'), 1)} | "
-                f"{_fmt_num(row.get('pnl_rs'), 0)} | {_fmt_num(row.get('target_price'), 2)} | {_fmt_num(row.get('stop_price'), 2)} |"
+                f"{_fmt_num(_gross, 0)} | {_fmt_num(row.get('v7_nse_id_total_cost_rs'), 0)} | {_fmt_num(_net, 0)} | "
+                f"{_fmt_num(row.get('target_price'), 2)} | {_fmt_num(row.get('stop_price'), 2)} |"
             )
             if has_path:
                 base += (

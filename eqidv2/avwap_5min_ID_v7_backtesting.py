@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import time
 from pathlib import Path
 
@@ -24,9 +25,23 @@ import pandas as pd
 
 import avwap_5min_ID_v5_backtesting as v5
 import avwap_5min_ID_v6_backtesting as v6
+import walkforward_gate
 
 
 OUT_ROOT = Path(r"C:\TradingData\eqidv2\outputs_ID_v7_5min")
+_GATE_NOTIONAL_RS = 100_000.0
+
+# P1-5: gate only evaluates the TRADED universe — SHORT setups + any explicitly
+# exempted LONG setups (mirrors EQIDV2_SIGNAL_DISCOVERY_V7_SHORT_FOCUS_EXEMPT_SETUPS
+# from the live scanner bat).  This ensures validated == traded.
+_GATE_SHORT_FOCUS_EXEMPT_LONGS: frozenset[str] = frozenset(
+    s.strip()
+    for s in os.getenv(
+        "EQIDV2_SIGNAL_DISCOVERY_V7_SHORT_FOCUS_EXEMPT_SETUPS",
+        "A_MOD_BREAK_C1_HIGH",
+    ).split(",")
+    if s.strip()
+)
 PNL_COL = "v6_net_pnl_rs"
 EXCLUDED_SETUPS = {
     "B_HUGE_PULLBACK_HOLD_BREAK",
@@ -420,13 +435,76 @@ def _apply_v7_expansion(base: pd.DataFrame, extra: pd.DataFrame) -> tuple[pd.Dat
     return final, accepted_df
 
 
+def _gate_filter_accepted(
+    trades: pd.DataFrame,
+    accepted: pd.DataFrame,
+    out_dir: Path,
+) -> pd.DataFrame:
+    """Run the walk-forward gate; return accepted filtered to PROMOTE setups only."""
+    required = {"entry_time_v6", "entry_price_v6", "v6_exit_price", "setup", "side"}
+    if not required.issubset(trades.columns) or trades.empty:
+        print("[v7 gate] skipping: required columns missing or empty trades")
+        return accepted
+
+    gate_df = pd.DataFrame({
+        "date": pd.to_datetime(trades["entry_time_v6"], errors="coerce"),
+        "setup": trades["setup"].astype(str),
+        "side": trades["side"].astype(str),
+        "entry_price": pd.to_numeric(trades["entry_price_v6"], errors="coerce"),
+        "exit_price": pd.to_numeric(trades["v6_exit_price"], errors="coerce"),
+    })
+    gate_df["qty"] = (
+        (_GATE_NOTIONAL_RS / gate_df["entry_price"]).round().clip(lower=1)
+    )
+    gate_df = gate_df.dropna(subset=["entry_price", "exit_price"]).reset_index(drop=True)
+
+    if gate_df.empty:
+        print("[v7 gate] skipping: no valid rows after dropna")
+        return accepted
+
+    # P1-5: restrict gate to the traded universe (SHORT + exempt LONGs).
+    traded_mask = (gate_df["side"] == "SHORT") | (
+        (gate_df["side"] == "LONG") & gate_df["setup"].isin(_GATE_SHORT_FOCUS_EXEMPT_LONGS)
+    )
+    gate_df = gate_df[traded_mask].reset_index(drop=True)
+    if gate_df.empty:
+        print("[v7 gate] skipping: no traded-subset rows after SHORT_FOCUS filter")
+        return accepted
+    excluded_sides = (~traded_mask).sum()
+    if excluded_sides:
+        print(f"[v7 gate] P1-5 side filter: excluded {excluded_sides} non-traded rows")
+
+    try:
+        report = walkforward_gate.run_gate(gate_df)
+    except Exception as exc:
+        print(f"[v7 gate] gate error {exc!r}; writing unfiltered accepted_rules.csv")
+        return accepted
+
+    report.to_csv(out_dir / "gate_decision_report.csv", index=False)
+    promoted = set(report.loc[report["decision"] == "PROMOTE", "setup"])
+    n_before = len(accepted)
+    if not accepted.empty and "setup" in accepted.columns:
+        filtered = accepted[accepted["setup"].isin(promoted)].reset_index(drop=True)
+    else:
+        filtered = accepted
+    n_after = len(filtered)
+    promote_count = len(promoted)
+    all_count = report["setup"].nunique()
+    print(
+        f"[v7 gate] {promote_count}/{all_count} setups PROMOTE; "
+        f"accepted rows {n_before} → {n_after}"
+    )
+    return filtered
+
+
 def _write_outputs(out_dir: Path, trades: pd.DataFrame, accepted: pd.DataFrame, source: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     trades.to_csv(out_dir / "trades.csv", index=False)
     summary, daily, by_setup = v6._metrics(trades)
     daily.rename(columns={"_pnl": "net_pnl_rs"}).to_csv(out_dir / "daily.csv", index=False)
     by_setup.to_csv(out_dir / "by_setup.csv", index=False)
-    accepted.to_csv(out_dir / "accepted_rules.csv", index=False)
+    gated_accepted = _gate_filter_accepted(trades, accepted, out_dir)
+    gated_accepted.to_csv(out_dir / "accepted_rules.csv", index=False)
     pd.DataFrame(
         [{"setup": k, "sl_pct": v[0], "target_pct": v[1]} for k, v in sorted(v6.SETUP_EXIT_RULES.items())]
     ).to_csv(out_dir / "setup_exit_rules.csv", index=False)

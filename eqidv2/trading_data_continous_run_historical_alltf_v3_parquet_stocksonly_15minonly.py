@@ -621,7 +621,20 @@ def calculate_adx(df, period=14):
     return adx.clip(0, 100)
 
 def calculate_vwap(df):
-    return (df["close"] * df["volume"]).cumsum() / (df["volume"].cumsum() + 1e-10)
+    # SESSION VWAP: reset each trading day, typical-price weighted. (Was a GLOBAL cumsum() that never
+    # reset per day -> VWAP anchored to the first bar of history and drifting far from price, e.g.
+    # 360ONE ~1106 vs price ~920. The backtest/live read-path recomputes session VWAP anyway; this
+    # makes the STORED parquet VWAP column correct for the future too.)
+    _tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    _vol = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0).fillna(0.0)
+    _d = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        _day = _d.dt.tz_convert(IST_TZ).dt.date
+    except (TypeError, AttributeError, NameError):
+        _day = _d.dt.date
+    _pv_cum = (_tp * _vol).groupby(_day).cumsum()
+    _vol_cum = _vol.groupby(_day).cumsum()
+    return _pv_cum / _vol_cum.where(_vol_cum != 0)
 
 def calculate_ema(close, span):
     return close.ewm(span=span, adjust=False).mean()

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Dedicated 15-minute NIFTY/NIFTYBEES fetcher for the backtest parquet folder.
+Dedicated 15-minute NIFTY context fetcher for the backtest parquet folder.
 
 This is a thin wrapper around the stock-only 15m fetcher so that:
 - timestamps are identical
@@ -10,8 +10,8 @@ This is a thin wrapper around the stock-only 15m fetcher so that:
 
 Examples:
     python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_15minonly.py
-    python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_15minonly.py --symbol NIFTYBEES --aliases NIFTYBEES
-    python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_15minonly.py --symbol NIFTYBEES --aliases NIFTYBEES,NIFTY50,NIFTY_50,NIFTY
+    python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_15minonly.py --symbol NIFTYBEES --aliases NIFTYBEES,NIFTYBEES_PROXY
+    python trading_data_continous_run_historical_alltf_v3_parquet_niftyonly_15minonly.py --symbol "NIFTY 50" --aliases "NIFTY,NIFTY50,NIFTY_50,NIFTY 50"
 """
 
 from __future__ import annotations
@@ -63,7 +63,10 @@ def parse_args() -> argparse.Namespace:
         "--aliases",
         type=str,
         default="NIFTYBEES",
-        help="Comma-separated output aliases. Example: NIFTYBEES,NIFTY50,NIFTY_50,NIFTY",
+        help=(
+            "Comma-separated output aliases. Use NIFTYBEES,NIFTYBEES_PROXY "
+            "for the ETF proxy, or NIFTY,NIFTY50,NIFTY_50,NIFTY 50 for the true index."
+        ),
     )
     p.add_argument(
         "--from-date",

@@ -13,7 +13,9 @@ set "SCRIPT_NAME=trading_data_continous_run_historical_alltf_v3_parquet_niftyonl
 set "LOG_FILE=%LOG_DIR%\nifty_guard_fetcher_v16_5min.log"
 set "STATUS_FILE=%LOG_DIR%\nifty_guard_fetcher_v16_5min.status"
 set "NIFTY_SYMBOL=NIFTYBEES"
-set "NIFTY_ALIASES=NIFTYBEES,NIFTY50,NIFTY_50,NIFTY"
+REM Legacy loop fetches only the live-gate ETF proxy. The supervised wrapper
+REM fetches true NIFTY 50 separately into NIFTY/NIFTY50 aliases.
+set "NIFTY_ALIASES=NIFTYBEES,NIFTYBEES_PROXY"
 set "FIRST_SLOT_HHMM=0915"
 set "POLL_SEC=1"
 set "SLOT_OFFSET_SEC=2"

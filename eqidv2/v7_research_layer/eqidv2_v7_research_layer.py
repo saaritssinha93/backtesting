@@ -60,7 +60,7 @@ SIGNAL_DISCOVERY_CSV_DIR = runtime_dir("signal_discovery_v7_5mins_ID", "csv")
 ENTRY_AUDIT_DIR = runtime_dir("entry_engine_1min_v5_ID", "audit")
 DATA_5M_LIVE_DIR = runtime_dir("stocks_indicators_5min_eq_live")
 NIFTY_5M_PARQUET = DATA_5M_LIVE_DIR / "NIFTYBEES_stocks_indicators_5min.parquet"
-NIFTY_STATUS_FILE = REPO_ROOT / "logs" / "nifty_guard_fetcher_v16_5min.status"
+NIFTY_STATUS_FILE = REPO_ROOT / "logs" / "eqidv2_nifty_guard_fetcher_supervised_v16_5min.status"
 LIVE_5MIN_STATUS_JSON = REPO_ROOT / "logs" / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"
 LIVE_5MIN_SUPERVISOR_STATUS = REPO_ROOT / "logs" / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status"
 LIVE_5MIN_SLOT_READY_DIR = runtime_dir("slot_ready_5m")
@@ -790,6 +790,65 @@ def _profit_factor(values: pd.Series) -> float:
     return gross_profit / gross_loss
 
 
+def _funnel_by_setup(truth: pd.DataFrame) -> pd.DataFrame:
+    """Per-setup signal funnel: raw → gated → entry_built → selected → paper_traded.
+
+    Exact drop-off counts and conversion rates at each stage make it easy to
+    identify whether a setup is losing candidates at the gate, the entry engine,
+    or the pre-momentum filter.
+    """
+    if truth.empty:
+        return pd.DataFrame()
+    cols_needed = {
+        "setup": "",
+        "side": "",
+        "passed_v8_gate": False,
+        "entry_row_built": False,
+        "entry_selected": False,
+        "paper_traded": False,
+    }
+    work = truth.copy()
+    for col, default in cols_needed.items():
+        if col not in work.columns:
+            work[col] = default
+    work["setup"] = work["setup"].fillna("UNKNOWN").astype(str)
+    work["side"] = work["side"].fillna("").astype(str).str.upper()
+    rows: list[dict[str, Any]] = []
+    for (setup, side), grp in work.groupby(["setup", "side"], dropna=False):
+        n_raw = int(len(grp))
+        n_gated = int(grp["passed_v8_gate"].sum())
+        n_entry = int(grp["entry_row_built"].sum())
+        n_selected = int(grp["entry_selected"].sum())
+        n_paper = int(grp["paper_traded"].sum())
+        pnl = pd.to_numeric(grp.get("paper_pnl_rs", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+        pf = _profit_factor(pnl[grp["paper_traded"].astype(bool)])
+        tgt = int((grp.get("paper_outcome", pd.Series("", dtype=str)).fillna("").str.upper() == "TARGET").sum())
+        sl_n = int((grp.get("paper_outcome", pd.Series("", dtype=str)).fillna("").str.upper() == "SL").sum())
+        rows.append(
+            {
+                "setup": setup,
+                "side": side,
+                "raw": n_raw,
+                "gated": n_gated,
+                "gate%": f"{100.0 * n_gated / max(n_raw, 1):.0f}",
+                "entry_built": n_entry,
+                "entry%": f"{100.0 * n_entry / max(n_gated, 1):.0f}",
+                "selected": n_selected,
+                "sel%": f"{100.0 * n_selected / max(n_entry, 1):.0f}",
+                "paper": n_paper,
+                "paper%": f"{100.0 * n_paper / max(n_selected, 1):.0f}",
+                "paper_pnl_rs": f"{float(pnl[grp['paper_traded'].astype(bool)].sum()):.0f}",
+                "pf": "inf" if np.isinf(pf) else (f"{pf:.2f}" if np.isfinite(pf) else ""),
+                "T/SL": f"{tgt}/{sl_n}",
+            }
+        )
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["paper", "raw"], ascending=[False, False])
+        .reset_index(drop=True)
+    )
+
+
 def _setup_risk_label(side: Any, setup: Any, count: int, pnl: float, pf: float) -> str:
     if count <= 0:
         return "NO_TRADE"
@@ -1386,6 +1445,24 @@ def write_report(day: str, truth: pd.DataFrame) -> str:
     for _, row in reason_counts.iterrows():
         lines.append(f"- {row['reason']}: {int(row['count'])}")
     lines.append("")
+
+    funnel = _funnel_by_setup(truth)
+    if not funnel.empty:
+        lines.extend(["## Signal Funnel Drop-Off By Setup", ""])
+        lines.append(
+            "Conversion rates at each pipeline stage. "
+            "`gate%` = gated/raw. `entry%` = entry_built/gated. "
+            "`sel%` = selected/entry_built. `paper%` = paper_traded/selected. "
+            "Low `entry%` = entry engine blocking (time gate, pre-momentum). "
+            "Low `gate%` = V8 gate or research filter rejecting."
+        )
+        lines.append("")
+        fcols = list(funnel.columns)
+        lines.append("| " + " | ".join(fcols) + " |")
+        lines.append("| " + " | ".join("---" for _ in fcols) + " |")
+        for _, row in funnel.head(30).iterrows():
+            lines.append("| " + " | ".join(str(row.get(c, "")).replace("|", "\\|") for c in fcols) + " |")
+        lines.append("")
 
     setup = (
         truth.groupby(["side", "setup"], dropna=False)

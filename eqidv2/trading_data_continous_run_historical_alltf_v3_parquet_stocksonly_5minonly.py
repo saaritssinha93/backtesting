@@ -620,7 +620,20 @@ def calculate_adx(df, period=14):
     return adx.clip(0, 100)
 
 def calculate_vwap(df):
-    return (df["close"] * df["volume"]).cumsum() / (df["volume"].cumsum() + 1e-10)
+    # SESSION VWAP: reset each trading day, typical-price weighted. (Was a GLOBAL cumsum() that never
+    # reset per day -> VWAP anchored to the first bar of history and drifting far from price, e.g.
+    # 360ONE ~1106 vs price ~920. The backtest/live read-path recomputes session VWAP anyway; this
+    # makes the STORED parquet VWAP column correct for the future too.)
+    _tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    _vol = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0).fillna(0.0)
+    _d = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        _day = _d.dt.tz_convert(IST_TZ).dt.date
+    except (TypeError, AttributeError, NameError):
+        _day = _d.dt.date
+    _pv_cum = (_tp * _vol).groupby(_day).cumsum()
+    _vol_cum = _vol.groupby(_day).cumsum()
+    return _pv_cum / _vol_cum.where(_vol_cum != 0)
 
 def calculate_ema(close, span):
     return close.ewm(span=span, adjust=False).mean()
@@ -752,9 +765,36 @@ def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.
 # SAVE / LOAD
 # =======================
 
+def _stamp_opening_snapshot(df: pd.DataFrame) -> pd.DataFrame:
+    """Label the 09:15 session-open row.
+
+    5m hybrid convention: 09:15 is the opening SNAPSHOT (session-open marker,
+    no prior in-day bar), while 09:20..15:30 are completed end-stamped 5m
+    candles. The flag is derived from the timestamp (MARKET_OPEN_TIME) so
+    consumers can treat the open row explicitly instead of guessing from
+    "first row of day". Additive column: readers that ignore it are unaffected.
+    """
+    if "date" not in df.columns or df.empty:
+        return df
+    ts = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        ts = ts.dt.tz_convert(IST_TZ)
+    except (TypeError, AttributeError):
+        try:
+            ts = ts.dt.tz_localize(IST_TZ)
+        except (TypeError, AttributeError):
+            pass
+    df = df.copy()
+    df["opening_snapshot"] = (
+        (ts.dt.hour == MARKET_OPEN_TIME.hour) & (ts.dt.minute == MARKET_OPEN_TIME.minute)
+    ).fillna(False).astype(bool)
+    return df
+
+
 def _finalize_and_save(df: pd.DataFrame, out_path: str):
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     _ensure_parquet_engine()
+    df = _stamp_opening_snapshot(df)
     df.to_parquet(out_path, engine="pyarrow", index=False, compression="snappy")
 
 def _load_existing_ohlc(out_path: str, intraday_ts: str) -> pd.DataFrame:

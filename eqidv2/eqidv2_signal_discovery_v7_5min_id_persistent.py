@@ -13,6 +13,7 @@ import csv
 import json
 import os
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -30,7 +31,25 @@ from eqidv2_runtime_paths import RUNTIME_ROOT, RUNTIME_STATUS_DIR, runtime_dir
 
 SESSION_NAME = "Signal discovery v7 5mins ID"
 SESSION_SLUG = "signal_discovery_v7_5mins_ID"
-SESSION_ROOT = runtime_dir("signal_discovery_v7_5mins_ID")
+# P2-14: schema version stamped into every candidate row.  Bump this string
+# whenever the candidate CSV column set changes so the entry engine can detect
+# stale-format files without a column-name comparison.
+CANDIDATE_SCHEMA_VERSION = "v7_candidate_2026_06_10"
+
+# When EQIDV2_REPLAY_OUTPUT_ROOT is set, all session-level outputs (JSON
+# snapshots, audit CSVs, JSONL, status, heartbeat) redirect there instead of
+# the production runtime root. This prevents --replay-slots from overwriting
+# live outputs. The BAT guard checks market hours; this provides Python-side
+# isolation so replay is safe even if the BAT guard is bypassed.
+_REPLAY_OUTPUT_ROOT_RAW = os.getenv("EQIDV2_REPLAY_OUTPUT_ROOT", "").strip()
+if _REPLAY_OUTPUT_ROOT_RAW:
+    import pathlib as _pathlib
+    SESSION_ROOT = _pathlib.Path(_REPLAY_OUTPUT_ROOT_RAW) / SESSION_SLUG
+    _is_replay_isolated = True
+else:
+    SESSION_ROOT = runtime_dir("signal_discovery_v7_5mins_ID")
+    _is_replay_isolated = False
+
 CSV_DIR = SESSION_ROOT / "csv"
 JSON_DIR = SESSION_ROOT / "json"
 LATEST_DIR = SESSION_ROOT / "latest"
@@ -432,6 +451,46 @@ def _load_universe() -> List[str]:
     return sorted({str(t).strip().upper() for t in universe if str(t).strip()})
 
 
+def _check_universe_feed_parity(scanner_tickers: List[str]) -> None:
+    """Warn when the scanner universe diverges from the feed's latest slot count.
+
+    The feed writes a slot-ready marker that includes tickers_written. If that
+    count differs from the scanner universe by more than UNIVERSE_PARITY_WARN_DELTA,
+    some symbols will be scanned against stale or missing indicator files.
+    """
+    UNIVERSE_PARITY_WARN_DELTA = int(
+        os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_UNIVERSE_PARITY_WARN_DELTA", "15")
+    )
+    scanner_count = len(scanner_tickers)
+    try:
+        from eqidv2_runtime_paths import runtime_dir as _runtime_dir
+        slot_ready_dir = _runtime_dir("slot_ready_5m")
+        markers = sorted(slot_ready_dir.glob("slot_*.json"))
+        if not markers:
+            return
+        import json as _json
+        marker = _json.loads(markers[-1].read_text(encoding="utf-8", errors="replace"))
+        feed_count = int(marker.get("tickers_written", marker.get("tickers_expected", 0)) or 0)
+        if feed_count <= 0:
+            return
+        delta = abs(scanner_count - feed_count)
+        if delta > UNIVERSE_PARITY_WARN_DELTA:
+            print(
+                f"[{SESSION_NAME}] UNIVERSE MISMATCH: scanner={scanner_count} feed={feed_count} "
+                f"delta={delta} > warn_threshold={UNIVERSE_PARITY_WARN_DELTA}. "
+                f"Some symbols may lack fresh indicator bars. "
+                f"Reconcile filtered_stocks_MIS.py with the feed universe before scanning.",
+                flush=True,
+            )
+        else:
+            print(
+                f"[{SESSION_NAME}] universe parity OK: scanner={scanner_count} feed={feed_count} delta={delta}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"[{SESSION_NAME}] universe parity check skipped: {type(exc).__name__}: {exc}", flush=True)
+
+
 def _daily_csv_path(day: str) -> Path:
     return CSV_DIR / f"candidate_tickers_{day}.csv"
 
@@ -474,6 +533,10 @@ def _v11_overlay_rejected_slot_json_path(slot: pd.Timestamp) -> Path:
 
 def _daily_audit_path(day: str) -> Path:
     return AUDIT_DIR / f"candidate_tickers_audit_{day}.csv"
+
+
+def _daily_audit_jsonl_path(day: str) -> Path:
+    return AUDIT_DIR / f"candidate_tickers_audit_{day}.jsonl"
 
 
 def _load_existing_ids(path: Path) -> set[str]:
@@ -526,6 +589,10 @@ def _append_candidates_to_path(df: pd.DataFrame, path: Path) -> Dict[str, int]:
         if not path.exists():
             df.to_csv(path, index=False)
         return {"written": 0, "duplicates": 0}
+    # P2-14: stamp schema version so consumers can detect format changes
+    if "candidate_schema_version" not in df.columns:
+        df = df.copy()
+        df["candidate_schema_version"] = CANDIDATE_SCHEMA_VERSION
 
     if path.exists() and path.stat().st_size > 0:
         try:
@@ -843,7 +910,9 @@ def _load_universe_for_day(day: str) -> List[str]:
     if day not in _UNIVERSE_CACHE_BY_DAY:
         _UNIVERSE_CACHE_BY_DAY.clear()
         _RANKER_MEMORY_CACHE.clear()
-        _UNIVERSE_CACHE_BY_DAY[day] = _load_universe()
+        tickers = _load_universe()
+        _UNIVERSE_CACHE_BY_DAY[day] = tickers
+        _check_universe_feed_parity(tickers)
     return _UNIVERSE_CACHE_BY_DAY[day]
 
 
@@ -1251,30 +1320,43 @@ def apply_v8_live_gate(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
 
 
 def _append_audit(slot: pd.Timestamp, summary: Dict[str, Any]) -> None:
-    path = _daily_audit_path(slot.strftime("%Y-%m-%d"))
+    day = slot.strftime("%Y-%m-%d")
     row = {
         "session": SESSION_NAME,
         "slot_ist": _fmt_slot(slot),
         "created_at_ist": _fmt_slot(pd.Timestamp.now(tz=base_v15.IST)),
         **summary,
     }
-    file_exists = path.exists() and path.stat().st_size > 0
+
+    # Primary: append-only JSONL — one compact JSON object per line, no
+    # schema migrations, no backup files. Each run appends exactly one line.
+    jsonl_path = _daily_audit_jsonl_path(day)
+    try:
+        with open(jsonl_path, "a", encoding="utf-8") as jf:
+            jf.write(json.dumps(row, default=str) + "\n")
+    except OSError as exc:
+        print(f"[{SESSION_NAME}] audit JSONL write failed for {jsonl_path}: {exc}", flush=True)
+
+    # Secondary: CSV kept for backwards-compat with downstream readers.
+    # Schema drift is handled by rewriting the header when the fieldnames
+    # change — no backup archive, no 29-file accumulation.
+    csv_path = _daily_audit_path(day)
     fieldnames = list(row.keys())
+    file_exists = csv_path.exists() and csv_path.stat().st_size > 0
+    rewrite_header = False
     if file_exists:
         try:
-            with open(path, "r", newline="", encoding="utf-8") as f:
+            with open(csv_path, "r", newline="", encoding="utf-8") as f:
                 existing_header = next(csv.reader(f), [])
+            if existing_header and existing_header != fieldnames:
+                rewrite_header = True
         except Exception:
-            existing_header = []
-        if existing_header and existing_header != fieldnames:
-            backup = path.with_name(f"{path.stem}_schema_backup_{base_v15.now_ist().strftime('%Y%m%d_%H%M%S')}{path.suffix}")
-            try:
-                path.replace(backup)
-                file_exists = False
-                print(f"[{SESSION_NAME}] archived schema-mismatched audit CSV: {backup}", flush=True)
-            except OSError as exc:
-                print(f"[{SESSION_NAME}] audit schema backup failed for {path}: {exc}", flush=True)
-    with open(path, "a", newline="", encoding="utf-8") as f:
+            rewrite_header = True
+    if rewrite_header:
+        # Schema changed: truncate and restart the CSV — no backup archive.
+        print(f"[{SESSION_NAME}] audit CSV schema changed, restarting without backup: {csv_path}", flush=True)
+        file_exists = False
+    with open(csv_path, "a" if file_exists else "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
@@ -1558,6 +1640,12 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--runtime-root", default=str(RUNTIME_ROOT))
     ap.add_argument("--scan-workers", type=int, default=DEFAULT_SCAN_WORKERS)
     ap.add_argument("--replay-slots", nargs="*", default=None)
+    ap.add_argument(
+        "--production-replay",
+        action="store_true",
+        help="Allow --replay-slots to write to production paths (default: REFUSED "
+             "unless EQIDV2_REPLAY_OUTPUT_ROOT is set)",
+    )
     ap.add_argument("--post-slot-delay-sec", type=int, default=POST_SLOT_DELAY_SEC)
     return ap.parse_args()
 
@@ -1592,16 +1680,21 @@ def main() -> None:
         print(f"[INFO] feed_gate=OFF (fixed post_slot_delay={int(args.post_slot_delay_sec)}s)", flush=True)
 
     if args.replay_slots:
-        # WARNING: replay currently writes to the same production paths as the
-        # live loop (daily CSVs, latest JSON/CSV, audit, status, heartbeat).
-        # Do not run replay while the live session is active.
-        # Full replay isolation (OutputPaths dataclass, replay_shadow/) is
-        # tracked as P0-F in v7_fix_20260608_111939.md and is not yet implemented.
-        print(
-            "[REPLAY][WARN] replay_slots writes to PRODUCTION paths. "
-            "Stop the live session before replaying.",
-            flush=True,
-        )
+        if _is_replay_isolated:
+            print(f"[REPLAY] isolated output root={SESSION_ROOT}", flush=True)
+        elif args.production_replay:
+            print(
+                "[REPLAY][WARN] --production-replay set: writing to PRODUCTION paths.",
+                flush=True,
+            )
+        else:
+            print(
+                "[ERROR] --replay-slots refused: would overwrite production outputs.\n"
+                "  Option A (recommended): set EQIDV2_REPLAY_OUTPUT_ROOT=<replay_dir>\n"
+                "  Option B (dangerous):   pass --production-replay to confirm.",
+                flush=True,
+            )
+            sys.exit(1)
         summaries = []
         for raw in args.replay_slots:
             slot = _ensure_ist_ts(raw)

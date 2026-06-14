@@ -26,6 +26,13 @@ from eqidv2_runtime_paths import (
     runtime_dir,
 )
 
+try:
+    from nse_intraday_costs import CostConfig as _NseCostConfig
+    from nse_intraday_costs import intraday_equity_costs as _nse_intraday_equity_costs
+except Exception:  # pragma: no cover - dashboard can still render legacy gross rows
+    _NseCostConfig = None
+    _nse_intraday_equity_costs = None
+
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 
@@ -50,6 +57,16 @@ V7_RESEARCH_LAYER_ROOT = runtime_dir("live_research_v7_research_layer")
 V7_RESEARCH_LAYER_LATEST_DIR = V7_RESEARCH_LAYER_ROOT / "latest"
 DAILY_LIVE_V7_RESEARCH_ROOT = runtime_dir("daily_live_v7_research_session")
 DAILY_LIVE_V7_RESEARCH_LATEST_DIR = DAILY_LIVE_V7_RESEARCH_ROOT / "latest"
+V7_NSE_ID_COST_ROOT = runtime_dir("v7_nse_id_cost")
+V7_NSE_ID_COST_LATEST_DIR = V7_NSE_ID_COST_ROOT / "latest"
+V7_WALKFORWARD_GATE_ROOT = runtime_dir("v7_walkforward_gate")
+V7_WALKFORWARD_GATE_LATEST_DIR = V7_WALKFORWARD_GATE_ROOT / "latest"
+V7_CAUSALITY_AUDIT_ROOT = runtime_dir("v7_causality_audit")
+V7_CAUSALITY_AUDIT_LATEST_DIR = V7_CAUSALITY_AUDIT_ROOT / "latest"
+V7_GATE_PROMOTION_ROOT = runtime_dir("v7_gate_promotion")
+V7_GATE_PROMOTION_LATEST_DIR = V7_GATE_PROMOTION_ROOT / "latest"
+V7_QUALIFICATION_ROOT = runtime_dir("v7_qualification")
+V7_QUALIFICATION_LATEST_DIR = V7_QUALIFICATION_ROOT / "latest"
 V7_PRE_MOMENTUM_FILTER_ANALYST_ROOT = runtime_dir("v7_pre_momentum_filter_analyst")
 V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR = V7_PRE_MOMENTUM_FILTER_ANALYST_ROOT / "latest"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
@@ -119,6 +136,11 @@ LOG_FILES: Dict[str, str] = {
     "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID/heartbeat/entry_engine.status.json",
     "v7_research_layer":                "live_research_v7_research_layer/latest/latest_summary.json",
     "daily_live_v7_research_session":   "daily_live_v7_research_session/latest/latest_daily_live_v7_research.md",
+    "v7_nse_id_cost":                    "v7_nse_id_cost/latest/latest_v7_nse_id_cost.md",
+    "v7_walkforward_gate":               "v7_walkforward_gate/latest/latest_v7_walkforward_gate.md",
+    "v7_causality_audit":                "v7_causality_audit/latest/v7_causality_audit.md",
+    "v7_gate_promotion":                 "v7_gate_promotion/latest/latest_v7_gate_promotion.md",
+    "v7_qualification":                  "v7_qualification/latest/latest_v7_qualification.md",
     "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst/latest/latest_v7_pre_momentum_filter_analyst.md",
     "data_for_backtesting":             "data_for_backtesting_latest.log",
     "backtesting_result_v11":            "backtesting_result_v11_latest.log",
@@ -155,7 +177,7 @@ STATUS_FILES: Dict[str, str] = {
     "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.status",
     "kite_trade_id_5min_v7": "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.status",
     "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.status",
-    "nifty_guard_fetch_v16_5min": "nifty_guard_fetcher_v16_5min.status",
+    "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.status",
     "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.status",
     "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.status",
     "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.status",
@@ -163,6 +185,11 @@ STATUS_FILES: Dict[str, str] = {
     "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.supervisor.status",
     "v7_research_layer":                "live_research_v7_research_layer.status",
     "daily_live_v7_research_session":   "daily_live_v7_research_session.status",
+    "v7_nse_id_cost":                    "v7_nse_id_cost.status",
+    "v7_walkforward_gate":               "v7_walkforward_gate.status",
+    "v7_causality_audit":                "v7_causality_audit.status",
+    "v7_gate_promotion":                 "v7_gate_promotion.status",
+    "v7_qualification":                  "v7_qualification.status",
     "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.status",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.status",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
@@ -178,6 +205,7 @@ HB_STALE_RUNNING_OVERRIDE_SEC: int = int(
 
 HEARTBEAT_FILES: Dict[str, str] = {
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat",
+    "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.heartbeat",
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
     "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.heartbeat",
@@ -189,6 +217,11 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.supervisor.heartbeat",
     "v7_research_layer":                "live_research_v7_research_layer.heartbeat",
     "daily_live_v7_research_session":   "daily_live_v7_research_session.heartbeat",
+    "v7_nse_id_cost":                    "v7_nse_id_cost.heartbeat",
+    "v7_walkforward_gate":               "v7_walkforward_gate.heartbeat",
+    "v7_causality_audit":                "v7_causality_audit.heartbeat",
+    "v7_gate_promotion":                 "v7_gate_promotion.heartbeat",
+    "v7_qualification":                  "v7_qualification.heartbeat",
     "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.heartbeat",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.heartbeat",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.heartbeat",
@@ -214,6 +247,11 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
         "\\EQIDV2_suggestions_v7_live_research_1615",
     ),
     "daily_live_v7_research_session": ("\\EQIDV2_daily_live_v7_research_0917",),
+    "v7_nse_id_cost": ("\\EQIDV2_v7_nse_id_cost_1605",),
+    "v7_walkforward_gate": ("\\EQIDV2_v7_walkforward_gate_1620",),
+    "v7_causality_audit": ("\\EQIDV2_v7_causality_audit_1605",),
+    "v7_gate_promotion": ("\\EQIDV2_v7_gate_promotion_1625",),
+    "v7_qualification": ("\\EQIDV2_v7_qualification_1630",),
     "v7_pre_momentum_filter_analyst": ("\\EQIDV2_v7_pre_momentum_filter_analyst_0917",),
     "live_signals_csv_id_5min_v7_short": ("\\EQIDV2_entry_engine_1min_v5_ID",),
     "live_signals_csv_id_5min_v7_long": ("\\EQIDV2_entry_engine_1min_v5_ID",),
@@ -248,7 +286,7 @@ _TASK_SNAPSHOT_CACHE: Dict[str, Dict[str, str]] = {}
 _TASK_SNAPSHOT_CACHE_AT: Optional[dt.datetime] = None
 
 RESTARTABLE_CARDS: Dict[str, str] = {
-    "nifty_guard_fetch_v16_5min":    "run_nifty_guard_fetcher_v16_5min.bat",
+    "nifty_guard_fetch_v16_5min":    "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
     "eod_5min_data":                 "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
     "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
@@ -257,6 +295,11 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "signal_discovery_v7_5min_id": "run_eqidv2_signal_discovery_v7_5min_id_persistent.bat",
     "v7_research_layer": "run_eqidv2_v7_research_layer.bat",
     "daily_live_v7_research_session": "run_eqidv2_daily_live_v7_research_session.bat",
+    "v7_nse_id_cost": "run_v7_nse_id_cost_report.bat",
+    "v7_walkforward_gate": "run_v7_walkforward_gate_report.bat",
+    "v7_causality_audit": "run_v7_causality_audit.bat",
+    "v7_gate_promotion": "run_v7_gate_promotion_report.bat",
+    "v7_qualification": "run_v7_qualification_report.bat",
     "v7_pre_momentum_filter_analyst": "run_eqidv2_v7_pre_momentum_filter_analyst.bat",
     "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
     "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
@@ -691,9 +734,49 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         path = DAILY_LIVE_V7_RESEARCH_LATEST_DIR / "latest_daily_live_v7_research.md"
         return path, str(Path("daily_live_v7_research_session") / "latest" / path.name)
 
+    if name == "v7_nse_id_cost":
+        path = V7_NSE_ID_COST_LATEST_DIR / "latest_v7_nse_id_cost.md"
+        return path, str(Path("v7_nse_id_cost") / "latest" / path.name)
+
+    if name == "v7_walkforward_gate":
+        path = V7_WALKFORWARD_GATE_LATEST_DIR / "latest_v7_walkforward_gate.md"
+        return path, str(Path("v7_walkforward_gate") / "latest" / path.name)
+
+    if name == "v7_causality_audit":
+        path = V7_CAUSALITY_AUDIT_LATEST_DIR / "v7_causality_audit.md"
+        return path, str(Path("v7_causality_audit") / "latest" / path.name)
+
+    if name == "v7_gate_promotion":
+        path = V7_GATE_PROMOTION_LATEST_DIR / "latest_v7_gate_promotion.md"
+        return path, str(Path("v7_gate_promotion") / "latest" / path.name)
+
+    if name == "v7_qualification":
+        path = V7_QUALIFICATION_LATEST_DIR / "latest_v7_qualification.md"
+        return path, str(Path("v7_qualification") / "latest" / path.name)
+
     if name == "v7_pre_momentum_filter_analyst":
         path = V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.md"
         return path, str(Path("v7_pre_momentum_filter_analyst") / "latest" / path.name)
+
+    if name == "nifty_guard_fetch_v16_5min":
+        today_log = _latest_matching_file(
+            LOG_DIR,
+            f"eqidv2_nifty_guard_fetcher_supervised_v16_5min_{today_ist}*.log",
+        )
+        if today_log is not None:
+            return today_log, today_log.name
+        latest_supervised = _latest_matching_file(
+            LOG_DIR,
+            "eqidv2_nifty_guard_fetcher_supervised_v16_5min_*.log",
+        )
+        if latest_supervised is not None:
+            return latest_supervised, latest_supervised.name
+        legacy_name = LOG_FILES[name]
+        legacy_path = LOG_DIR / legacy_name
+        if legacy_path.exists():
+            return legacy_path, legacy_name
+        fallback_name = f"eqidv2_nifty_guard_fetcher_supervised_v16_5min_{today_ist}.log"
+        return LOG_DIR / fallback_name, fallback_name
 
     if name in LOG_FILES:
         file_name = LOG_FILES[name]
@@ -1707,6 +1790,11 @@ def _paper_open_pnl_from_state(row: dict[str, Any]) -> float:
     side = str(row.get("side", "")).upper().strip()
     if math.isnan(qty) or math.isnan(entry) or math.isnan(ltp) or ltp <= 0:
         return float("nan")
+    if _nse_intraday_equity_costs is not None and side in {"LONG", "SHORT"}:
+        try:
+            return float(_nse_intraday_equity_costs(entry, ltp, qty, side, _NseCostConfig()).net_pnl)
+        except Exception:
+            pass
     if side == "SHORT":
         return (entry - ltp) * qty
     return (ltp - entry) * qty
@@ -1799,6 +1887,8 @@ def _v7_monitor_setup_bucket(
             "entry_raw": 0,
             "v11_rej": 0,
             "pre_rej": 0,
+            "adv_cap_rej": 0,
+            "fno_ban_rej": 0,
             "pre_pass": 0,
             "entries": 0,
             "signals": 0,
@@ -2232,7 +2322,7 @@ def _format_v7_live_5min_monitor(
                 ("v11_entry_rejected_rows", "v11_rej"),
                 ("pre_momentum_rejected_rows", "pre_rej"),
                 ("pre_momentum_filtered_entry_rows", "pre_pass"),
-                ("selected_entry_rows", "entries"),
+                ("entry_rows", "entries"),
                 ("entry_rows", "entry_rows"),
                 ("short_written", "short_written"),
                 ("long_written", "long_written"),
@@ -2240,8 +2330,6 @@ def _format_v7_live_5min_monitor(
                 value = _to_float_or_nan(str(payload.get(source_key, "")))
                 if not math.isnan(value):
                     rec[target_key] = int(value)
-            if not int(rec.get("entries", 0) or 0) and int(rec.get("entry_rows", 0) or 0):
-                rec["entries"] = int(rec.get("entry_rows", 0) or 0)
             rec["signals"] = int(rec.get("short_written", 0) or 0) + int(rec.get("long_written", 0) or 0)
             for source_key, target_key in (
                 ("elapsed_sec", "elapsed_sec"),
@@ -2284,6 +2372,15 @@ def _format_v7_live_5min_monitor(
         rows = _v7_monitor_slot_rows(path, date_key, "pre_rej", slots)
         for row in rows:
             _v7_monitor_add_setup_count(setup_stats, row, "pre_rej")
+    # P2-15: ADV cap and F&O ban reject counts surfaced in funnel card
+    for path in sorted(entry_audit_dir.glob(f"entry_rejected_adv_cap_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "adv_cap_rej", slots)
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "adv_cap_rej")
+    for path in sorted(entry_audit_dir.glob(f"entry_rejected_fno_ban_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "fno_ban_rej", slots)
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "fno_ban_rej")
     for path in sorted(entry_audit_dir.glob(f"entry_rows_{date_key}_*.csv")):
         rows = _v7_monitor_slot_rows(path, date_key, "entries", slots)
         slot = _v7_monitor_slot_from_path(path, date_key)
@@ -2385,7 +2482,7 @@ def _format_v7_live_5min_monitor(
             if not math.isnan(entry_lag):
                 rec["entry_lag_sec"] = max(float(rec.get("entry_lag_sec", 0.0) or 0.0), float(entry_lag))
         outcome_key = _v7_monitor_outcome_bucket(row.get("outcome", state))
-        pnl = _v7_monitor_num(row, ("pnl_rs", "pnl"))
+        pnl = _v7_monitor_num(row, ("net_pnl_rs", "net_pnl", "pnl_rs", "pnl"))
         if slot:
             rec = _slot_rec(slot)
             if outcome_key:
@@ -2757,6 +2854,8 @@ def _format_v7_live_5min_monitor(
                 "pot": str(int(bucket.get("potential", 0) or 0)),
                 "entry_raw": str(int(bucket.get("entry_raw", 0) or 0)),
                 "pre_rej": str(int(bucket.get("pre_rej", 0) or 0)),
+                "adv_rej": str(int(bucket.get("adv_cap_rej", 0) or 0)),
+                "fno_rej": str(int(bucket.get("fno_ban_rej", 0) or 0)),
                 "pre_pass": str(int(bucket.get("pre_pass", 0) or 0)),
                 "entries": str(int(bucket.get("entries", 0) or 0)),
                 "sig": str(int(bucket.get("signals", 0) or 0)),
@@ -2830,7 +2929,17 @@ def _format_v7_live_5min_monitor(
     pre_enabled = str(latest_summary.get("pre_momentum_gate_enabled", "")).strip()
     v11_enabled = str(latest_summary.get("v11_entry_overlay_enabled", "")).strip()
     status = {
-        "status": "READY" if slots or latest_summary else "WAITING_OUTPUT",
+        "status": (
+            "READY" if slots or latest_summary
+            else (
+                "SCHEDULED"
+                if now_ist.hour < 9
+                or (now_ist.hour == 9 and now_ist.minute < 20)
+                or now_ist.hour >= 16
+                or (now_ist.hour == 15 and now_ist.minute >= 40)
+                else "WAITING_OUTPUT"
+            )
+        ),
         "session": "V7 ID 5min live monitor",
         "slot": latest_slot,
         "scan_raw": str(raw_scan_total),
@@ -2938,6 +3047,8 @@ def _format_v7_live_5min_monitor(
             "pot",
             "entry_raw",
             "pre_rej",
+            "adv_rej",
+            "fno_rej",
             "pre_pass",
             "entries",
             "sig",
@@ -3022,7 +3133,7 @@ def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
                 "qty": _fmt_qty(qty),
                 "entry": _fmt_price(entry),
                 "ltp_exit": _fmt_price(last_ltp),
-                "pnl_rs": _fmt_rs(pnl) if not math.isnan(pnl) else "",
+                "net_pnl": _fmt_rs(pnl) if not math.isnan(pnl) else "",
                 "pnl_pct": _fmt_pct(pnl_pct) if not math.isnan(pnl_pct) else "",
                 "sl": _fmt_price(_to_float_or_nan(str(trade.get("stop_price", "")))),
                 "tgt": _fmt_price(_to_float_or_nan(str(trade.get("target_price", "")))),
@@ -3037,7 +3148,7 @@ def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
     wins = losses = skipped = 0
     for row in closed_rows:
         outcome = str(row.get("outcome", "")).upper().strip()
-        pnl = _to_float_or_nan(row.get("pnl_rs", ""))
+        pnl = _to_float_or_nan(_pick_csv_value(row, ("net_pnl_rs", "net_pnl", "pnl_rs")))
         if not math.isnan(pnl):
             closed_pnl_total += float(pnl)
             closed_count_for_pnl += 1
@@ -3056,8 +3167,8 @@ def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
                 "qty": _fmt_qty(_to_float_or_nan(row.get("quantity", ""))),
                 "entry": _fmt_price(_to_float_or_nan(row.get("entry_price", ""))),
                 "ltp_exit": _fmt_price(_to_float_or_nan(row.get("exit_price", ""))),
-                "pnl_rs": _fmt_rs(pnl) if not math.isnan(pnl) else "",
-                "pnl_pct": _fmt_pct(_to_float_or_nan(row.get("pnl_pct", ""))) if row.get("pnl_pct") else "",
+                "net_pnl": _fmt_rs(pnl) if not math.isnan(pnl) else "",
+                "pnl_pct": _fmt_pct(_to_float_or_nan(_pick_csv_value(row, ("net_pnl_pct", "pnl_pct")))) if _pick_csv_value(row, ("net_pnl_pct", "pnl_pct")) else "",
                 "sl": _fmt_price(_to_float_or_nan(row.get("stop_price", ""))),
                 "tgt": _fmt_price(_to_float_or_nan(row.get("target_price", ""))),
                 "time": _extract_time_only(str(row.get("entry_time", ""))),
@@ -3067,12 +3178,12 @@ def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
 
     def _state_rank(row: dict[str, str]) -> tuple[int, float, str]:
         state = row.get("state", "")
-        pnl = _to_float_or_nan(row.get("pnl_rs", ""))
+        pnl = _to_float_or_nan(row.get("net_pnl", ""))
         pnl_sort = float(pnl) if not math.isnan(pnl) else 0.0
         return (0 if state == "OPEN" else 1, pnl_sort, row.get("ticker", ""))
 
     rows = sorted(rows, key=_state_rank)
-    columns = ("state", "ticker", "side", "setup", "qty", "entry", "ltp_exit", "pnl_rs", "pnl_pct", "sl", "tgt", "time", "update")
+    columns = ("state", "ticker", "side", "setup", "qty", "entry", "ltp_exit", "net_pnl", "pnl_pct", "sl", "tgt", "time", "update")
 
     unrealized = latest_pnl.get("unrealized")
     if not isinstance(unrealized, (int, float)):
@@ -3082,8 +3193,20 @@ def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
     deployed = latest_pnl.get("deployed_margin")
     summary_payload = _read_json_dict(summary_path)
     if not isinstance(realized, (int, float)):
-        realized = _to_float_or_nan(str(summary_payload.get("total_pnl_rs", "")))
+        realized = _to_float_or_nan(str(summary_payload.get("net_pnl_rs", summary_payload.get("total_pnl_rs", ""))))
+    if (
+        (not isinstance(realized, (int, float)) or math.isnan(float(realized)))
+        and closed_count_for_pnl
+    ):
+        realized = float(closed_pnl_total)
     if not isinstance(total, (int, float)) and isinstance(unrealized, (int, float)) and isinstance(realized, (int, float)):
+        total = float(unrealized) + float(realized)
+    if (
+        isinstance(total, (int, float))
+        and math.isnan(float(total))
+        and isinstance(unrealized, (int, float))
+        and isinstance(realized, (int, float))
+    ):
         total = float(unrealized) + float(realized)
 
     best = max(open_pnl_values, key=lambda x: x[1], default=("", float("nan")))
@@ -3093,14 +3216,14 @@ def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
     summary_lines = [
         (
             f"V7 ID 5min Papertrade | updated={updated or 'n/a'} | "
-            f"open={open_count} | realized={_fmt_rs(float(realized)) if isinstance(realized, (int, float)) and not math.isnan(float(realized)) else 'n/a'} | "
-            f"unrealized={_fmt_rs(float(unrealized)) if isinstance(unrealized, (int, float)) and not math.isnan(float(unrealized)) else 'n/a'} | "
-            f"total={_fmt_rs(float(total)) if isinstance(total, (int, float)) and not math.isnan(float(total)) else 'n/a'}"
+            f"open={open_count} | realized_net={_fmt_rs(float(realized)) if isinstance(realized, (int, float)) and not math.isnan(float(realized)) else 'n/a'} | "
+            f"unrealized_net={_fmt_rs(float(unrealized)) if isinstance(unrealized, (int, float)) and not math.isnan(float(unrealized)) else 'n/a'} | "
+            f"total_net={_fmt_rs(float(total)) if isinstance(total, (int, float)) and not math.isnan(float(total)) else 'n/a'}"
         ),
         (
             f"deployed_margin={_fmt_rs_plain(float(deployed)) if isinstance(deployed, (int, float)) and not math.isnan(float(deployed)) else 'n/a'} | "
             f"closed_rows={len(closed_rows)} | wins={wins} | losses={losses} | skipped={skipped} | "
-            f"closed_csv_pnl={_fmt_rs(closed_pnl_total) if closed_count_for_pnl else 'n/a'}"
+            f"closed_csv_net_pnl={_fmt_rs(closed_pnl_total) if closed_count_for_pnl else 'n/a'}"
         ),
     ]
     if open_pnl_values:
@@ -5538,6 +5661,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "v7_live_5min_monitor",
       "v7_research_layer",
       "daily_live_v7_research_session",
+      "v7_nse_id_cost",
+      "v7_walkforward_gate",
+      "v7_causality_audit",
+      "v7_gate_promotion",
+      "v7_qualification",
       "v7_pre_momentum_filter_analyst",
       "live_signals_csv_id_5min_v7_short",
       "live_signals_csv_id_5min_v7_long",
@@ -5597,11 +5725,16 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "v7_live_5min_monitor": "V7 ID 5min Live Monitor",
       "v7_research_layer": "Suggestions v7 live research",
       "daily_live_v7_research_session": "Daily Live V7 Research",
+      "v7_nse_id_cost": "V7 NSE ID Cost",
+      "v7_walkforward_gate": "V7 Walkforward Gate",
+      "v7_causality_audit": "V7 Causality Audit",
+      "v7_gate_promotion": "V7 Gate Promotion (P0-17)",
+      "v7_qualification": "V7 Qualification (P1-22)",
       "v7_pre_momentum_filter_analyst": "v7 pre momentum filter analyst",
       "live_signals_csv_id_5min_v7_short": "Live Entries CSV ID 5mins v7 Short",
       "live_signals_csv_id_5min_v7_long": "Live Entries CSV ID 5mins v7 Long",
-      "live_papertrade_result_csv_id_5min_v7": "V7 ID 5min Papertrade Results",
-      "paper_trade_id_5min_v7": "V7 ID 5min Papertrade Runner Log",
+      "live_papertrade_result_csv_id_5min_v7": "V7 ID 5min Papertrade Results (Net)",
+      "paper_trade_id_5min_v7": "V7 ID 5min Papertrade Runner Log (Net)",
       "live_kite_trades_csv_id_5min_v7": "V7 ID 5min Live Kite Trades CSV",
       "kite_trade_id_5min_v7": "V7 ID 5min Live Trade Runner Log",
       "data_for_backtesting": "Data for backtesting",
@@ -5665,8 +5798,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         title: "Research & Suggestions",
         accent: "research",
         ids: [
+          "v7_gate_promotion",
+          "v7_qualification",
           "v7_research_layer",
           "daily_live_v7_research_session",
+          "v7_nse_id_cost",
+          "v7_walkforward_gate",
+          "v7_causality_audit",
           "v7_pre_momentum_filter_analyst"
         ]
       },
@@ -5718,7 +5856,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:22", id: "kite_trade_id_5min_v7", label: "Live Trade FALSE" },
       { time: "15:45", id: "data_for_backtesting", label: "Data for Backtesting" },
       { time: "16:00", id: "backtesting_result_v11", label: "Backtesting Result v11" },
+      { time: "16:05", id: "v7_nse_id_cost", label: "V7 NSE ID Cost" },
+      { time: "16:05", id: "v7_causality_audit", label: "V7 Causality Audit" },
       { time: "16:15", id: "v7_research_layer", label: "Suggestions v7 Research" },
+      { time: "16:20", id: "v7_walkforward_gate", label: "V7 Walkforward Gate" },
+      { time: "16:25", id: "v7_gate_promotion", label: "V7 Gate Promotion" },
+      { time: "16:30", id: "v7_qualification", label: "V7 Qualification" },
       { time: "17:00", id: "", label: "Dashboard Close" }
     ];
     const API_TOKEN = __API_TOKEN_JSON__;
@@ -5766,6 +5909,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "entry_engine_1min_v5_id",
       "v7_research_layer",
       "daily_live_v7_research_session",
+      "v7_nse_id_cost",
+      "v7_walkforward_gate",
+      "v7_causality_audit",
+      "v7_gate_promotion",
+      "v7_qualification",
       "v7_pre_momentum_filter_analyst",
       "kite_positions_day_today_csv",
       "kite_holdings_today_csv",
@@ -5853,7 +6001,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "MISSING_OUTPUT") return `<span class="pill fail">${esc(s)}</span>`;
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return `<span class="pill info">${esc(s)}</span>`;
-      if (s === "DISABLED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED") return `<span class="pill muted">${esc(s)}</span>`;
+      if (s === "DISABLED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED" || s === "DONE") return `<span class="pill muted">${esc(s)}</span>`;
       return `<span class="pill fail">${esc(s)}</span>`;
     }
 
@@ -5865,7 +6013,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "warn";
       if (s === "MISSING_OUTPUT") return "bad";
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return "scheduled";
-      if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED") return "scheduled";
+      if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED" || s === "DONE") return "scheduled";
       if (!s) return "unknown";
       return "bad";
     }
@@ -6093,6 +6241,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (filter === "research") {
         return id === "v7_research_layer"
           || id === "daily_live_v7_research_session"
+          || id === "v7_nse_id_cost"
+          || id === "v7_walkforward_gate"
+          || id === "v7_causality_audit"
+          || id === "v7_gate_promotion"
+          || id === "v7_qualification"
           || id === "v7_pre_momentum_filter_analyst"
           || id === "backtesting_result_v11"
           || id === "data_for_backtesting";
@@ -6818,7 +6971,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const logToggleCls = logHidden ? "card-toggle log-toggle is-hidden" : "card-toggle log-toggle";
           const killControls = renderKillControls(it.id, killSnapshot);
           const logText = it.tail || (it.exists ? "(empty)" : "(log file not found yet)");
-          const isEmptyLog = /\\((empty|no rows yet|log file not found yet)\\)/i.test(String(logText).trim());
+          const isEmptyLog = !String(logText || "").includes(" | ") && /\\((empty|no rows yet|log file not found yet)\\)/i.test(String(logText).trim());
           const emptyLabel = it.exists ? "No rows yet" : "Log file not found";
           const emptyHint = it.exists ? "Waiting for the next write" : "Waiting for this session to create output";
           return `
@@ -7005,6 +7158,26 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 tail = projected if projected else tail_text(path, lines=lines)
             elif key == "daily_live_v7_research_session":
                 report = DAILY_LIVE_V7_RESEARCH_LATEST_DIR / "latest_daily_live_v7_research.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_nse_id_cost":
+                report = V7_NSE_ID_COST_LATEST_DIR / "latest_v7_nse_id_cost.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_walkforward_gate":
+                report = V7_WALKFORWARD_GATE_LATEST_DIR / "latest_v7_walkforward_gate.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_causality_audit":
+                report = V7_CAUSALITY_AUDIT_LATEST_DIR / "v7_causality_audit.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_gate_promotion":
+                report = V7_GATE_PROMOTION_LATEST_DIR / "latest_v7_gate_promotion.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_qualification":
+                report = V7_QUALIFICATION_LATEST_DIR / "latest_v7_qualification.md"
                 projected = tail_text(report, lines=lines)
                 tail = projected if projected else tail_text(path, lines=lines)
             elif key == "v7_pre_momentum_filter_analyst":
@@ -7428,6 +7601,16 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             ("pnl_rs", ("pnl_rs",)),
             ("pnl_pct", ("pnl_pct",)),
         ]
+        paper_trade_cols_id_5min_v7: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("ticker",)),
+            ("exit_time", ("exit_time",)),
+            ("side", ("side",)),
+            ("outcome", ("outcome",)),
+            ("net_pnl_rs", ("net_pnl_rs", "net_pnl", "pnl_rs")),
+            ("gross_pnl_rs", ("gross_pnl_rs", "gross_pnl")),
+            ("total_cost_rs", ("total_cost_rs", "total_cost")),
+            ("net_pnl_pct", ("net_pnl_pct", "pnl_pct")),
+        ]
 
         # Dynamic card: today's paper trade results CSV V5 unified.
         paper_trade_csv_name_v5 = f"paper_trades_{today_ist}_v5.csv"
@@ -7548,7 +7731,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             paper_trade_size_id_5min_v7 = 0
         paper_trade_tail_id_5min_v7 = _format_csv_projection(
             paper_trade_csv_path_id_5min_v7,
-            paper_trade_cols,
+            paper_trade_cols_id_5min_v7,
             limit_rows=max(5, min(40, lines // 2)),
             time_only_cols={"exit_time"},
         )

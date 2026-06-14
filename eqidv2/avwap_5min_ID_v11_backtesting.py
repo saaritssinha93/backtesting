@@ -19,15 +19,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import time
 from concurrent.futures import ProcessPoolExecutor
+from datetime import time as dtime
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+# Backtest default: both LONG and SHORT setups allowed.
+# The live scanner defaults SHORT_FOCUS=1 (SHORT-only) via env var, but the
+# backtest should replay all sides unless the caller explicitly overrides.
+os.environ.setdefault("EQIDV2_SIGNAL_DISCOVERY_V7_SHORT_FOCUS", "0")
+
 import eqidv2_signal_discovery_v7_5min_id_persistent as live_discovery
+import eqidv2_v11_live_overlay as v11_overlay
 import avwap_5min_ID_v7_candidate_scan as candidate_scan
 import avwap_5min_ID_v5_backtesting as v5
 import avwap_5min_ID_v6_backtesting as v6
@@ -41,9 +49,31 @@ HISTORICAL_5M_DIR = Path(r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live2
 DEFAULT_CANDIDATE_5M_DIR = HISTORICAL_5M_DIR
 EXCLUDED_SETUPS = candidate_scan.EXCLUDED_SETUPS
 
+# --- 09:15 opening-snapshot policy -------------------------------------------
+# 5m hybrid convention: 09:15 is the session-open SNAPSHOT row (no prior in-day
+# bar), 09:20..15:30 are completed end-stamped 5m candles. Default keeps the
+# 09:15 row so the backtest stays in parity with live. --exclude_opening_snapshot
+# turns on strict research mode: skip the 09:15 slot for signal scanning AND drop
+# it from the market-context regime. (Indicator anchoring still uses the stored
+# bars; a fully strict indicator rebuild would need a separate data build.)
+_OPENING_SNAPSHOT_HHMM = (9, 15)
+_EXCLUDE_OPENING_SNAPSHOT = False
+
+
+def _drop_opening_snapshot_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if not _EXCLUDE_OPENING_SNAPSHOT or df is None or df.empty or "date" not in df.columns:
+        return df
+    ts = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        ts = ts.dt.tz_convert("Asia/Kolkata")
+    except (TypeError, AttributeError):
+        pass
+    keep = ~((ts.dt.hour == _OPENING_SNAPSHOT_HHMM[0]) & (ts.dt.minute == _OPENING_SNAPSHOT_HHMM[1]))
+    return df.loc[keep].reset_index(drop=True)
+
 # Mirrors the current v7 live chain:
 #   signal discovery -> 1-minute entry engine -> PAPER_TRADE_TRUE executor.
-V7_ENTRY_SEARCH_MAX_DELAY_MIN = 5
+V7_ENTRY_SEARCH_MAX_DELAY_MIN = 3
 V7_SIGNAL_MARGIN_RS = 20_000.0
 V7_INTRADAY_LEVERAGE = 5.0
 V7_SIGNAL_NOTIONAL_RS = V7_SIGNAL_MARGIN_RS * V7_INTRADAY_LEVERAGE
@@ -70,27 +100,57 @@ AB_MAX_PNL_LOW_VALID_SETUPS = (
     "B_AVWAP_RECLAIM_REVERSAL",
     "B_HUGE_C1_CLOSE_RECLAIM_BREAK",
 )
-AB_FILTERED_RELAXED_B_HUGE_MAX_RS_PCT = 10.7025
-AB_FILTERED_RELAXED_A_PULLBACK_MAX_MARKET_ABS_RET_PCT = 0.8354
-MAX_PNL_SBB_MIN_MARKET_RET_PCT = 0.53680868
-MAX_PNL_SBB_MIN_NOTIONAL_RS = 99971.74
-MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR = 0.60356498
-MAX_PNL_A_MOD_CLOSE_MIN_SIGNAL_RANGE_PCT = 2.1930941
-MAX_PNL_A_MOD_CLOSE_MAX_NOTIONAL_RS = 99576.0
-MAX_PNL_A_MOD_C1_HIGH_MAX_MARKET_ABS_RET_PCT = 0.2565259
-MAX_PNL_A_MOD_C1_HIGH_MAX_VOL_RATIO = 2.0147274
-MAX_PNL_A_MOD_C1_LOW_MIN_RS_ABS_PCT = 9.2370116
-MAX_PNL_A_MOD_C1_LOW_MIN_VOL_RATIO = 1.7928383
-MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT = 0.89474022
-MAX_PNL_D_EMA20_REJECTION_MIN_RANKER_SCORE = 0.388264
-MAX_PNL_E_VWAP_BAND_MIN_ATR_PCT = 0.0058985269
+
+# ---------------------------------------------------------------------------
+# Gate-blocked setups — honest out-of-sample verdict (2026-06-11).
+# v11_setup_rescue_search.py walk-forward fit a single indicator/non-indicator
+# threshold on TRAIN ONLY for each of these setups and scored every candidate
+# OUT-OF-SAMPLE, net-of-cost (nse_intraday_costs), with a day-clustered bootstrap.
+# None could be rescued: every cut was an in-sample mirage (best OOS net PF < 1.20
+# and/or day-block p > 0.10), and the full-sample day-clustered bootstrap shows
+# each is reliably NEGATIVE net-of-cost (p(net>0) ~ 0.87-0.98). Over Jan-Jun 2026,
+# blocking these six vs the full book moved the costed result:
+#   net Rs -77,588 -> +39,307 ; net PF 0.87 -> 1.39 ; day-win 40% -> 58% ;
+#   max DD Rs -126,309 -> -9,311 ; net-positive in every one of the 6 months.
+# Removed at the selected-strategy chokepoint, so it applies to every profile
+# (except `none`, the raw research passthrough) and to the Tier123 add-on.
+# Reversible: drop a name to restore it. Do NOT hand-tune one back in without a
+# fresh OOS rescue (v11_setup_rescue_search.py) that clears the gate.
+# ---------------------------------------------------------------------------
+# DISABLED 2026-06-11 per user request: all setups unblocked (empty set below).
+# The six that FAILED the OOS rescue and were previously blocked here were:
+#   E_VWAP_LOSE_EARLY_SHORT, A_MOD_BREAK_C1_LOW, E_ORB_BREAKOUT_SHORT,
+#   D_EMA20_BOUNCE, L_BB_SQUEEZE_LONG, A_MOD_CLOSE_CONTINUATION_BREAK.
+# Re-add those names to restore the costed clean book (net +39,307, PF 1.39,
+# max DD -9.3k, net-positive every month) documented above.
+GATE_BLOCKED_SETUPS: frozenset[str] = frozenset()
+
+AB_FILTERED_RELAXED_B_HUGE_MAX_RS_PCT = 10.7
+AB_FILTERED_RELAXED_A_PULLBACK_MAX_MARKET_ABS_RET_PCT = 0.84
+MAX_PNL_SBB_MIN_MARKET_RET_PCT = 0.54
+MAX_PNL_SBB_MIN_NOTIONAL_RS = 100_000.0
+MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR = 0.60
+MAX_PNL_A_MOD_CLOSE_MIN_SIGNAL_RANGE_PCT = 2.2
+MAX_PNL_A_MOD_CLOSE_MAX_NOTIONAL_RS = 100_000.0
+# A_MOD_BREAK_C1_HIGH gate — replaced 2026-06-09. Old: market_abs<=0.26 AND vol_ratio<=2.0
+# rejected genuine winners (SUVEN, BANKINDIA, CARYSIL, MAYURUNIQ).
+# New: rs_pct>=2.0 AND atr_pct<=0.006 AND signal_minute<=670 (11:10 IST).
+# Validated across 10 sessions: 32 trades, PF 3.25. Mirrors eqidv2_v11_live_overlay.py.
+A_MOD_C1_HIGH_MIN_RS_PCT     = 2.0
+A_MOD_C1_HIGH_MAX_ATR_PCT    = 0.006
+A_MOD_C1_HIGH_MAX_SIGNAL_MIN = 670.0
+MAX_PNL_A_MOD_C1_LOW_MIN_RS_ABS_PCT = 9.2
+MAX_PNL_A_MOD_C1_LOW_MIN_VOL_RATIO = 1.80
+MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT = 0.89
+MAX_PNL_D_EMA20_REJECTION_MIN_RANKER_SCORE = 0.39
+MAX_PNL_E_VWAP_BAND_MIN_ATR_PCT = 0.0059
 MAX_PNL_E_VWAP_BAND_MAX_SIGNAL_MINUTE = 690
-MAX_PNL_E_VWAP_LOSE_MIN_VWAP_DIST_ATR = -1.2528935
+MAX_PNL_E_VWAP_LOSE_MIN_VWAP_DIST_ATR = -1.25
 RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_SIGNAL_MINUTE = 780.0
 RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_SIGNAL_MINUTE = 825.0
-RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_BODY_PCT = 0.92592279
-RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_WICK_SKEW_PCT = -0.064893645
-RESIDUAL_OVERLAY_SBB_MAX_SIGNAL_MINUTE = 704.5
+RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_BODY_PCT = 0.93
+RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_WICK_SKEW_PCT = -0.065
+RESIDUAL_OVERLAY_SBB_MAX_SIGNAL_MINUTE = 705
 TIER123_BALANCED_PROFILE = "production_core_ab_max_pnl_low_valid_residual_overlay_tier123_balanced"
 TIER123_BALANCED_SETUPS = (
     "T_TREND_DAY_EMA_STAIR_SHORT",
@@ -102,12 +162,12 @@ TIER123_BALANCED_EXIT_RULES = {
     "MR_CONTROLLED_VWAP_EXTREME_FADE_LONG": (0.70, 0.80),
     "MR_CONTROLLED_VWAP_EXTREME_FADE_SHORT": (0.70, 0.80),
 }
-TIER123_T_STAIR_SHORT_MAX_MARKET_RET_PCT = -0.388704
+TIER123_T_STAIR_SHORT_MAX_MARKET_RET_PCT = -0.39
 TIER123_T_STAIR_SHORT_MIN_SIGNAL_MINUTE = 780.0
 TIER123_T_STAIR_SHORT_MAX_SIGNAL_MINUTE = 840.0
-TIER123_MR_FADE_LONG_MIN_VOL_RATIO = 2.473917
-TIER123_MR_FADE_SHORT_MAX_VOL_RATIO = 1.698991
-TIER123_MR_FADE_SHORT_MIN_QUALITY_SCORE = 60.674989
+TIER123_MR_FADE_LONG_MIN_VOL_RATIO = 2.47
+TIER123_MR_FADE_SHORT_MAX_VOL_RATIO = 1.70
+TIER123_MR_FADE_SHORT_MIN_QUALITY_SCORE = 60.7
 TIER123_MAX_RAW_PER_SETUP = 2500
 v6.SETUP_EXIT_RULES.update(TIER123_BALANCED_EXIT_RULES)
 AB_SELECTED_STRATEGY_PROFILES = {
@@ -120,8 +180,28 @@ AB_SELECTED_STRATEGY_PROFILES = {
     "production_core_ab_max_pnl_low_valid",
     "production_core_ab_max_pnl_low_valid_residual_overlay",
     TIER123_BALANCED_PROFILE,
+    "final_setup_conf",  # conf book contains A/B probation setups -> admit via quality_top_slot
 }
 AB_GATE_PROFILE_CHOICES = ("off", "quality_top_slot")
+
+# Opt-in profile: run ONLY the approved final_setup_conf.py book (the 9 passed setups),
+# each with its own tuned exit / pre-momentum gate / mask / entry guard. Non-breaking —
+# default behaviour is unchanged; activated only by --selected_strategy_profile final_setup_conf.
+FINAL_CONF_PROFILE = "final_setup_conf"
+# Conf setups whose candidates do NOT survive (or are not produced by) the standard v11 scan/gate:
+#   - RAW_PRE_GATE_POOL  : generated by candidate_scan but the v8 gate drops 100% (L_DOUBLE/L_PRESSURE)
+#   - TIER123_OVERLAY_PROBE / NEW_SETUPS_SCAN : NOT emitted by candidate_scan at all (T / S_UPTHRUST);
+#                          their candidates are merged in from external scan CSVs (see _FINAL_CONF_EXT_*)
+# All of these are re-admitted from `ranked` past v8+research in conf mode (the conf mask + premom +
+# exit then handle them). Populated by _activate_final_setup_conf(); empty otherwise.
+_FINAL_CONF_READMIT_SETUPS: frozenset[str] = frozenset()
+# External scan-source candidates (T_TREND_DAY_EMA_STAIR_SHORT, S_UPTHRUST_TRAP_FADE) loaded once in
+# conf mode and merged into the per-day raw_candidates before the pipeline. Empty otherwise.
+_FINAL_CONF_EXT_CANDIDATES = None
+_FINAL_CONF_EXT_SRC = {
+    "TIER123_OVERLAY_PROBE": r"C:\TradingData\eqidv2\outputs_ID_v11_tier123_new_setup_probe\tier123_standalone_trades.csv",
+    "NEW_SETUPS_SCAN": r"C:\TradingData\eqidv2\outputs_ID_v11_new_setups_probe\new_setups_standalone_trades.csv",
+}
 
 SELECTED_STRATEGY_PROFILE_CHOICES = (
     "none",
@@ -136,8 +216,9 @@ SELECTED_STRATEGY_PROFILE_CHOICES = (
     "production_core_ab_max_pnl_low_valid",
     "production_core_ab_max_pnl_low_valid_residual_overlay",
     TIER123_BALANCED_PROFILE,
+    FINAL_CONF_PROFILE,
 )
-SELECTED_STRATEGY_DEFAULT_PROFILE = "production_core"
+SELECTED_STRATEGY_DEFAULT_PROFILE = TIER123_BALANCED_PROFILE
 SELECTED_STRATEGY_RULE_LABELS = {
     "C_OR_BREAKOUT": "production_core: broad C_OR_BREAKOUT kept after honest holdout test",
     "D_EMA20_BOUNCE": "production_core: vol_ratio <= 1.5975512 OR vwap_dist_atr >= -0.38557115, and signal_minute <= 705",
@@ -208,42 +289,43 @@ SELECTED_STRATEGY_RULE_LABELS.update(
             "A/B quality_top_slot probation gate still required"
         ),
         "A_MOD_BREAK_C1_HIGH": (
-            "max_pnl_low_valid add-on: A_MOD_BREAK_C1_HIGH with "
-            f"market_abs_ret_pct <= {MAX_PNL_A_MOD_C1_HIGH_MAX_MARKET_ABS_RET_PCT:.7f} AND "
-            f"vol_ratio <= {MAX_PNL_A_MOD_C1_HIGH_MAX_VOL_RATIO:.7f}; "
-            "A/B quality_top_slot probation gate still required"
+            f"max_pnl_low_valid add-on (gate updated 2026-06-09): A_MOD_BREAK_C1_HIGH with "
+            f"rs_pct >= {A_MOD_C1_HIGH_MIN_RS_PCT} AND atr_pct <= {A_MOD_C1_HIGH_MAX_ATR_PCT} AND "
+            f"signal_minute <= {A_MOD_C1_HIGH_MAX_SIGNAL_MIN:.0f} (11:10 IST); "
+            "A/B quality_top_slot probation gate still required; "
+            "entry engine additionally caps to top-2 per slot by vwap_dist_atr with 11:10 signal-time ceiling"
         ),
         "D_EMA20_REJECTION": (
             "max_pnl_low_valid add-on: D_EMA20_REJECTION with "
-            f"body_pct >= {MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT:.8f} AND "
-            f"ranker_score >= {MAX_PNL_D_EMA20_REJECTION_MIN_RANKER_SCORE:.6f}; "
+            f"body_pct >= {MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT} AND "
+            f"ranker_score >= {MAX_PNL_D_EMA20_REJECTION_MIN_RANKER_SCORE}; "
             "residual_overlay profile additionally admits late-session residual D_EMA20_REJECTION "
             f"when {RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_SIGNAL_MINUTE:.0f} < signal_minute <= "
             f"{RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_SIGNAL_MINUTE:.0f} and "
-            f"(body_pct >= {RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_BODY_PCT:.8f} OR "
-            f"wick_skew_pct <= {RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_WICK_SKEW_PCT:.9f})"
+            f"(body_pct >= {RESIDUAL_OVERLAY_D_EMA20_REJECTION_MIN_BODY_PCT} OR "
+            f"wick_skew_pct <= {RESIDUAL_OVERLAY_D_EMA20_REJECTION_MAX_WICK_SKEW_PCT})"
         ),
         "E_VWAP_BAND_FADE": (
             "max_pnl_low_valid: filtered E_VWAP_BAND_FADE count add with "
-            f"atr_pct >= {MAX_PNL_E_VWAP_BAND_MIN_ATR_PCT:.10f} AND "
+            f"atr_pct >= {MAX_PNL_E_VWAP_BAND_MIN_ATR_PCT} AND "
             f"signal_minute <= {MAX_PNL_E_VWAP_BAND_MAX_SIGNAL_MINUTE}"
         ),
         "T_TREND_DAY_EMA_STAIR_SHORT": (
             "tier123_balanced: late bearish trend-day EMA stair short with "
-            f"market_ret_pct <= {TIER123_T_STAIR_SHORT_MAX_MARKET_RET_PCT:.6f} AND "
-            f"{TIER123_T_STAIR_SHORT_MIN_SIGNAL_MINUTE:.1f} <= signal_minute <= "
-            f"{TIER123_T_STAIR_SHORT_MAX_SIGNAL_MINUTE:.1f}; "
+            f"market_ret_pct <= {TIER123_T_STAIR_SHORT_MAX_MARKET_RET_PCT} AND "
+            f"{TIER123_T_STAIR_SHORT_MIN_SIGNAL_MINUTE:.0f} <= signal_minute <= "
+            f"{TIER123_T_STAIR_SHORT_MAX_SIGNAL_MINUTE:.0f}; "
             "resolved as non-overlap add-on after the protected residual-overlay book"
         ),
         "MR_CONTROLLED_VWAP_EXTREME_FADE_LONG": (
             "tier123_balanced: controlled VWAP extreme fade long with "
-            f"vol_ratio >= {TIER123_MR_FADE_LONG_MIN_VOL_RATIO:.6f}; "
+            f"vol_ratio >= {TIER123_MR_FADE_LONG_MIN_VOL_RATIO}; "
             "resolved as non-overlap add-on after the protected residual-overlay book"
         ),
         "MR_CONTROLLED_VWAP_EXTREME_FADE_SHORT": (
             "tier123_balanced: controlled VWAP extreme fade short with "
-            f"vol_ratio <= {TIER123_MR_FADE_SHORT_MAX_VOL_RATIO:.6f} AND "
-            f"quality_score >= {TIER123_MR_FADE_SHORT_MIN_QUALITY_SCORE:.6f}; "
+            f"vol_ratio <= {TIER123_MR_FADE_SHORT_MAX_VOL_RATIO} AND "
+            f"quality_score >= {TIER123_MR_FADE_SHORT_MIN_QUALITY_SCORE}; "
             "resolved as non-overlap add-on after the protected residual-overlay book"
         ),
     }
@@ -260,12 +342,90 @@ SELECTED_STRATEGY_EXIT_OVERRIDES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Entry-engine time gate constants — mirrors eqidv2_entry_engine_1min_v5_id.py
+# ---------------------------------------------------------------------------
+# E_VWAP_LOSE_EARLY_SHORT must not fire before 09:45 IST (first two 5-min
+# bars lack a meaningful intraday VWAP).
+ENTRY_E_VWAP_EARLY_SHORT_MIN_SLOT  = dtime(9, 45)
+# A_MOD_BREAK_C1_HIGH: signal-time ceiling mirrors V11 overlay (670 min = 11:10).
+ENTRY_A_MOD_C1_HIGH_MAX_SLOT       = dtime(11, 10)
+# Top-N per slot for A_MOD_C1_HIGH, ranked by vwap_dist_atr desc.
+ENTRY_A_MOD_C1_HIGH_TOP_N          = 2
+# C_OR_BREAKOUT VWAP-separation floor / ATR cap / time window.
+# VWAP separation >= 2.0 → PF 2.46; ATR >= 0.010 → PF 0.93 (bucket analysis).
+# Morning window bars 7-18 (09:55-10:40): WR 71.2%, PF 1.71.
+ENTRY_C_OR_BREAKOUT_MIN_VWAP_DIST_ATR = 2.0
+ENTRY_C_OR_BREAKOUT_MAX_ATR_PCT       = 0.010
+ENTRY_C_OR_BREAKOUT_MIN_SIGNAL_TIME   = dtime(9, 55)
+ENTRY_C_OR_BREAKOUT_MAX_SIGNAL_TIME   = dtime(10, 40)
+# Setups that are permanently blocked (shadow setups — never executable in live).
+ENTRY_SHADOW_SETUPS: frozenset[str] = frozenset({"C_OR_BREAKDOWN"})
+
+# Pre-entry momentum gate — mirrors PRE_ENTRY_MOMENTUM_SETUP_GATES in the
+# live entry engine (v7_pre_entry_momentum_2026_06_04_t_probation).
+# Each entry is a tuple of (feature, op, threshold) triples.
+PRE_ENTRY_MOMENTUM_GATE_VERSION = "v7_pre_entry_momentum_2026_06_04_t_probation"
+PRE_ENTRY_MOMENTUM_MISSING_ACTION = "block"  # block if features are missing
+PRE_ENTRY_MOMENTUM_SETUP_GATES: dict[str, tuple[tuple[str, str, float], ...]] = {
+    "B_AVWAP_RECLAIM_REVERSAL": (
+        ("pre_entry_momentum_score", "<=", 64.7678),
+    ),
+    "C_OR_BREAKOUT": (
+        ("sig5_adx_calc", ">=", 25.0),
+        ("sig5_rsi_dir", ">=", 60.0),
+        ("sig5_vol_ratio20", ">=", 1.5),
+        ("pre2_mom_r", ">=", -0.050),
+    ),
+    "D_EMA20_BOUNCE": (
+        ("pre3_range_r", ">=", 0.292349),
+        ("pre_entry_momentum_score", "<=", 78.3448),
+    ),
+    "D_EMA20_REJECTION": (
+        ("pre10_mom_r", "<=", 0.156614),
+        ("pre5_mom_r", ">=", 0.12493),
+        ("sig5_adx_calc", ">=", 20.0),
+    ),
+    "E_ORB_BREAKOUT_LONG": (
+        ("pre15_vol_ratio20", "<=", 1.08301),
+        ("pre1_adx", ">=", 42.3138),
+    ),
+    "E_ORB_BREAKOUT_SHORT": (
+        ("pre10_dir_count", ">=", 5.0),
+        ("pre5_vol_ratio20", ">=", 1.65561),
+    ),
+    "E_VWAP_LOSE_EARLY_SHORT": (
+        ("sig5_vol_ratio20", ">=", 1.5643),
+        ("pre3_body_sum_r", "<=", 0.797498),
+    ),
+    "G_HIGHER_HIGH_BREAK": (
+        ("pre3_close_pos", "<=", 0.985417),
+        ("sig5_rsi_dir", "<=", 67.878),
+    ),
+    "L_TREND_PULLBACK": (
+        ("pre_entry_momentum_score", ">=", 73.021),
+        ("pre2_mom_r", ">=", 0.233909),
+    ),
+    "T_TREND_DAY_EMA_STAIR_SHORT": (
+        ("pre3_close_pos", ">=", 0.662492),
+        ("pre5_dir_count", "<=", 3.0),
+        ("pre1_adx", "<=", 31.0),
+        ("pre5_range_r", ">=", 0.35),
+    ),
+}
+
+
 @lru_cache(maxsize=None)
 def _load_1m_with_open(ticker: str) -> pd.DataFrame | None:
     path = v6.DATA_1M_DIR / f"{str(ticker).upper()}_stocks_indicators_1min.parquet"
     if not path.exists():
         return None
-    df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close"])
+    # Load OHLCV + ADX + RSI (needed for pre-entry momentum gate)
+    want = ["date", "open", "high", "low", "close", "volume", "ADX", "RSI"]
+    try:
+        df = pd.read_parquet(path, columns=want)
+    except Exception:
+        df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close"])
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     if getattr(df["date"].dt, "tz", None) is None:
         df["date"] = df["date"].dt.tz_localize("UTC").dt.tz_convert("Asia/Kolkata")
@@ -476,12 +636,51 @@ def _normalise_selected_strategy_profile(profile: str | None) -> str:
     return out
 
 
+def _final_setup_conf_mask(signals: pd.DataFrame) -> pd.Series:
+    """Selected-strategy mask for the final_setup_conf book: keep ONLY the approved setups,
+    each filtered by its own mask_terms + entry-guard min_slot. Pre-momentum gates and exits
+    are applied downstream via the overridden PRE_ENTRY_MOMENTUM_SETUP_GATES / SETUP_EXIT_RULES
+    (see _activate_final_setup_conf). Production masks/overlays are intentionally bypassed."""
+    import final_setup_conf as _fc
+    work = _selected_strategy_features(signals)
+    setup = work.get("setup", pd.Series("", index=work.index)).astype(str)
+    regime = work.get("regime", pd.Series("", index=work.index)).astype(str).str.upper()
+    sig_min = _selected_strategy_numeric(work, "signal_minute")
+    mask = pd.Series(False, index=work.index)
+    for name, cfg in _fc.FINAL_SETUP_CONF.items():
+        m = setup.eq(name)
+        for term in cfg.get("mask_terms", []):
+            f, op, v = term[0], term[1], term[2]
+            if isinstance(v, str):
+                col = regime if f == "regime" else work.get(f, pd.Series("", index=work.index)).astype(str).str.upper()
+                vv = v.upper()
+                m = m & (col.ne(vv) if op == "!=" else col.eq(vv))
+            else:
+                col = _selected_strategy_numeric(work, f)
+                if op == ">=":
+                    m = m & (col >= v)
+                elif op == "<=":
+                    m = m & (col <= v)
+                elif op == "!=":
+                    m = m & (col != v)
+                else:
+                    m = m & (col == v)
+        guard = cfg.get("entry_guards", {})
+        if guard.get("min_slot"):
+            hh, mm = str(guard["min_slot"]).split(":")
+            m = m & (sig_min >= (int(hh) * 60 + int(mm)))
+        mask = mask | m.fillna(False)
+    return mask.fillna(False)
+
+
 def _selected_strategy_mask(signals: pd.DataFrame, profile: str) -> pd.Series:
     profile = _normalise_selected_strategy_profile(profile)
     if signals is None or signals.empty:
         return pd.Series(False, index=pd.RangeIndex(0))
     if profile == "none":
         return pd.Series(True, index=signals.index)
+    if profile == FINAL_CONF_PROFILE:
+        return _final_setup_conf_mask(signals)
 
     work = _selected_strategy_features(signals)
     setup = work.get("setup", pd.Series("", index=work.index)).astype(str)
@@ -534,8 +733,9 @@ def _selected_strategy_mask(signals: pd.DataFrame, profile: str) -> pd.Series:
         & (vol_ratio >= MAX_PNL_A_MOD_C1_LOW_MIN_VOL_RATIO)
     )
     max_pnl_low_valid_mask |= setup.eq("A_MOD_BREAK_C1_HIGH") & (
-        (market_abs <= MAX_PNL_A_MOD_C1_HIGH_MAX_MARKET_ABS_RET_PCT)
-        & (vol_ratio <= MAX_PNL_A_MOD_C1_HIGH_MAX_VOL_RATIO)
+        (rs_pct >= A_MOD_C1_HIGH_MIN_RS_PCT)
+        & (atr_pct <= A_MOD_C1_HIGH_MAX_ATR_PCT)
+        & (signal_minute <= A_MOD_C1_HIGH_MAX_SIGNAL_MIN)
     )
     max_pnl_low_valid_mask |= setup.eq("D_EMA20_REJECTION") & (
         (body_pct >= MAX_PNL_D_EMA20_REJECTION_MIN_BODY_PCT)
@@ -580,18 +780,18 @@ def _selected_strategy_mask(signals: pd.DataFrame, profile: str) -> pd.Series:
 
     mask = setup.eq("C_OR_BREAKOUT")
     mask |= setup.eq("D_EMA20_BOUNCE") & (
-        ((vol_ratio <= 1.5975512) | (vwap_dist_atr >= -0.38557115))
+        ((vol_ratio <= 1.60) | (vwap_dist_atr >= -0.39))
         & (signal_minute <= 705)
     )
-    mask |= setup.eq("E_ORB_BREAKOUT_LONG") & (notional >= 99937.32)
+    mask |= setup.eq("E_ORB_BREAKOUT_LONG") & (notional >= 100_000.0)
     mask |= setup.eq("E_ORB_BREAKOUT_SHORT") & (
-        (market_ret >= -0.63438346)
-        & (quality_score >= 97.873364)
-        & (upper_wick_pct <= 0.014647435)
+        (market_ret >= -0.63)
+        & (quality_score >= 97.9)
+        & (upper_wick_pct <= 0.015)
     )
     mask |= setup.eq("L_BB_SQUEEZE_LONG") & (
-        ((market_abs <= 0.74284715) | (vol_ratio <= 3.0227043))
-        & (ranker_score >= 0.7332456)
+        ((market_abs <= 0.74) | (vol_ratio <= 3.0))
+        & (ranker_score >= 0.73)
     )
     if profile == "production_core_tiny":
         mask |= setup.eq("E_VWAP_LOSE_EARLY_SHORT") & regime.eq("BEAR")
@@ -609,6 +809,10 @@ def _selected_strategy_mask(signals: pd.DataFrame, profile: str) -> pd.Series:
         mask |= max_pnl_residual_overlay_mask
         mask |= tier123_balanced_mask
 
+    # Honest OOS verdict: drop setups that no train-only threshold could rescue
+    # out-of-sample, net-of-cost (see GATE_BLOCKED_SETUPS). Applies to every
+    # profile except `none` (which returned True above as the raw passthrough).
+    mask &= ~setup.isin(GATE_BLOCKED_SETUPS)
     return mask.fillna(False)
 
 
@@ -779,6 +983,169 @@ def _v7_signal_id(ticker: str, side: str, bar_time: str, setup: str) -> str:
     return hashlib.md5(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
 
+# ---------------------------------------------------------------------------
+# Pre-entry momentum feature engineering (mirrors _pre_entry_momentum_features
+# in eqidv2_entry_engine_1min_v5_id.py, adapted for historical parquet data).
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=None)
+def _load_5m_ind_bars(ticker: str) -> pd.DataFrame | None:
+    path = Path(r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live2") / f"{str(ticker).upper()}_stocks_indicators_5min.parquet"
+    if not path.exists():
+        return None
+    want = ["date", "open", "high", "low", "close", "volume", "ADX", "RSI"]
+    try:
+        df = pd.read_parquet(path, columns=want)
+    except Exception:
+        try:
+            df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close", "volume"])
+        except Exception:
+            return None
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if getattr(df["date"].dt, "tz", None) is None:
+        df["date"] = df["date"].dt.tz_localize("UTC").dt.tz_convert("Asia/Kolkata")
+    else:
+        df["date"] = df["date"].dt.tz_convert("Asia/Kolkata")
+    return df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+
+def _pre_entry_momentum_features_v11(
+    ticker: str,
+    side: str,
+    entry_price: float,
+    stop_price: float,
+    entry_ts: pd.Timestamp,
+    signal_ts: pd.Timestamp,
+) -> tuple[dict[str, float], str]:
+    risk = abs(entry_price - stop_price)
+    if not risk or not np.isfinite(risk):
+        return {}, "zero risk"
+    d = 1.0 if side == "LONG" else -1.0
+
+    bars_full = _load_1m_with_open(ticker)
+    if bars_full is None or bars_full.empty:
+        return {}, "missing 1m file"
+    entry_date = entry_ts.date()
+    cutoff = entry_ts.floor("min")
+    bars = bars_full[(bars_full.index.date == entry_date) & (bars_full.index < cutoff)].copy()
+    if len(bars) < 16:
+        return {"pre_bars": float(len(bars))}, f"insufficient pre-entry 1m bars ({len(bars)})"
+
+    for col in ("open", "high", "low", "close"):
+        bars[col] = pd.to_numeric(bars[col], errors="coerce")
+    closes = bars["close"].values.astype(float)
+    opens  = bars["open"].values.astype(float)
+    highs  = bars["high"].values.astype(float)
+    lows   = bars["low"].values.astype(float)
+    volumes = pd.to_numeric(bars.get("volume", pd.Series(dtype=float)), errors="coerce").values.astype(float)
+
+    out: dict[str, float] = {"pre_bars": float(len(bars))}
+    last_close = closes[-1]
+    last_open  = opens[-1]
+    last_high  = highs[-1]
+    last_low   = lows[-1]
+    rng = max(last_high - last_low, 1e-9)
+
+    for n in (1, 2, 3, 5, 10, 15):
+        if len(closes) > n:
+            old_close = closes[-(n + 1)]
+            out[f"pre{n}_mom_r"] = float(d * (last_close - old_close) / risk) if np.isfinite(old_close) else float("nan")
+        else:
+            out[f"pre{n}_mom_r"] = float("nan")
+
+    # Base vol: mean of 20 bars before the last bar — mirrors live engine's
+    # `prior = bars.iloc[:-1].tail(20)` in _add_window_features.
+    _prior_vols = volumes[-21:-1] if len(volumes) >= 21 else volumes[:-1]
+    _base_vol = float(np.nanmean(_prior_vols)) if len(_prior_vols) > 0 else float("nan")
+
+    def _window_features(n: int) -> None:
+        if len(closes) < n:
+            return
+        wc = closes[-n:]
+        wo = opens[-n:]
+        wh = highs[-n:]
+        wl = lows[-n:]
+        wv = volumes[-n:]
+        # Use window high/low (not close min/max) — mirrors live _add_window_features.
+        w_high = float(wh.max())
+        w_low  = float(wl.min())
+        w_rng  = max(w_high - w_low, 1e-9)
+        out[f"pre{n}_close_pos"] = float((last_close - w_low) / w_rng if side == "LONG" else (w_high - last_close) / w_rng)
+        out[f"pre{n}_dir_count"] = float(np.sum(d * (wc - wo) > 0))
+        out[f"pre{n}_body_sum_r"] = float(d * np.sum(wc - wo) / risk)
+        # Overall window range (max_high - min_low), not sum of bar heights.
+        out[f"pre{n}_range_r"]    = float(w_rng / risk)
+        # Numerator: mean of window volume (not just last bar); base: 20 bars before
+        # last bar. Mirrors live engine's _add_window_features exactly.
+        out[f"pre{n}_vol_ratio20"] = float(float(np.nanmean(wv)) / _base_vol) if _base_vol and np.isfinite(_base_vol) else float("nan")
+
+    for n in (3, 5, 10, 15):
+        _window_features(n)
+
+    out["pre1_body_r"]    = float(d * (last_close - last_open) / risk)
+    out["pre1_close_pos"] = float((last_close - last_low) / rng if side == "LONG" else (last_high - last_close) / rng)
+    out["pre1_range_r"]   = float(rng / risk)
+    out["pre1_dir"]       = 1.0 if d * (last_close - last_open) > 0 else 0.0
+
+    adx_col = bars.get("ADX") if isinstance(bars, pd.DataFrame) else None
+    adx_vals = pd.to_numeric(adx_col, errors="coerce") if adx_col is not None else pd.Series(dtype=float)
+    out["pre1_adx"] = float(adx_vals.iloc[-1]) if len(adx_vals) and np.isfinite(adx_vals.iloc[-1]) else float("nan")
+    rsi_col = bars.get("RSI") if isinstance(bars, pd.DataFrame) else None
+    rsi_vals = pd.to_numeric(rsi_col, errors="coerce") if rsi_col is not None else pd.Series(dtype=float)
+    rsi_last = float(rsi_vals.iloc[-1]) if len(rsi_vals) and np.isfinite(rsi_vals.iloc[-1]) else float("nan")
+    out["pre1_rsi_dir"] = float(rsi_last if side == "LONG" else 100.0 - rsi_last) if np.isfinite(rsi_last) else float("nan")
+
+    mom_vals = [out.get("pre1_body_r"), out.get("pre3_mom_r"), out.get("pre5_mom_r")]
+    finite_mom = [v for v in mom_vals if v is not None and np.isfinite(v)]
+    mom = float(np.mean(finite_mom)) if finite_mom else 0.0
+    pos_vals = [out.get("pre3_close_pos"), out.get("pre5_close_pos")]
+    finite_pos = [v for v in pos_vals if v is not None and np.isfinite(v)]
+    pos = float(np.mean(finite_pos)) if finite_pos else 0.5
+    vol = out.get("pre3_vol_ratio20", float("nan"))
+    vol_component = min(float(vol), 3.0) / 3.0 if np.isfinite(vol) else 0.33
+    out["pre_entry_momentum_score"] = float(50 + 25 * np.tanh(2 * mom) + 15 * (pos - 0.5) + 10 * (vol_component - 0.33))
+
+    ind5 = _load_5m_ind_bars(ticker)
+    if ind5 is not None and not ind5.empty:
+        sig_date = signal_ts.date()
+        sig_bars = ind5[(ind5["date"].dt.date == sig_date) & (ind5["date"] <= signal_ts)]
+        if len(sig_bars):
+            sig = sig_bars.iloc[-1]
+            sig_o  = float(pd.to_numeric(sig.get("open",  float("nan")), errors="coerce"))
+            sig_h  = float(pd.to_numeric(sig.get("high",  float("nan")), errors="coerce"))
+            sig_l  = float(pd.to_numeric(sig.get("low",   float("nan")), errors="coerce"))
+            sig_c  = float(pd.to_numeric(sig.get("close", float("nan")), errors="coerce"))
+            sig_rng = max(sig_h - sig_l, 1e-9)
+            out["sig5_body_r"]    = float(d * (sig_c - sig_o) / risk)
+            out["sig5_range_r"]   = float(sig_rng / risk)
+            out["sig5_close_pos"] = float((sig_c - sig_l) / sig_rng if side == "LONG" else (sig_h - sig_c) / sig_rng)
+            adx5 = float(pd.to_numeric(sig.get("ADX", float("nan")), errors="coerce"))
+            out["sig5_adx_calc"] = adx5
+            rsi5 = float(pd.to_numeric(sig.get("RSI", float("nan")), errors="coerce"))
+            out["sig5_rsi_dir"] = float(rsi5 if side == "LONG" else 100.0 - rsi5) if np.isfinite(rsi5) else float("nan")
+            prior5 = ind5[(ind5["date"].dt.date == sig_date) & (ind5["date"] < sig["date"])].tail(20)
+            vol_base5 = pd.to_numeric(prior5["volume"], errors="coerce").mean() if len(prior5) else float("nan")
+            sig_vol5 = float(pd.to_numeric(sig.get("volume", float("nan")), errors="coerce"))
+            out["sig5_vol_ratio20"] = float(sig_vol5 / vol_base5) if vol_base5 and np.isfinite(vol_base5) else float("nan")
+    return out, ""
+
+
+def _eval_pre_momentum_terms(
+    features: dict[str, float],
+    terms: tuple[tuple[str, str, float], ...],
+) -> tuple[bool, str]:
+    failed: list[str] = []
+    for feature, op, threshold in terms:
+        value = features.get(feature, float("nan"))
+        if not isinstance(value, (int, float)) or not np.isfinite(value):
+            failed.append(f"{feature}=nan {op} {threshold:.6g}")
+            continue
+        ok = value >= threshold if op == ">=" else value <= threshold
+        if not ok:
+            failed.append(f"{feature}={value:.4f} {op} {threshold:.6g}")
+    return len(failed) == 0, "; ".join(failed)
+
+
 def _v7_entry_engine_candidate_time(row: pd.Series) -> pd.Timestamp:
     return _candidate_time(row, "signal_time_ist", "signal_ts", "bar_time_ist", "scan_slot_ist")
 
@@ -786,9 +1153,19 @@ def _v7_entry_engine_candidate_time(row: pd.Series) -> pd.Timestamp:
 def _v7_entry_engine_raw_rows(candidates: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build rows the v7 1-minute entry engine would hand to the signal CSV writer.
 
-    This mirrors eqidv2_entry_engine_1min_v5_id.py without fetching from Kite:
-    it uses historical 1-minute OHLC, the next available 1-minute open after the
-    5-minute signal, v6.SETUP_EXIT_RULES, and v7's Rs 20k margin / 5x sizing.
+    Mirrors eqidv2_entry_engine_1min_v5_id.py (V7 live) without fetching from Kite:
+    uses historical 1-minute OHLC, next available 1-minute open after the 5-minute
+    signal, v6.SETUP_EXIT_RULES, and v7's Rs 20k margin / 5x sizing.
+
+    Entry-engine guards applied (parity with live engine, 2026-06-10):
+    - C_OR_BREAKDOWN: permanently blocked (shadow setup)
+    - E_VWAP_LOSE_EARLY_SHORT: blocked when signal time < 09:45 IST
+    - A_MOD_BREAK_C1_HIGH: blocked when signal time >= 11:10 IST; top-2 per
+      (day, slot) ranked by vwap_dist_atr desc
+    - C_OR_BREAKOUT: requires vwap_dist_atr >= 2.0, atr_pct <= 0.010,
+      signal time in 09:55–10:40 IST window
+    - Pre-entry momentum gate (v7_pre_entry_momentum_2026_06_04_t_probation):
+      applied per-setup after entry price is known; missing features → block
     """
     if candidates is None or candidates.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -813,9 +1190,23 @@ def _v7_entry_engine_raw_rows(candidates: pd.DataFrame) -> tuple[pd.DataFrame, p
     else:
         score_source = pd.Series(0.0, index=work.index)
     work["_v11_score"] = pd.to_numeric(score_source, errors="coerce").fillna(0.0)
+    work["_v11_vwap_dist_atr"] = pd.to_numeric(work.get("vwap_dist_atr", 0.0), errors="coerce").fillna(0.0)
     work = work.sort_values(["_v11_entry_day", "_v11_entry_signal_ts", "_v11_input_order"]).reset_index(drop=True)
 
-    for _, row in work.iterrows():
+    # Pre-pass: A_MOD_BREAK_C1_HIGH top-N per (day, slot) by vwap_dist_atr desc.
+    # Mark rows that exceed the per-slot cap so they can be rejected with a clear reason.
+    c1high_blocked: set[int] = set()
+    c1high_mask = work["setup"].eq("A_MOD_BREAK_C1_HIGH")
+    if c1high_mask.any():
+        for (day_key, slot_key), grp in work[c1high_mask].groupby(
+            ["_v11_entry_day", "_v11_entry_slot"], sort=True, dropna=False
+        ):
+            if len(grp) > ENTRY_A_MOD_C1_HIGH_TOP_N:
+                sorted_idx = grp.sort_values("_v11_vwap_dist_atr", ascending=False).index
+                for idx in sorted_idx[ENTRY_A_MOD_C1_HIGH_TOP_N:]:
+                    c1high_blocked.add(idx)
+
+    for idx, row in work.iterrows():
         ticker = str(row.get("ticker", "")).upper().strip()
         side = str(row.get("side", "")).upper().strip()
         setup = str(row.get("setup", "")).strip()
@@ -833,6 +1224,40 @@ def _v7_entry_engine_raw_rows(candidates: pd.DataFrame) -> tuple[pd.DataFrame, p
         if setup not in v6.SETUP_EXIT_RULES:
             rejects.append({**reject_base, "reject_reason": "missing_v8_setup_exit_rule"})
             continue
+
+        # --- Entry-engine time / setup guards ---
+        signal_time = signal_ts.time() if pd.notna(signal_ts) else None
+
+        if setup in ENTRY_SHADOW_SETUPS:
+            rejects.append({**reject_base, "reject_reason": "entry_engine_shadow_setup"})
+            continue
+
+        if setup == "E_VWAP_LOSE_EARLY_SHORT" and signal_time is not None and signal_time < ENTRY_E_VWAP_EARLY_SHORT_MIN_SLOT:
+            rejects.append({**reject_base, "reject_reason": f"entry_engine_e_vwap_early_short_too_early_{signal_time}"})
+            continue
+
+        if setup == "A_MOD_BREAK_C1_HIGH":
+            if signal_time is not None and signal_time >= ENTRY_A_MOD_C1_HIGH_MAX_SLOT:
+                rejects.append({**reject_base, "reject_reason": f"entry_engine_a_mod_c1_high_too_late_{signal_time}"})
+                continue
+            if idx in c1high_blocked:
+                rejects.append({**reject_base, "reject_reason": f"entry_engine_a_mod_c1_high_top{ENTRY_A_MOD_C1_HIGH_TOP_N}_slot_cap"})
+                continue
+
+        if setup == "C_OR_BREAKOUT":
+            vwap_dist = float(pd.to_numeric(row.get("vwap_dist_atr", float("nan")), errors="coerce"))
+            atr_pct_val = float(pd.to_numeric(row.get("atr_pct", float("nan")), errors="coerce"))
+            if np.isfinite(vwap_dist) and abs(vwap_dist) < ENTRY_C_OR_BREAKOUT_MIN_VWAP_DIST_ATR:
+                rejects.append({**reject_base, "reject_reason": f"entry_engine_c_or_breakout_low_vwap_dist_atr_{vwap_dist:.3f}"})
+                continue
+            if np.isfinite(atr_pct_val) and atr_pct_val > ENTRY_C_OR_BREAKOUT_MAX_ATR_PCT:
+                rejects.append({**reject_base, "reject_reason": f"entry_engine_c_or_breakout_high_atr_pct_{atr_pct_val:.5f}"})
+                continue
+            if signal_time is not None and not (ENTRY_C_OR_BREAKOUT_MIN_SIGNAL_TIME <= signal_time <= ENTRY_C_OR_BREAKOUT_MAX_SIGNAL_TIME):
+                rejects.append({**reject_base, "reject_reason": f"entry_engine_c_or_breakout_out_of_window_{signal_time}"})
+                continue
+
+        # --- 1-min entry bar lookup ---
         bars = _load_1m_with_open(ticker)
         if bars is None or bars.empty:
             rejects.append({**reject_base, "reject_reason": "missing_1min_file"})
@@ -861,6 +1286,21 @@ def _v7_entry_engine_raw_rows(candidates: pd.DataFrame) -> tuple[pd.DataFrame, p
             target_price = signal_entry_price * (1.0 - target_pct / 100.0)
         stop_price = round(float(stop_price), 2)
         target_price = round(float(target_price), 2)
+
+        # --- Pre-entry momentum gate ---
+        momentum_terms = PRE_ENTRY_MOMENTUM_SETUP_GATES.get(setup)
+        if momentum_terms:
+            features, missing_reason = _pre_entry_momentum_features_v11(
+                ticker, side, signal_entry_price, stop_price, entry_ts, signal_ts
+            )
+            if missing_reason:
+                rejects.append({**reject_base, "reject_reason": f"pre_entry_momentum_missing_{missing_reason[:40]}"})
+                continue
+            gate_ok, gate_fail = _eval_pre_momentum_terms(features, momentum_terms)
+            if not gate_ok:
+                rejects.append({**reject_base, "reject_reason": f"pre_entry_momentum_fail: {gate_fail[:80]}"})
+                continue
+
         quantity = max(1, int(V7_SIGNAL_NOTIONAL_RS / signal_entry_price))
         bar_time = _fmt_ist(signal_ts)
         score = float(row.get("_v11_score", 0.0))
@@ -1175,6 +1615,8 @@ def _slot_range_for_day(day: str, start_time: str, end_time: str) -> list[pd.Tim
         raise SystemExit(f"[v11 historical_full_day] invalid --historical_date={day!r}")
     start_min = _parse_hhmm(start_time)
     end_min = _parse_hhmm(end_time)
+    if _EXCLUDE_OPENING_SNAPSHOT and start_min == _OPENING_SNAPSHOT_HHMM[0] * 60 + _OPENING_SNAPSHOT_HHMM[1]:
+        start_min += 5  # strict mode: skip the 09:15 opening-snapshot slot
     if end_min < start_min:
         raise SystemExit("[v11 historical_full_day] --end_time must be >= --start_time")
 
@@ -1545,7 +1987,18 @@ def _tier123_prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
     out["lower_wick_pct"] = (out[["open", "close"]].min(axis=1) - out["low"]) / range_nonzero
     out["vol_ratio"] = out["volume"] / out["Volume_SMA20"].replace(0, np.nan)
     out["atr_pct"] = out["ATR"] / out["close"].replace(0, np.nan)
-    out["vwap_dist_atr"] = (out["close"] - out["VWAP"]) / out["ATR"].replace(0, np.nan)
+    # --- VWAP FIX (2026-06-13, mirrors research_v11_tier123_new_setups._prepare_probe_5m) ----------
+    # The 5-min source parquet "VWAP" column is stale/anchored (near-constant, far from price), which
+    # corrupts vwap_dist_atr + VWAP-based detections + regime. Recompute a proper intraday SESSION VWAP
+    # (typical-price x volume, reset each day) so the tier123 overlay / probe use a correct VWAP.
+    out["VWAP_parquet"] = out["VWAP"]
+    _tp = (out["high"] + out["low"] + out["close"]) / 3.0
+    _cum_pv = (_tp * out["volume"]).groupby(out["date_only"]).cumsum()
+    _cum_v = out["volume"].groupby(out["date_only"]).cumsum().replace(0, np.nan)
+    _sess_vwap = _cum_pv / _cum_v
+    out["VWAP"] = _sess_vwap.where(_sess_vwap.notna(), out["VWAP_parquet"])
+    _atr_floor = out["ATR"].where(out["ATR"] >= 0.0003 * out["close"], 0.0003 * out["close"])
+    out["vwap_dist_atr"] = ((out["close"] - out["VWAP"]) / _atr_floor.replace(0, np.nan)).clip(-15.0, 15.0)
     return out
 
 
@@ -1578,7 +2031,13 @@ def _tier123_read_5m(ticker: str, data_root: Path, date_keys: set[str] | None = 
         df["date"] = df["date"].dt.tz_localize("Asia/Kolkata")
     else:
         df["date"] = df["date"].dt.tz_convert("Asia/Kolkata")
-    df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+    df = (
+        df.dropna(subset=["date"])
+        .sort_values("date")
+        .drop_duplicates(subset=["date"], keep="last")  # defensive: _eq_live2 dup-ts
+        .reset_index(drop=True)
+    )
+    df = _drop_opening_snapshot_rows(df)  # strict mode only; no-op by default
     df["date_only"] = df["date"].dt.strftime("%Y-%m-%d")
     if date_keys:
         df = df.loc[df["date_only"].isin(date_keys)].copy()
@@ -1588,7 +2047,12 @@ def _tier123_read_5m(ticker: str, data_root: Path, date_keys: set[str] | None = 
 
 
 def _tier123_market_context(data_root: Path, date_keys: set[str]) -> dict[str, dict[pd.Timestamp, dict]]:
-    for ticker in ["NIFTY", "NIFTY50", "NIFTY_50", "NIFTYBEES"]:
+    # NIFTYBEES first: keeps the backtest regime in parity with live
+    # (v2._load_market_context is NIFTYBEES-first) and guarantees a
+    # volume-bearing ETF series so session VWAP (BULL/BEAR classification)
+    # works. The true NIFTY 50 index has zero traded volume -> NaN VWAP ->
+    # regime would collapse to TREND/NEUTRAL, so it must never lead here.
+    for ticker in ["NIFTYBEES", "NIFTY", "NIFTY50", "NIFTY_50"]:
         df = _tier123_read_5m(ticker, data_root, date_keys)
         if df is None or df.empty:
             continue
@@ -2198,6 +2662,7 @@ def _apply_v7_live_strategy(
     ab_gate_max_per_side: int = 1,
     ab_gate_max_per_slot: int = 2,
     ab_gate_setups: tuple[str, ...] | None = None,
+    selected_strategy_profile: str = "none",
 ) -> dict:
     ab_gate_profile = _normalise_ab_gate_profile(ab_gate_profile)
     ab_gate_setups = tuple(ab_gate_setups or AB_PROBATION_SETUPS)
@@ -2257,10 +2722,59 @@ def _apply_v7_live_strategy(
                 max_per_slot=ab_gate_max_per_slot,
                 allowed_setups=ab_gate_setups,
             )
-            accepted, rejected, research_stats = live_discovery.apply_research_live_filters(gated, day_text)
+            # v11 live overlay — mirrors eqidv2_v11_live_overlay.apply_live_candidate_overlay
+            # which runs in the live pipeline alongside the standard v8 gate.  It admits
+            # candidates from V11_PROFILE_SETUP_UNIVERSE (including E_VWAP_LOSE_EARLY_SHORT)
+            # that failed the early quality gate but pass the selected-strategy profile rules.
+            # conf mode: the live overlay module doesn't know "final_setup_conf"; feed it the
+            # BROADEST production profile it understands (tier123_balanced) so it still admits the
+            # early-quality-gate failers we need (E_VWAP_LOSE_EARLY_SHORT + the tier123 T setup).
+            # The final_setup_conf selected-strategy mask downstream does the real 9-setup selection.
+            _overlay_profile = (
+                TIER123_BALANCED_PROFILE
+                if str(selected_strategy_profile) == FINAL_CONF_PROFILE
+                else str(selected_strategy_profile)
+            )
+            overlay_accepted, _overlay_rejected, _overlay_stats = v11_overlay.apply_live_candidate_overlay(
+                ranked,
+                profile=_overlay_profile,
+                ab_gate_profile=str(ab_gate_profile),
+            )
+            # Live parity fix: merge V8-gated + overlay before research filters.
+            # In the live scanner, merge_v7_and_v11_candidates runs BEFORE
+            # apply_research_live_filters, so all sources pass through anti-chase,
+            # SHORT_FOCUS, and probation checks exactly once (see scanner comment).
+            pre_research = _concat_frames([gated, overlay_accepted])
+            if not pre_research.empty:
+                pre_research = (
+                    _ensure_candidate_id(pre_research)
+                    .drop_duplicates(subset=["candidate_id"], keep="first")
+                    .reset_index(drop=True)
+                )
+            accepted, rejected, research_stats = live_discovery.apply_research_live_filters(pre_research, day_text)
+            # conf-mode raw-pool re-admit: setups validated on the RAW pre-gate pool (L_DOUBLE_BOTTOM_VWAP,
+            # L_PRESSURE_BURST_VWAP) are dropped 100% by the v8 gate. Re-admit them straight from `ranked`
+            # (bypassing v8 + research, consistent with their validation); the entry-window filter, the
+            # final_setup_conf selected-strategy mask, the conf pre-momentum gate and conf exit still apply.
+            if (str(selected_strategy_profile) == FINAL_CONF_PROFILE and _FINAL_CONF_READMIT_SETUPS
+                    and not ranked.empty and "setup" in ranked.columns):
+                _readmit = ranked[ranked["setup"].astype(str).isin(_FINAL_CONF_READMIT_SETUPS)]
+                if not _readmit.empty:
+                    accepted = _concat_frames([accepted, _readmit])
+                    if not accepted.empty:
+                        accepted = (
+                            _ensure_candidate_id(accepted)
+                            .drop_duplicates(subset=["candidate_id"], keep="first")
+                            .reset_index(drop=True)
+                        )
+            # Live parity fix: apply entry window filter (09:30-14:30) after research filters.
+            # The live scanner calls _filter_entry_window after apply_research_live_filters
+            # at scanner line 1539; the original backtester was missing this step entirely.
+            accepted, _ew_rejected = live_discovery._filter_entry_window(accepted)
             gated_output = _concat_frames([gated, ab_accepted])
             if not gated_output.empty:
                 gated_output = _ensure_candidate_id(gated_output).drop_duplicates(subset=["candidate_id"], keep="first").reset_index(drop=True)
+            # overlay_accepted is now consumed by pre_research -> accepted (via research + entry-window filters)
             accepted_combined = _concat_frames([accepted, ab_accepted])
             if not accepted_combined.empty:
                 accepted_combined = (
@@ -2674,6 +3188,7 @@ def _run_live_parity(args: argparse.Namespace) -> int:
         ab_gate_max_per_side=int(args.ab_gate_max_per_side),
         ab_gate_max_per_slot=int(args.ab_gate_max_per_slot),
         ab_gate_setups=_ab_gate_setups_for_selected_profile(str(args.selected_strategy_profile)),
+        selected_strategy_profile=str(args.selected_strategy_profile),
     )
     live_like_candidates = pipeline["live_like_candidates"]
     raw_candidates.to_csv(out_dir / "live_parity_raw_candidates.csv", index=False)
@@ -2768,6 +3283,7 @@ def _run_historical_full_day(args: argparse.Namespace) -> int:
         ab_gate_max_per_side=int(args.ab_gate_max_per_side),
         ab_gate_max_per_slot=int(args.ab_gate_max_per_slot),
         ab_gate_setups=_ab_gate_setups_for_selected_profile(str(args.selected_strategy_profile)),
+        selected_strategy_profile=str(args.selected_strategy_profile),
     )
     live_like_candidates = pipeline["live_like_candidates"]
     entry_engine_signals, entry_engine_raw, entry_engine_rejects = _build_v7_entry_engine_signals(
@@ -2789,6 +3305,8 @@ def _run_historical_full_day(args: argparse.Namespace) -> int:
     selected_strategy_signals.to_csv(out_dir / "historical_full_day_selected_strategy_signals.csv", index=False)
     selected_strategy_rejects.to_csv(out_dir / "historical_full_day_selected_strategy_rejects.csv", index=False)
     pipeline["slot_audit"].to_csv(out_dir / "historical_full_day_live_pipeline_slot_audit.csv", index=False)
+    if getattr(args, "parity_debug", False):
+        _write_parity_debug_csv(out_dir, pipeline, entry_engine_rejects, label="historical_full_day")
     full_day_stats = {
         **pipeline["stats"],
         "entry_engine_raw_entries": int(len(entry_engine_raw)),
@@ -2983,6 +3501,8 @@ def _run_historical_all_available(args: argparse.Namespace) -> int:
             data_root=day_data_root,
             include_ab_excluded=_ab_gate_enabled(str(args.ab_gate_profile)),
         )
+        if str(args.selected_strategy_profile) == FINAL_CONF_PROFILE:
+            raw_candidates = _merge_external_conf_candidates(raw_candidates, day)
         if not raw_candidates.empty:
             raw_candidates = raw_candidates.copy()
             raw_candidates["v11_source_day"] = day
@@ -3003,6 +3523,7 @@ def _run_historical_all_available(args: argparse.Namespace) -> int:
             ab_gate_max_per_side=int(args.ab_gate_max_per_side),
             ab_gate_max_per_slot=int(args.ab_gate_max_per_slot),
             ab_gate_setups=_ab_gate_setups_for_selected_profile(str(args.selected_strategy_profile)),
+            selected_strategy_profile=str(args.selected_strategy_profile),
         )
         entry_engine_signals, entry_engine_raw, entry_engine_rejects = _build_v7_entry_engine_signals(
             pipeline["pre_dedupe_live_candidates"]
@@ -3385,6 +3906,110 @@ def _write_empty_outputs(
     (out_dir / "summary.txt").write_text(text + "\n", encoding="utf-8")
 
 
+def _write_parity_debug_csv(
+    out_dir: Path,
+    pipeline: dict,
+    entry_rejects: pd.DataFrame | None = None,
+    label: str = "",
+) -> None:
+    """Write v11_ID_parity_debug.csv — per-candidate audit trail across all pipeline stages.
+
+    Columns: ticker, side, setup, signal_time_ist, pipeline_stage, fate, reason,
+             quality_score, ranker_score, vwap_dist_atr, rs_pct, atr_pct,
+             signal_minute, v11_pipeline_day, v11_pipeline_slot_ist
+    """
+    frames: list[pd.DataFrame] = []
+
+    def _tag(df: pd.DataFrame, fate: str, reason_col: str | None = None) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        t = df.copy()
+        t["_parity_fate"] = fate
+        t["_parity_reason"] = (
+            t[reason_col].astype(str) if reason_col and reason_col in t.columns
+            else t.get("v8_live_gate_rule", t.get("research_reject_reason", pd.Series("", index=t.index)))
+        )
+        return t
+
+    ranked = pipeline.get("ranked_raw_candidates", pd.DataFrame())
+    v8_gated = pipeline.get("v8_gated_candidates", pd.DataFrame())
+    research_rejected = pipeline.get("research_rejected_candidates", pd.DataFrame())
+    pre_dedupe = pipeline.get("pre_dedupe_live_candidates", pd.DataFrame())
+    live_like = pipeline.get("live_like_candidates", pd.DataFrame())
+
+    if not research_rejected.empty:
+        frames.append(_tag(research_rejected, "rejected_research_filter", "research_reject_reason"))
+    if not v8_gated.empty:
+        frames.append(_tag(v8_gated, "v8_gate_passed"))
+    if not pre_dedupe.empty:
+        frames.append(_tag(pre_dedupe, "live_accepted_pre_dedupe"))
+    if not live_like.empty:
+        frames.append(_tag(live_like, "live_final_accepted"))
+
+    if entry_rejects is not None and not entry_rejects.empty:
+        er = entry_rejects.copy()
+        er["_parity_fate"] = "entry_engine_rejected"
+        er["_parity_reason"] = er.get("reject_reason", pd.Series("", index=er.index))
+        er["v11_pipeline_stage"] = "entry_engine"
+        frames.append(er)
+
+    if not frames:
+        return
+
+    combined = pd.concat(frames, ignore_index=True)
+    keep_cols = [c for c in [
+        "ticker", "side", "setup", "signal_time_ist", "v11_pipeline_stage",
+        "_parity_fate", "_parity_reason",
+        "quality_score", "ranker_score", "vwap_dist_atr", "rs_pct", "atr_pct",
+        "signal_minute", "v8_live_gate_status", "v8_live_gate_rule",
+        "v11_pipeline_day", "v11_pipeline_slot_ist",
+    ] if c in combined.columns]
+    combined = combined[keep_cols].rename(columns={
+        "_parity_fate": "fate",
+        "_parity_reason": "reason",
+    })
+    combined = combined.sort_values(
+        [c for c in ["v11_pipeline_day", "signal_time_ist", "ticker"] if c in combined.columns]
+    )
+    fname = f"v11_ID_parity_debug{'_' + label if label else ''}.csv"
+    combined.to_csv(out_dir / fname, index=False)
+    print(f"[v11 parity_debug{' ' + label if label else ''}] wrote {len(combined)} rows → {out_dir / fname}")
+
+
+def _build_v11_id_trades(trades: pd.DataFrame) -> pd.DataFrame:
+    """Map the internal trades DataFrame to the canonical v11_ID output schema."""
+    if trades is None or trades.empty:
+        return pd.DataFrame(columns=[
+            "date", "symbol", "side", "setup_name", "entry_time", "entry_price",
+            "entry_source_timeframe", "exit_time", "exit_price", "exit_reason",
+            "pnl", "pnl_pct", "quantity", "reason", "filters_passed", "filters_failed",
+            "source_5min_file", "source_1min_file",
+        ])
+    t = trades.copy()
+    col = lambda *names: next((t[n] for n in names if n in t.columns), pd.Series(dtype=object, index=t.index))
+    out = pd.DataFrame({
+        "date":                 col("trade_date"),
+        "symbol":               col("ticker"),
+        "side":                 col("side"),
+        "setup_name":           col("setup"),
+        "entry_time":           col("entry_time_v6", "entry_time_ist", "entry_ts"),
+        "entry_price":          col("entry_price_v6", "entry_price", "entry_px"),
+        "entry_source_timeframe": "5min_signal_1min_open",
+        "exit_time":            col("v6_exit_time_ist", "exit_time_ist"),
+        "exit_price":           col("v6_exit_price", "exit_price"),
+        "exit_reason":          col("v6_outcome", "outcome"),
+        "pnl":                  col("v6_net_pnl_rs", "net_pnl_rs"),
+        "pnl_pct":              col("v6_pnl_pct_price", "pnl_pct"),
+        "quantity":             col("quantity"),
+        "reason":               col("v8_live_gate_rule", "v8_live_gate_status"),
+        "filters_passed":       col("research_filter_version", "v8_live_gate_status"),
+        "filters_failed":       col("research_filter_reject_reason", "research_reject_reason"),
+        "source_5min_file":     col("v11_source_day", "source_5min_file"),
+        "source_1min_file":     str(v6.DATA_1M_DIR),
+    })
+    return out
+
+
 def _write_outputs(
     out_dir: Path,
     trades: pd.DataFrame,
@@ -3396,7 +4021,8 @@ def _write_outputs(
     out_dir.mkdir(parents=True, exist_ok=True)
     trades.to_csv(out_dir / "trades.csv", index=False)
     summary, daily, by_setup = v6._metrics(trades)
-    daily.rename(columns={"_pnl": "net_pnl_rs"}).to_csv(out_dir / "daily.csv", index=False)
+    daily_out = daily.rename(columns={"_pnl": "net_pnl_rs"})
+    daily_out.to_csv(out_dir / "daily.csv", index=False)
     by_setup.to_csv(out_dir / "by_setup.csv", index=False)
     accepted.to_csv(out_dir / accepted_filename, index=False)
     pd.DataFrame(
@@ -3412,6 +4038,11 @@ def _write_outputs(
     ]].copy()
     entry_audit.to_csv(out_dir / "entry_timing_audit.csv", index=False)
 
+    # v11_ID canonical output files
+    _build_v11_id_trades(trades).to_csv(out_dir / "v11_ID_trades.csv", index=False)
+    daily_out.to_csv(out_dir / "v11_ID_daily_summary.csv", index=False)
+    by_setup.to_csv(out_dir / "v11_ID_setup_summary.csv", index=False)
+
     text = v6._summary_text(summary, by_setup, Path(source))
     text = text.replace("AVWAP ID 5-min v6 backtest", "AVWAP ID 5-min v11 backtest")
     text = text.replace(
@@ -3420,6 +4051,92 @@ def _write_outputs(
     )
     print(text)
     (out_dir / "summary.txt").write_text(text + "\n", encoding="utf-8")
+    (out_dir / "v11_ID_summary.csv").write_text(text + "\n", encoding="utf-8")
+
+
+def _merge_external_conf_candidates(raw_candidates: "pd.DataFrame", day: str) -> "pd.DataFrame":
+    """conf mode: merge external scan-source candidates (T_TREND_DAY_EMA_STAIR_SHORT, S_UPTHRUST_TRAP_FADE)
+    for `day` into raw_candidates so they enter the pipeline. They are re-admitted past v8+research
+    downstream (they are in _FINAL_CONF_READMIT_SETUPS); the conf mask + premom gate + exit then apply."""
+    ext = _FINAL_CONF_EXT_CANDIDATES
+    if not isinstance(ext, pd.DataFrame) or ext.empty:
+        return raw_candidates
+    day_ext = ext[ext["_ext_day"] == str(day)]
+    if day_ext.empty:
+        return raw_candidates
+    day_ext = day_ext.drop(columns=["_ext_day"], errors="ignore").copy()
+    # de-dupe external candidates (the scan CSVs can carry repeats) before injecting
+    _key = [c for c in ("ticker", "setup", "signal_time_ist") if c in day_ext.columns]
+    if _key:
+        day_ext = day_ext.drop_duplicates(subset=_key, keep="first")
+    if raw_candidates is None or raw_candidates.empty:
+        return day_ext.reset_index(drop=True)
+    return pd.concat([raw_candidates, day_ext], ignore_index=True, sort=False)
+
+
+def _activate_final_setup_conf() -> dict:
+    """Opt-in (--selected_strategy_profile final_setup_conf): run ONLY the approved book in
+    final_setup_conf.FINAL_SETUP_CONF. Overrides exits + pre-momentum gates with each setup's
+    tuned values (dropping the production gates for these setups), and restricts the candidate
+    scan to only these setups. The selected-strategy mask (_final_setup_conf_mask) applies each
+    setup's mask_terms + entry guards. Non-breaking: only runs when the conf profile is chosen.
+
+    COVERAGE NOTE: A/B/D/E/G were validated on the clean (post-v8/research) pool, so they replay
+    faithfully here. L_DOUBLE_BOTTOM_VWAP / L_PRESSURE_BURST_VWAP (raw pre-gate pool) and
+    T_TREND_DAY_EMA_STAIR_SHORT (tier123 overlay) were validated on non-standard pools — the
+    standard v11 v8/research/overlay stages may admit fewer of them; verify per-setup counts on
+    the first run and reconcile gating (see provenance.gating_caveat in the conf)."""
+    global PRE_ENTRY_MOMENTUM_SETUP_GATES, _FINAL_CONF_READMIT_SETUPS, _FINAL_CONF_EXT_CANDIDATES, ENTRY_SHADOW_SETUPS
+    import final_setup_conf as _fc
+    conf = _fc.FINAL_SETUP_CONF
+    keys = frozenset(conf)
+    for name, cfg in conf.items():
+        ex = cfg.get("exit", {})
+        if "sl_pct" in ex and "tgt_pct" in ex:
+            v6.SETUP_EXIT_RULES[name] = (float(ex["sl_pct"]), float(ex["tgt_pct"]))
+    PRE_ENTRY_MOMENTUM_SETUP_GATES = {
+        name: tuple((t[0], t[1], float(t[2])) for t in cfg.get("pre_momentum_terms", []))
+        for name, cfg in conf.items() if cfg.get("pre_momentum_terms")
+    }
+    # setups that must be re-admitted past v8+research: raw-pool (v8 drops them) + scan-source (not emitted)
+    _readmit_evals = ("RAW_PRE_GATE_POOL", "TIER123_OVERLAY_PROBE", "NEW_SETUPS_SCAN")
+    _FINAL_CONF_READMIT_SETUPS = frozenset(
+        name for name, cfg in conf.items()
+        if str(cfg.get("provenance", {}).get("evaluated_on", "")).upper() in _readmit_evals
+    )
+    # scan-source setups (not emitted by candidate_scan) -> load their external candidate CSVs once
+    _ext = []
+    for name, cfg in conf.items():
+        ev = str(cfg.get("provenance", {}).get("evaluated_on", "")).upper()
+        if ev not in ("TIER123_OVERLAY_PROBE", "NEW_SETUPS_SCAN"):
+            continue
+        csv = cfg.get("provenance", {}).get("scan_source_csv") or _FINAL_CONF_EXT_SRC.get(ev)
+        if csv and os.path.exists(csv):
+            try:
+                d = pd.read_csv(csv, low_memory=False)
+                d = d[d["setup"].astype(str) == name].copy()
+                if not d.empty:
+                    d["_ext_day"] = pd.to_datetime(d["signal_time_ist"], errors="coerce").dt.strftime("%Y-%m-%d")
+                    _ext.append(d)
+                    print(f"[v11 final_setup_conf]   loaded {len(d)} external candidates for {name} from {os.path.basename(csv)}", flush=True)
+            except Exception as exc:
+                print(f"[v11 final_setup_conf]   !! failed to load external candidates for {name}: {exc!r}", flush=True)
+    _FINAL_CONF_EXT_CANDIDATES = pd.concat(_ext, ignore_index=True) if _ext else pd.DataFrame()
+    # conf book is the gate of record: un-shadow any approved setup (its conf gate is the quality filter).
+    _unshadow = frozenset(ENTRY_SHADOW_SETUPS) & keys
+    if _unshadow:
+        ENTRY_SHADOW_SETUPS = frozenset(ENTRY_SHADOW_SETUPS) - keys
+        print(f"[v11 final_setup_conf]   un-shadowed conf setups (now tradeable): {sorted(_unshadow)}", flush=True)
+    candidate_scan.ALLOWED_SETUPS = keys
+    candidate_scan.FILTER_TO_V8_EXIT_SETUPS = True
+    if _FINAL_CONF_READMIT_SETUPS:
+        print(f"[v11 final_setup_conf]   re-admit (bypass v8+research): {sorted(_FINAL_CONF_READMIT_SETUPS)}", flush=True)
+    print(f"[v11 final_setup_conf] ACTIVE — {len(keys)} approved setups: {sorted(keys)}", flush=True)
+    print(f"[v11 final_setup_conf]   exits overridden for all; pre-momentum gated: "
+          f"{sorted(PRE_ENTRY_MOMENTUM_SETUP_GATES)}", flush=True)
+    print("[v11 final_setup_conf]   masks+guards via _final_setup_conf_mask; production masks/overlays bypassed.",
+          flush=True)
+    return conf
 
 
 def main() -> int:
@@ -3455,7 +4172,16 @@ def main() -> int:
     ap.add_argument("--end_date", type=str, default="")
     ap.add_argument("--start_time", type=str, default="09:15")
     ap.add_argument("--end_time", type=str, default="15:00")
-    ap.add_argument("--workers", type=int, default=v5.v2.DEFAULT_WORKERS)
+    ap.add_argument(
+        "--exclude_opening_snapshot",
+        action="store_true",
+        help=(
+            "Strict research mode: skip the 09:15 opening-snapshot slot for signal "
+            "scanning and drop it from the market-context regime. Default OFF keeps "
+            "the hybrid 76-bar convention (09:15..15:30) for live parity."
+        ),
+    )
+    ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--cost_bps", type=float, default=v6.DEFAULT_COST_BPS)
     ap.add_argument(
         "--entry_fill_model",
@@ -3526,11 +4252,28 @@ def main() -> int:
         default=2,
         help="Maximum A/B probation candidates across both sides per 5-minute slot.",
     )
+    ap.add_argument(
+        "--parity-debug",
+        action="store_true",
+        default=False,
+        dest="parity_debug",
+        help=(
+            "Write v11_ID_parity_debug.csv: per-candidate audit trail across all pipeline stages "
+            "(ranked → v8_gate → research_filter → entry_engine → accepted/rejected with reasons). "
+            "Use to cross-check v11 backtest entries against V7 live session logs."
+        ),
+    )
     args = ap.parse_args()
+    global _EXCLUDE_OPENING_SNAPSHOT
+    _EXCLUDE_OPENING_SNAPSHOT = bool(getattr(args, "exclude_opening_snapshot", False))
+    if _EXCLUDE_OPENING_SNAPSHOT:
+        print("[v11] --exclude_opening_snapshot ON: skipping 09:15 slot + dropping it from regime (strict research mode; NOT live-parity)")
     args.selected_strategy_profile = _normalise_selected_strategy_profile(args.selected_strategy_profile)
     args.ab_gate_profile = _normalise_ab_gate_profile(args.ab_gate_profile)
     if args.selected_strategy_profile in AB_SELECTED_STRATEGY_PROFILES and args.ab_gate_profile == "off":
         args.ab_gate_profile = "quality_top_slot"
+    if args.selected_strategy_profile == FINAL_CONF_PROFILE:
+        _activate_final_setup_conf()
         print(
             "[v11 ab_gate] auto-enabled quality_top_slot because selected_strategy_profile "
             f"is {args.selected_strategy_profile}",

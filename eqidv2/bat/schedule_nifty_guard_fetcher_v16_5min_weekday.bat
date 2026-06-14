@@ -4,7 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
 set "BAT_DIR=%BASE_DIR%\bat"
 set "TASK_HARDENER=%BAT_DIR%\harden_scheduled_task.ps1"
-set "FETCH_BAT=%BAT_DIR%\run_nifty_guard_fetcher_v16_5min.bat"
+set "FETCH_BAT=%BAT_DIR%\run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat"
 set "TASK_NIFTY=EQIDV2_nifty_guard_fetch_v16_5min_0915"
 
 if not exist "%FETCH_BAT%" (
