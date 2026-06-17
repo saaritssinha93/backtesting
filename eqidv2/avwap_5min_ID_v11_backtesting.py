@@ -199,8 +199,14 @@ _FINAL_CONF_READMIT_SETUPS: frozenset[str] = frozenset()
 # conf mode and merged into the per-day raw_candidates before the pipeline. Empty otherwise.
 _FINAL_CONF_EXT_CANDIDATES = None
 _FINAL_CONF_EXT_SRC = {
-    "TIER123_OVERLAY_PROBE": r"C:\TradingData\eqidv2\outputs_ID_v11_tier123_new_setup_probe\tier123_standalone_trades.csv",
-    "NEW_SETUPS_SCAN": r"C:\TradingData\eqidv2\outputs_ID_v11_new_setups_probe\new_setups_standalone_trades.csv",
+    "TIER123_OVERLAY_PROBE": os.getenv(
+        "EQIDV2_FINAL_CONF_TIER123_SOURCE_CSV",
+        r"C:\TradingData\eqidv2\outputs_ID_v11_conf_tier_c_current\tier123\tier123_standalone_trades.csv",
+    ),
+    "NEW_SETUPS_SCAN": os.getenv(
+        "EQIDV2_FINAL_CONF_NEW_SETUPS_SOURCE_CSV",
+        r"C:\TradingData\eqidv2\outputs_ID_v11_conf_tier_c_current\new_setups\new_setups_standalone_trades.csv",
+    ),
 }
 
 SELECTED_STRATEGY_PROFILE_CHOICES = (

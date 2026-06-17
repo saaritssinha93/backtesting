@@ -362,15 +362,27 @@ def _map_by_key(df: pd.DataFrame) -> pd.DataFrame:
     return df.set_index("_research_key", drop=False) if not df.empty and "_research_key" in df.columns else pd.DataFrame()
 
 
+_BAD_SIGNAL_IDS = {"", "NAN", "NONE", "NULL", "NA"}
+_SIGNAL_ID_COLS = ("signal_id", "live_signal_id", "source_signal_id", "candidate_id")
+
+
+def _clean_signal_id(value: Any) -> str:
+    sid = str(value or "").strip()
+    return "" if sid.upper() in _BAD_SIGNAL_IDS else sid
+
+
 def _map_by_signal_id(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or "signal_id" not in df.columns:
+    if df.empty:
+        return pd.DataFrame()
+    key_col = next((col for col in _SIGNAL_ID_COLS if col in df.columns), "")
+    if not key_col:
         return pd.DataFrame()
     out = df.copy()
-    out["signal_id"] = out["signal_id"].astype(str)
-    out = out.loc[out["signal_id"].str.len() > 0]
+    out["_signal_id_key"] = out[key_col].map(_clean_signal_id)
+    out = out.loc[out["_signal_id_key"].str.len() > 0]
     if out.empty:
         return pd.DataFrame()
-    return out.drop_duplicates(subset=["signal_id"], keep="last").set_index("signal_id", drop=False)
+    return out.drop_duplicates(subset=["_signal_id_key"], keep="last").set_index("_signal_id_key", drop=False)
 
 
 def _row_from_map(map_df: pd.DataFrame, key: str) -> pd.Series:
@@ -383,7 +395,7 @@ def _row_from_map(map_df: pd.DataFrame, key: str) -> pd.Series:
 
 
 def _row_by_signal_id(map_df: pd.DataFrame, signal_id: Any) -> pd.Series:
-    sid = str(signal_id or "")
+    sid = _clean_signal_id(signal_id)
     if map_df.empty or not sid or sid not in map_df.index:
         return pd.Series(dtype=object)
     row = map_df.loc[sid]
@@ -545,6 +557,8 @@ def build_truth_table(day: str) -> pd.DataFrame:
     rejects_map = _map_by_key(rejects)
     live_map = _map_by_key(live)
     paper_map = _map_by_key(paper)
+    entry_sel_signal_map = _map_by_signal_id(entry_selected)
+    live_signal_map = _map_by_signal_id(live)
     paper_signal_map = _map_by_signal_id(paper)
 
     rows: list[dict[str, Any]] = []
@@ -574,6 +588,21 @@ def build_truth_table(day: str) -> pd.DataFrame:
         paper_by_signal = _row_by_signal_id(paper_signal_map, signal_id)
         if not paper_by_signal.empty:
             paper_row = paper_by_signal
+        paper_signal_id = paper_row.get("signal_id", "") if not paper_row.empty else ""
+        if live_row.empty:
+            live_by_signal = _row_by_signal_id(live_signal_map, paper_signal_id)
+            if not live_by_signal.empty:
+                live_row = live_by_signal
+                signal_id = live_row.get("signal_id", signal_id)
+        live_candidate_id = live_row.get("candidate_id", "") if not live_row.empty else ""
+        if entry_sel_row.empty:
+            entry_by_signal = pd.Series(dtype=object)
+            for sid in (live_candidate_id, signal_id, paper_signal_id):
+                entry_by_signal = _row_by_signal_id(entry_sel_signal_map, sid)
+                if not entry_by_signal.empty:
+                    break
+            if not entry_by_signal.empty:
+                entry_sel_row = entry_by_signal
 
         base_row = cand
         for fallback in (v11_overlay_row, v11_overlay_reject_row, gated_row, entry_raw_row, entry_sel_row, live_row, paper_row):

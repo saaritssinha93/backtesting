@@ -7,6 +7,8 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
+set "EQIDV2_USE_FINAL_SETUP_CONF=1"
+set "EQIDV2_V11_SELECTED_STRATEGY_PROFILE=final_setup_conf"
 
 rem ============================================================
 rem  LIVE PARITY BLOCK — mirror run_eqidv2_signal_discovery_v7_5min_id_persistent.bat exactly.
@@ -75,6 +77,7 @@ rem ============================================================
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_PATH=%BASE_DIR%\backtesting_result_v11_daily.py"
 set "VERIFY_SCRIPT=%BASE_DIR%\data_for_backtesting_verify.py"
+set "WAIT_SCRIPT=%BASE_DIR%\wait_for_data_backtesting_ready.py"
 
 for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"') do set "TODAY_IST=%%a"
 if not defined TODAY_IST set "TODAY_IST=%DATE%"
@@ -87,6 +90,16 @@ cd /d "%BASE_DIR%"
 echo [%DATE% %TIME%] START Backtesting Result v11>>"%LOG_FILE%"
 
 rem --- Data completeness gate ---
+echo [%DATE% %TIME%] Waiting for data_for_backtesting session + verifier PASS...>>"%LOG_FILE%"
+"%PYTHON_EXE%" -u "%WAIT_SCRIPT%" --date "%TODAY_IST%" --timeout-sec 3600 --poll-sec 15 >>"%LOG_FILE%" 2>&1
+set "READY_EXIT=%ERRORLEVEL%"
+if not "%READY_EXIT%"=="0" (
+    echo [%DATE% %TIME%] DATA NOT READY - exit=%READY_EXIT%; aborting backtesting.>>"%LOG_FILE%"
+    echo [%DATE% %TIME%] END Backtesting Result v11 - exit=%READY_EXIT% data_not_ready>>"%LOG_FILE%"
+    copy /Y "%LOG_FILE%" "%LATEST_LOG_FILE%" >nul 2>&1
+    endlocal & exit /b %READY_EXIT%
+)
+
 echo [%DATE% %TIME%] Checking data completeness...>>"%LOG_FILE%"
 "%PYTHON_EXE%" -u "%VERIFY_SCRIPT%" --date "%TODAY_IST%" >>"%LOG_FILE%" 2>&1
 set "VERIFY_EXIT=%ERRORLEVEL%"
@@ -99,7 +112,10 @@ if "%VERIFY_EXIT%"=="2" (
 )
 
 if "%VERIFY_EXIT%"=="1" (
-    echo [%DATE% %TIME%] DATA VERIFY WARN - exit=1; some tickers incomplete, proceeding with caution>>"%LOG_FILE%"
+    echo [%DATE% %TIME%] DATA VERIFY WARN - exit=1; aborting parity run to avoid partial/false comparison>>"%LOG_FILE%"
+    echo [%DATE% %TIME%] END Backtesting Result v11 - exit=1 data_verify_warn>>"%LOG_FILE%"
+    copy /Y "%LOG_FILE%" "%LATEST_LOG_FILE%" >nul 2>&1
+    endlocal & exit /b 1
 )
 
 if not "%VERIFY_EXIT%"=="0" if not "%VERIFY_EXIT%"=="1" if not "%VERIFY_EXIT%"=="2" (
@@ -113,6 +129,13 @@ rem --- Run backtesting ---
 echo [%DATE% %TIME%] Running v11 backtest + parity analysis...>>"%LOG_FILE%"
 "%PYTHON_EXE%" -u "%SCRIPT_PATH%" --date "%TODAY_IST%" %* >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
+
+rem --- Conf-book adherence add-on (non-fatal; flags legacy leakage that live_parity is blind to) ---
+echo [%DATE% %TIME%] Running conf-book adherence check...>>"%LOG_FILE%"
+"%PYTHON_EXE%" -u "%BASE_DIR%\conf_adherence_check.py" --date "%TODAY_IST%" >>"%LOG_FILE%" 2>&1
+set "ADHERENCE_EXIT=%ERRORLEVEL%"
+echo [%DATE% %TIME%] conf-book adherence exit=%ADHERENCE_EXIT% (0=clean 3=legacy-leak 4=no-data; informational, does not fail the session)>>"%LOG_FILE%"
+
 echo [%DATE% %TIME%] END Backtesting Result v11 (exit=%EXIT_CODE%)>>"%LOG_FILE%"
 copy /Y "%LOG_FILE%" "%LATEST_LOG_FILE%" >nul 2>&1
 

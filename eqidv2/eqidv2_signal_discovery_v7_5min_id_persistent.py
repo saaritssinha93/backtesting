@@ -26,7 +26,52 @@ import pandas as pd
 import avwap_5min_ID_v7_candidate_scan as candidate_scan
 import eqidv2_v11_live_overlay as v11_live_overlay
 import eqidv2_live_combined_analyser_csv_v15 as base_v15
+import eqidv2_final_conf_live_bootstrap as _conf_boot
+import eqidv2_conf_tier_c_live_scan as _conf_tier_c
 from eqidv2_runtime_paths import RUNTIME_ROOT, RUNTIME_STATUS_DIR, runtime_dir
+
+
+# --- final_setup_conf (16-setup book) runtime activation --------------------
+# When EQIDV2_USE_FINAL_SETUP_CONF is set, the conf becomes the single source of
+# truth: the detection whitelist + legacy blocklists are replaced by the conf's
+# setups. Native conf setups continue through v8 + research filters; only the
+# provenance groups v11 explicitly readmits are merged back from raw candidates
+# before the final conf mask. Default OFF -> live behaviour unchanged.
+# _ensure_conf_scanner() is idempotent and called once per process at run_slot.
+_CONF_SCANNER_ACTIVE = False
+_CONF_SCANNER_BOOTSTRAPPED = False
+
+
+def _ensure_conf_scanner() -> bool:
+    global _CONF_SCANNER_ACTIVE, _CONF_SCANNER_BOOTSTRAPPED
+    if _CONF_SCANNER_BOOTSTRAPPED:
+        return _CONF_SCANNER_ACTIVE
+    _CONF_SCANNER_BOOTSTRAPPED = True
+    if not _conf_boot.is_enabled():
+        return False
+    keys = set(_conf_boot.conf_keys())
+    ukeys = set(_conf_boot.conf_keys_upper())
+    # Detection whitelist = conf setups; clear legacy blocklists for conf setups.
+    candidate_scan.ALLOWED_SETUPS = set(keys)
+    candidate_scan.FILTER_TO_V8_EXIT_SETUPS = True
+    candidate_scan.EXCLUDED_SETUPS = {s for s in candidate_scan.EXCLUDED_SETUPS if _conf_boot._u(s) not in ukeys}
+    if hasattr(candidate_scan, "EARLY_BLOCKED_SETUPS"):
+        candidate_scan.EARLY_BLOCKED_SETUPS = {
+            s for s in candidate_scan.EARLY_BLOCKED_SETUPS if _conf_boot._u(s) not in ukeys
+        }
+    if hasattr(candidate_scan, "RESEARCH_PROBATION_SETUPS"):
+        candidate_scan.RESEARCH_PROBATION_SETUPS = {
+            s for s in candidate_scan.RESEARCH_PROBATION_SETUPS if _conf_boot._u(s) not in ukeys
+        }
+    _CONF_SCANNER_ACTIVE = True
+    _n_readmit = len(_conf_boot.readmit_setups())
+    print(
+        f"[{SESSION_NAME}] final_setup_conf ACTIVE ({_conf_boot.GATE_VERSION}): "
+        f"{len(keys)} setups (match-v11): {len(keys) - _n_readmit} native through v8+overlay+research, "
+        f"{_n_readmit} non-native readmitted; conf mask is the final selection.",
+        flush=True,
+    )
+    return True
 
 
 SESSION_NAME = "Signal discovery v7 5mins ID"
@@ -1364,6 +1409,7 @@ def _append_audit(slot: pd.Timestamp, summary: Dict[str, Any]) -> None:
 
 
 def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[str, Any]:
+    _ensure_conf_scanner()
     slot = _ensure_ist_ts(slot_ts).floor("min")
     day = slot.strftime("%Y-%m-%d")
     tickers = _load_universe_for_day(day)
@@ -1394,6 +1440,7 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         PARALLEL_SCAN_BRANCHES_ENABLE
         and V11_BACKTESTING_OVERLAY_ENABLE
         and tier123_for_slot
+        and not _CONF_SCANNER_ACTIVE
     ):
         tier123_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="v7-tier123")
         tier123_future = tier123_executor.submit(
@@ -1422,6 +1469,24 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         print(f"[{SESSION_NAME}] scan failed: {type(exc).__name__}: {exc}", flush=True)
         candidates = pd.DataFrame()
         scanned_candidates = pd.DataFrame()
+    if _CONF_SCANNER_ACTIVE:
+        # conf mode: add the 4 Tier-C setups (no native detector) via their
+        # dedicated live causal scanner, merged into the candidate stream before
+        # ranking + the conf gate. (The legacy v11 tier123 overlay is skipped.)
+        try:
+            tier_c = _conf_tier_c.scan_conf_tier_c_live_slot(
+                slot, tickers, market_ctx=market_ctx, max_workers=scan_workers,
+            )
+            if tier_c is not None and not tier_c.empty:
+                candidates = (
+                    pd.concat([candidates, tier_c], ignore_index=True)
+                    if candidates is not None and not candidates.empty
+                    else tier_c
+                )
+                candidates = candidate_scan._dedupe_candidate_frame(candidates)
+                print(f"[{SESSION_NAME}] conf tier-c scan added {len(tier_c)} candidates", flush=True)
+        except Exception as exc:
+            print(f"[{SESSION_NAME}] conf tier-c scan failed: {type(exc).__name__}: {exc}", flush=True)
     _t_after_scan = time.perf_counter()
     print(
         f"[{SESSION_NAME} timing] market_ctx={_t_after_ctx-started:.3f}s "
@@ -1533,6 +1598,29 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
     else:
         merged_candidates = v8_candidates if v8_candidates is not None else pd.DataFrame()
     gated_candidates, research_rejected, research_filter_stats = apply_research_live_filters(merged_candidates, day)
+    if _CONF_SCANNER_ACTIVE:
+        # (i) match-v11: native conf setups have now passed v8 + overlay + research
+        # exactly as in v11. Readmit the NON-native conf setups (RAW_PRE_GATE_POOL /
+        # TIER123 / NEW_SETUPS) straight from raw_candidates — bypassing v8 + research,
+        # mirroring v11 _FINAL_CONF_READMIT_SETUPS — then apply the conf mask as the
+        # final selection (drops non-conf setups and conf setups failing their mask).
+        _readmit = _conf_boot.readmit_setups()
+        if _readmit and raw_candidates is not None and not raw_candidates.empty and "setup" in raw_candidates.columns:
+            _rd = raw_candidates[raw_candidates["setup"].astype(str).isin(_readmit)]
+            if not _rd.empty:
+                gated_candidates = pd.concat(
+                    [gated_candidates if gated_candidates is not None else pd.DataFrame(), _rd],
+                    ignore_index=True, sort=False,
+                )
+                if "candidate_id" in gated_candidates.columns:
+                    gated_candidates = candidate_scan._dedupe_candidate_frame(gated_candidates)
+        gated_candidates, _conf_rejected, _conf_stats = _conf_boot.apply_conf_gate(gated_candidates, day)
+        research_filter_stats.update(_conf_stats)
+        if _conf_rejected is not None and not _conf_rejected.empty:
+            research_rejected = pd.concat(
+                [research_rejected if research_rejected is not None else pd.DataFrame(), _conf_rejected],
+                ignore_index=True, sort=False,
+            )
     v11_overlay_stats["regular_v7_gated_candidates_before_v11_override"] = pre_merge_v8_count
     v11_overlay_stats["post_merge_pre_filter_candidates"] = int(0 if merged_candidates is None else len(merged_candidates))
     v11_overlay_stats["final_candidates_before_entry_window"] = int(0 if gated_candidates is None else len(gated_candidates))

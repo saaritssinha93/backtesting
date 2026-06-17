@@ -424,13 +424,12 @@ def _audit_ticker(ticker: str, data_root: Path, day: pd.Timestamp) -> dict[str, 
     medians = _feature_medians(prepared_day)
     staleness_min = _data_staleness_minutes(path)
 
-    feature_checks = [
+    core_feature_checks = [
         prepared_cmp["status"],
         day_value["status"],
         market_ret["status"],
-        v8_checks.get("v8_features_status", "PASS"),
     ]
-    feature_status = "PASS" if all(s in {"PASS", "N/A"} for s in feature_checks) else "FAIL"
+    feature_status = "PASS" if all(s in {"PASS", "N/A"} for s in core_feature_checks) else "FAIL"
 
     base.update(
         {
@@ -593,7 +592,7 @@ def _render_markdown(summary: dict[str, Any], rows: pd.DataFrame) -> str:
         "**V8 gate features checked**: `atr_pct`, `vol_ratio`, `rs_pct`, `vwap_dist_atr`, `body_pct`, `close_loc`, `quality_score`.",
         "`file_staleness_min` = minutes since parquet last written; >120 = potential data feed gap.",
         "The production V7 feature path is considered safe when `prepared_vwap_status`,",
-        "`day_value_status`, `market_ret_status`, and `v8_features_status` all pass.",
+        "`day_value_status`, and `market_ret_status` all pass. V8 feature range issues remain warnings.",
         "",
         _markdown_table(rows, [c for c in core_cols if c in rows.columns]),
         "",

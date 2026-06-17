@@ -37,16 +37,34 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# This script lives in Train_and_Test/; the shared core modules (v11 backtester,
+# candidate_scan, final_setup_conf, bootstrap, …) stay in the repo root. Add the
+# root to sys.path so they import in place (no duplication, single source of truth).
+# Also add THIS folder so the sibling train_test_window module imports cleanly.
+import sys
+_HERE = Path(__file__).resolve().parent
+_REPO_ROOT = _HERE.parent
+for _p in (str(_REPO_ROOT), str(_HERE)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import avwap_5min_ID_v11_backtesting as v11
 import walkforward_gate as wfg
 from nse_intraday_costs import CostConfig
+from train_test_window import compute_windows
 
-TRAIN = ("2025-11-01", "2026-04-30")
-TEST = ("2026-05-01", "2026-06-10")
+# Dynamic default window (rolls forward from today): TEST = last 2 weeks,
+# TRAIN = the 3 months before TEST. Override per-run with --train_start/--train_end/
+# --test_start/--test_end.
+_WIN = compute_windows()
+TRAIN = _WIN["train"]
+TEST = _WIN["test"]
 POOL_DIR = Path(r"C:\TradingData\eqidv2\outputs_ID_v11_traintest_pool")
 POOL_DIRS = [POOL_DIR]
 PROPOSAL_DIR = Path(r"C:\TradingData\eqidv2\outputs_ID_v11_traintest_pool\proposals")
-FINAL_CONF_PATH = Path(__file__).with_name("final_setup_conf.py")
+# --approve writes the SHARED root final_setup_conf.py (NOT a copy in this folder),
+# so the conf stays the single source of truth for v11 backtest + v7 live.
+FINAL_CONF_PATH = _REPO_ROOT / "final_setup_conf.py"
 
 # Train PF target BAND. The search reaches PF >= TRAIN_PF_MIN with the MOST
 # trades possible (rather than maximising PF, which overfits to tiny subsets);
@@ -106,9 +124,20 @@ EXCLUDED = set(v11.EXCLUDED_SETUPS) | set(v11.ENTRY_SHADOW_SETUPS)
 # ---------------------------------------------------------------------------
 # Pool load + feature prep
 # ---------------------------------------------------------------------------
-def _family_setups(prefix: str) -> list[str]:
+def _family_setups(prefix: str, available: set[str] | None = None) -> list[str]:
+    # Derive the family from v6 exits + the conf book + whatever is actually in the
+    # pool, so tier123/new-setups (e.g. P_PDH_BREAK_RETEST_LONG) and any newly-mined
+    # setup present in the unified pool are tunable, not just v6.SETUP_EXIT_RULES.
+    universe = set(v11.v6.SETUP_EXIT_RULES)
+    try:
+        import final_setup_conf as _fc
+        universe |= set(_fc.FINAL_SETUP_CONF)
+    except Exception:
+        pass
+    if available:
+        universe |= {str(s) for s in available}
     return sorted(
-        s for s in v11.v6.SETUP_EXIT_RULES
+        s for s in universe
         if s.startswith(f"{prefix.upper()}_") and s not in EXCLUDED
     )
 
@@ -243,12 +272,32 @@ def apply_guards(df: pd.DataFrame, guard: dict | None) -> pd.DataFrame:
 
 
 def apply_mask_terms(df: pd.DataFrame, terms: list[tuple]) -> pd.DataFrame:
+    """AND-combined selected-strategy mask. Mirrors the canonical conf mask
+    (eqidv2_final_conf_live_bootstrap.conf_mask / v11 _final_setup_conf_mask):
+    a STRING threshold is categorical (e.g. ["regime","!=","BULL"]; a missing
+    column defaults to "" so != keeps all), a numeric threshold uses >=/<=/!=/==.
+    (The tuner only generates numeric >=/<= terms, so its search is unchanged;
+    this just lets us also evaluate hand-authored conf masks faithfully.)"""
     if df.empty or not terms:
         return df
     keep = pd.Series(True, index=df.index)
     for feat, op, thr in terms:
-        x = pd.to_numeric(df[feat], errors="coerce")
-        keep &= (x >= thr) if op == ">=" else (x <= thr)
+        if isinstance(thr, str):                       # categorical
+            col = (df[feat] if feat in df.columns
+                   else pd.Series("", index=df.index)).astype(str).str.upper()
+            vv = thr.upper()
+            keep &= col.ne(vv) if op == "!=" else col.eq(vv)
+        else:                                          # numeric
+            x = (pd.to_numeric(df[feat], errors="coerce") if feat in df.columns
+                 else pd.Series(np.nan, index=df.index))
+            if op == ">=":
+                keep &= (x >= thr)
+            elif op == "<=":
+                keep &= (x <= thr)
+            elif op == "!=":
+                keep &= (x != thr)
+            else:                                      # "=="
+                keep &= (x == thr)
     return df[keep.fillna(False)]
 
 
@@ -638,7 +687,7 @@ def accept_verdict(train: dict, test: dict) -> tuple[bool, str]:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
-    global POOL_DIR, POOL_DIRS, TRAIN, TEST, MAX_MASK_TERMS, MAX_PREMOM_TERMS, QUANTILES
+    global POOL_DIR, POOL_DIRS, PROPOSAL_DIR, TRAIN, TEST, MAX_MASK_TERMS, MAX_PREMOM_TERMS, QUANTILES
     global TRAIN_PF_MIN, TRAIN_PF_MAX, TRAIN_MIN_NET_PF, KEEP_MIN_TRAIN_PF
     global OBJECTIVE, FORCE_PREMOM, MIN_TRAIN_TRADES
     ap = argparse.ArgumentParser(description="Honest per-family train/test setup tuning")
@@ -671,8 +720,12 @@ def main() -> int:
     if args.pool_dir:
         POOL_DIRS = [Path(p.strip()) for p in str(args.pool_dir).split(",") if p.strip()]
         POOL_DIR = POOL_DIRS[0]
+        PROPOSAL_DIR = POOL_DIR / "proposals"   # keep proposals next to the pool that produced them
     TRAIN = (args.train_start or TRAIN[0], args.train_end or TRAIN[1])
     TEST = (args.test_start or TEST[0], args.test_end or TEST[1])
+    _pinned = any([args.train_start, args.train_end, args.test_start, args.test_end])
+    print(f"[train_test] window {'(PINNED via CLI)' if _pinned else '(dynamic: ' + _WIN['policy'] + ', today=' + _WIN['today'] + ')'}: "
+          f"TRAIN {TRAIN[0]}..{TRAIN[1]}  TEST {TEST[0]}..{TEST[1]}")
     MAX_MASK_TERMS = int(args.max_mask_terms)
     MAX_PREMOM_TERMS = int(args.max_premom_terms)
     if args.fine_quantiles:
@@ -680,7 +733,8 @@ def main() -> int:
     print(f"[train_test] search depth: max_mask_terms={MAX_MASK_TERMS} max_premom_terms={MAX_PREMOM_TERMS} "
           f"quantiles={'fine(9)' if args.fine_quantiles else 'coarse(5)'}")
     prefix = args.family.upper()
-    setups = _family_setups(prefix)
+    pool = load_pool()
+    setups = _family_setups(prefix, available=set(pool["setup"].astype(str)) if "setup" in pool.columns else None)
     if args.setups:
         want = {s.strip().upper() for s in args.setups.split(",") if s.strip()}
         setups = [s for s in setups if s in want] or sorted(want)
@@ -688,7 +742,6 @@ def main() -> int:
         raise SystemExit(f"[train_test] no setups for family {prefix!r}")
 
     print(f"[train_test] family {prefix}* setups: {setups}")
-    pool = load_pool()
     fam_pool = pool[pool["setup"].isin(setups)].copy()
     tr, te = split_train_test(fam_pool)
     print(f"[train_test] pool rows: train={len(tr)} test={len(te)} "

@@ -60,6 +60,11 @@ from qualification_tracker import (
     load_trades,
 )
 
+try:
+    import eqidv2_final_conf_live_bootstrap as _final_conf_boot
+except Exception:  # pragma: no cover - dashboard should still run if optional import fails
+    _final_conf_boot = None
+
 SESSION_NAME = "V7 Qualification"
 SESSION_SLUG = "v7_qualification"
 SESSION_ROOT = runtime_dir(SESSION_SLUG)
@@ -196,7 +201,7 @@ def _md_daily(daily: pd.DataFrame, tail: int = 25) -> list[str]:
 
 def _render_md(res: QualResult, *, day: str, cfg: QualConfig,
                start: date, start_src: str, attested_src: str,
-               accepted_rules: Path, promoted_n: int | None,
+               approval_source: str, promoted_n: int | None,
                trades_glob: str, skip_log: list) -> str:
     phase = _phase_for(res.verdict)
     lines = [
@@ -213,7 +218,7 @@ def _render_md(res: QualResult, *, day: str, cfg: QualConfig,
         f"- Window: {res.window_start} -> {res.window_end} "
         f"({res.days} trading days, {res.n} trades, {res.rate:.1f}/day)",
         f"- Cumulative net: **Rs {res.total_net:+,.0f}** | win rate: {res.win_rate:.1%}",
-        f"- accepted_rules (Q5 source): `{accepted_rules}` "
+        f"- Q5 approved setup source: `{approval_source}` "
         f"({promoted_n if promoted_n is not None else 'not loaded'} promoted setups)",
         f"- Paper trades: `{trades_glob}`",
         "",
@@ -295,10 +300,16 @@ def run(*, trades_glob: str, accepted_rules: Path, cfg: QualConfig,
     attested, attested_src = _resolve_attested(cli_attest)
     start, start_src = _resolve_start(cli_start, files)
 
-    # Q5 source: gate-authored accepted_rules.
+    # Q5 source: final_setup_conf when the live conf switch is ON, otherwise the
+    # legacy gate-authored accepted_rules.csv.
     promoted: set[str] | None = None
     promoted_n: int | None = None
-    if accepted_rules.exists():
+    approval_source = f"accepted_rules.csv: {accepted_rules}"
+    if _final_conf_boot is not None and _final_conf_boot.is_enabled():
+        promoted = set(str(s) for s in _final_conf_boot.conf_keys())
+        promoted_n = len(promoted)
+        approval_source = f"final_setup_conf.py ({_final_conf_boot.GATE_VERSION})"
+    elif accepted_rules.exists():
         acc = pd.read_csv(accepted_rules)
         key = "setup" if "setup" in acc.columns else acc.columns[0]
         promoted = set(acc[key].astype(str))
@@ -319,6 +330,7 @@ def run(*, trades_glob: str, accepted_rules: Path, cfg: QualConfig,
             "verdict": "IN PROGRESS", "headline": headline,
             "window_start": str(start), "window_start_source": start_src,
             "trades_glob": trades_glob, "generated_at_ist": _fmt_ts(_now_ist()),
+            "approval_source": approval_source,
         })
         _write_status("DONE", phase="NO_PAPER_TRADES", day=day,
                       window_start=str(start), report=str(LATEST_DIR / "latest_v7_qualification.md"))
@@ -353,7 +365,7 @@ def run(*, trades_glob: str, accepted_rules: Path, cfg: QualConfig,
                                   f"excluded from PF, inflate trade count"})
 
     md = _render_md(res, day=day, cfg=cfg, start=start, start_src=start_src,
-                    attested_src=attested_src, accepted_rules=accepted_rules,
+                    attested_src=attested_src, approval_source=approval_source,
                     promoted_n=promoted_n, trades_glob=trades_glob, skip_log=skip_log)
     summary = {
         "session": SESSION_NAME,
@@ -383,6 +395,7 @@ def run(*, trades_glob: str, accepted_rules: Path, cfg: QualConfig,
         "attested": attested,
         "attested_source": attested_src,
         "promoted_setup_count": promoted_n,
+        "approval_source": approval_source,
         "criteria": {k: {"pass": v[0], "detail": v[1]} for k, v in res.criteria.items()},
         "trades_glob": trades_glob,
         "accepted_rules": str(accepted_rules),

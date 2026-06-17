@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +62,64 @@ OPS_ENTRY_WINDOW_END_HHMM = __import__("os").environ.get(
 
 for _p in (RESEARCH_ROOT, OPS_DIR, LATEST_DIR, HEARTBEAT_DIR):
     _p.mkdir(parents=True, exist_ok=True)
+
+
+def _write_text_retry(path: Path, text: str, *, retries: int = 6, delay_sec: float = 0.25) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{attempt}")
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+            if attempt < retries - 1:
+                time.sleep(delay_sec * (attempt + 1))
+        except Exception:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+            raise
+    if last_exc is not None:
+        raise last_exc
+
+
+def _write_csv_retry(path: Path, frame: pd.DataFrame, *, retries: int = 6, delay_sec: float = 0.25) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{attempt}")
+        try:
+            frame.to_csv(tmp, index=False)
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+            if attempt < retries - 1:
+                time.sleep(delay_sec * (attempt + 1))
+        except Exception:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+            raise
+    if last_exc is not None:
+        raise last_exc
 
 
 def _now_ist() -> pd.Timestamp:
@@ -2148,22 +2208,23 @@ def run_light_ops(day: str) -> tuple[Path, Path]:
         "paper": paper_summary,
         "recommendations": recs,
     }
-    report_path.write_text(report_text, encoding="utf-8")
-    json_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
-    slot_rows.to_csv(slot_csv_path, index=False)
-    open_df.to_csv(open_csv_path, index=False)
-    pre_gap_rows.to_csv(pre_gap_csv_path, index=False)
-    flow_rows.to_csv(flow_detail_csv_path, index=False)
-    anti_chase_audit.to_csv(anti_chase_csv_path, index=False)
-    concentration_rows.to_csv(concentration_csv_path, index=False)
-    path_lab.to_csv(path_lab_csv_path, index=False)
-    (LATEST_DIR / "latest_live_ops_snapshot.md").write_text(report_text, encoding="utf-8")
-    (LATEST_DIR / "latest_live_ops_snapshot.json").write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
-    (LATEST_DIR / "latest_live_ops_slot_flow.csv").write_text(slot_rows.to_csv(index=False), encoding="utf-8")
-    (LATEST_DIR / "latest_live_ops_open_trade_progress.csv").write_text(open_df.to_csv(index=False), encoding="utf-8")
-    (LATEST_DIR / "latest_live_ops_pre_momentum_feature_gaps.csv").write_text(pre_gap_rows.to_csv(index=False), encoding="utf-8")
-    (LATEST_DIR / "latest_live_ops_latest_flow_detail.csv").write_text(flow_rows.to_csv(index=False), encoding="utf-8")
-    (LATEST_DIR / "latest_live_ops_anti_chase_shadow_audit.csv").write_text(anti_chase_audit.to_csv(index=False), encoding="utf-8")
-    (LATEST_DIR / "latest_live_ops_setup_concentration_shadow.csv").write_text(concentration_rows.to_csv(index=False), encoding="utf-8")
-    (LATEST_DIR / "latest_live_ops_path_quality_lab.csv").write_text(path_lab.to_csv(index=False), encoding="utf-8")
+    payload_text = json.dumps(payload, indent=2, sort_keys=True, default=str)
+    _write_text_retry(report_path, report_text)
+    _write_text_retry(json_path, payload_text)
+    _write_csv_retry(slot_csv_path, slot_rows)
+    _write_csv_retry(open_csv_path, open_df)
+    _write_csv_retry(pre_gap_csv_path, pre_gap_rows)
+    _write_csv_retry(flow_detail_csv_path, flow_rows)
+    _write_csv_retry(anti_chase_csv_path, anti_chase_audit)
+    _write_csv_retry(concentration_csv_path, concentration_rows)
+    _write_csv_retry(path_lab_csv_path, path_lab)
+    _write_text_retry(LATEST_DIR / "latest_live_ops_snapshot.md", report_text)
+    _write_text_retry(LATEST_DIR / "latest_live_ops_snapshot.json", payload_text)
+    _write_csv_retry(LATEST_DIR / "latest_live_ops_slot_flow.csv", slot_rows)
+    _write_csv_retry(LATEST_DIR / "latest_live_ops_open_trade_progress.csv", open_df)
+    _write_csv_retry(LATEST_DIR / "latest_live_ops_pre_momentum_feature_gaps.csv", pre_gap_rows)
+    _write_csv_retry(LATEST_DIR / "latest_live_ops_latest_flow_detail.csv", flow_rows)
+    _write_csv_retry(LATEST_DIR / "latest_live_ops_anti_chase_shadow_audit.csv", anti_chase_audit)
+    _write_csv_retry(LATEST_DIR / "latest_live_ops_setup_concentration_shadow.csv", concentration_rows)
+    _write_csv_retry(LATEST_DIR / "latest_live_ops_path_quality_lab.csv", path_lab)
     return report_path, json_path

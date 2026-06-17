@@ -34,6 +34,7 @@ import pytz
 
 import avwap_5min_ID_v6_backtesting as v6
 import eqidv2_v11_live_overlay as v11_live_overlay
+import eqidv2_final_conf_live_bootstrap as _conf_boot
 import eqidv2_eod_scheduler_for_5mins_data_live_minimal as scheduler
 import eqidv2_live_combined_analyser_csv_id_5min_v7_persistent as v7_persistent
 import eqidv2_live_signal_writer as signal_writer
@@ -262,6 +263,47 @@ PRE_ENTRY_MOMENTUM_SHADOW_SETUPS = {
     # A_MOD_BREAK_C1_HIGH removed 2026-06-09: new V11 gate (rs_pct/atr_pct/time)
     # replaces the old market_abs/vol_ratio blocker; slot ranking caps live exposure.
 }
+
+
+# --- final_setup_conf (16-setup book) runtime activation --------------------
+# When EQIDV2_USE_FINAL_SETUP_CONF is set, the conf becomes the single source of
+# truth for this engine: the per-setup pre-momentum gates and exit LEVELS are
+# replaced by the conf's, and any conf setup is un-shadowed. The exit MECHANISM
+# is untouched (the executor still places real market SL/target orders; this only
+# changes the SL/target *levels* written into the signal CSV). Default OFF.
+# _ensure_conf_engine() is idempotent and called once at the top of run_slot.
+_CONF_ENGINE_ACTIVE = False
+_CONF_ENGINE_BOOTSTRAPPED = False
+
+
+def _ensure_conf_engine() -> bool:
+    global _CONF_ENGINE_ACTIVE, _CONF_ENGINE_BOOTSTRAPPED
+    global PRE_ENTRY_MOMENTUM_SETUP_GATES, PRE_ENTRY_MOMENTUM_SHADOW_SETUPS
+    global PRE_ENTRY_MOMENTUM_GATES_ENABLED, PRE_ENTRY_MOMENTUM_MISSING_ACTION
+    if _CONF_ENGINE_BOOTSTRAPPED:
+        return _CONF_ENGINE_ACTIVE
+    _CONF_ENGINE_BOOTSTRAPPED = True
+    if not _conf_boot.is_enabled():
+        return False
+    ukeys = set(_conf_boot.conf_keys_upper())
+    PRE_ENTRY_MOMENTUM_SETUP_GATES = _conf_boot.pre_momentum_gates_from_conf()
+    PRE_ENTRY_MOMENTUM_SHADOW_SETUPS = {
+        s for s in PRE_ENTRY_MOMENTUM_SHADOW_SETUPS if _conf_boot._u(s) not in ukeys
+    }
+    PRE_ENTRY_MOMENTUM_GATES_ENABLED = True
+    PRE_ENTRY_MOMENTUM_MISSING_ACTION = "block"
+    # Per-setup SL/target LEVELS (executor reads stop_price/target_price from the
+    # signal CSV, which this engine builds from v6.SETUP_EXIT_RULES).
+    v6.SETUP_EXIT_RULES.update(_conf_boot.exit_rules_from_conf())
+    _CONF_ENGINE_ACTIVE = True
+    print(
+        f"[entry_engine] final_setup_conf ACTIVE ({_conf_boot.GATE_VERSION}): "
+        f"{len(_conf_boot.conf_keys())} setups; pre-momentum gates + exit levels from conf; "
+        f"un-shadowed conf setups; exit mechanism (market SL/target) unchanged.",
+        flush=True,
+    )
+    return True
+
 
 _indicator_1m_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
 _indicator_5m_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
@@ -996,6 +1038,55 @@ def _add_window_features(out: Dict[str, float], bars: pd.DataFrame, side: str, r
     )
 
 
+def _last_finite(series: pd.Series) -> float:
+    vals = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    return float(vals.iloc[-1]) if len(vals) else float("nan")
+
+
+def _calc_rsi_last(bars: pd.DataFrame, period: int = 14) -> float:
+    if "close" not in bars.columns or len(bars) < period + 1:
+        return float("nan")
+    close = pd.to_numeric(bars["close"], errors="coerce")
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    rsi = rsi.mask((avg_loss == 0.0) & (avg_gain > 0.0), 100.0)
+    rsi = rsi.mask((avg_loss == 0.0) & (avg_gain <= 0.0), 50.0)
+    return _last_finite(rsi)
+
+
+def _calc_adx_last(bars: pd.DataFrame, period: int = 14) -> float:
+    needed = {"high", "low", "close"}
+    if not needed.issubset(set(bars.columns)) or len(bars) < period + 2:
+        return float("nan")
+    high = pd.to_numeric(bars["high"], errors="coerce")
+    low = pd.to_numeric(bars["low"], errors="coerce")
+    close = pd.to_numeric(bars["close"], errors="coerce")
+
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=bars.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=bars.index)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean().replace(0.0, np.nan)
+    plus_di = 100.0 * plus_dm.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean() / atr
+    minus_di = 100.0 * minus_dm.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean() / atr
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, np.nan)
+    adx = dx.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    return _last_finite(adx)
+
+
 def _pre_entry_momentum_features(entry_row: Dict[str, Any], raw_by_ticker: Dict[str, pd.DataFrame]) -> Tuple[Dict[str, float], str]:
     ticker = str(entry_row.get("ticker", "")).upper().strip()
     side = str(entry_row.get("side", "")).upper().strip()
@@ -1059,10 +1150,14 @@ def _pre_entry_momentum_features(entry_row: Dict[str, Any], raw_by_ticker: Dict[
     adx = _safe_float(last.get("ADX"), float("nan"))
     if not np.isfinite(adx) and ind_last is not None:
         adx = _safe_float(ind_last.get("ADX"), float("nan"))
+    if not np.isfinite(adx):
+        adx = _calc_adx_last(bars)
     out["pre1_adx"] = adx
     rsi = _safe_float(last.get("RSI"), float("nan"))
     if not np.isfinite(rsi) and ind_last is not None:
         rsi = _safe_float(ind_last.get("RSI"), float("nan"))
+    if not np.isfinite(rsi):
+        rsi = _calc_rsi_last(bars)
     out["pre1_rsi_dir"] = float(rsi if side == "LONG" else 100.0 - rsi) if np.isfinite(rsi) else float("nan")
 
     mom_vals = [out.get("pre1_body_r"), out.get("pre3_mom_r"), out.get("pre5_mom_r")]
@@ -1238,7 +1333,7 @@ def _build_entry_rows(
                     continue
         exit_override = (
             v11_live_overlay.selected_exit_override(setup, V11_BACKTESTING_OVERLAY_PROFILE)
-            if V11_BACKTESTING_OVERLAY_ENABLE
+            if V11_BACKTESTING_OVERLAY_ENABLE and not _CONF_ENGINE_ACTIVE
             else None
         )
         if exit_override is not None:
@@ -1401,7 +1496,7 @@ def _entry_reject_audit(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Da
         reason = ""
         rule = (
             v11_live_overlay.exit_rule_for_setup(setup, v6.SETUP_EXIT_RULES, V11_BACKTESTING_OVERLAY_PROFILE)
-            if V11_BACKTESTING_OVERLAY_ENABLE
+            if V11_BACKTESTING_OVERLAY_ENABLE and not _CONF_ENGINE_ACTIVE
             else v6.SETUP_EXIT_RULES.get(setup)
         )
         if rule is None:
@@ -1435,9 +1530,13 @@ def _apply_v11_entry_overlay(entry_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.D
     }
     if entry_df is None or entry_df.empty:
         return pd.DataFrame(), pd.DataFrame(), stats
-    if not V11_BACKTESTING_OVERLAY_ENABLE:
+    if not V11_BACKTESTING_OVERLAY_ENABLE or _CONF_ENGINE_ACTIVE:
+        # Conf mode: the conf mask (scanner) + conf pre-momentum gate are the gate
+        # of record. The legacy tier123_balanced overlay must NOT re-filter conf
+        # entries (it rejected the 6 conf setups that overlap its universe, e.g.
+        # A_MOD_BREAK_C1_LOW, B_AVWAP_RECLAIM_REVERSAL). Pass entries through.
         out = entry_df.copy()
-        out["v11_live_entry_overlay_status"] = "DISABLED"
+        out["v11_live_entry_overlay_status"] = "CONF_BYPASS" if _CONF_ENGINE_ACTIVE else "DISABLED"
         return out, out.iloc[0:0].copy(), stats
 
     universe = v11_live_overlay.v11_override_setup_universe(V11_BACKTESTING_OVERLAY_PROFILE)
@@ -1748,6 +1847,7 @@ def _risk_based_qty(entry_price: float, sl_price: float) -> int:
 
 def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]:
     global _last_raw_fetch_stats
+    _ensure_conf_engine()
     slot = _ensure_ist_ts(slot_ts).floor("min")
     t0 = time.perf_counter()
     _touch_progress("SLOT_START", slot=slot, log_line=True)

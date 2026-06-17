@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,11 @@ import numpy as np
 import pandas as pd
 
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR, runtime_dir
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,7 +38,18 @@ V11_SCRIPT = BASE_DIR / "avwap_5min_ID_v11_backtesting.py"
 LIVE_CANDIDATE_JSON_DIR = runtime_dir("signal_discovery_v7_5mins_ID", "json")
 
 BACKTEST_PNL_COL = "v6_net_pnl_rs"
+PNL_COL_CANDIDATES = (
+    BACKTEST_PNL_COL,
+    "pnl_rs",
+    "net_pnl_rs",
+    "v7_net_pnl_rs",
+    "pnl",
+    "net_pnl",
+    "gross_pnl",
+)
 SLOT_MINUTES = 5  # 5-min bar size; signals are aligned to this grid
+_MISSING_TEXT = {"", "NAN", "NONE", "NULL", "NA", "NAT"}
+_TRUE_ENV = {"1", "true", "yes", "on", "enable", "enabled"}
 
 for _p in (OUT_ROOT, LATEST_DIR, REPORTS_DIR):
     _p.mkdir(parents=True, exist_ok=True)
@@ -56,6 +73,49 @@ def _safe_float(value: Any, default: float = np.nan) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _series_from_any(df: pd.DataFrame, names: tuple[str, ...], default: Any = "") -> pd.Series:
+    for name in names:
+        if name in df.columns:
+            return df[name]
+    return pd.Series(default, index=df.index)
+
+
+def _text_from_any(df: pd.DataFrame, names: tuple[str, ...]) -> pd.Series:
+    return _series_from_any(df, names, "").fillna("").astype(str).str.strip()
+
+
+def _pnl_series(df: pd.DataFrame, preferred: str | None = None) -> pd.Series:
+    names = ((preferred,) if preferred else tuple()) + tuple(c for c in PNL_COL_CANDIDATES if c != preferred)
+    return pd.to_numeric(_series_from_any(df, names, np.nan), errors="coerce").fillna(0.0)
+
+
+def _row_pnl(row: pd.Series) -> float:
+    for col in PNL_COL_CANDIDATES:
+        if col in row.index:
+            val = _safe_float(row.get(col), np.nan)
+            if np.isfinite(val):
+                return val
+    return float("nan")
+
+
+def _valid_text(value: Any) -> bool:
+    return str(value).strip().upper() not in _MISSING_TEXT
+
+
+def _drop_invalid_key_rows(df: pd.DataFrame, source: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+    required = ("_ticker", "_side", "_setup")
+    mask = pd.Series(True, index=df.index)
+    for col in required:
+        mask &= df[col].map(_valid_text) if col in df.columns else False
+    mask &= df.get("_ts_ist", pd.Series(pd.NaT, index=df.index)).notna()
+    dropped = int((~mask).sum())
+    if dropped:
+        print(f"[backtesting_result_v11] dropped {dropped} {source} rows with invalid match keys", flush=True)
+    return df.loc[mask].copy()
 
 
 def _profit_factor(pnl: pd.Series) -> float:
@@ -82,6 +142,15 @@ def _fmt_pf(value: Any) -> str:
 
 def _paper_path(day: str) -> Path:
     return LIVE_SIGNALS_DIR / f"paper_trades_{day}_id_5min_v7.csv"
+
+
+def _default_selected_strategy_profile() -> str:
+    profile = str(os.getenv("EQIDV2_V11_SELECTED_STRATEGY_PROFILE", "")).strip()
+    if profile:
+        return profile
+    if str(os.getenv("EQIDV2_USE_FINAL_SETUP_CONF", "")).strip().lower() in _TRUE_ENV:
+        return "final_setup_conf"
+    return "none"
 
 
 # ---------------------------------------------------------------------------
@@ -117,14 +186,15 @@ def _enrich_keys(df: pd.DataFrame, *, source: str) -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
-    out["_ticker"] = out.get("ticker", pd.Series("", dtype=str)).fillna("").astype(str).str.upper().str.strip()
-    out["_side"] = out.get("side", pd.Series("", dtype=str)).fillna("").astype(str).str.upper().str.strip()
-    out["_setup"] = out.get("setup", pd.Series("", dtype=str)).fillna("").astype(str).str.strip()
+    out["_ticker"] = _text_from_any(out, ("ticker", "symbol", "stock", "tradingsymbol")).str.upper()
+    out["_side"] = _text_from_any(out, ("side", "trade_side", "direction", "position_side")).str.upper()
+    out["_setup"] = _text_from_any(out, ("setup", "setup_name", "setup_id", "strategy", "rule_name"))
+    out["_pnl_rs"] = _pnl_series(out)
 
     if source == "v11":
-        ts_raw = out.get("signal_time_v8", out.get("signal_time_ist", pd.Series("", dtype=str)))
+        ts_raw = _series_from_any(out, ("signal_time_v8", "signal_time_ist", "entry_time", "entry_time_ist", "signal_ts"), "")
     else:
-        ts_raw = out.get("signal_entry_datetime_ist", out.get("signal_datetime", pd.Series("", dtype=str)))
+        ts_raw = _series_from_any(out, ("signal_entry_datetime_ist", "signal_datetime", "entry_time", "entry_time_ist", "signal_time_ist"), "")
     out["_ts_ist"] = ts_raw.map(_to_ist)
 
     out["_slot_key"] = [
@@ -135,7 +205,7 @@ def _enrich_keys(df: pd.DataFrame, *, source: str) -> pd.DataFrame:
         _exact_key(str(r["_ticker"]), str(r["_side"]), str(r["_setup"]), r["_ts_ist"])
         for _, r in out.iterrows()
     ]
-    return out
+    return _drop_invalid_key_rows(out, source)
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +266,7 @@ def _entry_price_gap(v11: pd.DataFrame, paper: pd.DataFrame, match: dict[str, An
             pr = pr.iloc[0]
         v11_entry = _safe_float(vr.get("entry_price_v6", vr.get("entry_price", np.nan)))
         paper_entry = _safe_float(pr.get("entry_price", np.nan))
-        v11_pnl = _safe_float(vr.get(BACKTEST_PNL_COL, vr.get("pnl_rs", np.nan)))
+        v11_pnl = _row_pnl(vr)
         paper_pnl = _safe_float(pr.get("pnl_rs", np.nan))
         entry_gap_pct = (
             100.0 * (v11_entry - paper_entry) / paper_entry
@@ -243,8 +313,8 @@ def _per_setup_parity(v11: pd.DataFrame, paper: pd.DataFrame) -> pd.DataFrame:
         matched_s = len(v11_keys_s & paper_keys_s)
         v11_n = len(v11_s)
         paper_n = len(paper_s)
-        paper_pnl = pd.to_numeric(paper_s.get("pnl_rs", pd.Series(dtype=float)), errors="coerce").fillna(0.0) if not paper_s.empty else pd.Series(dtype=float)
-        v11_pnl = pd.to_numeric(v11_s.get(BACKTEST_PNL_COL, pd.Series(dtype=float)), errors="coerce").fillna(0.0) if not v11_s.empty else pd.Series(dtype=float)
+        paper_pnl = _pnl_series(paper_s, "pnl_rs") if not paper_s.empty else pd.Series(dtype=float)
+        v11_pnl = _pnl_series(v11_s, BACKTEST_PNL_COL) if not v11_s.empty else pd.Series(dtype=float)
         rows.append(
             {
                 "setup": setup,
@@ -366,7 +436,7 @@ def _root_cause_v11_only(v11_only: pd.DataFrame, paper: pd.DataFrame, day: str) 
         side = str(row.get("_side", row.get("side", ""))).upper()
         setup = str(row.get("_setup", row.get("setup", "")))
         ts = row.get("_ts_ist", pd.NaT)
-        v11_pnl = _fmt_num(row.get(BACKTEST_PNL_COL, row.get("pnl_rs", np.nan)), 2)
+        v11_pnl = _fmt_num(_row_pnl(row), 2)
 
         if paper_day.empty:
             cause = "no_paper_file"
@@ -447,8 +517,10 @@ def _parity_verdict(score: float, matched: int, total_paper: int) -> str:
 # V11 runner
 # ---------------------------------------------------------------------------
 
-def _run_v11(day: str, mode: str, out_dir: Path) -> tuple[int, str]:
+def _run_v11(day: str, mode: str, out_dir: Path, selected_strategy_profile: str) -> tuple[int, str]:
     cmd = [str(PYTHON_EXE), "-u", str(V11_SCRIPT), "--out", str(out_dir)]
+    if selected_strategy_profile:
+        cmd += ["--selected_strategy_profile", str(selected_strategy_profile)]
     if mode == "live_parity":
         cmd += ["--mode", "live_parity", "--live_date", day,
                 "--live_candidate_json_dir", str(LIVE_CANDIDATE_JSON_DIR)]
@@ -472,9 +544,9 @@ def _live_json_exists_for_day(day: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _summary(df: pd.DataFrame, pnl_col: str) -> dict[str, Any]:
-    if df.empty or pnl_col not in df.columns:
+    if df.empty:
         return {"trades": 0, "wins": 0, "losses": 0, "net": 0.0, "pf": np.nan, "win_rate_pct": 0.0}
-    pnl = pd.to_numeric(df[pnl_col], errors="coerce").fillna(0.0)
+    pnl = _pnl_series(df, pnl_col)
     wins = int((pnl > 0).sum())
     losses = int((pnl < 0).sum())
     return {
@@ -491,9 +563,16 @@ def _summary(df: pd.DataFrame, pnl_col: str) -> dict[str, Any]:
 # Build report
 # ---------------------------------------------------------------------------
 
-def build_report(day: str, *, run_v11: bool = True) -> int:
+def build_report(
+    day: str,
+    *,
+    run_v11: bool = True,
+    selected_strategy_profile: str = "",
+    force_historical: bool = False,
+) -> int:
     out_dir = OUT_ROOT / day
     out_dir.mkdir(parents=True, exist_ok=True)
+    selected_strategy_profile = str(selected_strategy_profile or _default_selected_strategy_profile())
 
     # --- Run v11 backtester ---
     mode_used = "skipped"
@@ -502,19 +581,19 @@ def build_report(day: str, *, run_v11: bool = True) -> int:
 
     if run_v11:
         # Try live_parity first (uses actual live signals), fall back to historical
-        if _live_json_exists_for_day(day):
+        if _live_json_exists_for_day(day) and not force_historical:
             mode_used = "live_parity"
-            rc, log_text = _run_v11(day, "live_parity", out_dir)
+            rc, log_text = _run_v11(day, "live_parity", out_dir, selected_strategy_profile)
             if rc != 0:
                 (out_dir / "v11_live_parity_run.log").write_text(log_text, encoding="utf-8")
                 # fall back
                 mode_used = "historical_full_day_fallback"
-                rc2, log2 = _run_v11(day, "historical_full_day", out_dir)
+                rc2, log2 = _run_v11(day, "historical_full_day", out_dir, selected_strategy_profile)
                 log_text += f"\n\n--- FALLBACK historical_full_day (rc={rc2}) ---\n{log2}"
                 rc = rc2
         else:
             mode_used = "historical_full_day"
-            rc, log_text = _run_v11(day, "historical_full_day", out_dir)
+            rc, log_text = _run_v11(day, "historical_full_day", out_dir, selected_strategy_profile)
         (out_dir / "v11_run.log").write_text(log_text, encoding="utf-8")
 
     # --- Load outputs ---
@@ -530,14 +609,14 @@ def build_report(day: str, *, run_v11: bool = True) -> int:
             ~paper["outcome"].fillna("").astype(str).str.upper().str.startswith("ENTRY_SKIPPED")
         ].copy()
 
-    v11_summary = _summary(v11, BACKTEST_PNL_COL)
-    paper_summary = _summary(paper_executed, "pnl_rs")
-    paper_all_summary = _summary(paper, "pnl_rs")
-
     # --- Enrich keys ---
     v11 = _enrich_keys(v11, source="v11") if not v11.empty else v11
     paper = _enrich_keys(paper, source="paper") if not paper.empty else paper
     paper_executed = _enrich_keys(paper_executed, source="paper") if not paper_executed.empty else paper_executed
+
+    v11_summary = _summary(v11, BACKTEST_PNL_COL)
+    paper_summary = _summary(paper_executed, "pnl_rs")
+    paper_all_summary = _summary(paper, "pnl_rs")
 
     # --- Match analysis ---
     match = _match_sets(v11, paper_executed)
@@ -591,6 +670,7 @@ def build_report(day: str, *, run_v11: bool = True) -> int:
         f"| field | value |",
         f"|---|---|",
         f"| mode | `{mode_used}` |",
+        f"| selected strategy profile | `{selected_strategy_profile}` |",
         f"| mode note | {mode_note} |",
         f"| v11 exit code | {rc} |",
         f"| v11 output dir | `{out_dir}` |",
@@ -773,6 +853,7 @@ def build_report(day: str, *, run_v11: bool = True) -> int:
     json_payload = {
         "day": day,
         "mode_used": mode_used,
+        "selected_strategy_profile": selected_strategy_profile,
         "exit_code": rc,
         "parity_score_pct": parity_score,
         "verdict": verdict,
@@ -822,8 +903,18 @@ def main() -> int:
     ap.add_argument("--date", default=_default_day(), help="Trading date YYYY-MM-DD (default: today IST)")
     ap.add_argument("--no-run-v11", action="store_true", help="Skip running v11; only compare existing outputs")
     ap.add_argument("--force-historical", action="store_true", help="Force historical_full_day mode even if live JSON exists")
+    ap.add_argument(
+        "--selected-strategy-profile",
+        default=_default_selected_strategy_profile(),
+        help="Profile passed to avwap_5min_ID_v11_backtesting.py; defaults from EQIDV2_V11_SELECTED_STRATEGY_PROFILE, or final_setup_conf when EQIDV2_USE_FINAL_SETUP_CONF=1",
+    )
     args = ap.parse_args()
-    return build_report(str(args.date), run_v11=not args.no_run_v11)
+    return build_report(
+        str(args.date),
+        run_v11=not args.no_run_v11,
+        selected_strategy_profile=str(args.selected_strategy_profile),
+        force_historical=bool(args.force_historical),
+    )
 
 
 if __name__ == "__main__":

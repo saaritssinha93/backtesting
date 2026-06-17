@@ -13,6 +13,7 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
+set "EQIDV2_USE_FINAL_SETUP_CONF=1"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_PATH=%BASE_DIR%\v7_qualification_report.py"
 

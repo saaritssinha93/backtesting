@@ -62,6 +62,7 @@ import pandas as pd
 import pytz
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR, runtime_dir
 from nse_intraday_costs import CostConfig, intraday_equity_costs
+import eqidv2_risk_brake as rb
 
 try:
     from watchdog.observers import Observer
@@ -110,9 +111,15 @@ ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_PAPER_V7_ENTRY_LAG_MIN", "
 # Simulation
 POLL_INTERVAL_SEC = 5
 LIVE_PNL_LOG_INTERVAL_SEC = int(os.getenv("LIVE_PNL_LOG_INTERVAL_SEC", "5"))
+# P0-19 (paper mirrors live): when the final_setup_conf qualification is active
+# (EQIDV2_USE_FINAL_SETUP_CONF set), paper defaults flip to LIVE risk values so the
+# qualification run tests the same machine that will be switched on. With the flag
+# off, research paper keeps its broad-coverage defaults. Explicit env vars still win.
+_CONF_QUAL_MODE = str(os.getenv("EQIDV2_USE_FINAL_SETUP_CONF", "0")).strip().lower() in {"1", "true", "yes", "on"}
 # 0 or negative means unlimited worker threads (no executor-side cap).
 # V7 paper/research sessions need broad coverage across simultaneous setups.
-MAX_CONCURRENT_TRADES = int(os.getenv("EQIDV2_PAPER_V7_ID_5MIN_MAX_CONCURRENT_TRADES", "100"))
+MAX_CONCURRENT_TRADES = int(os.getenv(
+    "EQIDV2_PAPER_V7_ID_5MIN_MAX_CONCURRENT_TRADES", "20" if _CONF_QUAL_MODE else "100"))
 
 # ---------------------------------------------------------------------------
 # v8 research parity
@@ -476,13 +483,23 @@ PAPER_BLOCKED_SETUPS: frozenset = frozenset(
 ANTI_CHASE_LONG_CLOSE_LOC_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_CLOSE_LOC_MIN", "0.97"))
 ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN = float(os.getenv("EQIDV2_PAPER_V7_ANTI_CHASE_LONG_VWAP_DIST_ATR_MIN", "3.50"))
 B_AVWAP_RECLAIM_MIN_RANKER_SCORE = float(os.getenv("EQIDV2_PAPER_V7_B_AVWAP_MIN_RANKER_SCORE", "0.65"))
-DAILY_LOSS_BRAKE_ENABLED = str(os.getenv("EQIDV2_PAPER_V7_DAILY_LOSS_BRAKE_ENABLED", "0")).strip().lower() in {
+# P0-19: brake ON by default + Rs10k limit (= live) when conf qualification is active.
+DAILY_LOSS_BRAKE_ENABLED = str(os.getenv(
+    "EQIDV2_PAPER_V7_DAILY_LOSS_BRAKE_ENABLED", "1" if _CONF_QUAL_MODE else "0")).strip().lower() in {
     "1",
     "true",
     "yes",
     "on",
 }
-DAILY_LOSS_BRAKE_RS = abs(float(os.getenv("EQIDV2_PAPER_V7_DAILY_LOSS_BRAKE_RS", "7500")))
+DAILY_LOSS_BRAKE_RS = abs(float(os.getenv(
+    "EQIDV2_PAPER_V7_DAILY_LOSS_BRAKE_RS", "10000" if _CONF_QUAL_MODE else "7500")))
+# rev-2 P0-18: MTM-aware brake (realized + open MTM, + per-day throttle + per-setup
+# concurrency cap) via eqidv2_risk_brake. OBSERVE-mode logs the decision only (default
+# ON during the conf qualification) — no behavior change. ACT-mode (EQIDV2_BRAKE_MTM_ACT)
+# lets it actually block entries; flatten stays separately flag-gated in the module.
+_MTM_BRAKE_OBSERVE = str(os.getenv(
+    "EQIDV2_BRAKE_MTM_OBSERVE", "1" if _CONF_QUAL_MODE else "0")).strip().lower() in {"1", "true", "yes", "on"}
+_MTM_BRAKE_ACT = str(os.getenv("EQIDV2_BRAKE_MTM_ACT", "0")).strip().lower() in {"1", "true", "yes", "on"}
 C_OR_BREAKOUT_TIME_STOP_ENABLED = str(
     os.getenv("EQIDV2_PAPER_V7_C_OR_BREAKOUT_TIME_STOP_ENABLED", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
@@ -1035,6 +1052,8 @@ inflight_signals_lock = threading.Lock()
 executed_lock = threading.Lock()
 active_positions: Dict[str, dict] = {}  # signal_id -> open position state
 active_positions_lock = threading.Lock()
+opened_entry_ids: Set[str] = set()  # signal_ids that actually opened today; skips excluded
+opened_entry_ids_lock = threading.Lock()
 state_file_lock = threading.Lock()
 kill_switch_cache_lock = threading.Lock()
 kill_switch_cache_mtime: float = -1.0
@@ -1307,7 +1326,55 @@ def _research_paper_gate(signal: dict) -> Tuple[bool, str, str]:
     return False, "", ""
 
 
+def _mtm_brake_cfg() -> "rb.BrakeConfig":
+    return rb.BrakeConfig.from_env(
+        daily_default=DAILY_LOSS_BRAKE_RS if DAILY_LOSS_BRAKE_RS > 0 else 10000.0,
+        per_trade_default=5000.0,
+    )
+
+
+def _mtm_brake_eval(signal: dict) -> Tuple[bool, str]:
+    """rev-2 P0-18 MTM-aware brake. Returns (tripped, reason). In OBSERVE mode it
+    only logs; the caller acts only when ACT mode is on. Fail-open on any error so a
+    brake-eval bug can never block a paper trade."""
+    if not _MTM_BRAKE_OBSERVE and not _MTM_BRAKE_ACT:
+        return False, ""
+    try:
+        cfg = _mtm_brake_cfg()
+        with daily_pnl_lock:
+            realized = float(daily_pnl.get("total", 0.0))
+        entries_today = _opened_entries_today_count()
+        open_mtm = _unrealized_total_from_positions()
+        setup = str(signal.get("setup", "")).strip().upper()
+        with active_positions_lock:
+            setup_open = sum(
+                1 for p in active_positions.values()
+                if str(p.get("setup", "")).strip().upper() == setup
+            )
+        allowed, reason = rb.entry_allowed(realized, open_mtm, entries_today, setup, setup_open, cfg)
+        if not allowed:
+            mode = "ACT" if _MTM_BRAKE_ACT else "OBSERVE"
+            print(
+                f"[RISK.BRAKE.MTM][{mode}] would block {signal.get('side')} "
+                f"{signal.get('ticker')} {setup}: {reason} | "
+                f"realized={_fmt_rs_signed(realized)} open_mtm={_fmt_rs_signed(open_mtm)} "
+                f"day_total={_fmt_rs_signed(realized + open_mtm)}",
+                flush=True,
+            )
+            return True, reason
+        return False, ""
+    except Exception:
+        return False, ""
+
+
 def _daily_loss_brake_gate(signal: dict) -> Tuple[bool, str, str]:
+    # MTM-aware brake first (realized + open MTM, throttle, per-setup caps).
+    # OBSERVE logs only; ACT actually blocks. Independent of the realized-only
+    # brake below, which stays as the conservative fallback.
+    mtm_tripped, mtm_reason = _mtm_brake_eval(signal)
+    if mtm_tripped and _MTM_BRAKE_ACT:
+        return True, "ENTRY_SKIPPED_MTM_BRAKE", f"[RISK.BRAKE.MTM] {mtm_reason}"
+
     if not DAILY_LOSS_BRAKE_ENABLED or DAILY_LOSS_BRAKE_RS <= 0:
         return False, "", ""
     with daily_pnl_lock:
@@ -1678,6 +1745,25 @@ def _capital_snapshot() -> Tuple[int, float]:
 def _daily_snapshot() -> Dict[str, float]:
     with daily_pnl_lock:
         return dict(daily_pnl)
+
+
+def _opened_entries_today_count() -> int:
+    with opened_entry_ids_lock:
+        return len(opened_entry_ids)
+
+
+def _mark_entry_opened(signal_id: str) -> None:
+    sid = str(signal_id or "").strip()
+    if not sid:
+        return
+    with opened_entry_ids_lock:
+        opened_entry_ids.add(sid)
+
+
+def _replace_opened_entry_ids(signal_ids: Set[str]) -> None:
+    with opened_entry_ids_lock:
+        opened_entry_ids.clear()
+        opened_entry_ids.update(str(s).strip() for s in signal_ids if str(s).strip())
 
 
 def _live_pnl_line(use_ltp: bool) -> str:
@@ -2194,6 +2280,7 @@ def simulate_trade(
             "signal_id": signal_id,
             "ticker": ticker,
             "side": side,
+            "setup": str(signal.get("setup", "")).strip().upper(),  # P0-18: per-setup concurrency cap
             "quantity": quantity,
             "entry_price": float(entry_price),
             "stop_price": float(stop_price),
@@ -2202,6 +2289,7 @@ def simulate_trade(
             "last_ltp": _safe_float(signal.get("last_ltp", 0.0), 0.0),
             "restored": bool(resume_mode),
         }
+    _mark_entry_opened(signal_id)
     _persist_open_trades_state()
 
     if resume_mode:
@@ -2827,8 +2915,9 @@ def _sanitize_today_paper_trade_csv() -> Tuple[int, int]:
 def _load_closed_ids_and_realized_summary(
     paper_csv_path: str,
     today_date: date,
-) -> Tuple[Set[str], Dict[str, float]]:
+) -> Tuple[Set[str], Set[str], Dict[str, float]]:
     closed_ids: Set[str] = set()
+    opened_ids: Set[str] = set()
     realized_total = 0.0
     realized_trades = 0
     realized_wins = 0
@@ -2858,6 +2947,9 @@ def _load_closed_ids_and_realized_summary(
                     sid = str(row.get("signal_id", "")).strip()
                     if sid:
                         closed_ids.add(sid)
+                        outcome = str(row.get("outcome", "")).strip().upper()
+                        if not outcome.startswith("ENTRY_SKIPPED"):
+                            opened_ids.add(sid)
 
                     net_pnl_rs = _row_float_first(row, ("net_pnl_rs", "net_pnl", "pnl_rs"), 0.0)
                     gross_pnl_rs = _row_float_first(row, ("gross_pnl_rs", "gross_pnl", "pnl_rs"), net_pnl_rs)
@@ -2879,7 +2971,7 @@ def _load_closed_ids_and_realized_summary(
         except Exception as e:
             log.warning(f"[RESTORE] Could not parse paper trade CSV: {e}")
 
-    return closed_ids, {
+    return closed_ids, opened_ids, {
         "realized_total": float(realized_total),
         "realized_trades": float(realized_trades),
         "realized_wins": float(realized_wins),
@@ -2913,10 +3005,11 @@ def _restore_intraday_runtime_state(
         if sid:
             signals_by_id[sid] = sig
 
-    closed_ids, realized = _load_closed_ids_and_realized_summary(
+    closed_ids, opened_ids, realized = _load_closed_ids_and_realized_summary(
         paper_csv_path=paper_csv_path,
         today_date=today_date,
     )
+    _replace_opened_entry_ids(opened_ids)
 
     with daily_pnl_lock:
         daily_pnl["total"] = float(realized["realized_total"])
@@ -2991,6 +3084,7 @@ def _restore_intraday_runtime_state(
             "signal_id": sid,
             "ticker": ticker,
             "side": side,
+            "setup": str(row.get("setup") or base.get("setup", "")).strip().upper(),
             "quantity": qty,
             "entry_price": float(entry_exec),
             "stop_price": float(stop_price),
@@ -3060,6 +3154,7 @@ def _restore_intraday_runtime_state(
             "signal_id": sid,
             "ticker": ticker,
             "side": side,
+            "setup": str(sig.get("setup", "")).strip().upper(),
             "quantity": qty,
             "entry_price": float(entry_exec),
             "stop_price": float(stop_price),
@@ -3097,6 +3192,8 @@ def _restore_intraday_runtime_state(
     with active_positions_lock:
         active_positions.clear()
         active_positions.update(restored_positions)
+    with opened_entry_ids_lock:
+        opened_entry_ids.update(restored_positions.keys())
 
     with capital_lock:
         capital_deployed.clear()

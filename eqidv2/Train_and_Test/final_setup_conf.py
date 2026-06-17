@@ -1,3 +1,11 @@
+# ===========================================================================
+# MIRROR COPY — read-only reference. DO NOT EDIT HERE.
+#   Source of truth: <repo-root>/final_setup_conf.py  (written only by
+#   setup_train_test.py --approve). The tuner, train_test_conf.py, the v11
+#   backtest, and v7 live ALL import the ROOT file — edits to this copy are
+#   IGNORED (verified: import binds to root even with this file present).
+#   Refresh this mirror:  cp ../final_setup_conf.py Train_and_Test/
+# ===========================================================================
 """
 final_setup_conf.py — approved per-setup configurations (the gate of record).
 ===========================================================================
