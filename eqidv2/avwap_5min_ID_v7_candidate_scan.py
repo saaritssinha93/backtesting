@@ -518,6 +518,27 @@ def _scan_early_slot_candidates(
         "early_vwap_lose_break_prev_low",
         6.0,
     )
+    # S9_MIDDAY_LOSE (SHORT) — USER_DIRECTED promotion 2026-06-30 (research verdict break-even/REJECT;
+    # see final_setup_conf.py provenance + Train_and_Test/long_setup_discovery_from_raw_data/claude_engine/).
+    # Late-morning (10:20-11:00 IST) failed bounce that loses VWAP: prior bar at/above VWAP, this bar
+    # red and below VWAP, breaks prior bar low, after a positive 3-bar push, with ATR room (>=0.30%).
+    # Emitted only when the conf book is active (v2.ENABLE_S9_MIDDAY_LOSE, default OFF). Exit 1.25/2.50
+    # is set in final_setup_conf. Placed in the early-slot layer because its edge window (10:20-11:00)
+    # is before v2._scan_day's catalog (which only scans from ~11:00 onward).
+    _s9_c3 = _safe_float(day_df["close"].iloc[idx - 3]) if idx >= 3 else float("nan")
+    _s9_mom3 = (close / _s9_c3 - 1.0) * 100.0 if np.isfinite(_s9_c3) and _s9_c3 > 0 else 0.0
+    add(
+        "S9_MIDDAY_LOSE",
+        "SHORT",
+        bool(getattr(v2, "ENABLE_S9_MIDDAY_LOSE", False))
+        and _ensure_ist_ts(slot_ts).time() >= pd.Timestamp("10:20").time()
+        and below_vwap and close < open_px and close < prev_low
+        and prev_close >= 0.999 * vwap and _s9_mom3 >= 0.10
+        and np.isfinite(atr) and atr > 0 and (atr / close) >= 0.0030
+        and regime != "BULL",
+        "midday_vwap_lose_failed_bounce_short",
+        6.0,
+    )
     add(
         "E_GAP_HOLD_CONTINUATION_LONG",
         "LONG",

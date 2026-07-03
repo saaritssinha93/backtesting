@@ -1,0 +1,84 @@
+# RAW_DATA_LONG_EDGE_STUDY
+
+Label: TARGET means +0.75% was reached before -0.75% using 1-minute sequence. Same 1-minute target/SL ties are SL-first.
+This study is based on generated raw 5-minute trigger candidates across FIT/VAL/TRAIN/TEST sessions; search selection still used FIT/VAL first.
+
+## Base Rate By Family / Trigger
+| rule | family | candidates | P(+0.75 before -0.75) | median hold min | avg net Rs |
+|---|---|---:|---:|---:|---:|
+| LONG_OPENING_STRENGTH_CONTINUATION_slot7_vol1.4 | LONG_OPENING_STRENGTH_CONTINUATION | 55 | 16.4% | 12.0 | -471 |
+| LONG_OPENING_STRENGTH_CONTINUATION_slot7_vol1.1 | LONG_OPENING_STRENGTH_CONTINUATION | 70 | 15.7% | 13.0 | -490 |
+| LONG_FAILED_BREAKDOWN_REVERSAL_wick0.4_cl0.68 | LONG_FAILED_BREAKDOWN_REVERSAL | 64 | 15.6% | 15.0 | -368 |
+| LONG_FAILED_BREAKDOWN_REVERSAL_wick0.4_cl0.58 | LONG_FAILED_BREAKDOWN_REVERSAL | 68 | 14.7% | 15.0 | -368 |
+| LONG_PRESSURE_BURST_BREAKOUT_vol1.6_body0.28 | LONG_PRESSURE_BURST_BREAKOUT | 1,033 | 12.3% | 15.0 | -415 |
+| LONG_PRESSURE_BURST_BREAKOUT_vol1.35_body0.28 | LONG_PRESSURE_BURST_BREAKOUT | 1,188 | 11.9% | 15.0 | -421 |
+| LONG_PRESSURE_BURST_BREAKOUT_vol1.15_body0.28 | LONG_PRESSURE_BURST_BREAKOUT | 1,349 | 11.9% | 15.0 | -422 |
+| LONG_PRESSURE_BURST_BREAKOUT_vol1.6_body0.18 | LONG_PRESSURE_BURST_BREAKOUT | 1,297 | 10.8% | 15.0 | -412 |
+| LONG_FAILED_BREAKDOWN_REVERSAL_wick0.25_cl0.68 | LONG_FAILED_BREAKDOWN_REVERSAL | 181 | 10.5% | 15.0 | -393 |
+| LONG_PRESSURE_BURST_BREAKOUT_vol1.35_body0.18 | LONG_PRESSURE_BURST_BREAKOUT | 1,522 | 10.3% | 15.0 | -418 |
+| LONG_PRESSURE_BURST_BREAKOUT_vol1.15_body0.18 | LONG_PRESSURE_BURST_BREAKOUT | 1,765 | 10.3% | 15.0 | -416 |
+| LONG_RANGE_EXPANSION_AFTER_COMPRESSION_comp0.65_vol1 | LONG_RANGE_EXPANSION_AFTER_COMPRESSION | 167 | 10.2% | 15.0 | -438 |
+| LONG_FAILED_BREAKDOWN_REVERSAL_wick0.25_cl0.58 | LONG_FAILED_BREAKDOWN_REVERSAL | 193 | 9.8% | 15.0 | -391 |
+| LONG_VOLUME_EXPANSION_BREAKOUT_vol2_h5 | LONG_VOLUME_EXPANSION_BREAKOUT | 11,642 | 9.6% | 15.0 | -398 |
+| LONG_RANGE_EXPANSION_AFTER_COMPRESSION_comp0.65_vol1.25 | LONG_RANGE_EXPANSION_AFTER_COMPRESSION | 146 | 9.6% | 15.0 | -442 |
+| LONG_RANGE_EXPANSION_AFTER_COMPRESSION_comp0.8_vol1.25 | LONG_RANGE_EXPANSION_AFTER_COMPRESSION | 376 | 9.3% | 15.0 | -400 |
+| LONG_PULLBACK_CONTINUATION_pullm0.08_vol1.05 | LONG_PULLBACK_CONTINUATION | 6,354 | 9.3% | 15.0 | -397 |
+| LONG_VOLUME_EXPANSION_BREAKOUT_vol2_h3 | LONG_VOLUME_EXPANSION_BREAKOUT | 12,724 | 9.3% | 15.0 | -401 |
+| LONG_VOLUME_EXPANSION_BREAKOUT_vol1.5_h5 | LONG_VOLUME_EXPANSION_BREAKOUT | 14,551 | 9.1% | 15.0 | -399 |
+| LONG_PULLBACK_CONTINUATION_pullm0.08_vol0.85 | LONG_PULLBACK_CONTINUATION | 7,547 | 9.0% | 15.0 | -398 |
+| LONG_RANGE_EXPANSION_AFTER_COMPRESSION_comp0.8_vol1 | LONG_RANGE_EXPANSION_AFTER_COMPRESSION | 439 | 8.9% | 15.0 | -403 |
+| LONG_VOLUME_EXPANSION_BREAKOUT_vol1.5_h3 | LONG_VOLUME_EXPANSION_BREAKOUT | 16,116 | 8.8% | 15.0 | -402 |
+| LONG_EMA_VWAP_TREND_CONTINUATION_slope0.04_adx16 | LONG_EMA_VWAP_TREND_CONTINUATION | 31,291 | 8.7% | 15.0 | -396 |
+| LONG_EMA_VWAP_TREND_CONTINUATION_slope0.04_adx10 | LONG_EMA_VWAP_TREND_CONTINUATION | 34,542 | 8.6% | 15.0 | -397 |
+| LONG_CONSOLIDATION_EXPANSION_BREAKOUT_comp0.72_exp1.45 | LONG_CONSOLIDATION_EXPANSION_BREAKOUT | 8,823 | 8.5% | 15.0 | -404 |
+| LONG_CONSOLIDATION_EXPANSION_BREAKOUT_comp0.72_exp1.2 | LONG_CONSOLIDATION_EXPANSION_BREAKOUT | 10,953 | 8.2% | 15.0 | -406 |
+| LONG_EMA_VWAP_TREND_CONTINUATION_slope0_adx16 | LONG_EMA_VWAP_TREND_CONTINUATION | 36,978 | 8.1% | 15.0 | -399 |
+| LONG_CONSOLIDATION_EXPANSION_BREAKOUT_comp0.85_exp1.45 | LONG_CONSOLIDATION_EXPANSION_BREAKOUT | 15,626 | 8.1% | 15.0 | -403 |
+| LONG_VWAP_RECLAIM_MOMENTUM_vol1.5_cl0.62 | LONG_VWAP_RECLAIM_MOMENTUM | 12,030 | 8.0% | 15.0 | -407 |
+| LONG_EMA_VWAP_TREND_CONTINUATION_slope0_adx10 | LONG_EMA_VWAP_TREND_CONTINUATION | 42,074 | 7.9% | 15.0 | -399 |
+| LONG_CONSOLIDATION_EXPANSION_BREAKOUT_comp0.85_exp1.2 | LONG_CONSOLIDATION_EXPANSION_BREAKOUT | 19,155 | 7.8% | 15.0 | -403 |
+| LONG_VWAP_RECLAIM_MOMENTUM_vol1.5_cl0.72 | LONG_VWAP_RECLAIM_MOMENTUM | 10,638 | 7.8% | 15.0 | -412 |
+| LONG_VWAP_RECLAIM_MOMENTUM_vol1.25_cl0.62 | LONG_VWAP_RECLAIM_MOMENTUM | 14,134 | 7.8% | 15.0 | -406 |
+| LONG_VWAP_RECLAIM_MOMENTUM_vol1.1_cl0.62 | LONG_VWAP_RECLAIM_MOMENTUM | 15,713 | 7.6% | 15.0 | -406 |
+| LONG_VWAP_RECLAIM_MOMENTUM_vol1.25_cl0.72 | LONG_VWAP_RECLAIM_MOMENTUM | 12,508 | 7.6% | 15.0 | -410 |
+| LONG_PULLBACK_CONTINUATION_pull0.0_vol1.05 | LONG_PULLBACK_CONTINUATION | 14,536 | 7.6% | 15.0 | -400 |
+| LONG_VWAP_RECLAIM_MOMENTUM_vol1.1_cl0.72 | LONG_VWAP_RECLAIM_MOMENTUM | 13,942 | 7.5% | 15.0 | -410 |
+| LONG_PULLBACK_CONTINUATION_pull0.0_vol0.85 | LONG_PULLBACK_CONTINUATION | 17,349 | 7.3% | 15.0 | -400 |
+| LONG_MIDDAY_RECLAIM_CONTINUATION_s15_36_vol1.15 | LONG_MIDDAY_RECLAIM_CONTINUATION | 9,139 | 6.8% | 15.0 | -410 |
+| LONG_MIDDAY_RECLAIM_CONTINUATION_s15_36_vol0.9 | LONG_MIDDAY_RECLAIM_CONTINUATION | 11,545 | 6.6% | 15.0 | -409 |
+| LONG_MIDDAY_RECLAIM_CONTINUATION_s20_48_vol1.15 | LONG_MIDDAY_RECLAIM_CONTINUATION | 13,701 | 6.0% | 15.0 | -408 |
+| LONG_MIDDAY_RECLAIM_CONTINUATION_s20_48_vol0.9 | LONG_MIDDAY_RECLAIM_CONTINUATION | 17,059 | 5.6% | 15.0 | -408 |
+
+## Winner Vs Loser Feature Patterns (+0.75% anchor)
+| feature | winners median | losers median | interpretation |
+|---|---:|---:|---|
+| vol_ratio | 2.617 | 2.256 | higher in winners |
+| atr_pct | 0.3757 | 0.2788 | higher in winners |
+| green_body_pct | 0.549 | 0.3597 | higher in winners |
+| close_loc | 0.8889 | 0.902 | lower in winners |
+| upper_wick_pct | 0.07286 | 0.04289 | higher in winners |
+| lower_wick_pct | 0.03557 | 0.02795 | higher in winners |
+| rsi | 63.95 | 61.46 | higher in winners |
+| rsi_delta | 8.121 | 7.184 | higher in winners |
+| macd_delta | 0.2302 | 0.1603 | higher in winners |
+| ema20_slope_pct | 0.1066 | 0.06598 | higher in winners |
+| vwap_dist_pct | 0.6341 | 0.4511 | higher in winners |
+| range_expansion | 1.983 | 1.789 | higher in winners |
+| compression | 0.8426 | 0.8534 | lower in winners |
+| slot | 30 | 35 | lower in winners |
+
+## Time Slots
+| slot hour | candidates | target-first rate | avg net Rs |
+|---|---:|---:|---:|
+| 09:xx | 20,128 | 13.3% | -460 |
+| 10:xx | 75,427 | 11.1% | -399 |
+| 11:xx | 99,369 | 7.2% | -416 |
+| 12:xx | 88,190 | 7.3% | -400 |
+| 13:xx | 73,792 | 6.7% | -383 |
+| 14:xx | 83,677 | 6.9% | -395 |
+
+## Failure / Overextension Patterns
+
+- Losers had median upper_wick_pct 0.043 and median green_streak_3 1.0.
+- Median loser VWAP distance was 0.451%; tight stops suffer when entry is too extended from VWAP/EMA.
+- Best raw base-rate families were retained for FIT/VAL search; weak families are still documented in the iteration log.

@@ -74,6 +74,31 @@ CLOSE_LOC_LONG_MIN = 0.60
 CLOSE_LOC_SHORT_MAX = 0.40
 BODY_PCT_MIN = 0.45
 
+# --- S9_MIDDAY_LOSE (SHORT) detector toggle -------------------------------------
+# USER_DIRECTED promotion 2026-06-30 (research verdict was break-even/REJECT: 3-month
+# PF ~1.00 @5bps, loses in OOS April and at 15 bps; see final_setup_conf.py provenance
+# and Train_and_Test/long_setup_discovery_from_raw_data/claude_engine/). The detector is
+# EMITTED ONLY when the final_setup_conf book is active (env EQIDV2_USE_FINAL_SETUP_CONF
+# truthy, OR a conf-mode backtest sets v2.ENABLE_S9_MIDDAY_LOSE=True). Default production
+# scans are therefore byte-for-byte unchanged.
+ENABLE_S9_MIDDAY_LOSE = str(os.getenv("EQIDV2_USE_FINAL_SETUP_CONF", "0")).strip().lower() in {"1", "true", "yes", "on"}
+
+# --- DOC5D_AVWAP_RECLAIM_LONG (LONG) detector toggle ---------------------------
+# USER_DIRECTED promotion 2026-07-01 (research verdict REJECT: even after a full
+# detector reinvention over the ~1.3k-name universe @5bps, no config met the goal;
+# the PARITY-EXACT live version (this v2-catalog layer, min_slot 11:00) is a LOSER:
+# 25 trades / PF 0.748 / -Rs2,839 / TRAIN 0.94 (out of band) / TEST 0.36. See
+# final_setup_conf.py provenance + Train_and_Test/setup_pf_1_4_approval_loop/
+# DOC5D_AVWAP_RECLAIM_LONG/ (REINVENTION_RESULTS.md). Emitted ONLY when the conf book
+# is active (same gating as S9), with a standalone kill-switch. Default production
+# scans are byte-for-byte unchanged. Only the >=11:00 (v2-catalog) window is wired,
+# so live == backtest exactly (the pre-11:00 early-slot layer is intentionally NOT
+# wired — its volume/ATR math differs from the research pool).
+ENABLE_DOC5D_AVWAP_RECLAIM = (
+    str(os.getenv("EQIDV2_USE_FINAL_SETUP_CONF", "0")).strip().lower() in {"1", "true", "yes", "on"}
+    and str(os.getenv("EQIDV2_DISABLE_DOC5D_AVWAP_RECLAIM", "0")).strip().lower() not in {"1", "true", "yes", "on"}
+)
+
 MOMENTUM_TARGET_PCT = 0.80
 MOMENTUM_SL_PCT = 0.78
 REVERSAL_TARGET_PCT = 0.80
@@ -699,6 +724,40 @@ def _scan_day(day_df: pd.DataFrame, ticker: str, market_ctx: dict[str, dict]) ->
             "reclaim_session_vwap_from_below",
             min_qs=6.0,
         )
+        # DOC5D_AVWAP_RECLAIM_LONG (LONG) — USER_DIRECTED promotion 2026-07-01 (research
+        # verdict REJECT; see final_setup_conf.py provenance). Reinvented "confirmed VWAP
+        # reclaim" (vB rule pack): a fresh reclaim from below that HELD intrabar, closed
+        # strong with a real body above a rising EMA20 & VWAP, on volume, as a leader, near
+        # value (vwap_dist<=1.2), non-climax, non-BEAR. The conf then applies the mask
+        # vwap_dist_atr>=1.028 + exit 0.6/2.0 + guard min_slot 11:00/top_n2. Flag-gated
+        # (ENABLE_DOC5D_AVWAP_RECLAIM); only the >=11:00 window is parity-exact vs research.
+        _d5_low = float(row["low"])
+        _d5_vwap5 = float(df["VWAP"].iloc[i - 5]) if i >= 5 else float("nan")
+        _d5_slope_ok = (
+            np.isfinite(_d5_vwap5) and np.isfinite(atr) and atr > 0
+            and (vwap - _d5_vwap5) / atr >= 0.0
+        )
+        _d5_body = float(row.get("body_pct", np.nan))
+        _d5_vwap_dist = float(row.get("vwap_dist_atr", np.nan))
+        _d5_minute = ts.hour * 60 + ts.minute
+        add_catalog(
+            "DOC5D_AVWAP_RECLAIM_LONG",
+            "LONG",
+            ENABLE_DOC5D_AVWAP_RECLAIM
+            and np.isfinite(prev_vwap) and prev_close <= prev_vwap and above_vwap
+            and close > prev_close
+            and close > open_ and close_loc >= 0.62
+            and np.isfinite(_d5_body) and _d5_body >= 0.35
+            and np.isfinite(atr) and atr > 0 and _d5_low >= vwap - 0.45 * atr
+            and vol_ratio >= 1.35 and rs_pct > 0.05
+            and np.isfinite(ema20) and close > ema20
+            and np.isfinite(_d5_vwap_dist) and _d5_vwap_dist <= 1.2
+            and _d5_slope_ok
+            and np.isfinite(rng) and rng <= 2.3 * atr
+            and market_ret >= -0.30 and regime != "BEAR"
+            and 585 <= _d5_minute <= 780,
+            "reinvented_confirmed_vwap_reclaim_long_vB",
+        )
         add_catalog(
             "D_AVWAP_LOSE_REVERSAL",
             "SHORT",
@@ -735,6 +794,10 @@ def _scan_day(day_df: pd.DataFrame, ticker: str, market_ctx: dict[str, dict]) ->
             and rs_pct < 0.10 and vol_ratio >= 1.5 and regime != "BULL",
             "opening_range_breakdown",
         )
+        # S9_MIDDAY_LOSE (SHORT) — USER_DIRECTED promotion (research verdict break-even/REJECT).
+        # Its edge window (10:20-11:00 IST) is inside THIS catalog scan's warmup region (the loop
+        # starts at VWAP_LOOKBACK=20 bars ~= 11:00), so it is detected in the EARLY-SLOT layer:
+        # avwap_5min_ID_v7_candidate_scan._scan_early_slot_candidates (gated by ENABLE_S9_MIDDAY_LOSE).
         add_catalog(
             "D_EMA20_BOUNCE",
             "LONG",

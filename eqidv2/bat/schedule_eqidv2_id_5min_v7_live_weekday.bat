@@ -10,10 +10,10 @@ set "TASK_ENTRY_ENGINE=EQIDV2_entry_engine_1min_v5_ID"
 set "TASK_PAPER=EQIDV2_paper_trade_id_5min_v7_0900"
 set "TASK_LIVE=EQIDV2_live_trade_id_5min_v7_0900"
 
-set "BAT_SIGNAL_DISCOVERY=%BAT_DIR%\run_eqidv2_signal_discovery_v7_5min_id_persistent.bat"
-set "BAT_ENTRY_ENGINE=%BAT_DIR%\run_eqidv2_entry_engine_1min_v5_id.bat"
-set "BAT_PAPER=%BAT_DIR%\run_avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7.bat"
-set "BAT_LIVE=%BAT_DIR%\run_avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.bat"
+set "BAT_SIGNAL_DISCOVERY=%BAT_DIR%\run_conf_paper_signal_discovery.bat"
+set "BAT_ENTRY_ENGINE=%BAT_DIR%\run_conf_paper_entry_engine.bat"
+set "BAT_PAPER=%BAT_DIR%\run_conf_paper_executor.bat"
+set "BAT_LIVE=%BAT_DIR%\run_conf_live_executor.bat"
 
 if not exist "%TASK_HARDENER%" (
   echo [ERROR] Missing PowerShell helper: %TASK_HARDENER%

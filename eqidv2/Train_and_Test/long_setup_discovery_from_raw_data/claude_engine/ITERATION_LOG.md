@@ -1,0 +1,918 @@
+# ITERATION_LOG — fast-momentum LONG discovery (staged FIT/VAL search)
+
+Greedy coordinate search per family; ONE logical group changed per step; kept iff it raised the FIT/VAL band score = min(PF_fit,PF_val) − 0.5·|PF_fit−PF_val| (PF clamped to 2.0, each fold ≥25 trades). 858 trials logged. Cost 5 bps/leg.
+FIT 2026-04-30..2026-05-21 | VAL 2026-05-22..2026-06-12 | TRAIN 2026-04-30..2026-06-12 | TEST 2026-06-15..2026-06-29
+
+
+## F1_VWAP_RECLAIM — LONG VWAP Reclaim Momentum
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n1682/PF0.505/win39.06 VAL n1551/PF0.453/win36.62 score=0.427 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n2832/PF0.395/win41.91 VAL n2505/PF0.391/win41.6 score=0.389 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | KEEP | FIT n2194/PF0.45/win40.57 VAL n2060/PF0.439/win40.1 score=0.4335 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n1436/PF0.585/win34.96 VAL n1350/PF0.5/win32.0 score=0.4575 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | KEEP | FIT n2241/PF0.47/win33.33 VAL n1985/PF0.464/win33.5 score=0.461 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n2598/PF0.441/win34.37 VAL n2492/PF0.375/win31.34 score=0.342 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n2181/PF0.47/win35.95 VAL n2093/PF0.435/win34.5 score=0.4175 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n2135/PF0.365/win25.48 VAL n1859/PF0.339/win25.28 score=0.326 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n2479/PF0.353/win26.22 VAL n2320/PF0.328/win25.39 score=0.3155 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n2241/PF0.47/win33.33 VAL n1985/PF0.464/win33.5 score=0.461 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | reject | FIT n1098/PF0.501/win37.43 VAL n932/PF0.464/win36.48 score=0.4455 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | KEEP | FIT n1182/PF0.517/win38.24 VAL n1023/PF0.492/win37.54 score=0.4795 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n1304/PF0.524/win38.57 VAL n1131/PF0.463/win36.07 score=0.4325 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n1416/PF0.538/win39.05 VAL n1258/PF0.469/win36.25 score=0.4345 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n1182/PF0.517/win38.24 VAL n1023/PF0.492/win37.54 score=0.4795 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | KEEP | FIT n1254/PF0.521/win38.44 VAL n1090/PF0.515/win38.44 score=0.512 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | KEEP | FIT n1343/PF0.54/win39.31 VAL n1177/PF0.573/win40.95 score=0.5235 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n1331/PF0.511/win38.02 VAL n1256/PF0.511/win38.22 score=0.511 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | reject | FIT n1256/PF0.51/win37.98 VAL n1202/PF0.542/win39.52 score=0.494 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n1343/PF0.54/win39.31 VAL n1177/PF0.573/win40.95 score=0.5235 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n1301/PF0.545/win39.51 VAL n1115/PF0.493/win37.22 score=0.467 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n1254/PF0.539/win39.39 VAL n1132/PF0.508/win37.9 score=0.4925 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n1272/PF0.533/win39.15 VAL n1163/PF0.521/win38.52 score=0.515 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n1215/PF0.494/win37.37 VAL n1148/PF0.538/win39.37 score=0.472 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n1183/PF0.559/win40.07 VAL n1104/PF0.503/win37.86 score=0.475 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n1343/PF0.54/win39.31 VAL n1177/PF0.573/win40.95 score=0.5235 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n1342/PF0.538/win39.27 VAL n1157/PF0.518/win38.55 score=0.508 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | KEEP | FIT n1282/PF0.531/win38.85 VAL n1128/PF0.528/win39.01 score=0.5265 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n1303/PF0.511/win38.07 VAL n1140/PF0.531/win39.12 score=0.501 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n1282/PF0.531/win38.85 VAL n1128/PF0.528/win39.01 score=0.5265 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n1276/PF0.542/win39.58 VAL n1135/PF0.502/win37.62 score=0.482 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n1306/PF0.551/win39.66 VAL n1132/PF0.529/win39.05 score=0.518 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n1282/PF0.531/win38.85 VAL n1128/PF0.528/win39.01 score=0.5265 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n364/PF0.493/win37.36 VAL n365/PF0.566/win41.1 score=0.4565 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | KEEP | FIT n696/PF0.578/win40.95 VAL n688/PF0.552/win40.26 score=0.539 | next=adopt | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | KEEP | FIT n984/PF0.566/win40.35 VAL n953/PF0.556/win40.29 score=0.551 | next=adopt | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n984/PF0.566/win40.35 VAL n953/PF0.556/win40.29 score=0.551 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | KEEP | FIT n934/PF0.561/win40.15 VAL n915/PF0.563/win40.55 score=0.56 | next=adopt | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n976/PF0.573/win40.68 VAL n952/PF0.556/win40.23 score=0.5475 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_050_075 -> b_075_075 | reject | FIT n880/PF0.615/win49.66 VAL n847/PF0.576/win48.05 score=0.5565 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_050_075 -> b_050_050 | reject | FIT n948/PF0.456/win49.47 VAL n950/PF0.443/win48.84 score=0.4365 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_050_075 -> b_060_060 | reject | FIT n929/PF0.525/win49.41 VAL n911/PF0.494/win47.86 score=0.4785 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_050_075 -> b_075_100 | KEEP | FIT n802/PF0.695/win44.01 VAL n781/PF0.635/win41.74 score=0.605 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_050_075 -> b_050_075 | reject | FIT n934/PF0.561/win40.15 VAL n915/PF0.563/win40.55 score=0.56 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_050_075 -> v_t12 | reject | FIT n913/PF0.573/win44.69 VAL n897/PF0.545/win42.25 score=0.531 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_050_075 -> v_t18 | reject | FIT n887/PF0.582/win45.89 VAL n857/PF0.572/win46.09 score=0.567 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_050_075 -> v_be04 | reject | FIT n916/PF0.408/win29.15 VAL n907/PF0.4/win28.89 score=0.396 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_050_075 -> v_be04_t18 | reject | FIT n919/PF0.403/win28.94 VAL n911/PF0.392/win29.31 score=0.3865 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 690 -> None | reject | FIT n1260/PF0.68/win42.3 VAL n1160/PF0.608/win40.0 score=0.572 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 660 | reject | FIT n702/PF0.675/win43.3 VAL n683/PF0.62/win41.14 score=0.5925 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 690 | reject | FIT n802/PF0.695/win44.01 VAL n781/PF0.635/win41.74 score=0.605 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 720 | reject | FIT n882/PF0.692/win43.99 VAL n876/PF0.611/win40.87 score=0.5705 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 750 | reject | FIT n950/PF0.681/win43.47 VAL n931/PF0.605/win40.39 score=0.567 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> None | reject | FIT n802/PF0.688/win43.52 VAL n796/PF0.624/win41.08 score=0.592 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> 0.25 | reject | FIT n806/PF0.695/win43.8 VAL n792/PF0.593/win40.28 score=0.542 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> 0.3 | reject | FIT n802/PF0.695/win44.01 VAL n781/PF0.635/win41.74 score=0.605 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> 0.35 | reject | FIT n791/PF0.694/win44.12 VAL n763/PF0.628/win41.28 score=0.595 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> 0.45 | reject | FIT n646/PF0.69/win44.12 VAL n665/PF0.631/win41.35 score=0.6015 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n802/PF0.695/win44.01 VAL n781/PF0.635/win41.74 score=0.605 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | KEEP | FIT n797/PF0.691/win43.79 VAL n787/PF0.652/win42.31 score=0.6325 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | KEEP | FIT n779/PF0.681/win43.77 VAL n741/PF0.715/win44.67 score=0.664 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n777/PF0.687/win44.14 VAL n760/PF0.603/win40.39 score=0.561 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n738/PF0.686/win43.9 VAL n728/PF0.621/win41.21 score=0.5885 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n724/PF0.743/win45.17 VAL n692/PF0.587/win39.88 score=0.509 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> None | reject | FIT n799/PF0.656/win42.8 VAL n761/PF0.685/win43.63 score=0.6415 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 3.0) | KEEP | FIT n800/PF0.681/win43.75 VAL n751/PF0.672/win43.28 score=0.6675 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n779/PF0.681/win43.77 VAL n741/PF0.715/win44.67 score=0.664 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('rsi', '<=', 80) | reject | FIT n780/PF0.666/win43.33 VAL n747/PF0.68/win43.51 score=0.659 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n800/PF0.681/win43.75 VAL n751/PF0.672/win43.28 score=0.6675 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n787/PF0.646/win42.31 VAL n742/PF0.664/win42.86 score=0.637 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n775/PF0.673/win42.97 VAL n737/PF0.701/win44.23 score=0.659 | next=revert | _candle strength: decisive close near high_
+- [topn] 3 -> None | reject | FIT n852/PF0.652/win42.72 VAL n759/PF0.596/win40.45 score=0.568 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 3 -> 1 | reject | FIT n342/PF0.681/win43.86 VAL n349/PF0.763/win46.42 score=0.64 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 3 -> 2 | reject | FIT n628/PF0.685/win43.79 VAL n629/PF0.728/win44.83 score=0.6635 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 3 -> 3 | reject | FIT n800/PF0.681/win43.75 VAL n751/PF0.672/win43.28 score=0.6675 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] 2 -> None | KEEP | FIT n802/PF0.678/win43.64 VAL n759/PF0.68/win43.48 score=0.677 | next=adopt | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] 2 -> 2 | reject | FIT n800/PF0.681/win43.75 VAL n751/PF0.672/win43.28 score=0.6675 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] 2 -> 3 | reject | FIT n802/PF0.678/win43.64 VAL n755/PF0.671/win43.31 score=0.6675 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F2_PRESSURE_BURST — LONG Pressure Burst Breakout
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n2157/PF0.547/win37.27 VAL n2067/PF0.449/win33.04 score=0.4 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n3385/PF0.392/win40.09 VAL n3107/PF0.366/win37.75 score=0.353 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | reject | FIT n2811/PF0.478/win39.7 VAL n2575/PF0.41/win35.84 score=0.376 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n1889/PF0.601/win32.08 VAL n1767/PF0.517/win29.09 score=0.475 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n2753/PF0.525/win33.82 VAL n2518/PF0.423/win29.03 score=0.372 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n3127/PF0.462/win33.71 VAL n3006/PF0.389/win30.71 score=0.3525 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n2723/PF0.502/win35.7 VAL n2564/PF0.429/win31.9 score=0.3925 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n2687/PF0.363/win23.82 VAL n2461/PF0.334/win22.59 score=0.3195 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n3107/PF0.345/win24.4 VAL n2880/PF0.314/win23.61 score=0.2985 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n1889/PF0.601/win32.08 VAL n1767/PF0.517/win29.09 score=0.475 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | KEEP | FIT n781/PF0.689/win43.79 VAL n671/PF0.616/win40.98 score=0.5795 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | reject | FIT n843/PF0.797/win47.45 VAL n720/PF0.554/win39.17 score=0.4325 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n906/PF0.697/win44.04 VAL n774/PF0.549/win38.11 score=0.475 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n987/PF0.686/win43.77 VAL n869/PF0.572/win39.36 score=0.515 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n781/PF0.689/win43.79 VAL n671/PF0.616/win40.98 score=0.5795 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | reject | FIT n765/PF0.654/win42.48 VAL n688/PF0.583/win40.26 score=0.5475 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | KEEP | FIT n842/PF0.627/win41.81 VAL n711/PF0.615/win41.07 score=0.609 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | KEEP | FIT n839/PF0.672/win43.03 VAL n786/PF0.652/win42.11 score=0.642 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | KEEP | FIT n986/PF0.673/win43.41 VAL n896/PF0.67/win43.3 score=0.6685 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n986/PF0.673/win43.41 VAL n896/PF0.67/win43.3 score=0.6685 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n994/PF0.65/win42.66 VAL n882/PF0.64/win42.06 score=0.635 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n981/PF0.696/win44.14 VAL n877/PF0.667/win42.99 score=0.6525 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | KEEP | FIT n977/PF0.681/win43.6 VAL n865/PF0.682/win43.58 score=0.6805 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n950/PF0.683/win43.89 VAL n861/PF0.644/win42.39 score=0.6245 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n940/PF0.694/win44.26 VAL n857/PF0.634/win41.77 score=0.604 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n977/PF0.681/win43.6 VAL n865/PF0.682/win43.58 score=0.6805 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | KEEP | FIT n929/PF0.739/win45.43 VAL n863/PF0.712/win44.84 score=0.6985 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n838/PF0.769/win46.3 VAL n822/PF0.713/win44.53 score=0.685 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n852/PF0.711/win44.6 VAL n809/PF0.69/win43.88 score=0.6795 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n929/PF0.739/win45.43 VAL n863/PF0.712/win44.84 score=0.6985 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n929/PF0.739/win45.43 VAL n863/PF0.712/win44.84 score=0.6985 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n929/PF0.739/win45.43 VAL n863/PF0.712/win44.84 score=0.6985 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n929/PF0.739/win45.43 VAL n863/PF0.712/win44.84 score=0.6985 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | KEEP | FIT n268/PF0.76/win46.64 VAL n262/PF0.733/win45.42 score=0.7195 | next=adopt | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n493/PF0.787/win47.46 VAL n502/PF0.717/win44.82 score=0.682 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n687/PF0.777/win47.16 VAL n695/PF0.718/win44.75 score=0.6885 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n268/PF0.76/win46.64 VAL n262/PF0.733/win45.42 score=0.7195 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n250/PF0.752/win46.4 VAL n245/PF0.672/win43.27 score=0.632 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n265/PF0.754/win46.42 VAL n255/PF0.724/win45.1 score=0.709 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_075_100 -> b_075_075 | reject | FIT n277/PF0.648/win51.62 VAL n274/PF0.708/win53.65 score=0.618 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_050 | reject | FIT n288/PF0.477/win50.69 VAL n285/PF0.494/win51.58 score=0.4685 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_060_060 | reject | FIT n281/PF0.583/win52.31 VAL n279/PF0.648/win54.84 score=0.5505 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_075_100 | reject | FIT n268/PF0.76/win46.64 VAL n262/PF0.733/win45.42 score=0.7195 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_075 | reject | FIT n281/PF0.583/win41.28 VAL n277/PF0.636/win43.32 score=0.5565 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t12 | reject | FIT n277/PF0.631/win50.9 VAL n274/PF0.694/win51.46 score=0.5995 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t18 | reject | FIT n277/PF0.628/win49.46 VAL n274/PF0.724/win52.92 score=0.58 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04 | reject | FIT n284/PF0.289/win20.07 VAL n279/PF0.406/win27.6 score=0.2305 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04_t18 | reject | FIT n284/PF0.289/win20.07 VAL n279/PF0.407/win27.96 score=0.23 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 660 -> None | reject | FIT n689/PF0.656/win41.51 VAL n661/PF0.72/win44.18 score=0.624 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 660 -> 660 | reject | FIT n268/PF0.76/win46.64 VAL n262/PF0.733/win45.42 score=0.7195 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 660 -> 690 | reject | FIT n335/PF0.726/win45.37 VAL n336/PF0.78/win47.02 score=0.699 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 660 -> 720 | KEEP | FIT n393/PF0.74/win45.8 VAL n398/PF0.76/win46.48 score=0.73 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 660 -> 750 | reject | FIT n443/PF0.708/win44.47 VAL n443/PF0.795/win47.63 score=0.6645 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> None | reject | FIT n416/PF0.715/win44.95 VAL n417/PF0.73/win45.32 score=0.7075 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.25 | reject | FIT n416/PF0.715/win44.95 VAL n413/PF0.741/win45.76 score=0.702 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.3 | reject | FIT n413/PF0.724/win45.28 VAL n410/PF0.747/win46.1 score=0.7125 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.35 | reject | FIT n410/PF0.731/win45.37 VAL n404/PF0.747/win46.04 score=0.723 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.45 | reject | FIT n393/PF0.74/win45.8 VAL n398/PF0.76/win46.48 score=0.73 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] ['adx', '>=', 20] -> None | reject | FIT n403/PF0.785/win47.15 VAL n412/PF0.727/win45.39 score=0.698 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('mom2_pct', '>=', 0.0) | reject | FIT n404/PF0.781/win47.03 VAL n411/PF0.723/win45.26 score=0.694 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('mom3_pct', '>=', 0.1) | reject | FIT n396/PF0.773/win46.72 VAL n404/PF0.744/win45.79 score=0.7295 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('adx', '>=', 20) | reject | FIT n393/PF0.74/win45.8 VAL n398/PF0.76/win46.48 score=0.73 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('adx', '>=', 25) | KEEP | FIT n383/PF0.753/win46.21 VAL n390/PF0.778/win47.18 score=0.7405 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('macd_hist', '>=', 0.0) | reject | FIT n362/PF0.735/win45.86 VAL n384/PF0.67/win42.97 score=0.6375 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> None | reject | FIT n399/PF0.688/win44.11 VAL n403/PF0.695/win44.42 score=0.6845 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n383/PF0.753/win46.21 VAL n390/PF0.778/win47.18 score=0.7405 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n363/PF0.766/win46.56 VAL n367/PF0.73/win45.5 score=0.712 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('rsi', '<=', 80) | reject | FIT n383/PF0.729/win45.43 VAL n387/PF0.755/win46.51 score=0.716 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n383/PF0.753/win46.21 VAL n390/PF0.778/win47.18 score=0.7405 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n383/PF0.753/win46.21 VAL n390/PF0.778/win47.18 score=0.7405 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n383/PF0.753/win46.21 VAL n390/PF0.778/win47.18 score=0.7405 | next=revert | _candle strength: decisive close near high_
+- [topn] 1 -> None | reject | FIT n1124/PF0.77/win46.71 VAL n1046/PF0.7/win44.07 score=0.665 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 1 | reject | FIT n383/PF0.753/win46.21 VAL n390/PF0.778/win47.18 score=0.7405 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 2 | reject | FIT n678/PF0.823/win48.53 VAL n683/PF0.696/win44.07 score=0.6325 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 3 | reject | FIT n890/PF0.864/win49.89 VAL n898/PF0.696/win43.99 score=0.612 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n383/PF0.753/win46.21 VAL n390/PF0.778/win47.18 score=0.7405 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n335/PF0.736/win45.67 VAL n346/PF0.734/win45.66 score=0.733 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n364/PF0.742/win45.88 VAL n375/PF0.773/win46.93 score=0.7265 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F3_CONSOL_EXPANSION — LONG Consolidation Expansion Breakout
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n1720/PF0.54/win37.03 VAL n1575/PF0.507/win36.32 score=0.4905 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n2673/PF0.39/win40.03 VAL n2551/PF0.385/win39.4 score=0.3825 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | reject | FIT n2145/PF0.433/win37.67 VAL n2027/PF0.425/win37.35 score=0.421 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n1476/PF0.563/win31.17 VAL n1409/PF0.522/win30.38 score=0.5015 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n2121/PF0.459/win31.59 VAL n2017/PF0.459/win31.83 score=0.459 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n2580/PF0.443/win32.79 VAL n2487/PF0.407/win31.32 score=0.389 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n2207/PF0.479/win34.75 VAL n2115/PF0.444/win33.43 score=0.4265 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n2076/PF0.4/win26.64 VAL n1943/PF0.358/win25.17 score=0.337 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n2448/PF0.372/win26.27 VAL n2341/PF0.362/win25.46 score=0.357 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n1476/PF0.563/win31.17 VAL n1409/PF0.522/win30.38 score=0.5015 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | KEEP | FIT n516/PF0.667/win43.41 VAL n475/PF0.708/win44.0 score=0.6465 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | KEEP | FIT n589/PF0.725/win44.14 VAL n537/PF0.692/win43.58 score=0.6755 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n657/PF0.665/win42.62 VAL n606/PF0.652/win42.57 score=0.6455 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n701/PF0.619/win40.66 VAL n663/PF0.628/win41.33 score=0.6145 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n589/PF0.725/win44.14 VAL n537/PF0.692/win43.58 score=0.6755 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | reject | FIT n602/PF0.659/win43.02 VAL n566/PF0.63/win41.87 score=0.6155 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | reject | FIT n628/PF0.656/win42.36 VAL n576/PF0.582/win39.76 score=0.545 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n674/PF0.723/win44.96 VAL n633/PF0.651/win42.81 score=0.615 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | KEEP | FIT n721/PF0.695/win43.83 VAL n660/PF0.71/win44.24 score=0.6875 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n721/PF0.695/win43.83 VAL n660/PF0.71/win44.24 score=0.6875 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n721/PF0.695/win43.83 VAL n660/PF0.71/win44.24 score=0.6875 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n720/PF0.692/win43.75 VAL n665/PF0.715/win44.36 score=0.6805 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | KEEP | FIT n698/PF0.722/win44.99 VAL n656/PF0.716/win44.36 score=0.713 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n669/PF0.74/win45.59 VAL n620/PF0.689/win43.55 score=0.6635 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n608/PF0.766/win46.55 VAL n599/PF0.692/win43.91 score=0.655 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n698/PF0.722/win44.99 VAL n656/PF0.716/win44.36 score=0.713 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n659/PF0.743/win45.68 VAL n620/PF0.657/win42.26 score=0.614 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n568/PF0.717/win44.72 VAL n551/PF0.661/win42.47 score=0.633 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n635/PF0.714/win44.57 VAL n626/PF0.648/win42.01 score=0.615 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n698/PF0.722/win44.99 VAL n656/PF0.716/win44.36 score=0.713 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n649/PF0.685/win43.76 VAL n616/PF0.707/win44.16 score=0.674 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n639/PF0.677/win43.51 VAL n604/PF0.683/win43.54 score=0.674 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n698/PF0.722/win44.99 VAL n656/PF0.716/win44.36 score=0.713 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | KEEP | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=adopt | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n443/PF0.705/win44.7 VAL n443/PF0.754/win46.28 score=0.6805 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n575/PF0.697/win44.35 VAL n583/PF0.696/win44.25 score=0.6955 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n247/PF0.841/win49.39 VAL n244/PF0.82/win48.36 score=0.8095 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_075_100 -> b_075_075 | reject | FIT n268/PF0.757/win55.6 VAL n256/PF0.773/win55.86 score=0.749 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_050 | reject | FIT n285/PF0.46/win49.82 VAL n276/PF0.575/win55.43 score=0.4025 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_060_060 | reject | FIT n282/PF0.579/win52.13 VAL n270/PF0.694/win56.67 score=0.5215 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_075_100 | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_075 | reject | FIT n275/PF0.633/win43.27 VAL n261/PF0.662/win44.44 score=0.6185 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t12 | reject | FIT n268/PF0.735/win52.61 VAL n256/PF0.741/win51.17 score=0.732 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t18 | reject | FIT n268/PF0.741/win53.36 VAL n256/PF0.794/win55.47 score=0.7145 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04 | reject | FIT n275/PF0.499/win32.73 VAL n264/PF0.502/win30.3 score=0.4975 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04_t18 | reject | FIT n275/PF0.509/win32.36 VAL n264/PF0.495/win30.3 score=0.488 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 690 -> None | reject | FIT n579/PF0.665/win43.01 VAL n561/PF0.67/win42.42 score=0.6625 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 660 | reject | FIT n193/PF0.852/win49.74 VAL n183/PF0.79/win47.54 score=0.759 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 690 | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 720 | reject | FIT n316/PF0.722/win45.57 VAL n309/PF0.745/win45.95 score=0.7105 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 750 | reject | FIT n373/PF0.663/win43.7 VAL n356/PF0.731/win45.51 score=0.629 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> None | reject | FIT n274/PF0.823/win48.54 VAL n273/PF0.778/win47.25 score=0.7555 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.25 | reject | FIT n273/PF0.824/win48.72 VAL n272/PF0.782/win47.43 score=0.761 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.3 | reject | FIT n272/PF0.83/win48.9 VAL n271/PF0.776/win47.23 score=0.749 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.35 | reject | FIT n267/PF0.82/win48.69 VAL n268/PF0.774/win47.01 score=0.751 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.45 | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] ['adx', '>=', 20] -> None | reject | FIT n266/PF0.811/win48.12 VAL n253/PF0.785/win47.04 score=0.772 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('mom2_pct', '>=', 0.0) | reject | FIT n266/PF0.811/win48.12 VAL n253/PF0.785/win47.04 score=0.772 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('mom3_pct', '>=', 0.1) | reject | FIT n266/PF0.811/win48.12 VAL n253/PF0.785/win47.04 score=0.772 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('adx', '>=', 20) | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('adx', '>=', 25) | reject | FIT n252/PF0.809/win48.41 VAL n246/PF0.795/win47.97 score=0.788 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('macd_hist', '>=', 0.0) | reject | FIT n242/PF0.759/win46.28 VAL n241/PF0.687/win43.98 score=0.651 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n250/PF0.905/win51.2 VAL n243/PF0.773/win46.91 score=0.707 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n229/PF0.701/win44.98 VAL n236/PF0.735/win45.76 score=0.684 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n243/PF0.777/win47.33 VAL n244/PF0.82/win48.36 score=0.7555 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n249/PF0.836/win49.0 VAL n246/PF0.878/win50.0 score=0.815 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n254/PF0.81/win48.43 VAL n248/PF0.875/win50.0 score=0.7775 | next=revert | _candle strength: decisive close near high_
+- [topn] 1 -> None | reject | FIT n698/PF0.722/win44.99 VAL n656/PF0.716/win44.36 score=0.713 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 1 | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 2 | reject | FIT n443/PF0.705/win44.7 VAL n443/PF0.754/win46.28 score=0.6805 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 3 | reject | FIT n575/PF0.697/win44.35 VAL n583/PF0.696/win44.25 score=0.6955 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n247/PF0.841/win49.39 VAL n244/PF0.82/win48.36 score=0.8095 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n256/PF0.822/win48.83 VAL n246/PF0.821/win48.37 score=0.8205 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F4_FAILED_BREAKDOWN — LONG Failed Breakdown Reversal
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n1402/PF0.506/win33.74 VAL n1328/PF0.361/win29.52 score=0.2885 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n2097/PF0.361/win36.39 VAL n1999/PF0.311/win34.17 score=0.286 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | KEEP | FIT n1722/PF0.428/win35.31 VAL n1624/PF0.343/win32.51 score=0.3005 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n1206/PF0.481/win27.2 VAL n1158/PF0.386/win25.22 score=0.3385 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n1705/PF0.433/win28.45 VAL n1660/PF0.361/win26.69 score=0.325 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n2167/PF0.342/win27.78 VAL n2128/PF0.299/win26.27 score=0.2775 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n1834/PF0.414/win30.97 VAL n1776/PF0.35/win28.38 score=0.318 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n1620/PF0.36/win23.95 VAL n1549/PF0.323/win23.63 score=0.3045 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n1976/PF0.349/win24.9 VAL n1914/PF0.279/win22.47 score=0.244 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n1206/PF0.481/win27.2 VAL n1158/PF0.386/win25.22 score=0.3385 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | KEEP | FIT n367/PF0.652/win41.42 VAL n378/PF0.487/win37.57 score=0.4045 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | KEEP | FIT n442/PF0.701/win42.53 VAL n430/PF0.529/win39.3 score=0.443 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n484/PF0.68/win43.18 VAL n490/PF0.506/win37.55 score=0.419 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n554/PF0.706/win43.32 VAL n529/PF0.484/win37.05 score=0.373 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n442/PF0.701/win42.53 VAL n430/PF0.529/win39.3 score=0.443 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | reject | FIT n430/PF0.667/win42.09 VAL n444/PF0.488/win37.39 score=0.3985 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | reject | FIT n468/PF0.746/win45.09 VAL n461/PF0.486/win36.66 score=0.356 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | KEEP | FIT n478/PF0.772/win46.44 VAL n459/PF0.567/win39.65 score=0.4645 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | KEEP | FIT n380/PF0.836/win48.68 VAL n332/PF0.676/win43.67 score=0.596 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n380/PF0.836/win48.68 VAL n332/PF0.676/win43.67 score=0.596 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | KEEP | FIT n224/PF0.92/win50.89 VAL n216/PF0.719/win44.44 score=0.6185 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n90/PF1.098/win55.56 VAL n68/PF0.521/win38.24 score=0.2325 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n350/PF0.839/win48.86 VAL n308/PF0.67/win43.51 score=0.5855 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | KEEP | FIT n311/PF0.824/win48.23 VAL n274/PF0.756/win46.72 score=0.722 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n80/PF1.078/win55.0 VAL n49/PF0.728/win44.9 score=0.553 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n311/PF0.824/win48.23 VAL n274/PF0.756/win46.72 score=0.722 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n310/PF0.837/win48.71 VAL n274/PF0.757/win46.72 score=0.717 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | KEEP | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n311/PF0.824/win48.23 VAL n274/PF0.756/win46.72 score=0.722 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n271/PF0.753/win45.76 VAL n236/PF0.782/win47.88 score=0.7385 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n118/PF0.625/win40.68 VAL n102/PF0.565/win41.18 score=0.535 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n142/PF1.028/win54.23 VAL n136/PF0.668/win42.65 score=0.488 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n209/PF0.832/win48.8 VAL n200/PF0.681/win44.0 score=0.6055 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n243/PF0.799/win47.74 VAL n232/PF0.687/win44.4 score=0.631 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.773/win47.23 score=0.7395 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_075_100 -> b_075_075 | reject | FIT n313/PF0.686/win52.4 VAL n277/PF0.758/win55.23 score=0.65 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_050 | reject | FIT n356/PF0.47/win50.28 VAL n295/PF0.675/win59.32 score=0.3675 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_060_060 | reject | FIT n340/PF0.572/win51.47 VAL n290/PF0.716/win57.24 score=0.5 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_075_100 | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_075 | reject | FIT n335/PF0.583/win41.19 VAL n289/PF0.788/win48.79 score=0.4805 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t12 | reject | FIT n313/PF0.619/win46.96 VAL n278/PF0.782/win48.2 score=0.5375 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t18 | reject | FIT n313/PF0.646/win48.88 VAL n277/PF0.778/win51.99 score=0.58 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04 | reject | FIT n324/PF0.545/win35.8 VAL n288/PF0.651/win38.89 score=0.492 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04_t18 | reject | FIT n324/PF0.528/win34.88 VAL n288/PF0.631/win38.19 score=0.4765 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 690 -> None | reject | FIT n517/PF0.747/win45.65 VAL n487/PF0.652/win41.48 score=0.6045 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 660 | reject | FIT n226/PF0.712/win44.25 VAL n209/PF0.841/win49.76 score=0.6475 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 690 | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 720 | reject | FIT n339/PF0.823/win48.38 VAL n311/PF0.7/win44.69 score=0.6385 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 750 | reject | FIT n385/PF0.773/win47.01 VAL n359/PF0.688/win44.29 score=0.6455 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> None | reject | FIT n445/PF0.746/win44.04 VAL n431/PF0.506/win37.59 score=0.386 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.25 | reject | FIT n452/PF0.691/win43.14 VAL n434/PF0.468/win36.41 score=0.3565 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.3 | reject | FIT n461/PF0.724/win44.25 VAL n427/PF0.534/win38.64 score=0.439 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.35 | reject | FIT n442/PF0.764/win45.93 VAL n406/PF0.568/win39.9 score=0.47 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.45 | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] ['adx', '>=', 25] -> None | reject | FIT n377/PF0.783/win47.21 VAL n331/PF0.629/win41.99 score=0.552 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 25] -> ('mom2_pct', '>=', 0.0) | reject | FIT n220/PF0.86/win49.09 VAL n212/PF0.714/win44.34 score=0.641 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 25] -> ('mom3_pct', '>=', 0.1) | reject | FIT n88/PF1.006/win53.41 VAL n67/PF0.534/win38.81 score=0.298 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 25] -> ('adx', '>=', 20) | reject | FIT n344/PF0.833/win48.55 VAL n305/PF0.692/win44.26 score=0.6215 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 25] -> ('adx', '>=', 25) | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 25] -> ('macd_hist', '>=', 0.0) | reject | FIT n76/PF1.033/win53.95 VAL n46/PF0.753/win45.65 score=0.613 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> None | reject | FIT n311/PF0.824/win48.23 VAL n274/PF0.756/win46.72 score=0.722 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n310/PF0.837/win48.71 VAL n274/PF0.757/win46.72 score=0.717 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('rsi', '<=', 80) | reject | FIT n311/PF0.824/win48.23 VAL n274/PF0.756/win46.72 score=0.722 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n271/PF0.753/win45.76 VAL n236/PF0.782/win47.88 score=0.7385 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n118/PF0.625/win40.68 VAL n102/PF0.565/win41.18 score=0.535 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n142/PF1.028/win54.23 VAL n136/PF0.668/win42.65 score=0.488 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n209/PF0.832/win48.8 VAL n200/PF0.681/win44.0 score=0.6055 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n243/PF0.799/win47.74 VAL n232/PF0.687/win44.4 score=0.631 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.773/win47.23 score=0.7395 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n306/PF0.84/win48.69 VAL n271/PF0.785/win47.6 score=0.7575 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F5_PULLBACK_CONT — LONG Pullback Continuation
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n2072/PF0.557/win38.8 VAL n1898/PF0.493/win36.56 score=0.461 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n3183/PF0.422/win42.38 VAL n2870/PF0.395/win40.35 score=0.3815 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | reject | FIT n2615/PF0.466/win39.89 VAL n2401/PF0.432/win37.9 score=0.415 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n1746/PF0.551/win32.07 VAL n1593/PF0.515/win30.13 score=0.497 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n2630/PF0.531/win34.87 VAL n2303/PF0.461/win31.87 score=0.426 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n2950/PF0.458/win33.56 VAL n2827/PF0.413/win32.01 score=0.3905 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n2542/PF0.481/win34.97 VAL n2409/PF0.415/win31.71 score=0.382 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n2538/PF0.381/win25.33 VAL n2280/PF0.369/win25.26 score=0.363 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n2875/PF0.355/win25.04 VAL n2706/PF0.35/win24.76 score=0.3475 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n1746/PF0.551/win32.07 VAL n1593/PF0.515/win30.13 score=0.497 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | reject | FIT n759/PF0.73/win44.53 VAL n672/PF0.558/win38.84 score=0.472 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | KEEP | FIT n844/PF0.699/win43.25 VAL n725/PF0.574/win39.72 score=0.5115 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | KEEP | FIT n924/PF0.672/win42.64 VAL n772/PF0.581/win39.77 score=0.5355 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | KEEP | FIT n986/PF0.692/win43.51 VAL n818/PF0.593/win40.46 score=0.5435 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n986/PF0.692/win43.51 VAL n818/PF0.593/win40.46 score=0.5435 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | KEEP | FIT n1046/PF0.697/win43.79 VAL n859/PF0.637/win42.26 score=0.607 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | reject | FIT n1123/PF0.69/win43.54 VAL n947/PF0.616/win40.76 score=0.579 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n1174/PF0.712/win44.38 VAL n1060/PF0.641/win41.89 score=0.6055 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | KEEP | FIT n1185/PF0.745/win45.57 VAL n1120/PF0.677/win43.48 score=0.643 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n1185/PF0.745/win45.57 VAL n1120/PF0.677/win43.48 score=0.643 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n1184/PF0.714/win44.68 VAL n1108/PF0.663/win42.87 score=0.6375 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | KEEP | FIT n1150/PF0.702/win44.35 VAL n1090/PF0.686/win43.85 score=0.678 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n1112/PF0.701/win44.33 VAL n1100/PF0.672/win43.27 score=0.6575 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n1018/PF0.725/win45.28 VAL n1023/PF0.675/win43.3 score=0.65 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n1030/PF0.646/win42.23 VAL n972/PF0.647/win42.28 score=0.6455 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n1150/PF0.702/win44.35 VAL n1090/PF0.686/win43.85 score=0.678 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | KEEP | FIT n1066/PF0.73/win45.22 VAL n1007/PF0.713/win44.49 score=0.7045 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n911/PF0.735/win45.23 VAL n859/PF0.663/win42.72 score=0.627 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n1042/PF0.729/win45.2 VAL n1034/PF0.681/win43.52 score=0.657 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n1066/PF0.73/win45.22 VAL n1007/PF0.713/win44.49 score=0.7045 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n975/PF0.717/win44.72 VAL n954/PF0.7/win44.03 score=0.6915 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n943/PF0.742/win45.6 VAL n917/PF0.691/win43.62 score=0.6655 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n1066/PF0.73/win45.22 VAL n1007/PF0.713/win44.49 score=0.7045 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | KEEP | FIT n407/PF0.763/win46.44 VAL n420/PF0.797/win47.14 score=0.746 | next=adopt | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n662/PF0.747/win46.07 VAL n699/PF0.706/win44.21 score=0.6855 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n830/PF0.77/win46.99 VAL n867/PF0.672/win43.14 score=0.623 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n407/PF0.763/win46.44 VAL n420/PF0.797/win47.14 score=0.746 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n375/PF0.753/win46.13 VAL n376/PF0.823/win47.87 score=0.718 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n398/PF0.756/win46.23 VAL n409/PF0.791/win46.94 score=0.7385 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_075_100 -> b_075_075 | reject | FIT n422/PF0.648/win51.42 VAL n434/PF0.701/win53.23 score=0.6215 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_050 | reject | FIT n453/PF0.509/win52.32 VAL n461/PF0.563/win54.88 score=0.482 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_060_060 | reject | FIT n442/PF0.62/win53.62 VAL n451/PF0.579/win52.11 score=0.5585 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_075_100 | reject | FIT n407/PF0.763/win46.44 VAL n420/PF0.797/win47.14 score=0.746 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_075 | reject | FIT n436/PF0.627/win43.12 VAL n441/PF0.708/win46.03 score=0.5865 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t12 | reject | FIT n423/PF0.65/win49.65 VAL n435/PF0.724/win52.64 score=0.613 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t18 | reject | FIT n422/PF0.642/win49.53 VAL n434/PF0.725/win53.0 score=0.6005 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04 | reject | FIT n440/PF0.356/win24.77 VAL n449/PF0.415/win28.06 score=0.3265 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04_t18 | reject | FIT n440/PF0.353/win24.32 VAL n449/PF0.415/win28.29 score=0.322 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 750 -> None | reject | FIT n578/PF0.722/win44.46 VAL n539/PF0.753/win44.53 score=0.7065 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 750 -> 660 | reject | FIT n252/PF0.836/win48.81 VAL n262/PF0.739/win45.42 score=0.6905 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 750 -> 690 | KEEP | FIT n317/PF0.785/win47.32 VAL n325/PF0.785/win46.77 score=0.785 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 750 -> 720 | reject | FIT n371/PF0.808/win47.98 VAL n381/PF0.773/win46.46 score=0.7555 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 750 -> 750 | reject | FIT n407/PF0.763/win46.44 VAL n420/PF0.797/win47.14 score=0.746 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> None | reject | FIT n346/PF0.796/win47.4 VAL n349/PF0.782/win46.42 score=0.775 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.25 | reject | FIT n346/PF0.796/win47.4 VAL n347/PF0.787/win46.69 score=0.7825 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.3 | KEEP | FIT n342/PF0.8/win47.66 VAL n346/PF0.792/win46.82 score=0.788 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.35 | KEEP | FIT n334/PF0.794/win47.6 VAL n340/PF0.791/win47.06 score=0.7895 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.45 | reject | FIT n317/PF0.785/win47.32 VAL n325/PF0.785/win46.77 score=0.785 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] ['mom3_pct', '>=', 0.1] -> None | reject | FIT n331/PF0.714/win45.02 VAL n340/PF0.721/win45.0 score=0.7105 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('mom2_pct', '>=', 0.0) | reject | FIT n332/PF0.71/win44.88 VAL n340/PF0.73/win45.29 score=0.7 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('mom3_pct', '>=', 0.1) | reject | FIT n334/PF0.794/win47.6 VAL n340/PF0.791/win47.06 score=0.7895 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('adx', '>=', 20) | reject | FIT n322/PF0.771/win46.89 VAL n340/PF0.703/win44.12 score=0.669 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('adx', '>=', 25) | reject | FIT n318/PF0.76/win46.54 VAL n331/PF0.691/win43.81 score=0.6565 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('macd_hist', '>=', 0.0) | reject | FIT n331/PF0.612/win41.09 VAL n332/PF0.717/win44.88 score=0.5595 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> None | reject | FIT n338/PF0.775/win47.04 VAL n343/PF0.786/win46.94 score=0.7695 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n334/PF0.794/win47.6 VAL n340/PF0.791/win47.06 score=0.7895 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n332/PF0.715/win45.18 VAL n334/PF0.651/win42.22 score=0.619 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('rsi', '<=', 80) | KEEP | FIT n340/PF0.805/win47.94 VAL n339/PF0.813/win47.79 score=0.801 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n340/PF0.805/win47.94 VAL n339/PF0.813/win47.79 score=0.801 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n334/PF0.774/win47.01 VAL n340/PF0.836/win48.53 score=0.743 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n329/PF0.764/win46.81 VAL n343/PF0.859/win48.98 score=0.7165 | next=revert | _candle strength: decisive close near high_
+- [topn] 1 -> None | reject | FIT n914/PF0.701/win44.31 VAL n840/PF0.58/win39.52 score=0.5195 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 1 | reject | FIT n340/PF0.805/win47.94 VAL n339/PF0.813/win47.79 score=0.801 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 2 | reject | FIT n595/PF0.791/win47.39 VAL n618/PF0.635/win41.75 score=0.557 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 3 | reject | FIT n806/PF0.786/win47.27 VAL n800/PF0.591/win40.25 score=0.4935 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n340/PF0.805/win47.94 VAL n339/PF0.813/win47.79 score=0.801 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | KEEP | FIT n327/PF0.817/win48.32 VAL n317/PF0.83/win48.26 score=0.8105 | next=adopt | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n337/PF0.809/win48.07 VAL n335/PF0.793/win47.16 score=0.785 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F6_VOLUME_EXPANSION — LONG Volume Expansion Breakout
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n1824/PF0.476/win35.31 VAL n1745/PF0.474/win35.42 score=0.473 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n2767/PF0.382/win39.61 VAL n2626/PF0.368/win38.58 score=0.361 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | reject | FIT n2299/PF0.454/win38.97 VAL n2185/PF0.42/win37.16 score=0.403 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n1624/PF0.573/win32.57 VAL n1571/PF0.511/win29.66 score=0.48 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n2270/PF0.49/win32.73 VAL n2191/PF0.462/win31.86 score=0.448 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n2678/PF0.469/win34.24 VAL n2603/PF0.43/win32.31 score=0.4105 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n2349/PF0.482/win35.67 VAL n2291/PF0.474/win34.57 score=0.47 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n2222/PF0.356/win23.67 VAL n2163/PF0.365/win25.2 score=0.3515 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n2613/PF0.332/win24.26 VAL n2514/PF0.358/win25.26 score=0.319 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n1624/PF0.573/win32.57 VAL n1571/PF0.511/win29.66 score=0.48 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | KEEP | FIT n596/PF0.666/win43.46 VAL n545/PF0.594/win40.37 score=0.558 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | reject | FIT n693/PF0.617/win41.27 VAL n675/PF0.575/win39.26 score=0.554 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n794/PF0.65/win42.32 VAL n724/PF0.543/win37.71 score=0.4895 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n842/PF0.663/win42.4 VAL n798/PF0.568/win38.72 score=0.5205 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n596/PF0.666/win43.46 VAL n545/PF0.594/win40.37 score=0.558 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | KEEP | FIT n592/PF0.657/win43.07 VAL n544/PF0.641/win42.28 score=0.633 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | reject | FIT n570/PF0.627/win42.28 VAL n553/PF0.635/win41.77 score=0.623 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n534/PF0.616/win41.2 VAL n530/PF0.673/win43.4 score=0.5875 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | reject | FIT n374/PF0.614/win40.91 VAL n403/PF0.688/win43.92 score=0.577 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n592/PF0.657/win43.07 VAL n544/PF0.641/win42.28 score=0.633 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n592/PF0.657/win43.07 VAL n544/PF0.641/win42.28 score=0.633 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n579/PF0.635/win42.31 VAL n546/PF0.646/win42.31 score=0.6295 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | KEEP | FIT n550/PF0.642/win42.73 VAL n547/PF0.639/win42.05 score=0.6375 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n522/PF0.664/win43.49 VAL n505/PF0.623/win41.58 score=0.6025 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n556/PF0.65/win43.35 VAL n525/PF0.637/win42.1 score=0.6305 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n550/PF0.642/win42.73 VAL n547/PF0.639/win42.05 score=0.6375 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | KEEP | FIT n500/PF0.684/win44.4 VAL n498/PF0.665/win43.17 score=0.6555 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n361/PF0.675/win43.21 VAL n322/PF0.612/win41.3 score=0.5805 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n456/PF0.639/win42.54 VAL n447/PF0.64/win42.28 score=0.6385 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n500/PF0.684/win44.4 VAL n498/PF0.665/win43.17 score=0.6555 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | KEEP | FIT n479/PF0.674/win43.84 VAL n477/PF0.691/win44.03 score=0.6655 | next=adopt | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n466/PF0.694/win44.85 VAL n458/PF0.638/win42.14 score=0.61 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n479/PF0.674/win43.84 VAL n477/PF0.691/win44.03 score=0.6655 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n181/PF0.863/win50.28 VAL n179/PF0.713/win44.69 score=0.638 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n310/PF0.664/win42.9 VAL n303/PF0.673/win43.23 score=0.6595 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n390/PF0.715/win44.62 VAL n382/PF0.652/win42.15 score=0.6205 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n479/PF0.674/win43.84 VAL n477/PF0.691/win44.03 score=0.6655 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | KEEP | FIT n474/PF0.685/win44.51 VAL n474/PF0.688/win43.88 score=0.6835 | next=adopt | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | KEEP | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=adopt | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_075_100 -> b_075_075 | reject | FIT n513/PF0.629/win50.49 VAL n504/PF0.623/win50.2 score=0.62 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_050 | reject | FIT n561/PF0.475/win50.45 VAL n578/PF0.48/win50.87 score=0.4725 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_060_060 | reject | FIT n542/PF0.561/win50.92 VAL n559/PF0.547/win50.81 score=0.54 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_075_100 | reject | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_075 | reject | FIT n537/PF0.592/win41.34 VAL n545/PF0.532/win39.27 score=0.502 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t12 | reject | FIT n518/PF0.55/win45.75 VAL n507/PF0.611/win44.97 score=0.5195 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t18 | reject | FIT n513/PF0.581/win46.98 VAL n504/PF0.632/win47.62 score=0.5555 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04 | reject | FIT n532/PF0.403/win27.82 VAL n537/PF0.421/win29.42 score=0.394 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04_t18 | reject | FIT n532/PF0.387/win28.2 VAL n537/PF0.409/win28.31 score=0.376 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 660 -> None | reject | FIT n1147/PF0.629/win38.45 VAL n1210/PF0.592/win38.43 score=0.5735 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 660 -> 660 | reject | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 660 -> 690 | reject | FIT n594/PF0.711/win44.78 VAL n610/PF0.609/win40.82 score=0.558 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 660 -> 720 | reject | FIT n677/PF0.694/win44.31 VAL n691/PF0.608/win40.96 score=0.565 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 660 -> 750 | reject | FIT n740/PF0.684/win43.51 VAL n756/PF0.609/win41.14 score=0.5715 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.25] -> None | reject | FIT n481/PF0.653/win43.24 VAL n480/PF0.669/win43.12 score=0.645 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.25] -> 0.25 | reject | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.25] -> 0.3 | reject | FIT n447/PF0.682/win44.3 VAL n461/PF0.672/win42.95 score=0.667 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.25] -> 0.35 | reject | FIT n390/PF0.682/win43.85 VAL n416/PF0.71/win44.71 score=0.668 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.25] -> 0.45 | reject | FIT n249/PF0.693/win43.78 VAL n290/PF0.737/win45.52 score=0.671 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] ['adx', '>=', 20] -> None | reject | FIT n520/PF0.698/win44.62 VAL n491/PF0.663/win42.97 score=0.6455 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('mom2_pct', '>=', 0.0) | reject | FIT n520/PF0.698/win44.62 VAL n491/PF0.663/win42.97 score=0.6455 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('mom3_pct', '>=', 0.1) | reject | FIT n511/PF0.659/win43.25 VAL n488/PF0.659/win42.83 score=0.659 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('adx', '>=', 20) | reject | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('adx', '>=', 25) | reject | FIT n430/PF0.724/win45.58 VAL n435/PF0.676/win43.45 score=0.652 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['adx', '>=', 20] -> ('macd_hist', '>=', 0.0) | reject | FIT n477/PF0.694/win45.07 VAL n471/PF0.664/win43.1 score=0.649 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> None | reject | FIT n527/PF0.621/win42.13 VAL n515/PF0.624/win41.55 score=0.6195 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n313/PF0.694/win43.77 VAL n279/PF0.58/win40.14 score=0.523 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 3.0] -> ('rsi', '<=', 80) | reject | FIT n428/PF0.619/win41.82 VAL n417/PF0.647/win42.45 score=0.605 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] ['close_loc', '>=', 0.6] -> None | reject | FIT n500/PF0.681/win44.4 VAL n498/PF0.665/win43.17 score=0.657 | next=revert | _candle strength: decisive close near high_
+- [strength] ['close_loc', '>=', 0.6] -> ('close_loc', '>=', 0.6) | reject | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=revert | _candle strength: decisive close near high_
+- [strength] ['close_loc', '>=', 0.6] -> ('body_frac', '>=', 0.5) | reject | FIT n466/PF0.694/win44.85 VAL n458/PF0.638/win42.14 score=0.61 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n180/PF0.853/win50.0 VAL n179/PF0.713/win44.69 score=0.643 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n309/PF0.659/win42.72 VAL n303/PF0.673/win43.23 score=0.652 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n389/PF0.711/win44.47 VAL n382/PF0.652/win42.15 score=0.6225 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] 3 -> None | reject | FIT n479/PF0.674/win43.84 VAL n477/PF0.691/win44.03 score=0.6655 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] 3 -> 2 | reject | FIT n474/PF0.685/win44.51 VAL n474/PF0.688/win43.88 score=0.6835 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] 3 -> 3 | reject | FIT n479/PF0.69/win44.47 VAL n477/PF0.691/win44.03 score=0.6895 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F7_TREND_CONT — LONG EMA/VWAP Trend Continuation
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n1740/PF0.571/win43.85 VAL n1595/PF0.554/win42.32 score=0.5455 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n2682/PF0.419/win44.89 VAL n2439/PF0.437/win45.06 score=0.41 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | reject | FIT n2227/PF0.479/win43.87 VAL n2007/PF0.519/win45.29 score=0.459 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n1493/PF0.59/win37.11 VAL n1369/PF0.606/win38.35 score=0.582 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n2202/PF0.498/win35.97 VAL n2013/PF0.564/win38.35 score=0.465 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n2347/PF0.497/win38.43 VAL n2233/PF0.511/win38.38 score=0.49 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n2115/PF0.541/win41.13 VAL n2020/PF0.557/win41.73 score=0.533 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n2147/PF0.352/win25.52 VAL n1926/PF0.425/win29.23 score=0.3155 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n2391/PF0.347/win25.51 VAL n2225/PF0.392/win28.54 score=0.3245 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n1493/PF0.59/win37.11 VAL n1369/PF0.606/win38.35 score=0.582 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | KEEP | FIT n744/PF0.624/win41.53 VAL n668/PF0.665/win43.26 score=0.6035 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | KEEP | FIT n810/PF0.621/win41.6 VAL n764/PF0.655/win42.54 score=0.604 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n908/PF0.615/win40.53 VAL n827/PF0.591/win39.78 score=0.579 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n968/PF0.635/win41.84 VAL n892/PF0.574/win39.57 score=0.5435 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n810/PF0.621/win41.6 VAL n764/PF0.655/win42.54 score=0.604 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | KEEP | FIT n819/PF0.619/win41.15 VAL n781/PF0.645/win42.64 score=0.606 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | KEEP | FIT n858/PF0.643/win42.07 VAL n808/PF0.625/win41.58 score=0.616 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n818/PF0.594/win40.34 VAL n854/PF0.699/win44.26 score=0.5415 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | reject | FIT n731/PF0.645/win42.13 VAL n720/PF0.707/win44.58 score=0.614 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n858/PF0.643/win42.07 VAL n808/PF0.625/win41.58 score=0.616 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | KEEP | FIT n822/PF0.629/win41.61 VAL n808/PF0.625/win41.58 score=0.623 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n833/PF0.601/win40.7 VAL n790/PF0.647/win42.53 score=0.578 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n807/PF0.599/win40.52 VAL n816/PF0.667/win43.5 score=0.565 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n761/PF0.616/win41.39 VAL n757/PF0.595/win40.55 score=0.5845 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | KEEP | FIT n827/PF0.63/win41.6 VAL n802/PF0.633/win41.77 score=0.6285 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n827/PF0.63/win41.6 VAL n802/PF0.633/win41.77 score=0.6285 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | KEEP | FIT n740/PF0.657/win42.57 VAL n739/PF0.648/win42.35 score=0.6435 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | KEEP | FIT n512/PF0.655/win42.58 VAL n538/PF0.666/win43.12 score=0.6495 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n683/PF0.66/win42.75 VAL n664/PF0.642/win42.17 score=0.633 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n512/PF0.655/win42.58 VAL n538/PF0.666/win43.12 score=0.6495 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n455/PF0.611/win40.88 VAL n482/PF0.577/win39.42 score=0.56 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n433/PF0.583/win39.95 VAL n467/PF0.617/win40.9 score=0.566 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n512/PF0.655/win42.58 VAL n538/PF0.666/win43.12 score=0.6495 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n186/PF0.691/win43.55 VAL n209/PF0.623/win41.15 score=0.589 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n289/PF0.707/win44.29 VAL n345/PF0.664/win42.61 score=0.6425 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n362/PF0.745/win45.58 VAL n421/PF0.659/win42.52 score=0.616 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n512/PF0.655/win42.58 VAL n538/PF0.666/win43.12 score=0.6495 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n495/PF0.627/win41.41 VAL n527/PF0.67/win42.88 score=0.6055 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n502/PF0.627/win41.63 VAL n538/PF0.666/win43.12 score=0.6075 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_075_100 -> b_075_075 | reject | FIT n569/PF0.592/win48.68 VAL n586/PF0.605/win49.15 score=0.5855 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_050 | reject | FIT n716/PF0.433/win48.18 VAL n731/PF0.431/win48.15 score=0.43 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_060_060 | reject | FIT n655/PF0.508/win48.55 VAL n662/PF0.522/win49.4 score=0.501 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_075_100 | reject | FIT n512/PF0.655/win42.58 VAL n538/PF0.666/win43.12 score=0.6495 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_075 | reject | FIT n640/PF0.513/win38.12 VAL n665/PF0.568/win40.6 score=0.4855 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t12 | reject | FIT n564/PF0.572/win45.57 VAL n589/PF0.576/win44.99 score=0.57 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t18 | reject | FIT n569/PF0.584/win47.28 VAL n586/PF0.592/win46.93 score=0.58 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04 | reject | FIT n638/PF0.375/win26.65 VAL n640/PF0.403/win30.0 score=0.361 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04_t18 | reject | FIT n638/PF0.364/win26.49 VAL n640/PF0.389/win29.22 score=0.3515 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 690 -> None | reject | FIT n528/PF0.628/win41.29 VAL n551/PF0.662/win42.83 score=0.611 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 660 | reject | FIT n508/PF0.694/win43.9 VAL n525/PF0.646/win42.48 score=0.622 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 690 | reject | FIT n512/PF0.655/win42.58 VAL n538/PF0.666/win43.12 score=0.6495 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 720 | reject | FIT n517/PF0.617/win41.01 VAL n547/PF0.669/win43.14 score=0.591 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 750 | reject | FIT n523/PF0.636/win41.87 VAL n547/PF0.669/win43.14 score=0.6195 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> None | reject | FIT n531/PF0.598/win39.92 VAL n520/PF0.649/win42.5 score=0.5725 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> 0.25 | reject | FIT n539/PF0.691/win43.6 VAL n537/PF0.646/win42.27 score=0.6235 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> 0.3 | reject | FIT n512/PF0.655/win42.58 VAL n538/PF0.666/win43.12 score=0.6495 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> 0.35 | reject | FIT n503/PF0.64/win41.75 VAL n504/PF0.678/win43.25 score=0.621 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.3] -> 0.45 | KEEP | FIT n374/PF0.71/win44.39 VAL n357/PF0.727/win44.82 score=0.7015 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] ['macd_hist', '>=', 0.0] -> None | reject | FIT n388/PF0.702/win44.07 VAL n367/PF0.691/win43.6 score=0.6855 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['macd_hist', '>=', 0.0] -> ('mom2_pct', '>=', 0.0) | reject | FIT n387/PF0.698/win43.93 VAL n367/PF0.691/win43.6 score=0.6875 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['macd_hist', '>=', 0.0] -> ('mom3_pct', '>=', 0.1) | KEEP | FIT n385/PF0.705/win44.16 VAL n363/PF0.711/win44.35 score=0.702 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['macd_hist', '>=', 0.0] -> ('adx', '>=', 20) | reject | FIT n356/PF0.72/win44.66 VAL n356/PF0.707/win44.1 score=0.7005 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['macd_hist', '>=', 0.0] -> ('adx', '>=', 25) | reject | FIT n315/PF0.729/win45.08 VAL n313/PF0.708/win44.09 score=0.6975 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['macd_hist', '>=', 0.0] -> ('macd_hist', '>=', 0.0) | reject | FIT n374/PF0.71/win44.39 VAL n357/PF0.727/win44.82 score=0.7015 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> None | reject | FIT n732/PF0.619/win41.26 VAL n720/PF0.677/win43.47 score=0.59 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n629/PF0.686/win43.72 VAL n613/PF0.743/win45.68 score=0.6575 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n385/PF0.705/win44.16 VAL n363/PF0.711/win44.35 score=0.702 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('rsi', '<=', 80) | reject | FIT n443/PF0.646/win41.99 VAL n470/PF0.649/win42.34 score=0.6445 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n385/PF0.705/win44.16 VAL n363/PF0.711/win44.35 score=0.702 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n317/PF0.7/win43.85 VAL n312/PF0.634/win41.35 score=0.601 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n283/PF0.643/win41.7 VAL n283/PF0.657/win42.4 score=0.636 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n385/PF0.705/win44.16 VAL n363/PF0.711/win44.35 score=0.702 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n148/PF0.751/win45.95 VAL n148/PF0.648/win42.57 score=0.5965 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n220/PF0.726/win45.0 VAL n232/PF0.692/win43.97 score=0.675 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n268/PF0.799/win47.39 VAL n277/PF0.698/win44.04 score=0.6475 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n385/PF0.705/win44.16 VAL n363/PF0.711/win44.35 score=0.702 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n369/PF0.668/win42.82 VAL n356/PF0.715/win44.38 score=0.6445 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n380/PF0.692/win43.68 VAL n363/PF0.711/win44.35 score=0.6825 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F8_OPENING_STRENGTH — LONG Opening Strength Continuation
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n393/PF0.522/win45.8 VAL n411/PF0.468/win43.07 score=0.441 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n505/PF0.352/win43.17 VAL n519/PF0.397/win46.05 score=0.3295 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | KEEP | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | reject | FIT n367/PF0.614/win40.6 VAL n382/PF0.491/win35.34 score=0.4295 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n434/PF0.442/win34.56 VAL n462/PF0.525/win38.53 score=0.4005 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n393/PF0.489/win42.49 VAL n411/PF0.439/win37.96 score=0.414 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n393/PF0.49/win42.75 VAL n411/PF0.464/win41.12 score=0.451 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n425/PF0.317/win24.71 VAL n447/PF0.299/win24.16 score=0.29 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n425/PF0.298/win24.47 VAL n447/PF0.292/win25.06 score=0.289 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | reject | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | reject | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | reject | FIT n449/PF0.472/win46.77 VAL n472/PF0.492/win48.09 score=0.462 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | reject | FIT n444/PF0.489/win47.75 VAL n485/PF0.472/win47.01 score=0.4635 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n448/PF0.437/win44.87 VAL n483/PF0.487/win47.83 score=0.412 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | reject | FIT n388/PF0.448/win45.62 VAL n459/PF0.502/win48.58 score=0.421 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n449/PF0.483/win47.44 VAL n472/PF0.483/win47.46 score=0.483 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n441/PF0.481/win47.39 VAL n478/PF0.48/win47.28 score=0.4795 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n442/PF0.459/win46.15 VAL n467/PF0.496/win48.18 score=0.4405 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n418/PF0.499/win48.33 VAL n456/PF0.477/win47.15 score=0.466 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n433/PF0.458/win46.19 VAL n475/PF0.452/win45.68 score=0.449 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n448/PF0.488/win47.77 VAL n474/PF0.496/win48.1 score=0.484 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n444/PF0.475/win47.07 VAL n460/PF0.512/win48.7 score=0.4565 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | KEEP | FIT n399/PF0.495/win48.12 VAL n443/PF0.505/win48.31 score=0.49 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n376/PF0.441/win45.21 VAL n417/PF0.491/win47.96 score=0.416 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n399/PF0.495/win48.12 VAL n443/PF0.505/win48.31 score=0.49 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n381/PF0.498/win48.03 VAL n426/PF0.464/win46.24 score=0.447 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n346/PF0.475/win46.82 VAL n414/PF0.483/win47.34 score=0.471 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n399/PF0.495/win48.12 VAL n443/PF0.505/win48.31 score=0.49 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n55/PF0.642/win54.55 VAL n52/PF0.305/win36.54 score=0.1365 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n109/PF0.542/win50.46 VAL n106/PF0.335/win38.68 score=0.2315 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n156/PF0.606/win53.21 VAL n155/PF0.357/win40.0 score=0.2325 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n399/PF0.495/win48.12 VAL n443/PF0.505/win48.31 score=0.49 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n399/PF0.458/win46.12 VAL n442/PF0.435/win44.8 score=0.4235 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n402/PF0.509/win48.76 VAL n441/PF0.485/win47.17 score=0.473 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_060_060 -> b_075_075 | reject | FIT n365/PF0.524/win46.03 VAL n385/PF0.408/win39.74 score=0.35 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> b_050_050 | reject | FIT n443/PF0.364/win44.02 VAL n494/PF0.419/win47.17 score=0.3365 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> b_060_060 | reject | FIT n399/PF0.495/win48.12 VAL n443/PF0.505/win48.31 score=0.49 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> b_075_100 | KEEP | FIT n341/PF0.592/win39.59 VAL n370/PF0.539/win37.3 score=0.5125 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> b_050_075 | reject | FIT n397/PF0.444/win34.76 VAL n441/PF0.449/win35.15 score=0.4415 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> v_t12 | reject | FIT n365/PF0.495/win42.19 VAL n385/PF0.377/win35.32 score=0.318 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> v_t18 | reject | FIT n365/PF0.485/win42.47 VAL n385/PF0.395/win37.66 score=0.35 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> v_be04 | reject | FIT n394/PF0.341/win26.65 VAL n424/PF0.34/win25.47 score=0.3395 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> v_be04_t18 | reject | FIT n394/PF0.324/win25.89 VAL n424/PF0.298/win24.29 score=0.285 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n341/PF0.592/win39.59 VAL n370/PF0.539/win37.3 score=0.5125 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | reject | FIT n341/PF0.592/win39.59 VAL n370/PF0.539/win37.3 score=0.5125 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | reject | FIT n341/PF0.592/win39.59 VAL n370/PF0.539/win37.3 score=0.5125 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n341/PF0.592/win39.59 VAL n370/PF0.539/win37.3 score=0.5125 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n341/PF0.592/win39.59 VAL n370/PF0.539/win37.3 score=0.5125 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n341/PF0.592/win39.59 VAL n370/PF0.539/win37.3 score=0.5125 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | KEEP | FIT n341/PF0.56/win38.71 VAL n370/PF0.563/win38.65 score=0.5585 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | reject | FIT n336/PF0.565/win38.99 VAL n374/PF0.526/win37.7 score=0.5065 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n336/PF0.543/win38.1 VAL n369/PF0.532/win37.4 score=0.5265 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | KEEP | FIT n263/PF0.613/win40.68 VAL n321/PF0.644/win42.06 score=0.5975 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n263/PF0.613/win40.68 VAL n321/PF0.644/win42.06 score=0.5975 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | KEEP | FIT n250/PF0.623/win40.8 VAL n311/PF0.641/win42.12 score=0.614 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n250/PF0.619/win40.8 VAL n321/PF0.636/win41.74 score=0.6105 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n244/PF0.624/win40.98 VAL n317/PF0.675/win43.22 score=0.5985 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n212/PF0.616/win40.57 VAL n301/PF0.659/win42.86 score=0.5945 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n240/PF0.608/win40.42 VAL n296/PF0.603/win40.54 score=0.6005 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> None | reject | FIT n316/PF0.54/win37.66 VAL n378/PF0.636/win41.8 score=0.492 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n311/PF0.574/win39.23 VAL n366/PF0.627/win41.53 score=0.5475 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n250/PF0.623/win40.8 VAL n311/PF0.641/win42.12 score=0.614 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('rsi', '<=', 80) | reject | FIT n214/PF0.567/win38.79 VAL n275/PF0.541/win37.82 score=0.528 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n250/PF0.623/win40.8 VAL n311/PF0.641/win42.12 score=0.614 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | KEEP | FIT n214/PF0.633/win41.12 VAL n284/PF0.621/win41.2 score=0.615 | next=adopt | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | KEEP | FIT n197/PF0.638/win41.12 VAL n261/PF0.662/win42.53 score=0.626 | next=adopt | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n197/PF0.638/win41.12 VAL n261/PF0.662/win42.53 score=0.626 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n50/PF0.656/win42.0 VAL n55/PF0.392/win30.91 score=0.26 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n92/PF0.793/win46.74 VAL n102/PF0.499/win36.27 score=0.352 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n121/PF0.799/win47.11 VAL n140/PF0.564/win39.29 score=0.4465 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n197/PF0.638/win41.12 VAL n261/PF0.662/win42.53 score=0.626 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | KEEP | FIT n196/PF0.644/win41.33 VAL n261/PF0.662/win42.53 score=0.635 | next=adopt | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n197/PF0.638/win41.12 VAL n261/PF0.662/win42.53 score=0.626 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F9_MIDDAY_RECLAIM — LONG Midday Reclaim Continuation
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n717/PF0.577/win47.28 VAL n672/PF0.488/win43.01 score=0.4435 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n1152/PF0.464/win49.22 VAL n1023/PF0.396/win45.75 score=0.362 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | reject | FIT n897/PF0.504/win47.16 VAL n887/PF0.413/win42.84 score=0.3675 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | reject | FIT n618/PF0.616/win40.61 VAL n586/PF0.443/win34.3 score=0.3565 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n907/PF0.549/win38.92 VAL n862/PF0.454/win35.73 score=0.4065 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n1075/PF0.448/win36.37 VAL n1055/PF0.418/win33.65 score=0.403 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n895/PF0.497/win39.66 VAL n866/PF0.385/win34.99 score=0.329 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n861/PF0.521/win34.84 VAL n780/PF0.355/win27.82 score=0.272 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n998/PF0.431/win31.66 VAL n930/PF0.325/win26.88 score=0.272 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n717/PF0.577/win47.28 VAL n672/PF0.488/win43.01 score=0.4435 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | reject | FIT n424/PF0.556/win46.46 VAL n423/PF0.452/win42.08 score=0.4 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | reject | FIT n526/PF0.569/win47.15 VAL n527/PF0.472/win42.69 score=0.4235 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n615/PF0.587/win46.99 VAL n582/PF0.43/win40.38 score=0.3515 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n672/PF0.577/win47.32 VAL n620/PF0.478/win42.74 score=0.4285 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n717/PF0.577/win47.28 VAL n672/PF0.488/win43.01 score=0.4435 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | reject | FIT n731/PF0.593/win47.74 VAL n705/PF0.487/win43.69 score=0.434 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | KEEP | FIT n768/PF0.564/win47.53 VAL n787/PF0.515/win45.11 score=0.4905 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n785/PF0.582/win48.15 VAL n789/PF0.511/win45.25 score=0.4755 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | KEEP | FIT n548/PF0.594/win48.91 VAL n542/PF0.588/win48.71 score=0.585 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n548/PF0.594/win48.91 VAL n542/PF0.588/win48.71 score=0.585 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | KEEP | FIT n546/PF0.592/win48.9 VAL n544/PF0.599/win49.26 score=0.5885 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n515/PF0.577/win48.16 VAL n497/PF0.6/win49.3 score=0.5655 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n446/PF0.577/win48.21 VAL n463/PF0.571/win47.95 score=0.568 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n344/PF0.573/win47.97 VAL n370/PF0.594/win48.92 score=0.5625 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n372/PF0.592/win48.92 VAL n355/PF0.634/win50.99 score=0.571 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n546/PF0.592/win48.9 VAL n544/PF0.599/win49.26 score=0.5885 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n540/PF0.588/win48.7 VAL n541/PF0.612/win49.72 score=0.576 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | KEEP | FIT n522/PF0.606/win49.43 VAL n526/PF0.609/win49.62 score=0.6045 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n545/PF0.603/win49.36 VAL n537/PF0.597/win49.16 score=0.594 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n522/PF0.606/win49.43 VAL n526/PF0.609/win49.62 score=0.6045 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n486/PF0.58/win48.35 VAL n483/PF0.633/win50.52 score=0.5535 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n464/PF0.557/win47.41 VAL n462/PF0.627/win50.43 score=0.522 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n522/PF0.606/win49.43 VAL n526/PF0.609/win49.62 score=0.6045 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n235/PF0.513/win45.53 VAL n247/PF0.661/win51.42 score=0.439 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n375/PF0.592/win49.07 VAL n379/PF0.65/win51.19 score=0.563 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n450/PF0.575/win48.44 VAL n452/PF0.631/win50.44 score=0.547 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n522/PF0.606/win49.43 VAL n526/PF0.609/win49.62 score=0.6045 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n515/PF0.597/win49.13 VAL n511/PF0.6/win49.32 score=0.5955 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n522/PF0.606/win49.43 VAL n525/PF0.602/win49.33 score=0.6 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n522/PF0.606/win49.43 VAL n526/PF0.609/win49.62 score=0.6045 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n619/PF0.446/win48.95 VAL n596/PF0.485/win51.17 score=0.4265 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | reject | FIT n581/PF0.539/win50.09 VAL n562/PF0.541/win50.36 score=0.538 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n495/PF0.641/win42.02 VAL n491/PF0.641/win41.96 score=0.641 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n582/PF0.508/win37.97 VAL n559/PF0.611/win42.4 score=0.4565 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n551/PF0.555/win44.46 VAL n529/PF0.604/win44.8 score=0.5305 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n535/PF0.562/win45.23 VAL n526/PF0.636/win47.91 score=0.525 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n577/PF0.402/win28.6 VAL n555/PF0.446/win30.99 score=0.38 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n577/PF0.405/win28.6 VAL n555/PF0.454/win30.81 score=0.3805 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n495/PF0.641/win42.02 VAL n491/PF0.641/win41.96 score=0.641 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | reject | FIT n290/PF0.571/win38.62 VAL n301/PF0.6/win40.53 score=0.5565 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | reject | FIT n388/PF0.586/win39.69 VAL n389/PF0.631/win41.65 score=0.5635 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | KEEP | FIT n452/PF0.665/win42.92 VAL n446/PF0.661/win42.83 score=0.659 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n482/PF0.645/win42.12 VAL n471/PF0.665/win42.89 score=0.635 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> None | reject | FIT n521/PF0.682/win42.61 VAL n509/PF0.413/win32.61 score=0.2785 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.25 | reject | FIT n568/PF0.675/win42.43 VAL n524/PF0.51/win37.6 score=0.4275 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.3 | reject | FIT n573/PF0.616/win40.66 VAL n545/PF0.489/win36.51 score=0.4255 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.35 | reject | FIT n589/PF0.625/win40.92 VAL n574/PF0.514/win37.28 score=0.4585 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.45] -> 0.45 | reject | FIT n452/PF0.665/win42.92 VAL n446/PF0.661/win42.83 score=0.659 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] ['mom2_pct', '>=', 0.0] -> None | reject | FIT n455/PF0.638/win41.76 VAL n446/PF0.67/win43.05 score=0.622 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom2_pct', '>=', 0.0] -> ('mom2_pct', '>=', 0.0) | reject | FIT n452/PF0.665/win42.92 VAL n446/PF0.661/win42.83 score=0.659 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom2_pct', '>=', 0.0] -> ('mom3_pct', '>=', 0.1) | reject | FIT n423/PF0.628/win41.61 VAL n406/PF0.663/win42.86 score=0.6105 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom2_pct', '>=', 0.0] -> ('adx', '>=', 20) | reject | FIT n375/PF0.668/win42.93 VAL n393/PF0.622/win41.22 score=0.599 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom2_pct', '>=', 0.0] -> ('adx', '>=', 25) | reject | FIT n292/PF0.663/win42.81 VAL n328/PF0.615/win40.85 score=0.591 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom2_pct', '>=', 0.0] -> ('macd_hist', '>=', 0.0) | KEEP | FIT n300/PF0.675/win43.33 VAL n299/PF0.685/win43.81 score=0.67 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> None | KEEP | FIT n316/PF0.682/win43.67 VAL n314/PF0.698/win44.27 score=0.674 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 3.0) | KEEP | FIT n311/PF0.702/win44.37 VAL n306/PF0.712/win44.77 score=0.697 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n300/PF0.675/win43.33 VAL n299/PF0.685/win43.81 score=0.67 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] ['vwap_dist_atr', '<=', 2.0] -> ('rsi', '<=', 80) | reject | FIT n313/PF0.652/win42.49 VAL n307/PF0.681/win43.65 score=0.6375 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n311/PF0.702/win44.37 VAL n306/PF0.712/win44.77 score=0.697 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n285/PF0.661/win43.16 VAL n276/PF0.67/win43.12 score=0.6565 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n278/PF0.636/win42.09 VAL n270/PF0.691/win44.07 score=0.6085 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n311/PF0.702/win44.37 VAL n306/PF0.712/win44.77 score=0.697 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n152/PF0.586/win40.13 VAL n153/PF0.801/win47.06 score=0.4785 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n236/PF0.69/win44.07 VAL n232/PF0.774/win46.55 score=0.648 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n282/PF0.648/win42.55 VAL n271/PF0.833/win48.71 score=0.5555 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n311/PF0.702/win44.37 VAL n306/PF0.712/win44.77 score=0.697 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | KEEP | FIT n309/PF0.701/win44.34 VAL n304/PF0.702/win44.41 score=0.7005 | next=adopt | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n311/PF0.702/win44.37 VAL n306/PF0.712/win44.77 score=0.697 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## F10_RANGE_EXPANSION — LONG Range Expansion After Compression
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n1653/PF0.527/win38.84 VAL n1495/PF0.458/win36.05 score=0.4235 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n2670/PF0.409/win42.25 VAL n2411/PF0.42/win42.22 score=0.4035 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | KEEP | FIT n2077/PF0.44/win39.14 VAL n1952/PF0.468/win40.47 score=0.426 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | KEEP | FIT n1399/PF0.576/win33.38 VAL n1385/PF0.521/win33.0 score=0.4935 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n2073/PF0.483/win33.53 VAL n2018/PF0.462/win32.95 score=0.4515 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n2533/PF0.423/win33.36 VAL n2452/PF0.418/win33.44 score=0.4155 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n2154/PF0.469/win35.65 VAL n2059/PF0.446/win34.48 score=0.4345 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n2069/PF0.377/win25.81 VAL n1805/PF0.388/win26.37 score=0.3715 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n2458/PF0.396/win27.5 VAL n2289/PF0.337/win24.99 score=0.3075 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n1399/PF0.576/win33.38 VAL n1385/PF0.521/win33.0 score=0.4935 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | KEEP | FIT n558/PF0.685/win43.37 VAL n520/PF0.627/win42.12 score=0.598 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | KEEP | FIT n638/PF0.635/win41.85 VAL n601/PF0.63/win41.6 score=0.6275 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | reject | FIT n708/PF0.738/win44.92 VAL n662/PF0.577/win39.12 score=0.4965 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n748/PF0.669/win42.91 VAL n722/PF0.588/win40.17 score=0.5475 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n638/PF0.635/win41.85 VAL n601/PF0.63/win41.6 score=0.6275 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | KEEP | FIT n670/PF0.669/win42.84 VAL n626/PF0.661/win43.61 score=0.657 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | KEEP | FIT n681/PF0.702/win44.05 VAL n652/PF0.678/win44.17 score=0.666 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | KEEP | FIT n723/PF0.696/win43.98 VAL n683/PF0.688/win43.92 score=0.684 | next=adopt | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | reject | FIT n709/PF0.653/win42.6 VAL n682/PF0.707/win44.43 score=0.626 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n723/PF0.696/win43.98 VAL n683/PF0.688/win43.92 score=0.684 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n723/PF0.696/win43.98 VAL n683/PF0.688/win43.92 score=0.684 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | KEEP | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=adopt | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n714/PF0.771/win46.36 VAL n689/PF0.667/win43.54 score=0.615 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n719/PF0.752/win46.18 VAL n666/PF0.629/win41.89 score=0.5675 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n705/PF0.707/win44.68 VAL n644/PF0.622/win41.77 score=0.5795 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n700/PF0.71/win44.43 VAL n642/PF0.646/win42.52 score=0.614 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n628/PF0.741/win45.38 VAL n582/PF0.622/win41.24 score=0.5625 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n689/PF0.695/win43.69 VAL n646/PF0.681/win43.5 score=0.674 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n719/PF0.698/win44.23 VAL n683/PF0.707/win44.8 score=0.6935 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n721/PF0.71/win44.38 VAL n698/PF0.707/win44.41 score=0.7055 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n304/PF0.77/win46.71 VAL n303/PF0.724/win45.54 score=0.701 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n560/PF0.74/win45.71 VAL n558/PF0.683/win44.27 score=0.6545 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n722/PF0.703/win44.46 VAL n689/PF0.676/win43.69 score=0.6625 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n723/PF0.676/win43.29 VAL n670/PF0.664/win43.13 score=0.658 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n739/PF0.696/win43.57 VAL n697/PF0.753/win45.91 score=0.6675 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_075_100 -> b_075_075 | reject | FIT n820/PF0.633/win50.24 VAL n793/PF0.622/win49.81 score=0.6165 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_050 | reject | FIT n1254/PF0.459/win49.68 VAL n1193/PF0.488/win51.3 score=0.4445 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_060_060 | reject | FIT n1036/PF0.552/win50.58 VAL n990/PF0.514/win49.09 score=0.495 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_075_100 | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> b_050_075 | reject | FIT n1049/PF0.581/win40.99 VAL n998/PF0.561/win40.48 score=0.551 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t12 | reject | FIT n930/PF0.512/win43.01 VAL n902/PF0.571/win43.57 score=0.4825 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_t18 | reject | FIT n839/PF0.577/win46.48 VAL n806/PF0.611/win47.39 score=0.56 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04 | reject | FIT n1019/PF0.431/win29.34 VAL n962/PF0.439/win30.56 score=0.427 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_100 -> v_be04_t18 | reject | FIT n1026/PF0.416/win29.14 VAL n965/PF0.425/win29.74 score=0.4115 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 690 -> None | reject | FIT n1466/PF0.685/win42.5 VAL n1387/PF0.657/win41.74 score=0.643 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 660 | reject | FIT n593/PF0.761/win46.21 VAL n565/PF0.658/win43.19 score=0.6065 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 690 | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 720 | reject | FIT n808/PF0.706/win44.31 VAL n783/PF0.637/win42.15 score=0.6025 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 690 -> 750 | reject | FIT n890/PF0.744/win45.51 VAL n870/PF0.631/win41.84 score=0.5745 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] ['atr_pct', '>=', 0.35] -> None | reject | FIT n631/PF0.658/win41.84 VAL n609/PF0.642/win42.2 score=0.634 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.35] -> 0.25 | reject | FIT n662/PF0.69/win43.66 VAL n615/PF0.621/win41.3 score=0.5865 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.35] -> 0.3 | reject | FIT n687/PF0.668/win42.94 VAL n640/PF0.668/win43.59 score=0.668 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.35] -> 0.35 | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] ['atr_pct', '>=', 0.35] -> 0.45 | reject | FIT n710/PF0.661/win42.82 VAL n676/PF0.703/win44.38 score=0.64 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] ['mom3_pct', '>=', 0.1] -> None | reject | FIT n723/PF0.696/win43.98 VAL n683/PF0.688/win43.92 score=0.684 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('mom2_pct', '>=', 0.0) | reject | FIT n723/PF0.696/win43.98 VAL n683/PF0.688/win43.92 score=0.684 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('mom3_pct', '>=', 0.1) | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('adx', '>=', 20) | reject | FIT n714/PF0.771/win46.36 VAL n689/PF0.667/win43.54 score=0.615 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('adx', '>=', 25) | reject | FIT n719/PF0.752/win46.18 VAL n666/PF0.629/win41.89 score=0.5675 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] ['mom3_pct', '>=', 0.1] -> ('macd_hist', '>=', 0.0) | reject | FIT n705/PF0.707/win44.68 VAL n644/PF0.622/win41.77 score=0.5795 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n700/PF0.71/win44.43 VAL n642/PF0.646/win42.52 score=0.614 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n628/PF0.741/win45.38 VAL n582/PF0.622/win41.24 score=0.5625 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n689/PF0.695/win43.69 VAL n646/PF0.681/win43.5 score=0.674 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n719/PF0.698/win44.23 VAL n683/PF0.707/win44.8 score=0.6935 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n721/PF0.71/win44.38 VAL n698/PF0.707/win44.41 score=0.7055 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | reject | FIT n304/PF0.77/win46.71 VAL n303/PF0.724/win45.54 score=0.701 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n560/PF0.74/win45.71 VAL n558/PF0.683/win44.27 score=0.6545 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n722/PF0.703/win44.46 VAL n689/PF0.676/win43.69 score=0.6625 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n726/PF0.706/win43.94 VAL n692/PF0.707/win44.51 score=0.7055 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n723/PF0.676/win43.29 VAL n670/PF0.664/win43.13 score=0.658 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | reject | FIT n739/PF0.696/win43.57 VAL n697/PF0.753/win45.91 score=0.6675 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+## ALL — pooled union
+- [bracket] b_075_075 -> b_075_075 | reject | FIT n2339/PF0.554/win37.84 VAL n2149/PF0.456/win33.18 score=0.407 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_050 | reject | FIT n3529/PF0.385/win38.82 VAL n3312/PF0.339/win36.53 score=0.316 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_060_060 | KEEP | FIT n2946/PF0.442/win37.68 VAL n2733/PF0.428/win36.63 score=0.421 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_075_100 | reject | FIT n1988/PF0.538/win29.93 VAL n1873/PF0.434/win26.37 score=0.382 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> b_050_075 | reject | FIT n2936/PF0.477/win31.61 VAL n2641/PF0.417/win29.0 score=0.387 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t12 | reject | FIT n3197/PF0.418/win31.81 VAL n3069/PF0.374/win29.2 score=0.352 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_t18 | reject | FIT n2821/PF0.471/win34.35 VAL n2646/PF0.432/win31.86 score=0.4125 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04 | reject | FIT n2714/PF0.374/win25.02 VAL n2621/PF0.342/win23.92 score=0.326 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_075_075 -> v_be04_t18 | reject | FIT n3157/PF0.327/win23.28 VAL n2933/PF0.319/win24.04 score=0.315 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] None -> None | reject | FIT n2946/PF0.442/win37.68 VAL n2733/PF0.428/win36.63 score=0.421 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 660 | KEEP | FIT n1132/PF0.492/win47.7 VAL n1015/PF0.469/win46.5 score=0.4575 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 690 | reject | FIT n1320/PF0.499/win48.18 VAL n1150/PF0.447/win45.57 score=0.421 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 720 | KEEP | FIT n1486/PF0.502/win48.25 VAL n1296/PF0.499/win47.99 score=0.4975 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] None -> 750 | reject | FIT n1643/PF0.501/win48.33 VAL n1418/PF0.484/win47.11 score=0.4755 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n1486/PF0.502/win48.25 VAL n1296/PF0.499/win47.99 score=0.4975 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | reject | FIT n1534/PF0.513/win48.76 VAL n1361/PF0.466/win46.44 score=0.4425 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | reject | FIT n1692/PF0.514/win49.05 VAL n1454/PF0.482/win47.46 score=0.466 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n1767/PF0.514/win48.9 VAL n1636/PF0.46/win46.39 score=0.433 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | reject | FIT n2192/PF0.543/win50.36 VAL n1933/PF0.486/win47.7 score=0.4575 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n1486/PF0.502/win48.25 VAL n1296/PF0.499/win47.99 score=0.4975 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n1416/PF0.531/win49.51 VAL n1266/PF0.475/win47.0 score=0.447 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n1514/PF0.555/win50.73 VAL n1311/PF0.492/win47.83 score=0.4605 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n1434/PF0.524/win49.23 VAL n1352/PF0.462/win46.15 score=0.431 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n1519/PF0.549/win50.56 VAL n1326/PF0.481/win47.44 score=0.447 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n1537/PF0.529/win49.51 VAL n1348/PF0.45/win45.55 score=0.4105 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n1486/PF0.502/win48.25 VAL n1296/PF0.499/win47.99 score=0.4975 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | reject | FIT n1455/PF0.48/win47.15 VAL n1299/PF0.457/win45.88 score=0.4455 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n1444/PF0.492/win47.65 VAL n1221/PF0.439/win44.72 score=0.4125 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n1425/PF0.506/win48.56 VAL n1211/PF0.458/win45.83 score=0.434 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n1486/PF0.502/win48.25 VAL n1296/PF0.499/win47.99 score=0.4975 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n1414/PF0.506/win48.37 VAL n1232/PF0.442/win44.97 score=0.41 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n1436/PF0.566/win51.39 VAL n1248/PF0.432/win44.39 score=0.365 | next=revert | _candle strength: decisive close near high_
+- [topn] None -> None | reject | FIT n1486/PF0.502/win48.25 VAL n1296/PF0.499/win47.99 score=0.4975 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 1 | KEEP | FIT n448/PF0.576/win52.01 VAL n431/PF0.595/win52.67 score=0.5665 | next=adopt | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 2 | reject | FIT n842/PF0.566/win51.54 VAL n831/PF0.499/win48.38 score=0.4655 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] None -> 3 | reject | FIT n1221/PF0.581/win52.17 VAL n1226/PF0.486/win47.72 score=0.4385 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] None -> None | reject | FIT n448/PF0.576/win52.01 VAL n431/PF0.595/win52.67 score=0.5665 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 2 | reject | FIT n305/PF0.66/win55.41 VAL n292/PF0.594/win52.74 score=0.561 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] None -> 3 | KEEP | FIT n361/PF0.597/win52.91 VAL n353/PF0.582/win52.12 score=0.5745 | next=adopt | _per-symbol-per-day cap (spread risk, more names)_
+- [bracket] b_060_060 -> b_075_075 | KEEP | FIT n347/PF0.674/win52.45 VAL n343/PF0.627/win50.73 score=0.6035 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> b_050_050 | reject | FIT n366/PF0.468/win50.27 VAL n357/PF0.512/win52.38 score=0.446 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> b_060_060 | reject | FIT n361/PF0.597/win52.91 VAL n353/PF0.582/win52.12 score=0.5745 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> b_075_100 | KEEP | FIT n336/PF0.718/win44.94 VAL n338/PF0.661/win43.2 score=0.6325 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> b_050_075 | KEEP | FIT n355/PF0.642/win43.66 VAL n348/PF0.646/win43.68 score=0.64 | next=adopt | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> v_t12 | reject | FIT n348/PF0.654/win50.29 VAL n344/PF0.638/win49.42 score=0.63 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> v_t18 | reject | FIT n347/PF0.657/win51.01 VAL n343/PF0.637/win50.73 score=0.627 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> v_be04 | reject | FIT n356/PF0.366/win25.28 VAL n350/PF0.326/win24.29 score=0.306 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [bracket] b_060_060 -> v_be04_t18 | reject | FIT n356/PF0.354/win24.72 VAL n350/PF0.327/win24.86 score=0.3135 | next=revert | _tight bracket / exit-variant selection (headline 0.75/0.75 anchor)_
+- [time_guard] 720 -> None | reject | FIT n650/PF0.568/win40.15 VAL n652/PF0.604/win41.56 score=0.55 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 720 -> 660 | reject | FIT n242/PF0.646/win43.8 VAL n245/PF0.601/win42.04 score=0.5785 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 720 -> 690 | KEEP | FIT n305/PF0.65/win43.93 VAL n300/PF0.653/win44.0 score=0.6485 | next=adopt | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 720 -> 720 | reject | FIT n355/PF0.642/win43.66 VAL n348/PF0.646/win43.68 score=0.64 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [time_guard] 720 -> 750 | reject | FIT n401/PF0.629/win43.14 VAL n397/PF0.598/win41.81 score=0.5825 | next=revert | _morning-only: strongest edge (35pp) — afternoon follow-through collapses_
+- [atr_floor] None -> None | reject | FIT n305/PF0.65/win43.93 VAL n300/PF0.653/win44.0 score=0.6485 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.25 | reject | FIT n305/PF0.65/win43.93 VAL n300/PF0.653/win44.0 score=0.6485 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.3 | reject | FIT n305/PF0.65/win43.93 VAL n299/PF0.657/win44.15 score=0.6465 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.35 | reject | FIT n305/PF0.65/win43.93 VAL n298/PF0.661/win44.3 score=0.6445 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [atr_floor] None -> 0.45 | reject | FIT n304/PF0.645/win43.75 VAL n297/PF0.665/win44.44 score=0.635 | next=revert | _ATR%% floor: need room to reach +0.75%% fast (30pp edge); reject dead-low ATR_
+- [momentum] None -> None | reject | FIT n305/PF0.65/win43.93 VAL n300/PF0.653/win44.0 score=0.6485 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom2_pct', '>=', 0.0) | reject | FIT n318/PF0.653/win44.03 VAL n309/PF0.619/win42.72 score=0.602 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('mom3_pct', '>=', 0.1) | reject | FIT n322/PF0.639/win43.48 VAL n318/PF0.608/win42.45 score=0.5925 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 20) | reject | FIT n306/PF0.655/win44.12 VAL n304/PF0.674/win44.74 score=0.6455 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('adx', '>=', 25) | reject | FIT n305/PF0.65/win43.93 VAL n304/PF0.648/win43.75 score=0.647 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [momentum] None -> ('macd_hist', '>=', 0.0) | reject | FIT n330/PF0.55/win40.0 VAL n322/PF0.604/win42.24 score=0.523 | next=revert | _momentum continuation (~15pp): prior 2-3 bar push / trend strength_
+- [overext] None -> None | reject | FIT n305/PF0.65/win43.93 VAL n300/PF0.653/win44.0 score=0.6485 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 3.0) | KEEP | FIT n311/PF0.679/win45.02 VAL n303/PF0.667/win44.55 score=0.661 | next=adopt | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('vwap_dist_atr', '<=', 2.0) | reject | FIT n314/PF0.618/win42.68 VAL n311/PF0.522/win38.59 score=0.474 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [overext] None -> ('rsi', '<=', 80) | reject | FIT n326/PF0.665/win44.48 VAL n312/PF0.562/win40.38 score=0.5105 | next=revert | _avoid overextension: far-above-VWAP and overbought pop less_
+- [strength] None -> None | reject | FIT n311/PF0.679/win45.02 VAL n303/PF0.667/win44.55 score=0.661 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('close_loc', '>=', 0.6) | reject | FIT n326/PF0.673/win44.79 VAL n318/PF0.647/win43.71 score=0.634 | next=revert | _candle strength: decisive close near high_
+- [strength] None -> ('body_frac', '>=', 0.5) | reject | FIT n346/PF0.625/win43.06 VAL n339/PF0.607/win42.18 score=0.598 | next=revert | _candle strength: decisive close near high_
+- [topn] 1 -> None | reject | FIT n1256/PF0.559/win40.13 VAL n1085/PF0.508/win38.25 score=0.4825 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 1 | reject | FIT n311/PF0.679/win45.02 VAL n303/PF0.667/win44.55 score=0.661 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 2 | reject | FIT n571/PF0.704/win45.88 VAL n577/PF0.549/win39.86 score=0.4715 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [topn] 1 -> 3 | reject | FIT n810/PF0.67/win44.69 VAL n847/PF0.552/win40.02 score=0.493 | next=revert | _top_n strongest per (day,slot) by atr_pct_
+- [cap_sym] 3 -> None | reject | FIT n360/PF0.642/win43.61 VAL n340/PF0.624/win42.94 score=0.615 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] 3 -> 2 | reject | FIT n268/PF0.735/win47.01 VAL n264/PF0.622/win42.8 score=0.5655 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+- [cap_sym] 3 -> 3 | reject | FIT n311/PF0.679/win45.02 VAL n303/PF0.667/win44.55 score=0.661 | next=revert | _per-symbol-per-day cap (spread risk, more names)_
+
+### F1_VWAP_RECLAIM BEST -> TRAIN n=1559 PF=0.678 net=Rs-250,050 win=43.49% exp=Rs-160.4/tr tgt/sl/eod/time=640/820/99/0 tpd=51.97 dayDom=0.014 symDom=0.014 topTr=0.002 hold=68.6m maxDD=Rs255,222 tie=0.0%
+    TEST n=489 PF=0.658 net=Rs-85,281 win=42.54% exp=Rs-174.4/tr tgt/sl/eod/time=203/263/23/0 tpd=48.9 dayDom=0.0 symDom=0.019 topTr=0.005 hold=72.4m maxDD=Rs91,393 tie=0.0%  | passes_gate=False
+
+### F2_PRESSURE_BURST BEST -> TRAIN n=773 PF=0.765 net=Rs-88,906 win=46.7% exp=Rs-115.0/tr tgt/sl/eod/time=358/408/7/0 tpd=25.77 dayDom=0.021 symDom=0.011 topTr=0.003 hold=39.2m maxDD=Rs98,315 tie=0.0%
+    TEST n=209 PF=0.739 net=Rs-27,001 win=45.45% exp=Rs-129.2/tr tgt/sl/eod/time=95/110/4/0 tpd=20.9 dayDom=0.083 symDom=0.053 topTr=0.011 hold=46.9m maxDD=Rs34,814 tie=0.0%  | passes_gate=False
+
+### F3_CONSOL_EXPANSION BEST -> TRAIN n=502 PF=0.822 net=Rs-42,238 win=48.61% exp=Rs-84.1/tr tgt/sl/eod/time=239/255/8/0 tpd=16.73 dayDom=0.022 symDom=0.032 topTr=0.004 hold=41.8m maxDD=Rs52,377 tie=0.0%
+    TEST n=147 PF=0.582 net=Rs-33,209 win=40.14% exp=Rs-225.9/tr tgt/sl/eod/time=56/85/6/0 tpd=14.7 dayDom=0.071 symDom=0.053 topTr=0.018 hold=52.7m maxDD=Rs38,912 tie=0.0%  | passes_gate=False
+
+### F4_FAILED_BREAKDOWN BEST -> TRAIN n=577 PF=0.78 net=Rs-59,866 win=47.14% exp=Rs-103.8/tr tgt/sl/eod/time=260/287/30/0 tpd=19.23 dayDom=0.032 symDom=0.015 topTr=0.004 hold=73.9m maxDD=Rs74,766 tie=0.0%
+    TEST n=98 PF=0.497 net=Rs-27,810 win=35.71% exp=Rs-283.8/tr tgt/sl/eod/time=34/58/6/0 tpd=9.8 dayDom=0.13 symDom=0.059 topTr=0.03 hold=87.1m maxDD=Rs28,394 tie=0.0%  | passes_gate=False
+
+### F5_PULLBACK_CONT BEST -> TRAIN n=644 PF=0.823 net=Rs-53,787 win=48.29% exp=Rs-83.5/tr tgt/sl/eod/time=309/327/8/0 tpd=21.47 dayDom=0.037 symDom=0.028 topTr=0.003 hold=42.6m maxDD=Rs63,328 tie=0.0%
+    TEST n=205 PF=0.729 net=Rs-27,507 win=45.37% exp=Rs-134.2/tr tgt/sl/eod/time=91/108/6/0 tpd=20.5 dayDom=0.06 symDom=0.054 topTr=0.011 hold=56.1m maxDD=Rs34,809 tie=0.0%  | passes_gate=False
+
+### F6_VOLUME_EXPANSION BEST -> TRAIN n=950 PF=0.675 net=Rs-153,746 win=43.68% exp=Rs-161.8/tr tgt/sl/eod/time=388/498/64/0 tpd=31.67 dayDom=0.027 symDom=0.017 topTr=0.003 hold=80.2m maxDD=Rs153,630 tie=0.0%
+    TEST n=328 PF=0.676 net=Rs-52,770 win=43.29% exp=Rs-160.9/tr tgt/sl/eod/time=132/171/25/0 tpd=32.8 dayDom=0.023 symDom=0.02 topTr=0.01 hold=91.5m maxDD=Rs57,497 tie=0.0%  | passes_gate=False
+
+### F7_TREND_CONT BEST -> TRAIN n=750 PF=0.708 net=Rs-109,750 win=44.27% exp=Rs-146.3/tr tgt/sl/eod/time=328/403/19/0 tpd=25.0 dayDom=0.04 symDom=0.02 topTr=0.003 hold=42.5m maxDD=Rs110,876 tie=0.0%
+    TEST n=181 PF=0.739 net=Rs-23,336 win=45.3% exp=Rs-128.9/tr tgt/sl/eod/time=82/96/3/0 tpd=18.1 dayDom=0.04 symDom=0.049 topTr=0.013 hold=45.6m maxDD=Rs35,252 tie=0.0%  | passes_gate=False
+
+### F8_OPENING_STRENGTH BEST -> TRAIN n=455 PF=0.647 net=Rs-83,445 win=41.76% exp=Rs-183.4/tr tgt/sl/eod/time=189/253/13/0 tpd=15.17 dayDom=0.058 symDom=0.031 topTr=0.005 hold=55.3m maxDD=Rs83,206 tie=0.0%
+    TEST n=102 PF=0.694 net=Rs-15,986 win=44.12% exp=Rs-156.7/tr tgt/sl/eod/time=45/55/2/0 tpd=10.2 dayDom=0.08 symDom=0.045 topTr=0.023 hold=55.7m maxDD=Rs16,076 tie=0.0%  | passes_gate=False
+
+### F9_MIDDAY_RECLAIM BEST -> TRAIN n=615 PF=0.708 net=Rs-89,755 win=44.55% exp=Rs-145.9/tr tgt/sl/eod/time=266/327/22/0 tpd=20.5 dayDom=0.025 symDom=0.022 topTr=0.004 hold=66.7m maxDD=Rs96,311 tie=0.0%
+    TEST n=105 PF=0.622 net=Rs-20,820 win=41.9% exp=Rs-198.3/tr tgt/sl/eod/time=42/58/5/0 tpd=10.5 dayDom=0.082 symDom=0.071 topTr=0.024 hold=72.4m maxDD=Rs22,332 tie=0.0%  | passes_gate=False
+
+### F10_RANGE_EXPANSION BEST -> TRAIN n=1409 PF=0.679 net=Rs-225,369 win=43.44% exp=Rs-159.9/tr tgt/sl/eod/time=581/743/85/0 tpd=46.97 dayDom=0.01 symDom=0.011 topTr=0.002 hold=76.0m maxDD=Rs225,246 tie=0.0%
+    TEST n=421 PF=0.598 net=Rs-89,484 win=40.14% exp=Rs-212.6/tr tgt/sl/eod/time=164/235/22/0 tpd=42.1 dayDom=0.022 symDom=0.024 topTr=0.008 hold=83.5m maxDD=Rs96,628 tie=0.0%  | passes_gate=False
+
+### ALL BEST -> TRAIN n=614 PF=0.673 net=Rs-74,897 win=44.79% exp=Rs-122.0/tr tgt/sl/eod/time=275/338/1/0 tpd=20.47 dayDom=0.025 symDom=0.023 topTr=0.004 hold=15.5m maxDD=Rs77,148 tie=0.0%
+    TEST n=207 PF=0.576 net=Rs-35,082 win=41.06% exp=Rs-169.5/tr tgt/sl/eod/time=85/122/0/0 tpd=20.7 dayDom=0.043 symDom=0.035 topTr=0.012 hold=19.1m maxDD=Rs38,958 tie=0.0%  | passes_gate=False

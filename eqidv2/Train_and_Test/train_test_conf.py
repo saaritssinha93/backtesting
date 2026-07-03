@@ -45,6 +45,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pool_dir", default=DEFAULT_POOL)
     ap.add_argument("--setups", default="", help="comma list to restrict (default: all conf setups)")
+    # Optional window pinning (default = dynamic train_test_window). Use when the pool's
+    # data ends before 'today' so the holdout lands on days that have candidates.
+    ap.add_argument("--train_start", default="")
+    ap.add_argument("--train_end", default="")
+    ap.add_argument("--test_start", default="")
+    ap.add_argument("--test_end", default="")
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(line_buffering=True)   # stream per-setup rows live
@@ -52,6 +58,10 @@ def main() -> int:
         pass
     tt.POOL_DIRS = [Path(args.pool_dir)]
     tt.POOL_DIR = Path(args.pool_dir)
+    if args.train_start or args.train_end:
+        tt.TRAIN = (args.train_start or tt.TRAIN[0], args.train_end or tt.TRAIN[1])
+    if args.test_start or args.test_end:
+        tt.TEST = (args.test_start or tt.TEST[0], args.test_end or tt.TEST[1])
 
     configs = {name: _conf_to_config(cfg) for name, cfg in fc.FINAL_SETUP_CONF.items()}
     if args.setups:

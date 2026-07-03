@@ -23,7 +23,10 @@ set "END_CUTOFF_HHMM=1535"
 set "MAX_RESTARTS=20"
 set "RESTART_DELAY_SEC=15"
 set "MONITOR_INTERVAL_SEC=5"
-set "HUNG_TIMEOUT_SEC=600"
+rem The entry engine is intentionally quiet while waiting for the first slot
+rem and after END_TIME. Worker heartbeat freshness is the authoritative
+rem liveness check; log-idle hung kills create false restarts.
+set "HUNG_TIMEOUT_SEC=0"
 set "WORKER_STALE_TIMEOUT_SEC=180"
 set "WORKER_START_GRACE_SEC=120"
 

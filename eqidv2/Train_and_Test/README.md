@@ -20,7 +20,7 @@ v11 full backtest and v7 live. One pool, one split, one config of record.
                                    │
  [2] run_train_test.bat <FAMILY> ─► setup_train_test.py --pool_dir <pool>
                               DYNAMIC window (train_test_window.py, rolls from today):
-                              TEST = last 2 weeks,  TRAIN = the 3 months before TEST
+                              TEST = last 4 weeks,  TRAIN = the 3 months before TEST
                               writes proposals (per-setup train/test stats + chosen gate)
                                    │  (review, then) --approve
                                    ▼
@@ -42,7 +42,7 @@ v11 full backtest and v7 live. One pool, one split, one config of record.
 ```
 # 1. (re)build the one pool  — fast merge of existing generated candidates
 py -3.12 Train_and_Test\build_unified_pool.py
-#    window is DYNAMIC by default (TEST=last 2w, TRAIN=3mo before); pin with --train-end/--test-start
+#    window is DYNAMIC by default (TEST=last 4w, TRAIN=3mo before); pin with --train-end/--test-start
 
 # 2. tune a family on the unified pool (review only; no config change)
 Train_and_Test\run_train_test.bat P
@@ -65,7 +65,7 @@ bat\run_conf_paper_executor.bat
 ## Files in this folder
 | File | Role |
 |---|---|
-| `train_test_window.py`  | dynamic TRAIN/TEST window from today (TEST=last 2w, TRAIN=3mo before); shared by the pool builder + tuner |
+| `train_test_window.py`  | dynamic TRAIN/TEST window from today (TEST=last 4w, TRAIN=3mo before); shared by the pool builder + tuner |
 | `build_unified_pool.py` | merge all families into one (i)-correct pool + manifest |
 | `setup_train_test.py`   | honest per-family train/test tuner; `--approve` writes root `final_setup_conf.py` |
 | `run_train_test.bat`    | wrapper: tune a family against the unified pool |
@@ -81,10 +81,15 @@ bat\run_conf_paper_executor.bat
 - **Same gating in backtest and live** (verified): conf mask bit-identical; pre-momentum
   features identical; native through v8/research, 10 non-native readmitted (option i).
 - **Tier-C parity** validated 100% vs current research sources (`validate_conf_tier_c_parity.py`).
-- **Dynamic window + freshness:** TEST is the most recent 2 weeks (rolls forward daily), so the pool
+- **Dynamic window + freshness:** TEST is the most recent 4 weeks (rolls forward daily), so the pool
   must be **rebuilt with fresh candidates** or the latest TEST days will be empty (the manifest's
   `date_max` shows coverage; if it lags `today`, the tail of TEST has no rows). Pin a fixed window with
   `--train_start/--train_end/--test_start/--test_end` (tuner) or `--train-end/--test-start` (builder).
+- **Honest promotion defaults:** the tuner now targets a modest, trade-rich TRAIN PF band
+  (`1.40..1.70`) instead of chasing PF>2, requires `min_train_trades=50`,
+  `min_test_trades=20`, `oos/is>=0.65`, `minhalf_pf>=1.10`, and bans the most common
+  overfit vectors from per-setup search by default: `market_ret_pct`,
+  `market_abs_ret_pct`, `signal_minute`, and `notional`.
 - **Regenerate cadence:** rebuild the pool when new sessions are added (manifest records coverage
   + split). The native basis reuses `outputs_ID_v11_traintest_pool`; the readmit/tier-c basis reuses
   `outputs_ID_v11_cleanpool` + `outputs_ID_v11_conf_tier_c_current`.

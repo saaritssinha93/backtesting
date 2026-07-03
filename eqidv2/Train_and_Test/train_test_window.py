@@ -1,7 +1,7 @@
 """Dynamic train/test windows for the Train_and_Test pipeline.
 
 Policy (relative to 'today', rolls forward every day):
-    TEST  = the most recent `test_weeks` weeks      ->  [today - 2w + 1d, today]
+    TEST  = the most recent `test_weeks` weeks
     TRAIN = the `train_months` months before TEST    ->  [test_start - 3mo, test_start - 1d]
 
 TRAIN and TEST are adjacent and non-overlapping. Both move forward each day, so the
@@ -15,11 +15,11 @@ from __future__ import annotations
 import pandas as pd
 
 
-def compute_windows(today=None, test_weeks: int = 2, train_months: int = 3) -> dict:
+def compute_windows(today=None, test_weeks: int = 4, train_months: int = 3) -> dict:
     """Return {'train': (start,end), 'test': (start,end), 'today':..., 'policy':...} (YYYY-MM-DD)."""
     today = pd.Timestamp.today().normalize() if today is None else pd.Timestamp(today).normalize()
     test_end = today
-    # "2 weeks back" inclusive of today -> a 14-day window ending today
+    # Inclusive rolling holdout ending today.
     test_start = today - pd.Timedelta(weeks=test_weeks) + pd.Timedelta(days=1)
     train_end = test_start - pd.Timedelta(days=1)             # adjacent, no overlap
     train_start = (train_end - pd.DateOffset(months=train_months) + pd.Timedelta(days=1)).normalize()

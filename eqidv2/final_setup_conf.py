@@ -11,7 +11,7 @@ Currently contains SIXTEEN probation setups (all sample-limited — adopt, do no
   - B_HUGE_C1_CLOSE_RECLAIM_BREAK (LONG)               — regime != BULL (categorical)
   - D_EMA20_REJECTION (SHORT)                          — pre-momentum-gated (the gate is the edge)
   - E_VWAP_LOSE_EARLY_SHORT (SHORT)                    — vol_ratio band [1.8,3.2] (STRONG: p 0.004); pre-momentum DROPPED
-  - G_HIGHER_HIGH_BREAK (LONG)                         — pre-momentum-gated (pre2_mom_r>=0.55 & adx>=26); exit 0.90/2.50 (STRONG: train 2.38/test 2.66, p 0.005)
+  - G_HIGHER_HIGH_BREAK (LONG)                         — 2026-06-29 USER FORCE-PROMOTE of Optuna loop winner (mask atr_pct>=0.0021 & upper_wick_pct>=0.0224 + premom sig5_vol_ratio20<=3.83; exit 1.20/2.00). *** FAILED gate (NOT SELECTED; dominance-cap breach, test day_block_p 0.37); SCREENING-ONLY firehose basis — confirm on v11 conf backtest. Prior 2026-06-12 config was pre2_mom_r>=0.55 & adx>=26, exit 0.90/2.50. ***
   - L_DOUBLE_BOTTOM_VWAP (LONG)                        — pre-momentum-gated (pre_entry_momentum_score>=79 & adx>=28); exit 0.90/1.50 (STRONG: train 2.55/test 3.57, p 0.033) *** RAW-POOL caveat: see provenance.gating_caveat ***
   - L_PRESSURE_BURST_VWAP (LONG)                       — quality_score<=25 mask + pre1_adx>=44 gate; exit 0.70/1.25 (WEAK/CAUTION: train 2.24/test 2.03 but fails monotonic-sensitivity + multi-exit-sig; USER_APPROVED_OVERRIDE_WEAK; RAW-POOL) TIER123-OVERLAY + thin-test(n=8) caveat *** SCANNER-ENRICHED feats (ema20_slope/rsi3max) wiring caveat + thin May-only test (n=12/6d) ***
   - L_RS_LEADER_VWAP_HOLD (LONG)                       — RS-leader VWAP test-and-hold; mask quality_score>=97 & vol_ratio>=2.16 & vwap_dist_atr<=1.49 (near-VWAP) & signal_minute<=660; exit 0.50/1.25 (STRONG on CORRECTED VWAP: train 2.74/test 3.82, 5/5 exits, 82% months) *** SCANNER-SOURCE; rescued by the 2026-06-13 VWAP fix ***
@@ -21,7 +21,7 @@ Currently contains SIXTEEN probation setups (all sample-limited — adopt, do no
   - B_HUGE_RED_FAILED_BOUNCE (SHORT)                   - mined short; failed-bounce after huge red bar; pre-mom pre3_close_pos<=0.58 & sig5_rsi_dir<=64 & pre5_mom_r<=0.28; exit 0.90/1.25 (STRONG: train 2.90/test 3.49, 5/5 exits, even halves, top1d 26%)
   - C_OR_BREAKDOWN (SHORT)                             - mined short; OR-breakdown in a strong downtrend; SIMPLE 2-term pre-mom sig5_adx_calc>=39.7 & pre1_adx<=21.4; exit 0.90/2.00 (STRONG: train 2.78/test 5.26, 5/5 exits, top1d 29%; halves imbalanced)
   - A_MOD_BREAK_C1_LOW (SHORT)                         - mined short (deeper A_MOD mine); momentum breakdown from a TIGHT pre-break range; mask vol_ratio>=1.96 + pre-mom pre5_mom_r>=0.43 & pre3_range_r<=0.20; exit 1.10/1.00 (STRONG: train 2.58/test 2.83, even halves, 88% months, MONOTONE sens)
-  - G_LOWER_LOW_BREAK (SHORT)                          - mined short (SELECTIVE); volume-climax exhaustion lower-low break; mask vol_ratio>=4.1 & quality_score>=76 + pre-mom sig5_rsi_dir>=68.7; exit 1.10/1.00 (4/5 exits, even halves, top1d27%, 100% months) *** thin count: test n=9, needs 4x volume ***
+  - G_LOWER_LOW_BREAK (SHORT)                          - mined short (SELECTIVE); volume-climax exhaustion lower-low break; mask vol_ratio>=4.1 & quality_score>=76 + pre-mom sig5_rsi_dir>=68.7; exit 0.80/0.80 (user override 2026-06-29; prior tested primary 1.10/1.00) *** thin count: test n=9, needs 4x volume ***
 
 It ALSO contains a RESEARCH_WATCH_CONF block (enabled=False — NEVER traded by v11) for
 setups that were deeply diagnosed (exit sweeps x sub-populations x pre-momentum on/off)
@@ -134,8 +134,8 @@ FINAL_SETUP_CONF = {
         # exit is NOT stable across data slices (see provenance.exit_instability).
         # -------------------------------------------------------------------
         "exit": {"sl_pct": 1.20, "tgt_pct": 1.50},          # clean-pool tuned (v6 default 0.85/1.00)
-        "mask_terms": [],                                   # raw detection only
-        "pre_momentum_terms": [],                           # none
+        "mask_terms": [["quality_score", ">=", 123.7606]],
+        "pre_momentum_terms": [["sig5_adx_calc", ">=", 21.4683]],
         "entry_guards": {},                                 # live 09:30-14:30 window + 1-ticker/day dedupe only
         "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
         "exit_model": "resolve on 1-min OHLC to 15:20 IST (TARGET / SL / EOD)",
@@ -159,7 +159,23 @@ FINAL_SETUP_CONF = {
             "kept_because": ("still net-positive and generalising OOS (test PF 1.85, ratio 1.39, "
                              "75% win in the good weeks) + full-history p=0.024; user-directed keep "
                              "despite weak clean-pool significance"),
-            "status_label": "WEAK / WATCHLIST — re-confirm with more history before trusting at size",
+            "status_label": "USER_REPROMOTED_WATCHLIST — high-quality + ADX gated subset; monitor live-paper before sizing",
+            "user_repromoted_on": "2026-06-29",
+            "user_repromoted_config": {
+                "mask_terms": [["quality_score", ">=", 123.7606]],
+                "pre_momentum_terms": [["sig5_adx_calc", ">=", 21.4683]],
+                "exit": {"sl_pct": 1.20, "tgt_pct": 1.50},
+            },
+            "last_1_month_replay_to_2026_06_29": {
+                "requested_window": ["2026-05-30", "2026-06-29"],
+                "available_candidate_window": ["2026-06-01", "2026-06-24"],
+                "trades": 30,
+                "net_pf": 3.491,
+                "net_pnl_rs": 14749.94,
+                "win_pct": 76.67,
+                "day_block_p": 0.0547,
+                "note": "Backtest/paper evidence only; no live execution performed.",
+            },
         },
     },
 
@@ -276,7 +292,7 @@ FINAL_SETUP_CONF = {
         # (PF 1.96), BULL loses (PF 0.66) — the break in a bull market is a late chase.
         # Filter -> regime != BULL. With detection's regime != BEAR, the effective
         # regime universe is {NEUTRAL, TREND}.
-        "exit": {"sl_pct": 0.70, "tgt_pct": 1.50},            # v6 default
+        "exit": {"sl_pct": 1.00, "tgt_pct": 1.50},            # user override 2026-06-29; prior 0.70/1.50
         "mask_terms": [["regime", "!=", "BULL"]],             # CATEGORICAL; REPLACES no-op rs_pct<=10.7
         "effective_regime_universe": ["NEUTRAL", "TREND"],    # detection excludes BEAR; mask excludes BULL
         "pre_momentum_terms": [],
@@ -287,7 +303,10 @@ FINAL_SETUP_CONF = {
             "approved_on": "2026-06-11", "family": "B",
             "cost_basis": "net_of_nse_intraday_costs",
             "pool": "outputs_ID_v11_cleanpool (Nov3-Jun10, 148 days)",
-            "exit_basis": "fixed 0.70/1.50, pre-dedupe",
+            "exit_basis": "fixed 1.00/1.50, pre-dedupe; user SL override from prior 0.70/1.50",
+            "user_exit_override_2026_06_29": (
+                "User requested SL 1.00%; prior SL 0.70%; target unchanged at 1.50%."
+            ),
             "train_window": ["2025-11-01", "2026-04-30"], "test_window": ["2026-05-01", "2026-06-10"],
             "train": {"trades": 29, "net_pf": 1.11},
             "test": {"trades": 5, "net_pf": "inf", "win_pct": 100.0},
@@ -346,21 +365,52 @@ FINAL_SETUP_CONF = {
         # TUNED v11 CONFIG. The pre-momentum gate (below) is the EDGE; the default
         # exit fits (53% win, mfe_R 0.8). No selected-strategy mask (production
         # body/ranker mask dropped — collapses the sample to n=6).
-        "exit": {"sl_pct": 0.75, "tgt_pct": 1.30},            # v6 default
-        "mask_terms": [],                                     # production body>=0.89 & ranker>=0.39 DROPPED (over-tight)
-        # PRE-ENTRY MOMENTUM GATE (the edge) — 1-min features at entry; ALL required.
-        # Demands recent downward momentum within a contained, trending move:
-        "pre_momentum_terms": [
-            ["pre10_mom_r", "<=", 0.156614],   # not already over-extended down over 10 bars
-            ["pre5_mom_r", ">=", 0.12493],     # genuine recent down-momentum (5 bars), risk-normalised
-            ["sig5_adx_calc", ">=", 20.0],     # 5-min ADX confirms a trend (not chop)
-        ],
+        # ===================================================================
+        # 2026-07-03 USER PROMOTE - relaxed 0bps recovery candidate.
+        # *** WARNING - this candidate did NOT pass the normal approval gate:
+        #     TRAIN n=21 PF=2.7387 but TEST n=9 PF=1.0312, with domination flags.
+        #     Promoted at explicit user direction. See
+        #     provenance.user_promote_2026_07_03_relaxed_0bps.
+        # *** Verify live/conf support for entry_guards.max_slot before assuming the
+        #     live path reproduces this research screen. ***
+        # ===================================================================
+        "exit": {"sl_pct": 1.00, "tgt_pct": 3.00},             # user-promoted relaxed 0bps recovery candidate
+        "mask_terms": [["ema20_dist_atr", "<=", -0.325336]],
+        "pre_momentum_terms": [],
         "pre_momentum_missing_action": "block",
-        "entry_guards": {},
+        "entry_guards": {"max_slot": "12:30"},
         "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
         "exit_model": "resolve on 1-min OHLC to 15:20 IST (TARGET / SL / EOD)",
         "provenance": {
             "approved_on": "2026-06-11", "family": "D",
+            "user_promote_2026_07_03_relaxed_0bps": {
+                "by": "user-directed promotion of relaxed TRAIN PF>=1.30 recovery candidate",
+                "config": {"exit": [1.00, 3.00], "mask": [["ema20_dist_atr", "<=", -0.325336]],
+                           "premom": [], "entry_guards": {"max_slot": "12:30"}},
+                "basis": "setup_recovery_full_loop_0bps_trainpf_ge_1p3; 0bps slippage with statutory costs still on",
+                "metrics": {"fit": {"n": 11, "pf": 1.7351, "net_pnl_rs": 2929.38},
+                            "val": {"n": 10, "pf": 6.1511, "net_pnl_rs": 6037.38},
+                            "train": {"n": 21, "pf": 2.7387, "net_pnl_rs": 8966.76},
+                            "test": {"n": 9, "pf": 1.0312, "net_pnl_rs": 138.88}},
+                "gate_status": "FAILED_NORMAL_APPROVAL - TEST PF<=1.40 and test domination flags; promoted at user direction",
+                "live_caveat": "Verify conf/live support for entry_guards.max_slot before relying on screen-faithful reproduction.",
+                "artifacts": "Train_and_Test/setup_recovery_full_loop_0bps_trainpf_ge_1p3/D_EMA20_REJECTION/",
+            },
+            "force_promote_2026_06_29": {
+                "by": "user-directed force-promote of the Optuna code-loop winner",
+                "config": {"exit": [1.10, 2.00], "mask": [["signal_range_pct", "<=", 0.477829]],
+                           "premom": [["sig5_rsi_dir", ">=", 52.862146]],
+                           "entry_guards": {"min_slot": "11:00", "top_n": 2}},
+                "basis": "native FIREHOSE pool (SCREENING-ONLY; NOT live-faithful) — confirm on the v11 conf backtest",
+                "screen_metrics": {"window": "TRAIN 2026-04-13..2026-05-25 / TEST 2026-05-26..2026-06-24",
+                                   "train_15bps": {"n": 20, "pf": 1.416}, "test_15bps": {"n": 9, "pf": 1.695},
+                                   "train_5bps": {"n": 20, "pf": 2.413}, "test_5bps": {"n": 9, "pf": 2.311}},
+                "gate_status": "FAILED — test n=9, day_dom/trade_dom>0.40 (one day/trade ~80% of net), "
+                               "test day_block_p 0.20; does NOT meet D_EMA20 re-promotion trigger",
+                "live_caveat": "conf-mask honours only entry_guards.min_slot; top_n=2 is NOT enforced by "
+                               "v11/live -> the live book fires more than the screen and will NOT reproduce these PFs",
+                "artifacts": "Train_and_Test/results/D_EMA20_REJECTION/{trials.csv,best_config.json,report.md,equity_*.png}",
+            },
             "cost_basis": "net_of_nse_intraday_costs",
             "pool": "D_EMA20_REJECTION from admitted pre-dedupe clean pool (Nov3-Jun10, 148 days)",
             "exit_basis": "fixed 0.75/1.30",
@@ -455,6 +505,87 @@ FINAL_SETUP_CONF = {
     # train PF>1.5 & test PF>1.3 across a CONTIGUOUS, MONOTONIC neighbourhood (mom[0.4,0.6] x
     # adx[24,30]); both train halves strong (2.47/2.30); test-positive at every exit tested.
     # =======================================================================
+    "E_ORB_BREAKOUT_LONG": {
+        "side": "LONG",
+        "detection": {
+            "reason_tag": "orb_breakout_long",
+            "source": "native selected-strategy setup",
+            "idea": "break of the opening-range high; gated to high-RS, less-extended entries",
+        },
+        "exit": {"sl_pct": 1.00, "tgt_pct": 2.75},
+        "mask_terms": [
+            ["rs_pct", ">=", 5.606893],
+            ["vwap_dist_atr", "<=", 0.979716],
+        ],
+        "pre_momentum_terms": [],
+        "entry_guards": {},
+        "entry_model": "next_1min_open_after_5min_signal + 15bps research slippage in approval loop",
+        "exit_model": "resolve on 1-min OHLC to 15:20 IST (TARGET / SL / EOD)",
+        "provenance": {
+            "approved_on": "2026-06-30",
+            "approved_by": "USER_APPROVED_PERMANENT",
+            "family": "E",
+            "cost_basis": "net_of_nse_intraday_costs",
+            "evaluated_on": "NATIVE_LIVE_GATED_POOL",
+            "pool": r"C:\TradingData\eqidv2\outputs_ID_v11_conf_fresh_20260629",
+            "prior_research_watch": {
+                "status": "REJECTED_BEFORE_REVALIDATION",
+                "old_best_found": {
+                    "mask": [["vwap_dist_atr", "<=", 1.0]],
+                    "exit": {"sl_pct": 0.70, "tgt_pct": 1.50},
+                },
+                "evidence": {
+                    "train_n": 58,
+                    "train_pf": 0.96,
+                    "test_n": 27,
+                    "test_pf": 0.91,
+                    "day_block_p": 0.589,
+                },
+            },
+            "fitval_approval_loop": {
+                "artifacts": "Train_and_Test/setup_pf_1_4_approval_loop/E_ORB_BREAKOUT_LONG/",
+                "train_window": ["2026-05-18", "2026-06-19"],
+                "test_window": ["2026-06-22", "2026-06-24"],
+                "config": {
+                    "exit": {"sl_pct": 1.00, "tgt_pct": 2.50},
+                    "mask_terms": [["rs_pct", ">=", 5.606893], ["vwap_dist_atr", "<=", 0.979716]],
+                },
+                "train": {"trades": 15, "net_pf": 1.608, "net_pnl_rs": 5983, "day_dom": 0.378, "sym_dom": 0.379},
+                "test": {"trades": 4, "net_pf": 5.536, "net_pnl_rs": 5552, "day_dom": 0.814, "sym_dom": 0.407, "day_block_p": 0.1466},
+                "gate_status": "FAILED_STRICT_STABILITY_BUT_USER_REVIEWED",
+            },
+            "two_month_replay": {
+                "window": ["2026-04-27", "2026-06-24"],
+                "sessions": 36,
+                "trades": 22,
+                "net_pf": 1.701,
+                "net_pnl_rs": 10341,
+                "win_pct": 45.5,
+                "target_sl_eod": [10, 12, 0],
+                "avg_win_rs": 2510,
+                "avg_loss_rs": -1230,
+                "max_drawdown_rs": -3686,
+                "top_trade_gross_profit_share": 0.100,
+                "top_day_net_share": 0.485,
+                "top_symbol_net_share": 0.243,
+                "day_block_p": 0.1227,
+            },
+            "target_sweep": {
+                "fixed_sl_pct": 1.00,
+                "best_target_pct": 2.75,
+                "note": "2.75 target beat 2.50 on PF/net and reduced top-day share from 0.576 to 0.485.",
+            },
+            "sl_sweep": {
+                "fixed_target_pct": 2.75,
+                "best_sl_pct": 1.00,
+                "note": "No alternate SL improved the approval blend; 1.00/2.75 remained best.",
+            },
+            "gate_status": "USER_APPROVED_PERMANENT",
+            "gate_miss": "strict stability still thin: top_day_net_share 0.485 > 0.40 and day_block_p 0.1227 > 0.10",
+            "status_label": "USER-APPROVED PERMANENT - high-RS, less-extended ORB long; monitor live-paper before sizing",
+        },
+    },
+
     "G_HIGHER_HIGH_BREAK": {
         "side": "LONG",
         # RAW DETECTION (avwap_5min_ID_v2_backtesting.py L745, "twenty_bar_higher_high_break").
@@ -487,22 +618,74 @@ FINAL_SETUP_CONF = {
                 "prev_20bar_high": "rolling 20-bar prior high (rh)", "regime": "BULL/BEAR/TREND/NEUTRAL",
             },
         },
-        # TUNED v11 CONFIG — the PRE-MOMENTUM GATE is the edge.
-        "exit": {"sl_pct": 0.90, "tgt_pct": 2.50},            # wide target lets the ADX-confirmed runner run
-        "mask_terms": [],                                     # no selected-strategy mask
-        # PRE-ENTRY MOMENTUM GATE (the edge) — 1-min features at entry; ALL required.
-        # Demands a real, trend-confirmed momentum thrust into the breakout (not a one-bar chase):
+        # ===================================================================
+        # 2026-06-29 FORCE-PROMOTE (USER-DIRECTED) — Optuna FIT/VAL→TRAIN/TEST code-loop winner.
+        # *** WARNING — this REPLACES the 2026-06-12 PM-gated config (pre2_mom_r>=0.55 &
+        #     sig5_adx_calc>=26.0, exit 0.90/2.50) with a SCREENING-ONLY (native firehose) config
+        #     that FAILED the selection gate (verdict NOT SELECTED). The binding failure is the
+        #     DOMINANCE_CAP=0.40 rule: TEST day-dominance 2.69 (one session's net exceeds the whole
+        #     window — every other test day nets negative), symbol-dominance 0.575, day_block_p 0.371
+        #     (no day-level significance); TRAIN day-dom 0.815 / sym-dom 0.617. PF clears 1.30 on both
+        #     windows ONLY because of concentrated, non-repeatable days/symbols. It does NOT meet
+        #     G_HIGHER's own re-promotion trigger (test PF>=1.30, test trades>=20, day_block_p<=0.10,
+        #     live-paper holdout PF>=1.20). Promoted at explicit user direction on 2026-06-29.
+        #     See provenance.force_promote_2026_06_29 and Train_and_Test/results/G_HIGHER_HIGH_BREAK/.
+        # *** top_n IS NOT ENFORCED by the conf-mask path — the live bootstrap (conf_mask) and v11
+        #     (_final_setup_conf_mask) honour ONLY entry_guards.min_slot. So v11/live will fire MORE
+        #     candidates than the screened config (which used top_n=3) and will NOT reproduce the
+        #     screen's PF. To make live match the screen, the conf-mask must be extended for top_n. ***
+        # ===================================================================
+        "exit": {"sl_pct": 1.20, "tgt_pct": 2.00},            # Optuna winner (was 0.90/2.50)
+        "mask_terms": [                                       # Optuna winner (firehose-derived thresholds; was [])
+            ["atr_pct", ">=", 0.002102],
+            ["upper_wick_pct", ">=", 0.022387],
+        ],
+        # PRE-ENTRY MOMENTUM GATE — Optuna winner REPLACES the 2026-06-12 pre2_mom_r/adx gate.
         "pre_momentum_terms": [
-            ["pre2_mom_r", ">=", 0.55],        # strong recent 2-bar up-momentum, risk-normalised
-            ["sig5_adx_calc", ">=", 26.0],     # 5-min ADX confirms a genuine trend (not chop/exhaustion)
+            ["sig5_vol_ratio20", "<=", 3.826296],             # Optuna winner; REPLACES pre2_mom_r>=0.55 & sig5_adx_calc>=26.0
         ],
         "pre_momentum_missing_action": "block",
         "dropped_production_gate": [["pre3_close_pos", "<=", 0.985417], ["sig5_rsi_dir", "<=", 67.878]],  # this HURT (ON -21k vs OFF -5.8k)
-        "entry_guards": {},
+        "entry_guards": {"top_n": 3},                         # NOTE: top_n is NOT enforced by conf-mask (min_slot only)
         "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
         "exit_model": "resolve on 1-min OHLC to 15:20 IST (TARGET / SL / EOD)",
         "provenance": {
             "approved_on": "2026-06-12", "family": "G",
+            "force_promote_2026_06_29": {
+                "by": "user-directed force-promote of the Optuna FIT/VAL→TRAIN/TEST code-loop winner",
+                "prior_config": {"exit": [0.90, 2.50], "mask": [], "premom": [["pre2_mom_r", ">=", 0.55],
+                                 ["sig5_adx_calc", ">=", 26.0]], "entry_guards": {}},
+                "config": {"exit": [1.20, 2.00],
+                           "mask": [["atr_pct", ">=", 0.002102], ["upper_wick_pct", ">=", 0.022387]],
+                           "premom": [["sig5_vol_ratio20", "<=", 3.826296]],
+                           "entry_guards": {"top_n": 3}},
+                "basis": "native FIREHOSE pool (SCREENING-ONLY; NOT live-faithful) — confirm on the v11 conf backtest",
+                "optimizer": "Optuna TPE, 300 trials, seed 7, objective min(FIT_PF,VAL_PF) - 0.5*|gap| on FIT/VAL only",
+                "windows": {"FIT": "2026-05-19..2026-05-29", "VAL": "2026-06-02..2026-06-09",
+                            "TRAIN": "2026-05-19..2026-06-09", "TEST": "2026-06-10..2026-06-24"},
+                "screen_metrics": {
+                    "train_15bps": {"n": 17, "pf": 1.358, "net_rs": 2862, "day_dom": 0.815, "sym_dom": 0.617, "day_block_p": 0.2417},
+                    "test_15bps":  {"n": 20, "pf": 1.315, "net_rs": 3070, "day_dom": 2.69,  "sym_dom": 0.575, "day_block_p": 0.3714},
+                    "train_5bps":  {"n": 17, "pf": 1.634, "net_rs": 4566},
+                    "test_5bps":   {"n": 20, "pf": 1.566, "net_rs": 5072},
+                },
+                "gate_status": ("FAILED / NOT SELECTED — DOMINANCE_CAP 0.40 breached on day & symbol "
+                                "(TEST day-dom 2.69 = one session > whole-window net), test day_block_p 0.37; "
+                                "does NOT meet G_HIGHER re-promotion trigger (test PF>=1.30, test n>=20, "
+                                "day_block_p<=0.10, live-paper PF>=1.20)"),
+                "last_1_month_replay_to_2026_06_29": {
+                    "requested_window": ["2026-05-30", "2026-06-29"],
+                    "available_candidate_window": ["2026-06-02", "2026-06-24"],
+                    "sessions": 10, "trades_15bps": 29, "net_pf_15bps": 1.36, "net_rs_15bps": 4968,
+                    "net_pf_5bps": 1.79, "net_rs_5bps": 9377, "win_pct": 58.6, "day_dom_15bps": 1.663,
+                    "note": ("one session (2026-06-12, +Rs8,259) carries the whole month; the other 9 sessions "
+                             "net -Rs3,291. Window overlaps the VAL+TEST optimisation windows, so this is NOT "
+                             "fresh out-of-sample. Backtest/paper evidence only; no live execution performed."),
+                },
+                "live_caveat": ("conf-mask honours only entry_guards.min_slot; top_n=3 is NOT enforced by "
+                                "v11/live -> the live book fires more than the screen and will NOT reproduce these PFs"),
+                "artifacts": "Train_and_Test/results/G_HIGHER_HIGH_BREAK/{trials.csv,best_config.json,report.md,equity_*.png}",
+            },
             "cost_basis": "net_of_nse_intraday_costs",
             "pool": "G_HIGHER_HIGH_BREAK from clean pool (Nov3-Jun10, 148 days, 750 candidates)",
             "exit_basis": "fixed 0.90/2.50, 1-min path to 15:20 EOD",
@@ -572,17 +755,27 @@ FINAL_SETUP_CONF = {
             },
         },
         # TUNED v11 CONFIG — the PRE-MOMENTUM/ADX GATE is the edge.
-        "exit": {"sl_pct": 0.90, "tgt_pct": 1.50},            # vs v6 default 0.70/0.80
+        # ===== FORCE-PROMOTE 2026-06-30 (USER-DIRECTED, PROVISIONAL "for now") — pf_band_search trial 322 =====
+        # Best config from the past-2-months band search (setup_pf_1_4_approval_loop/L_DOUBLE_BOTTOM_VWAP):
+        #   TRAIN 2026-04-28..2026-06-11 n=25 PF 1.648 net +Rs6,988 ; TEST 2026-06-12..2026-06-24 n=3 PF 2.467 +Rs1,657.
+        # *** THIS CONFIG FAILED THE APPROVAL GATE — promoted only at explicit user direction. *** Why it failed:
+        #   - TRAIN day-dominance 0.837 (~84% of net from ONE session) ; all 3 TEST trades are on 2026-06-12 (n<5).
+        #   - Card baseline is a heavy loser (TRAIN PF 0.71 / TEST 0.28). Best exit-only TRAIN PF reachable ~0.98.
+        # *** LIVE CAVEAT: the live conf-mask honors ONLY entry_guards.min_slot; top_n and max_slot are NOT enforced
+        #     live, so the live book will be LARGER / DIFFERENT from this backtest. Also: L* family is blocked by the
+        #     live research-layer (fires only via the conf Tier-C path). Reconcile gating + run live-paper before sizing.
+        # To REVERT: restore exit 0.90/1.50, pre_momentum_terms = pre_momentum_prev_active, entry_guards {}, and
+        #   re-enable the _LIVE_SURVIVAL_DEMOTION_2026_06_29 entry for L_DOUBLE_BOTTOM_VWAP.
+        "exit": {"sl_pct": 0.90, "tgt_pct": 2.00},            # force-promote 2026-06-30 (was 0.90/1.50)
         "mask_terms": [],
-        # PRE-ENTRY MOMENTUM GATE (the edge) — 1-min features at entry; ALL required.
-        # The reclaim only pays with a confirmed momentum thrust + trend strength:
+        # ACTIVE GATE (force-promote 2026-06-30, trial 322): single RSI-direction pre-entry gate.
         "pre_momentum_terms": [
-            ["pre_entry_momentum_score", ">=", 79.0],    # strong composite pre-entry momentum (top ~30%)
-            ["sig5_adx_calc", ">=", 28.0],               # 5-min ADX confirms a real trend
+            ["sig5_rsi_dir", ">=", 60.101595],
         ],
-        "pre_momentum_alt_gate": [["pre2_mom_r", ">=", 0.42], ["sig5_adx_calc", ">=", 28.0]],  # equivalent (G-style); train 2.25/test 3.35
+        "pre_momentum_prev_active": [["pre_entry_momentum_score", ">=", 79.0], ["sig5_adx_calc", ">=", 28.0]],  # pre-2026-06-30 active gate (kept for revert)
+        "pre_momentum_alt_gate": [["pre2_mom_r", ">=", 0.42], ["sig5_adx_calc", ">=", 28.0]],  # legacy reference (superseded)
         "pre_momentum_missing_action": "block",
-        "entry_guards": {},
+        "entry_guards": {"min_slot": "10:00", "max_slot": "11:30", "top_n": 1},  # NB: live honors only min_slot
         "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
         "exit_model": "resolve on 1-min OHLC to 15:20 IST (TARGET / SL / EOD)",
         "provenance": {
@@ -1063,7 +1256,7 @@ FINAL_SETUP_CONF = {
             "source": "production clean-pool scanner (raw_candidates); CORRECTED session VWAP/regime",
             "idea": "break of a recent lower-low; here gated to a high-volume climax/exhaustion break",
         },
-        "exit": {"sl_pct": 1.10, "tgt_pct": 1.00},
+        "exit": {"sl_pct": 0.80, "tgt_pct": 0.80},
         "exit_alt": {"sl_pct": 0.90, "tgt_pct": 0.80, "note": "test 7.19 p0.005 top1d28"},
         "mask_terms": [["vol_ratio", ">=", 4.129044], ["quality_score", ">=", 76.444124]],
         "pre_momentum_terms": [["sig5_rsi_dir", ">=", 68.747209]],
@@ -1076,6 +1269,7 @@ FINAL_SETUP_CONF = {
             "cost_basis": "net_of_nse_intraday_costs", "evaluated_on": "RAW_PRE_GATE_POOL",
             "pool": "G_LOWER_LOW_BREAK clean-pool shorts (deeper mine, ~1900tr/470te), CORRECTED VWAP",
             "exit_basis": "fixed 1.10/1.00, 1-min path to 15:20 EOD",
+            "user_exit_override_2026_06_29": "User requested SL/Tgt 0.80/0.80; prior primary was 1.10/1.00.",
             "ungated_reference": {"train_pf": 0.73, "test_pf": 1.16, "full_net_rs": -174682},
             "train": {"trades": 51, "net_pf": 2.25, "half1_pf": 2.46, "half2_pf": 2.11},
             "test": {"trades": 9, "days": 6, "net_pf": 9.12, "win_pct": 67.0, "day_block_p": 0.004, "top1day_pct": 27},
@@ -1089,6 +1283,136 @@ FINAL_SETUP_CONF = {
             "gate_status": "WEAK_SELECTIVE_PROBATION",
             "gate_miss": "SELECTIVE (4x volume) -> thin count: test n=9/6d; sig5_rsi_dir cliff; mined via wide search",
             "status_label": "WEAK/SELECTIVE PROBATION (corrected-VWAP) - passes battery (4/5 exits, even halves, top1d27%, 100% months) but fires rarely (4x vol). Do NOT size up; lowest-count short.",
+        },
+    },
+    # =======================================================================
+    # S9_MIDDAY_LOSE (SHORT) — USER_DIRECTED PROMOTION 2026-06-30.
+    # *** WARNING: the research verdict for this setup is REJECT / break-even. ***
+    # It was added at the user's explicit instruction despite NOT clearing the gate.
+    # Detector: avwap_5min_ID_v2_backtesting._scan_day (flag ENABLE_S9_MIDDAY_LOSE,
+    # default OFF; auto-enabled when the conf book is active). Shared by v11 backtest
+    # AND v7 live (both import avwap_5min_ID_v7_candidate_scan -> v2). Full research:
+    # Train_and_Test/long_setup_discovery_from_raw_data/claude_engine/ (S9_LAST_3_MONTHS.md,
+    # EXTENSION_RESULTS.md). This is NOT a fast scalp — ~56% of exits are EOD, hold ~3.7h.
+    # =======================================================================
+    "S9_MIDDAY_LOSE": {
+        "side": "SHORT",
+        "detection": {
+            "reason_tag": "midday_vwap_lose_failed_bounce_short",
+            "source": "avwap_5min_ID_v2_backtesting._scan_day add_catalog (ENABLE_S9_MIDDAY_LOSE)",
+            "idea": ("late-morning (10:20-11:00 IST) failed bounce that loses session VWAP: prior bar "
+                     "at/above VWAP, current bar red and below VWAP, breaks the prior bar low, after a "
+                     "positive 3-bar push (the bounce that fails), with ATR room (atr_pct>=0.30%); regime != BULL."),
+            "conditions": [
+                ("close", "<", "open"),
+                ("close", "<", "VWAP"),
+                ("close", "<", "prev_bar_low"),
+                ("prev_close", ">=", "0.999 * VWAP"),
+                ("mom3_pct", ">=", 0.10),
+                ("atr_pct", ">=", 0.0030),
+                ("signal_hour_ist", "in", "[10:20, 11:00]"),
+                ("regime", "!=", "BULL"),
+            ],
+        },
+        "exit": {"sl_pct": 1.25, "tgt_pct": 2.50},          # 1:2 R; chosen for cost-robustness (break-even basis)
+        "exit_alt": {"sl_pct": 1.00, "tgt_pct": 2.00, "note": "3-mo PF ~1.07; similar break-even"},
+        "mask_terms": [],                                    # detector encodes the full edge; mask features (mom3) not in pool
+        "pre_momentum_terms": [],
+        "entry_guards": {},                                  # time window is enforced inside the detector, not the conf mask
+        "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
+        "exit_model": "resolve on 1-min OHLC to 15:20 IST (TARGET / SL / EOD)",
+        "provenance": {
+            "approved_on": "2026-06-30",
+            "family": "S (raw-data SHORT discovery, claude_engine)",
+            "cost_basis": "net_of_nse_intraday_costs",
+            "evaluated_on": "RAW_PRE_GATE_POOL",             # re-admit past v8/research (new scanner setup)
+            "research_dir": "Train_and_Test/long_setup_discovery_from_raw_data/claude_engine/",
+            "universe": "top-250 liquid NSE by 5-min turnover",
+            "search_window": {"train": ["2026-04-30", "2026-06-12"], "test": ["2026-06-15", "2026-06-29"]},
+            "search_window_result": {"train_pf": 1.26, "test_pf": 1.34, "note": "8-week window only; period-flattered"},
+            "three_month_validation": {
+                "window": ["2026-03-30", "2026-06-29"], "sessions": 60, "trades": 238,
+                "pf_2bps": 1.12, "pf_5bps": 1.005, "pf_15bps": 0.708, "win_pct_5bps": 47.9,
+                "net_rs_5bps": 674, "price_path_pf_0cost": 1.39,
+                "monthly_pf_5bps": {"2026-04_OOS": 0.65, "2026-05_IS": 1.45, "2026-06": 1.14},
+                "concentration": {"day_dom": 0.11, "sym_dom": 0.03, "best_day_share": 0.11},
+                "hold_min": 222, "eod_exit_pct": 56,
+            },
+            "gate_status": "USER_DIRECTED_OVERRIDE_REJECT",
+            "gate_miss": ("3-month PF ~1.00 @5bps (break-even); OOS April lost (PF 0.65, -Rs20k); "
+                          "loses at 15bps (PF 0.71); the 8-week train/test edge did not persist; "
+                          "not a fast scalp (EOD-dominated, ~3.7h hold)."),
+            "kept_because": "user explicitly directed promotion to v7 live + v11 on 2026-06-30 despite REJECT.",
+            "risk_label": ("DO NOT SIZE UP. Cost-fragile (needs <=5bps/leg slippage to be ~break-even). "
+                           "Monitor live; demote if the cost wall holds. Detector default-OFF outside the conf book."),
+        },
+    },
+    # =======================================================================
+    # DOC5D_AVWAP_RECLAIM_LONG (LONG) — USER_DIRECTED PROMOTION 2026-07-01.
+    # *** WARNING: the research verdict for this setup is REJECT / net LOSER. ***
+    # Added at the user's explicit instruction despite failing the goal AND being a
+    # net loser on the live-faithful window. Detector: avwap_5min_ID_v2_backtesting.
+    # _scan_day add_catalog (flag ENABLE_DOC5D_AVWAP_RECLAIM, default OFF; auto-enabled
+    # when the conf book is active, kill-switch EQIDV2_DISABLE_DOC5D_AVWAP_RECLAIM=1).
+    # Only the >=11:00 (v2-catalog) window is wired, so live == backtest EXACTLY; the
+    # pre-11:00 early-slot layer is intentionally NOT wired (its vol/ATR math differs).
+    # Full research: Train_and_Test/setup_pf_1_4_approval_loop/DOC5D_AVWAP_RECLAIM_LONG/.
+    # =======================================================================
+    "DOC5D_AVWAP_RECLAIM_LONG": {
+        "side": "LONG",
+        "detection": {
+            "reason_tag": "reinvented_confirmed_vwap_reclaim_long_vB",
+            "source": "avwap_5min_ID_v2_backtesting._scan_day add_catalog (ENABLE_DOC5D_AVWAP_RECLAIM)",
+            "idea": ("reinvented 'confirmed VWAP reclaim' (vB rule pack): a fresh reclaim from below "
+                     "(prev_close<=prev_VWAP, close>VWAP) that HELD intrabar (low>=VWAP-0.45*ATR), "
+                     "closed strong (close>open, close_loc>=0.62, body_pct>=0.35) above a rising EMA20 "
+                     "and a flat-to-up VWAP (5-bar slope>=0), on volume (vol_ratio>=1.35), as a leader "
+                     "(rs_pct>0.05), near value (vwap_dist_atr<=1.2), non-climax (range<=2.3*ATR), "
+                     "regime!=BEAR, market_ret>=-0.30, 09:45-13:00 IST."),
+            "conditions": [
+                ("prev_close", "<=", "prev_VWAP"), ("close", ">", "VWAP"),
+                ("close", ">", "prev_close"), ("close", ">", "open"),
+                ("close_loc", ">=", 0.62), ("body_pct", ">=", 0.35),
+                ("low", ">=", "VWAP - 0.45*ATR"), ("vol_ratio", ">=", 1.35),
+                ("rs_pct", ">", 0.05), ("close", ">", "EMA_20"),
+                ("vwap_dist_atr", "<=", 1.2), ("vwap_5bar_slope_atr", ">=", 0.0),
+                ("range", "<=", "2.3*ATR"), ("market_ret", ">=", -0.30),
+                ("regime", "!=", "BEAR"), ("signal_hour_ist", "in", "[09:45, 13:00]"),
+            ],
+        },
+        "exit": {"sl_pct": 0.60, "tgt_pct": 2.00},           # best full-window bracket
+        "mask_terms": [["vwap_dist_atr", ">=", 1.027686]],   # optimizer-selected near/far-VWAP floor
+        "pre_momentum_terms": [],
+        "entry_guards": {"min_slot": "11:00", "top_n": 2},   # min_slot 11:00 = parity-exact v2-catalog layer
+        "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
+        "exit_model": "resolve on 1-min OHLC to 15:20 IST (TARGET / SL / EOD)",
+        "provenance": {
+            "approved_on": "2026-07-01",
+            "family": "DOC5D (5min_long_setups.md 'Setup D' AVWAP reclaim; reinvented detector)",
+            "cost_basis": "net_of_nse_intraday_costs",
+            "evaluated_on": "RAW_PRE_GATE_POOL",  # readmit past v8+research (matches the raw-pool backtest)
+            "pool": "reinvented pool_vB (full ~1.3k-name scan @5bps, probe-gated raw)",
+            "research_dir": "Train_and_Test/setup_pf_1_4_approval_loop/DOC5D_AVWAP_RECLAIM_LONG/",
+            "split": {"train": ["2026-05-18", "2026-06-19"], "test": ["2026-06-20", "2026-06-30"]},
+            "parity_exact_live_window_5bps": {
+                "note": "min_slot 11:00, v2-catalog layer only (== live). THE number this promote applies.",
+                "full_2mo": {"trades": 25, "net_pf": 0.748, "net_rs": -2839, "win_pct": 32.0, "positive_days": "6/19"},
+                "train": {"trades": 16, "net_pf": 0.94}, "test": {"trades": 3, "net_pf": 0.36},
+            },
+            "min_slot_10_00_context_5bps": {
+                "note": "the +Rs1,638/PF1.08 the user first saw; NOT live-reproducible (needs the "
+                        "pre-11:00 early-slot layer whose vol/ATR math differs). Recorded for context only.",
+                "full_2mo": {"trades": 48, "net_pf": 1.08, "net_rs": 1638, "top_day_share": 1.49},
+            },
+            "gate_status": "USER_DIRECTED_OVERRIDE_REJECT",
+            "gate_miss": ("fails the goal (0/81 SL x target brackets put TRAIN in [1.30,1.70] AND TEST>1.40); "
+                          "parity-exact live version is a net LOSER (PF 0.748, -Rs2,839); TRAIN out-of-band; "
+                          "OOS TEST PF 0.36; even the 10:00 version's positive PnL was one-day-carried "
+                          "(top-day 149% of net). No robust edge on 2026-05-18..06-30."),
+            "kept_because": "user explicitly directed promotion (parity-exact wiring) on 2026-07-01 despite REJECT.",
+            "risk_label": ("DO NOT SIZE UP. This is a documented LOSER wired at user request. Monitor live; "
+                           "demote at the first live confirmation. Kill-switch: EQIDV2_DISABLE_DOC5D_AVWAP_RECLAIM=1. "
+                           "Detector default-OFF outside the conf book."),
         },
     },
 }
@@ -1207,10 +1531,10 @@ RESEARCH_WATCH_CONF = {
         "revalidation_trigger": "do NOT promote unless a mechanically-justified sub-population shows train PF>=1.5 AND test PF>=1.3 AND day-block p<0.10 on >=2x more history",
     },
 
-    "E_ORB_BREAKOUT_LONG": {
+    "E_ORB_BREAKOUT_LONG_OLD_REJECT_ARCHIVE": {
         "enabled": False,
         "side": "LONG",
-        "production_candidate": "REJECT",
+        "production_candidate": "PROMOTED_TO_FINAL_SETUP_CONF_ON_2026_06_30",
         "detection": {"reason_tag": "orb_breakout_long", "idea": "break of the opening-range high"},
         "best_found": {
             "subpop": "less_extended (vwap_dist_atr < 1.0 at entry)",
@@ -1377,3 +1701,125 @@ RESEARCH_WATCH_CONF = {
     },
 }
 
+
+# ===========================================================================
+# 2026-06-22 LIVE DEMOTION (config-only, REVERSIBLE) — see
+# Train_and_Test/PROPOSED_FIX_2026-06-22.md and Train_and_Test/ANALYSIS_2026-06-22.md.
+# These 4 conf setups LOST money in LIVE conf paper trading 2026-06-16..06-22
+# (conf-era book net -Rs29,053 / PF 0.25). Their backtest test-PFs did NOT
+# generalize (overfit on tiny-n gates; P_PDH also over-fires ~13x/day on a
+# 0.5/0.6 scalp = death-by-cost). Demote them OUT of the live book
+# (FINAL_SETUP_CONF) and INTO RESEARCH_WATCH_CONF (enabled=False -> never traded
+# by eqidv2_final_conf_live_bootstrap, which trades only FINAL_SETUP_CONF).
+# To REVERSE: delete this whole block (the original configs are restored intact
+# because they are moved, not rewritten).
+# CAVEAT: setup_train_test.py --approve regenerates FINAL_SETUP_CONF and would
+# drop both this override and RESEARCH_WATCH_CONF; re-apply this block after any --approve.
+# ===========================================================================
+_LIVE_DEMOTION_2026_06_22 = {
+    "P_PDH_BREAK_RETEST_LONG": {"net_rs": -14497, "trades": 40, "pf": 0.25, "win_pct": 25.0},
+    "L_RS_LEADER_VWAP_HOLD":   {"net_rs": -6619,  "trades": 13, "pf": 0.15, "win_pct": 7.7},
+    "V_RECLAIM_PULLBACK_LONG": {"net_rs": -1937,  "trades": 3,  "pf": 0.00, "win_pct": 0.0},
+    "E_ORB_RETEST_HOLD_LONG":  {"net_rs": -1442,  "trades": 5,  "pf": 0.01, "win_pct": 20.0},
+}
+for _name, _live in _LIVE_DEMOTION_2026_06_22.items():
+    _cfg = FINAL_SETUP_CONF.pop(_name, None)
+    if _cfg is None:
+        continue
+    _cfg = dict(_cfg)
+    _cfg["enabled"] = False
+    _prov = dict(_cfg.get("provenance", {}))
+    _prov["live_demotion"] = {
+        "demoted_on": "2026-06-22",
+        "reason": "live conf paper 2026-06-16..06-22 net loser; backtest test-PF did not generalize",
+        "live": _live,
+        "re_validation_trigger": ("band-objective re-tune on regenerated June pool must show "
+                                  "test PF>=1.3 + day_block_p<0.10 before re-promotion"),
+    }
+    _cfg["provenance"] = _prov
+    RESEARCH_WATCH_CONF[_name] = _cfg
+
+
+# ===========================================================================
+# 2026-06-29 LIVE SURVIVAL DEMOTION (config-only, REVERSIBLE)
+#
+# Follow-up audit after the 2026-06-22 demotion:
+# - Live paper 2026-06-16..2026-06-29: 114 trades, net -Rs29,602, PF 0.25.
+# - Post-demotion live paper 2026-06-23 and 2026-06-29 was conf-clean, but only
+#   E_VWAP_LOSE_EARLY_SHORT fired: 4 trades, net -Rs549, PF 0.37.
+# - E first trade per day in the full conf-live sample was 6/6 losers, PF 0.00.
+# - Quality-score cuts did not create a robust live filter (q>=100: 4 trades,
+#   net -Rs15, PF 0.98).
+#
+# Survival policy: trade only the corrected-VWAP mined short mechanisms with the
+# cleanest evidence. Park weak overrides, thin/probation longs, and the live-
+# failing E short until they re-earn promotion on a fresh rolling, live-gated
+# train/test plus live paper holdout.
+# ===========================================================================
+_LIVE_SURVIVAL_DEMOTION_2026_06_29 = {
+    "B_AVWAP_RECLAIM_REVERSAL": {
+        "reason": "probation; test PF below promotion bar and only 5 test trades",
+        "evidence": {"train_trades": 27, "train_pf": 1.45, "test_trades": 5, "test_pf": 1.20},
+    },
+    "B_HUGE_C1_CLOSE_RECLAIM_BREAK": {
+        "reason": "probation; train PF weak and test is only 5/5 winners",
+        "evidence": {"train_trades": 29, "train_pf": 1.11, "test_trades": 5, "test_pf": "inf"},
+    },
+    # D_EMA20_REJECTION removed from the survival demotion on 2026-06-29 (USER-DIRECTED force-promote):
+    # it is now ACTIVE in FINAL_SETUP_CONF with the Optuna code-loop config. See its provenance
+    # .force_promote_2026_06_29 — this was a SCREENING-ONLY firehose config that FAILED the gate; promoted
+    # at explicit user direction. To re-park it, restore the entry below.
+    #   "D_EMA20_REJECTION": {
+    #       "reason": "probation; latest current-pool G/D replay failed and live has no positive evidence",
+    #       "evidence": {"live_trades": 1, "live_net_rs": -95, "latest_test_trades": 2, "latest_test_pf": 0.00},
+    #   },
+    "E_VWAP_LOSE_EARLY_SHORT": {
+        "reason": "live conf paper loser; no robust live quality/time cap found",
+        "evidence": {
+            "live_2026_06_16_to_2026_06_29": {"trades": 31, "net_rs": -790, "pf": 0.79, "win_pct": 32.3},
+            "post_2026_06_22": {"trades": 4, "net_rs": -549, "pf": 0.37, "win_pct": 25.0},
+            "first_trade_per_day": {"trades": 6, "net_rs": -1074, "pf": 0.00, "win_pct": 0.0},
+        },
+    },
+    # G_HIGHER_HIGH_BREAK removed from the survival demotion on 2026-06-29 (USER-DIRECTED force-promote):
+    # it is now ACTIVE in FINAL_SETUP_CONF with the Optuna code-loop config. See its provenance
+    # .force_promote_2026_06_29 — this was a SCREENING-ONLY firehose config that FAILED the gate
+    # (NOT SELECTED; dominance-cap breach, test day_block_p 0.37); promoted at explicit user direction.
+    # To re-park it, restore the entry below.
+    #   "G_HIGHER_HIGH_BREAK": {
+    #       "reason": "sample-thin long; latest current-pool G/D replay failed",
+    #       "evidence": {"latest_test_trades": 3, "latest_test_pf": 0.46, "latest_test_net_rs": -951},
+    #   },
+    # L_DOUBLE_BOTTOM_VWAP removed from the survival demotion on 2026-06-30 (USER-DIRECTED force-promote):
+    # it is now ACTIVE in FINAL_SETUP_CONF with the pf_band_search trial-322 config (see its block's
+    # FORCE-PROMOTE 2026-06-30 header). That config FAILED the approval gate (single-day artifact:
+    # TRAIN day-dom 0.837; all 3 TEST trades on 2026-06-12) and was promoted "for now" at explicit
+    # user direction. To re-park it, restore the entry below.
+    #   "L_DOUBLE_BOTTOM_VWAP": {
+    #       "reason": "raw-pool caveat and no live proof; keep out of survival book",
+    #       "evidence": {"train_trades": 33, "train_pf": 2.55, "test_trades": 13, "test_pf": 3.57},
+    #   },
+    "L_PRESSURE_BURST_VWAP": {
+        "reason": "weak/user override; failed anti-overfit checks and raw-pool caveat",
+        "evidence": {"train_trades": 26, "train_pf": 2.24, "test_trades": 12, "test_pf": 2.03},
+    },
+}
+for _name, _survival in _LIVE_SURVIVAL_DEMOTION_2026_06_29.items():
+    _cfg = FINAL_SETUP_CONF.pop(_name, None)
+    if _cfg is None:
+        continue
+    _cfg = dict(_cfg)
+    _cfg["enabled"] = False
+    _prov = dict(_cfg.get("provenance", {}))
+    _prov["live_survival_demotion"] = {
+        "demoted_on": "2026-06-29",
+        "reason": _survival["reason"],
+        "evidence": _survival["evidence"],
+        "re_validation_trigger": (
+            "fresh live-gated rolling train/test must show test PF>=1.30, "
+            "test trades>=20, day_block_p<=0.10, and subsequent live paper "
+            "holdout PF>=1.20 before re-promotion"
+        ),
+    }
+    _cfg["provenance"] = _prov
+    RESEARCH_WATCH_CONF[_name] = _cfg

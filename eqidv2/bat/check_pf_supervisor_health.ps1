@@ -22,6 +22,7 @@ $WorkerHeartbeatFile = Join-Path $RuntimeStatusDir "eqidv2_pending_data_fetcher_
 $Today = (Get-Date).ToString("yyyy-MM-dd")
 $WorkerLogFile = Join-Path $LogDir ("eqidv2_pending_data_fetcher_v16_5min_{0}.log" -f $Today)
 $SupervisorLogFile = "$WorkerLogFile.supervisor.log"
+$MonitoredTaskName = "EQIDV2_pending_data_fetcher_v16_5min_0900"
 
 $EmailTo = "saaritssinha93@gmail.com,dragontastic007@gmail.com"
 $EmailFrom = "saaritssinha93@gmail.com"
@@ -38,6 +39,31 @@ $findings = New-Object System.Collections.Generic.List[string]
 function Add-Finding {
     param([string]$Severity, [string]$Message)
     $findings.Add(("[{0}] {1}" -f $Severity, $Message))
+}
+
+$monitoredTask = $null
+try {
+    $monitoredTask = Get-ScheduledTask -TaskName $MonitoredTaskName -ErrorAction Stop
+} catch {
+    Add-Finding "WARN" ("monitored task state lookup failed for {0}: {1}" -f $MonitoredTaskName, $_.Exception.Message)
+}
+
+if ($monitoredTask -and ([string]$monitoredTask.State -eq "Disabled")) {
+    Add-Finding "OK" ("{0} is disabled; legacy PF supervisor checks skipped." -f $MonitoredTaskName)
+    Add-Finding "OK" "Active 5-minute feed health is covered by the dashboard's eod_5min_data checks."
+
+    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $header = "{0} PF supervisor health check: SKIPPED_DISABLED (failures=0)" -f $timestamp
+    $body = $header + "`n`n" + ($findings -join "`n")
+
+    $body | Out-File -FilePath $ReportFile -Encoding utf8
+    Add-Content -Path $LogFile -Value $header -Encoding utf8
+    foreach ($line in $findings) {
+        Add-Content -Path $LogFile -Value ("  " + $line) -Encoding utf8
+    }
+
+    Write-Output $body
+    exit 0
 }
 
 # Check 1: supervisor PowerShell process alive

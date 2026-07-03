@@ -54,6 +54,11 @@ def _ensure_conf_scanner() -> bool:
     # Detection whitelist = conf setups; clear legacy blocklists for conf setups.
     candidate_scan.ALLOWED_SETUPS = set(keys)
     candidate_scan.FILTER_TO_V8_EXIT_SETUPS = True
+    # USER_DIRECTED conf-only detector(s): emit when the conf book is active and whitelisted.
+    if hasattr(candidate_scan, "v2") and any(_conf_boot._u(k) == "S9_MIDDAY_LOSE" for k in keys):
+        candidate_scan.v2.ENABLE_S9_MIDDAY_LOSE = True
+    if hasattr(candidate_scan, "v2") and any(_conf_boot._u(k) == "DOC5D_AVWAP_RECLAIM_LONG" for k in keys):
+        candidate_scan.v2.ENABLE_DOC5D_AVWAP_RECLAIM = True
     candidate_scan.EXCLUDED_SETUPS = {s for s in candidate_scan.EXCLUDED_SETUPS if _conf_boot._u(s) not in ukeys}
     if hasattr(candidate_scan, "EARLY_BLOCKED_SETUPS"):
         candidate_scan.EARLY_BLOCKED_SETUPS = {

@@ -2,7 +2,7 @@
 
 Validates the CURRENT EQIDV2_USE_FINAL_SETUP_CONF flag state:
   flag UNSET  -> asserts the wiring is a pure no-op (live behaviour unchanged).
-  flag SET    -> asserts the conf (16-setup book) is installed across the live
+  flag SET    -> asserts the current conf book is installed across the live
                  scanner + 1-minute entry engine + v6 exit levels.
 
 Run BOTH ways to fully sign off Phase 1:
@@ -50,7 +50,7 @@ def main() -> int:
         print(f"== FLAG ON: expect conf installed ({boot.GATE_VERSION}) ==")
         ok &= _check("scanner active", a is True)
         ok &= _check("engine active", b is True)
-        ok &= _check("ALLOWED_SETUPS == 16 conf keys", set(cs.ALLOWED_SETUPS) == keys and len(keys) == 16)
+        ok &= _check("ALLOWED_SETUPS == current conf keys", set(cs.ALLOWED_SETUPS) == keys and len(keys) > 0)
         ok &= _check("no conf setup in EARLY_BLOCKED", not (set(map(str.upper, cs.EARLY_BLOCKED_SETUPS)) & ukeys))
         ok &= _check("no conf setup in RESEARCH_PROBATION", not (set(map(str.upper, cs.RESEARCH_PROBATION_SETUPS)) & ukeys))
         ok &= _check("C_OR_BREAKDOWN un-shadowed", "C_OR_BREAKDOWN" not in eng.PRE_ENTRY_MOMENTUM_SHADOW_SETUPS)
@@ -58,24 +58,24 @@ def main() -> int:
         ok &= _check("pre-momentum gates enabled", bool(eng.PRE_ENTRY_MOMENTUM_GATES_ENABLED))
         ok &= _check("missing-feature action == block", eng.PRE_ENTRY_MOMENTUM_MISSING_ACTION == "block")
         er = boot.exit_rules_from_conf()
-        ok &= _check("v6 exit levels == conf for all 16", all(v6.SETUP_EXIT_RULES.get(k) == er[k] for k in er))
+        ok &= _check("v6 exit levels == conf for all setups", all(v6.SETUP_EXIT_RULES.get(k) == er[k] for k in er))
 
         # gate behaviour smoke
         df = pd.DataFrame([
+            {"setup": "A_PULLBACK_C2_THEN_BREAK_C2_LOW", "regime": "BEAR", "signal_time_ist": "2026-06-12 10:00:00",
+             "vol_ratio": 2.0, "quality_score": 130, "vwap_dist_atr": -1.0, "rs_pct": -0.5, "body_pct": 0.8},
+            {"setup": "A_PULLBACK_C2_THEN_BREAK_C2_LOW", "regime": "BEAR", "signal_time_ist": "2026-06-12 10:00:00",
+             "vol_ratio": 2.0, "quality_score": 120, "vwap_dist_atr": -1.0, "rs_pct": -0.5, "body_pct": 0.8},
+            {"setup": "A_MOD_BREAK_C1_LOW", "regime": "BEAR", "signal_time_ist": "2026-06-12 10:00:00",
+             "vol_ratio": 2.2, "quality_score": 80, "vwap_dist_atr": -1.0, "rs_pct": -0.5, "body_pct": 0.8},
             {"setup": "C_OR_BREAKDOWN", "regime": "BEAR", "signal_time_ist": "2026-06-12 10:00:00",
-             "vol_ratio": 2.0, "quality_score": 80, "vwap_dist_atr": -1.0, "rs_pct": 0.1, "body_pct": 0.5},
-            {"setup": "L_PRESSURE_BURST_VWAP", "regime": "BULL", "signal_time_ist": "2026-06-12 10:00:00",
-             "vol_ratio": 2.0, "quality_score": 20, "vwap_dist_atr": 0.5, "rs_pct": 0.1, "body_pct": 0.5},
-            {"setup": "L_PRESSURE_BURST_VWAP", "regime": "BULL", "signal_time_ist": "2026-06-12 10:00:00",
-             "vol_ratio": 2.0, "quality_score": 40, "vwap_dist_atr": 0.5, "rs_pct": 0.1, "body_pct": 0.5},
-            {"setup": "E_VWAP_LOSE_EARLY_SHORT", "regime": "BEAR", "signal_time_ist": "2026-06-12 09:30:00",
              "vol_ratio": 2.0, "quality_score": 80, "vwap_dist_atr": -1.0, "rs_pct": 0.1, "body_pct": 0.5},
             {"setup": "NOT_A_CONF_SETUP", "regime": "BULL", "signal_time_ist": "2026-06-12 10:00:00",
              "vol_ratio": 2.0, "quality_score": 80, "vwap_dist_atr": 0.5, "rs_pct": 0.1, "body_pct": 0.5},
         ])
         acc, _, st = boot.apply_conf_gate(df)
-        ok &= _check("conf gate keeps exactly the 2 valid rows", st["final_setup_conf_accepted"] == 2
-                     and set(acc["setup"]) == {"C_OR_BREAKDOWN", "L_PRESSURE_BURST_VWAP"})
+        ok &= _check("conf gate keeps exactly the valid rows", st["final_setup_conf_accepted"] == 3
+                     and set(acc["setup"]) == {"A_PULLBACK_C2_THEN_BREAK_C2_LOW", "A_MOD_BREAK_C1_LOW", "C_OR_BREAKDOWN"})
 
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1

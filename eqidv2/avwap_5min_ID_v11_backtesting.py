@@ -78,6 +78,25 @@ V7_SIGNAL_MARGIN_RS = 20_000.0
 V7_INTRADAY_LEVERAGE = 5.0
 V7_SIGNAL_NOTIONAL_RS = V7_SIGNAL_MARGIN_RS * V7_INTRADAY_LEVERAGE
 V7_PAPER_SLIPPAGE_PCT = 0.0005
+# Cost/sizing alignment with the Train_and_Test tuner + live (G4; see
+# Train_and_Test/PROPOSED_ROOT_COST_ALIGNMENT.md). Default "flat_bps" reproduces the
+# legacy v6 behaviour byte-for-byte; "statutory" resolves P&L the way the tuner+live do
+# (per-trade NSE costs on the LIVE Rs-100k notional + per-leg spread). Set ONLY by main();
+# untouched on import, so the live stack (which imports this module) is never affected.
+_V11_COST_MODEL = "flat_bps"          # "flat_bps" | "statutory"
+_V11_SLIPPAGE_BPS = 0.0               # adverse per-leg slippage (bps), statutory mode only
+V7_LIVE_RAW_1M_DIR = Path(os.getenv(
+    "EQIDV2_V7_LIVE_RAW_1M_DIR",
+    r"C:\TradingData\eqidv2\stocks_raw_1min_entry_v5_id_live",
+))
+V7_LIVE_INDICATORS_5M_DIR = Path(os.getenv(
+    "EQIDV2_V7_LIVE_INDICATORS_5M_DIR",
+    r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live",
+))
+V7_HIST_INDICATORS_5M_DIR = Path(os.getenv(
+    "EQIDV2_V7_HIST_INDICATORS_5M_DIR",
+    r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live2",
+))
 
 AB_PROBATION_SETUPS = tuple(
     setup for setup in sorted(v6.SETUP_EXIT_RULES)
@@ -195,6 +214,8 @@ FINAL_CONF_PROFILE = "final_setup_conf"
 # All of these are re-admitted from `ranked` past v8+research in conf mode (the conf mask + premom +
 # exit then handle them). Populated by _activate_final_setup_conf(); empty otherwise.
 _FINAL_CONF_READMIT_SETUPS: frozenset[str] = frozenset()
+_FINAL_CONF_ACTIVE = False
+_FINAL_CONF_SETUP_KEYS: frozenset[str] = frozenset()
 # External scan-source candidates (T_TREND_DAY_EMA_STAIR_SHORT, S_UPTHRUST_TRAP_FADE) loaded once in
 # conf mode and merged into the per-day raw_candidates before the pipeline. Empty otherwise.
 _FINAL_CONF_EXT_CANDIDATES = None
@@ -421,24 +442,59 @@ PRE_ENTRY_MOMENTUM_SETUP_GATES: dict[str, tuple[tuple[str, str, float], ...]] = 
 }
 
 
+def _normalise_bars_date_index(df: pd.DataFrame, *, naive_tz: str) -> pd.DataFrame | None:
+    if df is None or df.empty or "date" not in df.columns:
+        return None
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if getattr(df["date"].dt, "tz", None) is None:
+        df["date"] = df["date"].dt.tz_localize(naive_tz).dt.tz_convert("Asia/Kolkata")
+    else:
+        df["date"] = df["date"].dt.tz_convert("Asia/Kolkata")
+    df = df.dropna(subset=["date"]).sort_values("date")
+    if df.empty:
+        return None
+    return df.set_index("date")
+
+
 @lru_cache(maxsize=None)
-def _load_1m_with_open(ticker: str) -> pd.DataFrame | None:
-    path = v6.DATA_1M_DIR / f"{str(ticker).upper()}_stocks_indicators_1min.parquet"
+def _load_live_raw_1m_with_open(ticker: str) -> pd.DataFrame | None:
+    path = V7_LIVE_RAW_1M_DIR / f"{str(ticker).upper()}_stocks_raw_1min.parquet"
     if not path.exists():
         return None
-    # Load OHLCV + ADX + RSI (needed for pre-entry momentum gate)
     want = ["date", "open", "high", "low", "close", "volume", "ADX", "RSI"]
     try:
         df = pd.read_parquet(path, columns=want)
     except Exception:
-        df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close"])
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    if getattr(df["date"].dt, "tz", None) is None:
-        df["date"] = df["date"].dt.tz_localize("UTC").dt.tz_convert("Asia/Kolkata")
-    else:
-        df["date"] = df["date"].dt.tz_convert("Asia/Kolkata")
-    df = df.dropna(subset=["date"]).sort_values("date")
-    return df.set_index("date")
+        try:
+            df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close", "volume"])
+        except Exception:
+            df = pd.read_parquet(path)
+    return _normalise_bars_date_index(df, naive_tz="Asia/Kolkata")
+
+
+@lru_cache(maxsize=None)
+def _load_1m_with_open(ticker: str) -> pd.DataFrame | None:
+    path = v6.DATA_1M_DIR / f"{str(ticker).upper()}_stocks_indicators_1min.parquet"
+    hist = None
+    # Load OHLCV + ADX + RSI (needed for pre-entry momentum gate)
+    if path.exists():
+        want = ["date", "open", "high", "low", "close", "volume", "ADX", "RSI"]
+        try:
+            df = pd.read_parquet(path, columns=want)
+        except Exception:
+            df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close"])
+        hist = _normalise_bars_date_index(df, naive_tz="UTC")
+
+    live_raw = _load_live_raw_1m_with_open(ticker)
+    if hist is None or hist.empty:
+        return live_raw
+    if live_raw is None or live_raw.empty:
+        return hist
+    live_extra = live_raw[~live_raw.index.isin(hist.index)]
+    if live_extra.empty:
+        return hist
+    return pd.concat([hist, live_extra], axis=0, sort=False).sort_index()
 
 
 def _normalise_ts(value) -> pd.Timestamp:
@@ -491,8 +547,9 @@ def _first_1m_entry(
     sig = _normalise_ts(signal_ts)
     if pd.isna(sig):
         return None
-    latest_allowed = sig + pd.Timedelta(minutes=max_delay_minutes)
-    sub = bars[(bars.index > sig) & (bars.index <= latest_allowed)]
+    intended_entry = (sig + pd.Timedelta(minutes=1)).floor("min")
+    latest_allowed = intended_entry + pd.Timedelta(minutes=max_delay_minutes)
+    sub = bars[(bars.index >= intended_entry) & (bars.index <= latest_allowed)]
     if sub.empty:
         return None
     entry_ts = pd.Timestamp(sub.index[0])
@@ -507,7 +564,7 @@ def _resolve_trade_1m_entry(row: pd.Series, cost_bps: float) -> dict | None:
     if setup not in v6.SETUP_EXIT_RULES:
         raise ValueError(f"missing v11 exit rule for setup: {setup}")
     sl_pct, target_pct = v6.SETUP_EXIT_RULES[setup]
-    if sl_pct < v6.MIN_SL_PCT:
+    if sl_pct < v6.MIN_SL_PCT and not (_FINAL_CONF_ACTIVE and setup in _FINAL_CONF_SETUP_KEYS):
         raise ValueError(f"SL for {setup} is below {v6.MIN_SL_PCT:.2f}%: {sl_pct}")
 
     bars = _load_1m_with_open(str(row["ticker"]))
@@ -531,7 +588,20 @@ def _resolve_trade_1m_entry(row: pd.Series, cost_bps: float) -> dict | None:
     if res is None:
         return None
 
-    net, gross, cost = v6._net_pnl_rs(res.pnl_pct_price, res.outcome, cost_bps)
+    if _V11_COST_MODEL == "statutory":
+        # G4: resolve P&L like the tuner + live — per-trade NSE statutory costs on the
+        # LIVE Rs-100k notional, with adverse per-leg slippage on entry and exit.
+        import nse_intraday_costs as _nse
+        _side = str(row["side"]).upper()
+        _qty = max(1, int(V7_SIGNAL_NOTIONAL_RS / entry_px))
+        _s = _V11_SLIPPAGE_BPS / 1e4
+        _fill = entry_px * (1 + _s) if _side == "LONG" else entry_px * (1 - _s)
+        _exit = res.exit_price * (1 - _s) if _side == "LONG" else res.exit_price * (1 + _s)
+        gross = (_exit - _fill) * _qty if _side == "LONG" else (_fill - _exit) * _qty
+        net = _nse.net_pnl(_fill, _exit, _qty, _side)
+        cost = gross - net
+    else:                                   # flat_bps (legacy default — byte-identical)
+        net, gross, cost = v6._net_pnl_rs(res.pnl_pct_price, res.outcome, cost_bps)
     old_entry_ts = row.get("entry_time_v6", row.get("entry_time_ist", row.get("entry_ts", pd.NaT)))
     old_entry_px = row.get("entry_price_v6", row.get("entry_price", row.get("entry_px", np.nan)))
     rec = row.to_dict()
@@ -996,23 +1066,80 @@ def _v7_signal_id(ticker: str, side: str, bar_time: str, setup: str) -> str:
 
 @lru_cache(maxsize=None)
 def _load_5m_ind_bars(ticker: str) -> pd.DataFrame | None:
-    path = Path(r"C:\TradingData\eqidv2\stocks_indicators_5min_eq_live2") / f"{str(ticker).upper()}_stocks_indicators_5min.parquet"
-    if not path.exists():
-        return None
-    want = ["date", "open", "high", "low", "close", "volume", "ADX", "RSI"]
-    try:
-        df = pd.read_parquet(path, columns=want)
-    except Exception:
+    name = f"{str(ticker).upper()}_stocks_indicators_5min.parquet"
+    paths = [
+        V7_HIST_INDICATORS_5M_DIR / name,
+        V7_LIVE_INDICATORS_5M_DIR / name,
+    ]
+    frames: list[pd.DataFrame] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        want = ["date", "open", "high", "low", "close", "volume", "ADX", "RSI"]
         try:
-            df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close", "volume"])
+            df = pd.read_parquet(path, columns=want)
         except Exception:
-            return None
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    if getattr(df["date"].dt, "tz", None) is None:
-        df["date"] = df["date"].dt.tz_localize("UTC").dt.tz_convert("Asia/Kolkata")
-    else:
-        df["date"] = df["date"].dt.tz_convert("Asia/Kolkata")
-    return df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+            try:
+                df = pd.read_parquet(path, columns=["date", "open", "high", "low", "close", "volume"])
+            except Exception:
+                continue
+        norm = _normalise_bars_date_index(df, naive_tz="UTC")
+        if norm is not None and not norm.empty:
+            frames.append(norm.reset_index())
+    if not frames:
+        return None
+    out = pd.concat(frames, ignore_index=True, sort=False)
+    out = out.dropna(subset=["date"]).sort_values("date")
+    out = out.drop_duplicates(subset=["date"], keep="last")
+    return out.reset_index(drop=True)
+
+
+def _last_finite(series: pd.Series) -> float:
+    vals = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    return float(vals.iloc[-1]) if len(vals) else float("nan")
+
+
+def _calc_rsi_last(bars: pd.DataFrame, period: int = 14) -> float:
+    if "close" not in bars.columns or len(bars) < period + 1:
+        return float("nan")
+    close = pd.to_numeric(bars["close"], errors="coerce")
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    rsi = rsi.mask((avg_loss == 0.0) & (avg_gain > 0.0), 100.0)
+    rsi = rsi.mask((avg_loss == 0.0) & (avg_gain <= 0.0), 50.0)
+    return _last_finite(rsi)
+
+
+def _calc_adx_last(bars: pd.DataFrame, period: int = 14) -> float:
+    needed = {"high", "low", "close"}
+    if not needed.issubset(set(bars.columns)) or len(bars) < period + 2:
+        return float("nan")
+    high = pd.to_numeric(bars["high"], errors="coerce")
+    low = pd.to_numeric(bars["low"], errors="coerce")
+    close = pd.to_numeric(bars["close"], errors="coerce")
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=bars.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=bars.index)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean().replace(0.0, np.nan)
+    plus_di = 100.0 * plus_dm.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean() / atr
+    minus_di = 100.0 * minus_dm.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean() / atr
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, np.nan)
+    adx = dx.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    return _last_finite(adx)
 
 
 def _pre_entry_momentum_features_v11(
@@ -1094,11 +1221,14 @@ def _pre_entry_momentum_features_v11(
     out["pre1_dir"]       = 1.0 if d * (last_close - last_open) > 0 else 0.0
 
     adx_col = bars.get("ADX") if isinstance(bars, pd.DataFrame) else None
-    adx_vals = pd.to_numeric(adx_col, errors="coerce") if adx_col is not None else pd.Series(dtype=float)
-    out["pre1_adx"] = float(adx_vals.iloc[-1]) if len(adx_vals) and np.isfinite(adx_vals.iloc[-1]) else float("nan")
+    adx = _last_finite(adx_col) if adx_col is not None else float("nan")
+    if not np.isfinite(adx):
+        adx = _calc_adx_last(bars)
+    out["pre1_adx"] = adx
     rsi_col = bars.get("RSI") if isinstance(bars, pd.DataFrame) else None
-    rsi_vals = pd.to_numeric(rsi_col, errors="coerce") if rsi_col is not None else pd.Series(dtype=float)
-    rsi_last = float(rsi_vals.iloc[-1]) if len(rsi_vals) and np.isfinite(rsi_vals.iloc[-1]) else float("nan")
+    rsi_last = _last_finite(rsi_col) if rsi_col is not None else float("nan")
+    if not np.isfinite(rsi_last):
+        rsi_last = _calc_rsi_last(bars)
     out["pre1_rsi_dir"] = float(rsi_last if side == "LONG" else 100.0 - rsi_last) if np.isfinite(rsi_last) else float("nan")
 
     mom_vals = [out.get("pre1_body_r"), out.get("pre3_mom_r"), out.get("pre5_mom_r")]
@@ -1389,6 +1519,36 @@ def _build_v7_entry_engine_signals(candidates: pd.DataFrame) -> tuple[pd.DataFra
     raw_entries, rejects = _v7_entry_engine_raw_rows(candidates)
     selected = _select_v7_entry_engine_signals(raw_entries)
     return selected, raw_entries, rejects
+
+
+def _build_v7_entry_engine_signals_for_profile(
+    candidates: pd.DataFrame,
+    selected_strategy_profile: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    """Build entry-engine rows in the same order v7 live uses for conf mode.
+
+    In final-conf live mode, the conf mask is applied before executable-entry
+    selection/daily ticker de-dupe. Applying it after selection can let an early
+    rejected candidate consume the ticker and hide a later valid live entry.
+    """
+    profile = _normalise_selected_strategy_profile(selected_strategy_profile)
+    raw_entries, rejects = _v7_entry_engine_raw_rows(candidates)
+    if profile == FINAL_CONF_PROFILE:
+        preselect, profile_rejects, profile_stats = _apply_selected_strategy_profile(raw_entries, profile)
+        selected = _select_v7_entry_engine_signals(preselect)
+        if not selected.empty:
+            selected["v11_selected_strategy_profile"] = profile
+            selected["v11_selected_strategy_rule"] = selected["setup"].astype(str).map(SELECTED_STRATEGY_RULE_LABELS).fillna("")
+        stats = {
+            **profile_stats,
+            "selected_strategy_preselect_signals": int(len(preselect)),
+            "selected_strategy_signals": int(len(selected)),
+        }
+        return selected, raw_entries, rejects, selected, profile_rejects, stats
+
+    entry_engine_signals = _select_v7_entry_engine_signals(raw_entries)
+    selected, profile_rejects, profile_stats = _apply_selected_strategy_profile(entry_engine_signals, profile)
+    return selected, raw_entries, rejects, entry_engine_signals, profile_rejects, profile_stats
 
 
 def _resolve_v7_entry_engine_signal(
@@ -3197,6 +3357,17 @@ def _run_live_parity(args: argparse.Namespace) -> int:
         selected_strategy_profile=str(args.selected_strategy_profile),
     )
     live_like_candidates = pipeline["live_like_candidates"]
+    (
+        selected_strategy_signals,
+        entry_engine_raw,
+        entry_engine_rejects,
+        entry_engine_signals,
+        selected_strategy_rejects,
+        selected_strategy_stats,
+    ) = _build_v7_entry_engine_signals_for_profile(
+        pipeline["pre_dedupe_live_candidates"],
+        str(args.selected_strategy_profile),
+    )
     raw_candidates.to_csv(out_dir / "live_parity_raw_candidates.csv", index=False)
     pipeline["ranked_raw_candidates"].to_csv(out_dir / "live_parity_ranked_raw_candidates.csv", index=False)
     pipeline["v8_gated_candidates"].to_csv(out_dir / "live_parity_v8_gated_candidates.csv", index=False)
@@ -3204,22 +3375,34 @@ def _run_live_parity(args: argparse.Namespace) -> int:
     pipeline["research_rejected_candidates"].to_csv(out_dir / "live_parity_research_rejected_candidates.csv", index=False)
     pipeline["pre_dedupe_live_candidates"].to_csv(out_dir / "live_parity_pre_dedupe_live_candidates.csv", index=False)
     live_like_candidates.to_csv(out_dir / "live_parity_live_like_candidates.csv", index=False)
+    entry_engine_raw.to_csv(out_dir / "live_parity_entry_engine_raw_entries.csv", index=False)
+    entry_engine_rejects.to_csv(out_dir / "live_parity_entry_engine_rejects.csv", index=False)
+    entry_engine_signals.to_csv(out_dir / "live_parity_entry_engine_signals.csv", index=False)
+    selected_strategy_signals.to_csv(out_dir / "live_parity_selected_strategy_signals.csv", index=False)
+    selected_strategy_rejects.to_csv(out_dir / "live_parity_selected_strategy_rejects.csv", index=False)
     pipeline["slot_audit"].to_csv(out_dir / "live_parity_live_pipeline_slot_audit.csv", index=False)
-    pd.DataFrame([pipeline["stats"]]).to_csv(out_dir / "live_parity_pipeline_stats.csv", index=False)
+    live_parity_stats = {
+        **pipeline["stats"],
+        "entry_engine_raw_entries": int(len(entry_engine_raw)),
+        "entry_engine_rejects": int(len(entry_engine_rejects)),
+        "entry_engine_signals": int(len(entry_engine_signals)),
+        **selected_strategy_stats,
+    }
+    pd.DataFrame([live_parity_stats]).to_csv(out_dir / "live_parity_pipeline_stats.csv", index=False)
 
     accepted = pd.DataFrame([{
         "stage": "live_parity",
         "source": str(source_dir),
         "date": str(args.live_date or ""),
-        **pipeline["stats"],
+        **live_parity_stats,
     }])
-    if live_like_candidates.empty:
+    if selected_strategy_signals.empty:
         _write_empty_outputs(
             out_dir,
             accepted,
             str(source_dir),
             accepted_filename="live_parity_rules_used.csv",
-            reason="[v11 live_parity] no candidates survived the exact v7 live pipeline",
+            reason="[v11 live_parity] no v7 entry-engine signals survived the selected strategy profile",
         )
         (out_dir / "inputs.txt").write_text(
             f"mode=live_parity\nlive_candidate_json_dir={source_dir}\nlive_date={args.live_date}\n"
@@ -3227,16 +3410,25 @@ def _run_live_parity(args: argparse.Namespace) -> int:
             f"ab_gate_min_quality={args.ab_gate_min_quality}\n"
             f"ab_gate_max_per_side={args.ab_gate_max_per_side}\n"
             f"ab_gate_max_per_slot={args.ab_gate_max_per_slot}\n"
-            "entry_model=NEXT_1MIN_OPEN_AFTER_5MIN_SIGNAL\n"
+            f"entry_fill_model={args.entry_fill_model}\n"
+            f"selected_strategy_profile={args.selected_strategy_profile}\n"
+            "entry_model=v7 1-minute entry engine, next 1-minute open after 5-minute signal\n"
             "candidate_source=signal_discovery_v7_5mins_ID snapshots\n"
             "live_strategy_pipeline=add_live_ranker_scores -> apply_v8_live_gate -> apply_research_live_filters\n"
-            "dedupe=one ticker per trade_date, matching live entry-engine intraday ticker guard\n",
+            "selected_strategy=post-v7-entry honest production profile filters; pass --selected_strategy_profile none for raw v11\n"
+            "entry_engine_dedupe=best setup per ticker/slot, then one ticker per day matching v7 entry-engine guard\n"
+            "pnl_model=v7 signal quantity, price-only, no backtest costs\n",
             encoding="utf-8",
         )
         print(f"[v11 live_parity] wrote empty no-trade outputs to {out_dir}")
         return 0
 
-    final = _resolve_live_parity_candidates(live_like_candidates, float(args.cost_bps), "live_parity")
+    final = _resolve_v7_entry_engine_signals(
+        selected_strategy_signals,
+        label="live_parity",
+        entry_fill_model=str(args.entry_fill_model),
+        selected_strategy_profile=str(args.selected_strategy_profile),
+    )
     _write_outputs(out_dir, final, accepted, str(source_dir), accepted_filename="live_parity_rules_used.csv")
     (out_dir / "inputs.txt").write_text(
         f"mode=live_parity\nlive_candidate_json_dir={source_dir}\nlive_date={args.live_date}\n"
@@ -3244,10 +3436,14 @@ def _run_live_parity(args: argparse.Namespace) -> int:
         f"ab_gate_min_quality={args.ab_gate_min_quality}\n"
         f"ab_gate_max_per_side={args.ab_gate_max_per_side}\n"
         f"ab_gate_max_per_slot={args.ab_gate_max_per_slot}\n"
-        "entry_model=NEXT_1MIN_OPEN_AFTER_5MIN_SIGNAL\n"
+        f"entry_fill_model={args.entry_fill_model}\n"
+        f"selected_strategy_profile={args.selected_strategy_profile}\n"
+        "entry_model=v7 1-minute entry engine, next 1-minute open after 5-minute signal\n"
         "candidate_source=signal_discovery_v7_5mins_ID snapshots\n"
         "live_strategy_pipeline=add_live_ranker_scores -> apply_v8_live_gate -> apply_research_live_filters\n"
-        "dedupe=one ticker per trade_date, matching live entry-engine intraday ticker guard\n",
+        "selected_strategy=post-v7-entry honest production profile filters; pass --selected_strategy_profile none for raw v11\n"
+        "entry_engine_dedupe=best setup per ticker/slot, then one ticker per day matching v7 entry-engine guard\n"
+        "pnl_model=v7 signal quantity, price-only, no backtest costs\n",
         encoding="utf-8",
     )
     print(f"[v11 live_parity] wrote {out_dir}")
@@ -3292,11 +3488,15 @@ def _run_historical_full_day(args: argparse.Namespace) -> int:
         selected_strategy_profile=str(args.selected_strategy_profile),
     )
     live_like_candidates = pipeline["live_like_candidates"]
-    entry_engine_signals, entry_engine_raw, entry_engine_rejects = _build_v7_entry_engine_signals(
-        pipeline["pre_dedupe_live_candidates"]
-    )
-    selected_strategy_signals, selected_strategy_rejects, selected_strategy_stats = _apply_selected_strategy_profile(
+    (
+        selected_strategy_signals,
+        entry_engine_raw,
+        entry_engine_rejects,
         entry_engine_signals,
+        selected_strategy_rejects,
+        selected_strategy_stats,
+    ) = _build_v7_entry_engine_signals_for_profile(
+        pipeline["pre_dedupe_live_candidates"],
         str(args.selected_strategy_profile),
     )
     pipeline["ranked_raw_candidates"].to_csv(out_dir / "historical_full_day_ranked_raw_candidates.csv", index=False)
@@ -3531,11 +3731,15 @@ def _run_historical_all_available(args: argparse.Namespace) -> int:
             ab_gate_setups=_ab_gate_setups_for_selected_profile(str(args.selected_strategy_profile)),
             selected_strategy_profile=str(args.selected_strategy_profile),
         )
-        entry_engine_signals, entry_engine_raw, entry_engine_rejects = _build_v7_entry_engine_signals(
-            pipeline["pre_dedupe_live_candidates"]
-        )
-        selected_strategy_signals, selected_strategy_rejects, selected_strategy_stats = _apply_selected_strategy_profile(
+        (
+            selected_strategy_signals,
+            entry_engine_raw,
+            entry_engine_rejects,
             entry_engine_signals,
+            selected_strategy_rejects,
+            selected_strategy_stats,
+        ) = _build_v7_entry_engine_signals_for_profile(
+            pipeline["pre_dedupe_live_candidates"],
             str(args.selected_strategy_profile),
         )
         for key, filename, bucket in [
@@ -4093,9 +4297,12 @@ def _activate_final_setup_conf() -> dict:
     standard v11 v8/research/overlay stages may admit fewer of them; verify per-setup counts on
     the first run and reconcile gating (see provenance.gating_caveat in the conf)."""
     global PRE_ENTRY_MOMENTUM_SETUP_GATES, _FINAL_CONF_READMIT_SETUPS, _FINAL_CONF_EXT_CANDIDATES, ENTRY_SHADOW_SETUPS
+    global _FINAL_CONF_ACTIVE, _FINAL_CONF_SETUP_KEYS
     import final_setup_conf as _fc
     conf = _fc.FINAL_SETUP_CONF
     keys = frozenset(conf)
+    _FINAL_CONF_ACTIVE = True
+    _FINAL_CONF_SETUP_KEYS = keys
     for name, cfg in conf.items():
         ex = cfg.get("exit", {})
         if "sl_pct" in ex and "tgt_pct" in ex:
@@ -4135,6 +4342,12 @@ def _activate_final_setup_conf() -> dict:
         print(f"[v11 final_setup_conf]   un-shadowed conf setups (now tradeable): {sorted(_unshadow)}", flush=True)
     candidate_scan.ALLOWED_SETUPS = keys
     candidate_scan.FILTER_TO_V8_EXIT_SETUPS = True
+    # USER_DIRECTED setups whose detector is emitted only under the conf book (default-off in
+    # production). Enable them now that the conf is active and they are in ALLOWED_SETUPS.
+    if hasattr(candidate_scan, "v2") and "S9_MIDDAY_LOSE" in keys:
+        candidate_scan.v2.ENABLE_S9_MIDDAY_LOSE = True
+    if hasattr(candidate_scan, "v2") and "DOC5D_AVWAP_RECLAIM_LONG" in keys:
+        candidate_scan.v2.ENABLE_DOC5D_AVWAP_RECLAIM = True
     if _FINAL_CONF_READMIT_SETUPS:
         print(f"[v11 final_setup_conf]   re-admit (bypass v8+research): {sorted(_FINAL_CONF_READMIT_SETUPS)}", flush=True)
     print(f"[v11 final_setup_conf] ACTIVE — {len(keys)} approved setups: {sorted(keys)}", flush=True)
@@ -4189,6 +4402,18 @@ def main() -> int:
     )
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--cost_bps", type=float, default=v6.DEFAULT_COST_BPS)
+    ap.add_argument(
+        "--cost_model", choices=["flat_bps", "statutory"], default="flat_bps",
+        help=(
+            "flat_bps = legacy v6 flat cost on EFFECTIVE_NOTIONAL (default, unchanged); "
+            "statutory = per-trade NSE costs on the LIVE notional + --slippage_bps/leg "
+            "(matches the Train_and_Test tuner + live; see PROPOSED_ROOT_COST_ALIGNMENT.md)"
+        ),
+    )
+    ap.add_argument(
+        "--slippage_bps", type=float, default=0.0,
+        help="adverse per-leg slippage/half-spread (bps) on entry+exit; statutory cost_model only (set 15 to match the tuner)",
+    )
     ap.add_argument(
         "--entry_fill_model",
         choices=["ltp_on_signal_1m_open", "signal_bar"],
@@ -4274,6 +4499,12 @@ def main() -> int:
     _EXCLUDE_OPENING_SNAPSHOT = bool(getattr(args, "exclude_opening_snapshot", False))
     if _EXCLUDE_OPENING_SNAPSHOT:
         print("[v11] --exclude_opening_snapshot ON: skipping 09:15 slot + dropping it from regime (strict research mode; NOT live-parity)")
+    global _V11_COST_MODEL, _V11_SLIPPAGE_BPS
+    _V11_COST_MODEL = str(getattr(args, "cost_model", "flat_bps"))
+    _V11_SLIPPAGE_BPS = float(getattr(args, "slippage_bps", 0.0))
+    if _V11_COST_MODEL == "statutory":
+        print(f"[v11] cost_model=statutory: per-trade NSE costs on Rs {V7_SIGNAL_NOTIONAL_RS:,.0f} notional "
+              f"+ {_V11_SLIPPAGE_BPS:.1f} bps/leg slippage (aligned with the Train_and_Test tuner + live)")
     args.selected_strategy_profile = _normalise_selected_strategy_profile(args.selected_strategy_profile)
     args.ab_gate_profile = _normalise_ab_gate_profile(args.ab_gate_profile)
     if args.selected_strategy_profile in AB_SELECTED_STRATEGY_PROFILES and args.ab_gate_profile == "off":

@@ -79,29 +79,36 @@ set "SCRIPT_PATH=%BASE_DIR%\backtesting_result_v11_daily.py"
 set "VERIFY_SCRIPT=%BASE_DIR%\data_for_backtesting_verify.py"
 set "WAIT_SCRIPT=%BASE_DIR%\wait_for_data_backtesting_ready.py"
 
-for /f %%a in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"') do set "TODAY_IST=%%a"
-if not defined TODAY_IST set "TODAY_IST=%DATE%"
-set "LOG_FILE=%LOG_DIR%\backtesting_result_v11_%TODAY_IST%.log"
+rem ============================================================
+rem  Target the PREVIOUS completed trading day, not today.
+rem  Day-D 1-min EOD data does not land until the NEXT morning (~09:15 fetch),
+rem  so a same-day 16:00 run ALWAYS fails the 1-min verify (exit 2). Backtest D-1
+rem  instead: D-1's 5-min landed ~15:45 on D-1 and D-1's 1-min landed this morning,
+rem  so both stores are complete and we are safely past market close (no live-feed
+rem  starvation). Weekends are skipped; holidays degrade gracefully (verifier FAILs
+rem  and we abort with a clear log line).
+rem ============================================================
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 set "LATEST_LOG_FILE=%LOG_DIR%\backtesting_result_v11_latest.log"
 
-if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+for /f %%a in ('powershell -NoProfile -Command "$d=(Get-Date).AddDays(-1); while($d.DayOfWeek -eq 'Saturday' -or $d.DayOfWeek -eq 'Sunday'){$d=$d.AddDays(-1)}; $d.ToString('yyyy-MM-dd')"') do set "TARGET_DAY=%%a"
+if not defined TARGET_DAY (
+    echo [%DATE% %TIME%] ERROR could not compute TARGET_DAY; aborting Backtesting Result v11.>>"%LATEST_LOG_FILE%"
+    endlocal & exit /b 3
+)
+set "LOG_FILE=%LOG_DIR%\backtesting_result_v11_%TARGET_DAY%.log"
+
 cd /d "%BASE_DIR%"
 
-echo [%DATE% %TIME%] START Backtesting Result v11>>"%LOG_FILE%"
+echo [%DATE% %TIME%] START Backtesting Result v11 (target trading day=%TARGET_DAY%)>>"%LOG_FILE%"
 
 rem --- Data completeness gate ---
-echo [%DATE% %TIME%] Waiting for data_for_backtesting session + verifier PASS...>>"%LOG_FILE%"
-"%PYTHON_EXE%" -u "%WAIT_SCRIPT%" --date "%TODAY_IST%" --timeout-sec 3600 --poll-sec 15 >>"%LOG_FILE%" 2>&1
-set "READY_EXIT=%ERRORLEVEL%"
-if not "%READY_EXIT%"=="0" (
-    echo [%DATE% %TIME%] DATA NOT READY - exit=%READY_EXIT%; aborting backtesting.>>"%LOG_FILE%"
-    echo [%DATE% %TIME%] END Backtesting Result v11 - exit=%READY_EXIT% data_not_ready>>"%LOG_FILE%"
-    copy /Y "%LOG_FILE%" "%LATEST_LOG_FILE%" >nul 2>&1
-    endlocal & exit /b %READY_EXIT%
-)
-
-echo [%DATE% %TIME%] Checking data completeness...>>"%LOG_FILE%"
-"%PYTHON_EXE%" -u "%VERIFY_SCRIPT%" --date "%TODAY_IST%" >>"%LOG_FILE%" 2>&1
+rem  The fresh verifier is authoritative: it re-scans 5-min AND 1-min for TARGET_DAY
+rem  and overwrites any stale data_verify_*.json from the failed same-day attempt.
+rem  The old wait-for-session helper only guarded the same-day data-build race, which
+rem  cannot occur for a previous completed day, so it is intentionally not used here.
+echo [%DATE% %TIME%] Checking data completeness for %TARGET_DAY%...>>"%LOG_FILE%"
+"%PYTHON_EXE%" -u "%VERIFY_SCRIPT%" --date "%TARGET_DAY%" >>"%LOG_FILE%" 2>&1
 set "VERIFY_EXIT=%ERRORLEVEL%"
 
 if "%VERIFY_EXIT%"=="2" (
@@ -126,13 +133,13 @@ if not "%VERIFY_EXIT%"=="0" if not "%VERIFY_EXIT%"=="1" if not "%VERIFY_EXIT%"==
 )
 
 rem --- Run backtesting ---
-echo [%DATE% %TIME%] Running v11 backtest + parity analysis...>>"%LOG_FILE%"
-"%PYTHON_EXE%" -u "%SCRIPT_PATH%" --date "%TODAY_IST%" %* >>"%LOG_FILE%" 2>&1
+echo [%DATE% %TIME%] Running v11 backtest + parity analysis for %TARGET_DAY%...>>"%LOG_FILE%"
+"%PYTHON_EXE%" -u "%SCRIPT_PATH%" --date "%TARGET_DAY%" %* >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 
 rem --- Conf-book adherence add-on (non-fatal; flags legacy leakage that live_parity is blind to) ---
 echo [%DATE% %TIME%] Running conf-book adherence check...>>"%LOG_FILE%"
-"%PYTHON_EXE%" -u "%BASE_DIR%\conf_adherence_check.py" --date "%TODAY_IST%" >>"%LOG_FILE%" 2>&1
+"%PYTHON_EXE%" -u "%BASE_DIR%\conf_adherence_check.py" --date "%TARGET_DAY%" >>"%LOG_FILE%" 2>&1
 set "ADHERENCE_EXIT=%ERRORLEVEL%"
 echo [%DATE% %TIME%] conf-book adherence exit=%ADHERENCE_EXIT% (0=clean 3=legacy-leak 4=no-data; informational, does not fail the session)>>"%LOG_FILE%"
 

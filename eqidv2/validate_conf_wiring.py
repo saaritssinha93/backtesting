@@ -22,34 +22,26 @@ exp_pm = {k for k, c in conf.items() if c.get("pre_momentum_terms")}
 assert set(v11.PRE_ENTRY_MOMENTUM_SETUP_GATES) == exp_pm, (set(v11.PRE_ENTRY_MOMENTUM_SETUP_GATES), exp_pm)
 for k in exp_pm:
     assert list(v11.PRE_ENTRY_MOMENTUM_SETUP_GATES[k]) == [tuple(t) for t in conf[k]["pre_momentum_terms"]]
-# 3. allowed setups restricted to the 9
+# 3. allowed setups restricted to the current conf book
 assert set(cs.ALLOWED_SETUPS) == set(conf) and cs.FILTER_TO_V8_EXIT_SETUPS is True
 print("OK: exits + premom gates + allowed-setups overridden correctly")
 print("  premom-gated:", sorted(exp_pm))
 
 # 4. mask test on synthetic candidates (one PASS + one FAIL per masked setup, plus a non-conf setup)
 rows = [
-    # B_AVWAP mask vwap_dist_atr<=1.0
-    {"setup": "B_AVWAP_RECLAIM_REVERSAL", "vwap_dist_atr": 0.5, "exp": True},
-    {"setup": "B_AVWAP_RECLAIM_REVERSAL", "vwap_dist_atr": 2.0, "exp": False},
-    # B_HUGE_C1 mask regime!=BULL
-    {"setup": "B_HUGE_C1_CLOSE_RECLAIM_BREAK", "regime": "NEUTRAL", "exp": True},
-    {"setup": "B_HUGE_C1_CLOSE_RECLAIM_BREAK", "regime": "BULL", "exp": False},
-    # E_VWAP_LOSE mask vol_ratio in [1.8,3.2] + guard min_slot 09:45
-    {"setup": "E_VWAP_LOSE_EARLY_SHORT", "vol_ratio": 2.5, "t": "10:00", "exp": True},
-    {"setup": "E_VWAP_LOSE_EARLY_SHORT", "vol_ratio": 5.0, "t": "10:00", "exp": False},   # vol out of band
-    {"setup": "E_VWAP_LOSE_EARLY_SHORT", "vol_ratio": 2.5, "t": "09:30", "exp": False},   # before 09:45 guard
-    # T_SHORT mask vol_ratio<=1.33
-    {"setup": "T_TREND_DAY_EMA_STAIR_SHORT", "vol_ratio": 1.0, "exp": True},
-    {"setup": "T_TREND_DAY_EMA_STAIR_SHORT", "vol_ratio": 2.0, "exp": False},
-    # L_PRESSURE mask quality_score<=25
-    {"setup": "L_PRESSURE_BURST_VWAP", "quality_score": 20.0, "exp": True},
-    {"setup": "L_PRESSURE_BURST_VWAP", "quality_score": 50.0, "exp": False},
-    # no-mask conf setups -> pass
-    {"setup": "A_PULLBACK_C2_THEN_BREAK_C2_LOW", "exp": True},
-    {"setup": "G_HIGHER_HIGH_BREAK", "exp": True},
-    {"setup": "L_DOUBLE_BOTTOM_VWAP", "exp": True},
-    {"setup": "D_EMA20_REJECTION", "exp": True},
+    # A_PULLBACK mask quality_score>=123.7606; ADX is a pre-momentum gate tested above.
+    {"setup": "A_PULLBACK_C2_THEN_BREAK_C2_LOW", "quality_score": 130.0, "exp": True},
+    {"setup": "A_PULLBACK_C2_THEN_BREAK_C2_LOW", "quality_score": 120.0, "exp": False},
+    # A_MOD mask vol_ratio>=1.955814
+    {"setup": "A_MOD_BREAK_C1_LOW", "vol_ratio": 2.2, "exp": True},
+    {"setup": "A_MOD_BREAK_C1_LOW", "vol_ratio": 1.5, "exp": False},
+    # G_LOWER mask vol_ratio>=4.129044 AND quality_score>=76.444124
+    {"setup": "G_LOWER_LOW_BREAK", "vol_ratio": 4.5, "quality_score": 80.0, "exp": True},
+    {"setup": "G_LOWER_LOW_BREAK", "vol_ratio": 3.0, "quality_score": 80.0, "exp": False},
+    {"setup": "G_LOWER_LOW_BREAK", "vol_ratio": 4.5, "quality_score": 70.0, "exp": False},
+    # no-mask active conf setups -> pass
+    {"setup": "B_HUGE_RED_FAILED_BOUNCE", "exp": True},
+    {"setup": "C_OR_BREAKDOWN", "exp": True},
     # non-conf setup -> excluded
     {"setup": "C_OR_BREAKOUT", "exp": False},
 ]
@@ -72,10 +64,11 @@ for i in range(len(df)):
     flag = "OK " if got == exp else "FAIL"
     if got != exp:
         ok = False
-    extra = df.loc[i, "vwap_dist_atr"] if df.loc[i, "setup"].startswith("B_AVWAP") else (
-        df.loc[i, "regime"] if df.loc[i, "setup"].startswith("B_HUGE") else (
-            df.loc[i, "vol_ratio"] if df.loc[i, "setup"] in ("E_VWAP_LOSE_EARLY_SHORT", "T_TREND_DAY_EMA_STAIR_SHORT") else (
-                df.loc[i, "quality_score"] if df.loc[i, "setup"].startswith("L_PRESSURE") else "")))
+    extra = (
+        f"vol={df.loc[i, 'vol_ratio']} q={df.loc[i, 'quality_score']}"
+        if df.loc[i, "setup"] in ("A_MOD_BREAK_C1_LOW", "G_LOWER_LOW_BREAK")
+        else (df.loc[i, "quality_score"] if df.loc[i, "setup"] == "A_PULLBACK_C2_THEN_BREAK_C2_LOW" else "")
+    )
     print(f"  [{flag}] {df.loc[i,'setup']:<34} {str(extra):>8}  t={df.loc[i,'signal_time_ist'][-14:-9]}  got={got} exp={exp}")
 print("\nMASK TEST:", "ALL PASS" if ok else "*** FAILURES ***")
 assert ok, "mask test failed"

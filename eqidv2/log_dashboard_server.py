@@ -121,6 +121,7 @@ LOG_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.log",
     "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.log",
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.log",
+    "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.log",
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data_live_minimal.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
@@ -148,6 +149,17 @@ LOG_FILES: Dict[str, str] = {
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.log",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.log",
 }
+
+LIVE_FETCH_STATUS_JSON_FILES: Dict[str, str] = {
+    "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json",
+    "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.status.json",
+}
+
+LIVE_FETCH_CARD_TITLES: Dict[str, str] = {
+    "eod_5min_data": "Live Data Fetch (5mins)",
+    "eod_1min_data": "Live Data Fetch (1min)",
+}
+
 LOG_IDS = tuple(LOG_FILES.keys()) + (
     "paper_trade_v5",
     "paper_trade_v7_sweep",
@@ -168,6 +180,7 @@ STATUS_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.status",
     "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.status",
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status",
+    "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
     "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.status",
@@ -205,6 +218,7 @@ HB_STALE_RUNNING_OVERRIDE_SEC: int = int(
 
 HEARTBEAT_FILES: Dict[str, str] = {
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat",
+    "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.heartbeat",
     "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.heartbeat",
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
@@ -231,6 +245,7 @@ HEARTBEAT_FILES: Dict[str, str] = {
 CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "authentication_v2": ("\\EQIDV2_authentication_v2_0900",),
     "eod_5min_data": ("\\EQIDV2_eod_5mins_data_0900",),
+    "eod_1min_data": ("\\EQIDV2_eod_1min_data_0915",),
     "eod_15min_data": ("\\EQIDV2_eod_15mins_data_0900",),
     "eod_1540_update": ("\\EQIDV2_eod_1540_update_1540",),
     "nifty_guard_fetch_v15": ("\\EQIDV2_nifty_guard_fetch_v15_0915",),
@@ -288,6 +303,7 @@ _TASK_SNAPSHOT_CACHE_AT: Optional[dt.datetime] = None
 RESTARTABLE_CARDS: Dict[str, str] = {
     "nifty_guard_fetch_v16_5min":    "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
     "eod_5min_data":                 "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
+    "eod_1min_data":                 "run_eqidv2_eod_scheduler_for_1min_data_live.bat",
     "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
     "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
@@ -1733,6 +1749,229 @@ def _format_fixed_table(
         for row in rows
     ]
     return "\n".join([*summary_lines, rows_meta, header, sep, *body])
+
+
+def _compact_status_value(value: Any, *, width: int = 90) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if math.isnan(value):
+            return ""
+        return _fmt_indian_number(value, decimals=2, signed=False)
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(_compact_status_value(v, width=width) for v in value if v not in (None, ""))
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    return _clip_text(str(value), width)
+
+
+def _format_status_seconds(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{float(value):.1f}s"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+_LIVE_FETCH_1MIN_NO_TOKEN_RE = re.compile(r"^No token for ([^,]+), skipping\.$")
+_LIVE_FETCH_1MIN_SLOT_START_RE = re.compile(r"^\[SLOT\]\s+(\d{2}:\d{2}:\d{2})\s+\|\s+fetching\b")
+_LIVE_FETCH_1MIN_SLOT_DONE_RE = re.compile(r"^\[SLOT\]\s+(\d{2}:\d{2}:\d{2})\s+done\b")
+
+
+def _infer_live_fetch_console_state(card_id: str, log_path: Path) -> str:
+    if card_id != "eod_1min_data":
+        return ""
+    raw = tail_text(log_path, lines=300, max_bytes=400_000)
+    if not raw:
+        return ""
+
+    last_start_idx = -1
+    last_done_idx = -1
+    current_slot = ""
+    for idx, line in enumerate(raw.splitlines()):
+        started = _LIVE_FETCH_1MIN_SLOT_START_RE.match(line.strip())
+        if started:
+            last_start_idx = idx
+            current_slot = started.group(1)
+            continue
+        if _LIVE_FETCH_1MIN_SLOT_DONE_RE.match(line.strip()):
+            last_done_idx = idx
+
+    if last_start_idx > last_done_idx and current_slot:
+        return f"console_state=running | current_slot={current_slot}"
+    return ""
+
+
+def _live_fetch_console_tail(card_id: str, log_path: Path, *, lines: int) -> str:
+    if card_id != "eod_1min_data":
+        return tail_text(log_path, lines=lines)
+
+    raw = tail_text(log_path, lines=max(lines * 4, lines + 120), max_bytes=400_000)
+    if not raw:
+        return ""
+
+    kept: list[str] = []
+    missing_token_symbols: list[str] = []
+    for line in raw.splitlines():
+        match = _LIVE_FETCH_1MIN_NO_TOKEN_RE.match(line.strip())
+        if match:
+            missing_token_symbols.append(match.group(1).strip())
+            continue
+        kept.append(line)
+
+    visible = kept[-lines:] if kept else raw.splitlines()[-lines:]
+    if not missing_token_symbols:
+        return "\n".join(visible)
+
+    unique_symbols = list(dict.fromkeys(missing_token_symbols))
+    sample = ", ".join(unique_symbols[:12])
+    summary = f"[dashboard] suppressed {len(missing_token_symbols)} no-token line(s)"
+    if sample:
+        summary += f"; sample={sample}"
+        if len(unique_symbols) > 12:
+            summary += f", +{len(unique_symbols) - 12} more"
+    return "\n".join([summary, *visible])
+
+
+def _format_live_data_fetch_console_view(card_id: str, log_path: Path, *, lines: int) -> str:
+    title = LIVE_FETCH_CARD_TITLES.get(card_id, card_id)
+    status_name = LIVE_FETCH_STATUS_JSON_FILES.get(card_id, "")
+    status_path = _resolve_status_path(status_name) if status_name else None
+    status_json = _read_json_dict(status_path) if status_path is not None else {}
+
+    out: list[str] = [title]
+    out.append(f"source_log={log_path.name}")
+    if status_path is not None:
+        status_note = "" if status_json else " (missing or empty)"
+        out.append(f"status_json={status_path.name}{status_note}")
+
+    if status_json:
+        state = _compact_status_value(status_json.get("state") or status_json.get("overall_state"))
+        updated = _compact_status_value(status_json.get("updated_at_ist"))
+        if state or updated:
+            out.append("status=" + " | ".join(part for part in (state, f"updated={updated}" if updated else "") if part))
+
+        console_state = _infer_live_fetch_console_state(card_id, log_path)
+        if console_state:
+            out.append(console_state)
+
+        schedule_parts: list[str] = []
+        first_slot = _compact_status_value(status_json.get("first_slot"))
+        end_cutoff = _compact_status_value(status_json.get("end_cutoff"))
+        interval_min = _compact_status_value(status_json.get("interval_min"))
+        if first_slot or end_cutoff or interval_min:
+            if first_slot or end_cutoff:
+                schedule_parts.append(f"window={first_slot or '?'}..{end_cutoff or '?'}")
+            if interval_min:
+                schedule_parts.append(f"every={interval_min}min")
+        slot_index = _compact_status_value(status_json.get("slot_index"))
+        total_slots = _compact_status_value(status_json.get("total_slots"))
+        if slot_index or total_slots:
+            schedule_parts.append(f"slot={slot_index or '?'}/{total_slots or '?'}")
+        next_slot = _compact_status_value(status_json.get("next_slot_ist"))
+        wait_left = _format_status_seconds(status_json.get("seconds_to_next_slot"))
+        if next_slot:
+            next_text = f"next={next_slot}"
+            if wait_left:
+                next_text += f" ({wait_left})"
+            schedule_parts.append(next_text)
+        if schedule_parts:
+            out.append("schedule=" + " | ".join(schedule_parts))
+
+        slot_parts: list[str] = []
+        for key, label in (
+            ("slot_ist", "slot"),
+            ("last_slot_ist", "last_slot"),
+            ("total_elapsed_sec", "elapsed"),
+            ("max_partition_elapsed_sec", "max_part"),
+            ("avg_partition_elapsed_sec", "avg_part"),
+            ("min_partition_elapsed_sec", "min_part"),
+        ):
+            value = status_json.get(key)
+            if value in (None, ""):
+                continue
+            text = _format_status_seconds(value) if key.endswith("_sec") else _compact_status_value(value)
+            slot_parts.append(f"{label}={text}")
+        if slot_parts:
+            out.append("latest=" + " | ".join(slot_parts))
+
+        worker_parts: list[str] = []
+        for key, label in (
+            ("max_workers", "max_workers"),
+            ("total_worker_budget", "worker_budget"),
+            ("per_app_cap", "per_app_cap"),
+            ("effective_per_app", "effective_per_app"),
+            ("intraday_ts", "intraday_ts"),
+        ):
+            value = _compact_status_value(status_json.get(key))
+            if value:
+                worker_parts.append(f"{label}={value}")
+        if worker_parts:
+            out.append("workers=" + " | ".join(worker_parts))
+
+        guard_parts: list[str] = []
+        for key, label in (
+            ("sla_state", "sla"),
+            ("sla_warn_sec", "sla_warn"),
+            ("sla_mode", "sla_mode"),
+            ("completion_policy", "completion"),
+            ("verification_failed_count", "verify_failed"),
+        ):
+            value = status_json.get(key)
+            if value in (None, ""):
+                continue
+            text = _format_status_seconds(value) if key.endswith("_sec") else _compact_status_value(value)
+            guard_parts.append(f"{label}={text}")
+        failures = status_json.get("failures")
+        if failures:
+            guard_parts.append(f"failures={_compact_status_value(failures)}")
+        if guard_parts:
+            out.append("guards=" + " | ".join(guard_parts))
+
+        last_summary = status_json.get("last_slot_summary")
+        if isinstance(last_summary, dict) and last_summary:
+            summary_parts: list[str] = []
+            for key, label in (("ok", "ok"), ("elapsed_sec", "elapsed"), ("error", "error")):
+                value = last_summary.get(key)
+                if value in (None, ""):
+                    continue
+                text = _format_status_seconds(value) if key.endswith("_sec") else _compact_status_value(value)
+                summary_parts.append(f"{label}={text}")
+            if summary_parts:
+                out.append("last_slot_summary=" + " | ".join(summary_parts))
+
+        elapsed_by_app = status_json.get("partition_elapsed_sec")
+        counts_by_app = status_json.get("partition_symbol_counts")
+        if isinstance(elapsed_by_app, dict) and elapsed_by_app:
+            app_names = sorted(elapsed_by_app, key=lambda x: str(x))
+            rows = []
+            for app in app_names:
+                symbol_count = ""
+                if isinstance(counts_by_app, dict):
+                    symbol_count = _compact_status_value(counts_by_app.get(app))
+                rows.append(
+                    {
+                        "app": str(app),
+                        "symbols": symbol_count,
+                        "elapsed": _format_status_seconds(elapsed_by_app.get(app)),
+                    }
+                )
+            out.append("")
+            out.append(
+                _format_fixed_table(
+                    rows,
+                    ("app", "symbols", "elapsed"),
+                    rows_meta=f"partitions={len(rows)}",
+                    column_max_widths={"app": 12, "symbols": 10, "elapsed": 12},
+                )
+            )
+
+    tail = _live_fetch_console_tail(card_id, log_path, lines=lines)
+    out.append("")
+    out.append("console_tail:")
+    out.append(tail if tail else "(no console lines yet)")
+    return "\n".join(out)
 
 
 def _parse_latest_live_pnl_line(log_path: Path) -> dict[str, Any]:
@@ -5654,6 +5893,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const LOG_ORDER = [
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
+      "eod_1min_data",
       "live_combined_csv_id_5min_v7_persistent",
       "signal_discovery_v7_5min_id",
       "candidate_tickers_v7_5min_id",
@@ -5709,6 +5949,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "detection_engine_v16_5min":     "V16 5min Detection Engine (Confirmation)",
       "detected_signals_v16_5min":     "V16 5min Detected Signals CSV",
       "eod_5min_data": "Live Data Fetch (5mins)",
+      "eod_1min_data": "Live Data Fetch (1min)",
       "eod_15min_data": "Live Data Fetch (15mins)",
       "live_combined_csv_v16_5min": "V16 5min Scanner (anti-exhaustion, 5min slots)",
       "live_signals_csv_v16_5min_short": "V16 5min Signals SHORT",
@@ -5761,7 +6002,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         accent: "market",
         ids: [
           "nifty_guard_fetch_v16_5min",
-          "eod_5min_data"
+          "eod_5min_data",
+          "eod_1min_data"
         ]
       },
       {
@@ -5846,6 +6088,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const SESSION_TIMELINE = [
       { time: "09:00", id: "authentication_v2", label: "Auth" },
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
+      { time: "09:17", id: "eod_1min_data", label: "Live Data Fetch 1min" },
       { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
       { time: "09:17", id: "v7_research_layer", label: "V7 Research Layer" },
       { time: "09:17", id: "daily_live_v7_research_session", label: "Daily Live V7 Research" },
@@ -5902,6 +6145,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const RESTARTABLE_CARDS = new Set([
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
+      "eod_1min_data",
       "signal_early_engine_v16_5min",
       "detection_engine_v16_5min",
       "pending_data_fetcher_v16_5min",
@@ -7129,6 +7373,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 )
             elif key == "preopen_healthcheck":
                 tail = _format_preopen_scheduled_sessions()
+            elif key in LIVE_FETCH_STATUS_JSON_FILES:
+                tail = _format_live_data_fetch_console_view(key, path, lines=lines)
             elif key == "entry_engine_1min_v5_id":
                 entry_rows = runtime_dir("entry_engine_1min_v5_ID") / "latest" / "latest_entry_engine_rows.csv"
                 entry_cols: list[Tuple[str, Sequence[str]]] = [

@@ -45,7 +45,7 @@ def main() -> int:
     keys = sorted(boot.conf_keys())
     _add("PASS" if enabled else "INFO", "conf flag EQIDV2_USE_FINAL_SETUP_CONF",
          "ON" if enabled else "OFF (live runs the legacy book; set =1 to use the 16-setup conf)")
-    _add("PASS" if len(keys) == 16 else "FAIL", "conf book size", f"{len(keys)} setups")
+    _add("PASS" if len(keys) > 0 else "FAIL", "tradeable conf book size", f"{len(keys)} setups")
 
     er = boot.exit_rules_from_conf()
     # exit levels are pushed to v6 only after the engine activates; here just confirm

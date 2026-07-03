@@ -747,13 +747,18 @@ def ticker_is_fresh(
     tol = timedelta(seconds=1)
     step_min = int(spec.get("step_min", 0) or 0)
     step_td = timedelta(minutes=step_min) if step_min > 0 else timedelta(0)
+    stale_ok_td = _live_1min_stale_ok_timedelta(mode)
+    freshness_tol = max(tol, stale_ok_td)
 
-    if last_ts >= (exp_ts - tol):
+    if _live_1min_same_day_stale_ok(mode) and last_ts.date() == exp_ts.date():
+        return True
+
+    if last_ts >= (exp_ts - freshness_tol):
         return True
     if step_min > 0:
-        if (last_ts + step_td) >= (exp_ts - tol):
+        if (last_ts + step_td) >= (exp_ts - freshness_tol):
             return True
-        if (last_ts - step_td) >= (exp_ts - tol):
+        if (last_ts - step_td) >= (exp_ts - freshness_tol):
             return True
 
     return False
@@ -1048,7 +1053,7 @@ def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.
             if age_days <= TOKENS_CACHE_MAX_AGE_DAYS:
                 cache = json.loads(Path(TOKENS_CACHE_FILE).read_text(encoding="utf-8"))
                 if isinstance(cache, dict) and all(t in cache for t in syms_u):
-                    return {t: int(cache[t]) for t in syms_u}
+                    return {t: int(cache[t]) for t in syms_u if int(cache.get(t, 0) or 0) > 0}
         except Exception:
             pass
 
@@ -1063,7 +1068,7 @@ def load_or_fetch_tokens(kite: KiteConnect, symbols: list[str], logger: logging.
             existing = json.loads(Path(TOKENS_CACHE_FILE).read_text(encoding="utf-8"))
             if not isinstance(existing, dict):
                 existing = {}
-        existing.update({k: int(v) for k, v in mp.items()})
+        existing.update({t: int(mp[t]) if t in mp else 0 for t in syms_u})
         Path(TOKENS_CACHE_FILE).write_text(json.dumps(existing, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -1246,11 +1251,13 @@ def verify_mode_outputs(
     """
     Post-run verification:
     - output file exists
-    - last timestamp is >= expected timestamp
+    - last timestamp is recent enough for the live mode
     """
     failed: list[str] = []
     ok = 0
     tol = timedelta(seconds=1)
+    stale_ok_td = _live_1min_stale_ok_timedelta(mode)
+    freshness_tol = max(tol, stale_ok_td)
 
     if expected_ts_ist.tzinfo is None:
         expected_ts_ist = IST_TZ.localize(expected_ts_ist)
@@ -1272,13 +1279,23 @@ def verify_mode_outputs(
         else:
             last_ts = last_ts.tz_convert(IST_TZ)
 
-        if last_ts >= (expected_ts_ist - tol):
+        if _live_1min_same_day_stale_ok(mode) and last_ts.date() == expected_ts_ist.date():
+            ok += 1
+        elif last_ts >= (expected_ts_ist - freshness_tol):
             ok += 1
         else:
             failed.append(f"{t_u}:stale_last_ts={last_ts.strftime('%Y-%m-%d %H:%M:%S%z')}")
 
     if failed:
-        logger.warning("[%s][VERIFY] Failed=%d | sample=%s", mode.upper(), len(failed), ", ".join(failed[:20]))
+        if _live_1min_stale_ok_timedelta(mode) > timedelta(0):
+            logger.warning(
+                "[%s][VERIFY] Lagged/missing=%d | sample=%s",
+                mode.upper(),
+                len(failed),
+                ", ".join(failed[:20]),
+            )
+        else:
+            logger.warning("[%s][VERIFY] Failed=%d | sample=%s", mode.upper(), len(failed), ", ".join(failed[:20]))
     return ok, failed
 
 
@@ -1294,6 +1311,27 @@ def _extract_failed_tickers(verify_failed: list[str], all_symbols: list[str]) ->
         seen.add(t)
         out.append(t)
     return out
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    raw = os.getenv(name, default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _live_1min_stale_ok_timedelta(mode: str) -> timedelta:
+    if str(mode).lower().strip() != "1min":
+        return timedelta(0)
+    try:
+        minutes = float(os.getenv("EQIDV2_1MIN_STALE_OK_MIN", "60"))
+    except (TypeError, ValueError):
+        minutes = 60.0
+    return timedelta(minutes=max(0.0, minutes))
+
+
+def _live_1min_same_day_stale_ok(mode: str) -> bool:
+    if str(mode).lower().strip() != "1min":
+        return False
+    return _env_flag("EQIDV2_1MIN_SAME_DAY_STALE_OK", "1")
 
 
 def _recover_verify_failures(
@@ -1670,6 +1708,11 @@ def run_mode(
     verify_expected_ts = end_dt if intraday_ts.lower() == "end" else (end_dt - timedelta(minutes=step))
     if verify_expected_ts.tzinfo is None:
         verify_expected_ts = IST_TZ.localize(verify_expected_ts)
+    stale_ok_td = _live_1min_stale_ok_timedelta(mode)
+    if stale_ok_td > timedelta(0):
+        logger.info("[%s] Live freshness lag tolerance: %.1fmin", mode.upper(), stale_ok_td.total_seconds() / 60.0)
+    if _live_1min_same_day_stale_ok(mode):
+        logger.info("[%s] Same-day stale candles are treated as live no-trade gaps.", mode.upper())
 
     if skip_if_fresh:
         logger.info("[%s] Missing files: %d", mode.upper(), len(missing_files))
@@ -1704,16 +1747,30 @@ def run_mode(
     t_token0 = _time.perf_counter()
     kite = setup_kite_session()
 
+    all_syms = [t.upper() for t in syms]
     token_map = {k.upper(): int(v) for k, v in dict(pre_token_map).items()}
-    need_tokens = [t for t in missing_rows if t.upper() not in token_map]
+    need_tokens = [t for t in all_syms if t.upper() not in token_map]
 
     if need_tokens:
         fetched = load_or_fetch_tokens(kite, need_tokens, logger, refresh=refresh_tokens)
         token_map.update({k.upper(): int(v) for k, v in fetched.items()})
     token_prep_secs = _time.perf_counter() - t_token0
 
+    fetchable_syms = [t for t in all_syms if int(token_map.get(t, 0) or 0) > 0]
+    tokenless_syms = [t for t in all_syms if int(token_map.get(t, 0) or 0) <= 0]
+    if tokenless_syms:
+        logger.warning(
+            "[%s] Skipping tokenless symbols=%d | sample=%s",
+            mode.upper(),
+            len(tokenless_syms),
+            ", ".join(tokenless_syms[:30]),
+        )
+
+    missing_rows_fetchable = [t.upper() for t in missing_rows if int(token_map.get(t.upper(), 0) or 0) > 0]
+    verify_syms = fetchable_syms
+
     work_items = []
-    for t in missing_rows:
+    for t in missing_rows_fetchable:
         tok = token_map.get(t.upper())
         if not tok:
             logger.warning("No token for %s, skipping.", t)
@@ -1723,12 +1780,12 @@ def run_mode(
     if not work_items:
         logger.info("No valid symbols with tokens.")
         t_verify0 = _time.perf_counter()
-        ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+        ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger) if verify_syms else (0, [])
         verify_secs = _time.perf_counter() - t_verify0
-        logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
+        logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d fetchable | failed=%d | tokenless_skipped=%d | elapsed=%.2fs",
                     mode.upper(),
                     verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
-                    ok_count, len(syms), len(verify_failed), verify_secs)
+                    ok_count, len(verify_syms), len(verify_failed), len(tokenless_syms), verify_secs)
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=0.00s | verify=%.2fs | total=%.2fs",
                     mode.upper(), freshness_scan_secs, token_prep_secs, verify_secs, _time.perf_counter() - t_mode0)
         return
@@ -1811,20 +1868,21 @@ def run_mode(
                     mode.upper(), sum_load, sum_fetch, sum_ind, sum_persist, sum_total)
 
     t_verify0 = _time.perf_counter()
-    ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+    ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger)
     verify_secs = _time.perf_counter() - t_verify0
-    logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
+    logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d fetchable | failed=%d | tokenless_skipped=%d | elapsed=%.2fs",
                 mode.upper(),
                 verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
-                ok_count, len(syms), len(verify_failed), verify_secs)
+                ok_count, len(verify_syms), len(verify_failed), len(tokenless_syms), verify_secs)
 
     recovery_secs = 0.0
     verify_post_secs = 0.0
-    if verify_failed:
+    strict_recovery = _env_flag("EQIDV2_1MIN_STRICT_VERIFY_RECOVERY", "0")
+    if verify_failed and strict_recovery:
         recovery_secs = _recover_verify_failures(
             mode=mode,
             verify_failed=verify_failed,
-            all_symbols=syms,
+            all_symbols=verify_syms,
             expected_ts_ist=verify_expected_ts,
             kite=kite,
             token_map=token_map,
@@ -1840,12 +1898,20 @@ def run_mode(
             print_missing_rows_max=print_missing_rows_max,
         )
         t_verify1 = _time.perf_counter()
-        ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+        ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger)
         verify_post_secs = _time.perf_counter() - t_verify1
-        logger.info("[%s][VERIFY][POST] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
+        logger.info("[%s][VERIFY][POST] expected_last=%s | ok=%d/%d fetchable | failed=%d | elapsed=%.2fs",
                     mode.upper(),
                     verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
-                    ok_count, len(syms), len(verify_failed), verify_post_secs)
+                    ok_count, len(verify_syms), len(verify_failed), verify_post_secs)
+    elif verify_failed:
+        logger.warning(
+            "[%s][VERIFY] Recovery skipped for %d lagged/missing fetchable symbol(s). "
+            "1-min live mode treats latest-candle gaps as non-fatal no-trade/illiquid gaps. "
+            "Set EQIDV2_1MIN_STRICT_VERIFY_RECOVERY=1 to force retry recovery.",
+            mode.upper(),
+            len(verify_failed),
+        )
 
     if recovery_secs > 0.0:
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=%.2fs | verify_pre=%.2fs | recover=%.2fs | verify_post=%.2fs | total=%.2fs",
