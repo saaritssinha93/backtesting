@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
@@ -198,14 +199,39 @@ def _run_one_slot(slot: datetime, *, max_workers: int, intraday_ts: str,
                   status_detail: dict | None = None) -> dict:
     started = time.perf_counter()
     started_at = now_ist()
+    slot_detail = {
+        **(status_detail or {}),
+        "current_slot_ist": slot.strftime("%Y-%m-%d %H:%M:%S%z"),
+        "slot_started_at_ist": started_at.strftime("%Y-%m-%d %H:%M:%S%z"),
+    }
     _write_status(
         "running",
-        {**(status_detail or {}),
-         "current_slot_ist": slot.strftime("%Y-%m-%d %H:%M:%S%z"),
-         "slot_started_at_ist": started_at.strftime("%Y-%m-%d %H:%M:%S%z")},
+        slot_detail,
     )
     print(f"[SLOT] {slot.strftime('%H:%M:%S')} | fetching 1-min incremental "
           f"(max_workers={max_workers}, intraday_ts={intraday_ts})", flush=True)
+    heartbeat_stop = threading.Event()
+
+    def _heartbeat_while_running() -> None:
+        interval = max(0.1, float(STATUS_TOUCH_SEC))
+        while not heartbeat_stop.wait(interval):
+            elapsed_sec = round(time.perf_counter() - started, 1)
+            _write_status(
+                "running",
+                {**slot_detail, "slot_elapsed_sec": elapsed_sec},
+            )
+            print(
+                f"[SLOT][HEARTBEAT] {slot.strftime('%H:%M:%S')} "
+                f"still running elapsed={elapsed_sec:.1f}s",
+                flush=True,
+            )
+
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_while_running,
+        name="eqidv2-1min-slot-heartbeat",
+        daemon=True,
+    )
+    heartbeat_thread.start()
     summary = {}
     try:
         core.run_mode(
@@ -224,6 +250,9 @@ def _run_one_slot(slot: datetime, *, max_workers: int, intraday_ts: str,
         summary["ok"] = False
         summary["error"] = str(exc)
         print(f"[SLOT] {slot.strftime('%H:%M:%S')} FAILED: {exc}", flush=True)
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=max(1.0, float(STATUS_TOUCH_SEC) + 1.0))
     summary["elapsed_sec"] = round(time.perf_counter() - started, 2)
     print(f"[SLOT] {slot.strftime('%H:%M:%S')} done in {summary['elapsed_sec']}s "
           f"ok={summary.get('ok')}", flush=True)

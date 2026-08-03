@@ -7,6 +7,7 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
+if not defined EQIDV2_LAUNCHER_NAME set "EQIDV2_LAUNCHER_NAME=run_eqidv2_signal_discovery_v7_5min_id_persistent.bat"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
 set "SCRIPT_NAME=eqidv2_signal_discovery_v7_5min_id_persistent.py"
@@ -29,6 +30,10 @@ if not exist "%RUNTIME_STATUS_DIR%" mkdir "%RUNTIME_STATUS_DIR%"
 cd /d "%BASE_DIR%"
 set EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS=24
 set EQIDV2_SIGNAL_DISCOVERY_V7_TIER123_SCAN_WORKERS=24
+REM Reuse the prewarmed process pool and keep work units small enough to balance
+REM changed and unchanged symbols across persistent workers.
+set EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_CACHE_ENABLED=1
+set EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_CHUNKSIZE=8
 REM Main V7 and Tier123 scans are independent; overlap them to meet T+1:30.
 set EQIDV2_SIGNAL_DISCOVERY_V7_PARALLEL_SCAN_BRANCHES=1
 REM Skip optional Tier123 when feed latency leaves too little T+1:30 budget.
@@ -38,11 +43,12 @@ REM Authentication, partition, and broader verification failures remain blocked.
 set EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MAX_VERIFICATION_FAILURES=5
 set EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MIN_DELAY_SEC=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_POLL_SEC=0.5
+REM Fail closed unless scanner and feed share the same atomic canonical universe.
+set EQIDV2_SIGNAL_DISCOVERY_V7_REQUIRE_FEED_UNIVERSE_MANIFEST=1
 REM The 5-min indicator feed (eqidv2_eod_scheduler_for_5mins_data_live_minimal)
-REM finishes writing each slot's bar at ~slot+45-60s (SLA-WARN range). The scan
-REM MUST start after that or it reads pre-bar files and misses A/B/C/etc setups.
-REM 75s guarantees the scan window is entirely after feed completion.
-set EQIDV2_SIGNAL_DISCOVERY_V7_POST_SLOT_DELAY_SEC=75
+REM publishes authoritative exact-slot completion. The feed gate is the normal
+REM synchronizer; this short delay is only the disabled-gate emergency fallback.
+set EQIDV2_SIGNAL_DISCOVERY_V7_POST_SLOT_DELAY_SEC=1
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_START=09:30
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_WINDOW_END=14:30
 set EQIDV2_SIGNAL_DISCOVERY_V7_ENTRY_LAG_MIN=1

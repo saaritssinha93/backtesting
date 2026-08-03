@@ -12,6 +12,7 @@ import json
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -21,6 +22,7 @@ import pandas as pd
 import avwap_5min_ID_v2_backtesting as v2
 import avwap_5min_ID_v6_backtesting as v6
 import avwap_5min_ID_v7_backtesting as v7
+import eqidv2_late_bb10_compression as late_bb10
 
 
 IST_TZ = "Asia/Kolkata"
@@ -44,6 +46,79 @@ FILTER_TO_V8_EXIT_SETUPS = SELECTION_MODE.strip().lower() in {
 }
 
 DEFAULT_SCAN_WORKERS = max(1, int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_WORKERS", "8")))
+DEFAULT_SCAN_CHUNKSIZE = max(
+    1,
+    int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_CHUNKSIZE", "24")),
+)
+SCAN_CACHE_ENABLED = os.getenv(
+    "EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_CACHE_ENABLED",
+    "1",
+).strip().lower() not in {"0", "false", "no", "off"}
+# Per process: enough for a normal 24-worker shard while bounding memory if
+# ProcessPool scheduling moves shards between workers over later slots.
+SCAN_CACHE_MAX_TICKERS = max(
+    1,
+    int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SCAN_CACHE_MAX_TICKERS", "128")),
+)
+
+
+@dataclass
+class _TickerFrameCache:
+    """Process-local cache, reusable only for an exactly verified input."""
+
+    fingerprint: Tuple[int, int, int]
+    frame: pd.DataFrame
+    prepared_key: Optional[Tuple[Any, ...]] = None
+    prepared: Optional[pd.DataFrame] = None
+
+
+_LOCAL_FRAME_CACHE: Dict[str, _TickerFrameCache] = {}
+_LAST_SCAN_TELEMETRY: Dict[str, Any] = {}
+
+
+def _new_ticker_telemetry() -> Dict[str, Any]:
+    return {
+        "raw_cache_hits": 0,
+        "raw_cache_misses": 0,
+        "prepared_cache_hits": 0,
+        "prepared_cache_misses": 0,
+        "unchanged_frame_hits": 0,
+        "file_read_seconds": 0.0,
+        "prepare_seconds": 0.0,
+        "strategy_seconds": 0.0,
+        "unstable_file_reads": 0,
+        "ticker_errors": 0,
+        "ticker_elapsed_seconds": 0.0,
+    }
+
+
+def _bump_telemetry(
+    telemetry: Optional[Dict[str, Any]],
+    key: str,
+    amount: float | int = 1,
+) -> None:
+    if telemetry is not None:
+        telemetry[key] = telemetry.get(key, 0) + amount
+
+
+def _file_fingerprint(fp: Path) -> Optional[Tuple[int, int, int]]:
+    try:
+        stat = fp.stat()
+    except OSError:
+        return None
+    return (int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+
+
+def _remember_frame(
+    ticker: str,
+    fingerprint: Tuple[int, int, int],
+    frame: pd.DataFrame,
+) -> _TickerFrameCache:
+    if ticker not in _LOCAL_FRAME_CACHE and len(_LOCAL_FRAME_CACHE) >= SCAN_CACHE_MAX_TICKERS:
+        _LOCAL_FRAME_CACHE.pop(next(iter(_LOCAL_FRAME_CACHE)))
+    entry = _TickerFrameCache(fingerprint=fingerprint, frame=frame)
+    _LOCAL_FRAME_CACHE[ticker] = entry
+    return entry
 
 EARLY_MODE_ENABLE = str(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EARLY_MODE", "1")).strip().lower() not in {
     "0",
@@ -138,21 +213,65 @@ def _read_one(fp: Path) -> Optional[pd.DataFrame]:
     return df
 
 
-def _load_live_5m(ticker: str) -> Optional[pd.DataFrame]:
-    fp = LIVE_5M_DIR / f"{str(ticker).upper()}_stocks_indicators_5min.parquet"
+def _load_live_5m_cached(
+    ticker: str,
+    telemetry: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[pd.DataFrame], Optional[_TickerFrameCache]]:
+    ticker = str(ticker).upper()
+    fp = LIVE_5M_DIR / f"{ticker}_stocks_indicators_5min.parquet"
+    fingerprint_before = _file_fingerprint(fp)
+    cached = _LOCAL_FRAME_CACHE.get(ticker) if SCAN_CACHE_ENABLED else None
+    if (
+        fingerprint_before is not None
+        and cached is not None
+        and cached.fingerprint == fingerprint_before
+    ):
+        _bump_telemetry(telemetry, "raw_cache_hits")
+        return cached.frame, cached
+
+    _bump_telemetry(telemetry, "raw_cache_misses")
+    read_started = time.perf_counter()
     df = _read_one(fp)
+    _bump_telemetry(
+        telemetry,
+        "file_read_seconds",
+        time.perf_counter() - read_started,
+    )
     if df is None or "date" not in df.columns:
-        return None
+        return None, None
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date"])
     if df.empty:
-        return None
-    return (
+        return None, None
+    normalized = (
         df.sort_values("date")
         .drop_duplicates(subset=["date"], keep="last")
         .reset_index(drop=True)
     )
+    fingerprint_after = _file_fingerprint(fp)
+    if (
+        SCAN_CACHE_ENABLED
+        and fingerprint_before is not None
+        and fingerprint_before == fingerprint_after
+    ):
+        # A feed may rewrite an unchanged illiquid symbol.  Retain prepared
+        # state only after exact equality, never from timestamp/shape alone.
+        if cached is not None and cached.frame.equals(normalized):
+            cached.fingerprint = fingerprint_after
+            _bump_telemetry(telemetry, "unchanged_frame_hits")
+            return cached.frame, cached
+        return normalized, _remember_frame(ticker, fingerprint_after, normalized)
+    if fingerprint_before != fingerprint_after:
+        _bump_telemetry(telemetry, "unstable_file_reads")
+    _LOCAL_FRAME_CACHE.pop(ticker, None)
+    return normalized, None
+
+
+def _load_live_5m(ticker: str) -> Optional[pd.DataFrame]:
+    """Compatibility loader used by market-alignment and research helpers."""
+    frame, _ = _load_live_5m_cached(ticker)
+    return frame
 
 
 def _append_synthetic_successor(prepared_day: pd.DataFrame, slot_ts: pd.Timestamp) -> pd.DataFrame:
@@ -179,6 +298,52 @@ def _append_synthetic_successor(prepared_day: pd.DataFrame, slot_ts: pd.Timestam
     if "volume" in last.index:
         last["volume"] = 0
     return pd.concat([prepared_day, pd.DataFrame([last])], ignore_index=True)
+
+
+def _scan_late_bb10_signal(
+    raw: pd.DataFrame,
+    ticker: str,
+    slot_ts: Any,
+) -> Optional[Tuple["v2.Candidate", Dict[str, Any]]]:
+    """Build the shared late-BB10 candidate without using future candles."""
+    slot = _ensure_ist_ts(slot_ts).floor("min")
+    try:
+        custom = late_bb10.signal_for_slot(raw, slot)
+    except Exception:
+        return None
+    if custom is None:
+        return None
+    close = float(custom["close"])
+    candle_range = float(custom["high"]) - float(custom["low"])
+    body_pct = abs(float(custom["close"]) - float(custom["open"])) / candle_range if candle_range > 0 else 0.0
+    vwap_dist_atr = (
+        (close - float(custom["avwap"])) / float(custom["atr"])
+        if float(custom["atr"]) > 0 else np.nan
+    )
+    candidate = v2.Candidate(
+        ticker=str(ticker).upper(),
+        date=str(slot.date()),
+        setup=late_bb10.SETUP,
+        side="LONG",
+        signal_ts=slot,
+        signal_close=close,
+        entry_ts=slot + pd.Timedelta(minutes=1),
+        entry_px=float(custom["entry_trigger_price"]),
+        target_px=0.0,
+        sl_px=0.0,
+        quality_score=float(custom["quality_score"]),
+        rs_pct=0.0,
+        market_ret_pct=0.0,
+        regime="NEUTRAL",
+        vol_ratio=float(custom["rel_volume"]),
+        atr_pct=float(custom["atr_pct"]),
+        close_loc=float(custom["close_loc"]),
+        body_pct=float(body_pct),
+        vwap_dist_atr=float(vwap_dist_atr),
+        day_value_so_far_rs=float(custom["traded_value"]),
+        reason="late_bb10_causal_compression_breakout",
+    )
+    return candidate, custom
 
 
 def _safe_float(value: Any, default: float = np.nan) -> float:
@@ -602,33 +767,83 @@ def scan_ticker_signal_candle(
     ticker: str,
     slot_ist: Any,
     market_ctx: Dict[str, Dict[str, Any]],
+    *,
+    telemetry: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple["v2.Candidate", Dict[str, Any]]]:
-    df = _load_live_5m(ticker)
+    ticker_started = time.perf_counter()
+
+    def finish(
+        result: List[Tuple["v2.Candidate", Dict[str, Any]]],
+    ) -> List[Tuple["v2.Candidate", Dict[str, Any]]]:
+        _bump_telemetry(
+            telemetry,
+            "ticker_elapsed_seconds",
+            time.perf_counter() - ticker_started,
+        )
+        return result
+
+    df, cache_entry = _load_live_5m_cached(ticker, telemetry)
     if df is None or df.empty:
-        return []
+        return finish([])
 
     slot_ts = _ensure_ist_ts(slot_ist).floor("min")
     df = df[df["date"] <= slot_ts].copy()
     if df.empty:
-        return []
+        return finish([])
 
-    # Trim to 3 calendar days before _prepare_5m: reduces compute from ~10 days to ~2-3
-    # trading days (~9x speedup). 3 days safely covers the previous trading day on Mondays.
+    # Keep a separate causal history for the BB10 detector. The native v2 scan
+    # must retain its fast three-day preparation window.
+    late_bb10_df = None
+    if late_bb10.SETUP in ALLOWED_SETUPS:
+        late_bb10_start = (slot_ts - pd.Timedelta(days=45)).normalize()
+        late_bb10_df = df[df["date"] >= late_bb10_start].copy()
     _trim_start = (slot_ts - pd.Timedelta(days=3)).normalize()
     df = df[df["date"] >= _trim_start].copy()
     if df.empty:
-        return []
+        return finish([])
 
-    try:
-        prepared = v2._prepare_5m(df)
-    except Exception:
-        return []
+    prepared_key: Optional[Tuple[Any, ...]] = None
+    if cache_entry is not None:
+        prepared_key = (
+            int(_trim_start.value),
+            int(pd.Timestamp(df["date"].iloc[-1]).value),
+            int(len(df)),
+        )
+    if (
+        prepared_key is not None
+        and cache_entry is not None
+        and cache_entry.prepared_key == prepared_key
+        and cache_entry.prepared is not None
+    ):
+        prepared = cache_entry.prepared
+        _bump_telemetry(telemetry, "prepared_cache_hits")
+    else:
+        _bump_telemetry(telemetry, "prepared_cache_misses")
+        prepare_started = time.perf_counter()
+        try:
+            prepared = v2._prepare_5m(df)
+        except Exception:
+            _bump_telemetry(telemetry, "ticker_errors")
+            _bump_telemetry(
+                telemetry,
+                "prepare_seconds",
+                time.perf_counter() - prepare_started,
+            )
+            return finish([])
+        _bump_telemetry(
+            telemetry,
+            "prepare_seconds",
+            time.perf_counter() - prepare_started,
+        )
+        if cache_entry is not None and prepared_key is not None:
+            cache_entry.prepared_key = prepared_key
+            cache_entry.prepared = prepared
     if "date_only" not in prepared.columns:
         prepared["date_only"] = prepared["date"].dt.tz_convert(IST_TZ).dt.date
 
     day_df = prepared[prepared["date_only"] == slot_ts.date()].copy().reset_index(drop=True)
     if day_df.empty:
-        return []
+        return finish([])
     day_df["date"] = pd.to_datetime(day_df["date"], errors="coerce")
     if getattr(day_df["date"].dt, "tz", None) is None:
         day_df["date"] = day_df["date"].dt.tz_localize(IST_TZ)
@@ -637,18 +852,20 @@ def scan_ticker_signal_candle(
 
     signal_rows = day_df[day_df["date"].dt.floor("min") == slot_ts]
     if signal_rows.empty:
-        return []
+        return finish([])
 
     scan_df = _append_synthetic_successor(day_df, slot_ts)
+    strategy_started = time.perf_counter()
     try:
         candidates = v2._scan_day(scan_df, str(ticker).upper(), market_ctx)
     except Exception:
+        _bump_telemetry(telemetry, "ticker_errors")
         candidates = []
     candidates = list(candidates or [])
     try:
         candidates.extend(_scan_early_slot_candidates(scan_df, str(ticker).upper(), slot_ts, market_ctx))
     except Exception:
-        pass
+        _bump_telemetry(telemetry, "ticker_errors")
 
     signal_row = signal_rows.iloc[-1].to_dict()
     out: List[Tuple["v2.Candidate", Dict[str, Any]]] = []
@@ -661,7 +878,20 @@ def scan_ticker_signal_candle(
         if FILTER_TO_V8_EXIT_SETUPS and str(c.setup) not in ALLOWED_SETUPS:
             continue
         out.append((c, signal_row))
-    return out
+    if late_bb10.SETUP in ALLOWED_SETUPS:
+        custom_row = _scan_late_bb10_signal(
+            late_bb10_df if late_bb10_df is not None else df,
+            str(ticker).upper(),
+            slot_ts,
+        )
+        if custom_row is not None:
+            out.append(custom_row)
+    _bump_telemetry(
+        telemetry,
+        "strategy_seconds",
+        time.perf_counter() - strategy_started,
+    )
+    return finish(out)
 
 
 def _fmt_ist(ts: Any) -> str:
@@ -751,6 +981,7 @@ def candidates_to_dataframe(
             "candidate_family": "EARLY" if setup.startswith("E_") else "V7_STANDARD",
             "scan_slot_ist": _fmt_ist(scan_slot),
             "signal_time_ist": signal_time,
+            "signal_timestamp_convention": "end_labeled_completed_5m",
             "ticker": ticker,
             "side": side,
             "setup": setup,
@@ -759,6 +990,11 @@ def candidates_to_dataframe(
             "signal_low": _finite_or_blank(signal_row.get("low")),
             "signal_close": _finite_or_blank(c.signal_close),
             "signal_volume": _finite_or_blank(signal_row.get("volume")),
+            "signal_adx": _finite_or_blank(signal_row.get("ADX")),
+            "signal_rsi": _finite_or_blank(signal_row.get("RSI")),
+            "signal_vol_ratio20": _finite_or_blank(
+                signal_row.get("vol_ratio", c.vol_ratio)
+            ),
             "quality_score": _finite_or_blank(c.quality_score),
             "rs_pct": _finite_or_blank(c.rs_pct),
             "market_ret_pct": _finite_or_blank(c.market_ret_pct),
@@ -772,6 +1008,14 @@ def candidates_to_dataframe(
             "status": "CANDIDATE",
             "created_at_ist": _fmt_ist(created_at),
             "diagnostics_json": json.dumps(diag, default=str),
+            "confirmation_score": _finite_or_blank(signal_row.get("confirmation_score")),
+            "breakout_level": _finite_or_blank(signal_row.get("breakout_level")),
+            "entry_trigger_price": _finite_or_blank(signal_row.get("entry_trigger_price")),
+            "entry_cancel_price": _finite_or_blank(signal_row.get("entry_cancel_price")),
+            "entry_valid_minutes": _finite_or_blank(signal_row.get("entry_valid_minutes")),
+            "entry_max_gap_pct": _finite_or_blank(signal_row.get("entry_max_gap_pct")),
+            "market_breadth": _finite_or_blank(signal_row.get("market_breadth")),
+            "nifty_ema_up": _finite_or_blank(signal_row.get("nifty_ema_up")),
             **_research_shadow_metadata(side, setup, c.close_loc, c.vwap_dist_atr),
         })
     if not rows:
@@ -834,13 +1078,36 @@ _SCAN_POOL_WORKERS: int = 0
 _SCAN_POOL_DAY: Optional[str] = None
 
 
-def _replace_scan_pool(workers: int, today_str: str) -> None:
+def shutdown_scan_pool(*, wait: bool = True) -> None:
     global _SCAN_POOL, _SCAN_POOL_WORKERS, _SCAN_POOL_DAY
-    if _SCAN_POOL is not None:
+    pool = _SCAN_POOL
+    _SCAN_POOL = None
+    _SCAN_POOL_WORKERS = 0
+    _SCAN_POOL_DAY = None
+    if pool is not None:
         try:
-            _SCAN_POOL.shutdown(wait=False, cancel_futures=True)
+            pool.shutdown(wait=wait, cancel_futures=True)
         except Exception:
             pass
+
+
+def reset_scan_caches(*, shutdown_pool_workers: bool = True) -> None:
+    """Clear parent and (by default) process-local scanner caches."""
+    global _LAST_SCAN_TELEMETRY, _MARKET_CTX_CACHE
+    _LOCAL_FRAME_CACHE.clear()
+    _MARKET_CTX_CACHE = {}
+    _LAST_SCAN_TELEMETRY = {}
+    if shutdown_pool_workers:
+        shutdown_scan_pool(wait=True)
+
+
+def get_last_scan_telemetry() -> Dict[str, Any]:
+    return dict(_LAST_SCAN_TELEMETRY)
+
+
+def _replace_scan_pool(workers: int, today_str: str) -> None:
+    global _SCAN_POOL, _SCAN_POOL_WORKERS, _SCAN_POOL_DAY
+    shutdown_scan_pool(wait=False)
     _SCAN_POOL = ProcessPoolExecutor(max_workers=workers, initializer=_worker_init)
     _SCAN_POOL_WORKERS = workers
     _SCAN_POOL_DAY = today_str
@@ -854,41 +1121,160 @@ def _get_scan_pool(workers: int, today_str: str) -> ProcessPoolExecutor:
 
 
 def _worker_init() -> None:
-    global _WORKER_MARKET_CTX
+    global _WORKER_MARKET_CTX, _WORKER_LAST_SLOT_ISO
     v2.DATA_ROOT_5M = LIVE_5M_DIR
     v2._init_worker({
         "ENABLE_NOISY_ADVANCED_SHORTS": True,
         "ENABLE_NATIVE_V2_MINED_FILTER": False,
     })
+    # First task (or explicit prewarm) performs one slot-aware context read,
+    # avoiding the previous initializer + first-task duplicate.
+    _WORKER_MARKET_CTX = {}
+    _WORKER_LAST_SLOT_ISO = None
+    _LOCAL_FRAME_CACHE.clear()
+
+
+def _refresh_worker_market_context(slot_iso: str) -> None:
+    global _WORKER_MARKET_CTX, _WORKER_LAST_SLOT_ISO
+    if _WORKER_MARKET_CTX is None:
+        _worker_init()
+    if _WORKER_LAST_SLOT_ISO == slot_iso:
+        return
     try:
         _WORKER_MARKET_CTX = v2._load_market_context()
     except Exception:
-        _WORKER_MARKET_CTX = {}
+        if _WORKER_MARKET_CTX is None:
+            _WORKER_MARKET_CTX = {}
+    _WORKER_LAST_SLOT_ISO = slot_iso
 
 
-def _worker_scan(payload: Tuple[str, str] | Tuple[str, str, bool]) -> List[Dict[str, Any]]:
+def _worker_prewarm(slot_iso: str) -> int:
+    _refresh_worker_market_context(slot_iso)
+    return os.getpid()
+
+
+def prewarm_scan_pool(
+    slot_ist: Any,
+    max_workers: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Eagerly start scanner processes outside the decision-critical slot."""
+    slot_ts = _ensure_ist_ts(slot_ist).floor("min")
+    workers = int(max_workers if max_workers is not None else DEFAULT_SCAN_WORKERS)
+    started = time.perf_counter()
+    if workers <= 1:
+        build_market_context_once()
+        return {
+            "workers_requested": workers,
+            "worker_pids_seen": 1,
+            "seconds": time.perf_counter() - started,
+        }
+    pool = _get_scan_pool(workers, slot_ts.date().isoformat())
+    pids = list(
+        pool.map(
+            _worker_prewarm,
+            [slot_ts.isoformat()] * (workers * 2),
+            chunksize=1,
+        )
+    )
+    result = {
+        "workers_requested": workers,
+        "worker_pids_seen": len(set(pids)),
+        "seconds": time.perf_counter() - started,
+    }
+    print(
+        "[candidate_scan] prewarm "
+        f"requested={workers} pids_seen={result['worker_pids_seen']} "
+        f"total={result['seconds']:.3f}s",
+        flush=True,
+    )
+    return result
+
+
+def _worker_scan(
+    payload: Tuple[str, str] | Tuple[str, str, bool],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if len(payload) >= 3:
         ticker, slot_iso, dedupe = payload
     else:
         ticker, slot_iso = payload
         dedupe = True
-    global _WORKER_MARKET_CTX, _WORKER_LAST_SLOT_ISO
-    if _WORKER_MARKET_CTX is None:
-        _worker_init()
-    elif _WORKER_LAST_SLOT_ISO != slot_iso:
-        # Refresh NIFTY market context once per slot per worker (keeps market_ret fresh).
-        try:
-            _WORKER_MARKET_CTX = v2._load_market_context()
-        except Exception:
-            pass
-    _WORKER_LAST_SLOT_ISO = slot_iso
+    telemetry = _new_ticker_telemetry()
+    _refresh_worker_market_context(slot_iso)
     try:
-        out = scan_ticker_signal_candle(ticker, pd.Timestamp(slot_iso), _WORKER_MARKET_CTX or {})
+        out = scan_ticker_signal_candle(
+            ticker,
+            pd.Timestamp(slot_iso),
+            _WORKER_MARKET_CTX or {},
+            telemetry=telemetry,
+        )
     except Exception:
-        return []
+        telemetry["ticker_errors"] += 1
+        return [], telemetry
     if not out:
-        return []
-    return candidates_to_dataframe(out, pd.Timestamp(slot_iso), dedupe=bool(dedupe)).to_dict("records")
+        return [], telemetry
+    rows = candidates_to_dataframe(
+        out,
+        pd.Timestamp(slot_iso),
+        dedupe=bool(dedupe),
+    ).to_dict("records")
+    return rows, telemetry
+
+
+_SUM_TELEMETRY_KEYS = (
+    "raw_cache_hits",
+    "raw_cache_misses",
+    "prepared_cache_hits",
+    "prepared_cache_misses",
+    "unchanged_frame_hits",
+    "file_read_seconds",
+    "prepare_seconds",
+    "strategy_seconds",
+    "unstable_file_reads",
+    "ticker_errors",
+)
+
+
+def _summarize_slot_telemetry(
+    ticker_telemetry: List[Dict[str, Any]],
+    *,
+    slot_ts: pd.Timestamp,
+    ticker_count: int,
+    workers: int,
+    chunksize: int,
+    pool_get_seconds: float,
+    scan_wall_seconds: float,
+    total_wall_seconds: float,
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "slot_ist": slot_ts.isoformat(),
+        "ticker_count": ticker_count,
+        "workers": workers,
+        "chunksize": chunksize,
+        "pool_get_seconds": pool_get_seconds,
+        "scan_wall_seconds": scan_wall_seconds,
+        "total_wall_seconds": total_wall_seconds,
+    }
+    for key in _SUM_TELEMETRY_KEYS:
+        summary[key] = sum(float(item.get(key, 0)) for item in ticker_telemetry)
+        if key.endswith(("hits", "misses", "reads", "errors")):
+            summary[key] = int(summary[key])
+    elapsed = [
+        float(item.get("ticker_elapsed_seconds", 0.0))
+        for item in ticker_telemetry
+        if float(item.get("ticker_elapsed_seconds", 0.0)) >= 0.0
+    ]
+    summary["ticker_p50_seconds"] = float(np.percentile(elapsed, 50)) if elapsed else 0.0
+    summary["ticker_p95_seconds"] = float(np.percentile(elapsed, 95)) if elapsed else 0.0
+    summary["ticker_max_seconds"] = max(elapsed, default=0.0)
+    raw_lookups = summary["raw_cache_hits"] + summary["raw_cache_misses"]
+    prepared_lookups = summary["prepared_cache_hits"] + summary["prepared_cache_misses"]
+    summary["raw_cache_hit_rate"] = (
+        summary["raw_cache_hits"] / raw_lookups if raw_lookups else 0.0
+    )
+    summary["prepared_cache_hit_rate"] = (
+        summary["prepared_cache_hits"] / prepared_lookups if prepared_lookups else 0.0
+    )
+    return summary
 
 
 def scan_slot_candidates(
@@ -898,20 +1284,38 @@ def scan_slot_candidates(
     max_workers: Optional[int] = None,
     *,
     dedupe: bool = True,
+    chunksize: Optional[int] = None,
 ) -> pd.DataFrame:
+    global _LAST_SCAN_TELEMETRY
+    overall_started = time.perf_counter()
     slot_ts = _ensure_ist_ts(slot_ist)
     tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
     workers = int(max_workers if max_workers is not None else DEFAULT_SCAN_WORKERS)
+    effective_chunksize = max(
+        1,
+        int(chunksize if chunksize is not None else DEFAULT_SCAN_CHUNKSIZE),
+    )
     rows: List[Dict[str, Any]] = []
+    ticker_telemetry: List[Dict[str, Any]] = []
+    pool_get_seconds = 0.0
+    scan_started = time.perf_counter()
 
     if workers <= 1:
         if market_ctx is None:
             market_ctx = build_market_context_once()
         for ticker in tickers:
+            one_telemetry = _new_ticker_telemetry()
             try:
-                found = scan_ticker_signal_candle(ticker, slot_ts, market_ctx)
+                found = scan_ticker_signal_candle(
+                    ticker,
+                    slot_ts,
+                    market_ctx,
+                    telemetry=one_telemetry,
+                )
             except Exception:
+                one_telemetry["ticker_errors"] += 1
                 found = []
+            ticker_telemetry.append(one_telemetry)
             if found:
                 rows.extend(candidates_to_dataframe(found, slot_ts, dedupe=dedupe).to_dict("records"))
     else:
@@ -921,8 +1325,15 @@ def scan_slot_candidates(
         _t0 = time.perf_counter()
         pool = _get_scan_pool(workers, today_str)
         _t1 = time.perf_counter()
+        pool_get_seconds = _t1 - _t0
+        scan_started = _t1
         try:
-            for result in pool.map(_worker_scan, payloads, chunksize=24):
+            for result, one_telemetry in pool.map(
+                _worker_scan,
+                payloads,
+                chunksize=effective_chunksize,
+            ):
+                ticker_telemetry.append(one_telemetry)
                 if result:
                     rows.extend(result)
         except Exception as exc:
@@ -931,24 +1342,67 @@ def scan_slot_candidates(
                 flush=True,
             )
             _replace_scan_pool(workers, today_str)
+            rows = []
+            ticker_telemetry = []
             if market_ctx is None:
                 market_ctx = build_market_context_once()
             for ticker in tickers:
+                one_telemetry = _new_ticker_telemetry()
                 try:
-                    found = scan_ticker_signal_candle(ticker, slot_ts, market_ctx)
+                    found = scan_ticker_signal_candle(
+                        ticker,
+                        slot_ts,
+                        market_ctx,
+                        telemetry=one_telemetry,
+                    )
                 except Exception:
+                    one_telemetry["ticker_errors"] += 1
                     found = []
+                ticker_telemetry.append(one_telemetry)
                 if found:
                     rows.extend(candidates_to_dataframe(found, slot_ts, dedupe=dedupe).to_dict("records"))
-        _t2 = time.perf_counter()
-        print(
-            f"[candidate_scan] n={len(tickers)} pool_get={_t1-_t0:.3f}s scan={_t2-_t1:.3f}s total={_t2-_t0:.3f}s",
-            flush=True,
-        )
+
+    finished = time.perf_counter()
+    _LAST_SCAN_TELEMETRY = _summarize_slot_telemetry(
+        ticker_telemetry,
+        slot_ts=slot_ts,
+        ticker_count=len(tickers),
+        workers=workers,
+        chunksize=effective_chunksize,
+        pool_get_seconds=pool_get_seconds,
+        scan_wall_seconds=finished - scan_started,
+        total_wall_seconds=finished - overall_started,
+    )
+    print(
+        "[candidate_scan] "
+        f"n={len(tickers)} workers={workers} chunksize={effective_chunksize} "
+        f"pool_get={_LAST_SCAN_TELEMETRY['pool_get_seconds']:.3f}s "
+        f"scan={_LAST_SCAN_TELEMETRY['scan_wall_seconds']:.3f}s "
+        f"total={_LAST_SCAN_TELEMETRY['total_wall_seconds']:.3f}s "
+        f"raw_cache={_LAST_SCAN_TELEMETRY['raw_cache_hits']}/"
+        f"{_LAST_SCAN_TELEMETRY['raw_cache_misses']} "
+        f"unchanged_frames={_LAST_SCAN_TELEMETRY['unchanged_frame_hits']} "
+        f"prepared_cache={_LAST_SCAN_TELEMETRY['prepared_cache_hits']}/"
+        f"{_LAST_SCAN_TELEMETRY['prepared_cache_misses']} "
+        f"io_cpu={_LAST_SCAN_TELEMETRY['file_read_seconds']:.3f}s "
+        f"prepare_cpu={_LAST_SCAN_TELEMETRY['prepare_seconds']:.3f}s "
+        f"strategy_cpu={_LAST_SCAN_TELEMETRY['strategy_seconds']:.3f}s "
+        f"ticker_p95={_LAST_SCAN_TELEMETRY['ticker_p95_seconds']:.3f}s "
+        f"ticker_max={_LAST_SCAN_TELEMETRY['ticker_max_seconds']:.3f}s "
+        f"errors={_LAST_SCAN_TELEMETRY['ticker_errors']}",
+        flush=True,
+    )
 
     if not rows:
         return pd.DataFrame()
-    df = _dedupe_candidate_frame(pd.DataFrame(rows)) if dedupe else pd.DataFrame(rows).drop_duplicates(subset=["candidate_id"], keep="first")
+    raw_frame = pd.DataFrame(rows)
+    custom_mask = raw_frame.get("setup", pd.Series("", index=raw_frame.index)).astype(str).eq(late_bb10.SETUP)
+    if custom_mask.any():
+        alignment = late_bb10.market_alignment_for_slots(tickers, [slot_ts], _load_live_5m)
+        values = alignment.get(slot_ts.floor("min").isoformat(), {})
+        for key in ("market_breadth", "nifty_ema_up"):
+            raw_frame.loc[custom_mask, key] = values.get(key, np.nan)
+    df = _dedupe_candidate_frame(raw_frame) if dedupe else raw_frame.drop_duplicates(subset=["candidate_id"], keep="first")
     if df.empty:
         return pd.DataFrame()
     return df.sort_values(["quality_score", "ticker"], ascending=[False, True]).reset_index(drop=True)

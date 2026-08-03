@@ -28,8 +28,8 @@ import pandas as pd
 import eqidv2_live_combined_analyser_csv_v15 as base_v15
 import eqidv2_v7_signal_contract as contract
 
-SCHEMA_VERSION = "v7_signal_contract_2026_06_07"
-PIPELINE_VERSION = "v7_live_1min_entry"
+SCHEMA_VERSION = "v7_signal_contract_2026_07_28_causal_v1"
+PIPELINE_VERSION = "v7_live_1min_entry_atomic_slot_v1"
 
 _WRITER_STARTED_AT_IST: str = base_v15.now_ist().strftime("%Y-%m-%d %H:%M:%S%z")
 
@@ -50,6 +50,7 @@ class WriteResult:
     skipped_stale_entry: int = 0
     skipped_future_entry: int = 0
     skipped_timing_invalid: int = 0
+    written_candidate_ids: list = field(default_factory=list)
     errors: list = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -301,6 +302,14 @@ def write_side_signals(
                     "signal_entry_datetime_ist": entry_time_str,
                     "signal_bar_time_ist": bar_time_str,
                     "stage2_detected_at_ist": str(row.get("stage2_detected_at_ist", "")),
+                    "bar_closed_at_ist": str(row.get("bar_closed_at_ist", bar_time_str)),
+                    "decision_ready_at_ist": str(row.get("decision_ready_at_ist", "")),
+                    "entry_engine_ready_at_ist": str(
+                        row.get("entry_engine_ready_at_ist", row.get("stage2_detected_at_ist", ""))
+                    ),
+                    "signal_written_at_ist": detected_now.strftime("%Y-%m-%d %H:%M:%S%z"),
+                    "candidate_snapshot_sha256": str(row.get("candidate_snapshot_sha256", "")),
+                    "runtime_manifest_path": str(row.get("runtime_manifest_path", "")),
                     # contract fields
                     "schema_version": SCHEMA_VERSION,
                     "pipeline_version": PIPELINE_VERSION,
@@ -319,5 +328,6 @@ def write_side_signals(
                 run_keys.add(dedupe_key)
                 run_tickers.add(ticker)
                 result.written += 1
+                result.written_candidate_ids.append(str(row.get("candidate_id", "")))
 
     return result

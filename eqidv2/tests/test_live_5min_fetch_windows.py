@@ -13,6 +13,12 @@ class _Logger:
     def warning(self, *args, **kwargs):
         pass
 
+    def info(self, *args, **kwargs):
+        pass
+
+    def exception(self, *args, **kwargs):
+        pass
+
 
 def _ist(hour: int, minute: int) -> pd.Timestamp:
     return pd.Timestamp(
@@ -107,6 +113,78 @@ class Live5MinFetchWindowTests(unittest.TestCase):
             ],
         )
         self.assertEqual(result["date"].tolist(), [_ist(10, 0), _ist(13, 0)])
+
+    def test_empty_exchange_backfill_uses_synthetic_zero_volume_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "TEST_stocks_indicators_5min.parquet"
+            current_stamps = pd.date_range(
+                start=_ist(9, 15),
+                end=_ist(11, 55),
+                freq="5min",
+            )
+            # A prior end-stamped session prevents the legacy one-time
+            # start-to-end migration heuristic from shifting today's rows.
+            prior_stamp = pd.Timestamp(
+                core.IST_TZ.localize(datetime(2026, 6, 10, 9, 20))
+            )
+            stamps = pd.DatetimeIndex([prior_stamp]).append(current_stamps)
+            pd.DataFrame(
+                {
+                    "date": stamps,
+                    "open": 100.0,
+                    "high": 100.0,
+                    "low": 100.0,
+                    "close": 100.0,
+                    "volume": 0.0,
+                    "gap_filled": 0,
+                }
+            ).to_parquet(out_path, index=False)
+
+            with (
+                patch.dict(core.DIRS["5min"], {"out": tmp}, clear=False),
+                patch.object(
+                    core,
+                    "expected_last_stamp",
+                    return_value={
+                        "kind": "ts",
+                        "value": _ist(12, 5).to_pydatetime(),
+                        "step_min": 5,
+                    },
+                ),
+                patch.object(
+                    core,
+                    "_fetch_missing_5min_session_rows",
+                    return_value=pd.DataFrame(),
+                ),
+            ):
+                report = core.process_ticker(
+                    "5min",
+                    "TEST",
+                    123,
+                    object(),
+                    _ist(9, 15).to_pydatetime(),
+                    _ist(12, 5).to_pydatetime(),
+                    _Logger(),
+                    set(),
+                    False,
+                    "end",
+                    tmp,
+                    False,
+                    5,
+                )
+
+            saved = pd.read_parquet(out_path)
+            saved_dates = pd.to_datetime(saved["date"])
+            tail = saved.loc[
+                saved_dates.isin([_ist(12, 0), _ist(12, 5)]),
+                ["date", "volume", "gap_filled"],
+            ]
+
+        self.assertEqual(report.status, "updated")
+        self.assertEqual(report.new_rows_count, 2)
+        self.assertEqual(tail["date"].tolist(), [_ist(12, 0), _ist(12, 5)])
+        self.assertEqual(tail["volume"].tolist(), [0.0, 0.0])
+        self.assertEqual(tail["gap_filled"].tolist(), [1, 1])
 
 
 if __name__ == "__main__":

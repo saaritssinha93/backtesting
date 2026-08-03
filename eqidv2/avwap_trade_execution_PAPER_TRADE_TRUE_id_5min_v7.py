@@ -61,6 +61,7 @@ import numpy as np
 import pandas as pd
 import pytz
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR, runtime_dir
+from eqidv2_runtime_manifest import freeze_runtime_manifest
 from nse_intraday_costs import CostConfig, intraday_equity_costs
 import eqidv2_risk_brake as rb
 
@@ -2044,6 +2045,19 @@ def simulate_trade(
     trade_id = trade_id_raw or f"PT-{signal_id[:8]}-{entry_time_ist.strftime('%H%M%S')}"
     today = datetime.now(IST).date()
     forced_close_dt = IST.localize(datetime.combine(today, FORCED_CLOSE_TIME))
+    configured_forced_exit = str(signal.get("forced_exit_time", "")).strip()
+    if configured_forced_exit:
+        try:
+            hh, mm = configured_forced_exit.split(":", 1)
+            configured_close_dt = IST.localize(
+                datetime.combine(today, dt_time(int(hh), int(mm)))
+            )
+            forced_close_dt = min(forced_close_dt, configured_close_dt)
+        except Exception:
+            log.warning(
+                f"[EXIT.POLICY] invalid forced_exit_time={configured_forced_exit!r}; "
+                f"using {FORCED_CLOSE_TIME} | signal_id={signal_id[:12]}"
+            )
     trade_start_ist = entry_time_ist if not resume_mode else datetime.now(IST)
     entry_retry_deadline = _entry_retry_deadline(signal, trade_start_ist, forced_close_dt)
 
@@ -2166,8 +2180,90 @@ def simulate_trade(
                 f"reason=ltp_unavailable | fallback_entry={signal_entry_price:.2f}"
             )
 
+    configured_trigger = _safe_float(signal.get("entry_trigger_price", 0.0), 0.0)
+    configured_cancel = _safe_float(signal.get("entry_cancel_price", 0.0), 0.0)
+    configured_valid_minutes = max(
+        0, int(_safe_float(signal.get("entry_valid_minutes", 0), 0))
+    )
+    configured_gap_pct = max(
+        0.0, _safe_float(signal.get("entry_max_gap_pct", 0.0), 0.0)
+    )
+    configured_breakout_entry = (
+        not resume_mode
+        and str(signal.get("entry_policy_model", "")).strip().lower()
+        == "high_break_trigger"
+        and configured_trigger > 0
+        and configured_cancel > 0
+        and configured_valid_minutes > 0
+    )
+    if configured_breakout_entry and use_ltp:
+        signal_bar_ts = _parse_ist_signal_ts(
+            signal.get("signal_time_ist")
+            or signal.get("signal_bar_time_ist")
+            or signal.get("bar_time_ist")
+        )
+        if signal_bar_ts is None:
+            return _finalize_pre_entry_skip(
+                "ENTRY_SKIPPED_MALFORMED_TRIGGER_WINDOW",
+                f"[ENTRY.TRIGGER] Missing signal timestamp for {ticker} | signal_id={signal_id[:12]}",
+            )
+        trigger_deadline = min(
+            signal_bar_ts.to_pydatetime()
+            + timedelta(minutes=configured_valid_minutes + 1),
+            forced_close_dt,
+        )
+        last_trigger_ltp: Optional[float] = None
+        log.info(
+            f"[ENTRY.TRIGGER] Armed {ticker} LONG trigger={configured_trigger:.2f} "
+            f"cancel={configured_cancel:.2f} until={trigger_deadline.strftime('%H:%M:%S')} "
+            f"| signal_id={signal_id[:12]}"
+        )
+        while datetime.now(IST) < trigger_deadline:
+            trigger_ltp = get_ltp(ticker)
+            if trigger_ltp is None or trigger_ltp <= 0:
+                time.sleep(POLL_INTERVAL_SEC)
+                continue
+            last_trigger_ltp = float(trigger_ltp)
+            # Cancel-first is the conservative live equivalent of the frozen
+            # same-1m-bar ambiguity rule.
+            if last_trigger_ltp <= configured_cancel:
+                return _finalize_pre_entry_skip(
+                    "ENTRY_CANCELLED_BEFORE_TRIGGER",
+                    (
+                        f"[ENTRY.TRIGGER] Cancelled {ticker}: ltp={last_trigger_ltp:.2f} "
+                        f"<= cancel={configured_cancel:.2f} | signal_id={signal_id[:12]}"
+                    ),
+                )
+            if last_trigger_ltp >= configured_trigger:
+                gap_pct = (
+                    (last_trigger_ltp / configured_trigger - 1.0) * 100.0
+                )
+                if configured_gap_pct > 0 and gap_pct > configured_gap_pct:
+                    return _finalize_pre_entry_skip(
+                        "ENTRY_SKIPPED_TRIGGER_GAP",
+                        (
+                            f"[ENTRY.TRIGGER] Skipped {ticker}: executable={last_trigger_ltp:.2f} "
+                            f"is {gap_pct:.3f}% above trigger={configured_trigger:.2f} "
+                            f"> {configured_gap_pct:.3f}% | signal_id={signal_id[:12]}"
+                        ),
+                    )
+                raw_entry = last_trigger_ltp
+                entry_source_used = "configured_high_break_trigger"
+                entry_time_ist = datetime.now(IST)
+                break
+            time.sleep(POLL_INTERVAL_SEC)
+        else:
+            return _finalize_pre_entry_skip(
+                "ENTRY_SKIPPED_TRIGGER_NOT_HIT",
+                (
+                    f"[ENTRY.TRIGGER] Not hit for {ticker} before "
+                    f"{trigger_deadline.strftime('%H:%M:%S')} "
+                    f"| last_ltp={last_trigger_ltp} | signal_id={signal_id[:12]}"
+                ),
+            )
+
     # --- Near-entry retry window + max entry slip gate ---
-    if (not resume_mode) and signal_entry_price > 0 and ENTRY_RETRY_NEAR_ENTRY_ENABLE and ENTRY_RETRY_WAIT_SEC > 0:
+    if (not resume_mode) and not configured_breakout_entry and signal_entry_price > 0 and ENTRY_RETRY_NEAR_ENTRY_ENABLE and ENTRY_RETRY_WAIT_SEC > 0:
         if raw_entry > 0 and not _entry_price_within_retry_band(side, signal_entry_price, raw_entry):
             retry_until_ist = entry_retry_deadline
             log.info(
@@ -2246,7 +2342,11 @@ def simulate_trade(
 
     # When entry is taken from live LTP, rebase SL/target to executed entry
     # so % distances remain consistent with signal design.
-    if (not resume_mode) and entry_source_used == "ltp_on_signal" and signal_entry_price > 0:
+    if (
+        (not resume_mode)
+        and entry_source_used in {"ltp_on_signal", "configured_high_break_trigger"}
+        and signal_entry_price > 0
+    ):
         stop_mult = float(stop_price / signal_entry_price)
         target_mult = float(target_price / signal_entry_price)
         rebased_stop = round(entry_price * stop_mult, 2)
@@ -2288,6 +2388,9 @@ def simulate_trade(
             "entry_time": entry_time_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
             "last_ltp": _safe_float(signal.get("last_ltp", 0.0), 0.0),
             "restored": bool(resume_mode),
+            "entry_policy_model": str(signal.get("entry_policy_model", "")),
+            "max_hold_minutes": signal.get("max_hold_minutes", ""),
+            "forced_exit_time": str(signal.get("forced_exit_time", "")),
         }
     _mark_entry_opened(signal_id)
     _persist_open_trades_state()
@@ -2337,6 +2440,13 @@ def simulate_trade(
     _be_stop_armed = False
     _one_r = abs(entry_price - stop_price)
     _initial_stop_price = stop_price
+    configured_max_hold_minutes = max(
+        0.0, _safe_float(signal.get("max_hold_minutes", 0.0), 0.0)
+    )
+    configured_time_stop_dt = (
+        entry_time_ist + timedelta(minutes=configured_max_hold_minutes)
+        if configured_max_hold_minutes > 0 else None
+    )
 
     while True:
         now_ist = datetime.now(IST)
@@ -2371,6 +2481,19 @@ def simulate_trade(
             log.info(
                 f"[SIM] FORCED CLOSE {side} {ticker} @ {exit_price} "
                 f"(EOD forced close, src={close_src}) | ID={trade_id}"
+            )
+            break
+
+        if configured_time_stop_dt is not None and now_ist >= configured_time_stop_dt:
+            ltp = get_ltp(ticker) if use_ltp else None
+            if ltp is not None and ltp > 0:
+                last_valid_ltp = float(ltp)
+            exit_price = float(last_valid_ltp) if last_valid_ltp is not None else entry_price
+            outcome = "TIME"
+            exit_price = _apply_exit_slippage(exit_price, side, outcome)
+            log.info(
+                f"[SIM] TIME EXIT {side} {ticker} @ {exit_price:.2f} "
+                f"({configured_max_hold_minutes:g}m max hold) | ID={trade_id}"
             )
             break
 
@@ -3630,11 +3753,27 @@ def main():
         ),
     )
     args = parser.parse_args()
+    manifest_path, _ = freeze_runtime_manifest(
+        "paper_trade_executor_id_5min_v7",
+        runtime_root=Path(RUNTIME_LIVE_SIGNALS_DIR).parent,
+        source_files=(Path(__file__), Path(rb.__file__)),
+        resolved_config={
+            "signal_dir": SIGNAL_DIR,
+            "max_concurrent_trades": int(args.max_trades),
+            "max_open_positions": int(MAX_OPEN_POSITIONS),
+            "max_capital_deployed_rs": float(MAX_CAPITAL_DEPLOYED_RS),
+            "daily_loss_brake_enabled": bool(DAILY_LOSS_BRAKE_ENABLED),
+            "daily_loss_brake_rs": float(DAILY_LOSS_BRAKE_RS),
+            "entry_window_start": ENTRY_WINDOW_START_RAW,
+            "entry_window_end": ENTRY_WINDOW_END_RAW,
+        },
+    )
 
     use_ltp = not args.no_ltp
 
     log.info("=" * 65)
     log.info("AVWAP Paper Trade Executor V7 ID 5min -- PAPER_TRADE = TRUE")
+    log.info(f"Frozen runtime manifest: {manifest_path}")
     log.info(f"  Mode            : SIMULATION (no real orders)")
     log.info(f"  LTP polling     : {'Enabled' if use_ltp else 'Disabled'}")
     log.info(f"  Entry source    : {args.entry_price_source}")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime
@@ -16,12 +17,25 @@ class DashboardV7ControlsTests(unittest.TestCase):
         expected = {
             "signal_discovery_v7_5min_id",
             "entry_engine_1min_v5_id",
+            "paper_trade_id_5min_v7",
             "v7_research_layer",
             "daily_live_v7_research_session",
             "v7_pre_momentum_filter_analyst",
         }
         self.assertTrue(expected.issubset(dashboard.RESTARTABLE_CARDS))
         self.assertNotIn("kite_trade_id_5min_v7", dashboard.RESTARTABLE_CARDS)
+        self.assertEqual(
+            dashboard.RESTARTABLE_CARDS["signal_discovery_v7_5min_id"],
+            "run_conf_paper_signal_discovery.bat",
+        )
+        self.assertEqual(
+            dashboard.RESTARTABLE_CARDS["entry_engine_1min_v5_id"],
+            "run_conf_paper_entry_engine.bat",
+        )
+        self.assertEqual(
+            dashboard.RESTARTABLE_CARDS["paper_trade_id_5min_v7"],
+            "run_conf_paper_executor.bat",
+        )
 
     def test_v7_id_kill_switch_paths_match_executors(self) -> None:
         today = "2026-06-08"
@@ -129,6 +143,45 @@ class DashboardV7ControlsTests(unittest.TestCase):
         self.assertEqual(
             [command for command in commands if "/Run" in command],
             [],
+        )
+
+    def test_newer_same_day_auth_session_clears_stale_runner_failure(self) -> None:
+        now = datetime(2026, 7, 27, 11, 30, tzinfo=dashboard.IST)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            state_path = root / "auth_v2_state.json"
+            token_path = root / "access_token.txt"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "session_date_ist": "2026-07-27",
+                        "updated_at_ist": "2026-07-27 11:07:01+0530",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            token_path.write_text("non-empty-token", encoding="utf-8")
+            recovered_ts = datetime(2026, 7, 27, 11, 7).timestamp()
+            os.utime(token_path, (recovered_ts, recovered_ts))
+
+            with (
+                patch.object(dashboard, "AUTH_V2_STATE_FILE", state_path),
+                patch.object(dashboard, "AUTH_V2_ACCESS_TOKEN_FILE", token_path),
+            ):
+                status = dashboard.reconcile_authentication_status(
+                    {
+                        "status": "FAILED",
+                        "ts": "2026-07-27_09:05:57",
+                        "exit_code": "1",
+                    },
+                    now_ist=now,
+                )
+
+        self.assertEqual(status["status"], "SUCCESS")
+        self.assertEqual(status["previous_status"], "FAILED")
+        self.assertEqual(
+            status["recovery_source"],
+            "newer_same_day_auth_state_and_access_token",
         )
 
 

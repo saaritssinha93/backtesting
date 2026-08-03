@@ -1,4 +1,4 @@
-"""Signal timing contract tests for T+1 with a 15-second deadline."""
+"""Signal timing contract tests for T+1 with a 30-second default deadline."""
 
 import os
 import sys
@@ -26,7 +26,7 @@ def test_build_intended_entry_is_t1():
     assert timing is not None
     assert timing.intended_entry_ist == pd.Timestamp("2026-06-07 10:01:00+05:30")
     assert timing.detection_lag_sec == 10.0
-    assert timing.deadline_ist == pd.Timestamp("2026-06-07 10:01:15+05:30")
+    assert timing.deadline_ist == pd.Timestamp("2026-06-07 10:01:30+05:30")
 
 
 def test_explicit_intended_entry_and_row_override_are_honoured():
@@ -68,19 +68,19 @@ def test_negative_lag_fails():
     assert not ok and "NEGATIVE_LAG" in reason
 
 
-def test_stale_lag_fails_after_15_seconds():
+def test_stale_lag_fails_after_30_seconds():
     timing = contract.build_signal_timing(
         "2026-06-07 10:00:00+05:30",
-        detected_time="2026-06-07 10:01:16+05:30",
+        detected_time="2026-06-07 10:01:31+05:30",
     )
     ok, reason = contract.validate_signal_timing(timing)
     assert not ok and "STALE_DETECTION" in reason
 
 
-def test_exactly_at_15_seconds_passes():
+def test_exactly_at_30_seconds_passes():
     timing = contract.build_signal_timing(
         "2026-06-07 10:00:00+05:30",
-        detected_time="2026-06-07 10:01:15+05:30",
+        detected_time="2026-06-07 10:01:30+05:30",
     )
     ok, reason = contract.validate_signal_timing(timing)
     assert ok, reason

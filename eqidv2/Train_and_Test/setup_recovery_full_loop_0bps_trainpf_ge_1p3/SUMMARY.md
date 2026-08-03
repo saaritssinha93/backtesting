@@ -8,6 +8,7 @@
 
 | Setup | Pool Rows | Entry Rows | Baseline TRAIN | Baseline TEST | Best TRAIN | Best TEST | Approval |
 |---|---|---|---|---|---|---|---|
-| D_EMA20_REJECTION | 1201 | 1201 | n=118 PF=0.8733 net=-5338.4 | n=20 PF=0.585 net=-2430.37 | n=21 PF=2.7387 net=8966.76 | n=9 PF=1.0312 net=138.88 | NO |
+| D_AVWAP_LOSE_REVERSAL | 4064 | 4063 | n=1365 PF=0.8612 net=-84853.73 | n=550 PF=0.9186 net=-17755.33 | not run | not run | NO |
+| D_EMA20_BOUNCE | 1228 | 1228 | n=799 PF=0.6783 net=-102814.2 | n=296 PF=0.731 net=-28691.63 | not run | not run | NO |
 
 No live trades were placed. No final setup config was edited.

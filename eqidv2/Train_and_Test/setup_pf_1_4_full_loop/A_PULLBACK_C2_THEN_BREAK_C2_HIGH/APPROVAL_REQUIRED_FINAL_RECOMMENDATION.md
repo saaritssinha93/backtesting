@@ -1,15 +1,14 @@
 # Approval Required Final Recommendation - A_PULLBACK_C2_THEN_BREAK_C2_HIGH
 
-## Adaptive Search Result
-No candidate met all approval gates.
+## Current Rework Result
+- Adaptive all-knob filter search: 0 passing candidates.
+- Path rework search on original pool: 0 passing candidates.
+- Structural rework search: 0 passing candidates.
+- Best adaptive TEST PF observed: 0.8611, TEST net Rs -598, TEST trades 8; rejected for TEST PF <= 1.40, negative TEST net, and TEST domination.
+- Best path-rework TRAIN PF observed: 0.7551 with negative TRAIN net; no candidate reached TEST.
+- Best structural TRAIN PF observed: 0.6098 with negative TRAIN net; no candidate reached TEST.
+- Structural report: `C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\Train_and_Test\setup_pf_1_4_full_loop\A_PULLBACK_C2_THEN_BREAK_C2_HIGH\STRUCTURAL_REWORK_RESULT.md`
 
-## Best Exact Fallback
-- candidate: adaptive_sl1.2_t2.0_max_slot_13_30_mask_market_ret_pct<=0.0_mask_atr_pct>=0.003349_mask_signal_minute>=795._regime0.0
-- TRAIN PF: inf
-- TEST PF: None
-
-## Final File Requiring Approval
-- `C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2\final_setup_conf.py`
-- No diff/patch is recommended because no adaptive candidate passed.
+No candidate is approved for final config or live/paper watch.
 
 DO NOT MOVE TO FINAL CONFIG UNTIL USER APPROVES

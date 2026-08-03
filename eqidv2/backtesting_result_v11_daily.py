@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from eqidv2_runtime_paths import LIVE_SIGNALS_DIR, runtime_dir
+from eqidv2_runtime_manifest import freeze_runtime_manifest
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -36,6 +37,8 @@ LATEST_DIR = OUT_ROOT / "latest"
 REPORTS_DIR = OUT_ROOT / "reports"
 V11_SCRIPT = BASE_DIR / "avwap_5min_ID_v11_backtesting.py"
 LIVE_CANDIDATE_JSON_DIR = runtime_dir("signal_discovery_v7_5mins_ID", "json")
+SCANNER_AUDIT_DIR = runtime_dir("signal_discovery_v7_5mins_ID", "audit")
+ENTRY_ENGINE_AUDIT_DIR = runtime_dir("entry_engine_1min_v5_ID", "audit")
 
 BACKTEST_PNL_COL = "v6_net_pnl_rs"
 PNL_COL_CANDIDATES = (
@@ -66,6 +69,73 @@ def _read_csv(path: Path) -> pd.DataFrame:
         return pd.read_csv(path, low_memory=False)
     except Exception:
         return pd.DataFrame()
+
+
+def _load_funnel_day(audit_dir: Path, prefix: str, day: str) -> pd.DataFrame:
+    day_key = str(day).replace("-", "")
+    frames: list[pd.DataFrame] = []
+    for path in sorted(audit_dir.glob(f"{prefix}_{day_key}_*.csv")):
+        frame = _read_csv(path)
+        if not frame.empty:
+            frame = frame.copy()
+            frame["funnel_source_path"] = str(path)
+            frames.append(frame)
+    return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+
+
+def _funnel_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    work = frame.copy()
+    for col in ("stage", "outcome", "reason", "candidate_id"):
+        if col not in work.columns:
+            work[col] = ""
+        work[col] = work[col].fillna("").astype(str)
+    return (
+        work.groupby(["stage", "outcome", "reason"], dropna=False)
+        .agg(
+            records=("candidate_id", "size"),
+            candidates=("candidate_id", "nunique"),
+        )
+        .reset_index()
+        .sort_values(["stage", "outcome", "candidates"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+
+
+def _entry_latency_summary(day: str) -> dict[str, Any]:
+    path = ENTRY_ENGINE_AUDIT_DIR / f"entry_engine_audit_{day}.jsonl"
+    if not path.exists():
+        return {"audit_path": str(path), "slots": 0}
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        if str(item.get("slot_ist", ""))[:10] == str(day):
+            rows.append(item)
+    out: dict[str, Any] = {"audit_path": str(path), "slots": int(len(rows))}
+    for key in (
+        "bar_close_to_candidate_ready_sec",
+        "candidate_ready_to_entry_engine_ready_sec",
+        "candidate_ready_to_signal_write_sec",
+        "intended_entry_to_signal_write_sec",
+    ):
+        values = pd.to_numeric(
+            pd.Series([row.get(key) for row in rows], dtype="object"),
+            errors="coerce",
+        ).dropna()
+        out[f"{key}_median"] = float(values.median()) if len(values) else None
+        out[f"{key}_p95"] = float(values.quantile(0.95)) if len(values) else None
+        out[f"{key}_max"] = float(values.max()) if len(values) else None
+    out["marker_missing_slots"] = int(
+        sum(not bool(row.get("slot_complete_marker_ready")) for row in rows)
+    )
+    out["writer_rejected_rows"] = int(
+        sum(int(row.get("signal_writer_rejected_rows", 0) or 0) for row in rows)
+    )
+    return out
 
 
 def _safe_float(value: Any, default: float = np.nan) -> float:
@@ -268,6 +338,16 @@ def _entry_price_gap(v11: pd.DataFrame, paper: pd.DataFrame, match: dict[str, An
         paper_entry = _safe_float(pr.get("entry_price", np.nan))
         v11_pnl = _row_pnl(vr)
         paper_pnl = _safe_float(pr.get("pnl_rs", np.nan))
+        v11_qty = _safe_float(vr.get("quantity", np.nan))
+        paper_qty = _safe_float(pr.get("quantity", np.nan))
+        v11_notional = _safe_float(vr.get("notional_exposure_rs", np.nan))
+        paper_notional = (
+            paper_entry * paper_qty
+            if np.isfinite(paper_entry) and np.isfinite(paper_qty)
+            else np.nan
+        )
+        v11_cost = _safe_float(vr.get("total_cost_rs", vr.get("v6_cost_rs", np.nan)))
+        paper_cost = _safe_float(pr.get("total_cost_rs", pr.get("total_cost", np.nan)))
         entry_gap_pct = (
             100.0 * (v11_entry - paper_entry) / paper_entry
             if np.isfinite(v11_entry) and np.isfinite(paper_entry) and paper_entry > 0
@@ -281,12 +361,20 @@ def _entry_price_gap(v11: pd.DataFrame, paper: pd.DataFrame, match: dict[str, An
                 "setup": vr.get("_setup", ""),
                 "v11_signal_time": vr.get("_ts_ist", ""),
                 "paper_signal_time": pr.get("_ts_ist", ""),
-                "v11_entry": _fmt_num(v11_entry, 2),
-                "paper_entry": _fmt_num(paper_entry, 2),
-                "entry_gap_pct": _fmt_num(entry_gap_pct, 3),
-                "v11_pnl_rs": _fmt_num(v11_pnl, 2),
-                "paper_pnl_rs": _fmt_num(paper_pnl, 2),
-                "pnl_gap_v11_minus_paper": _fmt_num(v11_pnl - paper_pnl if np.isfinite(v11_pnl) and np.isfinite(paper_pnl) else np.nan, 2),
+                "v11_entry": round(v11_entry, 2) if np.isfinite(v11_entry) else np.nan,
+                "paper_entry": round(paper_entry, 2) if np.isfinite(paper_entry) else np.nan,
+                "entry_gap_pct": round(entry_gap_pct, 3) if np.isfinite(entry_gap_pct) else np.nan,
+                "v11_quantity": int(v11_qty) if np.isfinite(v11_qty) else np.nan,
+                "paper_quantity": int(paper_qty) if np.isfinite(paper_qty) else np.nan,
+                "v11_notional_rs": round(v11_notional, 2) if np.isfinite(v11_notional) else np.nan,
+                "paper_notional_rs": round(paper_notional, 2) if np.isfinite(paper_notional) else np.nan,
+                "v11_cost_rs": round(v11_cost, 2) if np.isfinite(v11_cost) else np.nan,
+                "paper_cost_rs": round(paper_cost, 2) if np.isfinite(paper_cost) else np.nan,
+                "v11_pnl_rs": round(v11_pnl, 2) if np.isfinite(v11_pnl) else np.nan,
+                "paper_pnl_rs": round(paper_pnl, 2) if np.isfinite(paper_pnl) else np.nan,
+                "pnl_gap_v11_minus_paper": round(
+                    v11_pnl - paper_pnl, 2
+                ) if np.isfinite(v11_pnl) and np.isfinite(paper_pnl) else np.nan,
             }
         )
     return pd.DataFrame(rows)
@@ -518,7 +606,17 @@ def _parity_verdict(score: float, matched: int, total_paper: int) -> str:
 # ---------------------------------------------------------------------------
 
 def _run_v11(day: str, mode: str, out_dir: Path, selected_strategy_profile: str) -> tuple[int, str]:
-    cmd = [str(PYTHON_EXE), "-u", str(V11_SCRIPT), "--out", str(out_dir)]
+    cmd = [
+        str(PYTHON_EXE),
+        "-u",
+        str(V11_SCRIPT),
+        "--out",
+        str(out_dir),
+        "--cost_model",
+        "statutory",
+        "--slippage_bps",
+        "0",
+    ]
     if selected_strategy_profile:
         cmd += ["--selected_strategy_profile", str(selected_strategy_profile)]
     if mode == "live_parity":
@@ -545,14 +643,28 @@ def _live_json_exists_for_day(day: str) -> bool:
 
 def _summary(df: pd.DataFrame, pnl_col: str) -> dict[str, Any]:
     if df.empty:
-        return {"trades": 0, "wins": 0, "losses": 0, "net": 0.0, "pf": np.nan, "win_rate_pct": 0.0}
+        return {
+            "trades": 0, "wins": 0, "losses": 0, "gross": 0.0,
+            "cost": 0.0, "net": 0.0, "pf": np.nan, "win_rate_pct": 0.0,
+        }
     pnl = _pnl_series(df, pnl_col)
+    gross = pd.to_numeric(
+        _series_from_any(df, ("gross_pnl_rs", "v6_gross_pnl_rs", "gross_pnl"), np.nan),
+        errors="coerce",
+    )
+    gross = gross.where(gross.notna(), pnl)
+    cost = pd.to_numeric(
+        _series_from_any(df, ("total_cost_rs", "v6_cost_rs", "total_cost"), 0.0),
+        errors="coerce",
+    ).fillna(0.0)
     wins = int((pnl > 0).sum())
     losses = int((pnl < 0).sum())
     return {
         "trades": int(len(df)),
         "wins": wins,
         "losses": losses,
+        "gross": float(gross.sum()),
+        "cost": float(cost.sum()),
         "net": float(pnl.sum()),
         "pf": _profit_factor(pnl),
         "win_rate_pct": round(100.0 * wins / max(len(df), 1), 1),
@@ -617,6 +729,36 @@ def build_report(
     v11_summary = _summary(v11, BACKTEST_PNL_COL)
     paper_summary = _summary(paper_executed, "pnl_rs")
     paper_all_summary = _summary(paper, "pnl_rs")
+    paper_skipped = (
+        paper.loc[
+            paper.get("outcome", pd.Series("", index=paper.index))
+            .fillna("")
+            .astype(str)
+            .str.upper()
+            .str.startswith("ENTRY_SKIPPED")
+        ].copy()
+        if not paper.empty
+        else pd.DataFrame()
+    )
+    paper_skip_summary = (
+        paper_skipped.get("outcome", pd.Series(dtype=str))
+        .fillna("ENTRY_SKIPPED_UNKNOWN")
+        .astype(str)
+        .value_counts()
+        .rename_axis("outcome")
+        .reset_index(name="rows")
+        if not paper_skipped.empty
+        else pd.DataFrame()
+    )
+    scanner_funnel = _load_funnel_day(
+        SCANNER_AUDIT_DIR, "candidate_decision_funnel", day
+    )
+    entry_funnel = _load_funnel_day(
+        ENTRY_ENGINE_AUDIT_DIR, "entry_decision_funnel", day
+    )
+    scanner_funnel_summary = _funnel_summary(scanner_funnel)
+    entry_funnel_summary = _funnel_summary(entry_funnel)
+    latency_summary = _entry_latency_summary(day)
 
     # --- Match analysis ---
     match = _match_sets(v11, paper_executed)
@@ -663,7 +805,7 @@ def build_report(
         "",
         f"**Parity Score: {parity_score:.1f}% [{parity_bar}] → {verdict}**",
         "",
-        "Report-only mode. No changes made to `avwap_5min_ID_v11_backtesting.py`.",
+        "V11 economics use V7 risk-based quantity and PAPER_TRUE statutory costs.",
         "",
         "## Run Status",
         "",
@@ -679,11 +821,11 @@ def build_report(
         "",
         "## Result Comparison",
         "",
-        "| source | trades | wins | losses | win_rate | net P&L | PF |",
-        "|---|---:|---:|---:|---:|---:|---:|",
-        f"| v11 backtest ({mode_used}) | {v11_summary['trades']} | {v11_summary['wins']} | {v11_summary['losses']} | {v11_summary['win_rate_pct']:.1f}% | Rs {_fmt_num(v11_summary['net'])} | {_fmt_pf(v11_summary['pf'])} |",
-        f"| V7 paper TRUE (executed only) | {paper_summary['trades']} | {paper_summary['wins']} | {paper_summary['losses']} | {paper_summary['win_rate_pct']:.1f}% | Rs {_fmt_num(paper_summary['net'])} | {_fmt_pf(paper_summary['pf'])} |",
-        f"| V7 paper TRUE (all incl skips) | {paper_all_summary['trades']} | — | — | — | — | — |",
+        "| source | trades | wins | losses | win_rate | gross P&L | costs | net P&L | PF |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        f"| v11 backtest ({mode_used}) | {v11_summary['trades']} | {v11_summary['wins']} | {v11_summary['losses']} | {v11_summary['win_rate_pct']:.1f}% | Rs {_fmt_num(v11_summary['gross'])} | Rs {_fmt_num(v11_summary['cost'])} | Rs {_fmt_num(v11_summary['net'])} | {_fmt_pf(v11_summary['pf'])} |",
+        f"| V7 paper TRUE (executed only) | {paper_summary['trades']} | {paper_summary['wins']} | {paper_summary['losses']} | {paper_summary['win_rate_pct']:.1f}% | Rs {_fmt_num(paper_summary['gross'])} | Rs {_fmt_num(paper_summary['cost'])} | Rs {_fmt_num(paper_summary['net'])} | {_fmt_pf(paper_summary['pf'])} |",
+        f"| V7 paper TRUE (all incl skips) | {paper_all_summary['trades']} | — | — | — | — | — | — | — |",
         "",
         "## Parity Analysis",
         "",
@@ -699,6 +841,68 @@ def build_report(
         f"| avg P&L gap v11 minus paper (matched) | Rs {_fmt_num(avg_pnl_gap_rs, 2)} |",
         "",
     ]
+
+    lines.extend(
+        [
+            "## Operational Parity Scope",
+            "",
+            "Strategy results above are kept separate from live operational "
+            "gates. Capacity, freshness, writer, or executor skips therefore "
+            "cannot be mistaken for strategy-gate differences.",
+            "",
+            "| metric | value |",
+            "|---|---:|",
+            f"| scanner funnel records | {len(scanner_funnel)} |",
+            f"| entry-engine funnel records | {len(entry_funnel)} |",
+            f"| executor ENTRY_SKIPPED rows | {len(paper_skipped)} |",
+            f"| slot-complete marker missing slots | {latency_summary.get('marker_missing_slots', 0)} |",
+            f"| signal-writer rejected rows | {latency_summary.get('writer_rejected_rows', 0)} |",
+            "",
+            "Latency is split at the authoritative scanner marker:",
+            "",
+            "| latency | median sec | p95 sec | max sec |",
+            "|---|---:|---:|---:|",
+        ]
+    )
+    for key, label in (
+        ("bar_close_to_candidate_ready_sec", "5m bar close → candidate ready"),
+        ("candidate_ready_to_entry_engine_ready_sec", "candidate ready → entry decision"),
+        ("candidate_ready_to_signal_write_sec", "candidate ready → signal written"),
+        ("intended_entry_to_signal_write_sec", "intended T+1 entry → signal written"),
+    ):
+        lines.append(
+            f"| {label} | "
+            f"{_fmt_num(latency_summary.get(f'{key}_median'), 2)} | "
+            f"{_fmt_num(latency_summary.get(f'{key}_p95'), 2)} | "
+            f"{_fmt_num(latency_summary.get(f'{key}_max'), 2)} |"
+        )
+    lines.append("")
+    if not paper_skip_summary.empty:
+        lines.extend(["Executor skips:", "", "| outcome | rows |", "|---|---:|"])
+        for _, row in paper_skip_summary.iterrows():
+            lines.append(f"| {row['outcome']} | {int(row['rows'])} |")
+        lines.append("")
+    if not entry_funnel_summary.empty:
+        lines.extend(
+            [
+                "Entry-engine rejection funnel:",
+                "",
+                "| stage | outcome | candidates | reason |",
+                "|---|---|---:|---|",
+            ]
+        )
+        rejected_summary = entry_funnel_summary.loc[
+            entry_funnel_summary["outcome"].astype(str).str.upper().eq("REJECT")
+        ]
+        for _, row in rejected_summary.head(30).iterrows():
+            reason_text = str(row["reason"]).replace("|", "\\|")[:120]
+            lines.append(
+                f"| {row['stage']} | {row['outcome']} | "
+                f"{int(row['candidates'])} | {reason_text} |"
+            )
+        if rejected_summary.empty:
+            lines.append("| — | — | 0 | no entry-engine rejections |")
+        lines.append("")
 
     # Per-setup parity
     lines.extend(["## Per-Setup Parity", ""])
@@ -866,6 +1070,12 @@ def build_report(
         "avg_entry_gap_pct": None if not np.isfinite(avg_entry_gap_pct) else float(avg_entry_gap_pct),
         "avg_pnl_gap_rs": None if not np.isfinite(avg_pnl_gap_rs) else float(avg_pnl_gap_rs),
         "root_cause_summary": cause_summary,
+        "operational_parity": {
+            "scanner_funnel_records": int(len(scanner_funnel)),
+            "entry_funnel_records": int(len(entry_funnel)),
+            "executor_skipped_rows": int(len(paper_skipped)),
+            "entry_latency": latency_summary,
+        },
         "report": str(report_path),
         "out_dir": str(out_dir),
         "backtesting_script": str(V11_SCRIPT),
@@ -883,6 +1093,11 @@ def build_report(
     setup_parity.to_csv(out_dir / "per_setup_parity.csv", index=False)
     paper_only_causes.to_csv(out_dir / "paper_only_root_causes.csv", index=False)
     v11_only_causes.to_csv(out_dir / "v11_only_root_causes.csv", index=False)
+    scanner_funnel.to_csv(out_dir / "scanner_candidate_decision_funnel.csv", index=False)
+    entry_funnel.to_csv(out_dir / "entry_engine_decision_funnel.csv", index=False)
+    scanner_funnel_summary.to_csv(out_dir / "scanner_funnel_summary.csv", index=False)
+    entry_funnel_summary.to_csv(out_dir / "entry_funnel_summary.csv", index=False)
+    paper_skip_summary.to_csv(out_dir / "executor_skip_summary.csv", index=False)
 
     print(report)
     return rc
@@ -909,6 +1124,18 @@ def main() -> int:
         help="Profile passed to avwap_5min_ID_v11_backtesting.py; defaults from EQIDV2_V11_SELECTED_STRATEGY_PROFILE, or final_setup_conf when EQIDV2_USE_FINAL_SETUP_CONF=1",
     )
     args = ap.parse_args()
+    manifest_path, _ = freeze_runtime_manifest(
+        "backtesting_result_v11_daily",
+        runtime_root=OUT_ROOT.parent,
+        source_files=(Path(__file__), V11_SCRIPT),
+        resolved_config={
+            "date": str(args.date),
+            "run_v11": not bool(args.no_run_v11),
+            "selected_strategy_profile": str(args.selected_strategy_profile),
+            "force_historical": bool(args.force_historical),
+        },
+    )
+    print(f"[backtesting_result_v11] frozen_runtime_manifest={manifest_path}", flush=True)
     return build_report(
         str(args.date),
         run_v11=not args.no_run_v11,

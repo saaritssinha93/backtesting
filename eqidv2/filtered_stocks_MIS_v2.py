@@ -8,7 +8,7 @@
 # Legacy additions from filtered_stocks_MIS.py: 1039
 # Removed: 10 live-Kite-missing NSE symbols
 # Alias file: filtered_stocks_MIS_v2.py
-# Count: 1280
+# Count: 1279
 
 selected_stocks = {
     '360ONE',
@@ -288,7 +288,6 @@ selected_stocks = {
     'DCMSRIND',
     'DCW',
     'DCXINDIA',
-    'DEEDEV',
     'DEEPAKFERT',
     'DEEPAKNTR',
     'DEEPINDS',

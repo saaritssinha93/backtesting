@@ -1,4 +1,4 @@
-"""Paper executor freshness tests for the universal 15-second contract."""
+"""Paper executor freshness tests for the default 30-second contract."""
 
 import os
 import sys
@@ -16,7 +16,7 @@ def test_all_setups_return_universal_threshold():
         "D_EMA20_BOUNCE",
         "UNKNOWN_SETUP",
     ):
-        assert ex._late_lag_threshold_for_setup(setup) == 15
+        assert ex._late_lag_threshold_for_setup(setup) == 30
 
 
 def test_per_setup_threshold_dict_is_removed():
@@ -49,10 +49,10 @@ def test_append_late_skipped_csv_accepts_none_lag(tmp_path, monkeypatch):
     assert rows[0]["lag_sec"] == ""
 
 
-def test_default_lag_is_15():
+def test_default_lag_is_30():
     import avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7 as ex
 
-    assert ex.LATE_DETECTION_MAX_LAG_SEC == 15
+    assert ex.LATE_DETECTION_MAX_LAG_SEC == 30
 
 
 def test_explicit_contract_deadline_is_authoritative():

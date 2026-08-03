@@ -49,6 +49,7 @@ import json
 import re
 import argparse
 import logging
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -647,6 +648,25 @@ def ticker_is_fresh(mode: str, out_path: str, now_ist: datetime, holidays: set[d
         return False
 
     last_ts = _read_last_ts_from_store(existing_path)
+    return _ticker_is_fresh_from_last_ts(
+        mode,
+        existing_path,
+        last_ts,
+        now_ist,
+        holidays,
+        intraday_ts,
+    )
+
+
+def _ticker_is_fresh_from_last_ts(
+    mode: str,
+    existing_path: str,
+    last_ts,
+    now_ist: datetime,
+    holidays: set[date],
+    intraday_ts: str,
+) -> bool:
+    """Evaluate freshness without rereading a last timestamp already in hand."""
     if last_ts is None:
         return False
 
@@ -695,7 +715,14 @@ def missing_spec(mode: str, out_path: str, now_ist: datetime, holidays: set[date
     else:
         last_ts = last_ts.tz_convert(IST_TZ)
 
-    if ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
+    if _ticker_is_fresh_from_last_ts(
+        mode,
+        existing_path,
+        last_ts,
+        now_ist,
+        holidays,
+        intraday_ts,
+    ):
         return {"kind": "fresh", "last_ts": last_ts, "expected": spec}
 
     return {"kind": "rows_missing", "last_ts": last_ts, "expected": spec}
@@ -1044,7 +1071,28 @@ def _finalize_and_save(df: pd.DataFrame, out_path: str):
     if ext == ".parquet":
         _ensure_parquet_engine()
         compression = None if DEFAULT_PARQUET_COMPRESSION in {"", "none", "off", "false", "0"} else DEFAULT_PARQUET_COMPRESSION
-        df.to_parquet(out_path, engine="pyarrow", index=False, compression=compression)
+        # Keep the previous complete file visible until the replacement is
+        # fully encoded. The scanner therefore sees either the old snapshot or
+        # the new snapshot, never a partially-written Parquet file.
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{Path(out_path).name}.",
+                suffix=".tmp",
+                dir=str(Path(out_path).parent),
+                delete=False,
+            ) as tmp:
+                tmp_path = tmp.name
+            df.to_parquet(tmp_path, engine="pyarrow", index=False, compression=compression)
+            os.replace(tmp_path, out_path)
+            tmp_path = None
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.remove(tmp_path)
+                except FileNotFoundError:
+                    pass
         return
 
     df.to_csv(out_path, index=False)
@@ -1567,6 +1615,96 @@ class UpdateReport:
     persist_secs: float
     total_secs: float
     allow_previous_slot_verify: bool = False
+    last_after: str | None = None
+    data_state: str = "unresolved"  # current|previous_slot|unresolved|failed
+
+
+def _classify_symbol_timestamp(
+    last_ts,
+    expected_ts_ist: datetime,
+    step_min: int,
+) -> str:
+    """Classify one symbol against the authoritative slot timestamp."""
+    ts = _coerce_ist_datetime(last_ts)
+    expected = _coerce_ist_datetime(expected_ts_ist)
+    if ts is None or expected is None:
+        return "unresolved"
+
+    tol = timedelta(seconds=1)
+    if ts >= (expected - tol):
+        return "current"
+    if step_min > 0 and ts >= (expected - timedelta(minutes=step_min) - tol):
+        return "previous_slot"
+    return "unresolved"
+
+
+def _symbol_outcome_summary(
+    universe_symbols: list[str],
+    *,
+    current_symbols: set[str] | list[str] = (),
+    previous_slot_symbols: set[str] | list[str] = (),
+    failed_symbols: set[str] | list[str] = (),
+    unresolved_symbols: set[str] | list[str] = (),
+    token_missing_symbols: set[str] | list[str] = (),
+    written_symbols: set[str] | list[str] = (),
+    noop_symbols: set[str] | list[str] = (),
+) -> dict[str, object]:
+    """
+    Return scheduler-consumable, per-symbol completion accounting.
+
+    Precedence is failed -> unresolved -> previous-slot -> current. Any
+    universe symbol not explicitly classified is unresolved, preventing an
+    assigned ticker from being accidentally counted as successfully written.
+    """
+    universe = {
+        str(symbol).strip().upper()
+        for symbol in universe_symbols
+        if str(symbol).strip()
+    }
+    current = {str(s).strip().upper() for s in current_symbols if str(s).strip()} & universe
+    previous = {str(s).strip().upper() for s in previous_slot_symbols if str(s).strip()} & universe
+    failed = {str(s).strip().upper() for s in failed_symbols if str(s).strip()} & universe
+    unresolved = {str(s).strip().upper() for s in unresolved_symbols if str(s).strip()} & universe
+    token_missing = {str(s).strip().upper() for s in token_missing_symbols if str(s).strip()} & universe
+    written = {str(s).strip().upper() for s in written_symbols if str(s).strip()} & universe
+    noop = {str(s).strip().upper() for s in noop_symbols if str(s).strip()} & universe
+
+    unresolved |= token_missing
+    unresolved -= failed
+    previous -= failed | unresolved
+    current -= failed | unresolved | previous
+    unresolved |= universe - current - previous - failed
+    complete = current | previous
+
+    def _ordered(values: set[str]) -> list[str]:
+        return sorted(values)
+
+    return {
+        "universe_symbols": _ordered(universe),
+        "current_symbols": _ordered(current),
+        "previous_slot_symbols": _ordered(previous),
+        "complete_symbols": _ordered(complete),
+        "failed_symbols": _ordered(failed),
+        "unresolved_symbols": _ordered(unresolved),
+        "token_missing_symbols": _ordered(token_missing),
+        "written_symbols": _ordered(written),
+        "noop_symbols": _ordered(noop),
+        "universe_count": int(len(universe)),
+        "current_count": int(len(current)),
+        "previous_slot_count": int(len(previous)),
+        "complete_count": int(len(complete)),
+        "failed_count": int(len(failed)),
+        "unresolved_count": int(len(unresolved)),
+        "token_missing_count": int(len(token_missing)),
+        "written_count": int(len(written)),
+        "noop_count": int(len(noop)),
+        "outcome_counts": {
+            "current": int(len(current)),
+            "previous_slot": int(len(previous)),
+            "failed": int(len(failed)),
+            "unresolved": int(len(unresolved)),
+        },
+    }
 
 
 def verify_mode_outputs(
@@ -1831,7 +1969,9 @@ def process_ticker(
     intraday_ts: str,
     report_dir: str,
     print_missing_rows: bool,
-    print_missing_rows_max: int
+    print_missing_rows_max: int,
+    known_last_ts=None,
+    known_stale: bool = False,
 ) -> UpdateReport:
     t_total0 = _time.perf_counter()
     load_existing_secs = 0.0
@@ -1844,7 +1984,12 @@ def process_ticker(
 
     existing_path = _resolve_existing_store_path(out_path)
     existed_before = os.path.exists(existing_path)
-    last_before_ts = _read_last_ts_from_store(existing_path) if existed_before else None
+    if known_stale:
+        # run_mode already performed the authoritative freshness scan. Reuse
+        # its timestamp instead of reopening the same Parquet metadata here.
+        last_before_ts = known_last_ts
+    else:
+        last_before_ts = _read_last_ts_from_store(existing_path) if existed_before else None
     if last_before_ts is not None:
         if last_before_ts.tzinfo is None:
             last_before_ts = last_before_ts.tz_localize(IST_TZ)
@@ -1854,7 +1999,18 @@ def process_ticker(
     exp = expected_last_stamp(mode, now_ist, holidays, intraday_ts)
     exp_str = _fmt_expected(exp)
 
-    if skip_if_fresh and ticker_is_fresh(mode, out_path, now_ist, holidays, intraday_ts):
+    if (
+        skip_if_fresh
+        and not known_stale
+        and _ticker_is_fresh_from_last_ts(
+            mode,
+            existing_path,
+            last_before_ts,
+            now_ist,
+            holidays,
+            intraday_ts,
+        )
+    ):
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                             exp_str, 0, None, None, None,
@@ -1991,13 +2147,28 @@ def process_ticker(
                             load_existing_secs, fetch_secs, indicators_secs, persist_secs,
                             _time.perf_counter() - t_total0)
 
-    if fetched is None or fetched.empty:
+    fetched_is_empty = fetched is None or fetched.empty
+    synthetic_backfill_on_empty = bool(
+        fetched_is_empty
+        and mode == "5min"
+        and session_backfill_mode
+        and DEFAULT_5M_SYNTHETIC_GAP_FILL
+        and not existing.empty
+    )
+    if fetched_is_empty and not synthetic_backfill_on_empty:
         return UpdateReport(mode, ticker, "noop", out_path, existed_before,
                             last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
                             exp_str, 0, None, None, None,
                             load_existing_secs, fetch_secs, indicators_secs, persist_secs,
                             _time.perf_counter() - t_total0,
                             allow_previous_slot_verify=bool(slot_target_ts is not None))
+    if synthetic_backfill_on_empty:
+        logger.info(
+            "[5MIN] %s exchange returned no rows for missing session stamp(s); "
+            "continuing with configured synthetic zero-volume gap fill.",
+            ticker,
+        )
+        fetched = pd.DataFrame()
 
     fetched = fetched.copy()
     fetched["gap_filled"] = 0
@@ -2108,6 +2279,22 @@ def process_ticker(
         new_rows_count = int(len(new_rows))
         new_first = None
         new_last = None
+        merged_last = None
+        merged_last_ts = pd.to_datetime(merged["date"], errors="coerce").dropna().max()
+        if pd.notna(merged_last_ts):
+            merged_last = merged_last_ts.strftime("%Y-%m-%d %H:%M:%S")
+        merged_state = _classify_symbol_timestamp(
+            merged_last_ts,
+            exp.get("value"),
+            _mode_step_minutes(mode) or 0,
+        )
+        if (
+            merged_state == "current"
+            and mode == "5min"
+            and DEFAULT_ENFORCE_5MIN_SESSION_COMPLETENESS
+            and _missing_5min_session_stamps_from_df(merged, _coerce_ist_datetime(exp.get("value")))
+        ):
+            merged_state = "unresolved"
         if new_rows_count > 0:
             nf = pd.to_datetime(new_rows["date"], errors="coerce").dropna().min()
             nl = pd.to_datetime(new_rows["date"], errors="coerce").dropna().max()
@@ -2146,7 +2333,9 @@ def process_ticker(
             fetch_secs=fetch_secs,
             indicators_secs=indicators_secs,
             persist_secs=persist_secs,
-            total_secs=_time.perf_counter() - t_total0
+            total_secs=_time.perf_counter() - t_total0,
+            last_after=merged_last,
+            data_state=merged_state,
         )
 
     except Exception as e:
@@ -2194,6 +2383,7 @@ def run_mode(
             "verify_failed_count": 0,
             "verify_failed_sample": [],
             "total_elapsed_sec": float(_time.perf_counter() - t_mode0),
+            **_symbol_outcome_summary([]),
         }
 
     syms, pre_token_map = load_stocks_universe(logger)
@@ -2201,6 +2391,13 @@ def run_mode(
     missing_files: list[str] = []
     missing_rows: list[str] = []
     fresh: list[str] = []
+    scan_last_ts: dict[str, object] = {}
+
+    verify_expected_ts = end_dt if intraday_ts.lower() == "end" else (end_dt - timedelta(minutes=step))
+    if verify_expected_ts.tzinfo is None:
+        verify_expected_ts = IST_TZ.localize(verify_expected_ts)
+    fresh_current: set[str] = set()
+    fresh_previous: set[str] = set()
 
     t_scan0 = _time.perf_counter()
     if skip_if_fresh:
@@ -2208,8 +2405,18 @@ def run_mode(
             t = t.upper()
             out_path = os.path.join(DIRS[mode]["out"], f"{t}_stocks_indicators_{mode}.parquet")
             ms = missing_spec(mode, out_path, now_ist, holidays, intraday_ts)
+            scan_last_ts[t] = ms.get("last_ts")
             if ms["kind"] == "fresh":
                 fresh.append(t)
+                freshness_state = _classify_symbol_timestamp(
+                    ms.get("last_ts"),
+                    verify_expected_ts,
+                    step,
+                )
+                if freshness_state == "current":
+                    fresh_current.add(t)
+                elif freshness_state == "previous_slot":
+                    fresh_previous.add(t)
             elif ms["kind"] == "file_missing":
                 missing_files.append(t)
                 missing_rows.append(t)
@@ -2218,10 +2425,6 @@ def run_mode(
     else:
         missing_rows = [t.upper() for t in syms]
     freshness_scan_secs = _time.perf_counter() - t_scan0
-
-    verify_expected_ts = end_dt if intraday_ts.lower() == "end" else (end_dt - timedelta(minutes=step))
-    if verify_expected_ts.tzinfo is None:
-        verify_expected_ts = IST_TZ.localize(verify_expected_ts)
 
     if skip_if_fresh:
         logger.info("[%s] Missing files: %d", mode.upper(), len(missing_files))
@@ -2251,10 +2454,18 @@ def run_mode(
                     ok_count, len(syms), len(verify_failed), verify_secs)
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=0.00s | workers=0.00s | verify=%.2fs | total=%.2fs",
                     mode.upper(), freshness_scan_secs, verify_secs, _time.perf_counter() - t_mode0)
+        verify_unresolved = set(_extract_failed_tickers(verify_failed, syms))
         return {
             "verify_failed_count": int(len(verify_failed)),
             "verify_failed_sample": list(verify_failed[:20]),
             "total_elapsed_sec": float(_time.perf_counter() - t_mode0),
+            **_symbol_outcome_summary(
+                syms,
+                current_symbols=fresh_current - verify_unresolved,
+                previous_slot_symbols=fresh_previous - verify_unresolved,
+                unresolved_symbols=verify_unresolved,
+                noop_symbols=syms,
+            ),
         }
 
     t_token0 = _time.perf_counter()
@@ -2269,10 +2480,12 @@ def run_mode(
     token_prep_secs = _time.perf_counter() - t_token0
 
     work_items = []
+    token_missing_symbols: set[str] = set()
     for t in missing_rows:
         tok = token_map.get(t.upper())
         if not tok:
             logger.warning("No token for %s, skipping.", t)
+            token_missing_symbols.add(t.upper())
             continue
         work_items.append((t.upper(), int(tok)))
 
@@ -2287,10 +2500,19 @@ def run_mode(
                     ok_count, len(syms), len(verify_failed), verify_secs)
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=0.00s | verify=%.2fs | total=%.2fs",
                     mode.upper(), freshness_scan_secs, token_prep_secs, verify_secs, _time.perf_counter() - t_mode0)
+        verify_unresolved = set(_extract_failed_tickers(verify_failed, syms))
         return {
             "verify_failed_count": int(len(verify_failed)),
             "verify_failed_sample": list(verify_failed[:20]),
             "total_elapsed_sec": float(_time.perf_counter() - t_mode0),
+            **_symbol_outcome_summary(
+                syms,
+                current_symbols=fresh_current - verify_unresolved,
+                previous_slot_symbols=fresh_previous - verify_unresolved,
+                unresolved_symbols=set(missing_rows) | verify_unresolved,
+                token_missing_symbols=token_missing_symbols,
+                noop_symbols=fresh,
+            ),
         }
 
     logger.info("[%s] Processing ONLY missing symbols=%d with max_workers=%d ...", mode.upper(), len(work_items), max_workers)
@@ -2298,6 +2520,12 @@ def run_mode(
     all_reports: list[UpdateReport] = []
     updated_reports: list[UpdateReport] = []
     allow_previous_slot_tickers: set[str] = set()
+    current_symbols: set[str] = set(fresh_current)
+    previous_slot_symbols: set[str] = set(fresh_previous)
+    failed_symbols: set[str] = set()
+    unresolved_symbols: set[str] = set()
+    written_symbols: set[str] = set()
+    noop_symbols: set[str] = set()
     failed = 0
 
     t_workers0 = _time.perf_counter()
@@ -2308,7 +2536,8 @@ def run_mode(
                 mode, tkr, tok, kite, start_dt, end_dt,
                 logger, holidays,
                 skip_if_fresh, intraday_ts,
-                report_dir, print_missing_rows, print_missing_rows_max
+                report_dir, print_missing_rows, print_missing_rows_max,
+                scan_last_ts.get(tkr), bool(skip_if_fresh),
             ): tkr
             for (tkr, tok) in work_items
         }
@@ -2316,15 +2545,38 @@ def run_mode(
             tkr = futures[fut]
             try:
                 rep: UpdateReport = fut.result()
+                rep.last_after = rep.last_after or rep.new_last or rep.last_before
+                if rep.status == "failed":
+                    rep.data_state = "failed"
+                elif (
+                    rep.data_state not in {"current", "previous_slot"}
+                    and (rep.status in {"created", "updated"} or not skip_if_fresh)
+                ):
+                    rep.data_state = _classify_symbol_timestamp(
+                        rep.last_after,
+                        verify_expected_ts,
+                        step,
+                    )
                 all_reports.append(rep)
                 if rep.allow_previous_slot_verify:
                     allow_previous_slot_tickers.add(rep.ticker.upper())
                 if rep.status == "failed":
                     failed += 1
+                    failed_symbols.add(rep.ticker.upper())
+                elif rep.data_state == "current":
+                    current_symbols.add(rep.ticker.upper())
+                elif rep.data_state == "previous_slot":
+                    previous_slot_symbols.add(rep.ticker.upper())
+                else:
+                    unresolved_symbols.add(rep.ticker.upper())
                 if rep.status in ("created", "updated"):
                     updated_reports.append(rep)
+                    written_symbols.add(rep.ticker.upper())
+                elif rep.status == "noop":
+                    noop_symbols.add(rep.ticker.upper())
             except Exception as e:
                 failed += 1
+                failed_symbols.add(tkr.upper())
                 logger.exception("Worker crashed for %s (%s): %s", tkr, mode, e)
     workers_secs = _time.perf_counter() - t_workers0
 
@@ -2414,7 +2666,9 @@ def run_mode(
 
     recovery_secs = 0.0
     verify_post_secs = 0.0
+    recovery_candidates: set[str] = set()
     if verify_failed:
+        recovery_candidates = set(_extract_failed_tickers(verify_failed, verify_symbols))
         recovery_secs = _recover_verify_failures(
             mode=mode,
             verify_failed=verify_failed,
@@ -2449,6 +2703,34 @@ def run_mode(
                     verify_expected_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
                     ok_count, len(verify_universe), len(verify_failed), verify_post_secs)
 
+        final_verify_failed = set(_extract_failed_tickers(verify_failed, verify_universe))
+        for ticker in recovery_candidates:
+            if ticker in final_verify_failed:
+                if ticker not in failed_symbols:
+                    unresolved_symbols.add(ticker)
+                continue
+
+            out_path = os.path.join(
+                DIRS[mode]["out"],
+                f"{ticker}_stocks_indicators_{mode}.parquet",
+            )
+            recovered_state = _classify_symbol_timestamp(
+                _read_last_ts_from_store(_resolve_existing_store_path(out_path)),
+                verify_expected_ts,
+                step,
+            )
+            failed_symbols.discard(ticker)
+            unresolved_symbols.discard(ticker)
+            token_missing_symbols.discard(ticker)
+            current_symbols.discard(ticker)
+            previous_slot_symbols.discard(ticker)
+            if recovered_state == "current":
+                current_symbols.add(ticker)
+            elif recovered_state == "previous_slot":
+                previous_slot_symbols.add(ticker)
+            else:
+                unresolved_symbols.add(ticker)
+
     if recovery_secs > 0.0:
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=%.2fs | verify_pre=%.2fs | recover=%.2fs | verify_post=%.2fs | total=%.2fs",
                     mode.upper(),
@@ -2467,10 +2749,22 @@ def run_mode(
                     workers_secs,
                     verify_secs,
                     _time.perf_counter() - t_mode0)
+    final_verify_unresolved = set(_extract_failed_tickers(verify_failed, verify_universe))
+    unresolved_symbols |= final_verify_unresolved - failed_symbols
     return {
         "verify_failed_count": int(len(verify_failed)),
         "verify_failed_sample": list(verify_failed[:20]),
         "total_elapsed_sec": float(_time.perf_counter() - t_mode0),
+        **_symbol_outcome_summary(
+            syms,
+            current_symbols=current_symbols,
+            previous_slot_symbols=previous_slot_symbols,
+            failed_symbols=failed_symbols,
+            unresolved_symbols=unresolved_symbols | token_missing_symbols,
+            token_missing_symbols=token_missing_symbols,
+            written_symbols=written_symbols,
+            noop_symbols=noop_symbols,
+        ),
     }
 
 def parse_args():

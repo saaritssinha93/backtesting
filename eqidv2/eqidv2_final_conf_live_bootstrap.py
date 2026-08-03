@@ -1,10 +1,10 @@
-"""Runtime activation of final_setup_conf (the 16-setup book) into the LIVE v7 pipeline.
+"""Runtime activation of the configured setup book into the LIVE v7 pipeline.
 
-Single source of truth = final_setup_conf.FINAL_SETUP_CONF. When the env flag
-EQIDV2_USE_FINAL_SETUP_CONF is truthy, the live scanner and 1-minute entry engine
-call into this module to push the conf's setups / masks / pre-momentum gates /
-exit LEVELS into the *existing* v7 globals, while every filter stays exactly where
-v7 has always applied it:
+Single source of truth = the module selected by EQIDV2_FINAL_SETUP_CONF_MODULE.
+When EQIDV2_USE_FINAL_SETUP_CONF is truthy, the live scanner and 1-minute entry
+engine call into this module to push the conf's setups / masks / pre-momentum
+gates / exit LEVELS into the *existing* v7 globals, while every filter stays
+exactly where v7 has always applied it:
 
     scanner  : candidate_scan.ALLOWED_SETUPS (detection whitelist)
                apply_v8_live_gate           -> native setups pass normally
@@ -41,10 +41,12 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import pandas as pd
 
+import eqidv2_setup_conf_loader as setup_conf_loader
+
 FLAG_ENV = "EQIDV2_USE_FINAL_SETUP_CONF"
 _TRUE = {"1", "true", "yes", "on", "enable", "enabled"}
 
-GATE_VERSION = "final_setup_conf_live_2026_06_15"
+GATE_VERSION = "final_setup_conf_live_2026_07_26"
 
 # Candidate-row timestamp columns, in priority order (mirrors v11
 # _selected_strategy_features signal-minute derivation).
@@ -65,8 +67,12 @@ def _u(value: Any) -> str:
 # avoids __main__ vs named-module import pitfalls when a file is run as a script).
 # --------------------------------------------------------------------------- #
 def conf() -> Dict[str, dict]:
-    import final_setup_conf as fc
-    return fc.FINAL_SETUP_CONF
+    return setup_conf_loader.load_setup_conf_module().FINAL_SETUP_CONF
+
+
+def conf_source() -> str:
+    """Configured module/path used by both live V7 and V11."""
+    return setup_conf_loader.configured_target()
 
 
 def conf_keys() -> frozenset:
@@ -85,6 +91,18 @@ def exit_rules_from_conf() -> Dict[str, Tuple[float, float]]:
         if "sl_pct" in ex and "tgt_pct" in ex:
             out[name] = (float(ex["sl_pct"]), float(ex["tgt_pct"]))
     return out
+
+
+def entry_policy_for_setup(setup: str) -> Dict[str, Any]:
+    cfg = conf().get(str(setup), {})
+    policy = cfg.get("entry_policy", {})
+    return dict(policy) if isinstance(policy, dict) else {}
+
+
+def exit_policy_for_setup(setup: str) -> Dict[str, Any]:
+    cfg = conf().get(str(setup), {})
+    policy = cfg.get("exit_policy", {})
+    return dict(policy) if isinstance(policy, dict) else {}
 
 
 # Setups validated OFF the production v8/research gates (raw pre-gate pool, tier123
@@ -123,6 +141,15 @@ def _num(frame: pd.DataFrame, col: str) -> pd.Series:
     return pd.Series(np.nan, index=frame.index, dtype="float64")
 
 
+def _normalise_ts(value: Any) -> pd.Timestamp:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        return pd.NaT
+    if ts.tz is None:
+        return ts.tz_localize("Asia/Kolkata")
+    return ts.tz_convert("Asia/Kolkata")
+
+
 def _with_features(signals: pd.DataFrame) -> pd.DataFrame:
     work = signals.copy()
     for col in (
@@ -133,23 +160,40 @@ def _with_features(signals: pd.DataFrame) -> pd.DataFrame:
         if col in work.columns:
             work[col] = pd.to_numeric(work[col], errors="coerce")
 
-    if "signal_minute" not in work.columns:
-        minutes = []
-        for _, row in work.iterrows():
-            ts = pd.NaT
-            for col in _SIG_TS_COLS:
-                if col in row.index and pd.notna(row.get(col)):
-                    ts = pd.Timestamp(row.get(col))
-                    if pd.notna(ts):
-                        break
-            minutes.append(float(ts.hour * 60 + ts.minute) if pd.notna(ts) else np.nan)
-        work["signal_minute"] = minutes
+    # Always derive this field from the authoritative timestamp, exactly like
+    # V11. Trusting a pre-existing signal_minute lets stale/source-local values
+    # make the two masks disagree.
+    minutes = []
+    for _, row in work.iterrows():
+        ts = pd.NaT
+        for col in _SIG_TS_COLS:
+            if col in row.index and pd.notna(row.get(col)):
+                ts = _normalise_ts(row.get(col))
+                if pd.notna(ts):
+                    break
+        minutes.append(float(ts.hour * 60 + ts.minute) if pd.notna(ts) else np.nan)
+    work["signal_minute"] = minutes
+
+    # Derived mask features must be rebuilt from the signal candle exactly as
+    # V11 does. Candidate snapshots do not consistently carry these columns.
+    open_px = _num(work, "signal_open")
+    high_px = _num(work, "signal_high")
+    low_px = _num(work, "signal_low")
+    close_px = _num(work, "signal_close")
+    close_safe = close_px.replace(0, np.nan)
+    body_top = pd.concat([open_px, close_px], axis=1).max(axis=1)
+    body_bottom = pd.concat([open_px, close_px], axis=1).min(axis=1)
+    work["upper_wick_pct"] = (high_px - body_top) / close_safe * 100.0
+    work["lower_wick_pct"] = (body_bottom - low_px) / close_safe * 100.0
+    work["wick_skew_pct"] = work["upper_wick_pct"] - work["lower_wick_pct"]
+    work["signal_range_pct"] = (high_px - low_px) / close_safe * 100.0
+    work["market_abs_ret_pct"] = _num(work, "market_ret_pct").abs()
     return work
 
 
 def conf_mask(signals: pd.DataFrame) -> pd.Series:
     """Boolean keep-mask: keep ONLY conf setups, each filtered by its own
-    mask_terms + entry_guards.min_slot. Mirrors v11 _final_setup_conf_mask."""
+    mask_terms + entry guards. Mirrors v11 _final_setup_conf_mask."""
     if signals is None or len(signals) == 0:
         return pd.Series(False, index=getattr(signals, "index", pd.RangeIndex(0)))
     work = _with_features(signals)
@@ -176,9 +220,19 @@ def conf_mask(signals: pd.DataFrame) -> pd.Series:
                 else:
                     m = m & (col == v)
         guard = cfg.get("entry_guards", {})
+
+        def _slot_minute(value: object) -> int:
+            hh, mm = str(value).split(":")
+            return int(hh) * 60 + int(mm)
+
         if guard.get("min_slot"):
-            hh, mm = str(guard["min_slot"]).split(":")
-            m = m & (sig_min >= (int(hh) * 60 + int(mm)))
+            m = m & (sig_min >= _slot_minute(guard["min_slot"]))
+        if guard.get("max_slot"):
+            m = m & (sig_min <= _slot_minute(guard["max_slot"]))
+        for start, end in guard.get("exclude_windows", []):
+            start_min = _slot_minute(start)
+            end_min = _slot_minute(end)
+            m = m & ~sig_min.between(start_min, end_min, inclusive="both")
         mask = mask | m.fillna(False)
     return mask.fillna(False)
 
@@ -226,10 +280,17 @@ def summary() -> Dict[str, Any]:
         "flag_env": FLAG_ENV,
         "enabled": is_enabled(),
         "gate_version": GATE_VERSION,
+        "config_source": conf_source(),
         "n_setups": len(c),
         "longs": longs,
         "shorts": shorts,
         "exit_rules": exit_rules_from_conf(),
+        "entry_policies": {
+            k: entry_policy_for_setup(k) for k in c if entry_policy_for_setup(k)
+        },
+        "exit_policies": {
+            k: exit_policy_for_setup(k) for k in c if exit_policy_for_setup(k)
+        },
         "pre_momentum_gates": {k: v for k, v in pre_momentum_gates_from_conf().items()},
         "masked_setups": sorted(k for k, v in c.items() if v.get("mask_terms")),
         "guarded_setups": sorted(k for k, v in c.items() if v.get("entry_guards")),

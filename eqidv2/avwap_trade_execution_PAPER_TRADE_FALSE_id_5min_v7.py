@@ -2239,7 +2239,29 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
     trade_id = str(signal.get("trade_id", "")).strip() or default_trade_id
     today = trade_start_ist.date()
     forced_close_dt = IST.localize(datetime.combine(today, FORCED_CLOSE_TIME))
+    configured_forced_exit = str(signal.get("forced_exit_time", "")).strip()
+    if configured_forced_exit:
+        try:
+            hh, mm = configured_forced_exit.split(":", 1)
+            forced_close_dt = min(
+                forced_close_dt,
+                IST.localize(datetime.combine(today, dt_time(int(hh), int(mm)))),
+            )
+        except Exception:
+            log.warning(
+                f"[EXIT.POLICY] invalid forced_exit_time={configured_forced_exit!r}; "
+                f"using {FORCED_CLOSE_TIME} | signal_id={signal_id[:12]}"
+            )
     entry_retry_deadline = _entry_retry_deadline(signal, trade_start_ist, forced_close_dt)
+    configured_max_hold_minutes = max(
+        0.0, _safe_float(signal.get("max_hold_minutes", 0.0), 0.0)
+    )
+    configured_time_stop_dt: Optional[datetime] = None
+    configured_breakout_entry = (
+        not resume_mode
+        and str(signal.get("entry_policy_model", "")).strip().lower()
+        == "high_break_trigger"
+    )
 
     if side == "SHORT":
         entry_txn = "SELL"
@@ -2300,6 +2322,9 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 "setup": str(result.setup),
                 "impulse_type": str(result.impulse_type),
                 "quality_score": float(result.quality_score),
+                "entry_policy_model": str(signal.get("entry_policy_model", "")),
+                "max_hold_minutes": signal.get("max_hold_minutes", ""),
+                "forced_exit_time": str(signal.get("forced_exit_time", "")),
                 "stage": stage,
                 "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
             }
@@ -2403,6 +2428,18 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 )
                 _sync_active_position("resume_missing_filled_price")
                 return
+            if configured_max_hold_minutes > 0 and result.entry_time:
+                parsed_entry = pd.to_datetime(result.entry_time, errors="coerce")
+                if not pd.isna(parsed_entry):
+                    parsed_entry = pd.Timestamp(parsed_entry)
+                    if parsed_entry.tzinfo is None:
+                        parsed_entry = parsed_entry.tz_localize(IST)
+                    else:
+                        parsed_entry = parsed_entry.tz_convert(IST)
+                    configured_time_stop_dt = (
+                        parsed_entry.to_pydatetime()
+                        + timedelta(minutes=configured_max_hold_minutes)
+                    )
 
             margin = (result.filled_price * quantity) / INTRADAY_LEVERAGE
             with capital_lock:
@@ -2415,7 +2452,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 trade_closed = True
                 log.warning(
                     f"[LIVE] Skipping new entry for {ticker}: "
-                    f"cutoff {FORCED_CLOSE_TIME.strftime('%H:%M:%S')} IST already reached."
+                    f"cutoff {forced_close_dt.strftime('%H:%M:%S')} IST already reached."
                 )
                 # No open position was created; proceed to finalization for audit row.
                 pass
@@ -2439,6 +2476,95 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                         f"(universal threshold {threshold}s) | "
                         f"signal_id={signal_id[:12]} | total_late_skipped_today={_late_skipped_count}"
                     )
+
+            # Configured breakout entries are trigger orders in strategy terms.
+            # Wait for/cancel the trigger before submitting any real broker order.
+            if (not trade_closed) and configured_breakout_entry:
+                trigger = _safe_float(signal.get("entry_trigger_price", 0.0), 0.0)
+                cancel = _safe_float(signal.get("entry_cancel_price", 0.0), 0.0)
+                valid_minutes = max(
+                    0, int(_safe_float(signal.get("entry_valid_minutes", 0), 0))
+                )
+                max_gap_pct = max(
+                    0.0, _safe_float(signal.get("entry_max_gap_pct", 0.0), 0.0)
+                )
+                signal_bar_ts = _parse_ist_signal_ts(
+                    signal.get("signal_time_ist")
+                    or signal.get("signal_bar_time_ist")
+                    or signal.get("bar_time_ist")
+                )
+                if trigger <= 0 or cancel <= 0 or valid_minutes <= 0 or signal_bar_ts is None:
+                    result.outcome = "ENTRY_SKIPPED_MALFORMED_TRIGGER_POLICY"
+                    result.exit_price = signal_entry_price
+                    trade_closed = True
+                    log.error(
+                        f"[ENTRY.TRIGGER] Invalid policy for {ticker}: trigger={trigger} "
+                        f"cancel={cancel} valid_minutes={valid_minutes}"
+                    )
+                else:
+                    trigger_deadline = min(
+                        signal_bar_ts.to_pydatetime()
+                        + timedelta(minutes=valid_minutes + 1),
+                        forced_close_dt,
+                    )
+                    last_trigger_ltp: Optional[float] = None
+                    log.info(
+                        f"[ENTRY.TRIGGER] Armed REAL {ticker} LONG trigger={trigger:.2f} "
+                        f"cancel={cancel:.2f} until={trigger_deadline.strftime('%H:%M:%S')}"
+                    )
+                    while (not trade_closed) and datetime.now(IST) < trigger_deadline:
+                        quote_deadline = min(
+                            trigger_deadline,
+                            datetime.now(IST) + timedelta(seconds=max(2.0, ENTRY_RETRY_POLL_SEC)),
+                        )
+                        trigger_ltp = _safe_get_entry_ltp(
+                            ticker,
+                            retry_until_ist=quote_deadline,
+                            context=f"{ticker} configured trigger",
+                        )
+                        if trigger_ltp is None or trigger_ltp <= 0:
+                            continue
+                        last_trigger_ltp = float(trigger_ltp)
+                        if last_trigger_ltp <= cancel:
+                            result.outcome = "ENTRY_CANCELLED_BEFORE_TRIGGER"
+                            result.exit_price = signal_entry_price
+                            trade_closed = True
+                            log.warning(
+                                f"[ENTRY.TRIGGER] Cancelled REAL {ticker}: "
+                                f"ltp={last_trigger_ltp:.2f} <= {cancel:.2f}"
+                            )
+                            break
+                        if last_trigger_ltp >= trigger:
+                            gap_pct = (last_trigger_ltp / trigger - 1.0) * 100.0
+                            if max_gap_pct > 0 and gap_pct > max_gap_pct:
+                                result.outcome = "ENTRY_SKIPPED_TRIGGER_GAP"
+                                result.exit_price = signal_entry_price
+                                trade_closed = True
+                                log.warning(
+                                    f"[ENTRY.TRIGGER] Gap reject REAL {ticker}: "
+                                    f"{gap_pct:.3f}% > {max_gap_pct:.3f}%"
+                                )
+                            else:
+                                # Trigger occurred within the frozen window. Allow
+                                # a short broker/network placement window afterward.
+                                entry_retry_deadline = min(
+                                    datetime.now(IST) + timedelta(seconds=30),
+                                    forced_close_dt,
+                                )
+                            break
+                        time.sleep(max(1.0, float(ENTRY_RETRY_POLL_SEC)))
+                    if (
+                        not trade_closed
+                        and last_trigger_ltp is not None
+                        and last_trigger_ltp < trigger
+                    ):
+                        result.outcome = "ENTRY_SKIPPED_TRIGGER_NOT_HIT"
+                        result.exit_price = signal_entry_price
+                        trade_closed = True
+                    elif not trade_closed and last_trigger_ltp is None:
+                        result.outcome = "ENTRY_SKIPPED_TRIGGER_NOT_HIT"
+                        result.exit_price = signal_entry_price
+                        trade_closed = True
 
             # ---- SLIP GATE: pre-entry LTP check ----
             # Fetch current LTP and reject if it has chased too far from the model trigger.
@@ -2724,6 +2850,11 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 quantity = max(1, int(filled_qty_total))
                 result.quantity = quantity
                 result.filled_price = float(filled_notional_total / max(1, filled_qty_total))
+                if configured_max_hold_minutes > 0:
+                    configured_time_stop_dt = (
+                        datetime.now(IST)
+                        + timedelta(minutes=configured_max_hold_minutes)
+                    )
                 if quantity < planned_qty:
                     log.warning(
                         f"[LIVE] Entry partial for {ticker}: qty={quantity}/{planned_qty} "
@@ -2736,7 +2867,7 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 if datetime.now(IST) >= forced_close_dt:
                     log.warning(
                         f"[LIVE] Entry for {ticker} filled at/after cutoff "
-                        f"{FORCED_CLOSE_TIME.strftime('%H:%M:%S')} IST; forcing immediate close."
+                        f"{forced_close_dt.strftime('%H:%M:%S')} IST; forcing immediate close."
                     )
                     if _force_market_close(
                         tag="AVWAPCutoffClose",
@@ -2866,8 +2997,17 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                 if _check_kill_switch_and_close(stage="monitor_loop"):
                     break
 
-                if now_ist >= forced_close_dt:
-                    log.info(f"[LIVE] EOD forced close for {ticker}")
+                configured_time_due = (
+                    configured_time_stop_dt is not None
+                    and now_ist >= configured_time_stop_dt
+                )
+                if now_ist >= forced_close_dt or configured_time_due:
+                    close_reason = "TIME" if configured_time_due and now_ist < forced_close_dt else "EOD_CLOSE"
+                    close_tag = "AVWAPTimeClose" if close_reason == "TIME" else "AVWAPForceClose"
+                    log.info(
+                        f"[LIVE] {'configured time' if close_reason == 'TIME' else 'EOD forced'} "
+                        f"close for {ticker}"
+                    )
                     cancel_order_safe(kite.VARIETY_REGULAR, result.target_order_id)
                     cancel_order_safe(kite.VARIETY_REGULAR, result.sl_order_id)
                     broker_map = _get_broker_mis_position_qty_map()
@@ -2876,7 +3016,11 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                         expected_sign = -1 if side == "SHORT" else 1
                         if broker_qty == 0 or (broker_qty * expected_sign) <= 0:
                             result.exit_price = result.filled_price or signal_entry_price
-                            result.outcome = "EOD_FLAT_NO_FORCE_CLOSE"
+                            result.outcome = (
+                                "TIME_FLAT_NO_FORCE_CLOSE"
+                                if close_reason == "TIME"
+                                else "EOD_FLAT_NO_FORCE_CLOSE"
+                            )
                             trade_closed = True
                             log.warning(
                                 f"[LIVE] Skipping EOD force-close for {ticker}: "
@@ -2884,8 +3028,8 @@ def execute_live_trade(signal: dict, resume_mode: bool = False) -> None:
                             )
                             break
                     if _force_market_close(
-                        tag="AVWAPForceClose",
-                        outcome="EOD_CLOSE",
+                        tag=close_tag,
+                        outcome=close_reason,
                         timeout_sec=30,
                     ):
                         trade_closed = True

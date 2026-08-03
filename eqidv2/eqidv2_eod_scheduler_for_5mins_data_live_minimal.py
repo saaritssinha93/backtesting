@@ -34,6 +34,8 @@ Optional:
 from __future__ import annotations
 
 import argparse
+import atexit
+import hashlib
 import json
 import multiprocessing as mp
 import os
@@ -48,6 +50,7 @@ from typing import Callable, Optional
 import pytz
 from eqidv2_runtime_paths import DATA_5M_DIR as RUNTIME_DATA_5M_DIR
 from eqidv2_runtime_paths import REPORTS_DIR as RUNTIME_REPORTS_DIR
+from eqidv2_runtime_paths import RUNTIME_STATUS_DIR
 from eqidv2_runtime_paths import runtime_dir
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -211,18 +214,20 @@ core.load_stocks_universe = load_stocks_universe_fixed
 # ---------------------------------------------------------------------
 _orig_ticker_is_fresh = getattr(core, 'ticker_is_fresh', None)
 
-def ticker_is_fresh_strict(mode: str, out_path: str, now_ist: datetime, holidays: set, intraday_ts: str) -> bool:
-    existing_path = core._resolve_existing_store_path(out_path)
-    if not os.path.exists(existing_path):
-        return False
-    last_ts = core._read_last_ts_from_store(existing_path)
+def _ticker_is_fresh_from_last_ts_strict(
+    mode: str,
+    existing_path: str,
+    last_ts,
+    now_ist: datetime,
+    holidays: set,
+    intraday_ts: str,
+) -> bool:
+    """Require the exact slot; never classify the prior bar as fresh."""
     if last_ts is None:
         return False
-    # normalize tz
-    if last_ts.tzinfo is None:
-        last_ts = last_ts.tz_localize(core.IST_TZ)
-    else:
-        last_ts = last_ts.tz_convert(core.IST_TZ)
+    last_ts = core._coerce_ist_datetime(last_ts)
+    if last_ts is None:
+        return False
     spec = core.expected_last_stamp(mode, now_ist, holidays, intraday_ts)
     exp_ts = spec['value']
     if exp_ts.tzinfo is None:
@@ -236,9 +241,29 @@ def ticker_is_fresh_strict(mode: str, out_path: str, now_ist: datetime, holidays
             return False
     return True
 
+
+def ticker_is_fresh_strict(mode: str, out_path: str, now_ist: datetime, holidays: set, intraday_ts: str) -> bool:
+    existing_path = core._resolve_existing_store_path(out_path)
+    if not os.path.exists(existing_path):
+        return False
+    last_ts = core._read_last_ts_from_store(existing_path)
+    return _ticker_is_fresh_from_last_ts_strict(
+        mode,
+        existing_path,
+        last_ts,
+        now_ist,
+        holidays,
+        intraday_ts,
+    )
+
+
 # Apply patch only if core exposes expected_last_stamp (newer core); otherwise keep original.
 if hasattr(core, 'expected_last_stamp') and _orig_ticker_is_fresh is not None:
     core.ticker_is_fresh = ticker_is_fresh_strict
+    # missing_spec() uses this private helper directly after reading last_ts.
+    # Patch both entry points so a one-slot-old file cannot bypass strictness.
+    if hasattr(core, '_ticker_is_fresh_from_last_ts'):
+        core._ticker_is_fresh_from_last_ts = _ticker_is_fresh_from_last_ts_strict
 
 
 # ---------------------------------------------------------------------
@@ -282,6 +307,15 @@ DEFAULT_READY_MARKER_ENABLED = str(os.getenv("EQIDV2_5M_READY_MARKER_ENABLED", "
 DEFAULT_READY_MARKER_SAMPLE_SIZE = int(os.getenv("EQIDV2_5M_READY_MARKER_SAMPLE_SIZE", "24"))
 DEFAULT_READY_MARKER_POLL_SECONDS = float(os.getenv("EQIDV2_5M_READY_MARKER_POLL_SECONDS", "1"))
 DEFAULT_READY_MARKER_MIN_FRESH_RATIO = float(os.getenv("EQIDV2_5M_READY_MARKER_MIN_FRESH_RATIO", "0.70"))
+DEFAULT_PERSISTENT_PARTITION_WORKERS = str(
+    os.getenv("EQIDV2_5M_PERSISTENT_PARTITION_WORKERS", "0")
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+DEFAULT_FETCH_SLA_TARGET_SEC = float(os.getenv("EQIDV2_5M_FETCH_SLA_TARGET_SEC", "35"))
 DEFAULT_REFRESH_TOKENS = str(os.getenv("EQIDV2_5M_REFRESH_TOKENS", "0")).strip().lower() in {
     "1",
     "true",
@@ -304,6 +338,12 @@ DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY = max(
     int(os.getenv("EQIDV2_5M_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY", "2")),
 )
 SLOT_STATUS_PATH = EQIDV2_DIR / "logs" / "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"
+FEED_UNIVERSE_MANIFEST_PATH = Path(
+    os.getenv(
+        "EQIDV2_5M_FEED_UNIVERSE_MANIFEST",
+        str(RUNTIME_STATUS_DIR / "feed_universe_5m.json"),
+    )
+)
 
 
 class ParallelPartitionRunError(RuntimeError):
@@ -500,6 +540,12 @@ def _publish_slot_completion_marker(
     duration_ms: float,
     sample_fresh: int,
     sample_checked: int,
+    universe_sha256: str = "",
+    current_symbol_count: int = 0,
+    previous_slot_symbol_count: int = 0,
+    unresolved_symbol_count: int = 0,
+    failed_symbol_count: int = 0,
+    token_missing_symbol_count: int = 0,
 ) -> None:
     """
     strategy_v2 §M1 — authoritative LF completion marker.
@@ -522,7 +568,10 @@ def _publish_slot_completion_marker(
     complete = (
         not failures_list
         and int(verification_failed_count) == 0
-        and int(tickers_written) >= int(tickers_expected)
+        and int(tickers_written) == int(tickers_expected)
+        and int(unresolved_symbol_count) == 0
+        and int(failed_symbol_count) == 0
+        and int(token_missing_symbol_count) == 0
     )
     tickers_failed = max(0, int(tickers_expected) - int(tickers_written)) + int(verification_failed_count)
     ratio = (float(sample_fresh) / float(sample_checked)) if sample_checked > 0 else 0.0
@@ -556,7 +605,14 @@ def _publish_slot_completion_marker(
         # authoritative fetch outcome (full universe, not a sample)
         "tickers_expected": int(tickers_expected),
         "tickers_written":  int(tickers_written),
+        "tickers_complete": int(tickers_written),
         "tickers_failed":   int(tickers_failed),
+        "universe_sha256": str(universe_sha256),
+        "current_symbol_count": int(current_symbol_count),
+        "previous_slot_symbol_count": int(previous_slot_symbol_count),
+        "unresolved_symbol_count": int(unresolved_symbol_count),
+        "failed_symbol_count": int(failed_symbol_count),
+        "token_missing_symbol_count": int(token_missing_symbol_count),
         "partition_failures": failures_list,
         "verification_failed_count": int(verification_failed_count),
         "verification_failure_sample": verify_sample_list,
@@ -644,6 +700,47 @@ def _watch_and_publish_slot_ready_marker(
         )
 
 
+def _canonical_symbols(symbols: list[str]) -> list[str]:
+    return sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+
+
+def _universe_sha256(symbols: list[str]) -> str:
+    canonical = _canonical_symbols(symbols)
+    return hashlib.sha256("\n".join(canonical).encode("utf-8")).hexdigest()
+
+
+def _write_feed_universe_manifest(
+    slot_end: datetime,
+    symbols: list[str],
+    *,
+    path: Optional[Path] = None,
+) -> dict[str, object]:
+    """Publish the exact universe used by the authoritative 5-minute feed.
+
+    The scanner consumes this manifest rather than independently rebuilding a
+    similar-but-not-identical universe.  Atomic replace prevents a reader from
+    observing a partial symbol list.
+    """
+
+    slot_ts = slot_end if slot_end.tzinfo is not None else IST.localize(slot_end)
+    slot_ts = slot_ts.astimezone(IST)
+    canonical = _canonical_symbols(symbols)
+    payload: dict[str, object] = {
+        "schema_version": "eqidv2_5m_feed_universe_v1",
+        "slot_ist": slot_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
+        "published_at_ist": now_ist().strftime("%Y-%m-%d %H:%M:%S%z"),
+        "universe_count": int(len(canonical)),
+        "universe_sha256": _universe_sha256(canonical),
+        "symbols": canonical,
+    }
+    target = Path(path or FEED_UNIVERSE_MANIFEST_PATH)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(tmp_path, target)
+    return payload
+
+
 def _write_slot_status(
     slot_end: datetime,
     *,
@@ -657,10 +754,27 @@ def _write_slot_status(
     failures: list[str],
     verification_failed_count: int,
     verification_failure_sample: list[str],
+    universe_count: int = 0,
+    universe_sha256: str = "",
+    current_symbol_count: int = 0,
+    previous_slot_symbol_count: int = 0,
+    complete_symbol_count: int = 0,
+    unresolved_symbol_count: int = 0,
+    failed_symbol_count: int = 0,
+    token_missing_symbol_count: int = 0,
+    written_symbol_count: int = 0,
+    noop_symbol_count: int = 0,
+    accounting_exact: bool = False,
 ) -> None:
     slot_ts = slot_end if slot_end.tzinfo is not None else IST.localize(slot_end)
     slot_ts = slot_ts.astimezone(IST)
     elapsed_values = [float(v) for v in partition_elapsed.values() if v is not None]
+    if float(total_elapsed_sec) > float(sla_warn_sec):
+        sla_state = "CRITICAL"
+    elif float(total_elapsed_sec) > float(DEFAULT_FETCH_SLA_TARGET_SEC):
+        sla_state = "WARN"
+    else:
+        sla_state = "OK"
     payload = {
         "slot_ist": slot_ts.strftime("%Y-%m-%d %H:%M:%S%z"),
         "updated_at_ist": now_ist().strftime("%Y-%m-%d %H:%M:%S%z"),
@@ -674,15 +788,28 @@ def _write_slot_status(
         "per_app_cap": int(per_app_cap),
         "effective_per_app": int(effective_per_app),
         "sla_warn_sec": float(sla_warn_sec),
-        "sla_state": "WARN" if float(total_elapsed_sec) > float(sla_warn_sec) else "OK",
+        "fetch_sla_target_sec": float(DEFAULT_FETCH_SLA_TARGET_SEC),
+        "sla_state": sla_state,
         "sla_mode": "soft_warn_only",
         "completion_policy": "continue_until_verified",
+        "persistent_partition_workers": bool(DEFAULT_PERSISTENT_PARTITION_WORKERS),
+        "universe_count": int(universe_count),
+        "universe_sha256": str(universe_sha256),
+        "current_symbol_count": int(current_symbol_count),
+        "previous_slot_symbol_count": int(previous_slot_symbol_count),
+        "complete_symbol_count": int(complete_symbol_count),
+        "unresolved_symbol_count": int(unresolved_symbol_count),
+        "failed_symbol_count": int(failed_symbol_count),
+        "token_missing_symbol_count": int(token_missing_symbol_count),
+        "written_symbol_count": int(written_symbol_count),
+        "noop_symbol_count": int(noop_symbol_count),
+        "accounting_exact": bool(accounting_exact),
         "failures": list(failures),
         "verification_failed_count": int(verification_failed_count),
         "verification_failure_sample": list(verification_failure_sample),
         "overall_state": (
-            "FAIL" if failures or int(verification_failed_count) > 0
-            else ("WARN" if float(total_elapsed_sec) > float(sla_warn_sec) else "OK")
+            "FAIL" if failures or int(verification_failed_count) > 0 or not bool(accounting_exact)
+            else sla_state
         ),
     }
     SLOT_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1013,7 +1140,11 @@ def _run_partition(
 ) -> dict[str, object]:
     if not partition_tickers:
         print(f"[INFO] {partition_name}: no tickers assigned; skipping.")
-        return {"verify_failed_count": 0, "verify_failed_sample": []}
+        return {
+            "verify_failed_count": 0,
+            "verify_failed_sample": [],
+            **core._symbol_outcome_summary([]),
+        }
 
     current_loader = core.load_stocks_universe
     current_setup = core.setup_kite_session
@@ -1055,6 +1186,7 @@ def _run_partition_worker(
     skip_if_fresh: bool,
     expected_ts_ist: datetime,
     result_queue,
+    session_cache: Optional[dict[str, tuple[tuple[tuple[str, int, int], ...], object]]] = None,
 ) -> None:
     # Use stream-only logger in child process to avoid concurrent file truncation.
     logger = core.logging.getLogger("stocks_fetcher")
@@ -1065,7 +1197,31 @@ def _run_partition_worker(
         sh.setFormatter(fmt)
         logger.addHandler(sh)
 
-    setup_fn = _setup_fn_map().get(setup_kind, setup_kite_session_from_eqidv2_dir)
+    base_setup_fn = _setup_fn_map().get(setup_kind, setup_kite_session_from_eqidv2_dir)
+
+    def setup_fn():
+        if session_cache is None:
+            return base_setup_fn()
+        suffix = "" if setup_kind == "app1" else setup_kind.replace("app", "", 1)
+        signature_parts: list[tuple[str, int, int]] = []
+        for fname in (
+            f"api_key{suffix}.txt" if suffix else "api_key.txt",
+            f"access_token{suffix}.txt" if suffix else "access_token.txt",
+        ):
+            auth_path = EQIDV2_DIR / fname
+            try:
+                stat = auth_path.stat()
+                signature_parts.append((fname, int(stat.st_mtime_ns), int(stat.st_size)))
+            except FileNotFoundError:
+                signature_parts.append((fname, -1, -1))
+        signature = tuple(signature_parts)
+        cached = session_cache.get(setup_kind)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        kite = base_setup_fn()
+        session_cache[setup_kind] = (signature, kite)
+        return kite
+
     started_at = time.perf_counter()
     try:
         print(
@@ -1087,22 +1243,46 @@ def _run_partition_worker(
         )
         verify_failed = list((summary or {}).get("verify_failed_sample", []) or [])
         verify_failed_count = int((summary or {}).get("verify_failed_count", len(verify_failed)) or 0)
+        assigned_symbols = set(_canonical_symbols(partition_tickers))
+        reported_universe = set(_canonical_symbols((summary or {}).get("universe_symbols", []) or []))
+        complete_symbols = set(_canonical_symbols((summary or {}).get("complete_symbols", []) or []))
+        complete_count = int((summary or {}).get("complete_count", len(complete_symbols)) or 0)
+        failed_count = int((summary or {}).get("failed_count", 0) or 0)
+        unresolved_count = int((summary or {}).get("unresolved_count", 0) or 0)
+        token_missing_count = int((summary or {}).get("token_missing_count", 0) or 0)
+        accounting_ok = bool(
+            reported_universe == assigned_symbols
+            and complete_symbols == assigned_symbols
+            and complete_count == len(complete_symbols)
+            and complete_count == len(partition_tickers)
+            and failed_count == 0
+            and unresolved_count == 0
+            and token_missing_count == 0
+        )
         elapsed_sec = time.perf_counter() - started_at
-        if verify_failed_count > 0:
+        if verify_failed_count > 0 or not accounting_ok:
             sample = ", ".join(verify_failed[:8])
             print(
-                f"[PART] {partition_name}: completed with verification failures "
-                f"elapsed={elapsed_sec:.2f}s verify_failed={verify_failed_count}"
+                f"[PART] {partition_name}: completed with incomplete accounting "
+                f"elapsed={elapsed_sec:.2f}s verify_failed={verify_failed_count} "
+                f"complete={complete_count}/{len(partition_tickers)} failed={failed_count} "
+                f"unresolved={unresolved_count} token_missing={token_missing_count}"
             )
             result_queue.put(
                 (
                     partition_name,
                     False,
-                    f"verify_failed={verify_failed_count} sample={sample}",
+                    (
+                        f"verify_failed={verify_failed_count} complete={complete_count}/"
+                        f"{len(partition_tickers)} failed={failed_count} "
+                        f"unresolved={unresolved_count} token_missing={token_missing_count} "
+                        f"sample={sample}"
+                    ),
                     elapsed_sec,
                     len(partition_tickers),
                     verify_failed_count,
                     verify_failed[:8],
+                    dict(summary or {}),
                 )
             )
         else:
@@ -1119,6 +1299,7 @@ def _run_partition_worker(
                     len(partition_tickers),
                     0,
                     [],
+                    dict(summary or {}),
                 )
             )
     except Exception as e:
@@ -1133,21 +1314,34 @@ def _run_partition_worker(
                 len(partition_tickers),
                 0,
                 [],
+                {},
             )
         )
 
 def _drain_partition_results(
     result_queue,
-    result_map: dict[str, tuple[bool, str, float, int, int, list[str]]],
+    result_map: dict[str, tuple[bool, str, float, int, int, list[str], dict[str, object]]],
 ) -> int:
     drained = 0
     while True:
         try:
-            pname, ok, msg, elapsed_sec, ticker_count, verify_failed_count, verify_failed_sample = result_queue.get_nowait()
+            payload = result_queue.get_nowait()
         except queue.Empty:
             break
         except Exception:
             break
+        if len(payload) == 7:
+            payload = (*payload, {})
+        (
+            pname,
+            ok,
+            msg,
+            elapsed_sec,
+            ticker_count,
+            verify_failed_count,
+            verify_failed_sample,
+            partition_summary,
+        ) = payload
 
         result_map[str(pname)] = (
             bool(ok),
@@ -1156,6 +1350,7 @@ def _drain_partition_results(
             int(ticker_count),
             int(verify_failed_count),
             list(verify_failed_sample),
+            dict(partition_summary or {}),
         )
         drained += 1
     return drained
@@ -1180,6 +1375,135 @@ def _terminate_partition_process(proc: object, pname: str, timeout_sec: float) -
         except Exception:
             pass
 
+
+def _run_persistent_partition_jobs(
+    partitions: list[tuple[str, list[str], dict[str, int]]],
+    *,
+    partition_max_workers: int,
+    report_dir: str,
+    holidays: set,
+    refresh_tokens: bool,
+    intraday_ts_mode: str,
+    skip_if_fresh_mode: bool,
+    expected_ts_ist: datetime,
+    partition_timeout_sec: float,
+) -> tuple[
+    list[tuple[str, object]],
+    dict[str, tuple[bool, str, float, int, int, list[str], dict[str, object]]],
+    dict[str, tuple[bool, str, float, int, int, list[str], dict[str, object]]],
+    dict[str, Optional[int]],
+]:
+    """Dispatch one slot to the long-lived app processes."""
+
+    global _PERSISTENT_JOB_SEQUENCE
+    _, result_queue = _persistent_context()
+    _PERSISTENT_JOB_SEQUENCE += 1
+    job_id = f"{os.getpid()}-{_PERSISTENT_JOB_SEQUENCE}-{time.monotonic_ns()}"
+
+    workers: list[tuple[str, object]] = []
+    worker_start_times: dict[str, float] = {}
+    partition_ticker_counts: dict[str, int] = {}
+    pending: set[str] = set()
+
+    for pname, ptickers, ptoken_map in partitions:
+        command_queue, proc = _ensure_persistent_partition_worker(pname)
+        args = ("5min", pname, ptickers, ptoken_map, pname)
+        kwargs = {
+            "max_workers": int(partition_max_workers),
+            "report_dir": os.path.join(report_dir, pname),
+            "holidays": holidays,
+            "refresh_tokens": bool(refresh_tokens),
+            "intraday_ts": str(intraday_ts_mode),
+            "skip_if_fresh": bool(skip_if_fresh_mode),
+            "expected_ts_ist": expected_ts_ist,
+        }
+        command_queue.put((job_id, args, kwargs))
+        workers.append((pname, proc))
+        worker_start_times[pname] = time.perf_counter()
+        partition_ticker_counts[pname] = len(ptickers)
+        pending.add(pname)
+
+    result_map: dict[str, tuple[bool, str, float, int, int, list[str], dict[str, object]]] = {}
+    timed_out: dict[str, tuple[bool, str, float, int, int, list[str], dict[str, object]]] = {}
+    worker_exitcodes: dict[str, Optional[int]] = {}
+
+    while pending:
+        try:
+            result_job_id, payload = result_queue.get(
+                timeout=max(0.05, float(DEFAULT_PARTITION_JOIN_POLL_SEC))
+            )
+            if str(result_job_id) == job_id:
+                if len(payload) == 7:
+                    payload = (*payload, {})
+                (
+                    pname,
+                    ok,
+                    msg,
+                    elapsed_sec,
+                    ticker_count,
+                    verify_failed_count,
+                    verify_failed_sample,
+                    partition_summary,
+                ) = payload
+                pname = str(pname)
+                if pname in pending:
+                    result_map[pname] = (
+                        bool(ok),
+                        str(msg),
+                        float(elapsed_sec),
+                        int(ticker_count),
+                        int(verify_failed_count),
+                        list(verify_failed_sample),
+                        dict(partition_summary or {}),
+                    )
+                    worker_exitcodes[pname] = 0
+                    pending.discard(pname)
+        except queue.Empty:
+            pass
+
+        for pname in list(pending):
+            record = _PERSISTENT_WORKERS.get(pname)
+            proc = record[1] if record is not None else None
+            if proc is None or not proc.is_alive():
+                exitcode = getattr(proc, "exitcode", None)
+                result_map[pname] = (
+                    False,
+                    f"persistent_worker_exit={exitcode}",
+                    time.perf_counter() - worker_start_times[pname],
+                    int(partition_ticker_counts.get(pname, 0)),
+                    0,
+                    [],
+                    {},
+                )
+                worker_exitcodes[pname] = exitcode
+                pending.discard(pname)
+                _stop_persistent_partition_worker(pname)
+                continue
+
+            elapsed_sec = time.perf_counter() - worker_start_times[pname]
+            if elapsed_sec >= float(partition_timeout_sec):
+                print(
+                    f"[WARN] {pname}: persistent partition exceeded timeout "
+                    f"({elapsed_sec:.2f}s >= {float(partition_timeout_sec):.2f}s). Restarting worker."
+                )
+                timed_out[pname] = (
+                    False,
+                    f"partition_timeout={float(partition_timeout_sec):.1f}s",
+                    elapsed_sec,
+                    int(partition_ticker_counts.get(pname, 0)),
+                    0,
+                    [],
+                    {},
+                )
+                worker_exitcodes[pname] = -1
+                pending.discard(pname)
+                _stop_persistent_partition_worker(pname)
+
+    for pname, result in timed_out.items():
+        result_map.setdefault(pname, result)
+    return workers, result_map, timed_out, worker_exitcodes
+
+
 def run_update_5m_once(
     max_workers: int,
     max_workers_per_app: int,
@@ -1202,6 +1526,16 @@ def run_update_5m_once(
     logger = core.logging.getLogger("stocks_fetcher")
     all_tickers, pre_token_map = core.load_stocks_universe(logger)
     token_map = {str(k).strip().upper(): int(v) for k, v in dict(pre_token_map).items()}
+    universe_symbols = _canonical_symbols(all_tickers)
+    universe_hash = _universe_sha256(universe_symbols)
+    preflight_failures: list[str] = []
+    if slot_end is not None and bool(publish_completion_marker):
+        try:
+            _write_feed_universe_manifest(slot_end, universe_symbols)
+        except Exception as exc:
+            detail = f"feed_universe_manifest={type(exc).__name__}: {exc}"
+            preflight_failures.append(detail)
+            print(f"[WARN] Failed to publish canonical 5min feed universe: {detail}")
 
     intraday_ts_mode = "start" if opening_slot else "end"
     skip_if_fresh_mode = False if opening_slot else True
@@ -1234,12 +1568,23 @@ def run_update_5m_once(
             ", ".join(app_name for app_name, ptickers, _, _ in app_assignments if not ptickers),
         )
 
-    ctx = mp.get_context("spawn")
-    result_queue = ctx.Queue()
     partitions = [
         (app_name, partition_tickers, partition_token_map)
         for app_name, partition_tickers, partition_token_map, _ in app_assignments
     ]
+    assigned_symbols = _canonical_symbols(
+        [ticker for _, partition_tickers, _ in partitions for ticker in partition_tickers]
+    )
+    if assigned_symbols != universe_symbols:
+        missing = sorted(set(universe_symbols) - set(assigned_symbols))
+        extra = sorted(set(assigned_symbols) - set(universe_symbols))
+        detail = (
+            "partition_universe_mismatch "
+            f"expected={len(universe_symbols)} assigned={len(assigned_symbols)} "
+            f"missing={missing[:8]} extra={extra[:8]}"
+        )
+        preflight_failures.append(detail)
+        print(f"[WARN] {detail}")
     active_partition_count = sum(1 for _, ptickers, _ in partitions if ptickers)
     partition_max_workers = _partition_worker_budget(
         total_budget=max_workers,
@@ -1281,100 +1626,156 @@ def run_update_5m_once(
         )
         marker_thread.start()
 
-    workers: list[tuple[str, object]] = []
-    partition_ticker_counts: dict[str, int] = {}
-    for pname, ptickers, ptoken_map in partitions:
-        partition_ticker_counts[pname] = len(ptickers)
-        proc = ctx.Process(
-            target=_run_partition_worker,
-            args=(
-                "5min",
-                pname,
-                ptickers,
-                ptoken_map,
-                pname,
-            ),
-            kwargs={
-                "max_workers": partition_max_workers,
-                "report_dir": os.path.join(report_dir, pname),
-                "holidays": holidays,
-                "refresh_tokens": refresh_tokens,
-                "intraday_ts": intraday_ts_mode,
-                "skip_if_fresh": skip_if_fresh_mode,
-                "expected_ts_ist": (slot_end if slot_end is not None else now_ist()),
-                "result_queue": result_queue,
-            },
+    worker_exitcodes: dict[str, Optional[int]] = {}
+    if DEFAULT_PERSISTENT_PARTITION_WORKERS:
+        workers, result_map, timed_out_workers, worker_exitcodes = _run_persistent_partition_jobs(
+            partitions,
+            partition_max_workers=partition_max_workers,
+            report_dir=report_dir,
+            holidays=holidays,
+            refresh_tokens=refresh_tokens,
+            intraday_ts_mode=intraday_ts_mode,
+            skip_if_fresh_mode=skip_if_fresh_mode,
+            expected_ts_ist=(slot_end if slot_end is not None else now_ist()),
+            partition_timeout_sec=partition_timeout_sec,
         )
-        workers.append((pname, proc))
+    else:
+        ctx = mp.get_context("spawn")
+        result_queue = ctx.Queue()
+        workers = []
+        partition_ticker_counts: dict[str, int] = {}
+        for pname, ptickers, ptoken_map in partitions:
+            partition_ticker_counts[pname] = len(ptickers)
+            proc = ctx.Process(
+                target=_run_partition_worker,
+                args=(
+                    "5min",
+                    pname,
+                    ptickers,
+                    ptoken_map,
+                    pname,
+                ),
+                kwargs={
+                    "max_workers": partition_max_workers,
+                    "report_dir": os.path.join(report_dir, pname),
+                    "holidays": holidays,
+                    "refresh_tokens": refresh_tokens,
+                    "intraday_ts": intraday_ts_mode,
+                    "skip_if_fresh": skip_if_fresh_mode,
+                    "expected_ts_ist": (slot_end if slot_end is not None else now_ist()),
+                    "result_queue": result_queue,
+                },
+            )
+            workers.append((pname, proc))
 
-    for _, proc in workers:
-        proc.start()
+        for _, proc in workers:
+            proc.start()
 
-    result_map: dict[str, tuple[bool, str, float, int, int, list[str]]] = {}
-    timed_out_workers: dict[str, tuple[bool, str, float, int, int, list[str]]] = {}
-    worker_start_times = {pname: time.perf_counter() for pname, _ in workers}
-    pending_workers = {pname: proc for pname, proc in workers}
+        result_map = {}
+        timed_out_workers = {}
+        worker_start_times = {pname: time.perf_counter() for pname, _ in workers}
+        pending_workers = {pname: proc for pname, proc in workers}
 
-    while pending_workers:
+        while pending_workers:
+            _drain_partition_results(result_queue, result_map)
+            for pname, proc in list(pending_workers.items()):
+                if not proc.is_alive():
+                    try:
+                        proc.join(timeout=0.1)
+                    except Exception:
+                        pass
+                    worker_exitcodes[pname] = proc.exitcode
+                    pending_workers.pop(pname, None)
+                    continue
+
+                elapsed_sec = time.perf_counter() - worker_start_times[pname]
+                if elapsed_sec >= float(partition_timeout_sec):
+                    print(
+                        f"[WARN] {pname}: partition exceeded timeout "
+                        f"({elapsed_sec:.2f}s >= {float(partition_timeout_sec):.2f}s). Terminating worker."
+                    )
+                    _terminate_partition_process(proc, pname, DEFAULT_PARTITION_TERMINATE_GRACE_SEC)
+                    timed_out_workers[pname] = (
+                        False,
+                        f"partition_timeout={float(partition_timeout_sec):.1f}s",
+                        elapsed_sec,
+                        int(partition_ticker_counts.get(pname, 0)),
+                        0,
+                        [],
+                        {},
+                    )
+                    worker_exitcodes[pname] = proc.exitcode
+                    pending_workers.pop(pname, None)
+
+            if pending_workers:
+                time.sleep(max(0.05, float(DEFAULT_PARTITION_JOIN_POLL_SEC)))
+
         _drain_partition_results(result_queue, result_map)
-        for pname, proc in list(pending_workers.items()):
-            if not proc.is_alive():
-                try:
-                    proc.join(timeout=0.1)
-                except Exception:
-                    pass
-                pending_workers.pop(pname, None)
-                continue
-
-            elapsed_sec = time.perf_counter() - worker_start_times[pname]
-            if elapsed_sec >= float(partition_timeout_sec):
-                print(
-                    f"[WARN] {pname}: partition exceeded timeout "
-                    f"({elapsed_sec:.2f}s >= {float(partition_timeout_sec):.2f}s). Terminating worker."
-                )
-                _terminate_partition_process(proc, pname, DEFAULT_PARTITION_TERMINATE_GRACE_SEC)
-                timed_out_workers[pname] = (
-                    False,
-                    f"partition_timeout={float(partition_timeout_sec):.1f}s",
-                    elapsed_sec,
-                    int(partition_ticker_counts.get(pname, 0)),
-                    0,
-                    [],
-                )
-                pending_workers.pop(pname, None)
-
-        if pending_workers:
-            time.sleep(max(0.05, float(DEFAULT_PARTITION_JOIN_POLL_SEC)))
+        for pname, timed_out_result in timed_out_workers.items():
+            result_map.setdefault(pname, timed_out_result)
+        try:
+            result_queue.close()
+        except Exception:
+            pass
+        try:
+            result_queue.join_thread()
+        except Exception:
+            pass
 
     if marker_stop_event is not None:
         marker_stop_event.set()
     if marker_thread is not None:
         marker_thread.join(timeout=2.0)
 
-    _drain_partition_results(result_queue, result_map)
-    for pname, timed_out_result in timed_out_workers.items():
-        result_map.setdefault(pname, timed_out_result)
-    try:
-        result_queue.close()
-    except Exception:
-        pass
-    try:
-        result_queue.join_thread()
-    except Exception:
-        pass
-
-    failures: list[str] = []
+    failures: list[str] = list(preflight_failures)
     partition_elapsed: dict[str, float] = {}
     partition_symbol_counts: dict[str, int] = {}
+    partition_complete_counts: dict[str, int] = {}
     verification_failed_count = 0
     verification_failure_sample: list[str] = []
+    accounting_symbols: dict[str, set[str]] = {
+        "complete": set(),
+        "current": set(),
+        "previous_slot": set(),
+        "written": set(),
+        "noop": set(),
+        "failed": set(),
+        "unresolved": set(),
+        "token_missing": set(),
+    }
+    exact_accounting_partitions = 0
     for pname, proc in workers:
-        ok, msg, elapsed_sec, ticker_count, part_verify_failed_count, part_verify_failed_sample = result_map.get(
+        exitcode = worker_exitcodes.get(pname, getattr(proc, "exitcode", None))
+        (
+            ok,
+            msg,
+            elapsed_sec,
+            ticker_count,
+            part_verify_failed_count,
+            part_verify_failed_sample,
+            partition_summary,
+        ) = result_map.get(
             pname,
-            (proc.exitcode == 0, f"worker_exit={proc.exitcode}", 0.0, 0, 0, []),
+            (exitcode == 0, f"worker_exit={exitcode}", 0.0, 0, 0, [], {}),
         )
         partition_elapsed[pname] = float(elapsed_sec)
         partition_symbol_counts[pname] = int(ticker_count)
+        if partition_summary:
+            exact_accounting_partitions += 1
+            for key in accounting_symbols:
+                values = partition_summary.get(f"{key}_symbols", []) or []
+                accounting_symbols[key].update(
+                    str(value).strip().upper() for value in values if str(value).strip()
+                )
+            partition_complete_counts[pname] = int(
+                partition_summary.get(
+                    "complete_count",
+                    len(partition_summary.get("complete_symbols", []) or []),
+                )
+                or 0
+            )
+        else:
+            partition_complete_counts[pname] = int(ticker_count if ok else 0)
         verification_failed_count += int(part_verify_failed_count)
         for item in part_verify_failed_sample:
             text = str(item).strip()
@@ -1382,8 +1783,47 @@ def run_update_5m_once(
                 verification_failure_sample.append(text)
                 if len(verification_failure_sample) >= 20:
                     break
-        if (not ok) or (proc.exitcode not in (0, None)):
+        if (not ok) or (exitcode not in (0, None)):
             failures.append(f"{pname}: {msg}")
+
+    if exact_accounting_partitions != len(partitions):
+        print(
+            "[WARN] Exact per-symbol accounting unavailable for "
+            f"{len(partitions) - exact_accounting_partitions}/{len(partitions)} partition(s)."
+        )
+
+    complete_symbol_count = (
+        len(accounting_symbols["complete"])
+        if exact_accounting_partitions == len(partitions)
+        else int(sum(partition_complete_counts.values()))
+    )
+    current_symbol_count = len(accounting_symbols["current"])
+    previous_slot_symbol_count = len(accounting_symbols["previous_slot"])
+    unresolved_symbol_count = len(accounting_symbols["unresolved"])
+    failed_symbol_count = len(accounting_symbols["failed"])
+    token_missing_symbol_count = len(accounting_symbols["token_missing"])
+    written_symbol_count = len(accounting_symbols["written"])
+    noop_symbol_count = len(accounting_symbols["noop"])
+    accounting_exact = bool(
+        exact_accounting_partitions == len(partitions)
+        and accounting_symbols["complete"] == set(universe_symbols)
+        and not accounting_symbols["failed"]
+        and not accounting_symbols["unresolved"]
+        and not accounting_symbols["token_missing"]
+    )
+    accounting_failure = ""
+    if not accounting_exact:
+        accounting_failure = (
+            "authoritative_accounting_incomplete "
+            f"complete={complete_symbol_count}/{len(universe_symbols)} "
+            f"failed={failed_symbol_count} unresolved={unresolved_symbol_count} "
+            f"token_missing={token_missing_symbol_count} "
+            f"exact_partitions={exact_accounting_partitions}/{len(partitions)}"
+        )
+        print(f"[WARN] {accounting_failure}")
+    completion_failures = list(failures)
+    if accounting_failure:
+        completion_failures.append(accounting_failure)
 
     total_elapsed_sec = time.perf_counter() - slot_started_at
     elapsed_values = [v for v in partition_elapsed.values() if v > 0]
@@ -1415,9 +1855,20 @@ def run_update_5m_once(
                 per_app_cap=max_workers_per_app,
                 effective_per_app=partition_max_workers,
                 sla_warn_sec=slot_sla_warn_sec,
-                failures=failures,
+                failures=completion_failures,
                 verification_failed_count=verification_failed_count,
                 verification_failure_sample=verification_failure_sample,
+                universe_count=len(universe_symbols),
+                universe_sha256=universe_hash,
+                current_symbol_count=current_symbol_count,
+                previous_slot_symbol_count=previous_slot_symbol_count,
+                complete_symbol_count=complete_symbol_count,
+                unresolved_symbol_count=unresolved_symbol_count,
+                failed_symbol_count=failed_symbol_count,
+                token_missing_symbol_count=token_missing_symbol_count,
+                written_symbol_count=written_symbol_count,
+                noop_symbol_count=noop_symbol_count,
+                accounting_exact=accounting_exact,
             )
         except Exception as exc:
             print(f"[WARN] Failed to write 5min slot status: {exc}")
@@ -1432,8 +1883,8 @@ def run_update_5m_once(
         # publish_completion_marker=False; LF leaves it at the default True.
         if bool(publish_completion_marker):
             try:
-                tickers_expected_total = int(len(all_tickers))
-                tickers_written_total = int(sum(partition_symbol_counts.values()))
+                tickers_expected_total = int(len(universe_symbols))
+                tickers_written_total = int(complete_symbol_count)
                 sample_fresh = 0
                 sample_checked = 0
                 if bool(ready_marker_enabled) and 'ready_sample' in locals() and ready_sample:
@@ -1449,12 +1900,18 @@ def run_update_5m_once(
                     slot_end,
                     tickers_expected=tickers_expected_total,
                     tickers_written=tickers_written_total,
-                    failures=failures,
+                    failures=completion_failures,
                     verification_failed_count=verification_failed_count,
                     verification_failure_sample=verification_failure_sample,
                     duration_ms=float(total_elapsed_sec) * 1000.0,
                     sample_fresh=sample_fresh,
                     sample_checked=sample_checked,
+                    universe_sha256=universe_hash,
+                    current_symbol_count=current_symbol_count,
+                    previous_slot_symbol_count=previous_slot_symbol_count,
+                    unresolved_symbol_count=unresolved_symbol_count,
+                    failed_symbol_count=failed_symbol_count,
+                    token_missing_symbol_count=token_missing_symbol_count,
                 )
             except Exception as exc:
                 print(f"[WARN] Failed to write 5min completion marker: {exc}")
@@ -1463,6 +1920,7 @@ def run_update_5m_once(
         "total_elapsed_sec": float(total_elapsed_sec),
         "partition_elapsed_sec": partition_elapsed,
         "partition_symbol_counts": partition_symbol_counts,
+        "partition_complete_counts": partition_complete_counts,
         "max_partition_elapsed_sec": max(elapsed_values) if elapsed_values else 0.0,
         "min_partition_elapsed_sec": min(elapsed_values) if elapsed_values else 0.0,
         "avg_partition_elapsed_sec": (sum(elapsed_values) / len(elapsed_values)) if elapsed_values else 0.0,
@@ -1471,8 +1929,24 @@ def run_update_5m_once(
         "effective_per_app": int(partition_max_workers),
         "partition_timeout_sec": float(partition_timeout_sec),
         "sla_warn_sec": float(slot_sla_warn_sec),
+        "fetch_sla_target_sec": float(DEFAULT_FETCH_SLA_TARGET_SEC),
         "sla_breached": bool(total_elapsed_sec > float(slot_sla_warn_sec)),
+        "persistent_partition_workers": bool(DEFAULT_PERSISTENT_PARTITION_WORKERS),
+        "universe_count": int(len(universe_symbols)),
+        "universe_sha256": universe_hash,
+        "current_symbol_count": int(current_symbol_count),
+        "previous_slot_symbol_count": int(previous_slot_symbol_count),
+        "complete_symbol_count": int(complete_symbol_count),
+        "unresolved_symbol_count": int(unresolved_symbol_count),
+        "failed_symbol_count": int(failed_symbol_count),
+        "token_missing_symbol_count": int(token_missing_symbol_count),
+        "written_symbol_count": int(written_symbol_count),
+        "noop_symbol_count": int(noop_symbol_count),
+        "exact_accounting_partitions": int(exact_accounting_partitions),
+        "accounting_exact": bool(accounting_exact),
+        "accounting_failure": accounting_failure,
         "failures": list(failures),
+        "completion_failures": completion_failures,
         "verification_failed_count": int(verification_failed_count),
         "verification_failure_sample": list(verification_failure_sample),
     }
@@ -1481,8 +1955,136 @@ def run_update_5m_once(
             "Parallel partition run failed: " + " | ".join(failures),
             summary,
         )
-
     return summary
+
+
+class _TaggedResultSink:
+    """Attach a slot job id to a child result without changing its payload."""
+
+    def __init__(self, result_queue, job_id: str):
+        self._result_queue = result_queue
+        self._job_id = str(job_id)
+
+    def put(self, payload) -> None:
+        self._result_queue.put((self._job_id, payload))
+
+
+def _persistent_partition_worker_loop(partition_name: str, command_queue, result_queue) -> None:
+    """Long-lived app worker; one slot job is processed at a time."""
+
+    session_cache: dict[str, tuple[tuple[tuple[str, int, int], ...], object]] = {}
+    while True:
+        job = command_queue.get()
+        if job is None:
+            return
+        job_id, args, kwargs = job
+        try:
+            call_kwargs = dict(kwargs)
+            call_kwargs["result_queue"] = _TaggedResultSink(result_queue, str(job_id))
+            call_kwargs["session_cache"] = session_cache
+            _run_partition_worker(*args, **call_kwargs)
+        except BaseException as exc:
+            # The parent must always receive a terminal result for a dispatched
+            # slot, even if the wrapper itself fails before the normal worker
+            # error handler is reached.
+            result_queue.put(
+                (
+                    str(job_id),
+                    (
+                        str(partition_name),
+                        False,
+                        f"persistent_worker_wrapper={type(exc).__name__}: {exc}",
+                        0.0,
+                        0,
+                        0,
+                        [],
+                        {},
+                    ),
+                )
+            )
+
+
+_PERSISTENT_MP_CONTEXT = None
+_PERSISTENT_RESULT_QUEUE = None
+_PERSISTENT_WORKERS: dict[str, tuple[object, object]] = {}
+_PERSISTENT_JOB_SEQUENCE = 0
+
+
+def _persistent_context():
+    global _PERSISTENT_MP_CONTEXT, _PERSISTENT_RESULT_QUEUE
+    if _PERSISTENT_MP_CONTEXT is None:
+        _PERSISTENT_MP_CONTEXT = mp.get_context("spawn")
+    if _PERSISTENT_RESULT_QUEUE is None:
+        _PERSISTENT_RESULT_QUEUE = _PERSISTENT_MP_CONTEXT.Queue()
+    return _PERSISTENT_MP_CONTEXT, _PERSISTENT_RESULT_QUEUE
+
+
+def _stop_persistent_partition_worker(partition_name: str) -> None:
+    record = _PERSISTENT_WORKERS.pop(str(partition_name), None)
+    if record is None:
+        return
+    command_queue, proc = record
+    try:
+        command_queue.put_nowait(None)
+    except Exception:
+        pass
+    try:
+        proc.join(timeout=1.0)
+    except Exception:
+        pass
+    if getattr(proc, "is_alive", lambda: False)():
+        _terminate_partition_process(proc, str(partition_name), 1.0)
+    try:
+        command_queue.close()
+    except Exception:
+        pass
+
+
+def _ensure_persistent_partition_worker(partition_name: str):
+    partition_name = str(partition_name)
+    existing = _PERSISTENT_WORKERS.get(partition_name)
+    if existing is not None and getattr(existing[1], "is_alive", lambda: False)():
+        return existing
+    if existing is not None:
+        _stop_persistent_partition_worker(partition_name)
+    ctx, result_queue = _persistent_context()
+    command_queue = ctx.Queue(maxsize=1)
+    proc = ctx.Process(
+        target=_persistent_partition_worker_loop,
+        args=(partition_name, command_queue, result_queue),
+        name=f"eqidv2-5m-{partition_name}",
+    )
+    proc.start()
+    record = (command_queue, proc)
+    _PERSISTENT_WORKERS[partition_name] = record
+    return record
+
+
+def _prewarm_persistent_partition_workers(partition_names: list[str]) -> None:
+    if not DEFAULT_PERSISTENT_PARTITION_WORKERS:
+        return
+    started = time.perf_counter()
+    for partition_name in partition_names:
+        _ensure_persistent_partition_worker(partition_name)
+    print(
+        "[INFO] 5min persistent partition workers prewarmed:",
+        f"count={len(partition_names)}, elapsed={time.perf_counter() - started:.2f}s",
+    )
+
+
+def _shutdown_persistent_partition_workers() -> None:
+    global _PERSISTENT_RESULT_QUEUE
+    for partition_name in list(_PERSISTENT_WORKERS):
+        _stop_persistent_partition_worker(partition_name)
+    if _PERSISTENT_RESULT_QUEUE is not None:
+        try:
+            _PERSISTENT_RESULT_QUEUE.close()
+        except Exception:
+            pass
+        _PERSISTENT_RESULT_QUEUE = None
+
+
+atexit.register(_shutdown_persistent_partition_workers)
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -1587,11 +2189,17 @@ def main() -> None:
         f"poll={float(args.ready_marker_poll_seconds):.1f}s, "
         f"min_ratio={float(args.ready_marker_min_fresh_ratio):.2f}",
     )
+    print(
+        "       Persistent app workers:",
+        f"enabled={DEFAULT_PERSISTENT_PARTITION_WORKERS}",
+    )
     print(f"       Refresh tokens: {args.refresh_tokens}")
     print(f"       Opening slot fetch (09:15): {args.enable_opening_slot_fetch}")
     print(f"       Process will exit at {HARD_STOP.strftime('%H:%M')} IST.")
     holidays = _read_holidays_set()
     print(f"       Holidays loaded: {len(holidays)}")
+    if DEFAULT_PERSISTENT_PARTITION_WORKERS:
+        _prewarm_persistent_partition_workers(list(_setup_fn_map()))
 
     last_run_slot: Optional[datetime] = None
     current_max_workers = int(args.max_workers)

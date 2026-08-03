@@ -31,6 +31,7 @@ import json
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -67,6 +68,23 @@ EXCLUDED_SETUPS = {
 
 # Parallel scan: number of worker processes for scan_slot. 0/1 = sequential.
 DEFAULT_SCAN_WORKERS = max(1, int(os.getenv("EQIDV2_ID5MIN_V7_SCAN_WORKERS", "8")))
+# Keep the historical batching default for parity/stability, but make it
+# independently tunable so live-like p95 benchmarks can select a smaller
+# straggler-resistant chunk without changing worker count.
+DEFAULT_SCAN_CHUNKSIZE = max(1, int(os.getenv("EQIDV2_ID5MIN_V7_SCAN_CHUNKSIZE", "24")))
+SCAN_CACHE_ENABLED = os.getenv("EQIDV2_ID5MIN_V7_SCAN_CACHE_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+# Per process: 128 comfortably covers a normal 24-worker shard (~54 tickers)
+# without allowing task migration to multiply the whole universe into every
+# worker's memory.
+SCAN_CACHE_MAX_TICKERS = max(
+    1,
+    int(os.getenv("EQIDV2_ID5MIN_V7_SCAN_CACHE_MAX_TICKERS", "128")),
+)
 ENTRY_WINDOW_START = pd.Timestamp(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_START", "09:30")).time()
 ENTRY_WINDOW_END = pd.Timestamp(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_WINDOW_END", "14:00")).time()
 ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", "1"))
@@ -77,6 +95,77 @@ ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_ENTRY_LAG_MIN", 
 # the previous bar still fires, and when the late bar arrives next slot it
 # fires too. CSV dedup (signal_id) prevents double-writing.
 EMIT_WINDOW_MIN = int(os.getenv("EQIDV2_ID5MIN_V7_EMIT_WINDOW_MIN", "15"))
+
+
+@dataclass
+class _TickerFrameCache:
+    """Process-local, exact-input cache for one ticker.
+
+    A cache entry is reusable only while the live Parquet fingerprint is
+    unchanged.  Prepared data has an additional cutoff key, so caching never
+    substitutes an incrementally approximated indicator calculation for
+    v2._prepare_5m.
+    """
+
+    fingerprint: Tuple[int, int, int]
+    frame: pd.DataFrame
+    prepared_key: Optional[Tuple[Any, ...]] = None
+    prepared: Optional[pd.DataFrame] = None
+
+
+# This dictionary is intentionally process-local.  ProcessPool workers do not
+# share mutable pandas objects, which avoids locks and cross-process copies.
+_LOCAL_FRAME_CACHE: Dict[str, _TickerFrameCache] = {}
+_LAST_SCAN_TELEMETRY: Dict[str, Any] = {}
+
+
+def _new_ticker_telemetry() -> Dict[str, Any]:
+    return {
+        "raw_cache_hits": 0,
+        "raw_cache_misses": 0,
+        "prepared_cache_hits": 0,
+        "prepared_cache_misses": 0,
+        "unchanged_frame_hits": 0,
+        "file_read_seconds": 0.0,
+        "prepare_seconds": 0.0,
+        "strategy_seconds": 0.0,
+        "unstable_file_reads": 0,
+        "ticker_errors": 0,
+        "ticker_elapsed_seconds": 0.0,
+    }
+
+
+def _bump_telemetry(
+    telemetry: Optional[Dict[str, Any]],
+    key: str,
+    amount: float | int = 1,
+) -> None:
+    if telemetry is not None:
+        telemetry[key] = telemetry.get(key, 0) + amount
+
+
+def _file_fingerprint(fp: Path) -> Optional[Tuple[int, int, int]]:
+    """Return a strong-enough local version key without opening the Parquet."""
+    try:
+        stat = fp.stat()
+    except OSError:
+        return None
+    return (int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+
+
+def _remember_frame(
+    ticker: str,
+    fingerprint: Tuple[int, int, int],
+    frame: pd.DataFrame,
+) -> _TickerFrameCache:
+    if ticker not in _LOCAL_FRAME_CACHE and len(_LOCAL_FRAME_CACHE) >= SCAN_CACHE_MAX_TICKERS:
+        # Dict insertion order gives a tiny, dependency-free FIFO bound.  A
+        # normal worker owns only ~universe/workers entries, so eviction is a
+        # safeguard for sequential/research use rather than the live path.
+        _LOCAL_FRAME_CACHE.pop(next(iter(_LOCAL_FRAME_CACHE)))
+    entry = _TickerFrameCache(fingerprint=fingerprint, frame=frame)
+    _LOCAL_FRAME_CACHE[ticker] = entry
+    return entry
 
 
 def _fmt_ist(ts: Any) -> str:
@@ -109,7 +198,10 @@ def _read_one(fp: Path) -> Optional[pd.DataFrame]:
     return df
 
 
-def _merge_history_and_live(ticker: str) -> Optional[pd.DataFrame]:
+def _load_normalized_live(
+    ticker: str,
+    telemetry: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[pd.DataFrame], Optional[_TickerFrameCache]]:
     """Read 5-min bars from the LIVE store (_eq_live) ONLY.
 
     2026-05-20: switched from a hist+live merge to live-only because:
@@ -124,22 +216,66 @@ def _merge_history_and_live(ticker: str) -> Optional[pd.DataFrame]:
     which is enough history for v2's intraday/prev-day rolling features.
     """
     fp_live = LIVE_5M_DIR / f"{ticker}_stocks_indicators_5min.parquet"
+    fingerprint_before = _file_fingerprint(fp_live)
+    cached = _LOCAL_FRAME_CACHE.get(ticker) if SCAN_CACHE_ENABLED else None
+    if (
+        fingerprint_before is not None
+        and cached is not None
+        and cached.fingerprint == fingerprint_before
+    ):
+        _bump_telemetry(telemetry, "raw_cache_hits")
+        return cached.frame, cached
+
+    _bump_telemetry(telemetry, "raw_cache_misses")
+    read_started = time.perf_counter()
     df_live = _read_one(fp_live)
+    _bump_telemetry(
+        telemetry,
+        "file_read_seconds",
+        time.perf_counter() - read_started,
+    )
     if df_live is None or "date" not in df_live.columns:
-        return None
+        return None, None
 
     df_live = df_live.copy()
     df_live["date"] = pd.to_datetime(df_live["date"], errors="coerce")
     df_live = df_live.dropna(subset=["date"])
     if df_live.empty:
-        return None
+        return None, None
 
     df_live = (
         df_live.sort_values("date")
         .drop_duplicates(subset=["date"], keep="last")
         .reset_index(drop=True)
     )
-    return df_live
+    fingerprint_after = _file_fingerprint(fp_live)
+    if (
+        SCAN_CACHE_ENABLED
+        and fingerprint_before is not None
+        and fingerprint_before == fingerprint_after
+    ):
+        # Some feed paths rewrite a file even when no new bar was available.
+        # Preserve the prepared cache only after an exact DataFrame equality
+        # check; shape-only/latest-row shortcuts could silently miss a revised
+        # historical candle.
+        if cached is not None and cached.frame.equals(df_live):
+            cached.fingerprint = fingerprint_after
+            _bump_telemetry(telemetry, "unchanged_frame_hits")
+            return cached.frame, cached
+        return df_live, _remember_frame(ticker, fingerprint_after, df_live)
+
+    # Use the successfully decoded frame for this call, but never cache a file
+    # version that changed while it was being read.
+    if fingerprint_before != fingerprint_after:
+        _bump_telemetry(telemetry, "unstable_file_reads")
+    _LOCAL_FRAME_CACHE.pop(ticker, None)
+    return df_live, None
+
+
+def _merge_history_and_live(ticker: str) -> Optional[pd.DataFrame]:
+    """Compatibility wrapper returning the normalized live-only frame."""
+    frame, _ = _load_normalized_live(ticker)
+    return frame
 
 
 def _ensure_ist_ts(ts: Any) -> pd.Timestamp:
@@ -155,15 +291,28 @@ def scan_ticker_live(
     ticker: str,
     slot_ist: Any,
     market_ctx: Dict[str, Dict[str, Any]],
+    *,
+    telemetry: Optional[Dict[str, Any]] = None,
 ) -> List["v2.Candidate"]:
-    df = _merge_history_and_live(ticker)
+    ticker_started = time.perf_counter()
+    df, cache_entry = _load_normalized_live(ticker, telemetry)
     if df is None or df.empty:
+        _bump_telemetry(
+            telemetry,
+            "ticker_elapsed_seconds",
+            time.perf_counter() - ticker_started,
+        )
         return []
 
     slot_ts = _ensure_ist_ts(slot_ist)
 
     df = df[df["date"] <= slot_ts].copy()
     if df.empty:
+        _bump_telemetry(
+            telemetry,
+            "ticker_elapsed_seconds",
+            time.perf_counter() - ticker_started,
+        )
         return []
 
     # Trim to 3 calendar days before _prepare_5m: reduces compute from ~10 days to ~2-3
@@ -171,6 +320,11 @@ def scan_ticker_live(
     _trim_start = (slot_ts - pd.Timedelta(days=3)).normalize()
     df = df[df["date"] >= _trim_start].copy()
     if df.empty:
+        _bump_telemetry(
+            telemetry,
+            "ticker_elapsed_seconds",
+            time.perf_counter() - ticker_started,
+        )
         return []
 
     if "date_only" not in df.columns:
@@ -185,20 +339,84 @@ def scan_ticker_live(
     # The parquet VWAP is the "ground truth" for setup parity even though it's
     # numerically unusual.
 
-    try:
-        prepared = v2._prepare_5m(df)
-    except Exception:
-        return []
+    # Prepared frames are reused only for the exact same stable Parquet
+    # fingerprint and exact same input cutoff.  No indicator is updated
+    # approximately: every cache miss still calls the parity implementation
+    # v2._prepare_5m over the complete trimmed input.
+    prepared_key: Optional[Tuple[Any, ...]] = None
+    if cache_entry is not None:
+        prepared_key = (
+            int(_trim_start.value),
+            int(pd.Timestamp(df["date"].iloc[-1]).value),
+            int(len(df)),
+        )
+
+    if (
+        prepared_key is not None
+        and cache_entry is not None
+        and cache_entry.prepared_key == prepared_key
+        and cache_entry.prepared is not None
+    ):
+        prepared = cache_entry.prepared
+        _bump_telemetry(telemetry, "prepared_cache_hits")
+    else:
+        _bump_telemetry(telemetry, "prepared_cache_misses")
+        prepare_started = time.perf_counter()
+        try:
+            prepared = v2._prepare_5m(df)
+        except Exception:
+            _bump_telemetry(telemetry, "ticker_errors")
+            _bump_telemetry(
+                telemetry,
+                "prepare_seconds",
+                time.perf_counter() - prepare_started,
+            )
+            _bump_telemetry(
+                telemetry,
+                "ticker_elapsed_seconds",
+                time.perf_counter() - ticker_started,
+            )
+            return []
+        _bump_telemetry(
+            telemetry,
+            "prepare_seconds",
+            time.perf_counter() - prepare_started,
+        )
+        if cache_entry is not None and prepared_key is not None:
+            cache_entry.prepared_key = prepared_key
+            cache_entry.prepared = prepared
 
     today = slot_ts.date()
     day_df = prepared[prepared["date_only"] == today].reset_index(drop=True)
     if day_df.empty:
+        _bump_telemetry(
+            telemetry,
+            "ticker_elapsed_seconds",
+            time.perf_counter() - ticker_started,
+        )
         return []
 
+    strategy_started = time.perf_counter()
     try:
         candidates = v2._scan_day(day_df, ticker, market_ctx)
     except Exception:
+        _bump_telemetry(telemetry, "ticker_errors")
+        _bump_telemetry(
+            telemetry,
+            "strategy_seconds",
+            time.perf_counter() - strategy_started,
+        )
+        _bump_telemetry(
+            telemetry,
+            "ticker_elapsed_seconds",
+            time.perf_counter() - ticker_started,
+        )
         return []
+    _bump_telemetry(
+        telemetry,
+        "strategy_seconds",
+        time.perf_counter() - strategy_started,
+    )
 
     # PARITY FIX (2026-05-19): v2._scan_day needs the bar AFTER the signal
     # bar (to set entry_ts = next bar's timestamp, entry_px = next bar's open).
@@ -229,6 +447,11 @@ def scan_ticker_live(
             continue
         if window_start <= c_ts < latest_bar:
             out.append(c)
+    _bump_telemetry(
+        telemetry,
+        "ticker_elapsed_seconds",
+        time.perf_counter() - ticker_started,
+    )
     return out
 
 
@@ -335,13 +558,43 @@ _SCAN_POOL_WORKERS: int = 0
 _SCAN_POOL_DAY: Optional[str] = None
 
 
-def _replace_scan_pool(workers: int, today_str: str) -> None:
+def shutdown_scan_pool(*, wait: bool = True) -> None:
+    """Shut down the persistent pool (mainly for controlled restarts/tests)."""
     global _SCAN_POOL, _SCAN_POOL_WORKERS, _SCAN_POOL_DAY
-    if _SCAN_POOL is not None:
+    pool = _SCAN_POOL
+    _SCAN_POOL = None
+    _SCAN_POOL_WORKERS = 0
+    _SCAN_POOL_DAY = None
+    if pool is not None:
         try:
-            _SCAN_POOL.shutdown(wait=False, cancel_futures=True)
+            pool.shutdown(wait=wait, cancel_futures=True)
         except Exception:
             pass
+
+
+def reset_scan_caches(*, shutdown_pool_workers: bool = True) -> None:
+    """Clear exact-input caches without changing any strategy configuration.
+
+    Worker caches live inside their processes.  The default pool shutdown is
+    therefore required to guarantee they are cleared as well; a later scan or
+    prewarm call creates a fresh pool.
+    """
+    global _LAST_SCAN_TELEMETRY
+    _LOCAL_FRAME_CACHE.clear()
+    invalidate_market_context()
+    _LAST_SCAN_TELEMETRY = {}
+    if shutdown_pool_workers:
+        shutdown_scan_pool(wait=True)
+
+
+def get_last_scan_telemetry() -> Dict[str, Any]:
+    """Return a copy of the most recent parent-process slot telemetry."""
+    return dict(_LAST_SCAN_TELEMETRY)
+
+
+def _replace_scan_pool(workers: int, today_str: str) -> None:
+    global _SCAN_POOL, _SCAN_POOL_WORKERS, _SCAN_POOL_DAY
+    shutdown_scan_pool(wait=False)
     _SCAN_POOL = ProcessPoolExecutor(max_workers=workers, initializer=_worker_init)
     _SCAN_POOL_WORKERS = workers
     _SCAN_POOL_DAY = today_str
@@ -355,37 +608,158 @@ def _get_scan_pool(workers: int, today_str: str) -> ProcessPoolExecutor:
 
 
 def _worker_init() -> None:
-    global _WORKER_MARKET_CTX
+    global _WORKER_MARKET_CTX, _WORKER_LAST_SLOT_ISO
     v2.DATA_ROOT_5M = LIVE_5M_DIR
     v2._init_worker({
         "ENABLE_NOISY_ADVANCED_SHORTS": True,
         "ENABLE_NATIVE_V2_MINED_FILTER": False,
     })
-    try:
-        _WORKER_MARKET_CTX = v2._load_market_context()
-    except Exception:
-        _WORKER_MARKET_CTX = {}
+    # Defer the market file read until the worker knows which slot it is
+    # preparing.  This avoids the old initializer + first-task double read.
+    _WORKER_MARKET_CTX = {}
+    _WORKER_LAST_SLOT_ISO = None
+    _LOCAL_FRAME_CACHE.clear()
 
 
-def _worker_scan(payload: Tuple[str, str]) -> List[Dict[str, Any]]:
-    ticker, slot_iso = payload
+def _refresh_worker_market_context(slot_iso: str) -> None:
     global _WORKER_MARKET_CTX, _WORKER_LAST_SLOT_ISO
     if _WORKER_MARKET_CTX is None:
         _worker_init()
-    elif _WORKER_LAST_SLOT_ISO != slot_iso:
-        # Refresh NIFTY market context once per slot per worker.
-        try:
-            _WORKER_MARKET_CTX = v2._load_market_context()
-        except Exception:
-            pass
-    _WORKER_LAST_SLOT_ISO = slot_iso
+    if _WORKER_LAST_SLOT_ISO == slot_iso:
+        return
     try:
-        cands = scan_ticker_live(ticker, pd.Timestamp(slot_iso), _WORKER_MARKET_CTX or {})
+        _WORKER_MARKET_CTX = v2._load_market_context()
     except Exception:
-        return []
+        # Preserve the last valid context on a transient read error.
+        if _WORKER_MARKET_CTX is None:
+            _WORKER_MARKET_CTX = {}
+    _WORKER_LAST_SLOT_ISO = slot_iso
+
+
+def _worker_prewarm(slot_iso: str) -> int:
+    """Initialize one pool worker and return its PID for prewarm telemetry."""
+    _refresh_worker_market_context(slot_iso)
+    return os.getpid()
+
+
+def prewarm_scan_pool(
+    slot_ist: Any,
+    max_workers: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Eagerly start scanner processes before the first decision-critical slot."""
+    slot_ts = _ensure_ist_ts(slot_ist)
+    workers = int(max_workers if max_workers is not None else DEFAULT_SCAN_WORKERS)
+    started = time.perf_counter()
+    if workers <= 1:
+        build_market_context_once()
+        return {
+            "workers_requested": workers,
+            "worker_pids_seen": 1,
+            "seconds": time.perf_counter() - started,
+        }
+
+    pool = _get_scan_pool(workers, slot_ts.date().isoformat())
+    # CPython starts max_workers eagerly when work is first submitted.  More
+    # than one tiny task per worker lets the returned PID count expose whether
+    # the host actually scheduled all workers during the prewarm.
+    pids = list(
+        pool.map(
+            _worker_prewarm,
+            [slot_ts.isoformat()] * (workers * 2),
+            chunksize=1,
+        )
+    )
+    result = {
+        "workers_requested": workers,
+        "worker_pids_seen": len(set(pids)),
+        "seconds": time.perf_counter() - started,
+    }
+    print(
+        "[v7_live_scan] prewarm "
+        f"requested={workers} pids_seen={result['worker_pids_seen']} "
+        f"total={result['seconds']:.3f}s",
+        flush=True,
+    )
+    return result
+
+
+def _worker_scan(
+    payload: Tuple[str, str],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    ticker, slot_iso = payload
+    telemetry = _new_ticker_telemetry()
+    _refresh_worker_market_context(slot_iso)
+    try:
+        cands = scan_ticker_live(
+            ticker,
+            pd.Timestamp(slot_iso),
+            _WORKER_MARKET_CTX or {},
+            telemetry=telemetry,
+        )
+    except Exception:
+        telemetry["ticker_errors"] += 1
+        return [], telemetry
     if not cands:
-        return []
-    return candidates_to_dataframe(cands).to_dict("records")
+        return [], telemetry
+    return candidates_to_dataframe(cands).to_dict("records"), telemetry
+
+
+_SUM_TELEMETRY_KEYS = (
+    "raw_cache_hits",
+    "raw_cache_misses",
+    "prepared_cache_hits",
+    "prepared_cache_misses",
+    "unchanged_frame_hits",
+    "file_read_seconds",
+    "prepare_seconds",
+    "strategy_seconds",
+    "unstable_file_reads",
+    "ticker_errors",
+)
+
+
+def _summarize_slot_telemetry(
+    ticker_telemetry: List[Dict[str, Any]],
+    *,
+    slot_ts: pd.Timestamp,
+    ticker_count: int,
+    workers: int,
+    chunksize: int,
+    pool_get_seconds: float,
+    scan_wall_seconds: float,
+    total_wall_seconds: float,
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "slot_ist": slot_ts.isoformat(),
+        "ticker_count": ticker_count,
+        "workers": workers,
+        "chunksize": chunksize,
+        "pool_get_seconds": pool_get_seconds,
+        "scan_wall_seconds": scan_wall_seconds,
+        "total_wall_seconds": total_wall_seconds,
+    }
+    for key in _SUM_TELEMETRY_KEYS:
+        summary[key] = sum(float(item.get(key, 0)) for item in ticker_telemetry)
+        if key.endswith(("hits", "misses", "reads", "errors")):
+            summary[key] = int(summary[key])
+
+    elapsed = [
+        float(item.get("ticker_elapsed_seconds", 0.0))
+        for item in ticker_telemetry
+        if float(item.get("ticker_elapsed_seconds", 0.0)) >= 0.0
+    ]
+    summary["ticker_p50_seconds"] = float(np.percentile(elapsed, 50)) if elapsed else 0.0
+    summary["ticker_p95_seconds"] = float(np.percentile(elapsed, 95)) if elapsed else 0.0
+    summary["ticker_max_seconds"] = max(elapsed, default=0.0)
+    raw_lookups = summary["raw_cache_hits"] + summary["raw_cache_misses"]
+    prepared_lookups = summary["prepared_cache_hits"] + summary["prepared_cache_misses"]
+    summary["raw_cache_hit_rate"] = (
+        summary["raw_cache_hits"] / raw_lookups if raw_lookups else 0.0
+    )
+    summary["prepared_cache_hit_rate"] = (
+        summary["prepared_cache_hits"] / prepared_lookups if prepared_lookups else 0.0
+    )
+    return summary
 
 
 def scan_slot(
@@ -393,22 +767,40 @@ def scan_slot(
     tickers: Iterable[str],
     market_ctx: Optional[Dict[str, Dict[str, Any]]] = None,
     max_workers: Optional[int] = None,
+    chunksize: Optional[int] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    global _LAST_SCAN_TELEMETRY
+    overall_started = time.perf_counter()
     slot_ts = _ensure_ist_ts(slot_ist)
     tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
     workers = int(max_workers if max_workers is not None else DEFAULT_SCAN_WORKERS)
+    effective_chunksize = max(
+        1,
+        int(chunksize if chunksize is not None else DEFAULT_SCAN_CHUNKSIZE),
+    )
 
     rows: List[Dict[str, Any]] = []
+    ticker_telemetry: List[Dict[str, Any]] = []
+    pool_get_seconds = 0.0
+    scan_started = time.perf_counter()
 
     if workers <= 1:
         # Sequential fallback (no process spawn).
         if market_ctx is None:
             market_ctx = build_market_context_once()
         for tkr in tickers:
+            one_telemetry = _new_ticker_telemetry()
             try:
-                c_list = scan_ticker_live(tkr, slot_ts, market_ctx)
+                c_list = scan_ticker_live(
+                    tkr,
+                    slot_ts,
+                    market_ctx,
+                    telemetry=one_telemetry,
+                )
             except Exception:
+                one_telemetry["ticker_errors"] += 1
                 c_list = []
+            ticker_telemetry.append(one_telemetry)
             if c_list:
                 rows.extend(candidates_to_dataframe(c_list).to_dict("records"))
     else:
@@ -418,8 +810,15 @@ def scan_slot(
         _t0 = time.perf_counter()
         pool = _get_scan_pool(workers, today_str)
         _t1 = time.perf_counter()
+        pool_get_seconds = _t1 - _t0
+        scan_started = _t1
         try:
-            for res in pool.map(_worker_scan, payloads, chunksize=24):
+            for res, one_telemetry in pool.map(
+                _worker_scan,
+                payloads,
+                chunksize=effective_chunksize,
+            ):
+                ticker_telemetry.append(one_telemetry)
                 if res:
                     rows.extend(res)
         except Exception as exc:
@@ -428,20 +827,59 @@ def scan_slot(
                 flush=True,
             )
             _replace_scan_pool(workers, today_str)
+            # A broken map can yield a partial prefix.  Restart the result and
+            # telemetry lists before the full sequential retry so candidates
+            # and timing counters are never double-counted.
+            rows = []
+            ticker_telemetry = []
             if market_ctx is None:
                 market_ctx = build_market_context_once()
             for tkr in tickers:
+                one_telemetry = _new_ticker_telemetry()
                 try:
-                    c_list = scan_ticker_live(tkr, slot_ts, market_ctx)
+                    c_list = scan_ticker_live(
+                        tkr,
+                        slot_ts,
+                        market_ctx,
+                        telemetry=one_telemetry,
+                    )
                 except Exception:
+                    one_telemetry["ticker_errors"] += 1
                     c_list = []
+                ticker_telemetry.append(one_telemetry)
                 if c_list:
                     rows.extend(candidates_to_dataframe(c_list).to_dict("records"))
-        _t2 = time.perf_counter()
-        print(
-            f"[v7_live_scan] n={len(tickers)} pool_get={_t1-_t0:.3f}s scan={_t2-_t1:.3f}s total={_t2-_t0:.3f}s",
-            flush=True,
-        )
+
+    finished = time.perf_counter()
+    _LAST_SCAN_TELEMETRY = _summarize_slot_telemetry(
+        ticker_telemetry,
+        slot_ts=slot_ts,
+        ticker_count=len(tickers),
+        workers=workers,
+        chunksize=effective_chunksize,
+        pool_get_seconds=pool_get_seconds,
+        scan_wall_seconds=finished - scan_started,
+        total_wall_seconds=finished - overall_started,
+    )
+    print(
+        "[v7_live_scan] "
+        f"n={len(tickers)} workers={workers} chunksize={effective_chunksize} "
+        f"pool_get={_LAST_SCAN_TELEMETRY['pool_get_seconds']:.3f}s "
+        f"scan={_LAST_SCAN_TELEMETRY['scan_wall_seconds']:.3f}s "
+        f"total={_LAST_SCAN_TELEMETRY['total_wall_seconds']:.3f}s "
+        f"raw_cache={_LAST_SCAN_TELEMETRY['raw_cache_hits']}/"
+        f"{_LAST_SCAN_TELEMETRY['raw_cache_misses']} "
+        f"unchanged_frames={_LAST_SCAN_TELEMETRY['unchanged_frame_hits']} "
+        f"prepared_cache={_LAST_SCAN_TELEMETRY['prepared_cache_hits']}/"
+        f"{_LAST_SCAN_TELEMETRY['prepared_cache_misses']} "
+        f"io_cpu={_LAST_SCAN_TELEMETRY['file_read_seconds']:.3f}s "
+        f"prepare_cpu={_LAST_SCAN_TELEMETRY['prepare_seconds']:.3f}s "
+        f"strategy_cpu={_LAST_SCAN_TELEMETRY['strategy_seconds']:.3f}s "
+        f"ticker_p95={_LAST_SCAN_TELEMETRY['ticker_p95_seconds']:.3f}s "
+        f"ticker_max={_LAST_SCAN_TELEMETRY['ticker_max_seconds']:.3f}s "
+        f"errors={_LAST_SCAN_TELEMETRY['ticker_errors']}",
+        flush=True,
+    )
 
     if not rows:
         return pd.DataFrame(), pd.DataFrame()

@@ -9,6 +9,10 @@ set "PYTHONIOENCODING=utf-8"
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
 set "EQIDV2_USE_FINAL_SETUP_CONF=1"
 set "EQIDV2_V11_SELECTED_STRATEGY_PROFILE=final_setup_conf"
+set "EQIDV2_FINAL_SETUP_CONF_MODULE=final_setup_conf_v11_working"
+set "EQIDV2_V11_FINAL_SETUP_CONF_MODULE=final_setup_conf_v11_working"
+set "EQIDV2_EXPECT_FINAL_SETUP_CONF_MODULE=final_setup_conf_v11_working"
+set "EQIDV2_LAUNCHER_NAME=run_backtesting_result_v11_1600.bat"
 
 rem ============================================================
 rem  LIVE PARITY BLOCK — mirror run_eqidv2_signal_discovery_v7_5min_id_persistent.bat exactly.
@@ -80,18 +84,24 @@ set "VERIFY_SCRIPT=%BASE_DIR%\data_for_backtesting_verify.py"
 set "WAIT_SCRIPT=%BASE_DIR%\wait_for_data_backtesting_ready.py"
 
 rem ============================================================
-rem  Target the PREVIOUS completed trading day, not today.
-rem  Day-D 1-min EOD data does not land until the NEXT morning (~09:15 fetch),
-rem  so a same-day 16:00 run ALWAYS fails the 1-min verify (exit 2). Backtest D-1
-rem  instead: D-1's 5-min landed ~15:45 on D-1 and D-1's 1-min landed this morning,
-rem  so both stores are complete and we are safely past market close (no live-feed
-rem  starvation). Weekends are skipped; holidays degrade gracefully (verifier FAILs
-rem  and we abort with a clear log line).
+rem  Target TODAY (same-day backtest). This depends on the 15:45 "Data for
+rem  backtesting" job having done a real, strict full-day 1-min fetch through
+rem  15:30 (run_moving_files_1545.bat sets EQIDV2_1MIN_SAME_DAY_STALE_OK=0).
+rem  We run at 16:00, safely past the 15:30 market close, so there is no
+rem  live-feed starvation. The data-completeness gate below re-verifies both
+rem  the 5-min and 1-min stores for TARGET_DAY and aborts cleanly (exit 2) if
+rem  today's data is incomplete (e.g. holiday / missed 15:45 fetch). Weekends
+rem  fall back to the previous trading day so a stray weekend run still targets
+rem  a real session. Override with EQIDV2_V11_TARGET_DAY=YYYY-MM-DD if needed.
 rem ============================================================
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 set "LATEST_LOG_FILE=%LOG_DIR%\backtesting_result_v11_latest.log"
 
-for /f %%a in ('powershell -NoProfile -Command "$d=(Get-Date).AddDays(-1); while($d.DayOfWeek -eq 'Saturday' -or $d.DayOfWeek -eq 'Sunday'){$d=$d.AddDays(-1)}; $d.ToString('yyyy-MM-dd')"') do set "TARGET_DAY=%%a"
+if defined EQIDV2_V11_TARGET_DAY (
+    set "TARGET_DAY=%EQIDV2_V11_TARGET_DAY%"
+) else (
+    for /f %%a in ('powershell -NoProfile -Command "$d=(Get-Date); while($d.DayOfWeek -eq 'Saturday' -or $d.DayOfWeek -eq 'Sunday'){$d=$d.AddDays(-1)}; $d.ToString('yyyy-MM-dd')"') do set "TARGET_DAY=%%a"
+)
 if not defined TARGET_DAY (
     echo [%DATE% %TIME%] ERROR could not compute TARGET_DAY; aborting Backtesting Result v11.>>"%LATEST_LOG_FILE%"
     endlocal & exit /b 3

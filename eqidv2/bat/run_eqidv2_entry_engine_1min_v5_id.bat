@@ -7,6 +7,7 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
+if not defined EQIDV2_LAUNCHER_NAME set "EQIDV2_LAUNCHER_NAME=run_eqidv2_entry_engine_1min_v5_id.bat"
 set "EQIDV2_DATA_5M_DIR=C:\TradingData\eqidv2\stocks_indicators_5min_eq_live"
 set "EQIDV2_DATA_1MIN_DIR=C:\TradingData\eqidv2\stocks_indicators_1min_eq"
 set "LOG_DIR=%BASE_DIR%\logs"
@@ -33,11 +34,14 @@ set "WORKER_START_GRACE_SEC=120"
 rem T+1 execution: engine wakes one wall-clock minute after signal close.
 rem The paper executor uses live LTP; minute OHLC is a reference/filter input.
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DELAY_SEC=60
-rem Final handoff deadline is T+1:30; five seconds remain for processing.
-set EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC=30
-set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_SEC=30
+rem Defaults are strict T+1:30. Conf launchers may deliberately widen the
+rem bounded safety window; preserve those inherited overrides.
+if not defined EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC set EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC=30
+if not defined EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_SEC set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_SEC=30
+if not defined EQIDV2_ENTRY_ENGINE_USE_SLOT_CANDIDATE_JSON set EQIDV2_ENTRY_ENGINE_USE_SLOT_CANDIDATE_JSON=1
+if not defined EQIDV2_ENTRY_ENGINE_REQUIRE_SLOT_COMPLETE_MARKER set EQIDV2_ENTRY_ENGINE_REQUIRE_SLOT_COMPLETE_MARKER=1
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_POLL_SEC=0.5
-set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DUE_GRACE_SEC=30
+if not defined EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DUE_GRACE_SEC set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DUE_GRACE_SEC=30
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_PROCESS_RESERVE_SEC=2
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_POLL_SEC=1
 rem Entry handoff is T+1:30; keep live fetch/fallback calls bounded.

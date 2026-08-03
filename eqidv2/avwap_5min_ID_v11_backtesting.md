@@ -89,10 +89,13 @@ The live scanner defaults to SHORT-only (`SHORT_FOCUS=1`), but the backtest repl
 | Constant | Value | Meaning |
 |---|---|---|
 | `V7_ENTRY_SEARCH_MAX_DELAY_MIN` | `3` | Max minutes after the 5-min signal to find the next 1-min entry bar. |
-| `V7_SIGNAL_MARGIN_RS` | `20_000.0` | Margin per signal (Rs). |
+| `V7_SIGNAL_MARGIN_RS` | `20_000.0` | Legacy fixed-notional fallback margin. |
 | `V7_INTRADAY_LEVERAGE` | `5.0` | Intraday leverage. |
-| `V7_SIGNAL_NOTIONAL_RS` | `100_000.0` | = margin × leverage; used to size quantity. |
+| `V7_SIGNAL_NOTIONAL_RS` | `100_000.0` | Legacy fallback notional when risk sizing is disabled or inputs are invalid. |
 | `V7_PAPER_SLIPPAGE_PCT` | `0.0005` | 5 bps slippage applied to the paper fill. |
+| `RISK_PCT_PER_TRADE` | `0.25` | Risk budget as percent of `RISK_EQUITY_RS`. |
+| `RISK_EQUITY_RS` | `200_000.0` | Equity base; default risk budget is Rs 500. |
+| `RISK_MIN_NOTIONAL_RS` / `RISK_MAX_NOTIONAL_RS` | `50_000.0` / `150_000.0` | Per-trade notional bounds. |
 
 ### 3.3 v6 sizing / cost constants (inherited)
 | Constant | Value |
@@ -103,11 +106,11 @@ The live scanner defaults to SHORT-only (`SHORT_FOCUS=1`), but the backtest repl
 | `v6.DEFAULT_COST_BPS` | `16.0` |
 | `v6.MIN_SL_PCT` | `0.70` |
 
-> **Note on the two sizing models.** The v7 entry-engine resolution path
-> (`_resolve_v7_entry_engine_signal`) uses the **v7 sizing** (Rs 20k margin × 5x =
-> Rs 100k notional, price-only PnL, **no backtest cost**). The legacy
-> `_resolve_trade_1m_entry` path (used by `live_parity` mode) uses the **v6 sizing**
-> (Rs 10k × 5x = Rs 50k notional) and applies `cost_bps`. See §9.
+> **Current parity model.** V7 live and V11 call the shared
+> `eqidv2_v7_position_sizing.risk_based_quantity`: Rs 500 default risk at the
+> initial stop, bounded to Rs 50k–150k notional. V11 then applies the same
+> `nse_intraday_costs` model used by PAPER_TRUE. `--cost_model flat_bps` remains
+> available only for legacy comparison. See §9.
 
 ---
 
@@ -294,8 +297,10 @@ and uses its **open** as the raw signal entry price (rounded to 2dp).
 **Pre-entry momentum gate** (see §10) — applied per setup after entry price is known;
 missing features ⇒ block.
 
-**Sizing:** `quantity = max(1, int(V7_SIGNAL_NOTIONAL_RS / entry_price))` (Rs 100k /
-price). A `signal_id` is computed as an md5 of `ticker|side|bar_time|setup`.
+**Sizing:** `risk_based_quantity(entry_price, stop_price, config)` risks Rs 500
+by default, clamps notional to Rs 50k–150k, and applies the historical NIFTY
+short-size multiplier when applicable. A `signal_id` is computed as an md5 of
+`ticker|side|bar_time|setup`.
 
 The function returns accepted rows plus a full `rejects` DataFrame with explicit
 `reject_reason` for every dropped candidate (great for parity auditing).
@@ -322,10 +327,11 @@ relevant profile, `E_ORB_BREAKOUT_SHORT` is forced to `(0.80, 1.50)` SL/target a
 stop/target are recomputed from the entry. Otherwise SL/target % are derived from the
 constructed stop/target prices (`_side_exit_pcts`).
 
-**Exit walk** — `er.resolve(...)` (see §9.3). PnL is **price-only**:
-`pnl_rs = (exit − entry) × qty` for LONG, `(entry − exit) × qty` for SHORT.
-**No backtest cost** is applied in this path (`v6_cost_rs = 0.0`); sizing fields record
-`capital_per_trade_rs = 20_000`, `leverage = 5`, `notional = entry × qty`.
+**Exit walk** — `er.resolve(...)` (see §9.3). Gross PnL is
+`(exit − entry) × qty` for LONG and `(entry − exit) × qty` for SHORT. The
+default `statutory` cost model calls `nse_intraday_costs.intraday_equity_costs`
+and reports gross, total cost and net PnL. Sizing fields record the actual
+risk-sized notional and its 5x-margin requirement.
 
 `_resolve_v7_entry_engine_signals()` loops all signals, prints progress every 250,
 sorts by `(trade_date, entry_time, ticker)`.
@@ -517,9 +523,9 @@ entry engine → resolve), then `non_overlap = addon ∉ base_keys` and
 
 | Path | Notional | Slippage | Cost | PnL |
 |---|---|---|---|---|
-| v7 entry-engine resolution (historical modes) | Rs 100k (20k × 5x), qty = floor(100k/price) | 5 bps on fill (default model) | **none** | price-only `(exit−entry)×qty` |
-| Legacy v6 resolution (`live_parity`) | Rs 50k (10k × 5x) | none | `cost_bps` (16) + SL extra bps | `v6._net_pnl_rs` net |
-| `v7_live_paper_replay` | actual live `quantity` | n/a (actual fills) | none | price-only on actual entry |
+| v7 entry-engine resolution (historical/live-parity modes) | Risk-sized, Rs 50k–150k bounds | 5 bps entry approximation | PAPER_TRUE NSE statutory costs (default) | gross − costs = net |
+| Legacy resolution with `--cost_model flat_bps` | Legacy v6/fixed model | legacy behavior | legacy behavior | compatibility only |
+| `v7_live_paper_replay` | actual live `quantity` | n/a (actual fills) | PAPER_TRUE NSE statutory costs | gross − costs = net |
 
 All exits resolve on **1-minute OHLC to 15:20 IST** (EOD cutoff) via the v17D resolver.
 

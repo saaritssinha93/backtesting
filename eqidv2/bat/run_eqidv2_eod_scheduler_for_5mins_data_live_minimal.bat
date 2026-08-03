@@ -31,6 +31,9 @@ set "EQIDV2_5M_ADAPTIVE_TOTAL_STEP=32"
 set "EQIDV2_5M_ADAPTIVE_PER_APP_STEP=4"
 set "EQIDV2_5M_ADAPTIVE_RECOVERY_OK_RATIO=0.90"
 set "EQIDV2_5M_ADAPTIVE_RECOVERY_STREAK=2"
+REM Keep one authenticated process per app alive across slots. This removes
+REM Windows spawn/auth startup from the decision-critical fetch path.
+set "EQIDV2_5M_PERSISTENT_PARTITION_WORKERS=1"
 REM v2 universe (1262 syms after quarantine) takes ~22-24s/slot; bump warn from 20s to 30s
 REM so the adaptive throttle does not keep stepping workers down on cosmetic SLA breaches.
 set "EQIDV2_5M_SLOT_SLA_WARN_SEC=50"
@@ -42,16 +45,17 @@ set "STATUS_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_5mins_data_live_minimal.supe
 set "HEARTBEAT_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat"
 set "FRESHNESS_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"
 set "SUPERVISOR_PS1=%BASE_DIR%\bat\supervise_command.ps1"
-REM 2026-05-19: settled on 320/40 after testing 32 (29s baseline) and 48 (22-31s, variance).
+REM Historical benchmark: 320/40 was used before persistent partition workers.
 REM 40 workers gives ~4 batches per partition (vs 5 at 32, 3.3 at 48) — balances
 REM speed and per-app spread. Combined with Fix A (1-slot lag tolerance), expect
 REM ~24-26s clean slots.
 REM 2026-06-11: 384/48 created 384 Python workers on a 16-logical-CPU host,
-REM producing 150s partition timeouts under parquet/Kite contention. Restore
-REM the measured 320/40 ceiling and let adaptive throttle step down by 32/4
-REM when a slot breaches the SLA or times out.
-set "MAX_WORKERS=320"
-set "MAX_WORKERS_PER_APP=40"
+REM producing 150s partition timeouts under parquet/Kite contention. That result
+REM motivates the bounded ceiling below; adaptive throttle may step down further.
+REM 2026-07-31: persistent app processes allow a bounded concurrency ceiling.
+REM Cap each app at 20 ticker workers (160 total) to limit parquet/Kite contention.
+set "MAX_WORKERS=160"
+set "MAX_WORKERS_PER_APP=20"
 set "BUFFER_SEC=%EQIDV2_5M_BUFFER_SEC%"
 if "%BUFFER_SEC%"=="" set "BUFFER_SEC=2"
 set "QUARTER_HOUR_BUFFER_SEC=%EQIDV2_5M_QUARTER_HOUR_BUFFER_SEC%"

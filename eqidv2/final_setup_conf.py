@@ -134,7 +134,7 @@ FINAL_SETUP_CONF = {
         # exit is NOT stable across data slices (see provenance.exit_instability).
         # -------------------------------------------------------------------
         "exit": {"sl_pct": 1.20, "tgt_pct": 1.50},          # clean-pool tuned (v6 default 0.85/1.00)
-        "mask_terms": [["quality_score", ">=", 123.7606]],
+        "mask_terms": [["quality_score", ">=", 123.7606], ["signal_minute", "<=", 690]],  # R&D 2026-07-08: 11:30 IST entry cap (kills afternoon bleed; IS+OOS validated)
         "pre_momentum_terms": [["sig5_adx_calc", ">=", 21.4683]],
         "entry_guards": {},                                 # live 09:30-14:30 window + 1-ticker/day dedupe only
         "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
@@ -767,7 +767,7 @@ FINAL_SETUP_CONF = {
         # To REVERT: restore exit 0.90/1.50, pre_momentum_terms = pre_momentum_prev_active, entry_guards {}, and
         #   re-enable the _LIVE_SURVIVAL_DEMOTION_2026_06_29 entry for L_DOUBLE_BOTTOM_VWAP.
         "exit": {"sl_pct": 0.90, "tgt_pct": 2.00},            # force-promote 2026-06-30 (was 0.90/1.50)
-        "mask_terms": [],
+        "mask_terms": [["signal_minute", "<=", 690]],  # R&D 2026-07-08: 11:30 IST entry cap (kills afternoon bleed; IS+OOS validated)
         # ACTIVE GATE (force-promote 2026-06-30, trial 322): single RSI-direction pre-entry gate.
         "pre_momentum_terms": [
             ["sig5_rsi_dir", ">=", 60.101595],
@@ -1121,7 +1121,7 @@ FINAL_SETUP_CONF = {
             "idea": "after a huge red bar, price bounces weakly and fails -> resume down",
         },
         "exit": {"sl_pct": 0.90, "tgt_pct": 1.25},
-        "mask_terms": [],
+        "mask_terms": [["signal_minute", "<=", 690]],  # R&D 2026-07-08: 11:30 IST entry cap (kills afternoon bleed; IS+OOS validated)
         "pre_momentum_terms": [
             ["pre3_close_pos", "<=", 0.581797],
             ["sig5_rsi_dir", "<=", 64.104659],
@@ -1166,7 +1166,7 @@ FINAL_SETUP_CONF = {
         },
         "exit": {"sl_pct": 0.90, "tgt_pct": 2.00},
         "exit_alt": {"sl_pct": 0.90, "tgt_pct": 1.50, "note": "train 4.28 test 4.85 p0.003"},
-        "mask_terms": [],
+        "mask_terms": [["signal_minute", "<=", 690]],  # R&D 2026-07-08: 11:30 IST entry cap (kills afternoon bleed; IS+OOS validated)
         "pre_momentum_terms": [
             ["sig5_adx_calc", ">=", 39.670518],
             ["pre1_adx", "<=", 21.368044],
@@ -1212,7 +1212,7 @@ FINAL_SETUP_CONF = {
         },
         "exit": {"sl_pct": 1.10, "tgt_pct": 1.00},
         "exit_alt": {"sl_pct": 0.90, "tgt_pct": 1.00, "note": "cleaner day-spread top1d 33% (train 2.10/test 1.99)"},
-        "mask_terms": [["vol_ratio", ">=", 1.955814]],
+        "mask_terms": [["vol_ratio", ">=", 1.955814], ["signal_minute", "<=", 690]],  # R&D 2026-07-08: 11:30 IST entry cap (kills afternoon bleed; IS+OOS validated)
         "pre_momentum_terms": [
             ["pre5_mom_r", ">=", 0.425861],
             ["pre3_range_r", "<=", 0.202087],
@@ -1258,7 +1258,7 @@ FINAL_SETUP_CONF = {
         },
         "exit": {"sl_pct": 0.80, "tgt_pct": 0.80},
         "exit_alt": {"sl_pct": 0.90, "tgt_pct": 0.80, "note": "test 7.19 p0.005 top1d28"},
-        "mask_terms": [["vol_ratio", ">=", 4.129044], ["quality_score", ">=", 76.444124]],
+        "mask_terms": [["vol_ratio", ">=", 4.129044], ["quality_score", ">=", 76.444124], ["signal_minute", "<=", 690]],  # R&D 2026-07-08: 11:30 IST entry cap (kills afternoon bleed; IS+OOS validated)
         "pre_momentum_terms": [["sig5_rsi_dir", ">=", 68.747209]],
         "pre_momentum_missing_action": "block",
         "entry_guards": {},
@@ -1413,6 +1413,82 @@ FINAL_SETUP_CONF = {
             "risk_label": ("DO NOT SIZE UP. This is a documented LOSER wired at user request. Monitor live; "
                            "demote at the first live confirmation. Kill-switch: EQIDV2_DISABLE_DOC5D_AVWAP_RECLAIM=1. "
                            "Detector default-OFF outside the conf book."),
+        },
+    },
+    "L_LATE_BB10_COMPRESSION_BREAKOUT": {
+        "side": "LONG",
+        "detection": {
+            "reason_tag": "late_bb10_causal_compression_breakout",
+            "source": "eqidv2_late_bb10_compression.signal_for_slot",
+            "idea": (
+                "Late-session long breakout above the prior ten same-session highs after "
+                "causal BB20 compression, with strict trend, liquidity, volatility, "
+                "time-of-day relative-volume, momentum-score, and market-breadth filters."
+            ),
+            "conditions": [
+                ("signal_minute", "in", "[14:00, 14:29]"),
+                ("close", ">=", 50.0),
+                ("traded_value", ">=", 1_000_000.0),
+                ("atr_pct", "between", "[0.15, 0.90]"),
+                ("close", ">=", "causal_session_AVWAP"),
+                ("avwap_extension_pct", "<=", 0.60),
+                ("EMA9", ">", "EMA20"),
+                ("EMA20", ">", "EMA20_3bars_ago"),
+                ("range_atr", "<=", 2.20),
+                ("upper_wick_fraction", "<=", 0.45),
+                ("previous_BB20_width", "<=", "causal_same_session_q25"),
+                ("breakout_extension_pct", "between", "[0.00, 0.80]"),
+                ("confirmation_score", ">=", "6_of_8"),
+            ],
+        },
+        "exit": {"sl_pct": 0.70, "tgt_pct": 0.75},
+        "entry_policy": {
+            "model": "high_break_trigger",
+            "tick_size": 0.05,
+            "valid_minutes": 3,
+            "max_gap_pct": 0.20,
+            "same_bar_cancel_first": True,
+        },
+        "exit_policy": {
+            "max_hold_minutes": 60,
+            "forced_exit_time": "15:15",
+            "stop_gap_mode": "worse_open",
+        },
+        "mask_terms": [
+            ["market_breadth", ">=", 0.45],
+            ["nifty_ema_up", ">=", 1.0],
+        ],
+        "pre_momentum_terms": [],
+        "entry_guards": {"min_slot": "14:00", "max_slot": "14:29"},
+        "entry_model": (
+            "signal high + Rs0.05 tick; next three 1-min bars; cancel-first at "
+            "max(signal low, prior-10-bar high); reject >0.20% gap; 5bps paper slippage"
+        ),
+        "exit_model": (
+            "0.70% SL / 0.75% target on 1-min path; stop-first tie; 60min or 15:15; "
+            "worse-open stop gaps; adverse non-target paper slippage"
+        ),
+        "provenance": {
+            "approved_on": "2026-07-30",
+            "family": "three-month late-session BB10 compression research",
+            "evaluated_on": "RAW_PRE_GATE_POOL",
+            "research_dir": "isolated_long_3m_research_20260730/",
+            "split": {
+                "train": ["2026-05-05", "2026-07-01"],
+                "validation": ["2026-07-02", "2026-07-15"],
+                "test": ["2026-07-16", "2026-07-29"],
+            },
+            "frozen_metrics": {
+                "train": {"trades": 38, "net_pf": 1.262, "net_rs": 2564.10},
+                "validation": {"trades": 12, "net_pf": 1.263, "net_rs": 532.19},
+                "test": {"trades": 8, "net_pf": 3.163, "net_rs": 1812.63},
+                "test_150pct_exit_slippage": {"trades": 8, "net_pf": 2.833, "net_rs": 1714.80},
+            },
+            "gate_status": "USER_DIRECTED_FORWARD_PAPER",
+            "risk_label": (
+                "Forward-paper candidate only: frozen TEST has eight trades across three "
+                "days. Do not treat as production-proven or size up before 100-300 new trades."
+            ),
         },
     },
 }
@@ -1821,5 +1897,40 @@ for _name, _survival in _LIVE_SURVIVAL_DEMOTION_2026_06_29.items():
             "holdout PF>=1.20 before re-promotion"
         ),
     }
+    _cfg["provenance"] = _prov
+    RESEARCH_WATCH_CONF[_name] = _cfg
+
+
+# ===========================================================================
+# 2026-07-08 LIVE WIRING of the last-2-weeks v11 R&D study (config-only, REVERSIBLE).
+# Study: Train_and_Test/last2wk_v11_rnd_2026_07_08/FINAL_REPORT.md. The 11-setup book
+# was a heavy net loser at statutory+5bps on BOTH the tuning window (2026-06-23..07-07:
+# -Rs19,823, PF 0.70) and an out-of-sample window (2026-05-26..06-20: -Rs11,897, PF 0.92).
+# Two OOS-validated fixes: (1) an 11:30 IST entry cap on the 6 momentum setups (edited into
+# mask_terms above); (2) parking G_HIGHER_HIGH_BREAK (below). Result IS +Rs6,127 (PF 1.60) /
+# OOS +Rs8,338 (PF 1.35). The live conf path is faithful: conf_mask applies these mask_terms
+# (incl signal_minute) and the scanner's ALLOWED_SETUPS/detectors are driven by conf keys,
+# so demoted setups are neither scanned nor traded (eqidv2_final_conf_live_bootstrap.conf_mask
+# + eqidv2_signal_discovery_v7_5min_id_persistent activation). Surviving edge is concentrated
+# in E_ORB_BREAKOUT_LONG. FORWARD-VALIDATION on live paper; do NOT size real capital yet.
+# To REVERSE: restore final_setup_conf.py.bak_2026-07-08_pre_last2wk_rnd (or delete this block
+# AND the "R&D 2026-07-08" cap edits above). Takes effect on the next live process restart.
+# ===========================================================================
+# USER DIRECTION 2026-07-08: DOC5D_AVWAP_RECLAIM_LONG, S9_MIDDAY_LOSE and D_EMA20_REJECTION are kept
+# ACTIVE ("add irrespectively") despite their documented loser/reject/failed-gate provenance. Each fired
+# 0 trades in BOTH study windows, so re-adding them does NOT change the validated study PnL — but they
+# CAN fire (uncapped) in other regimes; risk is on the user by explicit direction. Only G_HIGHER_HIGH_BREAK
+# is parked below: kept INACTIVE but PRESENT in the file (moved to RESEARCH_WATCH_CONF, never traded).
+_RND_LIVE_WIRE_2026_07_08 = {
+    "G_HIGHER_HIGH_BREAK":      "unstable sign-flip P&L (IS -3,502 / OOS +6,263) + documented failed-gate; user-parked 2026-07-08",
+}
+for _name, _why in _RND_LIVE_WIRE_2026_07_08.items():
+    _cfg = FINAL_SETUP_CONF.pop(_name, None)
+    if _cfg is None:
+        continue
+    _cfg = dict(_cfg); _cfg["enabled"] = False
+    _prov = dict(_cfg.get("provenance", {}))
+    _prov["rnd_live_wire_2026_07_08"] = {"reason": _why,
+        "re_validation_trigger": "positive net at statutory+5bps on a fresh IS+OOS pair + live-paper holdout before re-promotion"}
     _cfg["provenance"] = _prov
     RESEARCH_WATCH_CONF[_name] = _cfg

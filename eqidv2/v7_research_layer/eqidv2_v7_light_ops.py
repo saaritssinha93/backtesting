@@ -999,6 +999,45 @@ def _setup_concentration_shadow(open_df: pd.DataFrame) -> tuple[dict[str, Any], 
     )
 
 
+def _merge_open_trade_signal_context(
+    open_df: pd.DataFrame,
+    live: pd.DataFrame,
+) -> pd.DataFrame:
+    """Add live-signal context without losing fields already in open state."""
+    if (
+        open_df.empty
+        or live.empty
+        or "signal_id" not in open_df.columns
+        or "signal_id" not in live.columns
+    ):
+        return open_df
+    context_cols = [
+        col
+        for col in ("signal_id", "signal_datetime", "setup", "_flow_key")
+        if col in live.columns
+    ]
+    merged = open_df.merge(
+        live[context_cols].drop_duplicates("signal_id"),
+        on="signal_id",
+        how="left",
+        suffixes=("", "_live"),
+    )
+    for col in context_cols:
+        if col == "signal_id":
+            continue
+        live_col = f"{col}_live"
+        if live_col not in merged.columns:
+            continue
+        if col not in merged.columns:
+            merged = merged.rename(columns={live_col: col})
+            continue
+        current = merged[col]
+        missing = current.isna() | current.astype(str).str.strip().eq("")
+        merged.loc[missing, col] = merged.loc[missing, live_col]
+        merged = merged.drop(columns=[live_col])
+    return merged
+
+
 def _slot_pressure_shadow(signal: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
     counts = _parse_count_text(signal.get("final_setup_counts", ""))
     total = int(_safe_float(signal.get("final_candidates", 0), 0))
@@ -1244,9 +1283,7 @@ def _paper_trade_analysis(day: str, entry_rows: pd.DataFrame, cache: dict[str, p
     open_rows = open_payload.get("open_trades", [])
     open_df = pd.DataFrame(open_rows if isinstance(open_rows, list) else [])
     if not open_df.empty:
-        if not live.empty and "signal_id" in live.columns and "signal_id" in open_df.columns:
-            live_cols = [c for c in ["signal_id", "signal_datetime", "setup", "_flow_key"] if c in live.columns]
-            open_df = open_df.merge(live[live_cols].drop_duplicates("signal_id"), on="signal_id", how="left")
+        open_df = _merge_open_trade_signal_context(open_df, live)
         open_df["entry_ts"] = open_df.get("entry_time", "").map(_normalise_ts)
         open_df["age_min"] = (_now_ist() - open_df["entry_ts"]).dt.total_seconds() / 60.0
         for col in ("entry_price", "stop_price", "target_price", "last_ltp"):

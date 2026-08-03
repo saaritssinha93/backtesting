@@ -69,8 +69,18 @@ V7_QUALIFICATION_ROOT = runtime_dir("v7_qualification")
 V7_QUALIFICATION_LATEST_DIR = V7_QUALIFICATION_ROOT / "latest"
 V7_PRE_MOMENTUM_FILTER_ANALYST_ROOT = runtime_dir("v7_pre_momentum_filter_analyst")
 V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR = V7_PRE_MOMENTUM_FILTER_ANALYST_ROOT / "latest"
+V7_FULL_PIPELINE_ENTRY_RESEARCH_ROOT = runtime_dir("v7_full_pipeline_entry_research")
+V7_FULL_PIPELINE_ENTRY_RESEARCH_LATEST_DIR = V7_FULL_PIPELINE_ENTRY_RESEARCH_ROOT / "latest"
+V7_FULL_PIPELINE_ENTRY_RESEARCH_V2_ROOT = runtime_dir("v7_full_pipeline_entry_research_v2")
+V7_FULL_PIPELINE_ENTRY_RESEARCH_V2_LATEST_DIR = V7_FULL_PIPELINE_ENTRY_RESEARCH_V2_ROOT / "latest"
+V7_SHADOW_CANDIDATE_MONITOR_ROOT = runtime_dir("v7_shadow_candidates")
+V7_SHADOW_CANDIDATE_MONITOR_LATEST_DIR = V7_SHADOW_CANDIDATE_MONITOR_ROOT / "latest"
+V11_LAB_SHADOW_MONITOR_ROOT = runtime_dir("v11_lab_shadow")
+V11_LAB_SHADOW_MONITOR_LATEST_DIR = V11_LAB_SHADOW_MONITOR_ROOT / "latest"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 IST = ZoneInfo("Asia/Kolkata")
+AUTH_V2_STATE_FILE = BASE_DIR / "auth_v2_state.json"
+AUTH_V2_ACCESS_TOKEN_FILE = BASE_DIR / "access_token.txt"
 OPEN_LIVE_TRADES_STATE_PATTERN_V5 = "open_live_trades_state_{}_v5.json"
 OPEN_PAPER_TRADES_STATE_PATTERN_V5 = "open_trades_state_{}_v5.json"
 OPEN_LIVE_TRADES_STATE_PATTERN_V7_SWEEP = "open_live_trades_state_{}_v7_sweep.json"
@@ -121,6 +131,7 @@ LOG_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.log",
     "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.log",
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.log",
+    "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.log",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.log",
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data_live_minimal.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
@@ -143,6 +154,10 @@ LOG_FILES: Dict[str, str] = {
     "v7_gate_promotion":                 "v7_gate_promotion/latest/latest_v7_gate_promotion.md",
     "v7_qualification":                  "v7_qualification/latest/latest_v7_qualification.md",
     "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst/latest/latest_v7_pre_momentum_filter_analyst.md",
+    "v7_full_pipeline_entry_research":    "v7_full_pipeline_entry_research/latest/latest_v7_full_pipeline_entry_research.md",
+    "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2/latest/latest_v7_full_pipeline_entry_research_v2.md",
+    "v7_shadow_candidate_monitor":        "v7_shadow_candidates/latest/latest_v7_shadow_candidate_monitor.md",
+    "v11_lab_shadow_monitor":             "v11_lab_shadow/latest/latest_v11_lab_shadow_monitor.md",
     "data_for_backtesting":             "data_for_backtesting_latest.log",
     "backtesting_result_v11":            "backtesting_result_v11_latest.log",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.log",
@@ -152,11 +167,13 @@ LOG_FILES: Dict[str, str] = {
 
 LIVE_FETCH_STATUS_JSON_FILES: Dict[str, str] = {
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json",
+    "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.status.json",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.status.json",
 }
 
 LIVE_FETCH_CARD_TITLES: Dict[str, str] = {
     "eod_5min_data": "Live Data Fetch (5mins)",
+    "kiteticker_5min_data": "Live Data kiteticker Fetch (5mins)",
     "eod_1min_data": "Live Data Fetch (1min)",
 }
 
@@ -180,6 +197,7 @@ STATUS_FILES: Dict[str, str] = {
     "authentication_v2": "authentication_v2_runner.status",
     "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.status",
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status",
+    "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.status",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
@@ -204,6 +222,10 @@ STATUS_FILES: Dict[str, str] = {
     "v7_gate_promotion":                 "v7_gate_promotion.status",
     "v7_qualification":                  "v7_qualification.status",
     "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.status",
+    "v7_full_pipeline_entry_research":    "v7_full_pipeline_entry_research.status",
+    "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2.status",
+    "v7_shadow_candidate_monitor":        "v7_shadow_candidate_monitor.status",
+    "v11_lab_shadow_monitor":             "v11_lab_shadow_monitor.status",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.status",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.status",
@@ -218,6 +240,7 @@ HB_STALE_RUNNING_OVERRIDE_SEC: int = int(
 
 HEARTBEAT_FILES: Dict[str, str] = {
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat",
+    "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.heartbeat",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.heartbeat",
     "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.heartbeat",
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
@@ -237,6 +260,10 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "v7_gate_promotion":                 "v7_gate_promotion.heartbeat",
     "v7_qualification":                  "v7_qualification.heartbeat",
     "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.heartbeat",
+    "v7_full_pipeline_entry_research":    "v7_full_pipeline_entry_research.heartbeat",
+    "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2.heartbeat",
+    "v7_shadow_candidate_monitor":        "v7_shadow_candidate_monitor.heartbeat",
+    "v11_lab_shadow_monitor":             "v11_lab_shadow_monitor.heartbeat",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.heartbeat",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.heartbeat",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.heartbeat",
@@ -245,6 +272,7 @@ HEARTBEAT_FILES: Dict[str, str] = {
 CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "authentication_v2": ("\\EQIDV2_authentication_v2_0900",),
     "eod_5min_data": ("\\EQIDV2_eod_5mins_data_0900",),
+    "kiteticker_5min_data": ("\\EQIDV2_kiteticker_5mins_data_0900",),
     "eod_1min_data": ("\\EQIDV2_eod_1min_data_0915",),
     "eod_15min_data": ("\\EQIDV2_eod_15mins_data_0900",),
     "eod_1540_update": ("\\EQIDV2_eod_1540_update_1540",),
@@ -268,6 +296,10 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "v7_gate_promotion": ("\\EQIDV2_v7_gate_promotion_1625",),
     "v7_qualification": ("\\EQIDV2_v7_qualification_1630",),
     "v7_pre_momentum_filter_analyst": ("\\EQIDV2_v7_pre_momentum_filter_analyst_0917",),
+    "v7_full_pipeline_entry_research": ("\\EQIDV2_v7_full_pipeline_entry_research_1620",),
+    "v7_full_pipeline_entry_research_v2": ("\\EQIDV2_v7_full_pipeline_entry_research_v2_1630",),
+    "v7_shadow_candidate_monitor": ("\\EQIDV2_v7_shadow_candidate_monitor_1645",),
+    "v11_lab_shadow_monitor": ("\\EQIDV2_v11_lab_shadow_monitor_1655",),
     "live_signals_csv_id_5min_v7_short": ("\\EQIDV2_entry_engine_1min_v5_ID",),
     "live_signals_csv_id_5min_v7_long": ("\\EQIDV2_entry_engine_1min_v5_ID",),
     "paper_trade_id_5min_v7": ("\\EQIDV2_paper_trade_id_5min_v7_0900",),
@@ -307,8 +339,12 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
     "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
-    "entry_engine_1min_v5_id": "run_eqidv2_entry_engine_1min_v5_id.bat",
-    "signal_discovery_v7_5min_id": "run_eqidv2_signal_discovery_v7_5min_id_persistent.bat",
+    # These cards must track the conf wrappers used by Task Scheduler.  Pointing
+    # process discovery at the base BATs allowed a dashboard restart to miss (or
+    # preserve) a worker launched with a different setup/risk configuration.
+    "entry_engine_1min_v5_id": "run_conf_paper_entry_engine.bat",
+    "signal_discovery_v7_5min_id": "run_conf_paper_signal_discovery.bat",
+    "paper_trade_id_5min_v7": "run_conf_paper_executor.bat",
     "v7_research_layer": "run_eqidv2_v7_research_layer.bat",
     "daily_live_v7_research_session": "run_eqidv2_daily_live_v7_research_session.bat",
     "v7_nse_id_cost": "run_v7_nse_id_cost_report.bat",
@@ -317,6 +353,10 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "v7_gate_promotion": "run_v7_gate_promotion_report.bat",
     "v7_qualification": "run_v7_qualification_report.bat",
     "v7_pre_momentum_filter_analyst": "run_eqidv2_v7_pre_momentum_filter_analyst.bat",
+    "v7_full_pipeline_entry_research": "run_v7_full_pipeline_entry_research.bat",
+    "v7_full_pipeline_entry_research_v2": "run_v7_full_pipeline_entry_research_v2.bat",
+    "v7_shadow_candidate_monitor": "run_v7_shadow_candidate_monitor.bat",
+    "v11_lab_shadow_monitor": "run_v11_lab_shadow_monitor.bat",
     "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
     "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
     "authentication_v2":             "run_authentication_v2.bat",
@@ -773,6 +813,22 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
     if name == "v7_pre_momentum_filter_analyst":
         path = V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.md"
         return path, str(Path("v7_pre_momentum_filter_analyst") / "latest" / path.name)
+
+    if name == "v7_full_pipeline_entry_research":
+        path = V7_FULL_PIPELINE_ENTRY_RESEARCH_LATEST_DIR / "latest_v7_full_pipeline_entry_research.md"
+        return path, str(Path("v7_full_pipeline_entry_research") / "latest" / path.name)
+
+    if name == "v7_full_pipeline_entry_research_v2":
+        path = V7_FULL_PIPELINE_ENTRY_RESEARCH_V2_LATEST_DIR / "latest_v7_full_pipeline_entry_research_v2.md"
+        return path, str(Path("v7_full_pipeline_entry_research_v2") / "latest" / path.name)
+
+    if name == "v7_shadow_candidate_monitor":
+        path = V7_SHADOW_CANDIDATE_MONITOR_LATEST_DIR / "latest_v7_shadow_candidate_monitor.md"
+        return path, str(Path("v7_shadow_candidates") / "latest" / path.name)
+
+    if name == "v11_lab_shadow_monitor":
+        path = V11_LAB_SHADOW_MONITOR_LATEST_DIR / "latest_v11_lab_shadow_monitor.md"
+        return path, str(Path("v11_lab_shadow") / "latest" / path.name)
 
     if name == "nifty_guard_fetch_v16_5min":
         today_log = _latest_matching_file(
@@ -1357,6 +1413,60 @@ def apply_scheduler_status(card_id: str, status: Dict[str, str], task_snapshot: 
     elif not current and scheduler_status:
         merged["status"] = scheduler_status
 
+    return merged
+
+
+def reconcile_authentication_status(
+    status: Dict[str, str],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> Dict[str, str]:
+    """Let a newer same-day auth session supersede an older runner failure."""
+    merged = dict(status or {})
+    if str(merged.get("status", "")).strip().upper() != "FAILED":
+        return merged
+    if not AUTH_V2_STATE_FILE.exists() or not AUTH_V2_ACCESS_TOKEN_FILE.exists():
+        return merged
+
+    try:
+        state = json.loads(AUTH_V2_STATE_FILE.read_text(encoding="utf-8", errors="replace"))
+        if not isinstance(state, dict):
+            return merged
+        current_ist = now_ist or dt.datetime.now(IST)
+        if current_ist.tzinfo is None:
+            current_ist = current_ist.replace(tzinfo=IST)
+        today = current_ist.astimezone(IST).date().isoformat()
+        if str(state.get("session_date_ist", "")).strip() != today:
+            return merged
+        if not AUTH_V2_ACCESS_TOKEN_FILE.read_text(
+            encoding="utf-8", errors="replace"
+        ).strip():
+            return merged
+
+        failure_at = _parse_status_datetime(str(merged.get("ts", "")))
+        token_at = dt.datetime.fromtimestamp(
+            AUTH_V2_ACCESS_TOKEN_FILE.stat().st_mtime,
+            tz=IST,
+        )
+        state_at = _parse_status_datetime(str(state.get("updated_at_ist", "")))
+        recovery_at = max(
+            candidate
+            for candidate in (token_at, state_at)
+            if candidate is not None
+        )
+        if failure_at is not None and recovery_at <= failure_at:
+            return merged
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return merged
+
+    merged["previous_status"] = "FAILED"
+    merged["previous_status_ts"] = str(merged.get("ts", "")).strip()
+    merged["status"] = "SUCCESS"
+    merged["session_date_ist"] = today
+    merged["recovered_at_ist"] = recovery_at.astimezone(IST).strftime(
+        "%Y-%m-%d %H:%M:%S%z"
+    )
+    merged["recovery_source"] = "newer_same_day_auth_state_and_access_token"
     return merged
 
 
@@ -5893,6 +6003,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const LOG_ORDER = [
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
+      "kiteticker_5min_data",
       "eod_1min_data",
       "live_combined_csv_id_5min_v7_persistent",
       "signal_discovery_v7_5min_id",
@@ -5907,6 +6018,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "v7_gate_promotion",
       "v7_qualification",
       "v7_pre_momentum_filter_analyst",
+      "v7_full_pipeline_entry_research",
+      "v7_full_pipeline_entry_research_v2",
+      "v7_shadow_candidate_monitor",
+      "v11_lab_shadow_monitor",
       "live_signals_csv_id_5min_v7_short",
       "live_signals_csv_id_5min_v7_long",
       "live_papertrade_result_csv_id_5min_v7",
@@ -5949,6 +6064,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "detection_engine_v16_5min":     "V16 5min Detection Engine (Confirmation)",
       "detected_signals_v16_5min":     "V16 5min Detected Signals CSV",
       "eod_5min_data": "Live Data Fetch (5mins)",
+      "kiteticker_5min_data": "Live Data kiteticker Fetch (5mins)",
       "eod_1min_data": "Live Data Fetch (1min)",
       "eod_15min_data": "Live Data Fetch (15mins)",
       "live_combined_csv_v16_5min": "V16 5min Scanner (anti-exhaustion, 5min slots)",
@@ -5972,6 +6088,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "v7_gate_promotion": "V7 Gate Promotion (P0-17)",
       "v7_qualification": "V7 Qualification (P1-22)",
       "v7_pre_momentum_filter_analyst": "v7 pre momentum filter analyst",
+      "v7_full_pipeline_entry_research": "V7 Full-Pipeline Entry Research",
+      "v7_full_pipeline_entry_research_v2": "V7 Full-Pipeline Entry Research v2",
+      "v7_shadow_candidate_monitor": "V7 Shadow Candidate Monitor",
+      "v11_lab_shadow_monitor": "V11 Lab Shadow Monitor",
       "live_signals_csv_id_5min_v7_short": "Live Entries CSV ID 5mins v7 Short",
       "live_signals_csv_id_5min_v7_long": "Live Entries CSV ID 5mins v7 Long",
       "live_papertrade_result_csv_id_5min_v7": "V7 ID 5min Papertrade Results (Net)",
@@ -6003,6 +6123,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         ids: [
           "nifty_guard_fetch_v16_5min",
           "eod_5min_data",
+          "kiteticker_5min_data",
           "eod_1min_data"
         ]
       },
@@ -6047,7 +6168,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "v7_nse_id_cost",
           "v7_walkforward_gate",
           "v7_causality_audit",
-          "v7_pre_momentum_filter_analyst"
+          "v7_pre_momentum_filter_analyst",
+          "v7_full_pipeline_entry_research",
+          "v7_full_pipeline_entry_research_v2",
+          "v7_shadow_candidate_monitor",
+          "v11_lab_shadow_monitor"
         ]
       },
       {
@@ -6085,9 +6210,16 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         ]
       }
     ];
+    // Keep explicitly staged market-data feeds in their operational section
+    // regardless of whether their scheduled task is disabled between shadow
+    // test runs. Only the section assignment is locked.
+    const SECTION_LOCKED_DISABLED_IDS = new Set([
+      "kiteticker_5min_data"
+    ]);
     const SESSION_TIMELINE = [
       { time: "09:00", id: "authentication_v2", label: "Auth" },
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
+      { time: "09:00", id: "kiteticker_5min_data", label: "Live Data KiteTicker Fetch 5min (shadow monitoring)" },
       { time: "09:17", id: "eod_1min_data", label: "Live Data Fetch 1min" },
       { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
       { time: "09:17", id: "v7_research_layer", label: "V7 Research Layer" },
@@ -6103,8 +6235,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "16:05", id: "v7_causality_audit", label: "V7 Causality Audit" },
       { time: "16:15", id: "v7_research_layer", label: "Suggestions v7 Research" },
       { time: "16:20", id: "v7_walkforward_gate", label: "V7 Walkforward Gate" },
+      { time: "16:20", id: "v7_full_pipeline_entry_research", label: "Full-Pipeline Entry Research" },
       { time: "16:25", id: "v7_gate_promotion", label: "V7 Gate Promotion" },
       { time: "16:30", id: "v7_qualification", label: "V7 Qualification" },
+      { time: "16:30", id: "v7_full_pipeline_entry_research_v2", label: "Full-Pipeline Entry Research v2" },
+      { time: "16:45", id: "v7_shadow_candidate_monitor", label: "V7 Shadow Candidate Monitor" },
+      { time: "16:55", id: "v11_lab_shadow_monitor", label: "V11 Lab Shadow Monitor" },
       { time: "17:00", id: "", label: "Dashboard Close" }
     ];
     const API_TOKEN = __API_TOKEN_JSON__;
@@ -6151,6 +6287,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "pending_data_fetcher_v16_5min",
       "signal_discovery_v7_5min_id",
       "entry_engine_1min_v5_id",
+      "paper_trade_id_5min_v7",
       "v7_research_layer",
       "daily_live_v7_research_session",
       "v7_nse_id_cost",
@@ -6159,6 +6296,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "v7_gate_promotion",
       "v7_qualification",
       "v7_pre_momentum_filter_analyst",
+      "v7_full_pipeline_entry_research",
+      "v7_full_pipeline_entry_research_v2",
+      "v7_shadow_candidate_monitor",
+      "v11_lab_shadow_monitor",
       "kite_positions_day_today_csv",
       "kite_holdings_today_csv",
       "authentication_v2",
@@ -6253,7 +6394,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       const s = String(status || "").toUpperCase();
       if (s === "DISABLED") return "disabled";
       if (s === "SUCCESS" || s === "RUNNING") return "ok";
-      if (s === "RESTARTING" || s === "COOLDOWN") return "warn";
+      if (s === "STALE_HB_RUNNING" || s === "RESTARTING" || s === "COOLDOWN") return "warn";
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "warn";
       if (s === "MISSING_OUTPUT") return "bad";
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return "scheduled";
@@ -6637,9 +6778,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     function cardStatusClass(status) {
       const s = String(status || "").toUpperCase();
       if (s === "SUCCESS" || s === "RUNNING") return "card is-ok";
-      if (s === "RESTARTING" || s === "COOLDOWN") return "card is-warn";
+      if (s === "STALE_HB_RUNNING" || s === "RESTARTING" || s === "COOLDOWN") return "card is-warn";
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "card is-warn";
-      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF") return "card";
+      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF" || s === "DONE") return "card";
       if (s) return "card is-bad";
       return "card";
     }
@@ -7166,7 +7307,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const activeOrdered = ordered.filter((id) => {
           const it = byId[id] || { status: {} };
           const status = String((it.status && it.status.status) || "").toUpperCase();
-          return status !== "DISABLED";
+          return status !== "DISABLED" || SECTION_LOCKED_DISABLED_IDS.has(id);
         });
         const disabledOrdered = ordered.filter((id) => !activeOrdered.includes(id));
         renderStatusFilters(byId, ordered);
@@ -7355,6 +7496,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             status = infer_scanner_runtime_status(key, path, status)
             status = apply_scheduler_status(key, status, task_snapshot)
             status = infer_pid_session_provenance(key, status)
+            if key == "authentication_v2":
+                status = reconcile_authentication_status(status)
             try:
                 size = path.stat().st_size if path.exists() else 0
             except OSError:

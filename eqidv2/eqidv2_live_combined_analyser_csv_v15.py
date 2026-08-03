@@ -129,6 +129,9 @@ SIGNAL_CSV_COLUMNS = [
     "quality_score", "atr_pct", "rsi", "adx", "quantity",
     "signal_entry_datetime_ist", "signal_bar_time_ist",
     "stage2_detected_at_ist",
+    "bar_closed_at_ist", "decision_ready_at_ist",
+    "entry_engine_ready_at_ist", "signal_written_at_ist",
+    "candidate_snapshot_sha256", "runtime_manifest_path",
     # v7 signal contract fields (appended for backward compatibility)
     "schema_version", "pipeline_version",
     "writer_name", "writer_pid", "writer_started_at_ist",

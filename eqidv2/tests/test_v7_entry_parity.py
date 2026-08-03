@@ -96,7 +96,8 @@ def test_fno_ban_http_fallback_is_bounded_fail_open():
             ee._fno_ban_cache.clear()
 
             assert ee._get_fno_banned_tickers() == frozenset()
-            assert seen["url"] == ee.FNO_BAN_URL
+            request = seen["url"]
+            assert getattr(request, "full_url", request) == ee.FNO_BAN_URL
             assert seen["timeout"] == 0.75
     finally:
         ee.FNO_BAN_FILTER_ENABLED = old_enabled

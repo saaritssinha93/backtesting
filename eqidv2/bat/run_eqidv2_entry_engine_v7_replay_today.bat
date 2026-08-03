@@ -16,23 +16,29 @@ if "%~1"=="" (
 cd /d "%BASE_DIR%"
 
 REM Isolated replay root. Scanner replay and entry-engine replay both write here.
-set "EQIDV2_REPLAY_OUTPUT_ROOT=C:\TradingData\eqidv2\replay"
+if not defined EQIDV2_REPLAY_OUTPUT_ROOT set "EQIDV2_REPLAY_OUTPUT_ROOT=C:\TradingData\eqidv2\replay"
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
 set "EQIDV2_DATA_5M_DIR=C:\TradingData\eqidv2\stocks_indicators_5min_eq_live"
 set "EQIDV2_DATA_1MIN_DIR=C:\TradingData\eqidv2\stocks_indicators_1min_eq"
+set "EQIDV2_USE_FINAL_SETUP_CONF=1"
+set "EQIDV2_FINAL_SETUP_CONF_MODULE=final_setup_conf_v11_working"
+set "EQIDV2_EXPECT_FINAL_SETUP_CONF_MODULE=final_setup_conf_v11_working"
+set "EQIDV2_LAUNCHER_NAME=run_eqidv2_entry_engine_v7_replay_today.bat"
 
 REM Match production entry-engine contract, but do not wait for live handoff.
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DELAY_SEC=60
-set EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC=30
+set EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC=90
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_SEC=0
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_POLL_SEC=0.5
-set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DUE_GRACE_SEC=30
+set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_DUE_GRACE_SEC=90
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_PROCESS_RESERVE_SEC=2
 set EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_ENTRY_LAG_MIN=1
 set EQIDV2_ENTRY_ENGINE_1MIN_V7_MAX_DELAY_MIN=3
 set EQIDV2_ENTRY_ENGINE_PRE_MOMENTUM_GATES=1
 set EQIDV2_ENTRY_ENGINE_PRE_MOMENTUM_MISSING_ACTION=block
 set EQIDV2_ENTRY_ENGINE_USE_SLOT_CANDIDATE_JSON=1
+set EQIDV2_ENTRY_ENGINE_REQUIRE_SLOT_COMPLETE_MARKER=1
+set EQIDV2_ENTRY_ENGINE_REPLAY_USE_LOCAL_1MIN=1
 set EQIDV2_RUNTIME_SCRIPT_NAME=eqidv2_entry_engine_1min_v5_id.py
 
 echo [REPLAY] Generating isolated signal-discovery candidates...

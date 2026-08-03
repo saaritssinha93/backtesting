@@ -34,11 +34,19 @@ import pytz
 
 import avwap_5min_ID_v6_backtesting as v6
 import eqidv2_v11_live_overlay as v11_live_overlay
+from eqidv2_v7_position_sizing import (
+    RiskSizingConfig,
+    nifty_regime_short_multiplier,
+    risk_based_quantity,
+)
 import eqidv2_final_conf_live_bootstrap as _conf_boot
 import eqidv2_eod_scheduler_for_5mins_data_live_minimal as scheduler
 import eqidv2_live_combined_analyser_csv_id_5min_v7_persistent as v7_persistent
 import eqidv2_live_signal_writer as signal_writer
 import eqidv2_v7_signal_contract as signal_contract
+import eqidv2_decision_funnel as decision_funnel
+import eqidv2_pre_momentum as shared_pre_momentum
+from eqidv2_runtime_manifest import freeze_runtime_manifest
 from eqidv2_runtime_paths import DATA_1MIN_DIR, DATA_5M_DIR, RUNTIME_ROOT, RUNTIME_STATUS_DIR, runtime_dir
 
 
@@ -71,6 +79,12 @@ SIGNAL_DISCOVERY_LATEST_CSV = SIGNAL_DISCOVERY_ROOT / "latest" / "latest_candida
 USE_SLOT_CANDIDATE_JSON = str(
     os.getenv("EQIDV2_ENTRY_ENGINE_USE_SLOT_CANDIDATE_JSON", "1" if _IS_REPLAY_ISOLATED else "0")
 ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+REQUIRE_SLOT_COMPLETE_MARKER = str(
+    os.getenv(
+        "EQIDV2_ENTRY_ENGINE_REQUIRE_SLOT_COMPLETE_MARKER",
+        "1" if USE_SLOT_CANDIDATE_JSON else "0",
+    )
+).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
 IST = pytz.timezone("Asia/Kolkata")
 MARKET_OPEN = dtime(9, 15)
@@ -84,6 +98,12 @@ RAW_FETCH_PARALLEL_APPS_ENABLED = str(
     os.getenv("EQIDV2_ENTRY_ENGINE_RAW_FETCH_PARALLEL_APPS", "1")
 ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 RAW_FETCH_APP_COUNT = max(1, min(8, int(os.getenv("EQIDV2_ENTRY_ENGINE_RAW_FETCH_APP_COUNT", "8"))))
+REPLAY_USE_LOCAL_1MIN = str(
+    os.getenv("EQIDV2_ENTRY_ENGINE_REPLAY_USE_LOCAL_1MIN", "0")
+).strip().lower() in {"1", "true", "yes", "on", "enable", "enabled"}
+RAW_FETCH_SESSION_START = os.getenv(
+    "EQIDV2_ENTRY_ENGINE_RAW_FETCH_SESSION_START", "09:15"
+).strip()
 
 # v8 backtesting resolves exits strictly from v6.SETUP_EXIT_RULES. The live
 # signal-discovery stage stays signal-only; SL/target are attached here.
@@ -92,7 +112,9 @@ RAW_FETCH_APP_COUNT = max(1, min(8, int(os.getenv("EQIDV2_ENTRY_ENGINE_RAW_FETCH
 #   T = completed, end-labelled 5-minute signal candle.
 #   The engine wakes one wall-clock minute later and the executor fills from
 #   live LTP. Minute OHLC is used only for reference and momentum filters.
-#   Freshness is measured from intended_entry_ist=T+1 through T+1:15.
+#   Freshness is measured from intended_entry_ist=T+1.  The default code
+#   contract is 30 seconds; the conf launcher may grant a larger fail-closed
+#   handoff window while the separately reported write SLA stays at 10 seconds.
 #
 # IMPORTANT: V7 is unprofitable with its full setup set after realistic costs.
 # Do not expand beyond the proven profitable setups (production_core).
@@ -102,6 +124,9 @@ ENTRY_SEARCH_MAX_DELAY_MIN = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V7_MAX_DELA
 ENTRY_SIGNAL_TO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_ENTRY_LAG_MIN", "1"))
 CANDIDATE_WAIT_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_SEC", "30"))
 CANDIDATE_WAIT_POLL_SEC = float(os.getenv("EQIDV2_ENTRY_ENGINE_1MIN_V5_ID_CANDIDATE_WAIT_POLL_SEC", "2"))
+ENTRY_WRITE_SLA_SEC = float(
+    os.getenv("EQIDV2_ENTRY_ENGINE_WRITE_SLA_SEC", "10")
+)
 MAX_SIGNAL_HANDOFF_LAG_SEC = float(
     os.getenv(
         "EQIDV2_ID5MIN_V7_MAX_ENTRY_TO_DETECTION_LAG_SEC",
@@ -265,7 +290,7 @@ PRE_ENTRY_MOMENTUM_SHADOW_SETUPS = {
 }
 
 
-# --- final_setup_conf (16-setup book) runtime activation --------------------
+# --- final_setup_conf shared setup-book runtime activation ------------------
 # When EQIDV2_USE_FINAL_SETUP_CONF is set, the conf becomes the single source of
 # truth for this engine: the per-setup pre-momentum gates and exit LEVELS are
 # replaced by the conf's, and any conf setup is un-shadowed. The exit MECHANISM
@@ -298,7 +323,8 @@ def _ensure_conf_engine() -> bool:
     _CONF_ENGINE_ACTIVE = True
     print(
         f"[entry_engine] final_setup_conf ACTIVE ({_conf_boot.GATE_VERSION}): "
-        f"{len(_conf_boot.conf_keys())} setups; pre-momentum gates + exit levels from conf; "
+        f"source={_conf_boot.conf_source()} {len(_conf_boot.conf_keys())} setups; "
+        f"pre-momentum gates + exit levels from conf; "
         f"un-shadowed conf setups; exit mechanism (market SL/target) unchanged.",
         flush=True,
     )
@@ -307,6 +333,9 @@ def _ensure_conf_engine() -> bool:
 
 _indicator_1m_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
 _indicator_5m_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
+_raw_kite_session_cache: List[Tuple[str, Any]] = []
+_raw_token_cache: Dict[str, int] = {}
+_raw_session_cache_lock = threading.Lock()
 _last_raw_fetch_stats: Dict[str, Any] = {}
 _last_candidate_load_stats: Dict[str, Any] = {}
 _progress_lock = threading.Lock()
@@ -482,6 +511,28 @@ def _candidate_slot_json_path(slot: pd.Timestamp) -> Path:
     return SIGNAL_DISCOVERY_ROOT / "json" / f"candidate_tickers_{_slot_key(slot)}.json"
 
 
+def _candidate_slot_complete_marker_path(slot: pd.Timestamp) -> Path:
+    return SIGNAL_DISCOVERY_ROOT / "json" / f"slot_complete_{_slot_key(slot)}.json"
+
+
+def _read_slot_complete_marker(slot: pd.Timestamp) -> Tuple[bool, Dict[str, Any]]:
+    path = _candidate_slot_complete_marker_path(slot)
+    if not path.exists():
+        return False, {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        marker_slot = _ensure_ist_ts(payload.get("slot_ist")).floor("min")
+    except Exception as exc:
+        return False, {
+            "slot_complete_marker_path": str(path),
+            "slot_complete_marker_error": f"{type(exc).__name__}: {exc}",
+        }
+    ready = bool(payload.get("complete")) and marker_slot == _ensure_ist_ts(slot).floor("min")
+    payload = dict(payload)
+    payload["slot_complete_marker_path"] = str(path)
+    return ready, payload
+
+
 def _candidate_rows_from_json(path: Path) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     rows = payload.get("candidates", [])
@@ -501,19 +552,63 @@ def _load_candidates_for_slot(slot: pd.Timestamp) -> pd.DataFrame:
         "candidate_source_slot_ist": "",
         "candidate_source_rows": 0,
         "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+        "slot_complete_marker_required": bool(REQUIRE_SLOT_COMPLETE_MARKER),
     }
     if USE_SLOT_CANDIDATE_JSON:
         slot_json = _candidate_slot_json_path(slot)
+        marker_ready, marker_payload = _read_slot_complete_marker(slot)
+        if REQUIRE_SLOT_COMPLETE_MARKER and not marker_ready:
+            _last_candidate_load_stats.update(
+                {
+                    "candidate_source": "slot_marker_pending",
+                    "candidate_source_path": str(slot_json),
+                    "slot_complete_marker_path": str(
+                        _candidate_slot_complete_marker_path(slot)
+                    ),
+                }
+            )
+            return pd.DataFrame()
         if slot_json.exists():
             try:
                 df, payload = _candidate_rows_from_json(slot_json)
                 loaded_exact_slot_snapshot = True
+                expected_sha = str(marker_payload.get("candidate_json_sha256", "")).strip()
+                actual_sha = ""
+                if expected_sha:
+                    import hashlib
+                    actual_sha = hashlib.sha256(slot_json.read_bytes()).hexdigest()
+                    if actual_sha != expected_sha:
+                        _last_candidate_load_stats = {
+                            "candidate_source": "slot_json_hash_mismatch",
+                            "candidate_source_path": str(slot_json),
+                            "candidate_source_slot_ist": str(payload.get("slot_ist", "")),
+                            "candidate_source_rows": 0,
+                            "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+                            "slot_complete_marker_required": bool(REQUIRE_SLOT_COMPLETE_MARKER),
+                            "candidate_snapshot_expected_sha256": expected_sha,
+                            "candidate_snapshot_actual_sha256": actual_sha,
+                        }
+                        return pd.DataFrame()
                 _last_candidate_load_stats = {
                     "candidate_source": "slot_json",
                     "candidate_source_path": str(slot_json),
                     "candidate_source_slot_ist": str(payload.get("slot_ist", "")),
                     "candidate_source_rows": int(len(df)),
                     "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
+                    "slot_complete_marker_required": bool(REQUIRE_SLOT_COMPLETE_MARKER),
+                    "slot_complete_marker_path": str(
+                        marker_payload.get("slot_complete_marker_path", "")
+                    ),
+                    "decision_ready_at_ist": str(
+                        marker_payload.get(
+                            "decision_ready_at_ist",
+                            payload.get("decision_ready_at_ist", ""),
+                        )
+                    ),
+                    "candidate_snapshot_sha256": actual_sha or expected_sha,
+                    "scanner_runtime_manifest_path": str(
+                        marker_payload.get("runtime_manifest_path", "")
+                    ),
                 }
             except Exception as exc:
                 _last_candidate_load_stats = {
@@ -525,6 +620,10 @@ def _load_candidates_for_slot(slot: pd.Timestamp) -> pd.DataFrame:
                     "candidate_source_replay_isolated": bool(_IS_REPLAY_ISOLATED),
                 }
                 df = pd.DataFrame()
+        # Exact-slot mode is fail-closed.  Never fall back to the moving latest
+        # pointer or a previous slot, even when the exact snapshot is empty.
+        if not loaded_exact_slot_snapshot:
+            return pd.DataFrame()
     if not loaded_exact_slot_snapshot and SIGNAL_DISCOVERY_LATEST_JSON.exists():
         try:
             df, payload = _candidate_rows_from_json(SIGNAL_DISCOVERY_LATEST_JSON)
@@ -574,6 +673,16 @@ def _load_candidates_for_slot(slot: pd.Timestamp) -> pd.DataFrame:
     df["setup"] = df["setup"].astype(str)
     df["signal_time_ist"] = sig.loc[df.index].map(_fmt_ist)
     df["quality_score"] = pd.to_numeric(df.get("quality_score", 0.0), errors="coerce").fillna(0.0)
+    if _last_candidate_load_stats.get("decision_ready_at_ist"):
+        df["decision_ready_at_ist"] = str(
+            _last_candidate_load_stats["decision_ready_at_ist"]
+        )
+    df["candidate_snapshot_sha256"] = str(
+        _last_candidate_load_stats.get("candidate_snapshot_sha256", "")
+    )
+    df["runtime_manifest_path"] = str(
+        _last_candidate_load_stats.get("scanner_runtime_manifest_path", "")
+    )
     return (
         df.sort_values(["quality_score", "ticker", "setup"], ascending=[False, True, True])
         .drop_duplicates(subset=["candidate_id"], keep="first")
@@ -583,6 +692,14 @@ def _load_candidates_for_slot(slot: pd.Timestamp) -> pd.DataFrame:
 
 
 def _latest_candidate_snapshot_slot() -> Optional[pd.Timestamp]:
+    latest_marker = SIGNAL_DISCOVERY_ROOT / "latest" / "latest_slot_complete.json"
+    if REQUIRE_SLOT_COMPLETE_MARKER and latest_marker.exists():
+        try:
+            payload = json.loads(latest_marker.read_text(encoding="utf-8", errors="replace"))
+            if payload.get("complete") and payload.get("slot_ist"):
+                return _ensure_ist_ts(payload["slot_ist"]).floor("min")
+        except Exception:
+            return None
     source_path = Path(_last_candidate_load_stats.get("candidate_source_path", ""))
     if USE_SLOT_CANDIDATE_JSON and source_path.exists() and source_path.name.startswith("candidate_tickers_"):
         try:
@@ -629,8 +746,15 @@ def _load_candidates_for_slot_with_wait(slot: pd.Timestamp) -> Tuple[pd.DataFram
     snapshot_slot = _latest_candidate_snapshot_slot()
     while True:
         df = _load_candidates_for_slot(slot)
-        snapshot_slot = _latest_candidate_snapshot_slot()
-        snapshot_ready = snapshot_slot is not None and snapshot_slot >= slot
+        marker_ready, marker_payload = _read_slot_complete_marker(slot)
+        snapshot_slot = (
+            slot if marker_ready else _latest_candidate_snapshot_slot()
+        )
+        snapshot_ready = (
+            marker_ready
+            if REQUIRE_SLOT_COMPLETE_MARKER
+            else snapshot_slot is not None and snapshot_slot >= slot
+        )
         if not df.empty or snapshot_ready or time.perf_counter() - started >= wait_budget:
             wait_stats = {
                 "candidate_wait_enabled": bool(wait_budget > 0),
@@ -646,6 +770,20 @@ def _load_candidates_for_slot_with_wait(slot: pd.Timestamp) -> Tuple[pd.DataFram
                 ),
                 "max_signal_handoff_lag_sec": float(MAX_SIGNAL_HANDOFF_LAG_SEC),
                 "entry_process_reserve_sec": float(ENTRY_PROCESS_RESERVE_SEC),
+                "slot_complete_marker_required": bool(REQUIRE_SLOT_COMPLETE_MARKER),
+                "slot_complete_marker_ready": bool(marker_ready),
+                "slot_complete_marker_path": str(
+                    marker_payload.get(
+                        "slot_complete_marker_path",
+                        _candidate_slot_complete_marker_path(slot),
+                    )
+                ),
+                "decision_ready_at_ist": str(
+                    marker_payload.get("decision_ready_at_ist", "")
+                ),
+                "candidate_snapshot_sha256": str(
+                    marker_payload.get("candidate_json_sha256", "")
+                ),
             }
             return df, wait_stats
         waited = True
@@ -657,6 +795,11 @@ def _setup_kite_app_pool(
     *,
     progress_slot: Optional[pd.Timestamp] = None,
 ) -> List[Tuple[str, Any]]:
+    requested = max(1, min(8, int(app_count)))
+    with _raw_session_cache_lock:
+        if _raw_kite_session_cache:
+            return list(_raw_kite_session_cache[:requested])
+
     setup_map: Dict[str, Callable[[], Any]] = {}
     try:
         setup_map = dict(scheduler._setup_fn_map())
@@ -664,7 +807,7 @@ def _setup_kite_app_pool(
         setup_map = {"app1": scheduler.setup_kite_session_from_eqidv2_dir}
 
     sessions: List[Tuple[str, Any]] = []
-    for idx in range(1, max(1, min(8, int(app_count))) + 1):
+    for idx in range(1, requested + 1):
         app_name = f"app{idx}"
         setup_fn = setup_map.get(app_name)
         if setup_fn is None:
@@ -679,7 +822,10 @@ def _setup_kite_app_pool(
             )
     if not sessions:
         sessions.append(("app1", scheduler.setup_kite_session_from_eqidv2_dir()))
-    return sessions
+    with _raw_session_cache_lock:
+        if not _raw_kite_session_cache:
+            _raw_kite_session_cache.extend(sessions)
+        return list(_raw_kite_session_cache[:requested])
 
 
 def _setup_kite_and_tokens(
@@ -697,8 +843,28 @@ def _setup_kite_and_tokens(
         active_apps=len(sessions),
         log_line=True,
     )
-    tokens = scheduler.core.load_or_fetch_tokens(sessions[0][1], tickers, log, refresh=False)
-    tokens = {str(k).upper(): int(v) for k, v in dict(tokens or {}).items()}
+    requested_tickers = sorted({str(ticker).upper() for ticker in tickers})
+    missing_tickers = [
+        ticker for ticker in requested_tickers if ticker not in _raw_token_cache
+    ]
+    if missing_tickers:
+        loaded = scheduler.core.load_or_fetch_tokens(
+            sessions[0][1],
+            missing_tickers,
+            log,
+            refresh=False,
+        )
+        _raw_token_cache.update(
+            {
+                str(key).upper(): int(value)
+                for key, value in dict(loaded or {}).items()
+            }
+        )
+    tokens = {
+        ticker: _raw_token_cache[ticker]
+        for ticker in requested_tickers
+        if ticker in _raw_token_cache
+    }
     _touch_progress(
         "RAW_TOKEN_LOOKUP_DONE",
         slot=progress_slot,
@@ -805,6 +971,10 @@ def _fetch_raw_partition(
         if df.empty:
             errors.append({"app": app_name, "ticker": symbol, "error": "empty_raw"})
             continue
+        df["timestamp_convention"] = "candle_start_1m"
+        df["raw_source"] = f"kite_historical_data:{app_name}"
+        df["raw_snapshot_slot_ist"] = _fmt_ist(slot)
+        df["raw_snapshot_fetched_at_ist"] = _fmt_ist(pd.Timestamp.now(tz=IST))
         df.to_parquet(_slot_raw_path(slot, symbol), index=False)
         _touch_progress("RAW_UPSERT_TICKER", slot=slot, app=app_name, ticker=symbol)
         _upsert_ticker_raw(symbol, df)
@@ -818,6 +988,21 @@ def _fetch_raw_partition(
             ticker_total=total,
         )
     return app_name, fetched, errors, time.perf_counter() - t0
+
+
+def _raw_fetch_start_for_slot(slot: pd.Timestamp) -> pd.Timestamp:
+    """Session-open lookback makes raw ADX/RSI reproducible without parquet."""
+
+    try:
+        hour_text, minute_text = RAW_FETCH_SESSION_START.split(":", 1)
+        hour, minute = int(hour_text), int(minute_text)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+    except Exception:
+        hour, minute = 9, 15
+    slot_ist = _ensure_ist_ts(slot)
+    start = slot_ist.normalize() + pd.Timedelta(hours=hour, minutes=minute)
+    return start if slot_ist >= start else slot_ist - pd.Timedelta(minutes=30)
 
 
 def _fetch_raw_for_candidates(candidates: pd.DataFrame, slot: pd.Timestamp) -> Dict[str, pd.DataFrame]:
@@ -835,13 +1020,61 @@ def _fetch_raw_for_candidates(candidates: pd.DataFrame, slot: pd.Timestamp) -> D
         return {}
     fetch_started = time.perf_counter()
     _touch_progress("RAW_FETCH_START", slot=slot, tickers=len(tickers), log_line=True)
+    if REPLAY_USE_LOCAL_1MIN:
+        if not _IS_REPLAY_ISOLATED:
+            raise RuntimeError(
+                "EQIDV2_ENTRY_ENGINE_REPLAY_USE_LOCAL_1MIN is allowed only "
+                "with an isolated EQIDV2_REPLAY_OUTPUT_ROOT"
+            )
+        start = _raw_fetch_start_for_slot(slot)
+        end = _ensure_ist_ts(slot) + pd.Timedelta(
+            minutes=max(1, ENTRY_SEARCH_MAX_DELAY_MIN), seconds=30
+        )
+        fetched: Dict[str, pd.DataFrame] = {}
+        failures = 0
+        for ticker in tickers:
+            bars = _load_indicator_bars(ticker, "1m")
+            if bars is None or bars.empty:
+                failures += 1
+                continue
+            window = bars[(bars["date"] >= start) & (bars["date"] <= end)].copy()
+            if window.empty:
+                failures += 1
+                continue
+            window["ticker"] = ticker
+            window["timestamp_convention"] = "candle_start_1m"
+            window["raw_source"] = "isolated_replay_local_1min"
+            window["raw_snapshot_slot_ist"] = _fmt_ist(slot)
+            window["raw_snapshot_fetched_at_ist"] = _fmt_ist(pd.Timestamp.now(tz=IST))
+            fetched[ticker] = window
+            window.to_parquet(_slot_raw_path(slot, ticker), index=False)
+        _last_raw_fetch_stats = {
+            "raw_fetch_mode": "isolated_replay_local_1min",
+            "raw_fetch_elapsed_sec": round(time.perf_counter() - fetch_started, 3),
+            "raw_fetch_active_apps": 0,
+            "raw_fetch_worker_apps": 0,
+            "raw_fetch_failures": int(failures),
+            "raw_fetch_missing_tokens": 0,
+            "raw_fetch_app_partitions": {"local_1min": int(len(tickers))},
+            "raw_fetch_app_elapsed_sec": {},
+        }
+        _touch_progress(
+            "RAW_FETCH_DONE",
+            slot=slot,
+            tickers=len(tickers),
+            fetched=len(fetched),
+            failures=failures,
+            elapsed_sec=round(time.perf_counter() - fetch_started, 3),
+            log_line=True,
+        )
+        return fetched
     sessions, tokens = _setup_kite_and_tokens(tickers, progress_slot=slot)
     worker_sessions = sessions if RAW_FETCH_PARALLEL_APPS_ENABLED else sessions[:1]
     if not worker_sessions:
         worker_sessions = sessions[:1]
-    # Fetch enough lookback to compute pre-entry raw momentum/volume features
-    # without relying only on indicator parquet freshness.
-    start = _ensure_ist_ts(slot) - pd.Timedelta(minutes=30)
+    # Fetch from session open so ADX/RSI and every momentum window are
+    # reproducible from the immutable slot snapshot alone.
+    start = _raw_fetch_start_for_slot(slot)
     end = _ensure_ist_ts(slot) + pd.Timedelta(minutes=max(1, ENTRY_SEARCH_MAX_DELAY_MIN), seconds=30)
     fetched: Dict[str, pd.DataFrame] = {}
     errors: List[Dict[str, str]] = []
@@ -1089,123 +1322,23 @@ def _calc_adx_last(bars: pd.DataFrame, period: int = 14) -> float:
 
 def _pre_entry_momentum_features(entry_row: Dict[str, Any], raw_by_ticker: Dict[str, pd.DataFrame]) -> Tuple[Dict[str, float], str]:
     ticker = str(entry_row.get("ticker", "")).upper().strip()
-    side = str(entry_row.get("side", "")).upper().strip()
     entry_price = _safe_float(entry_row.get("entry_price"), float("nan"))
     stop_price = _safe_float(entry_row.get("sl_price"), float("nan"))
-    risk = abs(entry_price - stop_price)
-    if not ticker or side not in {"LONG", "SHORT"} or not risk or not np.isfinite(risk):
-        return {}, "invalid entry/risk"
-
-    entry_ts = _ensure_ist_ts(entry_row.get("pre_momentum_cutoff_ist") or entry_row.get("entry_time_ist"))
     raw = raw_by_ticker.get(ticker)
     if raw is None or raw.empty:
-        return {}, "missing raw 1m fetch"
-    bars = raw.copy()
-    bars["date"] = pd.to_datetime(bars["date"], errors="coerce")
-    if getattr(bars["date"].dt, "tz", None) is None:
-        bars["date"] = bars["date"].dt.tz_localize(IST)
-    else:
-        bars["date"] = bars["date"].dt.tz_convert(IST)
-    cutoff = entry_ts.floor("min")
-    bars = bars[(bars["date"].dt.date == entry_ts.date()) & (bars["date"] < cutoff)].sort_values("date")
-
-    ind_1m = _load_indicator_bars(ticker, "1m")
-    ind_prev = pd.DataFrame()
-    if ind_1m is not None and not ind_1m.empty:
-        ind_prev = ind_1m[(ind_1m["date"].dt.date == entry_ts.date()) & (ind_1m["date"] < cutoff)].sort_values("date")
-        # Indicator parquet can supply ADX/RSI and can also rescue lookback if
-        # the Kite raw fetch starts too close to the entry.
-        if len(ind_prev) > len(bars):
-            bars = ind_prev
-    if len(bars) < 16:
-        return {"pre_bars": float(len(bars))}, f"insufficient pre-entry 1m bars ({len(bars)})"
-
-    for col in ("open", "high", "low", "close", "volume"):
-        bars[col] = pd.to_numeric(bars[col], errors="coerce")
-
-    d = _pre_momentum_side_dir(side)
-    last = bars.iloc[-1]
-    ind_last = None
-    if not ind_prev.empty:
-        ind_sub = ind_prev[ind_prev["date"] <= last["date"]].tail(1)
-        if len(ind_sub):
-            ind_last = ind_sub.iloc[-1]
-    close = _safe_float(last.get("close"), float("nan"))
-    open_ = _safe_float(last.get("open"), float("nan"))
-    high = _safe_float(last.get("high"), float("nan"))
-    low = _safe_float(last.get("low"), float("nan"))
-    rng = max(high - low, 1e-9)
-    out: Dict[str, float] = {"pre_bars": float(len(bars))}
-
-    for n in (1, 2, 3, 5, 10, 15):
-        old_close = _close_back(bars, n)
-        out[f"pre{n}_mom_r"] = float(d * (close - old_close) / risk) if np.isfinite(old_close) else float("nan")
-    for n in (3, 5, 10, 15):
-        _add_window_features(out, bars, side, risk, n)
-    out["pre1_body_r"] = float(d * (close - open_) / risk)
-    out["pre1_close_pos"] = float((close - low) / rng if side == "LONG" else (high - close) / rng)
-    out["pre1_range_r"] = float((high - low) / risk)
-    out["pre1_dir"] = 1.0 if d * (close - open_) > 0 else 0.0
-
-    adx = _safe_float(last.get("ADX"), float("nan"))
-    if not np.isfinite(adx) and ind_last is not None:
-        adx = _safe_float(ind_last.get("ADX"), float("nan"))
-    if not np.isfinite(adx):
-        adx = _calc_adx_last(bars)
-    out["pre1_adx"] = adx
-    rsi = _safe_float(last.get("RSI"), float("nan"))
-    if not np.isfinite(rsi) and ind_last is not None:
-        rsi = _safe_float(ind_last.get("RSI"), float("nan"))
-    if not np.isfinite(rsi):
-        rsi = _calc_rsi_last(bars)
-    out["pre1_rsi_dir"] = float(rsi if side == "LONG" else 100.0 - rsi) if np.isfinite(rsi) else float("nan")
-
-    mom_vals = [out.get("pre1_body_r"), out.get("pre3_mom_r"), out.get("pre5_mom_r")]
-    finite_mom = [v for v in mom_vals if v is not None and np.isfinite(v)]
-    mom = float(np.mean(finite_mom)) if finite_mom else 0.0
-    pos_vals = [out.get("pre3_close_pos"), out.get("pre5_close_pos")]
-    finite_pos = [v for v in pos_vals if v is not None and np.isfinite(v)]
-    pos = float(np.mean(finite_pos)) if finite_pos else 0.5
-    vol = out.get("pre3_vol_ratio20", float("nan"))
-    vol_component = min(float(vol), 3.0) / 3.0 if np.isfinite(vol) else 0.33
-    out["pre_entry_momentum_score"] = float(50 + 25 * np.tanh(2 * mom) + 15 * (pos - 0.5) + 10 * (vol_component - 0.33))
-
-    sig_ts = _ensure_ist_ts(entry_row.get("signal_time_ist"))
-    ind_5m = _load_indicator_bars(ticker, "5m")
-    if ind_5m is not None and not ind_5m.empty:
-        sig_bars = ind_5m[(ind_5m["date"].dt.date == sig_ts.date()) & (ind_5m["date"] <= sig_ts)].sort_values("date")
-        if len(sig_bars):
-            sig = sig_bars.iloc[-1]
-            sig_open = _safe_float(sig.get("open"), float("nan"))
-            sig_high = _safe_float(sig.get("high"), float("nan"))
-            sig_low = _safe_float(sig.get("low"), float("nan"))
-            sig_close = _safe_float(sig.get("close"), float("nan"))
-            sig_rng = max(sig_high - sig_low, 1e-9)
-            out["sig5_body_r"] = float(d * (sig_close - sig_open) / risk)
-            out["sig5_range_r"] = float(sig_rng / risk)
-            out["sig5_close_pos"] = float((sig_close - sig_low) / sig_rng if side == "LONG" else (sig_high - sig_close) / sig_rng)
-            out["sig5_adx_calc"] = _safe_float(sig.get("ADX"), float("nan"))
-            rsi = _safe_float(sig.get("RSI"), float("nan"))
-            out["sig5_rsi_dir"] = float(rsi if side == "LONG" else 100.0 - rsi) if np.isfinite(rsi) else float("nan")
-            prior5 = ind_5m[(ind_5m["date"].dt.date == sig_ts.date()) & (ind_5m["date"] < sig["date"])].tail(20)
-            vol_base5 = pd.to_numeric(prior5["volume"], errors="coerce").mean() if len(prior5) else float("nan")
-            sig_volume = _safe_float(sig.get("volume"), float("nan"))
-            out["sig5_vol_ratio20"] = float(sig_volume / vol_base5) if vol_base5 and np.isfinite(vol_base5) else float("nan")
-
-    return out, ""
+        return {}, "missing immutable raw 1m snapshot"
+    cutoff = entry_row.get("pre_momentum_cutoff_ist") or entry_row.get("entry_time_ist")
+    return shared_pre_momentum.calculate_features(
+        raw_1m=raw,
+        candidate=entry_row,
+        entry_price=entry_price,
+        stop_price=stop_price,
+        cutoff_ist=cutoff,
+    )
 
 
 def _eval_pre_momentum_terms(features: Dict[str, float], terms: Tuple[Tuple[str, str, float], ...]) -> Tuple[bool, str]:
-    failed: List[str] = []
-    for feature, op, threshold in terms:
-        value = _safe_float(features.get(feature, float("nan")), float("nan"))
-        if not np.isfinite(value):
-            failed.append(f"{feature}=nan {op} {threshold:.6g}")
-            continue
-        ok = value >= threshold if op == ">=" else value <= threshold
-        if not ok:
-            failed.append(f"{feature}={value:.4f} {op} {threshold:.6g}")
-    return len(failed) == 0, "; ".join(failed)
+    return shared_pre_momentum.evaluate_terms(features, terms)
 
 
 def _apply_pre_entry_momentum_gate(
@@ -1239,6 +1372,9 @@ def _apply_pre_entry_momentum_gate(
             continue
         features, missing_reason = _pre_entry_momentum_features(data, raw_by_ticker)
         data.update(features)
+        data["pre_momentum_feature_version"] = shared_pre_momentum.FEATURE_VERSION
+        data["pre_momentum_1m_source"] = "immutable_slot_raw_1min"
+        data["pre_momentum_5m_source"] = "frozen_candidate_signal_fields"
         data["pre_momentum_gate_version"] = PRE_ENTRY_MOMENTUM_GATE_VERSION
         if missing_reason:
             data["pre_momentum_missing_reason"] = missing_reason
@@ -1349,8 +1485,13 @@ def _build_entry_rows(
             (_sig_ts_for_lag + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)).floor("min")
             if not pd.isna(_sig_ts_for_lag) else pd.NaT
         )
+        entry_policy = _conf_boot.entry_policy_for_setup(setup) if _CONF_ENGINE_ACTIVE else {}
+        exit_policy = _conf_boot.exit_policy_for_setup(setup) if _CONF_ENGINE_ACTIVE else {}
         entry_bar = _entry_bar_for_candidate(raw_by_ticker, cand, _intended_entry_ist)
-        if entry_bar is not None:
+        if entry_policy.get("model") == "high_break_trigger":
+            entry_price = _safe_float(cand.get("entry_trigger_price"), np.nan)
+            _entry_bar_source = "configured_high_break_trigger"
+        elif entry_bar is not None:
             entry_price = float(entry_bar.get("open", np.nan))
             _entry_bar_source = "forming_t1_open_reference"
         else:
@@ -1410,7 +1551,11 @@ def _build_entry_rows(
                     })
                     continue
         v7_signal_notional_rs = float(entry_price * quantity)
-        _entry_time_ist = _fmt_ist(entry_bar.get("date")) if entry_bar is not None else ""
+        _entry_time_ist = (
+            _fmt_ist(_intended_entry_ist)
+            if entry_policy.get("model") == "high_break_trigger" and not pd.isna(_intended_entry_ist)
+            else _fmt_ist(entry_bar.get("date")) if entry_bar is not None else ""
+        )
         diag = {
             "source_session": SESSION_NAME,
             "signal_discovery_session": str(cand.get("scan_session", "")),
@@ -1421,6 +1566,8 @@ def _build_entry_rows(
             "sl_pct": sl_pct,
             "target_pct": tgt_pct,
             "exit_rule_source": rule_source,
+            "entry_policy": entry_policy,
+            "exit_policy": exit_policy,
             "v11_backtesting_overlay_enabled": bool(V11_BACKTESTING_OVERLAY_ENABLE),
             "v11_selected_strategy_profile": str(V11_BACKTESTING_OVERLAY_PROFILE),
             "reason": str(cand.get("reason", "")),
@@ -1448,6 +1595,11 @@ def _build_entry_rows(
             "signal_low": cand.get("signal_low", ""),
             "signal_close": cand.get("signal_close", ""),
             "signal_volume": cand.get("signal_volume", ""),
+            "signal_adx": cand.get("signal_adx", ""),
+            "signal_rsi": cand.get("signal_rsi", ""),
+            "signal_vol_ratio20": cand.get(
+                "signal_vol_ratio20", cand.get("vol_ratio", "")
+            ),
             "entry_price": entry_price,
             "sl_price": sl_price,
             "target_price": target_price,
@@ -1472,12 +1624,30 @@ def _build_entry_rows(
             "quantity": int(quantity),
             "v7_signal_notional_rs": v7_signal_notional_rs,
             "candidate_id": str(cand.get("candidate_id", "")),
+            "bar_closed_at_ist": str(
+                cand.get("bar_closed_at_ist", cand.get("signal_time_ist", ""))
+            ),
+            "decision_ready_at_ist": str(cand.get("decision_ready_at_ist", "")),
+            "candidate_snapshot_sha256": str(cand.get("candidate_snapshot_sha256", "")),
+            "runtime_manifest_path": str(cand.get("runtime_manifest_path", "")),
             "selection_mode": str(cand.get("selection_mode", "")),
             "exit_rule_source": rule_source,
             "sl_pct": sl_pct,
             "target_pct": tgt_pct,
             "v11_selected_strategy_profile": str(V11_BACKTESTING_OVERLAY_PROFILE),
             "v11_exit_override_applied": bool(exit_override is not None),
+            "entry_policy_model": str(entry_policy.get("model", "")),
+            "entry_trigger_price": cand.get("entry_trigger_price", ""),
+            "entry_cancel_price": cand.get("entry_cancel_price", ""),
+            "entry_valid_minutes": entry_policy.get(
+                "valid_minutes", cand.get("entry_valid_minutes", "")
+            ),
+            "entry_max_gap_pct": entry_policy.get(
+                "max_gap_pct", cand.get("entry_max_gap_pct", "")
+            ),
+            "max_hold_minutes": exit_policy.get("max_hold_minutes", ""),
+            "forced_exit_time": exit_policy.get("forced_exit_time", ""),
+            "stop_gap_mode": exit_policy.get("stop_gap_mode", ""),
         })
     return (
         pd.DataFrame(rows),
@@ -1503,7 +1673,14 @@ def _entry_reject_audit(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Da
             reason = "missing_v8_setup_exit_rule"
         elif ticker not in raw_by_ticker:
             reason = "missing_1min_fetch"
-        elif _entry_bar_for_candidate(raw_by_ticker, cand) is None:
+        elif (
+            not (
+                _CONF_ENGINE_ACTIVE
+                and _conf_boot.entry_policy_for_setup(setup).get("model")
+                == "high_break_trigger"
+            )
+            and _entry_bar_for_candidate(raw_by_ticker, cand) is None
+        ):
             reason = "missing_1min_entry_bar"
         if reason:
             rows.append({
@@ -1537,6 +1714,8 @@ def _apply_v11_entry_overlay(entry_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.D
         # A_MOD_BREAK_C1_LOW, B_AVWAP_RECLAIM_REVERSAL). Pass entries through.
         out = entry_df.copy()
         out["v11_live_entry_overlay_status"] = "CONF_BYPASS" if _CONF_ENGINE_ACTIVE else "DISABLED"
+        stats["v11_entry_overlay_passed"] = int(len(out))
+        stats["v11_entry_overlay_v7_only_rows"] = int(len(out))
         return out, out.iloc[0:0].copy(), stats
 
     universe = v11_live_overlay.v11_override_setup_universe(V11_BACKTESTING_OVERLAY_PROFILE)
@@ -1636,7 +1815,22 @@ def _filter_new_intraday_tickers(entry_df: pd.DataFrame, slot: pd.Timestamp) -> 
     if entry_df is None or entry_df.empty:
         return pd.DataFrame()
     day = _ensure_ist_ts(slot).strftime("%Y-%m-%d")
-    used = _load_live_written_tickers(day)
+    if _IS_REPLAY_ISOLATED:
+        used: set[str] = set()
+        current_key = _slot_key(slot)
+        for path in AUDIT_DIR.glob(f"entry_rows_{day.replace('-', '')}_*.csv"):
+            prior_key = path.stem.removeprefix("entry_rows_")
+            if prior_key >= current_key or path.stat().st_size <= 0:
+                continue
+            try:
+                prior = pd.read_csv(path, usecols=["ticker"])
+            except Exception:
+                continue
+            used.update(
+                prior["ticker"].dropna().astype(str).str.upper().str.strip()
+            )
+    else:
+        used = _load_live_written_tickers(day)
     df = entry_df.copy()
     df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
     df["_score_num"] = pd.to_numeric(df.get("score", 0.0), errors="coerce").fillna(0.0)
@@ -1654,9 +1848,12 @@ def _filter_new_intraday_tickers(entry_df: pd.DataFrame, slot: pd.Timestamp) -> 
     return pd.DataFrame(keep).drop(columns=["_score_num"], errors="ignore").reset_index(drop=True)
 
 
-def _write_live_entry_csvs(entry_df: pd.DataFrame, slot: pd.Timestamp) -> Tuple[int, int, float, float, float]:
+def _write_live_entry_csvs(
+    entry_df: pd.DataFrame,
+    slot: pd.Timestamp,
+) -> Tuple[int, int, float, float, float, Any, Any]:
     if entry_df.empty:
-        return 0, 0, 0.0, 0.0, 0.0
+        return 0, 0, 0.0, 0.0, 0.0, None, None
     write_started = time.perf_counter()
     day = _ensure_ist_ts(slot).strftime("%Y-%m-%d")
     live_signals_dir = v7_persistent.Path(v7_persistent.LIVE_SIGNALS_DIR)
@@ -1699,6 +1896,8 @@ def _write_live_entry_csvs(entry_df: pd.DataFrame, slot: pd.Timestamp) -> Tuple[
         round(short_elapsed, 3),
         round(long_elapsed, 3),
         round(time.perf_counter() - write_started, 3),
+        short_result,
+        long_result,
     )
 
 
@@ -1716,29 +1915,15 @@ def _nifty_regime_short_mult() -> float:
     today_str = _dt.date.today().isoformat()
     if today_str in _nifty_regime_cache:
         return _nifty_regime_cache[today_str]
-    mult = 1.0
-    try:
-        df = pd.read_parquet(NIFTY_5MIN_PARQUET, columns=["date", "close"])
-        daily = (
-            df.assign(trade_date=df["date"].dt.normalize())
-            .groupby("trade_date", sort=True)["close"]
-            .last()
-            .reset_index()
-        )
-        daily.columns = ["trade_date", "close"]
-        daily = daily.sort_values("trade_date").tail(NIFTY_MA_DAYS + 3).reset_index(drop=True)
-        if len(daily) >= NIFTY_MA_DAYS + 1:
-            daily["ma20"] = daily["close"].rolling(NIFTY_MA_DAYS).mean()
-            last, prev = daily.iloc[-1], daily.iloc[-2]
-            if pd.notna(last["ma20"]) and pd.notna(prev["ma20"]):
-                bullish = (last["close"] > last["ma20"]) and (last["ma20"] > prev["ma20"])
-                if bullish:
-                    mult = NIFTY_REGIME_SHORT_SIZE_MULT
-    except Exception as _exc:  # noqa: BLE001
-        pass  # parquet missing or unreadable — keep full size
+    mult = nifty_regime_short_multiplier(
+        NIFTY_5MIN_PARQUET,
+        trade_day=today_str,
+        enabled=NIFTY_REGIME_GATE_ENABLED,
+        ma_days=NIFTY_MA_DAYS,
+        bullish_multiplier=NIFTY_REGIME_SHORT_SIZE_MULT,
+    )
     _nifty_regime_cache[today_str] = mult
     return mult
-
 
 _fno_ban_cache: dict = {}  # date_str -> frozenset[str] of banned tickers
 _fno_ban_cache_lock = threading.Lock()
@@ -1833,16 +2018,18 @@ def _get_adv_rs(ticker: str) -> float:
 
 def _risk_based_qty(entry_price: float, sl_price: float) -> int:
     """Compute risk-based position size.  Falls back to fixed-notional on bad inputs."""
-    if not RISK_SIZING_ENABLED or entry_price <= 0 or sl_price <= 0:
-        return max(1, int(V7_SIGNAL_NOTIONAL_RS / entry_price)) if entry_price > 0 else 1
-    stop_dist = abs(entry_price - sl_price)
-    if stop_dist <= 0:
-        return max(1, int(V7_SIGNAL_NOTIONAL_RS / entry_price))
-    risk_rs = RISK_EQUITY_RS * RISK_PCT_PER_TRADE / 100.0
-    raw_qty = risk_rs / stop_dist
-    max_qty = RISK_MAX_NOTIONAL_RS / entry_price
-    min_qty = RISK_MIN_NOTIONAL_RS / entry_price
-    return max(1, int(max(min_qty, min(max_qty, raw_qty))))
+    return risk_based_quantity(
+        entry_price,
+        sl_price,
+        RiskSizingConfig(
+            enabled=RISK_SIZING_ENABLED,
+            fallback_notional_rs=V7_SIGNAL_NOTIONAL_RS,
+            equity_rs=RISK_EQUITY_RS,
+            risk_pct_per_trade=RISK_PCT_PER_TRADE,
+            min_notional_rs=RISK_MIN_NOTIONAL_RS,
+            max_notional_rs=RISK_MAX_NOTIONAL_RS,
+        ),
+    )
 
 
 def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]:
@@ -1932,10 +2119,12 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
     # Capture stage2_detected_at_ist immediately after all mandatory filters accept
     # the candidate. This is the wall-clock time the entry engine approved it for
     # signal writing — distinct from detected_time_ist (the later CSV-write time).
+    _stage2_ts = ""
     if not entries.empty:
         _stage2_ts = _fmt_ist(pd.Timestamp.now(tz=IST))
         entries = entries.copy()
         entries["stage2_detected_at_ist"] = _stage2_ts
+        entries["entry_engine_ready_at_ist"] = _stage2_ts
 
     csv_write_started = time.perf_counter()
     _touch_progress("AUDIT_CSV_WRITE", slot=slot, entry_rows=len(entries), log_line=True)
@@ -1975,7 +2164,7 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
     freshness_rejected_rows: list = []
     freshness_passed_rows: list = []
     _touch_progress("FRESHNESS_GATE", slot=slot, entry_rows=len(entries), log_line=True)
-    if not entries.empty:
+    if write_live_entries and not entries.empty:
         _max_lag = float(MAX_SIGNAL_HANDOFF_LAG_SEC) if MAX_SIGNAL_HANDOFF_LAG_SEC > 0 else 30.0
         for _, _row in entries.iterrows():
             _ok, _reason = signal_contract.validate_signal_timing_row(
@@ -1998,7 +2187,11 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
     short_signal_write_elapsed_sec = 0.0
     long_signal_write_elapsed_sec = 0.0
     live_signal_csv_write_elapsed_sec = 0.0
+    short_write_result = long_write_result = None
+    writer_input_entries = entries.copy()
     if write_live_entries and not entries.empty:
+        entries = entries.copy()
+        entries["signal_write_requested_at_ist"] = _fmt_ist(pd.Timestamp.now(tz=IST))
         _touch_progress("LIVE_SIGNAL_CSV_WRITE", slot=slot, entry_rows=len(entries), log_line=True)
         (
             short_written,
@@ -2006,7 +2199,122 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
             short_signal_write_elapsed_sec,
             long_signal_write_elapsed_sec,
             live_signal_csv_write_elapsed_sec,
+            short_write_result,
+            long_write_result,
         ) = _write_live_entry_csvs(entries, slot)
+    written_candidate_ids = {
+        str(candidate_id)
+        for result in (short_write_result, long_write_result)
+        if result is not None
+        for candidate_id in result.written_candidate_ids
+        if str(candidate_id)
+    }
+    if write_live_entries:
+        writer_passed_entries = (
+            writer_input_entries.loc[
+                writer_input_entries.get(
+                    "candidate_id", pd.Series("", index=writer_input_entries.index)
+                ).astype(str).isin(written_candidate_ids)
+            ].copy()
+            if not writer_input_entries.empty
+            else pd.DataFrame()
+        )
+        writer_rejected_entries = decision_funnel.difference_frame(
+            writer_input_entries,
+            writer_passed_entries,
+        )
+    else:
+        writer_passed_entries = writer_input_entries
+        writer_rejected_entries = pd.DataFrame()
+    signal_write_completed_at_ist = _fmt_ist(pd.Timestamp.now(tz=IST))
+
+    decision_ready_ts = _ensure_ist_ts(
+        candidate_wait_stats.get("decision_ready_at_ist")
+    ) if candidate_wait_stats.get("decision_ready_at_ist") else pd.NaT
+    stage2_ts = _ensure_ist_ts(_stage2_ts) if _stage2_ts else pd.NaT
+    signal_write_ts = _ensure_ist_ts(signal_write_completed_at_ist)
+    bar_close_to_candidate_ready_sec = (
+        float((decision_ready_ts - slot).total_seconds())
+        if pd.notna(decision_ready_ts)
+        else np.nan
+    )
+    candidate_ready_to_entry_engine_ready_sec = (
+        float((stage2_ts - decision_ready_ts).total_seconds())
+        if pd.notna(stage2_ts) and pd.notna(decision_ready_ts)
+        else np.nan
+    )
+    candidate_ready_to_signal_write_sec = (
+        float((signal_write_ts - decision_ready_ts).total_seconds())
+        if pd.notna(decision_ready_ts) and (short_written + long_written) > 0
+        else np.nan
+    )
+    intended_entry_ts = slot + pd.Timedelta(
+        minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN
+    )
+    intended_entry_to_signal_write_sec = (
+        float((signal_write_ts - intended_entry_ts).total_seconds())
+        if (short_written + long_written) > 0
+        else np.nan
+    )
+    entry_write_sla_state = (
+        "PASS"
+        if np.isfinite(intended_entry_to_signal_write_sec)
+        and intended_entry_to_signal_write_sec <= ENTRY_WRITE_SLA_SEC
+        else "MISS"
+        if np.isfinite(intended_entry_to_signal_write_sec)
+        else "NO_SIGNAL"
+    )
+
+    entry_funnel_recorded_at = _fmt_ist(pd.Timestamp.now(tz=IST))
+    entry_funnel_records: List[Dict[str, Any]] = []
+    entry_funnel_stages = (
+        (candidates, "candidate_snapshot", "PASS", ""),
+        (raw_entries, "entry_row_build", "PASS", ""),
+        (entry_fetch_rejected, "entry_row_build", "REJECT", "entry_row_build_rejected"),
+        (adv_cap_rejected, "adv_cap", "REJECT", "adv_cap"),
+        (fno_ban_rejected, "fno_ban", "REJECT", "fno_ban_short"),
+        (v11_filtered_entries, "entry_overlay", "PASS", ""),
+        (v11_entry_rejected, "entry_overlay", "REJECT", "entry_overlay_rejected"),
+        (pre_momentum_entries, "pre_momentum", "PASS", ""),
+        (pre_momentum_rejected, "pre_momentum", "REJECT", "pre_momentum_rejected"),
+        (selected_entries, "slot_dedupe", "PASS", ""),
+        (
+            decision_funnel.difference_frame(pre_momentum_entries, selected_entries),
+            "slot_dedupe",
+            "REJECT",
+            "lower_ranked_same_ticker_slot",
+        ),
+        (
+            writer_passed_entries,
+            "signal_writer",
+            "PASS" if write_live_entries else "SHADOW",
+            "",
+        ),
+        (
+            writer_rejected_entries,
+            "signal_writer",
+            "REJECT",
+            "signal_writer_rejected",
+        ),
+        (freshness_rejected_df, "freshness", "REJECT", "pre_write_freshness"),
+    )
+    for frame, stage, outcome, reason in entry_funnel_stages:
+        entry_funnel_records.extend(
+            decision_funnel.records_for_stage(
+                frame,
+                stage=stage,
+                outcome=outcome,
+                recorded_at_ist=entry_funnel_recorded_at,
+                default_reason=reason,
+            )
+        )
+    entry_funnel_csv = AUDIT_DIR / f"entry_decision_funnel_{_slot_key(slot)}.csv"
+    entry_funnel_jsonl = AUDIT_DIR / f"entry_decision_funnel_{_slot_key(slot)}.jsonl"
+    entry_funnel_rows = decision_funnel.write_slot_funnel(
+        records=entry_funnel_records,
+        csv_path=entry_funnel_csv,
+        jsonl_path=entry_funnel_jsonl,
+    )
 
     raw_fetch_stats = dict(_last_raw_fetch_stats)
     raw_fetch_stats["raw_fetch_app_partitions_json"] = json.dumps(
@@ -2035,6 +2343,27 @@ def run_slot(slot_ts: Any, *, write_live_entries: bool = True) -> Dict[str, Any]
         "intraday_duplicate_rows": int(max(0, len(selected_entries) - len(entries))),
         "short_written": int(short_written),
         "long_written": int(long_written),
+        "signal_writer_input_rows": int(len(writer_input_entries)),
+        "signal_writer_rejected_rows": int(len(writer_rejected_entries)),
+        "signal_writer_short_result_json": json.dumps(
+            short_write_result.as_dict() if short_write_result is not None else {},
+            sort_keys=True,
+            default=str,
+        ),
+        "signal_writer_long_result_json": json.dumps(
+            long_write_result.as_dict() if long_write_result is not None else {},
+            sort_keys=True,
+            default=str,
+        ),
+        "entry_decision_funnel_rows": int(entry_funnel_rows),
+        "entry_decision_funnel_csv": str(entry_funnel_csv),
+        "signal_write_completed_at_ist": signal_write_completed_at_ist,
+        "bar_close_to_candidate_ready_sec": bar_close_to_candidate_ready_sec,
+        "candidate_ready_to_entry_engine_ready_sec": candidate_ready_to_entry_engine_ready_sec,
+        "candidate_ready_to_signal_write_sec": candidate_ready_to_signal_write_sec,
+        "intended_entry_to_signal_write_sec": intended_entry_to_signal_write_sec,
+        "entry_write_sla_sec": float(ENTRY_WRITE_SLA_SEC),
+        "entry_write_sla_state": entry_write_sla_state,
         "raw_dir": str(RAW_1MIN_DIR),
         "latest_entries_csv": str(latest_entries_csv),
         "setup_exit_rules_csv": str(LATEST_DIR / "setup_exit_rules_v8.csv"),
@@ -2083,8 +2412,37 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    manifest_path, _ = freeze_runtime_manifest(
+        SESSION_SLUG,
+        runtime_root=RUNTIME_ROOT,
+        source_files=(
+            Path(__file__),
+            Path(v11_live_overlay.__file__),
+            Path(_conf_boot.__file__),
+            Path(signal_writer.__file__),
+            Path(signal_contract.__file__),
+        ),
+        resolved_config={
+            "session_root": str(SESSION_ROOT),
+            "signal_discovery_root": str(SIGNAL_DISCOVERY_ROOT),
+            "use_slot_candidate_json": bool(USE_SLOT_CANDIDATE_JSON),
+            "require_slot_complete_marker": bool(REQUIRE_SLOT_COMPLETE_MARKER),
+            "candidate_wait_sec": float(CANDIDATE_WAIT_SEC),
+            "max_signal_handoff_lag_sec": float(MAX_SIGNAL_HANDOFF_LAG_SEC),
+            "entry_due_grace_sec": int(ENTRY_DUE_GRACE_SEC),
+            "entry_signal_to_entry_lag_min": int(ENTRY_SIGNAL_TO_ENTRY_LAG_MIN),
+            "raw_fetch_parallel_apps": bool(RAW_FETCH_PARALLEL_APPS_ENABLED),
+            "raw_fetch_app_count": int(RAW_FETCH_APP_COUNT),
+            "raw_session_reuse_enabled": True,
+            "entry_write_sla_sec": float(ENTRY_WRITE_SLA_SEC),
+            "pre_momentum_gates_enabled": bool(PRE_ENTRY_MOMENTUM_GATES_ENABLED),
+            "adv_cap_enabled": bool(ADV_CAP_ENABLED),
+            "fno_ban_filter_enabled": bool(FNO_BAN_FILTER_ENABLED),
+        },
+    )
     print(f"[LIVE] {SESSION_NAME}", flush=True)
     print(f"[INFO] raw_1min_dir={RAW_1MIN_DIR}", flush=True)
+    print(f"[INFO] frozen_runtime_manifest={manifest_path}", flush=True)
 
     if args.replay_slot:
         if not _IS_REPLAY_ISOLATED and not args.production_replay:
@@ -2105,6 +2463,7 @@ def main() -> None:
     # Pre-mark all expired past slots so the monitor does not show BLOCKED for
     # slots the engine could never have fulfilled at this startup time.
     processed: set[str] = _startup_expired_slot_keys(v7_persistent.base_v15.now_ist())
+    raw_sessions_prewarmed = False
     while True:
         now = v7_persistent.base_v15.now_ist()
         _touch_status("RUNNING", phase="LOOP")
@@ -2123,6 +2482,22 @@ def main() -> None:
         if now.time() < MARKET_OPEN or now.time() > END_TIME:
             time.sleep(5.0)
             continue
+        if not raw_sessions_prewarmed:
+            try:
+                sessions = _setup_kite_app_pool()
+                print(
+                    f"[{SESSION_NAME}] prewarmed {len(sessions)} Kite raw-fetch sessions",
+                    flush=True,
+                )
+                raw_sessions_prewarmed = True
+            except Exception as exc:
+                print(
+                    f"[{SESSION_NAME}] raw-session prewarm failed; will retry: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                time.sleep(POLL_SEC)
+                continue
 
         run_at = _next_entry_run_after(now)
         slot = run_at - pd.Timedelta(seconds=ENTRY_DELAY_SEC)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -28,10 +29,12 @@ import eqidv2_v11_live_overlay as v11_live_overlay
 import eqidv2_live_combined_analyser_csv_v15 as base_v15
 import eqidv2_final_conf_live_bootstrap as _conf_boot
 import eqidv2_conf_tier_c_live_scan as _conf_tier_c
+import eqidv2_decision_funnel as decision_funnel
+from eqidv2_runtime_manifest import freeze_runtime_manifest
 from eqidv2_runtime_paths import RUNTIME_ROOT, RUNTIME_STATUS_DIR, runtime_dir
 
 
-# --- final_setup_conf (16-setup book) runtime activation --------------------
+# --- configured final_setup_conf book runtime activation --------------------
 # When EQIDV2_USE_FINAL_SETUP_CONF is set, the conf becomes the single source of
 # truth: the detection whitelist + legacy blocklists are replaced by the conf's
 # setups. Native conf setups continue through v8 + research filters; only the
@@ -72,7 +75,8 @@ def _ensure_conf_scanner() -> bool:
     _n_readmit = len(_conf_boot.readmit_setups())
     print(
         f"[{SESSION_NAME}] final_setup_conf ACTIVE ({_conf_boot.GATE_VERSION}): "
-        f"{len(keys)} setups (match-v11): {len(keys) - _n_readmit} native through v8+overlay+research, "
+        f"source={_conf_boot.conf_source()} {len(keys)} setups (match-v11): "
+        f"{len(keys) - _n_readmit} native through v8+overlay+research, "
         f"{_n_readmit} non-native readmitted; conf mask is the final selection.",
         flush=True,
     )
@@ -84,7 +88,7 @@ SESSION_SLUG = "signal_discovery_v7_5mins_ID"
 # P2-14: schema version stamped into every candidate row.  Bump this string
 # whenever the candidate CSV column set changes so the entry engine can detect
 # stale-format files without a column-name comparison.
-CANDIDATE_SCHEMA_VERSION = "v7_candidate_2026_06_10"
+CANDIDATE_SCHEMA_VERSION = "v7_candidate_2026_07_28_parity_v1"
 
 # When EQIDV2_REPLAY_OUTPUT_ROOT is set, all session-level outputs (JSON
 # snapshots, audit CSVs, JSONL, status, heartbeat) redirect there instead of
@@ -105,6 +109,7 @@ JSON_DIR = SESSION_ROOT / "json"
 LATEST_DIR = SESSION_ROOT / "latest"
 AUDIT_DIR = SESSION_ROOT / "audit"
 HEARTBEAT_DIR = SESSION_ROOT / "heartbeat"
+_RUNTIME_MANIFEST_PATH = ""
 
 SLOT_MINUTES = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_SLOT_MINUTES", "5"))
 POST_SLOT_DELAY_SEC = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_POST_SLOT_DELAY_SEC", "15"))
@@ -133,6 +138,39 @@ FEED_GATE_MIN_DELAY_SEC = int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MI
 FEED_GATE_MAX_VERIFICATION_FAILURES = max(
     0,
     int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MAX_VERIFICATION_FAILURES", "5")),
+)
+FEED_UNIVERSE_MANIFEST = Path(
+    os.getenv(
+        "EQIDV2_SIGNAL_DISCOVERY_V7_FEED_UNIVERSE_MANIFEST",
+        str(RUNTIME_STATUS_DIR / "feed_universe_5m.json"),
+    )
+)
+REQUIRE_FEED_UNIVERSE_MANIFEST = str(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_REQUIRE_FEED_UNIVERSE_MANIFEST", "0")
+).strip().lower() in {"1", "true", "yes", "on"}
+LATENCY_WARN_SEC = float(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LATENCY_WARN_SEC", "45")
+)
+LATENCY_CRITICAL_SEC = float(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LATENCY_CRITICAL_SEC", "55")
+)
+LATENCY_HARD_SEC = float(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LATENCY_HARD_SEC", "60")
+)
+LATENCY_WRITE_RESERVE_SEC = float(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LATENCY_WRITE_RESERVE_SEC", "2")
+)
+LATENCY_EXPECTED_SCAN_SEC = float(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_EXPECTED_SCAN_SEC", "15")
+)
+LATENCY_FAIL_CLOSED = str(
+    os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_LATENCY_FAIL_CLOSED", "0")
+).strip().lower() in {"1", "true", "yes", "on"}
+LATENCY_STATUS_PATH = Path(
+    os.getenv(
+        "EQIDV2_SIGNAL_DISCOVERY_V7_LATENCY_STATUS_PATH",
+        str(RUNTIME_STATUS_DIR / "signal_discovery_v7_5mins_ID.latency.json"),
+    )
 )
 # reject_slot: skip scan entirely on feed timeout (default, fail-closed).
 # degraded_scan: scan on whatever data is present (emergency fallback only).
@@ -492,52 +530,84 @@ def _next_slot_after(now: datetime) -> datetime:
     return slot
 
 
+def _canonical_universe(symbols: Iterable[str]) -> List[str]:
+    return sorted({str(t).strip().upper() for t in symbols if str(t).strip()})
+
+
+def _universe_sha256(symbols: Iterable[str]) -> str:
+    return hashlib.sha256("\n".join(_canonical_universe(symbols)).encode("utf-8")).hexdigest()
+
+
+def _read_feed_universe_manifest(expected_day: Optional[str] = None) -> Dict[str, Any]:
+    """Read and validate the feed's atomic canonical-universe manifest."""
+    payload = json.loads(FEED_UNIVERSE_MANIFEST.read_text(encoding="utf-8"))
+    symbols = _canonical_universe(payload.get("symbols", []) or [])
+    count = int(payload.get("universe_count", -1))
+    expected_hash = str(payload.get("universe_sha256", "")).strip().lower()
+    actual_hash = _universe_sha256(symbols)
+    if count != len(symbols):
+        raise ValueError(f"manifest count mismatch: declared={count} actual={len(symbols)}")
+    if not expected_hash or expected_hash != actual_hash:
+        raise ValueError("manifest sha256 mismatch")
+    slot = _ensure_ist_ts(payload.get("slot_ist")).floor(f"{SLOT_MINUTES}min")
+    if expected_day and slot.strftime("%Y-%m-%d") != str(expected_day):
+        raise ValueError(
+            f"manifest day mismatch: expected={expected_day} actual={slot.strftime('%Y-%m-%d')}"
+        )
+    return {
+        **payload,
+        "symbols": symbols,
+        "universe_count": len(symbols),
+        "universe_sha256": actual_hash,
+        "_slot_ts": slot,
+    }
+
+
 def _load_universe() -> List[str]:
+    try:
+        manifest = _read_feed_universe_manifest()
+        return list(manifest["symbols"])
+    except Exception as exc:
+        if REQUIRE_FEED_UNIVERSE_MANIFEST:
+            raise RuntimeError(
+                f"required feed universe manifest unavailable/invalid: {type(exc).__name__}: {exc}"
+            ) from exc
+        print(
+            f"[{SESSION_NAME}] feed universe unavailable; using legacy universe: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
     try:
         universe = candidate_scan.v2._load_universe()
     except Exception as exc:
         print(f"[{SESSION_NAME}] universe load failed: {type(exc).__name__}: {exc}", flush=True)
         universe = []
-    return sorted({str(t).strip().upper() for t in universe if str(t).strip()})
+    return _canonical_universe(universe)
 
 
 def _check_universe_feed_parity(scanner_tickers: List[str]) -> None:
-    """Warn when the scanner universe diverges from the feed's latest slot count.
-
-    The feed writes a slot-ready marker that includes tickers_written. If that
-    count differs from the scanner universe by more than UNIVERSE_PARITY_WARN_DELTA,
-    some symbols will be scanned against stale or missing indicator files.
-    """
-    UNIVERSE_PARITY_WARN_DELTA = int(
-        os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_UNIVERSE_PARITY_WARN_DELTA", "15")
-    )
-    scanner_count = len(scanner_tickers)
+    """Verify exact symbol/hash parity with the authoritative feed universe."""
+    scanner_symbols = _canonical_universe(scanner_tickers)
+    scanner_hash = _universe_sha256(scanner_symbols)
     try:
-        from eqidv2_runtime_paths import runtime_dir as _runtime_dir
-        slot_ready_dir = _runtime_dir("slot_ready_5m")
-        markers = sorted(slot_ready_dir.glob("slot_*.json"))
-        if not markers:
-            return
-        import json as _json
-        marker = _json.loads(markers[-1].read_text(encoding="utf-8", errors="replace"))
-        feed_count = int(marker.get("tickers_written", marker.get("tickers_expected", 0)) or 0)
-        if feed_count <= 0:
-            return
-        delta = abs(scanner_count - feed_count)
-        if delta > UNIVERSE_PARITY_WARN_DELTA:
-            print(
-                f"[{SESSION_NAME}] UNIVERSE MISMATCH: scanner={scanner_count} feed={feed_count} "
-                f"delta={delta} > warn_threshold={UNIVERSE_PARITY_WARN_DELTA}. "
-                f"Some symbols may lack fresh indicator bars. "
-                f"Reconcile filtered_stocks_MIS.py with the feed universe before scanning.",
-                flush=True,
+        manifest = _read_feed_universe_manifest()
+        feed_symbols = list(manifest["symbols"])
+        feed_hash = str(manifest["universe_sha256"])
+        if scanner_symbols != feed_symbols or scanner_hash != feed_hash:
+            missing = sorted(set(feed_symbols) - set(scanner_symbols))
+            extra = sorted(set(scanner_symbols) - set(feed_symbols))
+            raise RuntimeError(
+                f"scanner={len(scanner_symbols)} feed={len(feed_symbols)} "
+                f"missing={missing[:8]} extra={extra[:8]}"
             )
-        else:
-            print(
-                f"[{SESSION_NAME}] universe parity OK: scanner={scanner_count} feed={feed_count} delta={delta}",
-                flush=True,
-            )
+        print(
+            f"[{SESSION_NAME}] universe parity EXACT: "
+            f"count={len(scanner_symbols)} sha256={scanner_hash[:12]}",
+            flush=True,
+        )
     except Exception as exc:
+        if REQUIRE_FEED_UNIVERSE_MANIFEST:
+            raise
         print(f"[{SESSION_NAME}] universe parity check skipped: {type(exc).__name__}: {exc}", flush=True)
 
 
@@ -579,6 +649,18 @@ def _v11_overlay_slot_json_path(slot: pd.Timestamp) -> Path:
 
 def _v11_overlay_rejected_slot_json_path(slot: pd.Timestamp) -> Path:
     return JSON_DIR / f"v11_overlay_rejected_candidate_tickers_{_slot_key(slot)}.json"
+
+
+def _slot_complete_marker_path(slot: pd.Timestamp) -> Path:
+    return JSON_DIR / f"slot_complete_{_slot_key(slot)}.json"
+
+
+def _slot_funnel_csv_path(slot: pd.Timestamp) -> Path:
+    return AUDIT_DIR / f"candidate_decision_funnel_{_slot_key(slot)}.csv"
+
+
+def _slot_funnel_jsonl_path(slot: pd.Timestamp) -> Path:
+    return AUDIT_DIR / f"candidate_decision_funnel_{_slot_key(slot)}.jsonl"
 
 
 def _daily_audit_path(day: str) -> Path:
@@ -651,12 +733,24 @@ def _append_candidates_to_path(df: pd.DataFrame, path: Path) -> Dict[str, int]:
             existing_header = []
         incoming_header = list(df.columns)
         if existing_header and existing_header != incoming_header:
-            backup = path.with_name(f"{path.stem}_schema_backup_{base_v15.now_ist().strftime('%Y%m%d_%H%M%S')}{path.suffix}")
             try:
-                path.replace(backup)
-                print(f"[{SESSION_NAME}] archived schema-mismatched CSV: {backup}", flush=True)
-            except OSError as exc:
-                print(f"[{SESSION_NAME}] schema backup failed for {path}: {exc}", flush=True)
+                existing_frame = pd.read_csv(path, low_memory=False)
+                union_header = existing_header + [
+                    col for col in incoming_header if col not in existing_header
+                ]
+                _atomic_write_csv(path, existing_frame.reindex(columns=union_header))
+                df = df.reindex(columns=union_header)
+                print(
+                    f"[{SESSION_NAME}] expanded daily CSV schema in place: "
+                    f"{path} columns={len(union_header)}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(
+                    f"[{SESSION_NAME}] daily CSV schema expansion failed for "
+                    f"{path}: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
 
     existing = _load_existing_ids(path)
     existing_tickers = _load_existing_tickers(path)
@@ -741,6 +835,35 @@ def _write_json_snapshots(
     _atomic_write_text(slot_json_path or _slot_json_path(slot), text)
     _atomic_write_text(LATEST_DIR / latest_json_name, text)
     _atomic_write_csv(LATEST_DIR / latest_csv_name, pd.DataFrame() if df is None else df)
+
+
+def _write_slot_complete_marker(
+    slot: pd.Timestamp,
+    *,
+    decision_ready_at_ist: str,
+    candidate_count: int,
+) -> Path:
+    candidate_path = _slot_json_path(slot)
+    candidate_sha256 = ""
+    if candidate_path.exists():
+        candidate_sha256 = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+    payload = {
+        "schema_version": "eqidv2_scanner_slot_complete_v1",
+        "session": SESSION_NAME,
+        "slot_ist": _fmt_slot(slot),
+        "decision_ready_at_ist": decision_ready_at_ist,
+        "published_at_ist": _fmt_slot(pd.Timestamp.now(tz=base_v15.IST)),
+        "candidate_count": int(candidate_count),
+        "candidate_json_path": str(candidate_path),
+        "candidate_json_sha256": candidate_sha256,
+        "runtime_manifest_path": _RUNTIME_MANIFEST_PATH,
+        "complete": True,
+    }
+    text = json.dumps(payload, indent=2, sort_keys=True, default=str)
+    marker_path = _slot_complete_marker_path(slot)
+    _atomic_write_text(marker_path, text)
+    _atomic_write_text(LATEST_DIR / "latest_slot_complete.json", text)
+    return marker_path
 
 
 def _parse_rule(rule: str) -> Optional[Dict[str, Any]]:
@@ -1413,11 +1536,29 @@ def _append_audit(slot: pd.Timestamp, summary: Dict[str, Any]) -> None:
         writer.writerow(row)
 
 
+def _active_conf_tier_c_setups() -> set[str]:
+    if not _CONF_SCANNER_ACTIVE:
+        return set()
+    return set(_conf_boot.conf_keys()).intersection(_conf_tier_c.TIER_C_SETUPS)
+
+
+def _legacy_tier123_eligible(scan_start_lag_sec: float) -> bool:
+    # final_setup_conf uses its own causal detector for any active Tier-C setup.
+    # Running the legacy full-universe branch as well adds latency and candidates
+    # that the final conf gate immediately rejects.
+    return bool(
+        not _CONF_SCANNER_ACTIVE
+        and V11_BACKTESTING_OVERLAY_INCLUDE_TIER123
+        and scan_start_lag_sec <= TIER123_LATEST_START_LAG_SEC
+    )
+
+
 def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[str, Any]:
     _ensure_conf_scanner()
     slot = _ensure_ist_ts(slot_ts).floor("min")
     day = slot.strftime("%Y-%m-%d")
     tickers = _load_universe_for_day(day)
+    conf_tier_c_setups = _active_conf_tier_c_setups()
     started = time.perf_counter()
     try:
         market_ctx = candidate_scan.build_market_context_once()
@@ -1427,11 +1568,14 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
     _t_after_ctx = time.perf_counter()
 
     scan_start_lag_sec = max(0.0, (base_v15.now_ist() - slot.to_pydatetime()).total_seconds())
-    tier123_for_slot = bool(
-        V11_BACKTESTING_OVERLAY_INCLUDE_TIER123
-        and scan_start_lag_sec <= TIER123_LATEST_START_LAG_SEC
-    )
-    if V11_BACKTESTING_OVERLAY_INCLUDE_TIER123 and not tier123_for_slot:
+    tier123_for_slot = _legacy_tier123_eligible(scan_start_lag_sec)
+    if V11_BACKTESTING_OVERLAY_INCLUDE_TIER123 and _CONF_SCANNER_ACTIVE:
+        print(
+            f"[{SESSION_NAME} timing] legacy tier123 skipped: "
+            "final_setup_conf uses native/dedicated causal detectors",
+            flush=True,
+        )
+    elif V11_BACKTESTING_OVERLAY_INCLUDE_TIER123 and not tier123_for_slot:
         print(
             f"[{SESSION_NAME} timing] tier123 skipped: scan_start_lag={scan_start_lag_sec:.1f}s "
             f"> latest_start_lag={TIER123_LATEST_START_LAG_SEC:.1f}s",
@@ -1457,6 +1601,19 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
             max_workers=TIER123_SCAN_WORKERS,
         )
 
+    conf_tier_c_executor: Optional[ThreadPoolExecutor] = None
+    conf_tier_c_future = None
+    conf_tier_c_started = time.perf_counter()
+    if conf_tier_c_setups and PARALLEL_SCAN_BRANCHES_ENABLE:
+        conf_tier_c_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="v7-conf-tierc-branch")
+        conf_tier_c_future = conf_tier_c_executor.submit(
+            _conf_tier_c.scan_conf_tier_c_live_slot,
+            slot,
+            tickers,
+            market_ctx=market_ctx,
+            max_workers=scan_workers,
+        )
+
     try:
         scanned_candidates = candidate_scan.scan_slot_candidates(
             slot,
@@ -1474,13 +1631,19 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         print(f"[{SESSION_NAME}] scan failed: {type(exc).__name__}: {exc}", flush=True)
         candidates = pd.DataFrame()
         scanned_candidates = pd.DataFrame()
-    if _CONF_SCANNER_ACTIVE:
+    _t_after_native_scan = time.perf_counter()
+    if conf_tier_c_setups:
         # conf mode: add the 4 Tier-C setups (no native detector) via their
         # dedicated live causal scanner, merged into the candidate stream before
-        # ranking + the conf gate. (The legacy v11 tier123 overlay is skipped.)
+        # ranking + the conf gate. Run this independent full-universe branch in
+        # parallel with the native scan. The legacy v11 tier123 overlay is skipped.
         try:
-            tier_c = _conf_tier_c.scan_conf_tier_c_live_slot(
-                slot, tickers, market_ctx=market_ctx, max_workers=scan_workers,
+            tier_c = (
+                conf_tier_c_future.result()
+                if conf_tier_c_future is not None
+                else _conf_tier_c.scan_conf_tier_c_live_slot(
+                    slot, tickers, market_ctx=market_ctx, max_workers=scan_workers,
+                )
             )
             if tier_c is not None and not tier_c.empty:
                 candidates = (
@@ -1492,10 +1655,21 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
                 print(f"[{SESSION_NAME}] conf tier-c scan added {len(tier_c)} candidates", flush=True)
         except Exception as exc:
             print(f"[{SESSION_NAME}] conf tier-c scan failed: {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            if conf_tier_c_executor is not None:
+                conf_tier_c_executor.shutdown(wait=True)
+        print(
+            f"[{SESSION_NAME} timing] conf_tier_c_branch="
+            f"{time.perf_counter()-conf_tier_c_started:.3f}s "
+            f"parallel={bool(conf_tier_c_future is not None)} "
+            f"setups={','.join(sorted(conf_tier_c_setups))}",
+            flush=True,
+        )
     _t_after_scan = time.perf_counter()
     print(
         f"[{SESSION_NAME} timing] market_ctx={_t_after_ctx-started:.3f}s "
-        f"main_scan={_t_after_scan-_t_after_ctx:.3f}s",
+        f"native_scan={_t_after_native_scan-_t_after_ctx:.3f}s "
+        f"required_scan_wall={_t_after_scan-_t_after_ctx:.3f}s",
         flush=True,
     )
     raw_candidates = add_live_ranker_scores(candidates.copy() if candidates is not None else pd.DataFrame(), day)
@@ -1528,14 +1702,24 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
             tier_stats: Dict[str, Any] = {
                 "v11_tier123_live_enabled": bool(tier123_for_slot),
                 "v11_tier123_live_scan_mode": (
-                    "pending" if tier123_for_slot else "deadline_budget_skipped"
+                    "pending"
+                    if tier123_for_slot
+                    else (
+                        "final_setup_conf_dedicated_detectors"
+                        if _CONF_SCANNER_ACTIVE
+                        else "deadline_budget_skipped"
+                    )
                 ),
                 "v11_tier123_live_skip_reason": (
                     ""
                     if tier123_for_slot
                     else (
-                        f"scan_start_lag {scan_start_lag_sec:.1f}s exceeded "
-                        f"{TIER123_LATEST_START_LAG_SEC:.1f}s"
+                        "final_setup_conf uses native/dedicated causal detectors"
+                        if _CONF_SCANNER_ACTIVE
+                        else (
+                            f"scan_start_lag {scan_start_lag_sec:.1f}s exceeded "
+                            f"{TIER123_LATEST_START_LAG_SEC:.1f}s"
+                        )
                     )
                 ),
             }
@@ -1553,7 +1737,8 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
                     )
             print(
                 f"[{SESSION_NAME} timing] "
-                f"tier123_branch_elapsed={time.perf_counter()-tier123_started:.3f}s "
+                f"tier123_branch_elapsed="
+                f"{(time.perf_counter()-tier123_started) if tier123_for_slot else 0.0:.3f}s "
                 f"parallel_branches={bool(tier123_future is not None)} "
                 f"tier123_for_slot={tier123_for_slot}",
                 flush=True,
@@ -1603,6 +1788,17 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
     else:
         merged_candidates = v8_candidates if v8_candidates is not None else pd.DataFrame()
     gated_candidates, research_rejected, research_filter_stats = apply_research_live_filters(merged_candidates, day)
+    post_research_candidates = (
+        gated_candidates.copy()
+        if gated_candidates is not None
+        else pd.DataFrame()
+    )
+    research_rejected_pre_conf = (
+        research_rejected.copy()
+        if research_rejected is not None
+        else pd.DataFrame()
+    )
+    _conf_rejected = pd.DataFrame()
     if _CONF_SCANNER_ACTIVE:
         # (i) match-v11: native conf setups have now passed v8 + overlay + research
         # exactly as in v11. Readmit the NON-native conf setups (RAW_PRE_GATE_POOL /
@@ -1629,9 +1825,45 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
     v11_overlay_stats["regular_v7_gated_candidates_before_v11_override"] = pre_merge_v8_count
     v11_overlay_stats["post_merge_pre_filter_candidates"] = int(0 if merged_candidates is None else len(merged_candidates))
     v11_overlay_stats["final_candidates_before_entry_window"] = int(0 if gated_candidates is None else len(gated_candidates))
+    pre_entry_window_candidates = (
+        gated_candidates.copy()
+        if gated_candidates is not None
+        else pd.DataFrame()
+    )
     gated_candidates, entry_window_rejected_final = _filter_entry_window(gated_candidates)
+    entry_window_rejected_df = decision_funnel.difference_frame(
+        pre_entry_window_candidates,
+        gated_candidates,
+    )
     v11_overlay_stats["final_candidates_after_v11_override"] = int(len(gated_candidates))
     _t_write_start = time.perf_counter()
+
+    # Publish the authoritative final snapshot first.  The exact-slot completion
+    # marker is written only after the JSON and latest pointer are durable; the
+    # entry engine watches this marker and never consumes a prior slot.
+    decision_ready_at_ist = _fmt_slot(pd.Timestamp.now(tz=base_v15.IST))
+    if gated_candidates is not None and not gated_candidates.empty:
+        gated_candidates = gated_candidates.copy()
+        gated_candidates["bar_closed_at_ist"] = _fmt_slot(slot)
+        gated_candidates["decision_ready_at_ist"] = decision_ready_at_ist
+        gated_candidates["candidate_schema_version"] = CANDIDATE_SCHEMA_VERSION
+    _write_json_snapshots(
+        gated_candidates,
+        slot,
+        payload_extra={
+            "v8_live_gate_output": "gated_for_entry_engine_with_v11_backtesting_overlay",
+            "decision_ready_at_ist": decision_ready_at_ist,
+            "slot_complete_marker_required": True,
+            **gate_stats,
+            **research_filter_stats,
+            **v11_overlay_stats,
+        },
+    )
+    slot_complete_marker = _write_slot_complete_marker(
+        slot,
+        decision_ready_at_ist=decision_ready_at_ist,
+        candidate_count=int(0 if gated_candidates is None else len(gated_candidates)),
+    )
 
     raw_write_stats = _append_daily_raw_candidates(raw_candidates, day)
     research_rejected_write_stats = _append_daily_research_filter_rejections(research_rejected, day)
@@ -1655,16 +1887,6 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         payload_extra={"v8_live_gate_output": "v11_backtesting_overlay_passed", **v11_overlay_stats},
     )
     _write_json_snapshots(
-        gated_candidates,
-        slot,
-        payload_extra={
-            "v8_live_gate_output": "gated_for_entry_engine_with_v11_backtesting_overlay",
-            **gate_stats,
-            **research_filter_stats,
-            **v11_overlay_stats,
-        },
-    )
-    _write_json_snapshots(
         research_rejected,
         slot,
         slot_json_path=_research_filter_rejected_slot_json_path(slot),
@@ -1679,6 +1901,49 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         latest_json_name="latest_v11_overlay_rejected_candidate_tickers.json",
         latest_csv_name="latest_v11_overlay_rejected_candidate_tickers.csv",
         payload_extra={"v8_live_gate_output": "v11_backtesting_overlay_rejected", **v11_overlay_stats},
+    )
+
+    funnel_records: List[Dict[str, Any]] = []
+    funnel_stages = (
+        (raw_candidates_for_v11, "raw_detection", "PASS", ""),
+        (v8_candidates, "v8_gate", "PASS", ""),
+        (
+            decision_funnel.difference_frame(raw_candidates, v8_candidates),
+            "v8_gate",
+            "REJECT",
+            "v8_live_gate_rejected",
+        ),
+        (v11_overlay_candidates, "v11_overlay", "PASS", ""),
+        (v11_overlay_rejected, "v11_overlay", "REJECT", "v11_overlay_rejected"),
+        (merged_candidates, "overlay_merge_replace", "PASS", ""),
+        (
+            decision_funnel.difference_frame(v8_candidates, merged_candidates),
+            "overlay_merge_replace",
+            "REJECT",
+            "replaced_by_v11_overlay_universe",
+        ),
+        (post_research_candidates, "research_filter", "PASS", ""),
+        (research_rejected_pre_conf, "research_filter", "REJECT", "research_filter_rejected"),
+        (pre_entry_window_candidates, "final_setup_conf", "PASS", ""),
+        (_conf_rejected, "final_setup_conf", "REJECT", "final_setup_conf_rejected"),
+        (gated_candidates, "entry_window", "PASS", ""),
+        (entry_window_rejected_df, "entry_window", "REJECT", "entry_window_rejected"),
+        (gated_candidates, "scanner_final", "PASS", ""),
+    )
+    for frame, stage, outcome, reason in funnel_stages:
+        funnel_records.extend(
+            decision_funnel.records_for_stage(
+                frame,
+                stage=stage,
+                outcome=outcome,
+                recorded_at_ist=decision_ready_at_ist,
+                default_reason=reason,
+            )
+        )
+    decision_funnel_rows = decision_funnel.write_slot_funnel(
+        records=funnel_records,
+        csv_path=_slot_funnel_csv_path(slot),
+        jsonl_path=_slot_funnel_jsonl_path(slot),
     )
 
     total = int(0 if gated_candidates is None else len(gated_candidates))
@@ -1705,6 +1970,10 @@ def run_slot(slot_ts: Any, *, scan_workers: int = DEFAULT_SCAN_WORKERS) -> Dict[
         "v11_overlay_duplicates": int(v11_overlay_write_stats["duplicates"]),
         "v11_overlay_rejected_written": int(v11_overlay_rejected_write_stats["written"]),
         "v11_overlay_rejected_duplicates": int(v11_overlay_rejected_write_stats["duplicates"]),
+        "decision_ready_at_ist": decision_ready_at_ist,
+        "slot_complete_marker": str(slot_complete_marker),
+        "decision_funnel_rows": int(decision_funnel_rows),
+        "decision_funnel_csv": str(_slot_funnel_csv_path(slot)),
         "entry_window_start": ENTRY_WINDOW_START_TIME,
         "entry_window_end": ENTRY_WINDOW_END_TIME,
         "entry_signal_to_entry_lag_min": int(ENTRY_SIGNAL_TO_ENTRY_LAG_MIN),
@@ -1744,10 +2013,36 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    global _RUNTIME_MANIFEST_PATH
     args = _parse_args()
+    manifest_path, _ = freeze_runtime_manifest(
+        SESSION_SLUG,
+        runtime_root=RUNTIME_ROOT,
+        source_files=(
+            Path(__file__),
+            Path(candidate_scan.__file__),
+            Path(v11_live_overlay.__file__),
+            Path(_conf_boot.__file__),
+        ),
+        resolved_config={
+            "session_root": str(SESSION_ROOT),
+            "scan_workers": int(args.scan_workers),
+            "tier123_scan_workers": int(TIER123_SCAN_WORKERS),
+            "parallel_scan_branches": bool(PARALLEL_SCAN_BRANCHES_ENABLE),
+            "feed_gate_enable": bool(FEED_GATE_ENABLE),
+            "feed_gate_max_wait_sec": int(FEED_GATE_MAX_WAIT_SEC),
+            "entry_window_start": ENTRY_WINDOW_START_TIME,
+            "entry_window_end": ENTRY_WINDOW_END_TIME,
+            "entry_signal_to_entry_lag_min": int(ENTRY_SIGNAL_TO_ENTRY_LAG_MIN),
+            "v11_overlay_enabled": bool(V11_BACKTESTING_OVERLAY_ENABLE),
+            "v11_overlay_profile": V11_BACKTESTING_OVERLAY_PROFILE,
+        },
+    )
+    _RUNTIME_MANIFEST_PATH = str(manifest_path)
     holidays = base_v15._read_holidays_safe()
     print(f"[LIVE] {SESSION_NAME}", flush=True)
     print(f"[INFO] root={SESSION_ROOT}", flush=True)
+    print(f"[INFO] frozen_runtime_manifest={manifest_path}", flush=True)
     print(
         f"[INFO] scan_workers={int(args.scan_workers)} "
         f"tier123_scan_workers={int(TIER123_SCAN_WORKERS)} "
@@ -1771,6 +2066,31 @@ def main() -> None:
         )
     else:
         print(f"[INFO] feed_gate=OFF (fixed post_slot_delay={int(args.post_slot_delay_sec)}s)", flush=True)
+
+    prewarm_slot = (
+        _ensure_ist_ts(args.replay_slots[0])
+        if args.replay_slots
+        else _next_slot_after(base_v15.now_ist())
+    )
+    try:
+        prewarm_stats = candidate_scan.prewarm_scan_pool(
+            prewarm_slot,
+            max_workers=int(args.scan_workers),
+        )
+        print(
+            f"[INFO] candidate scanner pool prewarmed for "
+            f"{prewarm_slot.strftime('%Y-%m-%d %H:%M%z')}: "
+            f"requested={int(prewarm_stats.get('workers_requested', 0))} "
+            f"pids_seen={int(prewarm_stats.get('worker_pids_seen', 0))} "
+            f"elapsed={float(prewarm_stats.get('seconds', 0.0)):.3f}s",
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            f"[WARN] candidate scanner pool prewarm failed: "
+            f"{type(exc).__name__}: {exc}; first scan will retry pool startup",
+            flush=True,
+        )
 
     if args.replay_slots:
         if _is_replay_isolated:
