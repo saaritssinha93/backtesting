@@ -64,8 +64,8 @@ SHARED_FINAL_SETUP_CONF_MODULE_ENV = setup_conf_loader.FINAL_SETUP_CONF_MODULE_E
 # bar), 09:20..15:30 are completed end-stamped 5m candles. Default keeps the
 # 09:15 row so the backtest stays in parity with live. --exclude_opening_snapshot
 # turns on strict research mode: skip the 09:15 slot for signal scanning AND drop
-# it from the market-context regime. (Indicator anchoring still uses the stored
-# bars; a fully strict indicator rebuild would need a separate data build.)
+# it from the market-context regime. The shared causal AVWAP always excludes
+# 09:15 regardless of this scan-policy switch; other stored indicators do not.
 _OPENING_SNAPSHOT_HHMM = (9, 15)
 _EXCLUDE_OPENING_SNAPSHOT = False
 
@@ -330,7 +330,7 @@ SELECTED_STRATEGY_RULE_LABELS.update(
         ),
         "B_AVWAP_RECLAIM_REVERSAL": (
             "max_pnl_low_valid: B_AVWAP_RECLAIM_REVERSAL with "
-            f"vwap_dist_atr >= {MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR:.8f}; "
+            f"avwap_dist_atr >= {MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR:.8f}; "
             "A/B quality_top_slot probation gate still required"
         ),
         "A_MOD_CLOSE_CONTINUATION_BREAK": (
@@ -788,11 +788,27 @@ def _selected_strategy_numeric(frame: pd.DataFrame, col: str) -> pd.Series:
     return pd.Series(np.nan, index=frame.index, dtype="float64")
 
 
+def _setup_feature_column(setup: str, configured_column: str) -> str:
+    """Route legacy AVWAP-book distance terms to the real AVWAP feature.
+
+    Historical setup books called their session-VWAP input ``vwap_dist_atr``
+    even for setup names containing ``AVWAP``.  Keep the books loadable, but
+    interpret that one legacy field name as ``avwap_dist_atr`` for AVWAP
+    setups.  VWAP-named and all other setups retain their original semantics.
+    """
+    name = str(setup).strip().upper()
+    column = str(configured_column).strip()
+    if "AVWAP" in name and column == "vwap_dist_atr":
+        return "avwap_dist_atr"
+    return column
+
+
 def _selected_strategy_features(signals: pd.DataFrame) -> pd.DataFrame:
     work = signals.copy()
     for col in [
         "vol_ratio",
         "vwap_dist_atr",
+        "avwap_dist_atr",
         "v7_signal_notional_rs",
         "market_ret_pct",
         "quality_score",
@@ -806,6 +822,7 @@ def _selected_strategy_features(signals: pd.DataFrame) -> pd.DataFrame:
         if col in work.columns:
             work[col] = pd.to_numeric(work[col], errors="coerce")
 
+    signal_times: list[pd.Timestamp] = []
     signal_minutes: list[float] = []
     for _, row in work.iterrows():
         ts = pd.NaT
@@ -814,7 +831,9 @@ def _selected_strategy_features(signals: pd.DataFrame) -> pd.DataFrame:
                 ts = _normalise_ts(row.get(col))
                 if pd.notna(ts):
                     break
+        signal_times.append(ts)
         signal_minutes.append(float(ts.hour * 60 + ts.minute) if pd.notna(ts) else np.nan)
+    work["signal_day"] = [ts.strftime("%Y-%m-%d") if pd.notna(ts) else "" for ts in signal_times]
     work["signal_minute"] = signal_minutes
 
     open_px = _selected_strategy_numeric(work, "signal_open")
@@ -879,6 +898,7 @@ def _final_setup_conf_mask(signals: pd.DataFrame) -> pd.Series:
         m = setup.eq(name)
         for term in cfg.get("mask_terms", []):
             f, op, v = term[0], term[1], term[2]
+            f = _setup_feature_column(name, f)
             if isinstance(v, str):
                 col = regime if f == "regime" else work.get(f, pd.Series("", index=work.index)).astype(str).str.upper()
                 vv = v.upper()
@@ -907,6 +927,23 @@ def _final_setup_conf_mask(signals: pd.DataFrame) -> pd.Series:
             start_min = _slot_minute(start)
             end_min = _slot_minute(end)
             m = m & ~sig_min.between(start_min, end_min, inclusive="both")
+        top_n = int(guard.get("top_n") or 0)
+        if top_n > 0 and bool(m.any()):
+            ranked = work.loc[m].copy()
+            rank_column = _setup_feature_column(name, "vwap_dist_atr")
+            ranked["_conf_top_n_distance"] = _selected_strategy_numeric(
+                ranked, rank_column
+            )
+            ranked["_conf_top_n_order"] = np.arange(len(ranked))
+            ranked = ranked.sort_values(
+                ["signal_day", "signal_minute", "_conf_top_n_distance", "_conf_top_n_order"],
+                ascending=[True, True, False, True],
+                kind="mergesort",
+            )
+            kept_index = ranked.groupby(
+                ["signal_day", "signal_minute"], sort=False, dropna=False
+            ).head(top_n).index
+            m = m & work.index.isin(kept_index)
         mask = mask | m.fillna(False)
     return mask.fillna(False)
 
@@ -942,6 +979,7 @@ def _selected_strategy_mask(signals: pd.DataFrame, profile: str) -> pd.Series:
 
     vol_ratio = _selected_strategy_numeric(work, "vol_ratio")
     vwap_dist_atr = _selected_strategy_numeric(work, "vwap_dist_atr")
+    avwap_dist_atr = _selected_strategy_numeric(work, "avwap_dist_atr")
     notional = _selected_strategy_numeric(work, "v7_signal_notional_rs")
     market_ret = _selected_strategy_numeric(work, "market_ret_pct")
     quality_score = _selected_strategy_numeric(work, "quality_score")
@@ -960,7 +998,7 @@ def _selected_strategy_mask(signals: pd.DataFrame, profile: str) -> pd.Series:
         | (notional >= MAX_PNL_SBB_MIN_NOTIONAL_RS)
     )
     max_pnl_low_valid_mask |= setup.eq("B_AVWAP_RECLAIM_REVERSAL") & (
-        vwap_dist_atr >= MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR
+        avwap_dist_atr >= MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR
     )
     max_pnl_low_valid_mask |= setup.eq("A_MOD_CLOSE_CONTINUATION_BREAK") & (
         (signal_range_pct >= MAX_PNL_A_MOD_CLOSE_MIN_SIGNAL_RANGE_PCT)
@@ -2533,35 +2571,8 @@ def _tier123_profile_enabled(profile: str | None) -> bool:
 
 
 def _tier123_prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    if "ATR" not in out.columns or out["ATR"].isna().all() or "VWAP" not in out.columns or out["VWAP"].isna().all():
-        return candidate_scan.v2._prepare_5m(out)
-    out["Volume_SMA20"] = out.groupby("date_only")["volume"].transform(
-        lambda s: s.shift(1).rolling(candidate_scan.v2.VWAP_LOOKBACK, min_periods=8).mean()
-    )
-    out["traded_value_rs"] = out["close"] * out["volume"]
-    out["day_value_so_far_rs"] = out.groupby("date_only")["traded_value_rs"].cumsum()
-    out["range"] = out["high"] - out["low"]
-    range_nonzero = out["range"].replace(0, np.nan)
-    out["body_pct"] = (out["close"] - out["open"]).abs() / range_nonzero
-    out["close_loc"] = (out["close"] - out["low"]) / range_nonzero
-    out["upper_wick_pct"] = (out["high"] - out[["open", "close"]].max(axis=1)) / range_nonzero
-    out["lower_wick_pct"] = (out[["open", "close"]].min(axis=1) - out["low"]) / range_nonzero
-    out["vol_ratio"] = out["volume"] / out["Volume_SMA20"].replace(0, np.nan)
-    out["atr_pct"] = out["ATR"] / out["close"].replace(0, np.nan)
-    # --- VWAP FIX (2026-06-13, mirrors research_v11_tier123_new_setups._prepare_probe_5m) ----------
-    # The 5-min source parquet "VWAP" column is stale/anchored (near-constant, far from price), which
-    # corrupts vwap_dist_atr + VWAP-based detections + regime. Recompute a proper intraday SESSION VWAP
-    # (typical-price x volume, reset each day) so the tier123 overlay / probe use a correct VWAP.
-    out["VWAP_parquet"] = out["VWAP"]
-    _tp = (out["high"] + out["low"] + out["close"]) / 3.0
-    _cum_pv = (_tp * out["volume"]).groupby(out["date_only"]).cumsum()
-    _cum_v = out["volume"].groupby(out["date_only"]).cumsum().replace(0, np.nan)
-    _sess_vwap = _cum_pv / _cum_v
-    out["VWAP"] = _sess_vwap.where(_sess_vwap.notna(), out["VWAP_parquet"])
-    _atr_floor = out["ATR"].where(out["ATR"] >= 0.0003 * out["close"], 0.0003 * out["close"])
-    out["vwap_dist_atr"] = ((out["close"] - out["VWAP"]) / _atr_floor.replace(0, np.nan)).clip(-15.0, 15.0)
-    return out
+    """Use the shared causal VWAP/AVWAP preparation contract for overlays."""
+    return candidate_scan.v2._prepare_5m(df.copy())
 
 
 def _tier123_prev_day_levels(prepared: pd.DataFrame) -> pd.DataFrame:
@@ -4537,7 +4548,7 @@ def _write_parity_debug_csv(
     """Write v11_ID_parity_debug.csv — per-candidate audit trail across all pipeline stages.
 
     Columns: ticker, side, setup, signal_time_ist, pipeline_stage, fate, reason,
-             quality_score, ranker_score, vwap_dist_atr, rs_pct, atr_pct,
+             quality_score, ranker_score, VWAP/AVWAP distance, rs_pct, atr_pct,
              signal_minute, v11_pipeline_day, v11_pipeline_slot_ist
     """
     frames: list[pd.DataFrame] = []
@@ -4582,7 +4593,7 @@ def _write_parity_debug_csv(
     keep_cols = [c for c in [
         "ticker", "side", "setup", "signal_time_ist", "v11_pipeline_stage",
         "_parity_fate", "_parity_reason",
-        "quality_score", "ranker_score", "vwap_dist_atr", "rs_pct", "atr_pct",
+        "quality_score", "ranker_score", "vwap_dist_atr", "avwap_dist_atr", "rs_pct", "atr_pct",
         "signal_minute", "v8_live_gate_status", "v8_live_gate_rule",
         "v11_pipeline_day", "v11_pipeline_slot_ist",
     ] if c in combined.columns]

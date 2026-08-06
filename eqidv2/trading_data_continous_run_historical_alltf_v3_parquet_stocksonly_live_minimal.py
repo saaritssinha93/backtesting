@@ -21,7 +21,8 @@ What remains:
 - Robust missing/freshness detection for intraday candles
 - Incremental fetching with warmup re-stabilization
 - Minimal live/backtest indicator computation:
-  RSI, ATR, EMA_20, EMA_50, EMA_200, Stoch_%K, Stoch_%D, ADX
+  RSI, ATR, EMA_20, EMA_50, EMA_200, Stoch_%K, Stoch_%D, ADX,
+  and causal session-open AVWAP for 5-minute bars
 - Parquet outputs + optional legacy CSV migration (read-only or delete after write)
 - Reports for missing files / newly appended rows
 
@@ -935,6 +936,57 @@ def calculate_vwap(df):
     _vol_cum = _vol.groupby(_day).cumsum()
     return _pv_cum / _vol_cum.where(_vol_cum != 0)
 
+
+def calculate_anchored_vwap_5min(df: pd.DataFrame) -> pd.Series:
+    """Return causal session-open AVWAP from completed, real 5-minute bars.
+
+    The live store's 09:15 row is an opening snapshot, not a completed bar, so
+    it must never seed the anchor. Synthetic/partial rows are similarly
+    ineligible. Their AVWAP value is NaN, but later eligible bars continue the
+    same session cumulative sums without any contribution from those rows.
+    """
+    typical = (
+        pd.to_numeric(df["high"], errors="coerce")
+        + pd.to_numeric(df["low"], errors="coerce")
+        + pd.to_numeric(df["close"], errors="coerce")
+    ) / 3.0
+    volume = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0)
+    finite_typical = typical.notna() & np.isfinite(typical)
+    finite_volume = volume.notna() & np.isfinite(volume)
+    volume = volume.where(finite_volume, 0.0)
+
+    timestamps = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        timestamps_ist = timestamps.dt.tz_convert(IST_TZ)
+    except (TypeError, AttributeError):
+        timestamps_ist = timestamps.dt.tz_localize(IST_TZ)
+    session = timestamps_ist.dt.date
+
+    opening_snapshot = (
+        (timestamps_ist.dt.hour == MARKET_OPEN_TIME.hour)
+        & (timestamps_ist.dt.minute == MARKET_OPEN_TIME.minute)
+    ).fillna(False)
+    if "opening_snapshot" in df.columns:
+        stored_opening = df["opening_snapshot"]
+        stored_opening = (
+            pd.to_numeric(stored_opening, errors="coerce").fillna(0).ne(0)
+            | stored_opening.astype(str).str.strip().str.lower().isin({"true", "yes", "on"})
+        )
+        opening_snapshot |= stored_opening
+
+    ineligible = opening_snapshot | ~finite_typical | ~finite_volume | timestamps_ist.isna()
+    if "gap_filled" in df.columns:
+        ineligible |= pd.to_numeric(df["gap_filled"], errors="coerce").fillna(0).ne(0)
+    if "source_1m_count" in df.columns:
+        ineligible |= pd.to_numeric(df["source_1m_count"], errors="coerce").fillna(0).ne(5)
+
+    eligible = ~ineligible
+    eligible_volume = volume.where(eligible, 0.0)
+    cumulative_volume = eligible_volume.groupby(session).cumsum()
+    cumulative_pv = (typical.fillna(0.0) * eligible_volume).groupby(session).cumsum()
+    avwap = cumulative_pv / cumulative_volume.where(cumulative_volume > 0)
+    return avwap.where(eligible)
+
 def calculate_ema(close, span):
     return close.ewm(span=span, adjust=False).mean()
 
@@ -1539,6 +1591,9 @@ def _fetch_missing_5min_session_rows(
 
 def _compute_common_features(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     df = add_standard_indicators(df)
+
+    if mode == "5min":
+        df["AVWAP"] = calculate_anchored_vwap_5min(df)
 
     stoch_k, stoch_d = calculate_stochastic_slow(df, 14, 3, 3, "sma")
     df["Stoch_%K"], df["Stoch_%D"] = stoch_k, stoch_d

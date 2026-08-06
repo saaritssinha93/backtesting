@@ -164,6 +164,10 @@ class Candidate:
     vwap_dist_atr: float
     day_value_so_far_rs: float
     reason: str
+    # Explicit anchored feature. Defaults preserve compatibility with custom
+    # candidate constructors that do not participate in AVWAP setups.
+    avwap: float = float("nan")
+    avwap_dist_atr: float = float("nan")
 
 
 @dataclass
@@ -250,7 +254,8 @@ def _read_ohlcv(fp: Path) -> pd.DataFrame:
         "VWAP", "AVWAP", "ATR", "EMA_20", "EMA_50", "EMA_200",
         "RSI", "ADX", "CCI", "MFI", "OBV", "MACD", "MACD_Signal", "MACD_Hist",
         "Upper_Band", "Lower_Band", "Stoch_%K", "Stoch_%D", "Prev_Day_Close",
-        "Recent_High", "Recent_Low", "date_only",
+        "Recent_High", "Recent_Low", "opening_snapshot", "gap_filled",
+        "source_1m_count", "date_only",
     ]
     df = _read_parquet(fp, cols)
     for col in ("open", "high", "low", "close", "volume"):
@@ -285,6 +290,56 @@ def _calc_session_vwap(df: pd.DataFrame) -> pd.Series:
     return pv_cum / vol_cum
 
 
+def _calc_session_open_avwap(df: pd.DataFrame) -> pd.Series:
+    """Causal AVWAP anchored at the first completed real bar of each IST day.
+
+    A 09:15 row in these end-labelled stores is an opening snapshot, not a
+    completed five-minute candle. Opening snapshots, synthetic gap fills and
+    partial one-minute buckets neither seed nor alter AVWAP and receive NaN.
+    Later eligible bars resume the same session cumulative state.
+    """
+    typical = (
+        pd.to_numeric(df["high"], errors="coerce")
+        + pd.to_numeric(df["low"], errors="coerce")
+        + pd.to_numeric(df["close"], errors="coerce")
+    ) / 3.0
+    volume = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0)
+    finite_typical = typical.notna() & np.isfinite(typical)
+    finite_volume = volume.notna() & np.isfinite(volume)
+    volume = volume.where(finite_volume, 0.0)
+
+    timestamps = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        timestamps_ist = timestamps.dt.tz_convert("Asia/Kolkata")
+    except (TypeError, AttributeError):
+        timestamps_ist = timestamps.dt.tz_localize("Asia/Kolkata")
+    session = timestamps_ist.dt.date
+
+    opening_snapshot = (
+        (timestamps_ist.dt.hour == 9) & (timestamps_ist.dt.minute == 15)
+    ).fillna(False)
+    if "opening_snapshot" in df.columns:
+        stored_opening = df["opening_snapshot"]
+        stored_opening = (
+            pd.to_numeric(stored_opening, errors="coerce").fillna(0).ne(0)
+            | stored_opening.astype(str).str.strip().str.lower().isin({"true", "yes", "on"})
+        )
+        opening_snapshot |= stored_opening
+
+    ineligible = opening_snapshot | ~finite_typical | ~finite_volume | timestamps_ist.isna()
+    if "gap_filled" in df.columns:
+        ineligible |= pd.to_numeric(df["gap_filled"], errors="coerce").fillna(0).ne(0)
+    if "source_1m_count" in df.columns:
+        ineligible |= pd.to_numeric(df["source_1m_count"], errors="coerce").fillna(0).ne(5)
+
+    eligible = ~ineligible
+    eligible_volume = volume.where(eligible, 0.0)
+    cumulative_volume = eligible_volume.groupby(session).cumsum()
+    cumulative_pv = (typical.fillna(0.0) * eligible_volume).groupby(session).cumsum()
+    avwap = cumulative_pv / cumulative_volume.where(cumulative_volume > 0)
+    return avwap.where(eligible)
+
+
 def _prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "ATR" not in out.columns or out["ATR"].isna().all():
@@ -294,6 +349,10 @@ def _prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
         out["ATR"] = calculated_atr
     out["VWAP_source"] = out["VWAP"] if "VWAP" in out.columns else np.nan
     out["VWAP"] = _calc_session_vwap(out)
+    out["AVWAP_source"] = out["AVWAP"] if "AVWAP" in out.columns else np.nan
+    # Always recompute from the causal OHLCV path. Persisted AVWAP is retained
+    # only for diagnostics so live, V11 and V12 cannot diverge on stale stores.
+    out["AVWAP"] = _calc_session_open_avwap(out)
     out["Volume_SMA20"] = out.groupby("date_only")["volume"].transform(
         lambda s: s.shift(1).rolling(VWAP_LOOKBACK, min_periods=8).mean()
     )
@@ -308,6 +367,9 @@ def _prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
     vwap_atr = out["ATR"].where(out["ATR"] >= atr_floor, atr_floor)
     out["vwap_dist_atr"] = (
         (out["close"] - out["VWAP"]) / vwap_atr.replace(0, np.nan)
+    ).clip(-15.0, 15.0)
+    out["avwap_dist_atr"] = (
+        (out["close"] - out["AVWAP"]) / vwap_atr.replace(0, np.nan)
     ).clip(-15.0, 15.0)
     out["ema20_dist_atr"] = (out["close"] - out.get("EMA_20", out["close"])) / out["ATR"].replace(0, np.nan)
     out["upper_wick_pct"] = (out["high"] - out[["open", "close"]].max(axis=1)) / out["range"].replace(0, np.nan)
@@ -505,13 +567,16 @@ def _make_candidate(
         target_px = entry_px * (1.0 - tgt_pct / 100.0)
         sl_px = entry_px * (1.0 + sl_pct / 100.0)
 
+    # AVWAP-labelled setups are scored against the explicit anchored feature;
+    # ordinary VWAP setups retain the legacy session-VWAP distance.
+    distance_column = "avwap_dist_atr" if "AVWAP" in setup.upper() else "vwap_dist_atr"
     score = _score(
         side=side,
         setup=setup,
         rs_pct=rs_pct,
         vol_ratio=float(row.get("vol_ratio", np.nan)),
         close_loc=float(row.get("close_loc", np.nan)),
-        vwap_dist_atr=float(row.get("vwap_dist_atr", np.nan)),
+        vwap_dist_atr=float(row.get(distance_column, np.nan)),
         atr_pct=float(row.get("atr_pct", np.nan)),
         regime=regime,
     )
@@ -537,6 +602,8 @@ def _make_candidate(
         vwap_dist_atr=float(row.get("vwap_dist_atr", np.nan)),
         day_value_so_far_rs=float(row.get("day_value_so_far_rs", 0.0)),
         reason=reason,
+        avwap=float(row.get("AVWAP", np.nan)),
+        avwap_dist_atr=float(row.get("avwap_dist_atr", np.nan)),
     )
 
 
@@ -566,6 +633,7 @@ def _scan_day(day_df: pd.DataFrame, ticker: str, market_ctx: dict[str, dict]) ->
         close = float(row["close"])
         open_ = float(row["open"])
         vwap = float(row.get("VWAP", np.nan))
+        avwap = float(row.get("AVWAP", np.nan))
         close_loc = float(row.get("close_loc", np.nan))
         vol_ratio = float(row.get("vol_ratio", np.nan))
 
@@ -580,6 +648,8 @@ def _scan_day(day_df: pd.DataFrame, ticker: str, market_ctx: dict[str, dict]) ->
         short_struct = close < open_ and close_loc <= CLOSE_LOC_SHORT_MAX
         above_vwap = np.isfinite(vwap) and close > vwap
         below_vwap = np.isfinite(vwap) and close < vwap
+        above_avwap = np.isfinite(avwap) and close > avwap
+        below_avwap = np.isfinite(avwap) and close < avwap
 
         long_momentum = (
             long_struct and above_vwap
@@ -669,6 +739,7 @@ def _scan_day(day_df: pd.DataFrame, ticker: str, market_ctx: dict[str, dict]) ->
         prev_range = float(prev.get("range", np.nan))
         prev_atr = float(prev.get("ATR", np.nan))
         prev_vwap = float(prev.get("VWAP", np.nan))
+        prev_avwap = float(prev.get("AVWAP", np.nan))
         prev2 = df.iloc[i - 2] if i >= 2 else prev
         moderate_impulse = np.isfinite(atr) and atr > 0 and 0.60 * atr <= rng <= 2.20 * atr
         huge_prev = np.isfinite(prev_atr) and prev_atr > 0 and prev_range >= 1.80 * prev_atr
@@ -719,50 +790,53 @@ def _scan_day(day_df: pd.DataFrame, ticker: str, market_ctx: dict[str, dict]) ->
         add_catalog(
             "B_AVWAP_RECLAIM_REVERSAL",
             "LONG",
-            long_struct and np.isfinite(prev_vwap) and prev_close < prev_vwap and above_vwap
+            long_struct and np.isfinite(prev_avwap) and prev_close < prev_avwap and above_avwap
             and rs_pct > -0.10 and vol_ratio >= 1.4 and regime != "BEAR",
+            # Stable reason tag is part of final_setup_conf compatibility.
             "reclaim_session_vwap_from_below",
             min_qs=6.0,
         )
         # DOC5D_AVWAP_RECLAIM_LONG (LONG) — USER_DIRECTED promotion 2026-07-01 (research
-        # verdict REJECT; see final_setup_conf.py provenance). Reinvented "confirmed VWAP
+        # verdict REJECT; see final_setup_conf.py provenance). Reinvented "confirmed AVWAP
         # reclaim" (vB rule pack): a fresh reclaim from below that HELD intrabar, closed
-        # strong with a real body above a rising EMA20 & VWAP, on volume, as a leader, near
-        # value (vwap_dist<=1.2), non-climax, non-BEAR. The conf then applies the mask
-        # vwap_dist_atr>=1.028 + exit 0.6/2.0 + guard min_slot 11:00/top_n2. Flag-gated
+        # strong with a real body above a rising EMA20 & AVWAP, on volume, as a leader, near
+        # value (avwap_dist<=1.2), non-climax, non-BEAR. The conf applies its explicit
+        # avwap_dist_atr mask + exit 0.6/2.0 + guard min_slot 11:00/top_n2. Flag-gated
         # (ENABLE_DOC5D_AVWAP_RECLAIM); only the >=11:00 window is parity-exact vs research.
         _d5_low = float(row["low"])
-        _d5_vwap5 = float(df["VWAP"].iloc[i - 5]) if i >= 5 else float("nan")
+        _d5_avwap5 = float(df["AVWAP"].iloc[i - 5]) if i >= 5 else float("nan")
         _d5_slope_ok = (
-            np.isfinite(_d5_vwap5) and np.isfinite(atr) and atr > 0
-            and (vwap - _d5_vwap5) / atr >= 0.0
+            np.isfinite(_d5_avwap5) and np.isfinite(atr) and atr > 0
+            and (avwap - _d5_avwap5) / atr >= 0.0
         )
         _d5_body = float(row.get("body_pct", np.nan))
-        _d5_vwap_dist = float(row.get("vwap_dist_atr", np.nan))
+        _d5_avwap_dist = float(row.get("avwap_dist_atr", np.nan))
         _d5_minute = ts.hour * 60 + ts.minute
         add_catalog(
             "DOC5D_AVWAP_RECLAIM_LONG",
             "LONG",
             ENABLE_DOC5D_AVWAP_RECLAIM
-            and np.isfinite(prev_vwap) and prev_close <= prev_vwap and above_vwap
+            and np.isfinite(prev_avwap) and prev_close <= prev_avwap and above_avwap
             and close > prev_close
             and close > open_ and close_loc >= 0.62
             and np.isfinite(_d5_body) and _d5_body >= 0.35
-            and np.isfinite(atr) and atr > 0 and _d5_low >= vwap - 0.45 * atr
+            and np.isfinite(atr) and atr > 0 and _d5_low >= avwap - 0.45 * atr
             and vol_ratio >= 1.35 and rs_pct > 0.05
             and np.isfinite(ema20) and close > ema20
-            and np.isfinite(_d5_vwap_dist) and _d5_vwap_dist <= 1.2
+            and np.isfinite(_d5_avwap_dist) and _d5_avwap_dist <= 1.2
             and _d5_slope_ok
             and np.isfinite(rng) and rng <= 2.3 * atr
             and market_ret >= -0.30 and regime != "BEAR"
             and 585 <= _d5_minute <= 780,
+            # Stable reason tag is part of final_setup_conf compatibility.
             "reinvented_confirmed_vwap_reclaim_long_vB",
         )
         add_catalog(
             "D_AVWAP_LOSE_REVERSAL",
             "SHORT",
-            short_struct and np.isfinite(prev_vwap) and prev_close > prev_vwap and below_vwap
+            short_struct and np.isfinite(prev_avwap) and prev_close > prev_avwap and below_avwap
             and rs_pct < 0.15 and vol_ratio >= 1.4 and regime != "BULL",
+            # Stable reason tag retained for downstream/report compatibility.
             "lose_session_vwap_from_above",
         )
         add_catalog(

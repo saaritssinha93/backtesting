@@ -967,12 +967,19 @@ def candidates_to_dataframe(
         selection_mode = EARLY_SELECTION_MODE if setup.startswith("E_") else SELECTION_MODE
         signal_time = _fmt_ist(signal_ts)
         candidate_id = f"{ticker}|{side}|{setup}|{signal_time}"
+        avwap_value = _finite_or_blank(signal_row.get("AVWAP", getattr(c, "avwap", np.nan)))
+        avwap_dist_atr = _finite_or_blank(
+            signal_row.get("avwap_dist_atr", getattr(c, "avwap_dist_atr", np.nan))
+        )
+        setup_distance = avwap_dist_atr if "AVWAP" in setup.upper() else c.vwap_dist_atr
         diag = {
             "reason": str(c.reason),
             "day_value_so_far_rs": _finite_or_blank(c.day_value_so_far_rs),
             "market_ret_pct": _finite_or_blank(c.market_ret_pct),
             "rs_pct": _finite_or_blank(c.rs_pct),
             "regime": str(c.regime),
+            "avwap": avwap_value,
+            "avwap_dist_atr": avwap_dist_atr,
         }
         rows.append({
             "candidate_id": candidate_id,
@@ -1004,6 +1011,8 @@ def candidates_to_dataframe(
             "body_pct": _finite_or_blank(c.body_pct),
             "close_loc": _finite_or_blank(c.close_loc),
             "vwap_dist_atr": _finite_or_blank(c.vwap_dist_atr),
+            "avwap": avwap_value,
+            "avwap_dist_atr": avwap_dist_atr,
             "reason": str(c.reason),
             "status": "CANDIDATE",
             "created_at_ist": _fmt_ist(created_at),
@@ -1016,7 +1025,7 @@ def candidates_to_dataframe(
             "entry_max_gap_pct": _finite_or_blank(signal_row.get("entry_max_gap_pct")),
             "market_breadth": _finite_or_blank(signal_row.get("market_breadth")),
             "nifty_ema_up": _finite_or_blank(signal_row.get("nifty_ema_up")),
-            **_research_shadow_metadata(side, setup, c.close_loc, c.vwap_dist_atr),
+            **_research_shadow_metadata(side, setup, c.close_loc, setup_distance),
         })
     if not rows:
         return pd.DataFrame()

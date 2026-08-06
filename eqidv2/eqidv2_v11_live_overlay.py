@@ -57,6 +57,8 @@ AB_FILTERED_RELAXED_B_HUGE_MAX_RS_PCT = 10.7
 AB_FILTERED_RELAXED_A_PULLBACK_MAX_MARKET_ABS_RET_PCT = 0.84
 MAX_PNL_SBB_MIN_MARKET_RET_PCT = 0.54
 MAX_PNL_SBB_MIN_NOTIONAL_RS = 100_000.0
+# Historical constant name retained for config compatibility; the B_AVWAP
+# gate now evaluates the explicit AVWAP distance, not legacy session VWAP.
 MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR = 0.60
 MAX_PNL_A_MOD_CLOSE_MIN_SIGNAL_RANGE_PCT = 2.2
 MAX_PNL_A_MOD_CLOSE_MAX_NOTIONAL_RS = 100_000.0
@@ -165,7 +167,7 @@ SELECTED_STRATEGY_RULE_LABELS = {
     "S_BB_SQUEEZE_SHORT": (
         "max_pnl_low_valid/residual_overlay: market_ret/notional gate, plus residual morning S_BB"
     ),
-    "B_AVWAP_RECLAIM_REVERSAL": "max_pnl_low_valid: vwap_dist_atr gate",
+    "B_AVWAP_RECLAIM_REVERSAL": "max_pnl_low_valid: avwap_dist_atr gate",
     "A_MOD_CLOSE_CONTINUATION_BREAK": "max_pnl_low_valid: signal_range/notional gate",
     "A_MOD_BREAK_C1_LOW": "max_pnl_low_valid: abs(rs_pct) and vol_ratio gate",
     "A_MOD_BREAK_C1_HIGH": f"max_pnl_low_valid: rs_pct>={A_MOD_C1_HIGH_MIN_RS_PCT} AND atr_pct<={A_MOD_C1_HIGH_MAX_ATR_PCT} AND signal_min<={A_MOD_C1_HIGH_MAX_SIGNAL_MIN}",
@@ -267,6 +269,7 @@ def selected_strategy_features(
     for col in [
         "vol_ratio",
         "vwap_dist_atr",
+        "avwap_dist_atr",
         "v7_signal_notional_rs",
         "market_ret_pct",
         "quality_score",
@@ -351,6 +354,7 @@ def selected_strategy_mask(
 
     vol_ratio = _selected_strategy_numeric(work, "vol_ratio")
     vwap_dist_atr = _selected_strategy_numeric(work, "vwap_dist_atr")
+    avwap_dist_atr = _selected_strategy_numeric(work, "avwap_dist_atr")
     notional = _selected_strategy_numeric(work, "v7_signal_notional_rs")
     market_ret = _selected_strategy_numeric(work, "market_ret_pct")
     quality_score = _selected_strategy_numeric(work, "quality_score")
@@ -369,7 +373,7 @@ def selected_strategy_mask(
         | (notional >= MAX_PNL_SBB_MIN_NOTIONAL_RS)
     )
     max_pnl_low_valid_mask |= setup.eq("B_AVWAP_RECLAIM_REVERSAL") & (
-        vwap_dist_atr >= MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR
+        avwap_dist_atr >= MAX_PNL_B_AVWAP_MIN_VWAP_DIST_ATR
     )
     max_pnl_low_valid_mask |= setup.eq("A_MOD_CLOSE_CONTINUATION_BREAK") & (
         (signal_range_pct >= MAX_PNL_A_MOD_CLOSE_MIN_SIGNAL_RANGE_PCT)

@@ -14,6 +14,8 @@ from typing import Any, Callable, Iterable
 import numpy as np
 import pandas as pd
 
+from avwap_5min_ID_v2_backtesting import _calc_session_open_avwap
+
 
 SETUP = "L_LATE_BB10_COMPRESSION_BREAKOUT"
 IST_TZ = "Asia/Kolkata"
@@ -93,12 +95,10 @@ def add_features(raw: pd.DataFrame) -> pd.DataFrame:
         & (d["rsi"].shift(1) > d["rsi"].shift(2))
     )
 
-    typical = (d["high"] + d["low"] + d["close"]) / 3.0
-    pv = typical * d["volume"].fillna(0)
-    cum_pv = pv.groupby(d["session"]).cumsum()
-    cum_volume = d["volume"].fillna(0).groupby(d["session"]).cumsum()
-    fallback = typical.groupby(d["session"]).expanding().mean().reset_index(level=0, drop=True)
-    d["avwap"] = (cum_pv / cum_volume.replace(0, np.nan)).fillna(fallback)
+    # Share the V7/V11/V12 session-open AVWAP contract.  The 09:15 opening
+    # snapshot plus synthetic/partial rows are NaN and contribute no state;
+    # later completed real bars resume the same session cumulative value.
+    d["avwap"] = _calc_session_open_avwap(d)
     d["avwap_ext"] = (d["close"] / d["avwap"] - 1.0) * 100.0
 
     slot_median = d.groupby("minute", sort=False)["volume"].transform(
@@ -266,11 +266,7 @@ def market_alignment_for_slots(
             for col in ("open", "high", "low", "close", "volume"):
                 d[col] = pd.to_numeric(d[col], errors="coerce")
             d["session"] = d["date"].dt.normalize()
-            typical = (d["high"] + d["low"] + d["close"]) / 3.0
-            pv = typical * d["volume"].fillna(0)
-            cum_pv = pv.groupby(d["session"]).cumsum()
-            cum_volume = d["volume"].fillna(0).groupby(d["session"]).cumsum()
-            d["avwap"] = cum_pv / cum_volume.replace(0, np.nan)
+            d["avwap"] = _calc_session_open_avwap(d)
             d["valid"] = (
                 d[["open", "high", "low", "close", "volume"]].notna().all(axis=1)
                 & (d["close"] > 0)

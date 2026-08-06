@@ -150,10 +150,19 @@ def _normalise_ts(value: Any) -> pd.Timestamp:
     return ts.tz_convert("Asia/Kolkata")
 
 
+def _setup_feature_column(setup: str, configured_column: str) -> str:
+    """Keep AVWAP setup gates on the anchored distance feature."""
+    name = str(setup).strip().upper()
+    column = str(configured_column).strip()
+    if "AVWAP" in name and column == "vwap_dist_atr":
+        return "avwap_dist_atr"
+    return column
+
+
 def _with_features(signals: pd.DataFrame) -> pd.DataFrame:
     work = signals.copy()
     for col in (
-        "vol_ratio", "vwap_dist_atr", "v7_signal_notional_rs", "market_ret_pct",
+        "vol_ratio", "vwap_dist_atr", "avwap_dist_atr", "v7_signal_notional_rs", "market_ret_pct",
         "quality_score", "ranker_score", "body_pct", "rs_pct",
         "signal_open", "signal_high", "signal_low", "signal_close",
     ):
@@ -163,6 +172,7 @@ def _with_features(signals: pd.DataFrame) -> pd.DataFrame:
     # Always derive this field from the authoritative timestamp, exactly like
     # V11. Trusting a pre-existing signal_minute lets stale/source-local values
     # make the two masks disagree.
+    signal_days = []
     minutes = []
     for _, row in work.iterrows():
         ts = pd.NaT
@@ -171,7 +181,9 @@ def _with_features(signals: pd.DataFrame) -> pd.DataFrame:
                 ts = _normalise_ts(row.get(col))
                 if pd.notna(ts):
                     break
+        signal_days.append(ts.strftime("%Y-%m-%d") if pd.notna(ts) else "")
         minutes.append(float(ts.hour * 60 + ts.minute) if pd.notna(ts) else np.nan)
+    work["signal_day"] = signal_days
     work["signal_minute"] = minutes
 
     # Derived mask features must be rebuilt from the signal candle exactly as
@@ -205,6 +217,7 @@ def conf_mask(signals: pd.DataFrame) -> pd.Series:
         m = setup.eq(name)
         for term in cfg.get("mask_terms", []):
             f, op, v = term[0], term[1], term[2]
+            f = _setup_feature_column(name, f)
             if isinstance(v, str):
                 col = regime if f == "regime" else work.get(f, pd.Series("", index=work.index)).astype(str).str.upper()
                 vv = v.upper()
@@ -233,6 +246,21 @@ def conf_mask(signals: pd.DataFrame) -> pd.Series:
             start_min = _slot_minute(start)
             end_min = _slot_minute(end)
             m = m & ~sig_min.between(start_min, end_min, inclusive="both")
+        top_n = int(guard.get("top_n") or 0)
+        if top_n > 0 and bool(m.any()):
+            ranked = work.loc[m].copy()
+            rank_column = _setup_feature_column(name, "vwap_dist_atr")
+            ranked["_conf_top_n_distance"] = _num(ranked, rank_column)
+            ranked["_conf_top_n_order"] = np.arange(len(ranked))
+            ranked = ranked.sort_values(
+                ["signal_day", "signal_minute", "_conf_top_n_distance", "_conf_top_n_order"],
+                ascending=[True, True, False, True],
+                kind="mergesort",
+            )
+            kept_index = ranked.groupby(
+                ["signal_day", "signal_minute"], sort=False, dropna=False
+            ).head(top_n).index
+            m = m & work.index.isin(kept_index)
         mask = mask | m.fillna(False)
     return mask.fillna(False)
 

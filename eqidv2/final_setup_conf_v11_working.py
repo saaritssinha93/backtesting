@@ -13,7 +13,7 @@ consumed by the v11 backtester (and, later, live) when running the approved book
 The promotion/demotion blocks at the end determine final membership; the shared
 parity book currently exposes 12 active probation setups (do not size up):
   - A_PULLBACK_C2_THEN_BREAK_C2_LOW (SHORT)            — exit 1.20/1.50, raw detection
-  - B_AVWAP_RECLAIM_REVERSAL (LONG)                    — un-inverted mask vwap_dist_atr <= 1.0
+  - B_AVWAP_RECLAIM_REVERSAL (LONG)                    — un-inverted mask avwap_dist_atr <= 1.0
   - B_HUGE_C1_CLOSE_RECLAIM_BREAK (LONG)               — regime != BULL (categorical)
   - D_EMA20_REJECTION (SHORT)                          — pre-momentum-gated (the gate is the edge)
   - E_VWAP_LOSE_EARLY_SHORT (SHORT)                    — vol_ratio band [1.8,3.2] (STRONG: p 0.004); pre-momentum DROPPED
@@ -193,7 +193,7 @@ FINAL_SETUP_CONF = {
         "side": "LONG",
         # RAW DETECTION (avwap_5min_ID_v2_backtesting.py L680, reason
         # "reclaim_session_vwap_from_below", min quality_score >= 6.0). Idea: a stock
-        # that was BELOW session VWAP reclaims it on a strong up-bar in a non-bear
+        # that was BELOW session AVWAP reclaims it on a strong up-bar in a non-bear
         # regime -> momentum reversal from weakness.
         "detection": {
             "reason_tag": "reclaim_session_vwap_from_below",
@@ -202,8 +202,8 @@ FINAL_SETUP_CONF = {
             "conditions": [
                 ("close", ">", "open"),                       # long_struct
                 ("close_loc", ">=", 0.60),                    # CLOSE_LOC_LONG_MIN
-                ("prev_close", "<", "prev_VWAP"),             # prior bar was below VWAP
-                ("close", ">", "VWAP"),                       # current bar reclaims VWAP
+                ("prev_close", "<", "prev_AVWAP"),            # prior bar was below AVWAP
+                ("close", ">", "AVWAP"),                      # current bar reclaims AVWAP
                 ("rs_pct", ">", -0.10),
                 ("vol_ratio", ">=", 1.4),
                 ("regime", "!=", "BEAR"),
@@ -215,22 +215,22 @@ FINAL_SETUP_CONF = {
                 "max_candle_range_atr": "range <= MAX_CANDLE_RANGE_ATR * ATR (no blow-off bar)",
             },
             "feature_defs": {
-                "VWAP": "intraday session VWAP (resets daily)", "ATR": "per-day ATR",
+                "AVWAP": "causal session-open AVWAP from completed real 5-minute bars (resets daily)", "ATR": "per-day ATR",
                 "close_loc": "(close - low) / (high - low)",
                 "vol_ratio": "volume / Volume_SMA20 (SMA20 = volume.shift(1).rolling(20,min8).mean)",
-                "atr_pct": "ATR / close", "vwap_dist_atr": "(close - VWAP) / ATR",
+                "atr_pct": "ATR / close", "avwap_dist_atr": "(close - AVWAP) / ATR",
                 "rs_pct": "stock_intraday_ret% - NIFTY_intraday_ret% (RS_LOOKBACK_BARS=6)",
                 "regime": "BULL/BEAR/TREND/NEUTRAL from NIFTY ret vs VWAP",
             },
         },
         # TUNED v11 CONFIG (B* deep diagnosis). The PRODUCTION mask was INVERTED:
-        # vwap_dist_atr >= 0.60 selected EXTENDED reclaims that fail (PF 0.6, 43%
-        # immediate-fail); the edge is a reclaim NEAR VWAP. PF rises monotonically as
-        # the cut tightens; the cut sweep picked vwap_dist_atr <= 1.0 as the best
+        # avwap_dist_atr >= 0.60 selected EXTENDED reclaims that fail (PF 0.6, 43%
+        # immediate-fail); the edge is a reclaim NEAR AVWAP. PF rises monotonically as
+        # the cut tightens; the cut sweep picked avwap_dist_atr <= 1.0 as the best
         # balance of positive test + enough test sample (<=0.75 collapsed test to 2
         # losers). Also DROPPED the data-mined pre_entry_momentum_score <= 64.7678.
         "exit": {"sl_pct": 0.70, "tgt_pct": 1.50},            # v6 default
-        "mask_terms": [["vwap_dist_atr", "<=", 1.0]],         # REPLACES inverted >= 0.60
+        "mask_terms": [["avwap_dist_atr", "<=", 1.0]],        # REPLACES inverted >= 0.60
         "pre_momentum_terms": [],                             # dropped 6-decimal momentum gate
         "entry_guards": {},
         "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
@@ -244,7 +244,9 @@ FINAL_SETUP_CONF = {
             "train": {"trades": 27, "net_pf": 1.45},
             "test": {"trades": 5, "net_pf": 1.20, "win_pct": 40.0, "day_block_p": 0.185},
             "net_pnl_rs_total": 5736.0,
-            "diagnosis": ("production mask vwap_dist_atr>=0.60 was INVERTED; edge is a near-VWAP "
+            "avwap_semantics_revalidation": ("Recorded PF evidence predates corrected causal 5-minute "
+                                               "AVWAP semantics and must be revalidated."),
+            "diagnosis": ("production mask avwap_dist_atr>=0.60 was INVERTED; edge is a near-AVWAP "
                           "reclaim; PF monotonic vs cut; <=1.0 keeps test positive on 5 trades"),
             "gate_status": "PROBATION",
             "gate_miss": "test n=5 (small); day_block_p 0.185 not < 0.10",
@@ -1369,25 +1371,25 @@ FINAL_SETUP_CONF = {
         "detection": {
             "reason_tag": "reinvented_confirmed_vwap_reclaim_long_vB",
             "source": "avwap_5min_ID_v2_backtesting._scan_day add_catalog (ENABLE_DOC5D_AVWAP_RECLAIM)",
-            "idea": ("reinvented 'confirmed VWAP reclaim' (vB rule pack): a fresh reclaim from below "
-                     "(prev_close<=prev_VWAP, close>VWAP) that HELD intrabar (low>=VWAP-0.45*ATR), "
+            "idea": ("reinvented 'confirmed AVWAP reclaim' (vB rule pack): a fresh reclaim from below "
+                     "(prev_close<=prev_AVWAP, close>AVWAP) that HELD intrabar (low>=AVWAP-0.45*ATR), "
                      "closed strong (close>open, close_loc>=0.62, body_pct>=0.35) above a rising EMA20 "
-                     "and a flat-to-up VWAP (5-bar slope>=0), on volume (vol_ratio>=1.35), as a leader "
-                     "(rs_pct>0.05), near value (vwap_dist_atr<=1.2), non-climax (range<=2.3*ATR), "
+                     "and a flat-to-up AVWAP (5-bar slope>=0), on volume (vol_ratio>=1.35), as a leader "
+                     "(rs_pct>0.05), near value (avwap_dist_atr<=1.2), non-climax (range<=2.3*ATR), "
                      "regime!=BEAR, market_ret>=-0.30, 09:45-13:00 IST."),
             "conditions": [
-                ("prev_close", "<=", "prev_VWAP"), ("close", ">", "VWAP"),
+                ("prev_close", "<=", "prev_AVWAP"), ("close", ">", "AVWAP"),
                 ("close", ">", "prev_close"), ("close", ">", "open"),
                 ("close_loc", ">=", 0.62), ("body_pct", ">=", 0.35),
-                ("low", ">=", "VWAP - 0.45*ATR"), ("vol_ratio", ">=", 1.35),
+                ("low", ">=", "AVWAP - 0.45*ATR"), ("vol_ratio", ">=", 1.35),
                 ("rs_pct", ">", 0.05), ("close", ">", "EMA_20"),
-                ("vwap_dist_atr", "<=", 1.2), ("vwap_5bar_slope_atr", ">=", 0.0),
+                ("avwap_dist_atr", "<=", 1.2), ("avwap_5bar_slope_atr", ">=", 0.0),
                 ("range", "<=", "2.3*ATR"), ("market_ret", ">=", -0.30),
                 ("regime", "!=", "BEAR"), ("signal_hour_ist", "in", "[09:45, 13:00]"),
             ],
         },
         "exit": {"sl_pct": 0.60, "tgt_pct": 2.00},           # best full-window bracket
-        "mask_terms": [["vwap_dist_atr", ">=", 1.027686]],   # optimizer-selected near/far-VWAP floor
+        "mask_terms": [["avwap_dist_atr", ">=", 1.027686]],  # optimizer-selected near/far-AVWAP floor
         "pre_momentum_terms": [],
         "entry_guards": {"min_slot": "11:00", "top_n": 2},   # min_slot 11:00 = parity-exact v2-catalog layer
         "entry_model": "next_1min_open_after_5min_signal + 5bps paper slippage",
@@ -1400,6 +1402,8 @@ FINAL_SETUP_CONF = {
             "pool": "reinvented pool_vB (full ~1.3k-name scan @5bps, probe-gated raw)",
             "research_dir": "Train_and_Test/setup_pf_1_4_approval_loop/DOC5D_AVWAP_RECLAIM_LONG/",
             "split": {"train": ["2026-05-18", "2026-06-19"], "test": ["2026-06-20", "2026-06-30"]},
+            "avwap_semantics_revalidation": ("Recorded PF evidence predates corrected causal 5-minute "
+                                               "AVWAP semantics and must be revalidated."),
             "parity_exact_live_window_5bps": {
                 "note": "min_slot 11:00, v2-catalog layer only (== live). THE number this promote applies.",
                 "full_2mo": {"trades": 25, "net_pf": 0.748, "net_rs": -2839, "win_pct": 32.0, "positive_days": "6/19"},
@@ -1423,14 +1427,17 @@ FINAL_SETUP_CONF = {
     },
 }
 
-# The late BB10 setup is defined in the primary configuration record and copied
-# into this launcher-selected V7/V11 parity book. deepcopy prevents either book
-# from mutating the other's nested policy dictionaries at runtime.
+# Setups added after the original V11 book freeze are copied from the primary
+# configuration record. deepcopy prevents either book from mutating the other's
+# nested policy dictionaries at runtime.
 from copy import deepcopy as _deepcopy
 from final_setup_conf import FINAL_SETUP_CONF as _PRIMARY_FINAL_SETUP_CONF
 
 FINAL_SETUP_CONF["L_LATE_BB10_COMPRESSION_BREAKOUT"] = _deepcopy(
     _PRIMARY_FINAL_SETUP_CONF["L_LATE_BB10_COMPRESSION_BREAKOUT"]
+)
+FINAL_SETUP_CONF["QUIET_LIQUID_ONE_BAR_DEFER_LONG"] = _deepcopy(
+    _PRIMARY_FINAL_SETUP_CONF["QUIET_LIQUID_ONE_BAR_DEFER_LONG"]
 )
 
 

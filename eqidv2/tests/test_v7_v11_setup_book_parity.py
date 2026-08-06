@@ -59,7 +59,8 @@ class V7V11SetupBookParityTests(unittest.TestCase):
             )
             self.assertIn("G_HIGHER_HIGH_BREAK", expected)
             self.assertIn("L_LATE_BB10_COMPRESSION_BREAKOUT", expected)
-            self.assertEqual(len(expected), 12)
+            self.assertIn("QUIET_LIQUID_ONE_BAR_DEFER_LONG", expected)
+            self.assertEqual(len(expected), 13)
 
     def test_live_and_v11_masks_match_for_min_and_max_guards(self):
         with _environment(
@@ -125,6 +126,27 @@ class V7V11SetupBookParityTests(unittest.TestCase):
                 live.conf_mask(frame).tolist(),
                 v11._final_setup_conf_mask(frame).tolist(),
             )
+
+    def test_doc5d_top_n_uses_avwap_distance_in_live_and_v11(self):
+        with _environment(EQIDV2_FINAL_SETUP_CONF_MODULE=PARITY_BOOK):
+            _reset_v11_loader()
+            import avwap_5min_ID_v11_backtesting as v11
+            import eqidv2_final_conf_live_bootstrap as live
+
+            frame = pd.DataFrame(
+                {
+                    "ticker": ["HIGH", "MID", "LOW"],
+                    "setup": ["DOC5D_AVWAP_RECLAIM_LONG"] * 3,
+                    "signal_time_ist": ["2026-07-24 11:00:00+05:30"] * 3,
+                    "vwap_dist_atr": [1.0, 2.0, 3.0],
+                    "avwap_dist_atr": [1.15, 1.10, 1.05],
+                }
+            )
+            live_mask = live.conf_mask(frame)
+            v11_mask = v11._final_setup_conf_mask(frame)
+
+            self.assertEqual(live_mask.tolist(), v11_mask.tolist())
+            self.assertEqual(frame.loc[live_mask, "ticker"].tolist(), ["HIGH", "MID"])
 
     def test_all_production_launchers_select_the_shared_parity_book(self):
         launchers = [

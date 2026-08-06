@@ -635,6 +635,57 @@ def calculate_vwap(df):
     _vol_cum = _vol.groupby(_day).cumsum()
     return _pv_cum / _vol_cum.where(_vol_cum != 0)
 
+
+def calculate_anchored_vwap_5min(df: pd.DataFrame) -> pd.Series:
+    """Return causal session-open AVWAP from completed, real 5-minute bars.
+
+    The 09:15 row is an opening snapshot rather than a completed candle. It,
+    synthetic gap fills, and partial 1-minute buckets cannot seed or alter the
+    anchor. Ineligible rows receive NaN; later real bars resume the session
+    cumulative sums without those rows contributing price or volume.
+    """
+    typical = (
+        pd.to_numeric(df["high"], errors="coerce")
+        + pd.to_numeric(df["low"], errors="coerce")
+        + pd.to_numeric(df["close"], errors="coerce")
+    ) / 3.0
+    volume = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0)
+    finite_typical = typical.notna() & np.isfinite(typical)
+    finite_volume = volume.notna() & np.isfinite(volume)
+    volume = volume.where(finite_volume, 0.0)
+
+    timestamps = pd.to_datetime(df["date"], errors="coerce")
+    try:
+        timestamps_ist = timestamps.dt.tz_convert(IST_TZ)
+    except (TypeError, AttributeError):
+        timestamps_ist = timestamps.dt.tz_localize(IST_TZ)
+    session = timestamps_ist.dt.date
+
+    opening_snapshot = (
+        (timestamps_ist.dt.hour == MARKET_OPEN_TIME.hour)
+        & (timestamps_ist.dt.minute == MARKET_OPEN_TIME.minute)
+    ).fillna(False)
+    if "opening_snapshot" in df.columns:
+        stored_opening = df["opening_snapshot"]
+        stored_opening = (
+            pd.to_numeric(stored_opening, errors="coerce").fillna(0).ne(0)
+            | stored_opening.astype(str).str.strip().str.lower().isin({"true", "yes", "on"})
+        )
+        opening_snapshot |= stored_opening
+
+    ineligible = opening_snapshot | ~finite_typical | ~finite_volume | timestamps_ist.isna()
+    if "gap_filled" in df.columns:
+        ineligible |= pd.to_numeric(df["gap_filled"], errors="coerce").fillna(0).ne(0)
+    if "source_1m_count" in df.columns:
+        ineligible |= pd.to_numeric(df["source_1m_count"], errors="coerce").fillna(0).ne(5)
+
+    eligible = ~ineligible
+    eligible_volume = volume.where(eligible, 0.0)
+    cumulative_volume = eligible_volume.groupby(session).cumsum()
+    cumulative_pv = (typical.fillna(0.0) * eligible_volume).groupby(session).cumsum()
+    avwap = cumulative_pv / cumulative_volume.where(cumulative_volume > 0)
+    return avwap.where(eligible)
+
 def calculate_ema(close, span):
     return close.ewm(span=span, adjust=False).mean()
 
@@ -668,6 +719,7 @@ def add_standard_indicators(df):
     df["EMA_200"] = calculate_ema(df["close"], 200)
     df["20_SMA"] = df["close"].rolling(20, min_periods=20).mean()
     df["VWAP"] = calculate_vwap(df)
+    df["AVWAP"] = calculate_anchored_vwap_5min(df)
     df["CCI"] = calculate_cci(df)
     df["MFI"] = calculate_mfi(df)
     df["OBV"] = calculate_obv(df)

@@ -494,6 +494,8 @@ def candidates_to_dataframe(candidates: Iterable["v2.Candidate"]) -> pd.DataFram
             "close": _finite_or_none(c.signal_close),
             "vol_ratio": _finite_or_none(c.vol_ratio),
             "vwap_dist_atr": _finite_or_none(c.vwap_dist_atr),
+            "avwap": _finite_or_none(getattr(c, "avwap", np.nan)),
+            "avwap_dist_atr": _finite_or_none(getattr(c, "avwap_dist_atr", np.nan)),
             "rs_pct": _finite_or_none(c.rs_pct),
             "market_ret_pct": _finite_or_none(c.market_ret_pct),
             "body_pct": _finite_or_none(c.body_pct),
@@ -514,6 +516,8 @@ def candidates_to_dataframe(candidates: Iterable["v2.Candidate"]) -> pd.DataFram
                 "sl_price": sl_price,
                 "target_price": tgt_price,
                 "score": float(c.quality_score) if np.isfinite(c.quality_score) else 0.0,
+                "avwap": _finite_or_none(getattr(c, "avwap", np.nan)),
+                "avwap_dist_atr": _finite_or_none(getattr(c, "avwap_dist_atr", np.nan)),
                 "diagnostics_json": json.dumps(diag, default=str),
             }
         )
