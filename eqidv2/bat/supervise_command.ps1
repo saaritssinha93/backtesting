@@ -88,7 +88,50 @@ function Write-KeyFile {
     foreach ($entry in ($Data.GetEnumerator() | Sort-Object Name)) {
         $lines += ("{0}={1}" -f $entry.Key, [string]$entry.Value)
     }
-    Set-Content -Path $Path -Value $lines -Encoding UTF8
+    $content = ($lines -join [Environment]::NewLine) + [Environment]::NewLine
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        $tempPath = "{0}.{1}.{2}.tmp" -f $Path, $PID, ([Guid]::NewGuid().ToString("N"))
+        $backupPath = "{0}.{1}.{2}.bak" -f $Path, $PID, ([Guid]::NewGuid().ToString("N"))
+        try {
+            [System.IO.File]::WriteAllText($tempPath, $content, $encoding)
+            if ([System.IO.File]::Exists($Path)) {
+                [System.IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+                if ([System.IO.File]::Exists($backupPath)) {
+                    [System.IO.File]::Delete($backupPath)
+                }
+            } else {
+                [System.IO.File]::Move($tempPath, $Path)
+            }
+            return
+        } catch {
+            $lastError = $_.Exception.Message
+            try {
+                if ([System.IO.File]::Exists($tempPath)) {
+                    [System.IO.File]::Delete($tempPath)
+                }
+                if ([System.IO.File]::Exists($backupPath)) {
+                    [System.IO.File]::Delete($backupPath)
+                }
+            } catch { }
+            if ($attempt -lt 4) {
+                Start-Sleep -Milliseconds (75 * $attempt)
+            }
+        }
+    }
+
+    # A dashboard or antivirus reader may briefly hold the destination. Keep
+    # supervising and retry on the next heartbeat instead of orphaning the worker.
+    $warning = "Could not update key file '$Path' after 4 attempts: $lastError"
+    Write-Warning $warning
+    if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
+        try {
+            Add-Content -Path $script:SupervisorLogFile -Value (
+                "{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $warning
+            ) -Encoding UTF8
+        } catch { }
+    }
 }
 
 function Read-KeyFile {

@@ -46,6 +46,7 @@ import eqidv2_live_signal_writer as signal_writer
 import eqidv2_v7_signal_contract as signal_contract
 import eqidv2_decision_funnel as decision_funnel
 import eqidv2_pre_momentum as shared_pre_momentum
+import hilega_milega_setups as hm
 from eqidv2_runtime_manifest import freeze_runtime_manifest
 from eqidv2_runtime_paths import DATA_1MIN_DIR, DATA_5M_DIR, RUNTIME_ROOT, RUNTIME_STATUS_DIR, runtime_dir
 
@@ -1178,6 +1179,68 @@ def _safe_float(value: Any, default: float = np.nan) -> float:
         return float(default)
 
 
+HM_DYNAMIC_SIGNAL_RR_SETUP = hm.SHORT_RSI50_REVERSAL
+
+
+def _candidate_entry_lag_min(cand: pd.Series) -> int:
+    value = _safe_float(cand.get("entry_lag_min"), np.nan)
+    if np.isfinite(value) and value >= 0:
+        return int(value)
+    return int(ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)
+
+
+def _candidate_intended_entry_ist(cand: pd.Series) -> pd.Timestamp:
+    sig = _ensure_ist_ts(cand.get("signal_time_ist"))
+    if pd.isna(sig):
+        return pd.NaT
+    return (sig + pd.Timedelta(minutes=_candidate_entry_lag_min(cand))).floor("min")
+
+
+def _hm_dynamic_signal_rr_levels(
+    cand: pd.Series,
+    side: str,
+    entry_price: float,
+) -> Optional[Tuple[float, float, float, float]]:
+    setup = str(cand.get("setup", "")).upper().strip()
+    if setup != HM_DYNAMIC_SIGNAL_RR_SETUP:
+        return None
+    if not np.isfinite(entry_price) or entry_price <= 0:
+        return None
+    side_u = str(side).upper().strip()
+    rr = _safe_float(cand.get("hm_risk_reward"), 1.35)
+    min_risk = _safe_float(cand.get("hm_min_risk_pct"), 1.0)
+    max_risk = _safe_float(cand.get("hm_max_risk_pct"), 1.25)
+    signal_stop = _safe_float(
+        cand.get("hm_signal_stop_price", cand.get("signal_high")),
+        np.nan,
+    )
+    if not all(np.isfinite(x) for x in (rr, min_risk, max_risk, signal_stop)):
+        return None
+    if rr <= 0 or min_risk <= 0 or max_risk <= 0:
+        return None
+    if side_u == "SHORT":
+        stop_distance = signal_stop - entry_price
+        if stop_distance <= 0:
+            return None
+        stop_price = signal_stop
+        target_price = entry_price - (stop_distance * rr)
+    elif side_u == "LONG":
+        stop_distance = entry_price - signal_stop
+        if stop_distance <= 0:
+            return None
+        stop_price = signal_stop
+        target_price = entry_price + (stop_distance * rr)
+    else:
+        return None
+    if target_price <= 0:
+        return None
+    sl_pct = stop_distance / entry_price * 100.0
+    target_pct = sl_pct * rr
+    if sl_pct < min_risk or sl_pct > max_risk:
+        return None
+    return float(stop_price), float(target_price), float(sl_pct), float(target_pct)
+
+
 def _pre_momentum_side_dir(side: str) -> float:
     return 1.0 if str(side).strip().upper() == "LONG" else -1.0
 
@@ -1480,11 +1543,7 @@ def _build_entry_rows(
             rule = v6.SETUP_EXIT_RULES.get(setup)
         if rule is None:
             continue
-        _sig_ts_for_lag = _ensure_ist_ts(cand.get("signal_time_ist"))
-        _intended_entry_ist = (
-            (_sig_ts_for_lag + pd.Timedelta(minutes=ENTRY_SIGNAL_TO_ENTRY_LAG_MIN)).floor("min")
-            if not pd.isna(_sig_ts_for_lag) else pd.NaT
-        )
+        _intended_entry_ist = _candidate_intended_entry_ist(cand)
         entry_policy = _conf_boot.entry_policy_for_setup(setup) if _CONF_ENGINE_ACTIVE else {}
         exit_policy = _conf_boot.exit_policy_for_setup(setup) if _CONF_ENGINE_ACTIVE else {}
         entry_bar = _entry_bar_for_candidate(raw_by_ticker, cand, _intended_entry_ist)
@@ -1495,6 +1554,8 @@ def _build_entry_rows(
             entry_price = float(entry_bar.get("open", np.nan))
             _entry_bar_source = "forming_t1_open_reference"
         else:
+            if setup.upper() == HM_DYNAMIC_SIGNAL_RR_SETUP:
+                continue
             # T+1 bar unavailable at fetch time (forming or not yet returned by Kite).
             # Use signal-bar close as SL/TGT reference only; actual fill is live LTP.
             # Executor rebases stop/target distances around the real fill price.
@@ -1502,15 +1563,22 @@ def _build_entry_rows(
             _entry_bar_source = "signal_bar_close_reference"
         if not np.isfinite(entry_price) or entry_price <= 0:
             continue
-        sl_pct, tgt_pct = rule
-        if side == "LONG":
-            sl_price = entry_price * (1.0 - sl_pct / 100.0)
-            target_price = entry_price * (1.0 + tgt_pct / 100.0)
-        elif side == "SHORT":
-            sl_price = entry_price * (1.0 + sl_pct / 100.0)
-            target_price = entry_price * (1.0 - tgt_pct / 100.0)
+        hm_levels = _hm_dynamic_signal_rr_levels(cand, side, entry_price)
+        if hm_levels is not None:
+            sl_price, target_price, sl_pct, tgt_pct = hm_levels
+            rule_source = "hm_signal_candle_rr"
         else:
-            continue
+            if setup.upper() == HM_DYNAMIC_SIGNAL_RR_SETUP:
+                continue
+            sl_pct, tgt_pct = rule
+            if side == "LONG":
+                sl_price = entry_price * (1.0 - sl_pct / 100.0)
+                target_price = entry_price * (1.0 + tgt_pct / 100.0)
+            elif side == "SHORT":
+                sl_price = entry_price * (1.0 + sl_pct / 100.0)
+                target_price = entry_price * (1.0 - tgt_pct / 100.0)
+            else:
+                continue
         # P2-12: F&O ban filter — block new SHORT entries on banned securities
         if side == "SHORT" and FNO_BAN_FILTER_ENABLED:
             if slot is not None:
@@ -1679,7 +1747,11 @@ def _entry_reject_audit(candidates: pd.DataFrame, raw_by_ticker: Dict[str, pd.Da
                 and _conf_boot.entry_policy_for_setup(setup).get("model")
                 == "high_break_trigger"
             )
-            and _entry_bar_for_candidate(raw_by_ticker, cand) is None
+            and _entry_bar_for_candidate(
+                raw_by_ticker,
+                cand,
+                _candidate_intended_entry_ist(cand),
+            ) is None
         ):
             reason = "missing_1min_entry_bar"
         if reason:

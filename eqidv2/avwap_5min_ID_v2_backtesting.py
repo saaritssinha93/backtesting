@@ -35,6 +35,8 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+import hilega_milega_setups as hilega_milega
+
 try:
     from filtered_stocks_MIS import selected_stocks
 except Exception:
@@ -128,6 +130,14 @@ EXTRA_SLOT_MARKET_RET_MAX_PCT = 0.0667
 EXTRA_SLOT_MIN_DAY_VALUE_RS = 314_000_000.0
 ENABLE_NOISY_ADVANCED_SHORTS = False
 ENABLE_NATIVE_V2_MINED_FILTER = True
+
+# Transcript-derived Hilega Milega entries are research-only.  The default is
+# OFF, so historical/live output cannot change until an explicit research run
+# enables the detector.  They are also absent from the live allowed-setup and
+# final-conf books.
+ENABLE_HILEGA_MILEGA_RESEARCH = str(
+    os.getenv("EQIDV2_ENABLE_HILEGA_MILEGA_RESEARCH", "0")
+).strip().lower() in {"1", "true", "yes", "on"}
 
 DEFAULT_COST_BPS = 16.0
 DEFAULT_WORKERS = 12
@@ -407,6 +417,8 @@ def _prepare_5m(df: pd.DataFrame) -> pd.DataFrame:
     else:
         out["bb_width_pct"] = np.nan
         out["bb_width_mean100"] = np.nan
+    if ENABLE_HILEGA_MILEGA_RESEARCH:
+        out = hilega_milega.add_hilega_milega_features(out)
     return out
 
 
@@ -755,6 +767,32 @@ def _scan_day(day_df: pd.DataFrame, ticker: str, market_ctx: dict[str, dict]) ->
             if min_qs is not None and c.quality_score < min_qs:
                 return
             out.append(c)
+
+        if ENABLE_HILEGA_MILEGA_RESEARCH:
+            add_catalog(
+                hilega_milega.LONG_RSI50_REVERSAL,
+                "LONG",
+                hilega_milega.setup_fired(row, hilega_milega.LONG_RSI50_REVERSAL),
+                "hm_rsi9_crosses_above_50_with_bullish_alignment_and_price_confirmation",
+            )
+            add_catalog(
+                hilega_milega.SHORT_RSI50_REVERSAL,
+                "SHORT",
+                hilega_milega.setup_fired(row, hilega_milega.SHORT_RSI50_REVERSAL),
+                "hm_rsi9_crosses_below_50_with_bearish_alignment_and_price_confirmation",
+            )
+            add_catalog(
+                hilega_milega.LONG_BB20_PULLBACK,
+                "LONG",
+                hilega_milega.setup_fired(row, hilega_milega.LONG_BB20_PULLBACK),
+                "hm_bullish_rsi_alignment_reclaims_bollinger_20sma",
+            )
+            add_catalog(
+                hilega_milega.SHORT_BB20_PULLBACK,
+                "SHORT",
+                hilega_milega.setup_fired(row, hilega_milega.SHORT_BB20_PULLBACK),
+                "hm_bearish_rsi_alignment_rejects_bollinger_20sma",
+            )
 
         add_catalog(
             "A_MOD_BREAK_C1_HIGH",

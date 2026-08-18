@@ -184,6 +184,88 @@ class DashboardV7ControlsTests(unittest.TestCase):
             "newer_same_day_auth_state_and_access_token",
         )
 
+    def test_newer_fno_worker_success_preserves_supervisor_failure_as_recovered(self) -> None:
+        now = datetime(2026, 8, 12, 18, 0, tzinfo=dashboard.IST)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "fno_oi_fetch_5min.status").write_text(
+                "\n".join(
+                    (
+                        "status=SUCCESS",
+                        "ts=2026-08-12T17:58:00+05:30",
+                        "phase=SLOT_DONE",
+                        "output=recovered-marker.json",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with patch.object(dashboard, "RUNTIME_STATUS_DIR", root):
+                status = dashboard.reconcile_fno_worker_recovery(
+                    "fno_oi_fetch_5min",
+                    {
+                        "status": "FAILED",
+                        "ts": "2026-08-12_09:24:05",
+                        "reason": "max_restarts_exceeded",
+                    },
+                    now_ist=now,
+                )
+
+        self.assertEqual(status["status"], "RECOVERED")
+        self.assertEqual(status["previous_status"], "FAILED")
+        self.assertEqual(status["previous_reason"], "max_restarts_exceeded")
+        self.assertEqual(status["recovery_phase"], "SLOT_DONE")
+        self.assertEqual(status["recovery_source"], "newer_same_day_worker_success")
+        source = Path(dashboard.__file__).read_text(encoding="utf-8")
+        self.assertIn('"RECOVERED", "WAITING", "PARTIAL"', source)
+
+    def test_prior_day_failure_is_scheduled_before_todays_run(self) -> None:
+        task_snapshot = {
+            "\\EQIDV2_fno_oi_eod_qc_1540": {
+                "Scheduled Task State": "Enabled",
+                "Status": "Ready",
+                "Next Run Time": "13-08-2026 15:40:00",
+            }
+        }
+        now = datetime(2026, 8, 13, 9, 30, tzinfo=dashboard.IST)
+        status = dashboard.apply_scheduler_status(
+            "fno_oi_eod_qc",
+            {
+                "status": "FAILED",
+                "ts": "2026-08-12T15:40:01+05:30",
+                "phase": "FAILED",
+                "error": "stale universe",
+            },
+            task_snapshot,
+            now_ist=now,
+        )
+        status = dashboard.apply_scheduler_status(
+            "fno_oi_eod_qc", status, task_snapshot, now_ist=now
+        )
+
+        self.assertEqual(status["status"], "SCHEDULED")
+        self.assertEqual(status["previous_status"], "FAILED")
+        self.assertEqual(status["previous_error"], "stale universe")
+        self.assertEqual(status["phase"], "WAIT_SCHEDULE")
+        self.assertEqual(status["previous_phase"], "FAILED")
+        self.assertEqual(status["status_scope"], "awaiting_today_scheduled_run")
+
+    def test_same_day_failure_remains_failed(self) -> None:
+        status = dashboard.apply_scheduler_status(
+            "fno_v6_scanner_5min",
+            {"status": "FAILED", "ts": "2026-08-13T09:15:02+05:30"},
+            {
+                "\\EQIDV2_fno_v6_scanner_5min_0918": {
+                    "Scheduled Task State": "Enabled",
+                    "Status": "Ready",
+                    "Next Run Time": "14-08-2026 09:15:00",
+                }
+            },
+            now_ist=datetime(2026, 8, 13, 9, 30, tzinfo=dashboard.IST),
+        )
+
+        self.assertEqual(status["status"], "FAILED")
+
 
 if __name__ == "__main__":
     unittest.main()

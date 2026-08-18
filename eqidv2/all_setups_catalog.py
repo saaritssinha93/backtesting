@@ -24,6 +24,10 @@ Sources collated (all in the main eqidv2 folder)
         MR_CONTROLLED_VWAP_EXTREME_FADE_*  (E_ORB_RETEST_HOLD_* counted under B).
   E) discovery-engine candidates (Train_and_Test/long_setup_discovery_from_raw_data)
         Standalone-mined near-misses kept for the record (NOT promoted).
+  F) hilega_milega_setups.py -> 4 transcript-derived research setups
+        RSI(9) with EMA(3), WMA(21), the 50 regime line, and BB20 price
+        confirmation. Only S_HM_RSI50_REVERSAL is paper-active as a 60m FnO
+        final-conf variant; the other HM setups remain research-only.
 
 Live status (ACTIVE / RESEARCH_WATCH / RAW_ONLY) is NOT hard-coded here — it is
 derived at runtime from the gate-of-record, final_setup_conf.py:
@@ -48,6 +52,7 @@ SRC_V7_EARLY = "avwap_5min_ID_v7_candidate_scan.py::EARLY"
 SRC_NEW = "new_setups_scan_v11.py"
 SRC_TIER123 = "research_v11_tier123_new_setups / tier123_new_validate.py"
 SRC_DISCOVERY = "Train_and_Test/long_setup_discovery_from_raw_data"
+SRC_HILEGA_MILEGA = "hilega_milega_setups.py (research-gated v2 adapter)"
 
 
 @dataclass(frozen=True)
@@ -253,9 +258,32 @@ DISCOVERY_SETUPS: list[Setup] = [
           notes="near-miss; train PF 1.26 / test PF 1.34 @5bps, fails at 15bps"),
 ]
 
+# ===========================================================================
+# F) Hilega Milega transcript-derived setups
+# ===========================================================================
+HILEGA_MILEGA_SETUPS: list[Setup] = [
+    Setup("L_HM_RSI50_REVERSAL", LONG, SRC_HILEGA_MILEGA,
+          "hm_rsi9_crosses_above_50_with_bullish_alignment_and_price_confirmation",
+          "RSI(9) crosses above 50 with rising EMA(3)/WMA(21) alignment and price confirmation.",
+          notes="RESEARCH_ONLY; enable with EQIDV2_ENABLE_HILEGA_MILEGA_RESEARCH=1"),
+    Setup("S_HM_RSI50_REVERSAL", SHORT, SRC_HILEGA_MILEGA,
+          "hm_rsi9_crosses_below_50_with_bearish_alignment_and_price_confirmation",
+          "RSI(9) crosses below 50 with falling EMA(3)/WMA(21) alignment and price confirmation.",
+          notes="ACTIVE paper-only in final conf as 60m FnO variant; other HM variants remain research-only"),
+    Setup("L_HM_BB20_PULLBACK", LONG, SRC_HILEGA_MILEGA,
+          "hm_bullish_rsi_alignment_reclaims_bollinger_20sma",
+          "Established bullish RSI alignment reclaims the Bollinger 20-SMA after a pullback.",
+          notes="RESEARCH_ONLY; enable with EQIDV2_ENABLE_HILEGA_MILEGA_RESEARCH=1"),
+    Setup("S_HM_BB20_PULLBACK", SHORT, SRC_HILEGA_MILEGA,
+          "hm_bearish_rsi_alignment_rejects_bollinger_20sma",
+          "Established bearish RSI alignment rejects the Bollinger 20-SMA after a pullback.",
+          notes="RESEARCH_ONLY; symmetric short implementation"),
+]
+
 # Full collated catalog (deduplicated by name; each setup listed once).
 ALL_SETUPS: list[Setup] = (
-    V2_SETUPS + V7_EARLY_SETUPS + NEW_SETUPS + TIER123_SETUPS + DISCOVERY_SETUPS
+    V2_SETUPS + V7_EARLY_SETUPS + NEW_SETUPS + TIER123_SETUPS
+    + DISCOVERY_SETUPS + HILEGA_MILEGA_SETUPS
 )
 
 
@@ -331,7 +359,14 @@ def _print_summary() -> None:
     n_short = len(shorts())
     print(f"Collated setups: {len(ALL_SETUPS)}  ({n_long} LONG / {n_short} SHORT)")
     print("Sources:")
-    for src in (SRC_V2, SRC_V7_EARLY, SRC_NEW, SRC_TIER123, SRC_DISCOVERY):
+    for src in (
+        SRC_V2,
+        SRC_V7_EARLY,
+        SRC_NEW,
+        SRC_TIER123,
+        SRC_DISCOVERY,
+        SRC_HILEGA_MILEGA,
+    ):
         items = by_source(src)
         print(f"  - {len(items):>2}  {src}")
     print()

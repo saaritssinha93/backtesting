@@ -13,6 +13,15 @@ set "EQIDV2_DATA_5M_DIR=C:\TradingData\eqidv2\stocks_indicators_5min_eq_live"
 set "EQIDV2_CACHE_5MIN_DIR=C:\TradingData\eqidv2\stocks_cache_5min_eq_live"
 set "EQIDV2_5M_ENFORCE_SESSION_COMPLETENESS=1"
 set "EQIDV2_5M_SYNTHETIC_GAP_FILL=1"
+REM Start at +2s, but recheck a new candle if Kite initially publishes an
+REM exact OHLCV copy of the prior slot. Unsafe copies never receive a complete marker.
+set "EQIDV2_5M_PROVISIONAL_DUPLICATE_RETRY=1"
+set "EQIDV2_5M_PROVISIONAL_SETTLE_SEC=18"
+set "EQIDV2_5M_PROVISIONAL_RETRY_ATTEMPTS=3"
+set "EQIDV2_5M_PROVISIONAL_RETRY_INTERVAL_SEC=2"
+REM FnO cash legs use five exact 1-minute candles, matching the V5/V6 backtest.
+set "EQIDV2_FNO_5M_FROM_1M=1"
+set "EQIDV2_FNO_UNIVERSE_PATH=C:\TradingData\eqidv2\fno_oi\universe\latest_near_month.parquet"
 set "EQIDV2_5M_LIVE_SLIM_MODE=1"
 set "EQIDV2_5M_LIVE_SLIM_CALENDAR_DAYS=10"
 set "EQIDV2_5M_BUFFER_SEC=2"

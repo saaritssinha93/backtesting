@@ -47,6 +47,7 @@ from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
+import pandas as pd
 import pytz
 from eqidv2_runtime_paths import DATA_5M_DIR as RUNTIME_DATA_5M_DIR
 from eqidv2_runtime_paths import REPORTS_DIR as RUNTIME_REPORTS_DIR
@@ -205,6 +206,54 @@ def load_stocks_universe_fixed(*args, **kwargs):
     return tickers, token_map
 
 core.load_stocks_universe = load_stocks_universe_fixed
+
+
+def _mapped_fno_equities(logger) -> pd.DataFrame:
+    """Return the authoritative mapped cash-equity subset required by FnO V5."""
+    universe_path = runtime_dir("fno_oi", "universe", "latest_near_month.parquet")
+    if not universe_path.exists():
+        logger.warning("FnO equity universe is missing: %s", universe_path)
+        return pd.DataFrame(columns=["equity_symbol", "equity_instrument_token"])
+    universe = pd.read_parquet(universe_path)
+    required = {"equity_symbol", "equity_instrument_token"}
+    if not required.issubset(universe.columns):
+        logger.warning(
+            "FnO mapped equity columns are missing from %s",
+            universe_path,
+        )
+        return pd.DataFrame(columns=sorted(required))
+    mapped = universe[["equity_symbol", "equity_instrument_token"]].dropna().copy()
+    mapped["equity_symbol"] = mapped["equity_symbol"].astype(str).str.strip().str.upper()
+    mapped["equity_instrument_token"] = pd.to_numeric(
+        mapped["equity_instrument_token"], errors="coerce"
+    )
+    mapped = mapped.loc[
+        mapped["equity_symbol"].ne("")
+        & mapped["equity_instrument_token"].gt(0)
+    ]
+    return mapped.drop_duplicates("equity_symbol", keep="last").sort_values("equity_symbol")
+
+
+def _include_mapped_fno_equities(
+    tickers: list[str],
+    token_map: dict[str, int],
+    logger,
+) -> tuple[list[str], dict[str, int]]:
+    """Guarantee that every mapped stock future has cash 5-minute data."""
+    mapped = _mapped_fno_equities(logger)
+    combined = {str(value).strip().upper() for value in tickers if str(value).strip()}
+    tokens = {str(key).strip().upper(): int(value) for key, value in token_map.items()}
+    added = 0
+    for row in mapped.itertuples(index=False):
+        symbol = str(row.equity_symbol).strip().upper()
+        token = int(row.equity_instrument_token)
+        if symbol not in combined:
+            added += 1
+        combined.add(symbol)
+        tokens[symbol] = token
+    if added:
+        logger.info("Added %d mapped FnO cash equities to the live 5-minute universe.", added)
+    return sorted(combined), tokens
 
 # ---------------------------------------------------------------------
 # IMPORTANT FIX: core.ticker_is_fresh() has a +/- one-step tolerance that can
@@ -439,6 +488,8 @@ def _last_5m_bar_for_ticker_ist(ticker: str) -> Optional[datetime]:
 def _ticker_has_required_5m_slot_data(
     ticker: str,
     expected_ts_ist: datetime,
+    *,
+    require_exact_1m: bool = False,
 ) -> tuple[bool, Optional[datetime], list]:
     out_path = str(RUNTIME_DATA_5M_DIR / f"{str(ticker).strip().upper()}{END_5M}")
     try:
@@ -471,6 +522,21 @@ def _ticker_has_required_5m_slot_data(
             missing_session = []
         if missing_session:
             return False, last_ts, missing_session
+
+    if require_exact_1m:
+        try:
+            lineage = pd.read_parquet(
+                existing_path, columns=["date", "source_1m_count"]
+            )
+            lineage_ts = core._to_ist(lineage["date"]).dt.floor("min")
+            target_rows = lineage.loc[lineage_ts.eq(pd.Timestamp(target_ts).floor("min"))]
+            source_count = pd.to_numeric(
+                target_rows.get("source_1m_count"), errors="coerce"
+            )
+            if target_rows.empty or not source_count.eq(5).any():
+                return False, last_ts, [target_ts]
+        except Exception:
+            return False, last_ts, [target_ts]
 
     return True, last_ts, []
 
@@ -546,6 +612,10 @@ def _publish_slot_completion_marker(
     unresolved_symbol_count: int = 0,
     failed_symbol_count: int = 0,
     token_missing_symbol_count: int = 0,
+    fno_equity_expected: int = 0,
+    fno_equity_ready: int = 0,
+    fno_equity_failures: list[str] | None = None,
+    fno_equity_universe_sha256: str = "",
 ) -> None:
     """
     strategy_v2 §M1 — authoritative LF completion marker.
@@ -565,13 +635,22 @@ def _publish_slot_completion_marker(
     """
     failures_list = [str(f) for f in (failures or [])]
     verify_sample_list = [str(t) for t in (verification_failure_sample or [])]
+    fno_failure_list = [str(value) for value in (fno_equity_failures or [])]
+    fno_quality_complete = bool(
+        int(fno_equity_expected) > 0
+        and int(fno_equity_ready) == int(fno_equity_expected)
+        and not fno_failure_list
+    )
     complete = (
         not failures_list
         and int(verification_failed_count) == 0
         and int(tickers_written) == int(tickers_expected)
+        and int(current_symbol_count) == int(tickers_expected)
+        and int(previous_slot_symbol_count) == 0
         and int(unresolved_symbol_count) == 0
         and int(failed_symbol_count) == 0
         and int(token_missing_symbol_count) == 0
+        and fno_quality_complete
     )
     tickers_failed = max(0, int(tickers_expected) - int(tickers_written)) + int(verification_failed_count)
     ratio = (float(sample_fresh) / float(sample_checked)) if sample_checked > 0 else 0.0
@@ -613,6 +692,12 @@ def _publish_slot_completion_marker(
         "unresolved_symbol_count": int(unresolved_symbol_count),
         "failed_symbol_count": int(failed_symbol_count),
         "token_missing_symbol_count": int(token_missing_symbol_count),
+        "fno_equity_quality_complete": fno_quality_complete,
+        "fno_equity_expected": int(fno_equity_expected),
+        "fno_equity_ready": int(fno_equity_ready),
+        "fno_equity_failed": int(len(fno_failure_list)),
+        "fno_equity_failure_sample": fno_failure_list[:20],
+        "fno_equity_universe_sha256": str(fno_equity_universe_sha256),
         "partition_failures": failures_list,
         "verification_failed_count": int(verification_failed_count),
         "verification_failure_sample": verify_sample_list,
@@ -629,7 +714,8 @@ def _publish_slot_completion_marker(
         f"[READY] Published authoritative 5m completion marker "
         f"slot={slot_end.astimezone(IST).strftime('%Y-%m-%d %H:%M:%S%z')} "
         f"complete={complete} written={tickers_written}/{tickers_expected} "
-        f"failed={tickers_failed} duration_ms={duration_ms:.0f}",
+        f"failed={tickers_failed} fno_ready={fno_equity_ready}/{fno_equity_expected} "
+        f"duration_ms={duration_ms:.0f}",
         flush=True,
     )
 
@@ -1526,9 +1612,19 @@ def run_update_5m_once(
     logger = core.logging.getLogger("stocks_fetcher")
     all_tickers, pre_token_map = core.load_stocks_universe(logger)
     token_map = {str(k).strip().upper(): int(v) for k, v in dict(pre_token_map).items()}
+    all_tickers, token_map = _include_mapped_fno_equities(
+        list(all_tickers), token_map, logger
+    )
     universe_symbols = _canonical_symbols(all_tickers)
     universe_hash = _universe_sha256(universe_symbols)
+    mapped_fno = _mapped_fno_equities(logger)
+    fno_equity_symbols = _canonical_symbols(
+        mapped_fno.get("equity_symbol", pd.Series(dtype=str)).astype(str).tolist()
+    )
+    fno_equity_hash = _universe_sha256(fno_equity_symbols)
     preflight_failures: list[str] = []
+    if not fno_equity_symbols:
+        preflight_failures.append("mapped_fno_equity_universe_empty")
     if slot_end is not None and bool(publish_completion_marker):
         try:
             _write_feed_universe_manifest(slot_end, universe_symbols)
@@ -1806,7 +1902,8 @@ def run_update_5m_once(
     noop_symbol_count = len(accounting_symbols["noop"])
     accounting_exact = bool(
         exact_accounting_partitions == len(partitions)
-        and accounting_symbols["complete"] == set(universe_symbols)
+        and accounting_symbols["current"] == set(universe_symbols)
+        and not accounting_symbols["previous_slot"]
         and not accounting_symbols["failed"]
         and not accounting_symbols["unresolved"]
         and not accounting_symbols["token_missing"]
@@ -1884,7 +1981,32 @@ def run_update_5m_once(
         if bool(publish_completion_marker):
             try:
                 tickers_expected_total = int(len(universe_symbols))
-                tickers_written_total = int(complete_symbol_count)
+                tickers_written_total = int(current_symbol_count)
+                fno_equity_failures: list[str] = []
+                for ticker in fno_equity_symbols:
+                    ok, last_ts, quality_issues = _ticker_has_required_5m_slot_data(
+                        ticker,
+                        slot_end.astimezone(IST),
+                        require_exact_1m=True,
+                    )
+                    if ok:
+                        continue
+                    last_text = last_ts.strftime("%Y-%m-%d %H:%M:%S%z") if last_ts else "missing"
+                    issue_text = ",".join(
+                        pd.Timestamp(value).strftime("%H:%M")
+                        for value in quality_issues[:6]
+                    )
+                    fno_equity_failures.append(
+                        f"{ticker}:last={last_text}:unsafe={issue_text or 'target_missing'}"
+                    )
+                fno_equity_ready = len(fno_equity_symbols) - len(fno_equity_failures)
+                if fno_equity_failures:
+                    print(
+                        "[WARN] FnO equity 5min quality gate failed "
+                        f"ready={fno_equity_ready}/{len(fno_equity_symbols)} "
+                        f"sample={'; '.join(fno_equity_failures[:8])}",
+                        flush=True,
+                    )
                 sample_fresh = 0
                 sample_checked = 0
                 if bool(ready_marker_enabled) and 'ready_sample' in locals() and ready_sample:
@@ -1912,6 +2034,10 @@ def run_update_5m_once(
                     unresolved_symbol_count=unresolved_symbol_count,
                     failed_symbol_count=failed_symbol_count,
                     token_missing_symbol_count=token_missing_symbol_count,
+                    fno_equity_expected=len(fno_equity_symbols),
+                    fno_equity_ready=fno_equity_ready,
+                    fno_equity_failures=fno_equity_failures,
+                    fno_equity_universe_sha256=fno_equity_hash,
                 )
             except Exception as exc:
                 print(f"[WARN] Failed to write 5min completion marker: {exc}")

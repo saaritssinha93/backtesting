@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -27,6 +28,122 @@ def _ist(hour: int, minute: int) -> pd.Timestamp:
 
 
 class Live5MinFetchWindowTests(unittest.TestCase):
+    def test_exact_fno_minute_aggregation_requires_all_five_rows(self):
+        timestamps = pd.date_range(_ist(9, 16), periods=10, freq="1min")
+        minute = pd.DataFrame(
+            {
+                "date": timestamps,
+                "open": range(10),
+                "high": [value + 2 for value in range(10)],
+                "low": [value - 1 for value in range(10)],
+                "close": [value + 1 for value in range(10)],
+                "volume": range(1, 11),
+            }
+        ).drop(index=7)
+
+        exact = core._aggregate_exact_minute_targets(
+            minute,
+            [_ist(9, 20), _ist(9, 25)],
+        )
+
+        self.assertEqual(exact["date"].tolist(), [_ist(9, 20)])
+        self.assertEqual(exact.iloc[0]["volume"], 15.0)
+        self.assertEqual(exact.iloc[0]["source_1m_count"], 5)
+
+        zoneinfo_target = pd.Timestamp(
+            datetime(2026, 6, 11, 9, 20, tzinfo=ZoneInfo("Asia/Kolkata"))
+        )
+        mixed_timezone = core._aggregate_exact_minute_targets(
+            minute,
+            [zoneinfo_target],
+        )
+        self.assertEqual(len(mixed_timezone), 1)
+
+    def test_exact_fno_fetch_builds_opening_snapshot_and_real_bar(self):
+        timestamps = pd.date_range(_ist(9, 16), periods=5, freq="1min")
+        minute = pd.DataFrame(
+            {
+                "date": timestamps,
+                "open": [100.0, 101.0, 102.0, 103.0, 104.0],
+                "high": [101.0, 102.0, 103.0, 104.0, 105.0],
+                "low": [99.0, 100.0, 101.0, 102.0, 103.0],
+                "close": [100.5, 101.5, 102.5, 103.5, 104.5],
+                "volume": [10.0, 20.0, 30.0, 40.0, 50.0],
+            }
+        )
+
+        with patch.object(core, "fetch_historical_generic", return_value=minute):
+            exact = core._fetch_exact_fno_5min_rows(
+                "TEST",
+                object(),
+                123,
+                [_ist(9, 15), _ist(9, 20)],
+                _Logger(),
+            )
+
+        self.assertEqual(exact["date"].tolist(), [_ist(9, 15), _ist(9, 20)])
+        self.assertEqual(exact["source_1m_count"].tolist(), [0, 5])
+        self.assertEqual(exact["opening_snapshot"].tolist(), [True, False])
+        self.assertEqual(exact.iloc[1]["open"], 100.0)
+        self.assertEqual(exact.iloc[1]["close"], 104.5)
+        self.assertEqual(exact.iloc[1]["volume"], 150.0)
+
+    def test_exact_fno_fetch_retries_an_incomplete_minute_bucket(self):
+        timestamps = pd.date_range(_ist(9, 16), periods=5, freq="1min")
+        complete = pd.DataFrame(
+            {
+                "date": timestamps,
+                "open": [100.0] * 5,
+                "high": [101.0] * 5,
+                "low": [99.0] * 5,
+                "close": [100.5] * 5,
+                "volume": [10.0] * 5,
+            }
+        )
+
+        with (
+            patch.object(
+                core,
+                "fetch_historical_generic",
+                side_effect=[complete.iloc[:4], complete],
+            ) as fetch,
+            patch.object(core, "DEFAULT_5M_PROVISIONAL_RETRY_ATTEMPTS", 2),
+            patch.object(core, "DEFAULT_5M_PROVISIONAL_RETRY_INTERVAL_SEC", 0.0),
+        ):
+            exact = core._fetch_exact_fno_5min_rows(
+                "TEST",
+                object(),
+                123,
+                [_ist(9, 20)],
+                _Logger(),
+            )
+
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(len(exact), 1)
+        self.assertEqual(exact.iloc[0]["source_1m_count"], 5)
+
+    def test_existing_loader_preserves_one_minute_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "TEST_stocks_indicators_5min.parquet"
+            pd.DataFrame(
+                {
+                    "date": [_ist(9, 15), _ist(9, 20)],
+                    "open": [100.0, 100.0],
+                    "high": [101.0, 101.0],
+                    "low": [99.0, 99.0],
+                    "close": [100.5, 100.5],
+                    "volume": [150.0, 150.0],
+                    "gap_filled": [0, 0],
+                    "opening_snapshot": [1, 0],
+                    "provisional_stale": [0, 0],
+                    "source_1m_count": [0, 5],
+                }
+            ).to_parquet(out_path, index=False)
+
+            loaded = core._load_existing_ohlc(str(out_path), "end", "5min")
+
+        self.assertEqual(loaded["source_1m_count"].tolist(), [0, 5])
+
     def test_finalize_and_save_stamps_opening_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "TEST_stocks_indicators_5min.parquet"
@@ -48,6 +165,116 @@ class Live5MinFetchWindowTests(unittest.TestCase):
 
         self.assertIn("opening_snapshot", saved.columns)
         self.assertEqual(saved["opening_snapshot"].tolist(), [True, False, False])
+
+    def test_opening_snapshot_does_not_trigger_legacy_timestamp_shift(self):
+        frame = pd.DataFrame(
+            {
+                "date": [_ist(9, 15), _ist(9, 20)],
+                "opening_snapshot": [True, False],
+            }
+        )
+
+        converted = core._maybe_convert_existing_intraday_to_end(frame, 5)
+
+        self.assertEqual(converted["date"].tolist(), frame["date"].tolist())
+
+    def test_provisional_duplicate_is_refetched_and_replaced(self):
+        existing = pd.DataFrame(
+            {
+                "date": [_ist(9, 20)],
+                "open": [100.0],
+                "high": [101.0],
+                "low": [99.0],
+                "close": [100.5],
+                "volume": [1000.0],
+            }
+        )
+        fetched = existing.copy()
+        fetched["date"] = [_ist(9, 25)]
+        corrected = pd.DataFrame(
+            {
+                "date": [_ist(9, 25)],
+                "open": [100.5],
+                "high": [102.0],
+                "low": [100.0],
+                "close": [101.5],
+                "volume": [800.0],
+            }
+        )
+
+        with (
+            patch.object(core, "DEFAULT_5M_PROVISIONAL_SETTLE_SEC", 0.0),
+            patch.object(core, "DEFAULT_5M_PROVISIONAL_RETRY_ATTEMPTS", 2),
+            patch.object(core, "DEFAULT_5M_PROVISIONAL_RETRY_INTERVAL_SEC", 0.0),
+            patch.object(core, "fetch_historical_5min_df", return_value=corrected),
+        ):
+            result = core._revalidate_provisional_5min_target(
+                "TEST",
+                object(),
+                123,
+                fetched,
+                existing,
+                _ist(9, 25),
+                _Logger(),
+            )
+
+        self.assertEqual(result.iloc[-1]["close"], 101.5)
+        self.assertEqual(result.iloc[-1]["provisional_stale"], 0)
+
+    def test_unresolved_provisional_duplicate_blocks_session_completeness(self):
+        existing = pd.DataFrame(
+            {
+                "date": [_ist(9, 20)],
+                "open": [100.0],
+                "high": [101.0],
+                "low": [99.0],
+                "close": [100.5],
+                "volume": [1000.0],
+            }
+        )
+        fetched = existing.copy()
+        fetched["date"] = [_ist(9, 25)]
+
+        with (
+            patch.object(core, "DEFAULT_5M_PROVISIONAL_SETTLE_SEC", 0.0),
+            patch.object(core, "DEFAULT_5M_PROVISIONAL_RETRY_ATTEMPTS", 1),
+            patch.object(core, "fetch_historical_5min_df", return_value=fetched),
+        ):
+            result = core._revalidate_provisional_5min_target(
+                "TEST",
+                object(),
+                123,
+                fetched,
+                existing,
+                _ist(9, 25),
+                _Logger(),
+            )
+
+        combined = pd.concat([existing, result], ignore_index=True)
+        self.assertEqual(result.iloc[-1]["provisional_stale"], 1)
+        self.assertEqual(
+            core._missing_5min_session_stamps_from_df(combined, _ist(9, 25)),
+            [_ist(9, 15), _ist(9, 25)],
+        )
+
+    def test_verified_one_minute_aggregate_duplicate_is_complete(self):
+        frame = pd.DataFrame(
+            {
+                "date": [_ist(9, 15), _ist(9, 20), _ist(9, 25)],
+                "open": [100.0, 100.0, 100.0],
+                "high": [101.0, 101.0, 101.0],
+                "low": [99.0, 99.0, 99.0],
+                "close": [100.5, 100.5, 100.5],
+                "volume": [1000.0, 1000.0, 1000.0],
+                "opening_snapshot": [1, 0, 0],
+                "source_1m_count": [0, 5, 5],
+            }
+        )
+
+        self.assertEqual(
+            core._missing_5min_session_stamps_from_df(frame, _ist(9, 25)),
+            [],
+        )
 
     def test_latest_missing_stamp_fetches_only_one_raw_bar(self):
         calls = []

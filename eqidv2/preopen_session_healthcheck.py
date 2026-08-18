@@ -30,6 +30,17 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_authentication_v2_0900",
     "EQIDV2_eod_5mins_data_0900",
     "EQIDV2_eod_15mins_data_0900",
+    "EQIDV2_fno_oi_universe_0850",
+    "EQIDV2_fno_oi_fetch_5min_0905",
+    "EQIDV2_fno_oi_feature_ranker_0915",
+    "EQIDV2_fno_v6_scanner_5min_0918",
+    "EQIDV2_fno_v6_equity_1min_feed_0919",
+    "EQIDV2_fno_v6_confirmation_1min_0919",
+    "EQIDV2_fno_v6_live_long_0920",
+    "EQIDV2_fno_v6_live_short_0920",
+    "EQIDV2_fno_v6_trade_logger_0920",
+    "EQIDV2_fno_v6_net_result_0920",
+    "EQIDV2_fno_oi_eod_qc_1540",
     "EQIDV2_live_combined_csv_v15_new_0900",
     "EQIDV2_avwap_paper_trade_v15_0900",
     "EQIDV2_avwap_live_trade_v15_0905",
@@ -52,6 +63,13 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_kite_export_start_0915",
     "EQIDV2_preopen_session_healthcheck_0905",
     "EQIDV2_eod_1540_update_1540",
+)
+
+# The confirmation consumer has no broker fallback.  Without this producer
+# task every V6 confirmation slot must fail closed, so a missing/disabled task
+# is a preopen failure rather than an optional inactive session.
+REQUIRED_DASHBOARD_SESSION_TASKS = frozenset(
+    {"EQIDV2_fno_v6_equity_1min_feed_0919"}
 )
 
 
@@ -349,6 +367,17 @@ def _extract_value(lines: List[str], prefix: str) -> str:
 
 
 def _task_scheduled_time(task_name: str) -> Optional[dt.time]:
+    out = _run_schtasks_query(task_name)
+    if out:
+        actual = _extract_value(out.splitlines(), "Start Time")
+        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
+            try:
+                return dt.datetime.strptime(actual, fmt).time()
+            except ValueError:
+                continue
+
+    # Keep suffix parsing as a fallback for unavailable or localized schtasks
+    # output. Some stable task IDs intentionally retain their former time suffix.
     suffix = task_name.rsplit("_", 1)[-1]
     if len(suffix) != 4 or not suffix.isdigit():
         return None
@@ -506,12 +535,13 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     # Dashboard scheduled sessions. Future slots are reported as waiting; past
     # enabled slots must have a same-day scheduler run.
     for task in DASHBOARD_SESSION_TASKS:
+        required = task in REQUIRED_DASHBOARD_SESSION_TASKS
         checks.append(
             check_task_enabled_state(
                 task,
                 f"task_{task}",
                 require_run_today=_task_should_have_run_today(task, now_local),
-                inactive_ok=True,
+                inactive_ok=not required,
                 inactive_detail="session not enabled",
             )
         )

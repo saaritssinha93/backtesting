@@ -29,6 +29,7 @@ TASK_TO_BAT: Dict[str, Path] = {
     "EQIDV2_avwap_live_trade_v15_0905": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_FALSE_v15.bat",
     "EQIDV2_nifty_guard_fetch_v15_0915": BAT_DIR / "run_nifty_guard_fetcher_v15.bat",
     "EQIDV2_nifty_guard_fetch_v16_5min_0915": BAT_DIR / "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
+    "EQIDV2_fno_v6_equity_1min_feed_0919": BAT_DIR / "run_fno_v6_equity_1min_feed.bat",
 }
 
 FAIL_CHECK_TO_BAT: Dict[str, Path] = {

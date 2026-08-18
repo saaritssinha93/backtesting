@@ -60,7 +60,7 @@ class V7V11SetupBookParityTests(unittest.TestCase):
             self.assertIn("G_HIGHER_HIGH_BREAK", expected)
             self.assertIn("L_LATE_BB10_COMPRESSION_BREAKOUT", expected)
             self.assertIn("QUIET_LIQUID_ONE_BAR_DEFER_LONG", expected)
-            self.assertEqual(len(expected), 13)
+            self.assertEqual(len(expected), 14)
 
     def test_live_and_v11_masks_match_for_min_and_max_guards(self):
         with _environment(

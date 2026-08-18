@@ -109,7 +109,12 @@ def exit_policy_for_setup(setup: str) -> Dict[str, Any]:
 # probe, new-setups scan). These are READMITTED past v8 + research in conf mode,
 # mirroring avwap_5min_ID_v11_backtesting._FINAL_CONF_READMIT_SETUPS. Native setups
 # (no such provenance) go THROUGH v8 + research, exactly as v11 does.
-_READMIT_EVALS = frozenset({"RAW_PRE_GATE_POOL", "TIER123_OVERLAY_PROBE", "NEW_SETUPS_SCAN"})
+_READMIT_EVALS = frozenset({
+    "RAW_PRE_GATE_POOL",
+    "TIER123_OVERLAY_PROBE",
+    "NEW_SETUPS_SCAN",
+    "HILEGA_MILEGA_FNO_60M",
+})
 
 
 def readmit_setups() -> frozenset:

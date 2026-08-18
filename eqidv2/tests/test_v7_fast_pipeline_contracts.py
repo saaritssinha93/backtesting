@@ -569,6 +569,16 @@ class SchedulerAuthoritativeCompletionTests(unittest.TestCase):
                 ),
                 patch.object(
                     fetch_scheduler,
+                    "_mapped_fno_equities",
+                    return_value=pd.DataFrame(
+                        {
+                            "equity_symbol": ["A", "B"],
+                            "equity_instrument_token": [1, 2],
+                        }
+                    ),
+                ),
+                patch.object(
+                    fetch_scheduler,
                     "_build_working_app_partitions",
                     return_value=(
                         [("app1", ["A", "B"], {"A": 1, "B": 2}, "test-user")],
@@ -730,6 +740,10 @@ class LauncherFastPathConfigTests(unittest.TestCase):
 
         self.assertEqual(
             self._batch_value(text, "EQIDV2_5M_PERSISTENT_PARTITION_WORKERS"),
+            "1",
+        )
+        self.assertEqual(
+            self._batch_value(text, "EQIDV2_FNO_5M_FROM_1M"),
             "1",
         )
         per_app = self._batch_value(text, "MAX_WORKERS_PER_APP")

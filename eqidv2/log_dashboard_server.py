@@ -77,6 +77,25 @@ V7_SHADOW_CANDIDATE_MONITOR_ROOT = runtime_dir("v7_shadow_candidates")
 V7_SHADOW_CANDIDATE_MONITOR_LATEST_DIR = V7_SHADOW_CANDIDATE_MONITOR_ROOT / "latest"
 V11_LAB_SHADOW_MONITOR_ROOT = runtime_dir("v11_lab_shadow")
 V11_LAB_SHADOW_MONITOR_LATEST_DIR = V11_LAB_SHADOW_MONITOR_ROOT / "latest"
+FUNDAMENTAL_PRICE_ACTION_V1_ROOT = runtime_dir("fundamental_price_action_v1")
+FUNDAMENTAL_PRICE_ACTION_V1_LATEST_DIR = FUNDAMENTAL_PRICE_ACTION_V1_ROOT / "latest"
+COLLECT_FILTERED_STOCK_DATA_ROOT = runtime_dir("collect_filtered_stock_data")
+COLLECT_FILTERED_STOCK_DATA_LATEST_DIR = COLLECT_FILTERED_STOCK_DATA_ROOT / "latest"
+FNO_OI_ROOT = runtime_dir("fno_oi")
+FNO_OI_LATEST_DIR = FNO_OI_ROOT / "latest"
+FNO_OI_CARD_REPORTS: Dict[str, str] = {
+    "fno_oi_universe": "latest_fno_oi_universe.md",
+    "fno_oi_fetch_5min": "latest_fno_oi_fetch.md",
+    "fno_oi_feature_ranker": "latest_fno_oi_leaderboard.md",
+    "fno_v6_scanner_5min": "latest_fno_v6_scanner_5min.md",
+    "fno_v6_equity_1min_feed": "latest_fno_v6_equity_1min_feed.md",
+    "fno_v6_confirmation_1min": "latest_fno_v6_confirmation_1min.md",
+    "fno_v6_live_long": "latest_fno_v6_live_long.md",
+    "fno_v6_live_short": "latest_fno_v6_live_short.md",
+    "fno_v6_trade_logger": "latest_fno_v6_trade_logger.md",
+    "fno_v6_net_result": "latest_fno_v6_net_result.md",
+    "fno_oi_eod_qc": "latest_fno_oi_eod_qc.md",
+}
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 IST = ZoneInfo("Asia/Kolkata")
 AUTH_V2_STATE_FILE = BASE_DIR / "auth_v2_state.json"
@@ -135,6 +154,17 @@ LOG_FILES: Dict[str, str] = {
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.log",
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data_live_minimal.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
+    "fno_oi_universe": "fno_oi_universe.log",
+    "fno_oi_fetch_5min": "fno_oi_fetch_5min.log",
+    "fno_oi_feature_ranker": "fno_oi_feature_ranker.log",
+    "fno_v6_scanner_5min": "fno_v6_scanner_5min.log",
+    "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.log",
+    "fno_v6_confirmation_1min": "fno_v6_confirmation_1min.log",
+    "fno_v6_live_long": "fno_v6_live_long.log",
+    "fno_v6_live_short": "fno_v6_live_short.log",
+    "fno_v6_trade_logger": "fno_v6_trade_logger.log",
+    "fno_v6_net_result": "fno_v6_net_result.log",
+    "fno_oi_eod_qc": "fno_oi_eod_qc.log",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.log",
     "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.log",
@@ -158,6 +188,8 @@ LOG_FILES: Dict[str, str] = {
     "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2/latest/latest_v7_full_pipeline_entry_research_v2.md",
     "v7_shadow_candidate_monitor":        "v7_shadow_candidates/latest/latest_v7_shadow_candidate_monitor.md",
     "v11_lab_shadow_monitor":             "v11_lab_shadow/latest/latest_v11_lab_shadow_monitor.md",
+    "fundamental_price_action_v1":         "fundamental_price_action_v1/latest/latest_fundamental_price_action_v1.md",
+    "collect_filtered_stock_data":         "collect_filtered_stock_data/latest/latest_collect_filtered_stock_data.md",
     "data_for_backtesting":             "data_for_backtesting_latest.log",
     "backtesting_result_v11":            "backtesting_result_v11_latest.log",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.log",
@@ -183,6 +215,7 @@ LOG_IDS = tuple(LOG_FILES.keys()) + (
     "paper_trade_v15",
     "paper_trade_v16_5min",
     "paper_trade_id_5min_v7",
+    "paper_trade_fpa_v1",
     "kite_trade",
     "kite_trade_v7_sweep",
     "kite_trade_v15",
@@ -199,6 +232,17 @@ STATUS_FILES: Dict[str, str] = {
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status",
     "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.status",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.status",
+    "fno_oi_universe": "fno_oi_universe.status",
+    "fno_oi_fetch_5min": "fno_oi_fetch_5min.supervisor.status",
+    "fno_oi_feature_ranker": "fno_oi_feature_ranker.supervisor.status",
+    "fno_v6_scanner_5min": "fno_v6_scanner_5min.status",
+    "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.status",
+    "fno_v6_confirmation_1min": "fno_v6_confirmation_1min.status",
+    "fno_v6_live_long": "fno_v6_live_long.status",
+    "fno_v6_live_short": "fno_v6_live_short.status",
+    "fno_v6_trade_logger": "fno_v6_trade_logger.status",
+    "fno_v6_net_result": "fno_v6_net_result.status",
+    "fno_oi_eod_qc": "fno_oi_eod_qc.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
     "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.status",
@@ -226,6 +270,9 @@ STATUS_FILES: Dict[str, str] = {
     "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2.status",
     "v7_shadow_candidate_monitor":        "v7_shadow_candidate_monitor.status",
     "v11_lab_shadow_monitor":             "v11_lab_shadow_monitor.status",
+    "fundamental_price_action_v1":         "fundamental_price_action_v1.status",
+    "paper_trade_fpa_v1":                  "fundamental_price_action_v1_papertrade.status",
+    "collect_filtered_stock_data":         "collect_filtered_stock_data.status",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.status",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.status",
@@ -242,6 +289,17 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat",
     "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.heartbeat",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.heartbeat",
+    "fno_oi_universe": "fno_oi_universe.heartbeat",
+    "fno_oi_fetch_5min": "fno_oi_fetch_5min.supervisor.heartbeat",
+    "fno_oi_feature_ranker": "fno_oi_feature_ranker.supervisor.heartbeat",
+    "fno_v6_scanner_5min": "fno_v6_scanner_5min.heartbeat",
+    "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.heartbeat",
+    "fno_v6_confirmation_1min": "fno_v6_confirmation_1min.heartbeat",
+    "fno_v6_live_long": "fno_v6_live_long.heartbeat",
+    "fno_v6_live_short": "fno_v6_live_short.heartbeat",
+    "fno_v6_trade_logger": "fno_v6_trade_logger.heartbeat",
+    "fno_v6_net_result": "fno_v6_net_result.heartbeat",
+    "fno_oi_eod_qc": "fno_oi_eod_qc.heartbeat",
     "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.heartbeat",
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
     "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
@@ -264,6 +322,9 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2.heartbeat",
     "v7_shadow_candidate_monitor":        "v7_shadow_candidate_monitor.heartbeat",
     "v11_lab_shadow_monitor":             "v11_lab_shadow_monitor.heartbeat",
+    "fundamental_price_action_v1":         "fundamental_price_action_v1.heartbeat",
+    "paper_trade_fpa_v1":                  "fundamental_price_action_v1_papertrade.heartbeat",
+    "collect_filtered_stock_data":         "collect_filtered_stock_data.heartbeat",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.heartbeat",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.heartbeat",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.heartbeat",
@@ -274,6 +335,17 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "eod_5min_data": ("\\EQIDV2_eod_5mins_data_0900",),
     "kiteticker_5min_data": ("\\EQIDV2_kiteticker_5mins_data_0900",),
     "eod_1min_data": ("\\EQIDV2_eod_1min_data_0915",),
+    "fno_oi_universe": ("\\EQIDV2_fno_oi_universe_0850",),
+    "fno_oi_fetch_5min": ("\\EQIDV2_fno_oi_fetch_5min_0905",),
+    "fno_oi_feature_ranker": ("\\EQIDV2_fno_oi_feature_ranker_0915",),
+    "fno_v6_scanner_5min": ("\\EQIDV2_fno_v6_scanner_5min_0918",),
+    "fno_v6_equity_1min_feed": ("\\EQIDV2_fno_v6_equity_1min_feed_0919",),
+    "fno_v6_confirmation_1min": ("\\EQIDV2_fno_v6_confirmation_1min_0919",),
+    "fno_v6_live_long": ("\\EQIDV2_fno_v6_live_long_0920",),
+    "fno_v6_live_short": ("\\EQIDV2_fno_v6_live_short_0920",),
+    "fno_v6_trade_logger": ("\\EQIDV2_fno_v6_trade_logger_0920",),
+    "fno_v6_net_result": ("\\EQIDV2_fno_v6_net_result_0920",),
+    "fno_oi_eod_qc": ("\\EQIDV2_fno_oi_eod_qc_1540",),
     "eod_15min_data": ("\\EQIDV2_eod_15mins_data_0900",),
     "eod_1540_update": ("\\EQIDV2_eod_1540_update_1540",),
     "nifty_guard_fetch_v15": ("\\EQIDV2_nifty_guard_fetch_v15_0915",),
@@ -300,6 +372,14 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "v7_full_pipeline_entry_research_v2": ("\\EQIDV2_v7_full_pipeline_entry_research_v2_1630",),
     "v7_shadow_candidate_monitor": ("\\EQIDV2_v7_shadow_candidate_monitor_1645",),
     "v11_lab_shadow_monitor": ("\\EQIDV2_v11_lab_shadow_monitor_1655",),
+    "fundamental_price_action_v1": ("\\EQIDV2_fundamental_price_action_v1_0915",),
+    # The entry sheets are published by the FPA session itself, so both side
+    # cards track that task; only the paper-trade cards track the runner.
+    "live_signals_csv_fpa_v1_short": ("\\EQIDV2_fundamental_price_action_v1_0915",),
+    "live_signals_csv_fpa_v1_long": ("\\EQIDV2_fundamental_price_action_v1_0915",),
+    "paper_trade_fpa_v1": ("\\EQIDV2_fundamental_price_action_v1_papertrade_0920",),
+    "live_papertrade_result_csv_fpa_v1": ("\\EQIDV2_fundamental_price_action_v1_papertrade_0920",),
+    "collect_filtered_stock_data": ("\\EQIDV2_collect_filtered_stock_data_0930",),
     "live_signals_csv_id_5min_v7_short": ("\\EQIDV2_entry_engine_1min_v5_ID",),
     "live_signals_csv_id_5min_v7_long": ("\\EQIDV2_entry_engine_1min_v5_ID",),
     "paper_trade_id_5min_v7": ("\\EQIDV2_paper_trade_id_5min_v7_0900",),
@@ -336,6 +416,15 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "nifty_guard_fetch_v16_5min":    "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
     "eod_5min_data":                 "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
     "eod_1min_data":                 "run_eqidv2_eod_scheduler_for_1min_data_live.bat",
+    "fno_oi_fetch_5min":             "run_fno_oi_fetch_5min.bat",
+    "fno_oi_feature_ranker":         "run_fno_oi_feature_ranker.bat",
+    "fno_v6_scanner_5min":           "run_fno_v6_scanner_5min.bat",
+    "fno_v6_equity_1min_feed":        "run_fno_v6_equity_1min_feed.bat",
+    "fno_v6_confirmation_1min":       "run_fno_v6_confirmation_1min.bat",
+    "fno_v6_live_long":               "run_fno_v6_live_long.bat",
+    "fno_v6_live_short":              "run_fno_v6_live_short.bat",
+    "fno_v6_trade_logger":            "run_fno_v6_trade_logger.bat",
+    "fno_v6_net_result":              "run_fno_v6_net_result.bat",
     "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
     "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
@@ -357,6 +446,9 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "v7_full_pipeline_entry_research_v2": "run_v7_full_pipeline_entry_research_v2.bat",
     "v7_shadow_candidate_monitor": "run_v7_shadow_candidate_monitor.bat",
     "v11_lab_shadow_monitor": "run_v11_lab_shadow_monitor.bat",
+    "fundamental_price_action_v1": "run_fundamental_price_action_v1_session.bat",
+    "paper_trade_fpa_v1": "run_fundamental_price_action_v1_papertrade.bat",
+    "collect_filtered_stock_data": "run_collect_filtered_stock_data_session.bat",
     "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
     "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
     "authentication_v2":             "run_authentication_v2.bat",
@@ -769,6 +861,14 @@ def _latest_matching_file(base_dir: Path, glob_pattern: str) -> Optional[Path]:
 
 def resolve_log_target(name: str) -> Tuple[Path, str]:
     today_ist = dt.datetime.now(IST).date().isoformat()
+    if name in FNO_OI_CARD_REPORTS:
+        report_name = FNO_OI_CARD_REPORTS[name]
+        report_path = FNO_OI_LATEST_DIR / report_name
+        if report_path.exists():
+            return report_path, str(Path("fno_oi") / "latest" / report_name)
+        log_name = LOG_FILES[name]
+        return LOG_DIR / log_name, log_name
+
     if name == "signal_discovery_v7_5min_id":
         latest_log = _latest_matching_file(
             LOG_DIR, f"eqidv2_signal_discovery_v7_5min_id_persistent_{today_ist}*.log"
@@ -789,6 +889,14 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
     if name == "daily_live_v7_research_session":
         path = DAILY_LIVE_V7_RESEARCH_LATEST_DIR / "latest_daily_live_v7_research.md"
         return path, str(Path("daily_live_v7_research_session") / "latest" / path.name)
+
+    if name == "fundamental_price_action_v1":
+        path = FUNDAMENTAL_PRICE_ACTION_V1_LATEST_DIR / "latest_fundamental_price_action_v1.md"
+        return path, str(Path("fundamental_price_action_v1") / "latest" / path.name)
+
+    if name == "collect_filtered_stock_data":
+        path = COLLECT_FILTERED_STOCK_DATA_LATEST_DIR / "latest_collect_filtered_stock_data.md"
+        return path, str(Path("collect_filtered_stock_data") / "latest" / path.name)
 
     if name == "v7_nse_id_cost":
         path = V7_NSE_ID_COST_LATEST_DIR / "latest_v7_nse_id_cost.md"
@@ -986,6 +1094,18 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
             return latest, latest.name
         legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v16_5min.log"
         return LOG_DIR / legacy_name, legacy_name
+
+    if name == "paper_trade_fpa_v1":
+        today_name = f"fundamental_price_action_v1_papertrade_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(
+            LOG_DIR, "fundamental_price_action_v1_papertrade_*.log"
+        )
+        if latest is not None:
+            return latest, latest.name
+        return today_path, today_name
 
     if name == "paper_trade_id_5min_v7":
         runtime_name = f"paper_trade_execution_{today_ist}_id_5min_v7.log"
@@ -1358,7 +1478,32 @@ def load_task_scheduler_snapshot(force: bool = False) -> Dict[str, Dict[str, str
     return dict(tasks)
 
 
-def apply_scheduler_status(card_id: str, status: Dict[str, str], task_snapshot: Dict[str, Dict[str, str]]) -> Dict[str, str]:
+def _parse_scheduler_datetime(raw: object) -> Optional[dt.datetime]:
+    text = str(raw or "").strip()
+    if not text or text.upper() == "N/A":
+        return None
+    parsed = _parse_status_datetime(text)
+    if parsed is not None:
+        return parsed
+    for fmt in (
+        "%d-%m-%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%m/%d/%Y %I:%M:%S %p",
+    ):
+        try:
+            return dt.datetime.strptime(text, fmt).replace(tzinfo=IST)
+        except ValueError:
+            continue
+    return None
+
+
+def apply_scheduler_status(
+    card_id: str,
+    status: Dict[str, str],
+    task_snapshot: Dict[str, Dict[str, str]],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> Dict[str, str]:
     merged = dict(status or {})
     task_names = CARD_TASK_NAMES.get(card_id, ())
     if not task_names:
@@ -1412,6 +1557,50 @@ def apply_scheduler_status(card_id: str, status: Dict[str, str], task_snapshot: 
         merged["status"] = "DISABLED"
     elif not current and scheduler_status:
         merged["status"] = scheduler_status
+
+    # A terminal status file belongs to the run that wrote it. Before today's
+    # scheduled run, retain that evidence as history instead of presenting it
+    # as today's active state (for example, yesterday's EOD QC failure).
+    current_time = now_ist or dt.datetime.now(IST)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=IST)
+    else:
+        current_time = current_time.astimezone(IST)
+    status_time = _parse_status_datetime(merged.get("ts", ""))
+    next_run = min(
+        (parsed for parsed in (_parse_scheduler_datetime(value) for value in next_runs) if parsed),
+        default=None,
+    )
+    active_states = {
+        "RUNNING",
+        "RESTARTING",
+        "COOLDOWN",
+        "STALE_HB_RUNNING",
+        "RECOVERED",
+    }
+    if (
+        scheduler_status == "SCHEDULED"
+        and merged.get("status_scope") != "awaiting_today_scheduled_run"
+        and current not in active_states
+        and status_time is not None
+        and status_time.date() < current_time.date()
+        and next_run is not None
+        and next_run.date() == current_time.date()
+        and next_run > current_time
+    ):
+        merged["previous_status"] = current or "UNKNOWN"
+        merged["previous_status_ts"] = str(merged.get("ts", "")).strip()
+        for field in ("reason", "error", "phase"):
+            value = str(merged.get(field, "")).strip()
+            if value:
+                merged[f"previous_{field}"] = value
+        merged["status"] = "SCHEDULED"
+        merged["phase"] = "WAIT_SCHEDULE"
+        merged["status_scope"] = "awaiting_today_scheduled_run"
+        merged = _append_status_note(
+            merged,
+            f"previous_run={current or 'UNKNOWN'} at {merged['previous_status_ts']}",
+        )
 
     return merged
 
@@ -1467,6 +1656,53 @@ def reconcile_authentication_status(
         "%Y-%m-%d %H:%M:%S%z"
     )
     merged["recovery_source"] = "newer_same_day_auth_state_and_access_token"
+    return merged
+
+
+FNO_RECOVERY_WORKER_STATUS_FILES: Dict[str, str] = {
+    "fno_oi_fetch_5min": "fno_oi_fetch_5min.status",
+    "fno_oi_feature_ranker": "fno_oi_feature_ranker.status",
+}
+
+
+def reconcile_fno_worker_recovery(
+    card_id: str,
+    status: Dict[str, str],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> Dict[str, str]:
+    """Expose a newer same-day worker recovery without erasing a supervisor failure."""
+    merged = dict(status or {})
+    worker_filename = FNO_RECOVERY_WORKER_STATUS_FILES.get(card_id)
+    if not worker_filename or str(merged.get("status", "")).strip().upper() != "FAILED":
+        return merged
+
+    worker = parse_status_file(RUNTIME_STATUS_DIR / worker_filename)
+    if str(worker.get("status", "")).strip().upper() != "SUCCESS":
+        return merged
+    failure_at = _parse_status_datetime(merged.get("ts", ""))
+    recovery_at = _parse_status_datetime(worker.get("ts", ""))
+    current = now_ist or dt.datetime.now(IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=IST)
+    if (
+        failure_at is None
+        or recovery_at is None
+        or recovery_at <= failure_at
+        or recovery_at.astimezone(IST).date() != current.astimezone(IST).date()
+    ):
+        return merged
+
+    merged["previous_status"] = "FAILED"
+    merged["previous_status_ts"] = str(merged.get("ts", "")).strip()
+    merged["previous_reason"] = str(merged.get("reason", "")).strip()
+    merged["status"] = "RECOVERED"
+    merged["recovered_at_ist"] = recovery_at.astimezone(IST).isoformat(
+        timespec="seconds"
+    )
+    merged["recovery_source"] = "newer_same_day_worker_success"
+    merged["recovery_phase"] = str(worker.get("phase", "")).strip()
+    merged["recovery_output"] = str(worker.get("output", "")).strip()
     return merged
 
 
@@ -6005,6 +6241,23 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_5min_data",
       "kiteticker_5min_data",
       "eod_1min_data",
+      "fno_oi_universe",
+      "fno_oi_fetch_5min",
+      "fno_oi_feature_ranker",
+      "fno_v6_scanner_5min",
+      "fno_v6_equity_1min_feed",
+      "fno_v6_confirmation_1min",
+      "fno_v6_live_long",
+      "fno_v6_live_short",
+      "fno_v6_trade_logger",
+      "fno_v6_net_result",
+      "fno_oi_eod_qc",
+      "fundamental_price_action_v1",
+      "live_signals_csv_fpa_v1_short",
+      "live_signals_csv_fpa_v1_long",
+      "live_papertrade_result_csv_fpa_v1",
+      "paper_trade_fpa_v1",
+      "collect_filtered_stock_data",
       "live_combined_csv_id_5min_v7_persistent",
       "signal_discovery_v7_5min_id",
       "candidate_tickers_v7_5min_id",
@@ -6067,6 +6320,17 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "kiteticker_5min_data": "Live Data kiteticker Fetch (5mins)",
       "eod_1min_data": "Live Data Fetch (1min)",
       "eod_15min_data": "Live Data Fetch (15mins)",
+      "fno_oi_universe": "FnO Near-Month Futures Universe",
+      "fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch",
+      "fno_oi_feature_ranker": "FnO OI Gainers, Losers & Activity Rankings",
+      "fno_v6_scanner_5min": "FnO V6 BEST_NET Equity 5-Minute + Futures OI Scanner",
+      "fno_v6_equity_1min_feed": "FnO V6 Durable Completed Equity 1-Minute Feed",
+      "fno_v6_confirmation_1min": "FnO V6 BEST_NET Candidate Equity 1-Minute Confirmation",
+      "fno_v6_live_long": "FnO V6 BEST_NET LONG Entry Session",
+      "fno_v6_live_short": "FnO V6 BEST_NET SHORT Entry Session",
+      "fno_v6_trade_logger": "FnO V6 BEST_NET Continuous Trade Log",
+      "fno_v6_net_result": "FnO V6 BEST_NET Net Result",
+      "fno_oi_eod_qc": "FnO EOD Data Quality Control",
       "live_combined_csv_v16_5min": "V16 5min Scanner (anti-exhaustion, 5min slots)",
       "live_signals_csv_v16_5min_short": "V16 5min Signals SHORT",
       "live_signals_csv_v16_5min_long": "V16 5min Signals LONG",
@@ -6082,6 +6346,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "v7_live_5min_monitor": "V7 ID 5min Live Monitor",
       "v7_research_layer": "Suggestions v7 live research",
       "daily_live_v7_research_session": "Daily Live V7 Research",
+      "fundamental_price_action_v1": "fundamental_price_action_v1",
+      "live_signals_csv_fpa_v1_short": "Live Entries CSV FPA v1 Short",
+      "live_signals_csv_fpa_v1_long": "Live Entries CSV FPA v1 Long",
+      "live_papertrade_result_csv_fpa_v1": "V1 FPA Papertrade Results (Net)",
+      "paper_trade_fpa_v1": "V1 FPA Papertrade Runner Log (Net)",
+      "collect_filtered_stock_data": "Collect Filtered Stock Data (NSE)",
       "v7_nse_id_cost": "V7 NSE ID Cost",
       "v7_walkforward_gate": "V7 Walkforward Gate",
       "v7_causality_audit": "V7 Causality Audit",
@@ -6117,14 +6387,47 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const ACTIVE_GROUPS = [
       {
         key: "market",
-        nav: "Market",
-        title: "Market Data Readiness",
+        nav: "Live Market",
+        title: "Live Market Data",
         accent: "market",
         ids: [
           "nifty_guard_fetch_v16_5min",
           "eod_5min_data",
           "kiteticker_5min_data",
           "eod_1min_data"
+        ]
+      },
+      {
+        key: "fno",
+        nav: "FnO",
+        title: "FnO",
+        accent: "market",
+        ids: [
+          "fno_oi_universe",
+          "fno_oi_fetch_5min",
+          "fno_oi_feature_ranker",
+          "fno_v6_scanner_5min",
+          "fno_v6_equity_1min_feed",
+          "fno_v6_confirmation_1min",
+          "fno_v6_live_long",
+          "fno_v6_live_short",
+          "fno_v6_trade_logger",
+          "fno_v6_net_result",
+          "fno_oi_eod_qc"
+        ]
+      },
+      {
+        key: "forensic-positional",
+        nav: "Forensic",
+        title: "core forensic_and_intra_positional",
+        accent: "research",
+        ids: [
+          "fundamental_price_action_v1",
+          "live_signals_csv_fpa_v1_short",
+          "live_signals_csv_fpa_v1_long",
+          "live_papertrade_result_csv_fpa_v1",
+          "paper_trade_fpa_v1",
+          "collect_filtered_stock_data"
         ]
       },
       {
@@ -6217,11 +6520,23 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "kiteticker_5min_data"
     ]);
     const SESSION_TIMELINE = [
+      { time: "08:50", id: "fno_oi_universe", label: "FnO Universe" },
       { time: "09:00", id: "authentication_v2", label: "Auth" },
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
       { time: "09:00", id: "kiteticker_5min_data", label: "Live Data KiteTicker Fetch 5min (shadow monitoring)" },
+      { time: "09:05", id: "fno_oi_fetch_5min", label: "FnO Futures OI Fetch" },
+      { time: "09:15", id: "fno_oi_feature_ranker", label: "FnO OI Rankings" },
+      { time: "09:15", id: "fno_v6_scanner_5min", label: "FnO V6 BEST_NET 5m Scanner" },
+      { time: "09:15", id: "fno_v6_equity_1min_feed", label: "FnO V6 Durable Completed 1m Feed" },
+      { time: "09:15", id: "fno_v6_confirmation_1min", label: "FnO V6 BEST_NET 1m Confirmation" },
+      { time: "09:15", id: "fno_v6_live_long", label: "FnO V6 BEST_NET LONG Entries" },
+      { time: "09:15", id: "fno_v6_live_short", label: "FnO V6 BEST_NET SHORT Entries" },
+      { time: "09:15", id: "fno_v6_trade_logger", label: "FnO V6 BEST_NET Trade Log" },
+      { time: "09:15", id: "fno_v6_net_result", label: "FnO V6 BEST_NET Net Result" },
       { time: "09:17", id: "eod_1min_data", label: "Live Data Fetch 1min" },
       { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
+      { time: "09:15", id: "fundamental_price_action_v1", label: "fundamental_price_action_v1" },
+      { time: "09:30", id: "collect_filtered_stock_data", label: "Collect Filtered Stock Data" },
       { time: "09:17", id: "v7_research_layer", label: "V7 Research Layer" },
       { time: "09:17", id: "daily_live_v7_research_session", label: "Daily Live V7 Research" },
       { time: "09:17", id: "v7_pre_momentum_filter_analyst", label: "V7 Pre-Momentum Analyst" },
@@ -6229,6 +6544,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:21", id: "entry_engine_1min_v5_id", label: "Entry Engine" },
       { time: "09:22", id: "paper_trade_id_5min_v7", label: "Papertrade TRUE" },
       { time: "09:22", id: "kite_trade_id_5min_v7", label: "Live Trade FALSE" },
+      { time: "15:40", id: "fno_oi_eod_qc", label: "FnO EOD QC" },
       { time: "15:45", id: "data_for_backtesting", label: "Data for Backtesting" },
       { time: "16:00", id: "backtesting_result_v11", label: "Backtesting Result v11" },
       { time: "16:05", id: "v7_nse_id_cost", label: "V7 NSE ID Cost" },
@@ -6272,6 +6588,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { id: "watch", label: "Watch" },
       { id: "v7", label: "V7" },
       { id: "v16", label: "V16" },
+      { id: "fno", label: "FnO" },
       { id: "paper", label: "Paper" },
       { id: "live", label: "Live" },
       { id: "research", label: "Research" },
@@ -6282,6 +6599,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
       "eod_1min_data",
+      "fno_oi_fetch_5min",
+      "fno_oi_feature_ranker",
+      "fno_v6_scanner_5min",
+      "fno_v6_equity_1min_feed",
+      "fno_v6_confirmation_1min",
+      "fno_v6_live_long",
+      "fno_v6_live_short",
+      "fno_v6_trade_logger",
+      "fno_v6_net_result",
       "signal_early_engine_v16_5min",
       "detection_engine_v16_5min",
       "pending_data_fetcher_v16_5min",
@@ -6300,6 +6626,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "v7_full_pipeline_entry_research_v2",
       "v7_shadow_candidate_monitor",
       "v11_lab_shadow_monitor",
+      "fundamental_price_action_v1",
+      "paper_trade_fpa_v1",
       "kite_positions_day_today_csv",
       "kite_holdings_today_csv",
       "authentication_v2",
@@ -6382,11 +6710,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (!s) return '<span class="pill">UNKNOWN</span>';
       if (s === "SUCCESS" || s === "RUNNING") return `<span class="pill ok">${esc(s)}</span>`;
       if (s === "STALE_HB_RUNNING") return `<span class="pill warn" title="Heartbeat stale — process may be dead">${esc(s)}</span>`;
-      if (s === "RESTARTING" || s === "COOLDOWN") return `<span class="pill warn">${esc(s)}</span>`;
+      if (["RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "MISSING_OUTPUT") return `<span class="pill fail">${esc(s)}</span>`;
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return `<span class="pill info">${esc(s)}</span>`;
-      if (s === "DISABLED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED" || s === "DONE") return `<span class="pill muted">${esc(s)}</span>`;
+      if (s === "DISABLED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "STOPPED" || s === "DONE") return `<span class="pill muted">${esc(s)}</span>`;
       return `<span class="pill fail">${esc(s)}</span>`;
     }
 
@@ -6394,11 +6722,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       const s = String(status || "").toUpperCase();
       if (s === "DISABLED") return "disabled";
       if (s === "SUCCESS" || s === "RUNNING") return "ok";
-      if (s === "STALE_HB_RUNNING" || s === "RESTARTING" || s === "COOLDOWN") return "warn";
+      if (["STALE_HB_RUNNING", "RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return "warn";
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "warn";
       if (s === "MISSING_OUTPUT") return "bad";
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return "scheduled";
-      if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "STOPPED" || s === "DONE") return "scheduled";
+      if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "STOPPED" || s === "DONE") return "scheduled";
       if (!s) return "unknown";
       return "bad";
     }
@@ -6621,6 +6949,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         return title.includes("v7") || title.includes("id_5min") || title.includes("5mins id");
       }
       if (filter === "v16") return title.includes("v16");
+      if (filter === "fno") return id.startsWith("fno_");
       if (filter === "paper") return title.includes("paper");
       if (filter === "live") return title.includes("live") || title.includes("kite");
       if (filter === "research") {
@@ -6778,9 +7107,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     function cardStatusClass(status) {
       const s = String(status || "").toUpperCase();
       if (s === "SUCCESS" || s === "RUNNING") return "card is-ok";
-      if (s === "STALE_HB_RUNNING" || s === "RESTARTING" || s === "COOLDOWN") return "card is-warn";
+      if (["STALE_HB_RUNNING", "RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return "card is-warn";
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "card is-warn";
-      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF" || s === "DONE") return "card";
+      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "DONE") return "card";
       if (s) return "card is-bad";
       return "card";
     }
@@ -7494,6 +7823,7 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                     pass
                 status = merge_runtime_status(status, heartbeat)
             status = infer_scanner_runtime_status(key, path, status)
+            status = reconcile_fno_worker_recovery(key, status)
             status = apply_scheduler_status(key, status, task_snapshot)
             status = infer_pid_session_provenance(key, status)
             if key == "authentication_v2":
@@ -7911,6 +8241,33 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
+        # Dynamic cards: today's FPA v1 entry sheets, one per side. The FPA
+        # session publishes these with the same column contract as the v7 pair.
+        fpa_entry_status = _v7_monitor_status_for("fundamental_price_action_v1", task_snapshot)
+        for fpa_side in ("short", "long"):
+            fpa_csv_name = f"signals_{today_ist}_fpa_v1_{fpa_side}.csv"
+            fpa_csv_path = LIVE_SIGNAL_DIR / fpa_csv_name
+            try:
+                fpa_size = fpa_csv_path.stat().st_size if fpa_csv_path.exists() else 0
+            except OSError:
+                fpa_size = 0
+            items.append(
+                {
+                    "id": f"live_signals_csv_fpa_v1_{fpa_side}",
+                    "file_name": str(Path("live_signals") / fpa_csv_name),
+                    "exists": fpa_csv_path.exists(),
+                    "mtime": iso_mtime(fpa_csv_path),
+                    "size_bytes": fpa_size,
+                    "status": dict(fpa_entry_status),
+                    "tail": _format_csv_projection(
+                        fpa_csv_path,
+                        live_entries_cols,
+                        limit_rows=5000,
+                        time_only_cols={"signal_datetime", "detected_time_ist"},
+                    ),
+                }
+            )
+
         detected_csv_path_v16_5min, _detected_csv_name_v16_5min = resolve_log_target(
             "detected_signals_v16_5min"
         )
@@ -8133,6 +8490,46 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "size_bytes": paper_trade_size_id_5min_v7,
                 "status": {},
                 "tail": paper_trade_tail_id_5min_v7,
+            }
+        )
+
+        # Dynamic card: today's FPA v1 paper trade results (net of costs).
+        # Intraday MIS runs 5x leverage on Rs 10,000 of capital per trade, so
+        # the card carries return-on-capital next to the raw price move.
+        fpa_paper_trade_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("ticker",)),
+            ("exit_time", ("exit_time",)),
+            ("side", ("side",)),
+            ("outcome", ("outcome",)),
+            ("qty", ("quantity",)),
+            ("exposure_rs", ("exposure_rs",)),
+            ("net_pnl_rs", ("net_pnl_rs",)),
+            ("total_cost_rs", ("total_cost_rs",)),
+            ("net_pnl_pct", ("net_pnl_pct",)),
+            ("roc_pct", ("return_on_capital_pct",)),
+        ]
+        fpa_paper_csv_name = f"paper_trades_{today_ist}_fpa_v1.csv"
+        fpa_paper_csv_path = LIVE_SIGNAL_DIR / fpa_paper_csv_name
+        try:
+            fpa_paper_size = (
+                fpa_paper_csv_path.stat().st_size if fpa_paper_csv_path.exists() else 0
+            )
+        except OSError:
+            fpa_paper_size = 0
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_fpa_v1",
+                "file_name": str(Path("live_signals") / fpa_paper_csv_name),
+                "exists": fpa_paper_csv_path.exists(),
+                "mtime": iso_mtime(fpa_paper_csv_path),
+                "size_bytes": fpa_paper_size,
+                "status": _v7_monitor_status_for("paper_trade_fpa_v1", task_snapshot),
+                "tail": _format_csv_projection(
+                    fpa_paper_csv_path,
+                    fpa_paper_trade_cols,
+                    limit_rows=max(5, min(40, lines // 2)),
+                    time_only_cols={"exit_time"},
+                ),
             }
         )
 

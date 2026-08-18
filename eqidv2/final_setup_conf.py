@@ -1599,6 +1599,77 @@ FINAL_SETUP_CONF = {
             ),
         },
     },
+    "S_HM_RSI50_REVERSAL": {
+        "side": "SHORT",
+        "detection": {
+            "reason_tag": "hm_rsi50_reversal_60m_fno",
+            "source": "avwap_5min_ID_v7_candidate_scan._scan_hm_fno_short_signal",
+            "idea": (
+                "FnO current near-month stock underlyings only; completed 60-minute "
+                "Hilega Milega RSI(9) cross below 50 with bearish EMA(3)/WMA(21) "
+                "alignment, RSI<=47, HM line distance>=6, signal window 12:15-14:15."
+            ),
+            "conditions": [
+                ("universe", "in", "current_near_month_fno_stock_underlyings"),
+                ("signal_timeframe_min", "==", 60),
+                ("signal_minute", "in", "[12:15, 14:15]"),
+                ("HM_SETUP_S_RSI50_REVERSAL", "==", True),
+                ("HM_RSI_9", "<=", 47.0),
+                ("HM_LINE_DISTANCE", ">=", 6.0),
+                ("initial_risk_pct", "between", "[1.00, 1.25]"),
+            ],
+        },
+        # Placeholder whitelist only. Runtime/v11 replace this with the row-level
+        # signal-candle-high stop and 1.35R target from candidate metadata.
+        "exit": {"sl_pct": 1.00, "tgt_pct": 1.35},
+        "mask_terms": [],
+        "pre_momentum_terms": [],
+        "entry_guards": {"min_slot": "12:15", "max_slot": "14:15"},
+        "entry_model": (
+            "v7/v11 live-parity paper entry at the T+1 one-minute handoff after "
+            "the completed 60-minute signal; exact research next-5m-open fill is "
+            "not live-executable from the completed-bar scanner."
+        ),
+        "exit_model": (
+            "dynamic signal-candle high stop, 1.35R target, risk band 1.00-1.25%; "
+            "1-minute path resolution and EOD otherwise."
+        ),
+        "provenance": {
+            "approved_on": "2026-08-10",
+            "approved_for": "v7 paper trading and v11 live-parity backtesting from 2026-08-11",
+            "family": "Hilega Milega transcript RSI/EMA/WMA strategy",
+            "evaluated_on": "HILEGA_MILEGA_FNO_60M",
+            "universe": "current near-month FnO stock underlyings",
+            "universe_caveat": "historical runs are survivorship-biased because they use the latest near-month FnO universe.",
+            "frozen_research_result": {
+                "window": ["2026-02-10", "2026-08-07"],
+                "files_scanned": 206,
+                "trades": 122,
+                "net_pf": 1.6547,
+                "net_pnl_rs": 10242.33,
+                "win_rate_pct": 59.84,
+                "max_daily_drawdown_rs": -1526.67,
+                "research_entry_model": "next 5-minute bar open after completed 60-minute signal",
+                "research_exit_model": "signal-candle high stop and 1.35R target",
+            },
+            "mis_universe_warning": {
+                "window": ["2026-06-10", "2026-08-07"],
+                "matched_symbols": 1274,
+                "trades": 304,
+                "net_pf": 0.711,
+                "net_pnl_rs": -19846.90,
+            },
+            "runtime_change_from_research": (
+                "Live paper/v11 parity uses v7's executable one-minute handoff after "
+                "the completed 60-minute signal, not a retroactive next-5m-open fill."
+            ),
+            "gate_status": "USER_DIRECTED_FORWARD_PAPER_ONLY",
+            "risk_label": (
+                "Paper/backtest activation only. Do not use for real capital until a "
+                "fresh forward paper holdout confirms the live-parity entry model."
+            ),
+        },
+    },
 }
 
 

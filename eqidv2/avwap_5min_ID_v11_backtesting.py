@@ -41,6 +41,7 @@ import avwap_5min_ID_v5_backtesting as v5
 import avwap_5min_ID_v6_backtesting as v6
 import eqidv2_setup_conf_loader as setup_conf_loader
 import eqidv2_pre_momentum as shared_pre_momentum
+import hilega_milega_setups as hm
 from eqidv2_runtime_manifest import freeze_runtime_manifest
 from eqidv2_v7_position_sizing import (
     RiskSizingConfig,
@@ -88,6 +89,7 @@ V7_SIGNAL_MARGIN_RS = 20_000.0
 V7_INTRADAY_LEVERAGE = 5.0
 V7_SIGNAL_NOTIONAL_RS = V7_SIGNAL_MARGIN_RS * V7_INTRADAY_LEVERAGE
 V7_PAPER_SLIPPAGE_PCT = 0.0005
+HM_DYNAMIC_SIGNAL_RR_SETUP = hm.SHORT_RSI50_REVERSAL
 # V7 PAPER_TRUE parity: risk-based sizing in the entry engine and statutory
 # costs in the executor. Set only by main(), so imports do not mutate live state.
 _V11_COST_MODEL = "statutory"         # "flat_bps" (legacy) | "statutory" (paper parity)
@@ -604,11 +606,12 @@ def _first_1m_entry(
     *,
     max_delay_minutes: int = 1,
     decision_ready_at: pd.Timestamp | None = None,
+    entry_lag_minutes: int = 1,
 ) -> tuple[pd.Timestamp, float] | None:
     sig = _normalise_ts(signal_ts)
     if pd.isna(sig):
         return None
-    intended_entry = (sig + pd.Timedelta(minutes=1)).floor("min")
+    intended_entry = (sig + pd.Timedelta(minutes=max(0, int(entry_lag_minutes)))).floor("min")
     not_before = intended_entry
     if decision_ready_at is not None:
         ready = _normalise_ts(decision_ready_at)
@@ -625,6 +628,55 @@ def _first_1m_entry(
     if not np.isfinite(entry_px) or entry_px <= 0:
         return None
     return entry_ts, entry_px
+
+
+def _candidate_entry_lag_minutes(row: pd.Series) -> int:
+    value = _safe_float(row.get("entry_lag_min"), np.nan)
+    if np.isfinite(value) and value >= 0:
+        return int(value)
+    return 1
+
+
+def _hm_dynamic_signal_rr_levels(
+    row: pd.Series,
+    side: str,
+    entry_price: float,
+) -> tuple[float, float, float, float] | None:
+    setup = str(row.get("setup", "")).upper().strip()
+    if setup != HM_DYNAMIC_SIGNAL_RR_SETUP:
+        return None
+    if not np.isfinite(entry_price) or entry_price <= 0:
+        return None
+    side_u = str(side).upper().strip()
+    rr = _safe_float(row.get("hm_risk_reward"), 1.35)
+    min_risk = _safe_float(row.get("hm_min_risk_pct"), 1.0)
+    max_risk = _safe_float(row.get("hm_max_risk_pct"), 1.25)
+    signal_stop = _safe_float(row.get("hm_signal_stop_price", row.get("signal_high")), np.nan)
+    if not all(np.isfinite(x) for x in (rr, min_risk, max_risk, signal_stop)):
+        return None
+    if rr <= 0 or min_risk <= 0 or max_risk <= 0:
+        return None
+    if side_u == "SHORT":
+        stop_distance = signal_stop - entry_price
+        if stop_distance <= 0:
+            return None
+        stop_price = signal_stop
+        target_price = entry_price - stop_distance * rr
+    elif side_u == "LONG":
+        stop_distance = entry_price - signal_stop
+        if stop_distance <= 0:
+            return None
+        stop_price = signal_stop
+        target_price = entry_price + stop_distance * rr
+    else:
+        return None
+    if target_price <= 0:
+        return None
+    sl_pct = stop_distance / entry_price * 100.0
+    target_pct = sl_pct * rr
+    if sl_pct < min_risk or sl_pct > max_risk:
+        return None
+    return float(stop_price), float(target_price), float(sl_pct), float(target_pct)
 
 
 def _resolve_trade_1m_entry(row: pd.Series, cost_bps: float) -> dict | None:
@@ -1135,6 +1187,8 @@ def _selected_exit_override(setup: str, profile: str) -> tuple[float, float] | N
     # target from whichever book created the cache, so replaying those row
     # values would silently test the wrong exit geometry.
     setup_name = str(setup)
+    if setup_name.upper() == HM_DYNAMIC_SIGNAL_RR_SETUP:
+        return None
     if (
         profile == FINAL_CONF_PROFILE
         and _FINAL_CONF_ACTIVE
@@ -1698,6 +1752,7 @@ def _v7_entry_engine_raw_rows(candidates: pd.DataFrame) -> tuple[pd.DataFrame, p
                 decision_ready_at=(
                     decision_ready_at if pd.notna(decision_ready_at) else signal_ts
                 ),
+                entry_lag_minutes=_candidate_entry_lag_minutes(row),
             )
         if entry is None:
             rejects.append({
@@ -1717,13 +1772,22 @@ def _v7_entry_engine_raw_rows(candidates: pd.DataFrame) -> tuple[pd.DataFrame, p
             rejects.append({**reject_base, "reject_reason": "invalid_entry_price"})
             continue
 
-        sl_pct, target_pct = v6.SETUP_EXIT_RULES[setup]
-        if side == "LONG":
-            stop_price = signal_entry_price * (1.0 - sl_pct / 100.0)
-            target_price = signal_entry_price * (1.0 + target_pct / 100.0)
+        hm_levels = _hm_dynamic_signal_rr_levels(row, side, signal_entry_price)
+        if hm_levels is not None:
+            stop_price, target_price, sl_pct, target_pct = hm_levels
+            exit_rule_source = "hm_signal_candle_rr"
         else:
-            stop_price = signal_entry_price * (1.0 + sl_pct / 100.0)
-            target_price = signal_entry_price * (1.0 - target_pct / 100.0)
+            if setup.upper() == HM_DYNAMIC_SIGNAL_RR_SETUP:
+                rejects.append({**reject_base, "reject_reason": "hm_signal_rr_risk_filter_or_invalid_stop"})
+                continue
+            sl_pct, target_pct = v6.SETUP_EXIT_RULES[setup]
+            if side == "LONG":
+                stop_price = signal_entry_price * (1.0 - sl_pct / 100.0)
+                target_price = signal_entry_price * (1.0 + target_pct / 100.0)
+            else:
+                stop_price = signal_entry_price * (1.0 + sl_pct / 100.0)
+                target_price = signal_entry_price * (1.0 - target_pct / 100.0)
+            exit_rule_source = "v6_setup_exit_rule"
         stop_price = round(float(stop_price), 2)
         target_price = round(float(target_price), 2)
 
@@ -1772,6 +1836,7 @@ def _v7_entry_engine_raw_rows(candidates: pd.DataFrame) -> tuple[pd.DataFrame, p
             "v7_signal_target_price": target_price,
             "v7_signal_sl_pct": float(sl_pct),
             "v7_signal_target_pct": float(target_pct),
+            "v7_signal_exit_rule_source": exit_rule_source,
             "quantity": int(quantity),
             "signal_entry_datetime_ist": bar_time,
             "signal_bar_time_ist": bar_time,
@@ -2362,6 +2427,11 @@ def _scan_one_ticker_day_candidates(payload: tuple) -> list[dict]:
     if candidate_scan.late_bb10.SETUP in candidate_scan.ALLOWED_SETUPS:
         for slot in slot_times:
             custom = candidate_scan._scan_late_bb10_signal(df, str(ticker).upper(), slot)
+            if custom is not None:
+                by_slot.setdefault(slot, []).append(custom)
+    if getattr(candidate_scan, "HM_FNO_SETUP", "") in candidate_scan.ALLOWED_SETUPS:
+        for slot in slot_times:
+            custom = candidate_scan._scan_hm_fno_short_signal(df, str(ticker).upper(), slot)
             if custom is not None:
                 by_slot.setdefault(slot, []).append(custom)
 
@@ -4368,6 +4438,46 @@ def _dates_for_cached_replay(args: argparse.Namespace, cached_signals: pd.DataFr
     return dates, {day: primary_root for day in dates}
 
 
+def _filter_cached_signals_for_replay_dates(
+    cached_signals: pd.DataFrame,
+    start_date: str = "",
+    end_date: str = "",
+) -> pd.DataFrame:
+    """Apply inclusive CLI date bounds to cached signals before replay."""
+
+    start_text = str(start_date or "").strip()
+    end_text = str(end_date or "").strip()
+    if not start_text and not end_text:
+        return cached_signals
+
+    signal_col = (
+        "signal_time_ist"
+        if "signal_time_ist" in cached_signals.columns
+        else "bar_time_ist"
+    )
+    if signal_col not in cached_signals.columns:
+        raise SystemExit(
+            "[v11 cached_all_setups] cached signals require signal_time_ist "
+            "or bar_time_ist for date filtering"
+        )
+
+    start_day = pd.to_datetime(start_text, errors="coerce") if start_text else pd.NaT
+    end_day = pd.to_datetime(end_text, errors="coerce") if end_text else pd.NaT
+    if start_text and pd.isna(start_day):
+        raise SystemExit(f"[v11 cached_all_setups] invalid --start_date={start_date!r}")
+    if end_text and pd.isna(end_day):
+        raise SystemExit(f"[v11 cached_all_setups] invalid --end_date={end_date!r}")
+
+    timestamps = _normalise_date_series(cached_signals[signal_col])
+    signal_days = timestamps.dt.strftime("%Y-%m-%d")
+    keep = timestamps.notna()
+    if start_text:
+        keep &= signal_days.ge(start_day.strftime("%Y-%m-%d"))
+    if end_text:
+        keep &= signal_days.le(end_day.strftime("%Y-%m-%d"))
+    return cached_signals.loc[keep].copy().reset_index(drop=True)
+
+
 def _run_historical_cached_all_setups(args: argparse.Namespace) -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -4375,6 +4485,11 @@ def _run_historical_cached_all_setups(args: argparse.Namespace) -> int:
     signal_path = _cached_entry_signal_path(source_dir)
     print(f"[v11 cached_all_setups] loading cached entry-engine signals from {signal_path}", flush=True)
     cached_signals = pd.read_csv(signal_path)
+    cached_signals = _filter_cached_signals_for_replay_dates(
+        cached_signals,
+        str(args.start_date or ""),
+        str(args.end_date or ""),
+    )
     dates, date_to_root = _dates_for_cached_replay(args, cached_signals)
     if not dates:
         raise SystemExit("[v11 cached_all_setups] no dates available for cached replay")
@@ -4750,7 +4865,12 @@ def _activate_final_setup_conf() -> dict:
         for name, cfg in conf.items() if cfg.get("pre_momentum_terms")
     }
     # setups that must be re-admitted past v8+research: raw-pool (v8 drops them) + scan-source (not emitted)
-    _readmit_evals = ("RAW_PRE_GATE_POOL", "TIER123_OVERLAY_PROBE", "NEW_SETUPS_SCAN")
+    _readmit_evals = (
+        "RAW_PRE_GATE_POOL",
+        "TIER123_OVERLAY_PROBE",
+        "NEW_SETUPS_SCAN",
+        "HILEGA_MILEGA_FNO_60M",
+    )
     _FINAL_CONF_READMIT_SETUPS = frozenset(
         name for name, cfg in conf.items()
         if str(cfg.get("provenance", {}).get("evaluated_on", "")).upper() in _readmit_evals

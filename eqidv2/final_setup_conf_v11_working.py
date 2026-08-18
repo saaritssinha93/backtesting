@@ -1439,6 +1439,9 @@ FINAL_SETUP_CONF["L_LATE_BB10_COMPRESSION_BREAKOUT"] = _deepcopy(
 FINAL_SETUP_CONF["QUIET_LIQUID_ONE_BAR_DEFER_LONG"] = _deepcopy(
     _PRIMARY_FINAL_SETUP_CONF["QUIET_LIQUID_ONE_BAR_DEFER_LONG"]
 )
+FINAL_SETUP_CONF["S_HM_RSI50_REVERSAL"] = _deepcopy(
+    _PRIMARY_FINAL_SETUP_CONF["S_HM_RSI50_REVERSAL"]
+)
 
 
 # ===========================================================================

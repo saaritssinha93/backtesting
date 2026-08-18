@@ -23,6 +23,7 @@ import avwap_5min_ID_v2_backtesting as v2
 import avwap_5min_ID_v6_backtesting as v6
 import avwap_5min_ID_v7_backtesting as v7
 import eqidv2_late_bb10_compression as late_bb10
+import hilega_milega_setups as hm
 
 
 IST_TZ = "Asia/Kolkata"
@@ -74,6 +75,23 @@ class _TickerFrameCache:
 
 _LOCAL_FRAME_CACHE: Dict[str, _TickerFrameCache] = {}
 _LAST_SCAN_TELEMETRY: Dict[str, Any] = {}
+_HM_FNO_UNIVERSE_CACHE: Dict[str, Any] = {}
+
+HM_FNO_SETUP = hm.SHORT_RSI50_REVERSAL
+HM_FNO_SIGNAL_TF_MIN = 60
+HM_FNO_ENTRY_LAG_MIN = int(os.getenv("EQIDV2_HM_FNO_ENTRY_LAG_MIN", "1"))
+HM_FNO_SIGNAL_WARMUP_DAYS = int(os.getenv("EQIDV2_HM_FNO_WARMUP_DAYS", "45"))
+HM_FNO_SIGNAL_START_MIN = 12 * 60 + 15
+HM_FNO_SIGNAL_END_MIN = 14 * 60 + 15
+HM_FNO_MIN_LINE_DISTANCE = float(os.getenv("EQIDV2_HM_FNO_MIN_LINE_DISTANCE", "6.0"))
+HM_FNO_SHORT_MAX_RSI = float(os.getenv("EQIDV2_HM_FNO_SHORT_MAX_RSI", "47.0"))
+HM_FNO_RISK_REWARD = float(os.getenv("EQIDV2_HM_FNO_RISK_REWARD", "1.35"))
+HM_FNO_MIN_RISK_PCT = float(os.getenv("EQIDV2_HM_FNO_MIN_RISK_PCT", "1.0"))
+HM_FNO_MAX_RISK_PCT = float(os.getenv("EQIDV2_HM_FNO_MAX_RISK_PCT", "1.25"))
+HM_FNO_UNIVERSE_PATH = os.getenv(
+    "EQIDV2_HILEGA_MILEGA_FNO_UNIVERSE",
+    r"C:\TradingData\eqidv2\fno_oi\universe\latest_near_month.parquet",
+)
 
 
 def _new_ticker_telemetry() -> Dict[str, Any]:
@@ -352,6 +370,225 @@ def _safe_float(value: Any, default: float = np.nan) -> float:
     except Exception:
         return default
     return out if np.isfinite(out) else default
+
+
+def _hm_norm_symbol(value: Any) -> str:
+    return str(value or "").strip().upper().replace(".NS", "")
+
+
+def _hm_fno_enabled() -> bool:
+    if str(os.getenv("EQIDV2_HILEGA_MILEGA_FNO_PAPER", "1")).strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+        "disabled",
+    }:
+        return False
+    return HM_FNO_SETUP in ALLOWED_SETUPS
+
+
+def _hm_load_fno_universe() -> frozenset[str]:
+    path = Path(HM_FNO_UNIVERSE_PATH)
+    try:
+        stat = path.stat()
+        key = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        key = (str(path), 0, 0)
+    if _HM_FNO_UNIVERSE_CACHE.get("key") == key:
+        return _HM_FNO_UNIVERSE_CACHE.get("symbols", frozenset())
+
+    symbols: set[str] = set()
+    if path.exists():
+        try:
+            universe = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
+            if "is_index_future" in universe.columns:
+                universe = universe.loc[~universe["is_index_future"].fillna(False).astype(bool)]
+            symbol_column = next(
+                (
+                    col
+                    for col in ("underlying", "ticker", "symbol", "tradingsymbol")
+                    if col in universe.columns
+                ),
+                None,
+            )
+            if symbol_column is not None:
+                symbols = {
+                    _hm_norm_symbol(x)
+                    for x in universe[symbol_column].dropna().tolist()
+                    if _hm_norm_symbol(x)
+                }
+        except Exception:
+            symbols = set()
+    out = frozenset(symbols)
+    _HM_FNO_UNIVERSE_CACHE["key"] = key
+    _HM_FNO_UNIVERSE_CACHE["symbols"] = out
+    return out
+
+
+def _hm_normalise_5m(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty or "date" not in frame.columns:
+        return pd.DataFrame()
+    required = [c for c in ("date", "open", "high", "low", "close", "volume") if c in frame.columns]
+    out = frame[required].copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    if getattr(out["date"].dt, "tz", None) is None:
+        out["date"] = out["date"].dt.tz_localize(IST_TZ)
+    else:
+        out["date"] = out["date"].dt.tz_convert(IST_TZ)
+    out = out.dropna(subset=["date", "open", "high", "low", "close"]).copy()
+    for col in ("open", "high", "low", "close", "volume"):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    opening = out["date"].dt.hour.eq(9) & out["date"].dt.minute.eq(15)
+    out = out.loc[~opening.fillna(False)].copy()
+    return (
+        out.sort_values("date")
+        .drop_duplicates(subset=["date"], keep="last")
+        .reset_index(drop=True)
+    )
+
+
+def _hm_aggregate_signal_bars(frame: pd.DataFrame, minutes: int = HM_FNO_SIGNAL_TF_MIN) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close"])
+    expected_rows = int(minutes) // 5
+    pieces: List[pd.DataFrame] = []
+    working = frame.copy()
+    working["trade_day"] = working["date"].dt.date
+    agg_spec: Dict[str, Tuple[str, str]] = {
+        "open": ("open", "first"),
+        "high": ("high", "max"),
+        "low": ("low", "min"),
+        "close": ("close", "last"),
+        "source_rows": ("close", "count"),
+    }
+    if "volume" in working.columns:
+        agg_spec["volume"] = ("volume", "sum")
+    for _, day in working.groupby("trade_day", sort=True):
+        indexed = day.set_index("date").sort_index()
+        aggregate = indexed.resample(
+            f"{int(minutes)}min",
+            origin="start_day",
+            offset="15min",
+            closed="right",
+            label="right",
+        ).agg(**agg_spec)
+        aggregate = aggregate.loc[aggregate["source_rows"].eq(expected_rows)]
+        if not aggregate.empty:
+            pieces.append(aggregate.reset_index())
+    if not pieces:
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close"])
+    return pd.concat(pieces, ignore_index=True).sort_values("date").reset_index(drop=True)
+
+
+def _hm_minute(ts: pd.Timestamp) -> int:
+    return int(ts.hour) * 60 + int(ts.minute)
+
+
+def _scan_hm_fno_short_signal(
+    raw: pd.DataFrame,
+    ticker: str,
+    slot_ts: Any,
+) -> Optional[Tuple["v2.Candidate", Dict[str, Any]]]:
+    """Emit the approved FnO Hilega short signal on completed 60-minute bars."""
+    if not _hm_fno_enabled():
+        return None
+    symbol = _hm_norm_symbol(ticker)
+    if symbol not in _hm_load_fno_universe():
+        return None
+    slot = _ensure_ist_ts(slot_ts).floor("min")
+    signal_minute = _hm_minute(slot)
+    if signal_minute < HM_FNO_SIGNAL_START_MIN or signal_minute > HM_FNO_SIGNAL_END_MIN:
+        return None
+    if slot.minute != 15:
+        return None
+
+    frame = _hm_normalise_5m(raw)
+    if frame.empty:
+        return None
+    start = (slot - pd.Timedelta(days=max(1, HM_FNO_SIGNAL_WARMUP_DAYS))).normalize()
+    frame = frame.loc[(frame["date"] >= start) & (frame["date"] <= slot)].copy()
+    if frame.empty:
+        return None
+    bars = _hm_aggregate_signal_bars(frame, HM_FNO_SIGNAL_TF_MIN)
+    if bars.empty:
+        return None
+    try:
+        features = hm.add_hilega_milega_features(bars)
+    except Exception:
+        return None
+    signal_rows = features[features["date"].dt.floor("min").eq(slot)]
+    if signal_rows.empty:
+        return None
+    signal = signal_rows.iloc[-1]
+    if not bool(signal.get(hm.SETUP_FLAG_COLUMNS[HM_FNO_SETUP], False)):
+        return None
+    rsi = _safe_float(signal.get(hm.RSI_COLUMN))
+    line_distance = _safe_float(signal.get("HM_LINE_DISTANCE"))
+    if not (np.isfinite(rsi) and rsi <= HM_FNO_SHORT_MAX_RSI):
+        return None
+    if not (np.isfinite(line_distance) and line_distance >= HM_FNO_MIN_LINE_DISTANCE):
+        return None
+
+    close = _safe_float(signal.get("close"))
+    high = _safe_float(signal.get("high"))
+    low = _safe_float(signal.get("low"))
+    open_price = _safe_float(signal.get("open"))
+    if not all(np.isfinite(x) and x > 0 for x in (close, high, low, open_price)):
+        return None
+    candle_range = max(high - low, 0.0)
+    close_loc = (close - low) / candle_range if candle_range > 0 else np.nan
+    body_pct = abs(close - open_price) / candle_range if candle_range > 0 else 0.0
+    atr_pct = candle_range / close if close > 0 else np.nan
+    quality = 100.0 + max(0.0, line_distance) + max(0.0, HM_FNO_SHORT_MAX_RSI - rsi)
+    signal_row = signal.to_dict()
+    signal_row.update(
+        {
+            "candidate_family": "HILEGA_MILEGA_FNO",
+            "selection_mode": "hilega_milega_fno_60m",
+            "signal_timestamp_convention": "end_labeled_completed_60m",
+            "signal_timeframe_min": HM_FNO_SIGNAL_TF_MIN,
+            "entry_lag_min": HM_FNO_ENTRY_LAG_MIN,
+            "hm_signal_bar_time_ist": _fmt_ist(slot),
+            "hm_signal_stop_price": high,
+            "hm_risk_reward": HM_FNO_RISK_REWARD,
+            "hm_min_risk_pct": HM_FNO_MIN_RISK_PCT,
+            "hm_max_risk_pct": HM_FNO_MAX_RISK_PCT,
+            "hm_rsi_9": rsi,
+            "hm_rsi_ema_3": _safe_float(signal.get(hm.EMA_COLUMN)),
+            "hm_rsi_wma_21": _safe_float(signal.get(hm.WMA_COLUMN)),
+            "hm_line_distance": line_distance,
+            "hm_exit_model": "signal_candle_high_stop_1_35R",
+            "RSI": rsi,
+            "ADX": np.nan,
+            "vol_ratio": np.nan,
+        }
+    )
+    candidate = v2.Candidate(
+        ticker=symbol,
+        date=str(slot.date()),
+        setup=HM_FNO_SETUP,
+        side="SHORT",
+        signal_ts=slot,
+        signal_close=close,
+        entry_ts=slot + pd.Timedelta(minutes=HM_FNO_ENTRY_LAG_MIN),
+        entry_px=close,
+        target_px=0.0,
+        sl_px=high,
+        quality_score=float(quality),
+        rs_pct=0.0,
+        market_ret_pct=0.0,
+        regime="NEUTRAL",
+        vol_ratio=0.0,
+        atr_pct=float(atr_pct),
+        close_loc=float(close_loc),
+        body_pct=float(body_pct),
+        vwap_dist_atr=0.0,
+        day_value_so_far_rs=0.0,
+        reason="hm_rsi50_reversal_60m_fno",
+    )
+    return candidate, signal_row
 
 
 def _early_signal_window(ts: pd.Timestamp) -> bool:
@@ -797,6 +1034,10 @@ def scan_ticker_signal_candle(
     if late_bb10.SETUP in ALLOWED_SETUPS:
         late_bb10_start = (slot_ts - pd.Timedelta(days=45)).normalize()
         late_bb10_df = df[df["date"] >= late_bb10_start].copy()
+    hm_fno_df = None
+    if HM_FNO_SETUP in ALLOWED_SETUPS:
+        hm_fno_start = (slot_ts - pd.Timedelta(days=max(1, HM_FNO_SIGNAL_WARMUP_DAYS))).normalize()
+        hm_fno_df = df[df["date"] >= hm_fno_start].copy()
     _trim_start = (slot_ts - pd.Timedelta(days=3)).normalize()
     df = df[df["date"] >= _trim_start].copy()
     if df.empty:
@@ -808,6 +1049,7 @@ def scan_ticker_signal_candle(
             int(_trim_start.value),
             int(pd.Timestamp(df["date"].iloc[-1]).value),
             int(len(df)),
+            bool(getattr(v2, "ENABLE_HILEGA_MILEGA_RESEARCH", False)),
         )
     if (
         prepared_key is not None
@@ -881,6 +1123,14 @@ def scan_ticker_signal_candle(
     if late_bb10.SETUP in ALLOWED_SETUPS:
         custom_row = _scan_late_bb10_signal(
             late_bb10_df if late_bb10_df is not None else df,
+            str(ticker).upper(),
+            slot_ts,
+        )
+        if custom_row is not None:
+            out.append(custom_row)
+    if HM_FNO_SETUP in ALLOWED_SETUPS:
+        custom_row = _scan_hm_fno_short_signal(
+            hm_fno_df if hm_fno_df is not None else df,
             str(ticker).upper(),
             slot_ts,
         )
@@ -964,7 +1214,18 @@ def candidates_to_dataframe(
         ticker = str(c.ticker).upper().strip()
         side = str(c.side).upper().strip()
         setup = str(c.setup)
-        selection_mode = EARLY_SELECTION_MODE if setup.startswith("E_") else SELECTION_MODE
+        selection_mode = str(
+            signal_row.get(
+                "selection_mode",
+                EARLY_SELECTION_MODE if setup.startswith("E_") else SELECTION_MODE,
+            )
+        )
+        candidate_family = str(
+            signal_row.get(
+                "candidate_family",
+                "EARLY" if setup.startswith("E_") else "V7_STANDARD",
+            )
+        )
         signal_time = _fmt_ist(signal_ts)
         candidate_id = f"{ticker}|{side}|{setup}|{signal_time}"
         avwap_value = _finite_or_blank(signal_row.get("AVWAP", getattr(c, "avwap", np.nan)))
@@ -980,15 +1241,29 @@ def candidates_to_dataframe(
             "regime": str(c.regime),
             "avwap": avwap_value,
             "avwap_dist_atr": avwap_dist_atr,
+            "signal_timeframe_min": _finite_or_blank(signal_row.get("signal_timeframe_min")),
+            "entry_lag_min": _finite_or_blank(signal_row.get("entry_lag_min")),
+            "hm_signal_bar_time_ist": str(signal_row.get("hm_signal_bar_time_ist", "")),
+            "hm_signal_stop_price": _finite_or_blank(signal_row.get("hm_signal_stop_price")),
+            "hm_risk_reward": _finite_or_blank(signal_row.get("hm_risk_reward")),
+            "hm_min_risk_pct": _finite_or_blank(signal_row.get("hm_min_risk_pct")),
+            "hm_max_risk_pct": _finite_or_blank(signal_row.get("hm_max_risk_pct")),
+            "hm_rsi_9": _finite_or_blank(signal_row.get("hm_rsi_9")),
+            "hm_rsi_ema_3": _finite_or_blank(signal_row.get("hm_rsi_ema_3")),
+            "hm_rsi_wma_21": _finite_or_blank(signal_row.get("hm_rsi_wma_21")),
+            "hm_line_distance": _finite_or_blank(signal_row.get("hm_line_distance")),
+            "hm_exit_model": str(signal_row.get("hm_exit_model", "")),
         }
         rows.append({
             "candidate_id": candidate_id,
             "scan_session": "Signal discovery v7 5mins ID",
             "selection_mode": selection_mode,
-            "candidate_family": "EARLY" if setup.startswith("E_") else "V7_STANDARD",
+            "candidate_family": candidate_family,
             "scan_slot_ist": _fmt_ist(scan_slot),
             "signal_time_ist": signal_time,
-            "signal_timestamp_convention": "end_labeled_completed_5m",
+            "signal_timestamp_convention": str(
+                signal_row.get("signal_timestamp_convention", "end_labeled_completed_5m")
+            ),
             "ticker": ticker,
             "side": side,
             "setup": setup,
@@ -1025,6 +1300,18 @@ def candidates_to_dataframe(
             "entry_max_gap_pct": _finite_or_blank(signal_row.get("entry_max_gap_pct")),
             "market_breadth": _finite_or_blank(signal_row.get("market_breadth")),
             "nifty_ema_up": _finite_or_blank(signal_row.get("nifty_ema_up")),
+            "signal_timeframe_min": _finite_or_blank(signal_row.get("signal_timeframe_min")),
+            "entry_lag_min": _finite_or_blank(signal_row.get("entry_lag_min")),
+            "hm_signal_bar_time_ist": str(signal_row.get("hm_signal_bar_time_ist", "")),
+            "hm_signal_stop_price": _finite_or_blank(signal_row.get("hm_signal_stop_price")),
+            "hm_risk_reward": _finite_or_blank(signal_row.get("hm_risk_reward")),
+            "hm_min_risk_pct": _finite_or_blank(signal_row.get("hm_min_risk_pct")),
+            "hm_max_risk_pct": _finite_or_blank(signal_row.get("hm_max_risk_pct")),
+            "hm_rsi_9": _finite_or_blank(signal_row.get("hm_rsi_9")),
+            "hm_rsi_ema_3": _finite_or_blank(signal_row.get("hm_rsi_ema_3")),
+            "hm_rsi_wma_21": _finite_or_blank(signal_row.get("hm_rsi_wma_21")),
+            "hm_line_distance": _finite_or_blank(signal_row.get("hm_line_distance")),
+            "hm_exit_model": str(signal_row.get("hm_exit_model", "")),
             **_research_shadow_metadata(side, setup, c.close_loc, setup_distance),
         })
     if not rows:

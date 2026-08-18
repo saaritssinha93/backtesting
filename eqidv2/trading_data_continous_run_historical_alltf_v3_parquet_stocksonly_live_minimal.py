@@ -109,6 +109,30 @@ DEFAULT_5M_LIVE_SLIM_CALENDAR_DAYS = max(
 DEFAULT_5M_SYNTHETIC_GAP_FILL = str(
     os.getenv("EQIDV2_5M_SYNTHETIC_GAP_FILL", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_5M_PROVISIONAL_DUPLICATE_RETRY = str(
+    os.getenv("EQIDV2_5M_PROVISIONAL_DUPLICATE_RETRY", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_5M_PROVISIONAL_SETTLE_SEC = max(
+    0.0,
+    float(os.getenv("EQIDV2_5M_PROVISIONAL_SETTLE_SEC", "18")),
+)
+DEFAULT_5M_PROVISIONAL_RETRY_ATTEMPTS = max(
+    1,
+    int(os.getenv("EQIDV2_5M_PROVISIONAL_RETRY_ATTEMPTS", "3")),
+)
+DEFAULT_5M_PROVISIONAL_RETRY_INTERVAL_SEC = max(
+    0.0,
+    float(os.getenv("EQIDV2_5M_PROVISIONAL_RETRY_INTERVAL_SEC", "2")),
+)
+DEFAULT_FNO_5M_FROM_1M = str(
+    os.getenv("EQIDV2_FNO_5M_FROM_1M", "0")
+).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_FNO_UNIVERSE_PATH = Path(
+    os.getenv(
+        "EQIDV2_FNO_UNIVERSE_PATH",
+        str(runtime_dir("fno_oi") / "universe" / "latest_near_month.parquet"),
+    )
+)
 DEFAULT_SESSION_COMPLETENESS_LOG_LIMIT = max(
     1,
     int(os.getenv("EQIDV2_5M_SESSION_COMPLETENESS_LOG_LIMIT", "6")),
@@ -127,6 +151,9 @@ WARMUP_BARS = {
     "5min":  600,
     "15min": 400,
 }
+
+_FNO_EQUITY_SYMBOLS: set[str] = set()
+_FNO_UNIVERSE_MTIME_NS: int | None = None
 
 # Token cache
 SCRIPT_ROOT = Path(__file__).resolve().parent
@@ -303,9 +330,10 @@ def _normalize_ticker_list(obj) -> list[str]:
 def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, int]]:
     """
     Universe loader (ETF-ready):
-    - Preferred: filtered_stocks_MIS_v2.py with either:
+    - Preferred: filtered_fno_MIS_v2.py with either:
         - stocks_tokens = {SYMBOL: TOKEN, ...}
         - selected_stocks = [...]
+    - Legacy fallback: filtered_stocks_MIS_v2.py
     - Fallback: stocks_tickers.txt (one symbol per line)
     """
     cwd = Path.cwd().resolve()
@@ -318,11 +346,15 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
 
     token_map: dict[str, int] = {}
     mod: Optional[ModuleType] = None
+    module_name = ""
 
-    try:
-        mod = importlib.import_module("filtered_stocks_MIS_v2")
-    except Exception:
-        mod = None
+    for candidate_module in ("filtered_fno_MIS_v2", "filtered_stocks_MIS_v2"):
+        try:
+            mod = importlib.import_module(candidate_module)
+            module_name = candidate_module
+            break
+        except Exception:
+            mod = None
 
     if mod is not None:
         if hasattr(mod, "stocks_tokens") and isinstance(getattr(mod, "stocks_tokens"), dict):
@@ -331,7 +363,7 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                 token_map = {str(k).strip().upper(): int(v) for k, v in raw.items() if str(k).strip()}
                 tickers = sorted(token_map.keys())
                 if tickers:
-                    logger.info("Loaded %d symbols from filtered_stocks_MIS_v2.stocks_tokens", len(tickers))
+                    logger.info("Loaded %d symbols from %s.stocks_tokens", len(tickers), module_name)
                     return _filter_quarantined_symbols(tickers, token_map, logger)
             except Exception:
                 pass
@@ -347,12 +379,12 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
                 except Exception:
                     pass
                 if tickers:
-                    logger.info("Loaded %d symbols from filtered_stocks_MIS_v2.selected_stocks", len(tickers))
+                    logger.info("Loaded %d symbols from %s.selected_stocks", len(tickers), module_name)
                     return _filter_quarantined_symbols(tickers, token_map, logger)
 
             tickers = _normalize_ticker_list(ss)
             if tickers:
-                logger.info("Loaded %d symbols from filtered_stocks_MIS_v2.selected_stocks", len(tickers))
+                logger.info("Loaded %d symbols from %s.selected_stocks", len(tickers), module_name)
                 return _filter_quarantined_symbols(tickers, token_map, logger)
 
     for base in (cwd, script_dir, parent_dir):
@@ -367,10 +399,11 @@ def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, i
     raise RuntimeError(
         "Could not load symbols.\n"
         "Fix options:\n"
-        "  1) Ensure filtered_stocks_MIS_v2.py is importable and define either:\n"
+        "  1) Ensure filtered_fno_MIS_v2.py is importable and define either:\n"
         "       - stocks_tokens = {SYMBOL: TOKEN, ...}   OR\n"
         "       - selected_stocks = [SYMBOL, ...] / {SYMBOL, ...} / {SYMBOL: TOKEN, ...}\n"
-        "  2) Or create stocks_tickers.txt (one symbol per line) in cwd / script dir / parent dir.\n\n"
+        "  2) Or keep legacy filtered_stocks_MIS_v2.py importable.\n"
+        "  3) Or create stocks_tickers.txt (one symbol per line) in cwd / script dir / parent dir.\n\n"
         f"Diagnostics:\n  cwd={cwd}\n  script_dir={script_dir}\n  parent_dir={parent_dir}"
     )
 
@@ -596,7 +629,7 @@ def _read_last_ts_from_store(path: str):
     return _read_last_ts_fast_csv(path)
 
 def _intraday_end_shift_minutes(interval: str) -> int:
-    return {"5minute": 5, "15minute": 15}.get(interval, 0)
+    return {"minute": 1, "5minute": 5, "15minute": 15}.get(interval, 0)
 
 def _maybe_convert_existing_intraday_to_end(df: pd.DataFrame, step_min: int) -> pd.DataFrame:
     if df.empty or "date" not in df.columns:
@@ -606,6 +639,13 @@ def _maybe_convert_existing_intraday_to_end(df: pd.DataFrame, step_min: int) -> 
         return df
     s = _to_ist(s)
     min_ts = s.min()
+    if "opening_snapshot" in df.columns:
+        opening_snapshot = (
+            pd.to_numeric(df["opening_snapshot"], errors="coerce").fillna(0).ne(0)
+            | df["opening_snapshot"].astype(str).str.strip().str.lower().isin({"true", "yes", "on"})
+        )
+        if opening_snapshot.any():
+            return df
     if (min_ts.hour, min_ts.minute) == (9, 15):
         s = s + pd.Timedelta(minutes=step_min)
         df = df.copy()
@@ -825,6 +865,164 @@ def fetch_historical_generic(
 
 def fetch_historical_5min_df(kite, token, start_dt_ist, end_dt_ist, logger, intraday_ts):
     return fetch_historical_generic(kite, token, start_dt_ist, end_dt_ist, "5minute", 60, timedelta(minutes=5), logger, intraday_ts)
+
+
+def _refresh_fno_equity_symbols(logger: logging.Logger) -> set[str]:
+    """Refresh the mapped cash-equity subset once per universe revision."""
+    global _FNO_EQUITY_SYMBOLS, _FNO_UNIVERSE_MTIME_NS
+    if not DEFAULT_FNO_5M_FROM_1M:
+        _FNO_EQUITY_SYMBOLS = set()
+        _FNO_UNIVERSE_MTIME_NS = None
+        return set()
+    try:
+        mtime_ns = DEFAULT_FNO_UNIVERSE_PATH.stat().st_mtime_ns
+        if mtime_ns == _FNO_UNIVERSE_MTIME_NS and _FNO_EQUITY_SYMBOLS:
+            return set(_FNO_EQUITY_SYMBOLS)
+        universe = pd.read_parquet(
+            DEFAULT_FNO_UNIVERSE_PATH, columns=["equity_symbol"]
+        )
+        symbols = {
+            str(value).strip().upper()
+            for value in universe["equity_symbol"].dropna()
+            if str(value).strip()
+        }
+        if not symbols:
+            raise RuntimeError("mapped equity set is empty")
+        _FNO_EQUITY_SYMBOLS = symbols
+        _FNO_UNIVERSE_MTIME_NS = mtime_ns
+        logger.info(
+            "[5MIN][FNO] Exact 1-minute aggregation enabled for %d mapped equities",
+            len(symbols),
+        )
+    except Exception as exc:
+        _FNO_EQUITY_SYMBOLS = set()
+        _FNO_UNIVERSE_MTIME_NS = None
+        logger.error(
+            "[5MIN][FNO] Cannot load exact-aggregation universe %s: %s",
+            DEFAULT_FNO_UNIVERSE_PATH,
+            exc,
+        )
+    return set(_FNO_EQUITY_SYMBOLS)
+
+
+def _aggregate_exact_minute_targets(
+    minute: pd.DataFrame,
+    targets: list[pd.Timestamp],
+) -> pd.DataFrame:
+    """Aggregate only targets backed by all five exact end-labelled minutes."""
+    if minute is None or minute.empty or not targets:
+        return pd.DataFrame()
+    ohlcv_columns = ("open", "high", "low", "close", "volume")
+    work = minute.copy()
+    work["date"] = _to_ist(work["date"]).dt.floor("min")
+    for column in ohlcv_columns:
+        work[column] = pd.to_numeric(work[column], errors="coerce")
+    work = work.drop_duplicates("date", keep="last").sort_values("date")
+    rows: list[dict[str, object]] = []
+    for raw_target in sorted(set(targets)):
+        target = pd.Timestamp(raw_target).floor("min")
+        expected = pd.date_range(
+            target - pd.Timedelta(minutes=4),
+            target,
+            freq="1min",
+        )
+        bucket = work.loc[work["date"].isin(expected)].copy()
+        if len(bucket) != 5 or set(bucket["date"]) != set(expected):
+            continue
+        values = bucket[list(ohlcv_columns)].to_numpy(dtype=float)
+        if not np.isfinite(values).all():
+            continue
+        rows.append(
+            {
+                "date": target,
+                "open": float(bucket.iloc[0]["open"]),
+                "high": float(bucket["high"].max()),
+                "low": float(bucket["low"].min()),
+                "close": float(bucket.iloc[-1]["close"]),
+                "volume": float(bucket["volume"].sum()),
+                "gap_filled": 0,
+                "source_1m_count": 5,
+                "provisional_stale": 0,
+                "opening_snapshot": False,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _fetch_exact_fno_5min_rows(
+    ticker: str,
+    kite: KiteConnect,
+    token: int,
+    requested_stamps: list[pd.Timestamp],
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """Fetch mapped FnO equity minutes and return causal five-minute rows."""
+    if not requested_stamps:
+        return pd.DataFrame()
+    requested = sorted({pd.Timestamp(stamp).floor("min") for stamp in requested_stamps})
+    session_open = requested[0].normalize() + pd.Timedelta(hours=9, minutes=15)
+    first_end = session_open + pd.Timedelta(minutes=5)
+    real_targets = [stamp for stamp in requested if stamp >= first_end]
+    fetch_targets = list(real_targets)
+    if session_open in requested and first_end not in fetch_targets:
+        fetch_targets.append(first_end)
+    if not fetch_targets:
+        return pd.DataFrame()
+
+    latest_target = max(fetch_targets)
+    retry_attempts = DEFAULT_5M_PROVISIONAL_RETRY_ATTEMPTS
+    if latest_target > pd.Timestamp(datetime.now(IST_TZ)).floor("min"):
+        retry_attempts = 1
+    aggregated = pd.DataFrame()
+    required_targets = set(fetch_targets)
+    for attempt in range(1, retry_attempts + 1):
+        minute = fetch_historical_generic(
+            kite,
+            int(token),
+            (min(fetch_targets) - pd.Timedelta(minutes=5)).to_pydatetime(),
+            latest_target.to_pydatetime(),
+            "minute",
+            55,
+            timedelta(minutes=1),
+            logger,
+            "end",
+        )
+        refreshed = _aggregate_exact_minute_targets(minute, fetch_targets)
+        if not refreshed.empty:
+            aggregated = (
+                pd.concat([aggregated, refreshed], ignore_index=True, sort=False)
+                .drop_duplicates("date", keep="last")
+                .sort_values("date")
+                .reset_index(drop=True)
+            )
+        available_targets = set(aggregated.get("date", pd.Series(dtype="object")))
+        if required_targets.issubset(available_targets):
+            if attempt > 1:
+                logger.info(
+                    "[5MIN][FNO] %s exact minute targets settled on attempt %d",
+                    ticker,
+                    attempt,
+                )
+            break
+        if attempt < retry_attempts:
+            _time.sleep(DEFAULT_5M_PROVISIONAL_RETRY_INTERVAL_SEC)
+    if aggregated.empty:
+        logger.warning(
+            "[5MIN][FNO] %s exact minute aggregation returned no complete target",
+            ticker,
+        )
+        return aggregated
+
+    output = aggregated.loc[aggregated["date"].isin(real_targets)].copy()
+    if session_open in requested:
+        opening_source = aggregated.loc[aggregated["date"].eq(first_end)]
+        if not opening_source.empty:
+            opening = opening_source.tail(1).copy()
+            opening["date"] = session_open
+            opening["source_1m_count"] = 0
+            opening["opening_snapshot"] = True
+            output = pd.concat([opening, output], ignore_index=True, sort=False)
+    return output.sort_values("date").reset_index(drop=True)
 
 def fetch_historical_15min_df(kite, token, start_dt_ist, end_dt_ist, logger, intraday_ts):
     return fetch_historical_generic(kite, token, start_dt_ist, end_dt_ist, "15minute", 120, timedelta(minutes=15), logger, intraday_ts)
@@ -1158,7 +1356,18 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
         return pd.DataFrame()
 
     try:
-        keep_cols = ["date", "open", "high", "low", "close", "volume", "gap_filled"]
+        keep_cols = [
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "gap_filled",
+            "opening_snapshot",
+            "provisional_stale",
+            "source_1m_count",
+        ]
         ext = str(Path(existing_path).suffix).lower()
 
         if ext == ".parquet":
@@ -1166,11 +1375,7 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
             try:
                 df = pd.read_parquet(existing_path, columns=keep_cols, engine="pyarrow")
             except Exception:
-                df = pd.read_parquet(
-                    existing_path,
-                    columns=[c for c in keep_cols if c != "gap_filled"],
-                    engine="pyarrow",
-                )
+                df = pd.read_parquet(existing_path, engine="pyarrow")
         else:
             df = pd.read_csv(existing_path)
 
@@ -1191,6 +1396,16 @@ def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFr
             df["gap_filled"] = 0
         else:
             df["gap_filled"] = pd.to_numeric(df["gap_filled"], errors="coerce").fillna(0).astype(int)
+        if "provisional_stale" not in df.columns:
+            df["provisional_stale"] = 0
+        else:
+            df["provisional_stale"] = (
+                pd.to_numeric(df["provisional_stale"], errors="coerce").fillna(0).astype(int)
+            )
+        if "source_1m_count" in df.columns:
+            df["source_1m_count"] = pd.to_numeric(
+                df["source_1m_count"], errors="coerce"
+            )
 
         keep = [c for c in keep_cols if c in df.columns]
         return df[keep].drop_duplicates(subset="date").sort_values("date").reset_index(drop=True)
@@ -1234,6 +1449,131 @@ def _resolve_current_slot_window(
         fetch_end = min(default_end, (slot_target_ts + step_td).to_pydatetime())
 
     return fetch_start, fetch_end, slot_target_ts
+
+
+_OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
+
+
+def _rows_have_same_ohlcv(left: pd.Series, right: pd.Series) -> bool:
+    try:
+        left_values = np.asarray([float(left[column]) for column in _OHLCV_COLUMNS])
+        right_values = np.asarray([float(right[column]) for column in _OHLCV_COLUMNS])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return bool(
+        np.isfinite(left_values).all()
+        and np.isfinite(right_values).all()
+        and np.allclose(left_values, right_values, rtol=0.0, atol=1e-9)
+    )
+
+
+def _replace_timestamp_row(
+    frame: pd.DataFrame,
+    replacement: pd.DataFrame,
+    target_ts: pd.Timestamp,
+) -> pd.DataFrame:
+    out = frame.copy()
+    out_dt = _to_ist(out["date"]).dt.floor("min")
+    replacement = replacement.copy()
+    replacement["date"] = _to_ist(replacement["date"])
+    return (
+        pd.concat([out.loc[out_dt.ne(target_ts.floor("min"))], replacement], ignore_index=True)
+        .drop_duplicates(subset="date", keep="last")
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+
+def _revalidate_provisional_5min_target(
+    ticker: str,
+    kite: KiteConnect,
+    token: int,
+    fetched: pd.DataFrame,
+    existing: pd.DataFrame,
+    target_ts_ist: datetime | pd.Timestamp | None,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """Retry a just-published candle that is an exact copy of its predecessor."""
+    if (
+        not DEFAULT_5M_PROVISIONAL_DUPLICATE_RETRY
+        or fetched is None
+        or fetched.empty
+        or existing is None
+        or existing.empty
+    ):
+        return fetched
+
+    target_ts = _coerce_ist_datetime(target_ts_ist)
+    if target_ts is None:
+        return fetched
+    first_completed = pd.Timestamp(
+        IST_TZ.localize(datetime(target_ts.year, target_ts.month, target_ts.day, 9, 20))
+    )
+    if target_ts <= first_completed:
+        return fetched
+
+    fetched_dt = _to_ist(fetched["date"]).dt.floor("min")
+    target_rows = fetched.loc[fetched_dt.eq(target_ts.floor("min"))]
+    if target_rows.empty:
+        return fetched
+
+    previous_ts = target_ts - pd.Timedelta(minutes=5)
+    prior_pool = pd.concat([existing, fetched], ignore_index=True, sort=False)
+    prior_dt = _to_ist(prior_pool["date"]).dt.floor("min")
+    previous_rows = prior_pool.loc[prior_dt.eq(previous_ts.floor("min"))]
+    if previous_rows.empty:
+        return fetched
+
+    target_row = target_rows.iloc[-1]
+    previous_row = previous_rows.iloc[-1]
+    if not _rows_have_same_ohlcv(target_row, previous_row):
+        return fetched
+
+    settle_at = target_ts + pd.Timedelta(seconds=DEFAULT_5M_PROVISIONAL_SETTLE_SEC)
+    wait_seconds = max(0.0, (settle_at.to_pydatetime() - datetime.now(IST_TZ)).total_seconds())
+    if wait_seconds > 0:
+        _time.sleep(wait_seconds)
+
+    refreshed_target = pd.DataFrame()
+    for attempt in range(1, DEFAULT_5M_PROVISIONAL_RETRY_ATTEMPTS + 1):
+        refreshed = fetch_historical_5min_df(
+            kite,
+            int(token),
+            (target_ts - pd.Timedelta(minutes=5)).to_pydatetime(),
+            target_ts.to_pydatetime(),
+            logger,
+            "end",
+        )
+        if not refreshed.empty:
+            refreshed_dt = _to_ist(refreshed["date"]).dt.floor("min")
+            refreshed_target = refreshed.loc[
+                refreshed_dt.eq(target_ts.floor("min"))
+            ].copy()
+            if not refreshed_target.empty:
+                refreshed_target["date"] = _to_ist(refreshed_target["date"])
+                refreshed_target["gap_filled"] = 0
+                refreshed_target["provisional_stale"] = 0
+                if not _rows_have_same_ohlcv(refreshed_target.iloc[-1], previous_row):
+                    logger.info(
+                        "[5MIN] %s revalidated provisional %s candle on attempt %d",
+                        ticker,
+                        target_ts.strftime("%H:%M"),
+                        attempt,
+                    )
+                    return _replace_timestamp_row(fetched, refreshed_target, target_ts)
+        if attempt < DEFAULT_5M_PROVISIONAL_RETRY_ATTEMPTS:
+            _time.sleep(DEFAULT_5M_PROVISIONAL_RETRY_INTERVAL_SEC)
+
+    out = fetched.copy()
+    out_dt = _to_ist(out["date"]).dt.floor("min")
+    out.loc[out_dt.eq(target_ts.floor("min")), "provisional_stale"] = 1
+    logger.warning(
+        "[5MIN] %s %s candle remained an exact OHLCV copy after %d recheck(s); marked provisional_stale",
+        ticker,
+        target_ts.strftime("%H:%M"),
+        DEFAULT_5M_PROVISIONAL_RETRY_ATTEMPTS,
+    )
+    return out
 
 def _incremental_start_from_existing(
     mode: str,
@@ -1354,14 +1694,95 @@ def _missing_5min_session_stamps_from_df(
 ) -> list[pd.Timestamp]:
     if df is None or df.empty or "date" not in df.columns:
         return _expected_5min_session_stamps(expected_ts_ist)
-    return _missing_5min_session_stamps_from_series(df["date"], expected_ts_ist)
+    missing = _missing_5min_session_stamps_from_series(df["date"], expected_ts_ist)
+    expected = set(_expected_5min_session_stamps(expected_ts_ist))
+    unsafe: set[pd.Timestamp] = set()
+
+    timestamps = _to_ist(df["date"]).dt.floor("min")
+    quality_bad = pd.Series(False, index=df.index)
+    for quality_flag in ("gap_filled", "provisional_stale"):
+        if quality_flag in df.columns:
+            quality_bad |= (
+                pd.to_numeric(df[quality_flag], errors="coerce").fillna(0).ne(0)
+                | df[quality_flag]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .isin({"true", "yes", "on"})
+            )
+    if "source_1m_count" in df.columns:
+        source_count = pd.to_numeric(df["source_1m_count"], errors="coerce")
+        quality_bad |= source_count.notna() & source_count.ne(5)
+
+    # The optional 09:15 row is an opening snapshot, not a completed strategy
+    # candle. It remains valid for legacy store shape and is excluded here.
+    quality_bad &= ~(
+        timestamps.dt.hour.eq(9) & timestamps.dt.minute.eq(15)
+    )
+    unsafe.update(
+        pd.Timestamp(stamp).floor("min")
+        for stamp in timestamps.loc[quality_bad].dropna()
+        if pd.Timestamp(stamp).floor("min") in expected
+    )
+
+    required_ohlcv = {"open", "high", "low", "close", "volume"}
+    if required_ohlcv.issubset(df.columns):
+        ordered = df.assign(_quality_ts=timestamps).sort_values("_quality_ts").reset_index(drop=True)
+        previous = ordered.shift(1)
+        adjacent = ordered["_quality_ts"].dt.date.eq(previous["_quality_ts"].dt.date)
+        adjacent &= ordered["_quality_ts"].sub(previous["_quality_ts"]).eq(
+            pd.Timedelta(minutes=5)
+        )
+        if "opening_snapshot" in ordered.columns:
+            previous_opening = (
+                pd.to_numeric(previous["opening_snapshot"], errors="coerce").fillna(0).ne(0)
+                | previous["opening_snapshot"]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .isin({"true", "yes", "on"})
+            )
+            adjacent &= ~previous_opening
+        for column in sorted(required_ohlcv):
+            adjacent &= pd.to_numeric(ordered[column], errors="coerce").eq(
+                pd.to_numeric(previous[column], errors="coerce")
+            )
+        if "source_1m_count" in ordered.columns:
+            source_count = pd.to_numeric(
+                ordered["source_1m_count"], errors="coerce"
+            )
+            previous_source_count = source_count.shift(1)
+            adjacent &= ~(source_count.eq(5) & previous_source_count.eq(5))
+        unsafe.update(
+            pd.Timestamp(stamp).floor("min")
+            for stamp in ordered.loc[adjacent, "_quality_ts"].dropna()
+            if pd.Timestamp(stamp).floor("min") in expected
+        )
+
+    return sorted(set(missing) | unsafe)
 
 
 def _missing_5min_session_stamps_from_store(
     path: str,
     expected_ts_ist: datetime | pd.Timestamp | None,
 ) -> list[pd.Timestamp]:
-    return _missing_5min_session_stamps_from_series(_read_store_dates(path), expected_ts_ist)
+    try:
+        ext = str(Path(path).suffix).lower()
+        if ext == ".parquet":
+            _ensure_parquet_engine()
+            try:
+                frame = pd.read_parquet(
+                    path,
+                    columns=["date", "provisional_stale"],
+                    engine="pyarrow",
+                )
+            except Exception:
+                frame = pd.read_parquet(path, columns=["date"], engine="pyarrow")
+        else:
+            frame = pd.read_csv(path)
+    except Exception:
+        return _expected_5min_session_stamps(expected_ts_ist)
+    return _missing_5min_session_stamps_from_df(frame, expected_ts_ist)
 
 
 def _format_missing_stamp_sample(missing_stamps: list[pd.Timestamp]) -> str:
@@ -2136,6 +2557,25 @@ def process_ticker(
                             _time.perf_counter() - t_total0)
 
     def _fetch_for_token(active_token: int) -> pd.DataFrame:
+        exact_fno_equity = bool(
+            mode == "5min"
+            and DEFAULT_FNO_5M_FROM_1M
+            and ticker.upper() in _FNO_EQUITY_SYMBOLS
+        )
+        if exact_fno_equity:
+            requested = (
+                session_missing_stamps
+                if session_backfill_mode
+                else ([slot_target_ts] if slot_target_ts is not None else [])
+            )
+            if requested:
+                return _fetch_exact_fno_5min_rows(
+                    ticker,
+                    kite,
+                    active_token,
+                    requested,
+                    logger,
+                )
         if session_backfill_mode:
             return _fetch_missing_5min_session_rows(
                 ticker,
@@ -2151,9 +2591,10 @@ def process_ticker(
             return fetch_historical_15min_df(kite, active_token, inc_start, fetch_end_dt, logger, intraday_ts)
         raise ValueError(f"Unsupported mode for fetch: {mode}")
 
+    active_token = int(token)
     try:
         t_fetch0 = _time.perf_counter()
-        fetched = _fetch_for_token(token)
+        fetched = _fetch_for_token(active_token)
         fetch_secs = _time.perf_counter() - t_fetch0
     except InvalidInstrumentTokenError:
         refreshed = {}
@@ -2172,8 +2613,9 @@ def process_ticker(
                 refreshed_token,
             )
             try:
+                active_token = int(refreshed_token)
                 t_fetch0 = _time.perf_counter()
-                fetched = _fetch_for_token(int(refreshed_token))
+                fetched = _fetch_for_token(active_token)
                 fetch_secs = _time.perf_counter() - t_fetch0
             except InvalidInstrumentTokenError:
                 _quarantine_symbols([ticker], logger, "invalid_token_after_refresh")
@@ -2227,6 +2669,7 @@ def process_ticker(
 
     fetched = fetched.copy()
     fetched["gap_filled"] = 0
+    fetched["provisional_stale"] = 0
 
     if slot_target_ts is not None and not session_backfill_mode:
         fetched = fetched[fetched["date"] == slot_target_ts].reset_index(drop=True)
@@ -2238,16 +2681,38 @@ def process_ticker(
                                 _time.perf_counter() - t_total0,
                                 allow_previous_slot_verify=True)
 
+    fetched_from_exact_minutes = bool(
+        mode == "5min"
+        and DEFAULT_FNO_5M_FROM_1M
+        and ticker.upper() in _FNO_EQUITY_SYMBOLS
+        and "source_1m_count" in fetched.columns
+        and pd.to_numeric(fetched["source_1m_count"], errors="coerce").eq(5).any()
+    )
+    if mode == "5min" and slot_target_ts is not None and not fetched_from_exact_minutes:
+        t_revalidate0 = _time.perf_counter()
+        fetched = _revalidate_provisional_5min_target(
+            ticker,
+            kite,
+            active_token,
+            fetched,
+            existing,
+            slot_target_ts,
+            logger,
+        )
+        fetch_secs += _time.perf_counter() - t_revalidate0
+
     if mode in {"5min", "15min"} and last_before_ts is not None and not session_backfill_mode:
         replaceable_overlap = set()
-        if "gap_filled" in existing.columns:
-            existing_dt = _to_ist(existing["date"]).dt.floor("min")
-            replaceable_overlap = {
-                pd.Timestamp(ts)
-                for ts in existing_dt.loc[
-                    pd.to_numeric(existing["gap_filled"], errors="coerce").fillna(0).astype(int) > 0
-                ].tolist()
-            }
+        existing_dt = _to_ist(existing["date"]).dt.floor("min")
+        replaceable = pd.Series(False, index=existing.index)
+        for quality_flag in ("gap_filled", "provisional_stale"):
+            if quality_flag in existing.columns:
+                replaceable |= (
+                    pd.to_numeric(existing[quality_flag], errors="coerce").fillna(0).astype(int) > 0
+                )
+        replaceable_overlap = {
+            pd.Timestamp(ts) for ts in existing_dt.loc[replaceable].tolist()
+        }
 
         overlap = fetched[fetched["date"] <= last_before_ts].copy()
         if not overlap.empty:
@@ -2421,6 +2886,8 @@ def run_mode(
     mode = mode.lower().strip()
     if mode not in VALID_MODES:
         raise ValueError(f"Unknown mode '{mode}'. Expected: {', '.join(VALID_MODES)}")
+    if mode == "5min":
+        _refresh_fno_equity_symbols(logger)
 
     now_ist = datetime.now(IST_TZ)
     start_dt = get_start_date(mode, now_ist)
