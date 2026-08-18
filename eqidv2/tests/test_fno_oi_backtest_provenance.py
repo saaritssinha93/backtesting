@@ -419,6 +419,7 @@ class FnoBacktestProvenanceTests(unittest.TestCase):
             self.assertFalse(payload["original_selection_source_provenance_available"])
             self.assertIn("NOT_ORIGINAL_SELECTION", payload["provenance_claim"])
             self.assertIn("NOT DATE SLICED", payload["source_inventory_scope"])
+            self.assertEqual(payload["source_snapshot"], {})
             self.assertEqual(payload["strategy_payload"], {"setup": "frozen"})
             self.assertEqual(payload["results"]["sessions"], 1)
             self.assertEqual(

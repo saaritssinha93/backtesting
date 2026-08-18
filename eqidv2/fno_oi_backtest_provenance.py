@@ -27,6 +27,7 @@ import fno_oi_hybrid_data as hybrid
 
 
 SOURCE_INVENTORY_SCHEMA_VERSION = "fno_backtest_source_inventory_v1"
+SOURCE_SNAPSHOT_SCHEMA_VERSION = "fno_backtest_source_snapshot_v1"
 CACHE_MANIFEST_SCHEMA_VERSION = "fno_signal_cache_manifest_v2"
 RUN_PROVENANCE_SCHEMA_VERSION = "fno_backtest_run_provenance_v1"
 CURRENT_SOURCE_PROVENANCE_CLAIM = (
@@ -315,11 +316,55 @@ def _source_entry(
     }
 
 
+def _source_specifications(
+    mapped_universe: pd.DataFrame,
+    *,
+    futures_5m_root: Path | str | None = None,
+    equity_1m_root: Path | str | None = None,
+) -> list[tuple[str, str, Path]]:
+    futures_root = (
+        common.RAW_CONTRACT_DIR
+        if futures_5m_root is None
+        else Path(futures_5m_root)
+    )
+    equity_root = (
+        hybrid.DEFAULT_BACKTEST_EQUITY_1M_DIR
+        if equity_1m_root is None
+        else Path(equity_1m_root)
+    )
+    specifications: list[tuple[str, str, Path]] = []
+    for row in mapped_universe.to_dict("records"):
+        futures_symbol = str(row["futures_tradingsymbol"]).upper().strip()
+        equity_symbol = hybrid.resolve_backtest_equity_symbol(
+            str(row["equity_symbol"]), root=equity_root
+        ).upper().strip()
+        specifications.append(
+            (
+                "NFO_FUTURES_5M",
+                futures_symbol,
+                futures_root
+                / f"{common.safe_contract_stem(futures_symbol)}_5minute.parquet",
+            )
+        )
+        specifications.append(
+            (
+                "NSE_EQUITY_1M",
+                equity_symbol,
+                hybrid.equity_one_minute_path(equity_symbol, equity_root),
+            )
+        )
+    return sorted(
+        specifications, key=lambda item: (item[0], item[1], _normal_path(item[2]))
+    )
+
+
 def build_source_inventory(
     mapped_universe: pd.DataFrame,
     universe_record: Mapping[str, Any],
     *,
     previous_inventory: Mapping[str, Any] | None = None,
+    futures_5m_root: Path | str | None = None,
+    equity_1m_root: Path | str | None = None,
 ) -> dict[str, Any]:
     """Fingerprint the exact mapped futures/equity source-file inventory."""
 
@@ -328,25 +373,11 @@ def build_source_inventory(
         for item in (previous_inventory or {}).get("entries", [])
         if isinstance(item, Mapping)
     }
-    specifications: list[tuple[str, str, Path]] = []
-    for row in mapped_universe.to_dict("records"):
-        futures_symbol = str(row["futures_tradingsymbol"]).upper().strip()
-        equity_symbol = hybrid.resolve_backtest_equity_symbol(
-            str(row["equity_symbol"])
-        ).upper().strip()
-        specifications.append(
-            ("NFO_FUTURES_5M", futures_symbol, common.raw_contract_path(futures_symbol))
-        )
-        specifications.append(
-            (
-                "NSE_EQUITY_1M",
-                equity_symbol,
-                hybrid.equity_one_minute_path(
-                    equity_symbol, hybrid.DEFAULT_BACKTEST_EQUITY_1M_DIR
-                ),
-            )
-        )
-    specifications.sort(key=lambda item: (item[0], item[1], _normal_path(item[2])))
+    specifications = _source_specifications(
+        mapped_universe,
+        futures_5m_root=futures_5m_root,
+        equity_1m_root=equity_1m_root,
+    )
 
     entries: list[dict[str, Any]] = []
     for role, symbol, path in specifications:
@@ -452,6 +483,318 @@ def validate_source_inventory_readable(inventory: Mapping[str, Any]) -> None:
             "Promoted V6 source inventory contains missing, unreadable, or invalid "
             f"Parquets: {failures[:20]}"
         )
+
+
+def _publish_stable_physical_copy(
+    source: Path | str,
+    target: Path | str,
+    *,
+    attempts: int = 3,
+    chunk_size: int = 8 * 1024 * 1024,
+) -> dict[str, Any]:
+    """Copy stable source bytes into a new physical snapshot artifact.
+
+    The temporary file is populated by streaming the source bytes, so the
+    snapshot never hard-links a mutable source.  Source size and mtime are
+    checked around each copy attempt; a concurrent update discards that copy
+    and retries.  Publication hard-links only the completed temporary copy to
+    its final name, preserving no-replacement semantics on Windows.
+    """
+
+    source_path = Path(source).resolve()
+    target_path = Path(target).resolve()
+    if not source_path.exists():
+        raise FileNotFoundError(f"Backtest snapshot source is missing: {source_path}")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if target_path.exists():
+        raise FileExistsError(f"Backtest snapshot target already exists: {target_path}")
+
+    last_state: tuple[int, int, int, int] | None = None
+    for attempt in range(max(1, int(attempts))):
+        before = source_path.stat()
+        temp_path: Path | None = None
+        try:
+            digest = hashlib.sha256()
+            with source_path.open("rb") as source_handle, tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{target_path.name}.",
+                suffix=".tmp",
+                dir=str(target_path.parent),
+                delete=False,
+            ) as target_handle:
+                temp_path = Path(target_handle.name)
+                for chunk in iter(lambda: source_handle.read(chunk_size), b""):
+                    digest.update(chunk)
+                    target_handle.write(chunk)
+                target_handle.flush()
+                os.fsync(target_handle.fileno())
+            after = source_path.stat()
+            last_state = (
+                int(before.st_size),
+                int(before.st_mtime_ns),
+                int(after.st_size),
+                int(after.st_mtime_ns),
+            )
+            if last_state[:2] != last_state[2:]:
+                continue
+            try:
+                os.link(temp_path, target_path)
+            except FileExistsError:
+                raise FileExistsError(
+                    f"Backtest snapshot target raced with another writer: {target_path}"
+                )
+            return {
+                "source_path": str(source_path),
+                "snapshot_path": str(target_path),
+                "source_size": int(after.st_size),
+                "source_mtime_ns": int(after.st_mtime_ns),
+                "sha256": digest.hexdigest(),
+                "copy_attempts": attempt + 1,
+                "physical_copy": True,
+            }
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink()
+                except FileNotFoundError:
+                    pass
+    raise RuntimeError(
+        "Backtest source changed during every physical snapshot attempt: "
+        f"path={source_path}, state={last_state}"
+    )
+
+
+def create_source_snapshot(
+    mapped_universe: pd.DataFrame,
+    universe_record: Mapping[str, Any],
+    *,
+    universe_path: Path | str,
+    snapshot_root: Path | str,
+    require_complete_sources: bool = True,
+) -> dict[str, Any]:
+    """Physically freeze every mapped source for a reproducible cache build.
+
+    This is a verified per-file capture, not a global filesystem transaction.
+    Each copied file is stable for the duration of its own byte copy, and the
+    completed snapshot is subsequently fingerprinted and Parquet-validated.
+    A manifest is published only after the complete set passes validation.
+    """
+
+    root = Path(snapshot_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = common.now_ist().strftime("%Y%m%dT%H%M%S%f%z")
+    snapshot_dir = Path(
+        tempfile.mkdtemp(prefix=f"snapshot_{stamp}_", dir=str(root))
+    ).resolve()
+    futures_root = snapshot_dir / "futures_5m"
+    equity_root = snapshot_dir / "equity_1m"
+    universe_root = snapshot_dir / "universe"
+    futures_root.mkdir()
+    equity_root.mkdir()
+    universe_root.mkdir()
+
+    source_specs = _source_specifications(mapped_universe)
+    if require_complete_sources:
+        missing = [
+            f"{role}:{symbol}"
+            for role, symbol, path in source_specs
+            if not path.exists()
+        ]
+        if missing:
+            raise FileNotFoundError(
+                "Backtest source snapshot requires every mapped source; missing "
+                f"{missing[:20]}"
+            )
+
+    captures: list[dict[str, Any]] = []
+    for role, symbol, source_path in source_specs:
+        if not source_path.exists():
+            continue
+        if role == "NFO_FUTURES_5M":
+            target_path = futures_root / source_path.name
+        elif role == "NSE_EQUITY_1M":
+            target_path = equity_root / source_path.name
+        else:
+            raise AssertionError(f"Unexpected snapshot source role: {role}")
+        capture = _publish_stable_physical_copy(source_path, target_path)
+        captures.append(
+            {
+                "role": role,
+                "logical_symbol": symbol,
+                **capture,
+            }
+        )
+
+    frozen_universe_path = universe_root / Path(universe_path).name
+    universe_capture = _publish_stable_physical_copy(
+        universe_path, frozen_universe_path
+    )
+    expected_universe_hash = str(universe_record.get("file_sha256", ""))
+    if expected_universe_hash and universe_capture["sha256"] != expected_universe_hash:
+        raise AssertionError(
+            "Dated universe changed while creating source snapshot: "
+            f"expected {expected_universe_hash}, observed {universe_capture['sha256']}"
+        )
+
+    frozen_inventory = build_source_inventory(
+        mapped_universe,
+        universe_record,
+        futures_5m_root=futures_root,
+        equity_1m_root=equity_root,
+    )
+    if require_complete_sources and int(frozen_inventory["missing_count"]) != 0:
+        raise RuntimeError(
+            "Completed source snapshot has missing files: "
+            f"{frozen_inventory['missing_count']}"
+        )
+    validate_source_inventory_readable(frozen_inventory)
+
+    capture_hashes = {
+        (str(item["role"]), str(item["logical_symbol"])): str(item["sha256"])
+        for item in captures
+    }
+    for entry in frozen_inventory["entries"]:
+        identity = (str(entry["role"]), str(entry["logical_symbol"]))
+        if str(entry["sha256"]) != capture_hashes.get(identity, ""):
+            raise RuntimeError(
+                "Source snapshot copy does not match its captured hash: "
+                f"{identity}"
+            )
+
+    snapshot_fingerprint = common.canonical_json_sha256(
+        {
+            "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+            "universe_file_sha256": universe_record.get("file_sha256", ""),
+            "mapped_universe_sha256": universe_record.get(
+                "mapped_universe_sha256", ""
+            ),
+            "source_inventory_sha256": frozen_inventory["inventory_sha256"],
+            "source_fingerprint": frozen_inventory["source_fingerprint"],
+        }
+    )
+    manifest_path = snapshot_dir / "manifest.json"
+    payload = {
+        "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+        "complete": True,
+        "created_at_ist": common.now_ist().isoformat(timespec="microseconds"),
+        "capture_scope": (
+            "PER_FILE_STABLE_PHYSICAL_COPY_NOT_GLOBAL_FILESYSTEM_TRANSACTION"
+        ),
+        "physical_copy": True,
+        "snapshot_fingerprint": snapshot_fingerprint,
+        "snapshot_dir": str(snapshot_dir),
+        "futures_5m_root": str(futures_root),
+        "equity_1m_root": str(equity_root),
+        "universe_path": str(frozen_universe_path),
+        "universe": dict(universe_record),
+        "universe_capture": universe_capture,
+        "source_inventory": frozen_inventory,
+        "captures": captures,
+    }
+    write_immutable_json(manifest_path, payload)
+    return {**payload, "manifest_path": str(manifest_path)}
+
+
+def load_source_snapshot(path: Path | str) -> dict[str, Any]:
+    """Read a completed snapshot manifest and reject path escapes."""
+
+    supplied = Path(path).resolve()
+    manifest_path = supplied / "manifest.json" if supplied.is_dir() else supplied
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Backtest source snapshot manifest is missing: {manifest_path}")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Backtest source snapshot manifest is unreadable: {manifest_path}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Backtest source snapshot manifest must be a JSON object.")
+    if payload.get("schema_version") != SOURCE_SNAPSHOT_SCHEMA_VERSION:
+        raise ValueError("Backtest source snapshot schema is unsupported.")
+    if not bool(payload.get("complete")) or not bool(payload.get("physical_copy")):
+        raise ValueError("Backtest source snapshot is not a completed physical copy.")
+
+    snapshot_dir = Path(str(payload.get("snapshot_dir", ""))).resolve()
+    if manifest_path.parent.resolve() != snapshot_dir:
+        raise ValueError("Backtest source snapshot directory does not match its manifest.")
+    for key in ("futures_5m_root", "equity_1m_root", "universe_path"):
+        resolved = Path(str(payload.get(key, ""))).resolve()
+        if snapshot_dir != resolved and snapshot_dir not in resolved.parents:
+            raise ValueError(f"Backtest source snapshot {key} escapes its directory.")
+        if not resolved.exists():
+            raise FileNotFoundError(
+                f"Backtest source snapshot {key} is missing: {resolved}"
+            )
+    return {**payload, "manifest_path": str(manifest_path)}
+
+
+def validate_source_snapshot(
+    snapshot: Mapping[str, Any] | Path | str,
+    mapped_universe: pd.DataFrame,
+    universe_record: Mapping[str, Any],
+    *,
+    require_complete_sources: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Re-fingerprint snapshot artifacts and bind them to the dated universe."""
+
+    if isinstance(snapshot, (str, Path)):
+        payload = load_source_snapshot(snapshot)
+    else:
+        supplied = dict(snapshot)
+        payload = load_source_snapshot(
+            str(supplied.get("manifest_path") or supplied.get("snapshot_dir", ""))
+        )
+    expected_universe = payload.get("universe")
+    if not isinstance(expected_universe, Mapping):
+        raise ValueError("Backtest source snapshot has no universe identity.")
+    for key in (
+        "file_sha256",
+        "universe_sha256",
+        "mapped_universe_sha256",
+        "mapped_symbol_set_sha256",
+    ):
+        if str(expected_universe.get(key, "")) != str(universe_record.get(key, "")):
+            raise AssertionError(
+                f"Backtest source snapshot universe {key} does not match the replay."
+            )
+    frozen_universe_hash = sha256_file(payload["universe_path"])
+    if frozen_universe_hash != str(universe_record.get("file_sha256", "")):
+        raise AssertionError("Backtest source snapshot universe bytes changed.")
+
+    previous_inventory = payload.get("source_inventory")
+    if not isinstance(previous_inventory, Mapping):
+        raise ValueError("Backtest source snapshot has no source inventory.")
+    observed = build_source_inventory(
+        mapped_universe,
+        universe_record,
+        previous_inventory=previous_inventory,
+        futures_5m_root=payload["futures_5m_root"],
+        equity_1m_root=payload["equity_1m_root"],
+    )
+    if require_complete_sources and int(observed["missing_count"]) != 0:
+        raise FileNotFoundError("Backtest source snapshot is no longer complete.")
+    validate_source_inventory_readable(observed)
+    if (
+        observed["inventory_sha256"] != previous_inventory.get("inventory_sha256")
+        or observed["source_fingerprint"]
+        != previous_inventory.get("source_fingerprint")
+    ):
+        raise AssertionError("Backtest source snapshot artifacts changed after capture.")
+    observed_snapshot_fingerprint = common.canonical_json_sha256(
+        {
+            "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+            "universe_file_sha256": universe_record.get("file_sha256", ""),
+            "mapped_universe_sha256": universe_record.get(
+                "mapped_universe_sha256", ""
+            ),
+            "source_inventory_sha256": observed["inventory_sha256"],
+            "source_fingerprint": observed["source_fingerprint"],
+        }
+    )
+    if observed_snapshot_fingerprint != str(payload.get("snapshot_fingerprint", "")):
+        raise AssertionError("Backtest source snapshot fingerprint is invalid.")
+    return payload, observed
 
 
 def artifact_record(path: Path | str) -> dict[str, Any]:
@@ -628,6 +971,7 @@ def build_run_provenance(
         "cache_input_fingerprint": cache_manifest.get("input_fingerprint", ""),
         "universe": dict(cache_manifest.get("universe", {})),
         "source_inventory": dict(cache_manifest.get("source_inventory", {})),
+        "source_snapshot": dict(cache_manifest.get("source_snapshot") or {}),
         "cache_artifacts": dict(cache_manifest.get("artifacts", {})),
         "results": dict(results or {}),
         "outputs": outputs,

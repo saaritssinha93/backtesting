@@ -66,9 +66,103 @@ BRACKETS = {
 FIRST_SIGNAL_SLOT = "0925"   # 0920 has no 5-minute predecessor to diff against
 LAST_SIGNAL_SLOT = "1500"
 
+CONFIRMATION_POLICY_V6_STRICT = "v6_strict"
+CONFIRMATION_POLICY_V7_BREAKOUT = "v7_high_low_breakout"
+CONFIRMATION_POLICIES = frozenset(
+    {CONFIRMATION_POLICY_V6_STRICT, CONFIRMATION_POLICY_V7_BREAKOUT}
+)
 
-def load_minute_history(symbol: str) -> pd.DataFrame:
-    return hybrid.load_equity_one_minute(symbol)
+
+def _confirmation_candle_passes(
+    policy: str,
+    *,
+    long_side: bool,
+    candle_open: float,
+    candle_close: float,
+    signal_close: float,
+) -> bool:
+    """Return whether an exact, positive-range 1m candle may set a trigger.
+
+    Range and timestamp completeness are checked by :func:`build_signal_table`.
+    The V7 policy deliberately ignores candle colour, body/wick morphology and
+    displacement from the 5m signal close; direction is confirmed only when a
+    later candle trades through the recorded high/low trigger.
+    """
+
+    if policy == CONFIRMATION_POLICY_V7_BREAKOUT:
+        return True
+    if policy == CONFIRMATION_POLICY_V6_STRICT:
+        if long_side:
+            return candle_close > candle_open and candle_close > signal_close
+        return candle_close < candle_open and candle_close < signal_close
+    raise ValueError(
+        f"unsupported confirmation_policy {policy!r}; "
+        f"expected one of {sorted(CONFIRMATION_POLICIES)}"
+    )
+
+
+def _valid_v7_confirmation_candle(
+    *,
+    candle_open: float,
+    candle_high: float,
+    candle_low: float,
+    candle_close: float,
+    candle_volume: float,
+    source_flagged: bool,
+) -> bool:
+    """Fail closed on malformed or explicitly non-real confirmation rows."""
+
+    ohlcv = np.asarray(
+        [candle_open, candle_high, candle_low, candle_close, candle_volume],
+        dtype=float,
+    )
+    if source_flagged or not np.isfinite(ohlcv).all():
+        return False
+    return bool(
+        candle_low > 0
+        and candle_high > candle_low
+        and candle_high >= max(candle_open, candle_close)
+        and candle_low <= min(candle_open, candle_close)
+        and candle_volume >= 0
+    )
+
+
+def load_five_minute_history(
+    symbol: str,
+    *,
+    root: Path | None = None,
+) -> pd.DataFrame:
+    """Load futures bars from the live root or an explicit frozen root."""
+
+    if root is None:
+        return bt.load_five_minute(symbol)
+    path = Path(root) / f"{common.safe_contract_stem(symbol)}_5minute.parquet"
+    if not path.exists():
+        return pd.DataFrame()
+    frame = pd.read_parquet(
+        path,
+        columns=["timestamp", "open", "high", "low", "close", "volume", "oi"],
+    )
+    frame["ts"] = pd.to_datetime(frame["timestamp"], utc=True).dt.tz_convert(
+        common.IST
+    )
+    return frame.sort_values("ts").reset_index(drop=True)
+
+
+def load_minute_history(
+    symbol: str,
+    *,
+    root: Path | None = None,
+) -> pd.DataFrame:
+    if root is None:
+        return hybrid.load_equity_one_minute(symbol)
+    return hybrid.load_equity_one_minute(symbol, root=Path(root))
+
+
+def _resolve_equity_symbol(symbol: str, *, root: Path | None) -> str:
+    if root is None:
+        return hybrid.resolve_backtest_equity_symbol(symbol)
+    return hybrid.resolve_backtest_equity_symbol(symbol, root=Path(root))
 
 
 def build_signal_table(
@@ -77,8 +171,24 @@ def build_signal_table(
     square_off: str,
     max_forward_bars: int,
     mapped_universe: pd.DataFrame | None = None,
+    confirmation_policy: str = CONFIRMATION_POLICY_V6_STRICT,
+    futures_5m_root: Path | None = None,
+    equity_1m_root: Path | None = None,
 ) -> tuple[pd.DataFrame, dict[int, dict[str, np.ndarray]]]:
-    """Every candidate signal at the loosest thresholds, with its forward path."""
+    """Every candidate signal at the loosest thresholds, with its forward path.
+
+    ``confirmation_policy`` defaults to the historical V6 directional-candle
+    gate. V7 callers can select ``CONFIRMATION_POLICY_V7_BREAKOUT`` to let any
+    exact, finite, positive-range 1m candle establish the directional high/low
+    stop-entry trigger. Explicit source roots let a cache build consume an
+    immutable snapshot; omitting them retains the historical live-root loaders.
+    """
+
+    if confirmation_policy not in CONFIRMATION_POLICIES:
+        raise ValueError(
+            f"unsupported confirmation_policy {confirmation_policy!r}; "
+            f"expected one of {sorted(CONFIRMATION_POLICIES)}"
+        )
 
     if mapped_universe is None:
         # Research callers that do not choose a universe explicitly still
@@ -96,11 +206,13 @@ def build_signal_table(
 
     for count, contract in enumerate(universe.to_dict("records"), start=1):
         futures_symbol = str(contract["futures_tradingsymbol"])
-        equity_symbol = hybrid.resolve_backtest_equity_symbol(
-            str(contract["equity_symbol"])
+        equity_symbol = _resolve_equity_symbol(
+            str(contract["equity_symbol"]), root=equity_1m_root
         )
-        futures_five = bt.load_five_minute(futures_symbol)
-        minute = load_minute_history(equity_symbol)
+        futures_five = load_five_minute_history(
+            futures_symbol, root=futures_5m_root
+        )
+        minute = load_minute_history(equity_symbol, root=equity_1m_root)
         equity_five = hybrid.aggregate_equity_one_minute_to_five_minute(minute)
         if futures_five.empty or equity_five.empty or minute.empty:
             continue
@@ -133,6 +245,26 @@ def build_signal_table(
         m_low = minute["low"].to_numpy(float)
         m_close = minute["close"].to_numpy(float)
         m_hhmm = minute["ts"].dt.strftime("%H%M").to_numpy()
+        if confirmation_policy == CONFIRMATION_POLICY_V7_BREAKOUT:
+            m_volume = minute["volume"].to_numpy(float)
+            m_source_real = np.ones(len(minute), dtype=bool)
+            for column in ("gap_filled", "opening_snapshot", "provisional_stale"):
+                if column not in minute.columns:
+                    continue
+                values = minute[column]
+                flagged = (
+                    pd.to_numeric(values, errors="coerce").fillna(0).ne(0)
+                    | values.astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .isin({"true", "yes", "on"})
+                )
+                m_source_real &= ~flagged.to_numpy(bool)
+        else:
+            # Keep the historical V6 input path independent of optional V7-only
+            # source-lineage fields.
+            m_volume = None
+            m_source_real = None
 
         for _, sig in hits.iterrows():
             # Equity 1-minute files are end-labelled. A 09:25 signal therefore
@@ -140,6 +272,17 @@ def build_signal_table(
             want = (pd.Timestamp(sig["ts"]) + pd.Timedelta(minutes=1)).value
             idx = int(np.searchsorted(minute_ts, want))
             if idx >= len(minute_ts) or minute_ts[idx] != want:
+                continue
+            if confirmation_policy == CONFIRMATION_POLICY_V7_BREAKOUT and not (
+                _valid_v7_confirmation_candle(
+                    candle_open=m_open[idx],
+                    candle_high=m_high[idx],
+                    candle_low=m_low[idx],
+                    candle_close=m_close[idx],
+                    candle_volume=m_volume[idx],
+                    source_flagged=not m_source_real[idx],
+                )
+            ):
                 continue
             rng = m_high[idx] - m_low[idx]
             if rng <= 0:
@@ -149,10 +292,13 @@ def build_signal_table(
             lower = min(m_open[idx], m_close[idx]) - m_low[idx]
             long_side = sig["side"] == "LONG"
 
-            # Direction-independent confirmation gates.
-            if long_side and not (m_close[idx] > m_open[idx] and m_close[idx] > sig["close"]):
-                continue
-            if not long_side and not (m_close[idx] < m_open[idx] and m_close[idx] < sig["close"]):
+            if not _confirmation_candle_passes(
+                confirmation_policy,
+                long_side=long_side,
+                candle_open=m_open[idx],
+                candle_close=m_close[idx],
+                signal_close=float(sig["close"]),
+            ):
                 continue
 
             stop_idx = idx + 1

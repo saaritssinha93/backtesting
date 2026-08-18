@@ -1721,6 +1721,29 @@ def tail_text(path: Path, lines: int = 80, max_bytes: int = 120_000) -> str:
         return f"[ERROR reading log: {exc}]"
 
 
+def report_text(path: Path, lines: int = 80, max_bytes: int = 400_000, max_lines: int = 1200) -> str:
+    """Read a published markdown report from the top.
+
+    Tailing a markdown report drops the title, the ``key: value`` preamble and
+    the table header row once the report outgrows the tail window, which leaves
+    the dashboard with orphan table rows it cannot render. Reports are small, so
+    read them whole and only fall back to tailing if one grows unexpectedly big.
+    """
+    if not path.exists():
+        return ""
+    try:
+        size = path.stat().st_size
+        if size > max_bytes:
+            return tail_text(path, lines=lines, max_bytes=max_bytes)
+        text = path.read_bytes().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return f"[ERROR reading report: {exc}]"
+    all_lines = text.splitlines()
+    if len(all_lines) > max_lines:
+        return "\n".join(all_lines[-max(lines, max_lines // 2):])
+    return "\n".join(all_lines)
+
+
 def _read_csv_tail_rows(path: Path, limit: int = 30) -> list[dict[str, str]]:
     if not path.exists():
         return []
@@ -4605,6 +4628,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       color: #ffffff;
     }
 
+    /* keep semantic cell colours from being flattened by the dark td override */
+    body[data-theme="dark"] .log-table td.pos { color: #86efac; }
+    body[data-theme="dark"] .log-table td.neg { color: #fca5a5; }
+    body[data-theme="dark"] .log-table td.warnval { color: #fcd34d; }
+    body[data-theme="dark"] .log-table td.mutedval { color: #94a3b8; }
+
     body[data-theme="dark"] .th-sort-btn {
       color: #ffffff !important;
     }
@@ -5924,6 +5953,148 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       font-weight: 700;
     }
 
+    .log-table td.warnval {
+      color: #fcd34d;
+      font-weight: 700;
+    }
+
+    .log-table td.mutedval {
+      color: #94a3b8;
+    }
+
+    /* digit alignment without forcing text-align (the report declares its own) */
+    .log-table td.tabnum {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .log-table td.right,
+    .log-table th.right .th-sort-btn {
+      text-align: right;
+      justify-content: flex-end;
+    }
+
+    .log-table td.center {
+      text-align: center;
+    }
+
+    .cell-pill {
+      display: inline-block;
+      padding: 0 5px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      line-height: 1.55;
+      white-space: nowrap;
+    }
+
+    .cell-pill.ok    { color: #86efac; background: rgba(16, 185, 129, 0.18);  border-color: rgba(16, 185, 129, 0.38); }
+    .cell-pill.warn  { color: #fcd34d; background: rgba(245, 158, 11, 0.18);  border-color: rgba(245, 158, 11, 0.38); }
+    .cell-pill.bad   { color: #fca5a5; background: rgba(239, 68, 68, 0.18);   border-color: rgba(239, 68, 68, 0.38); }
+    .cell-pill.info  { color: #93c5fd; background: rgba(59, 130, 246, 0.18);  border-color: rgba(59, 130, 246, 0.38); }
+    .cell-pill.muted { color: #cbd5e1; background: rgba(148, 163, 184, 0.16); border-color: rgba(148, 163, 184, 0.32); }
+    .cell-pill.side-long  { color: #7dd3fc; background: rgba(14, 165, 233, 0.18);  border-color: rgba(14, 165, 233, 0.38); }
+    .cell-pill.side-short { color: #d8b4fe; background: rgba(168, 85, 247, 0.18);  border-color: rgba(168, 85, 247, 0.38); }
+
+    .cell-qty {
+      font-variant-numeric: tabular-nums;
+      margin-right: 4px;
+    }
+
+    /* markdown-report cards (FnO V6 sessions) */
+    .md-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+
+    .md-chip {
+      min-width: 0;
+      padding: 3px 6px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: var(--radius);
+      background: rgba(15, 23, 42, 0.72);
+    }
+
+    .md-chip .k {
+      display: block;
+      font-size: 8px;
+      line-height: 1.4;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .md-chip .v {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.35;
+      color: #e2e8f0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .md-notes {
+      margin-bottom: 6px;
+      color: #94a3b8;
+      font-size: 10px;
+    }
+
+    .md-notes > summary {
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    .md-notes > summary::-webkit-details-marker { display: none; }
+    .md-notes > summary::before { content: "\\25B8  "; }
+    .md-notes[open] > summary::before { content: "\\25BE  "; }
+
+    .md-notes ul {
+      margin: 4px 0 0;
+      padding-left: 15px;
+      color: #cbd5e1;
+      line-height: 1.4;
+    }
+
+    .md-note-line {
+      margin: 4px 0;
+      color: #cbd5e1;
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    .md-caption {
+      margin: 7px 0 3px;
+      color: #dbeafe;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .md-table-wrap {
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .md-rowcount {
+      margin: 3px 0 0;
+      color: #94a3b8;
+      font-size: 9.5px;
+    }
+
+    .md-report code {
+      font-family: inherit;
+      color: #bae6fd;
+    }
+
     .log-table thead th {
       position: sticky;
       top: 0;
@@ -6595,6 +6766,17 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { id: "disabled", label: "Disabled" }
     ];
     const TABLE_SORT_STATE = {};
+    // Cards whose tail is a published markdown report: rendered as meta chips,
+    // collapsed invariant notes and real sortable tables instead of raw text.
+    const MD_REPORT_CARDS = new Set([
+      "fno_v6_scanner_5min",
+      "fno_v6_equity_1min_feed",
+      "fno_v6_confirmation_1min",
+      "fno_v6_live_long",
+      "fno_v6_live_short",
+      "fno_v6_trade_logger",
+      "fno_v6_net_result"
+    ]);
     const RESTARTABLE_CARDS = new Set([
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
@@ -7243,15 +7425,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       };
     }
 
-    function sortMark(header, cardId, colIdx) {
-      const st = TABLE_SORT_STATE[cardId];
+    function sortMark(header, stateKey, colIdx) {
+      const st = TABLE_SORT_STATE[stateKey];
       if (!st || st.colIdx !== colIdx) return "sort";
       if (isTickerColumn(header)) return st.dir === "asc" ? "A-Z" : "Z-A";
       return st.dir === "asc" ? "asc" : "desc";
     }
 
-    function sortedRows(parsed, cardId) {
-      const st = TABLE_SORT_STATE[cardId];
+    function sortedRows(parsed, stateKey) {
+      const st = TABLE_SORT_STATE[stateKey];
       const indexed = parsed.rows.map((cells, idx) => ({ cells, idx }));
       if (!st || st.colIdx < 0) return indexed.map((r) => r.cells);
 
@@ -7286,8 +7468,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return indexed.map((r) => r.cells);
     }
 
-    function renderSortableTable(cardId, hostEl, parsed) {
-      const rows = sortedRows(parsed, cardId);
+    function renderSortableTable(stateKey, hostEl, parsed) {
+      const rows = sortedRows(parsed, stateKey);
 
       const summaryHtml = parsed.summaryLines.length
         ? `<div class="table-summary">${parsed.summaryLines.map((ln) => esc(ln)).join("<br>")}</div>`
@@ -7297,7 +7479,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         <th>
           <button type="button" class="th-sort-btn" data-col="${i}">
             <span>${esc(h)}</span>
-            <span class="sort-mark">${esc(sortMark(h, cardId, i))}</span>
+            <span class="sort-mark">${esc(sortMark(h, stateKey, i))}</span>
           </button>
         </th>
       `).join("");
@@ -7318,11 +7500,289 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         btn.addEventListener("click", (ev) => {
           const colIdx = Number((ev.currentTarget && ev.currentTarget.getAttribute("data-col")) || "-1");
           if (!Number.isInteger(colIdx) || colIdx < 0) return;
-          const prev = TABLE_SORT_STATE[cardId] || { colIdx: -1, dir: "asc" };
+          const prev = TABLE_SORT_STATE[stateKey] || { colIdx: -1, dir: "asc" };
           const nextDir = prev.colIdx === colIdx && prev.dir === "asc" ? "desc" : "asc";
-          TABLE_SORT_STATE[cardId] = { colIdx, dir: nextDir };
-          renderSortableTable(cardId, hostEl, parsed);
+          TABLE_SORT_STATE[stateKey] = { colIdx, dir: nextDir };
+          renderSortableTable(stateKey, hostEl, parsed);
         });
+      });
+    }
+
+    function mdInline(text) {
+      const s = String(text === null || text === undefined ? "" : text);
+      const re = /\\*\\*([^*]+)\\*\\*|`([^`]+)`/g;
+      let out = "";
+      let last = 0;
+      let m;
+      while ((m = re.exec(s)) !== null) {
+        out += esc(s.slice(last, m.index));
+        out += (m[1] !== undefined) ? `<strong>${esc(m[1])}</strong>` : `<code>${esc(m[2])}</code>`;
+        last = m.index + m[0].length;
+      }
+      return out + esc(s.slice(last));
+    }
+
+    function mdStripMarkers(text) {
+      return String(text === null || text === undefined ? "" : text)
+        .replace(/\\*\\*/g, "")
+        .replace(/`/g, "")
+        .trim();
+    }
+
+    function splitMdRow(line) {
+      let s = String(line || "").trim();
+      if (s.startsWith("|")) s = s.slice(1);
+      if (s.endsWith("|")) s = s.slice(0, -1);
+      return s.split("|").map((c) => c.trim());
+    }
+
+    function isMdSeparatorLine(line) {
+      const s = String(line || "").trim();
+      if (!s.includes("|") || !s.includes("-")) return false;
+      const cells = splitMdRow(s);
+      if (cells.length < 2) return false;
+      return cells.every((c) => /^:?-{2,}:?$/.test(c));
+    }
+
+    // Parses the markdown reports the FnO V6 sessions publish (title, key: value
+    // preamble, invariant notes, one or more pipe tables) into render blocks.
+    function parseMarkdownReport(tailText) {
+      const lines = String(tailText || "").split(/\\r?\\n/);
+      const blocks = [];
+      let tableCount = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const trimmed = String(lines[i] || "").trim();
+        if (!trimmed) continue;
+
+        const head = /^(#{1,6})\\s+(.*)$/.exec(trimmed);
+        if (head) {
+          blocks.push({ kind: "heading", level: head[1].length, text: head[2].trim() });
+          continue;
+        }
+
+        if (trimmed.includes("|") && isMdSeparatorLine(lines[i + 1])) {
+          const headers = splitMdRow(trimmed);
+          const aligns = splitMdRow(lines[i + 1]).map((c) => {
+            if (!c.endsWith(":")) return "";
+            return c.startsWith(":") ? "center" : "right";
+          });
+          const rows = [];
+          let j = i + 2;
+          for (; j < lines.length; j++) {
+            const cur = String(lines[j] || "").trim();
+            if (!cur || !cur.includes("|")) break;
+            const cells = splitMdRow(cur);
+            while (cells.length < headers.length) cells.push("");
+            rows.push(cells.slice(0, headers.length));
+          }
+          blocks.push({ kind: "table", headers, aligns, rows, tableIdx: tableCount++ });
+          i = j - 1;
+          continue;
+        }
+
+        const bullet = /^[-*]\\s+(.*)$/.exec(trimmed);
+        if (bullet) {
+          blocks.push({ kind: "note", text: bullet[1].trim() });
+          continue;
+        }
+
+        const meta = /^([A-Za-z][A-Za-z0-9 ()/_.-]{0,38}):\\s*(.+)$/.exec(trimmed);
+        if (meta) {
+          const value = meta[2].trim();
+          const isCodeValue = value.startsWith("`") && value.endsWith("`");
+          const shortEnough = value.length <= 48 && meta[1].trim().split(/\\s+/).length <= 4;
+          if (isCodeValue || shortEnough) {
+            blocks.push({ kind: "meta", label: meta[1].trim(), value });
+            continue;
+          }
+        }
+
+        blocks.push({ kind: "note", text: trimmed });
+      }
+
+      if (!blocks.some((b) => b.kind === "table")) return null;
+      return blocks;
+    }
+
+    const MD_PILL_OK = new Set(["SUCCESS", "READY", "COMPLETE", "COMPLETED", "TARGET", "FILLED", "LIVE_LOT_SIZED", "ARMED", "OK"]);
+    const MD_PILL_BAD = new Set(["STOP", "FAILED", "FAIL", "ERROR", "REJECTED", "NO_SESSION_ROWS", "INVALID", "MISSING"]);
+    const MD_PILL_WARN = new Set(["PENDING", "WAITING", "PARTIAL", "NO_FILL", "NOFILL", "CANCELLED", "CANCELED", "TIMEOUT", "EOD"]);
+    const MD_PILL_INFO = new Set(["OPEN", "ACTIVE", "LIVE", "TRIGGERED", "NEUTRAL"]);
+
+    function mdPillClass(token) {
+      const t = String(token || "").toUpperCase();
+      if (!t) return "";
+      if (MD_PILL_OK.has(t)) return "ok";
+      if (MD_PILL_BAD.has(t)) return "bad";
+      if (MD_PILL_WARN.has(t)) return "warn";
+      if (MD_PILL_INFO.has(t)) return "info";
+      if (t === "LONG" || t.startsWith("LONG_")) return "side-long";
+      if (t === "SHORT" || t.startsWith("SHORT_")) return "side-short";
+      if (t.startsWith("BLOCKED") || t.startsWith("STALE") || t.startsWith("SKIPPED") || t.startsWith("UNVERIFIED")) return "warn";
+      if (t.startsWith("FAILED") || t.startsWith("ERROR") || t.startsWith("INVALID")) return "bad";
+      if (t === "PAPER" || t === "CLOSED" || t === "DONE" || t === "DISABLED") return "muted";
+      return "";
+    }
+
+    function isPillColumn(header) {
+      return /(state|status|side|mode|reason|class|action|outcome)/i.test(String(header || ""));
+    }
+
+    function isProblemCountColumn(header) {
+      return /(error|fail|invalid|missing|unverified|unexpected|ineligible|blocked|cancelled|canceled|no fill|nofill|stale|skip)/i.test(String(header || ""));
+    }
+
+    function isCoverageRatioColumn(header) {
+      return /(written|valid|complete|coverage|fetched|filled|evaluated)/i.test(String(header || ""));
+    }
+
+    // Returns { cls, html } for one markdown table cell.
+    function mdCell(header, rawValue, align) {
+      const raw = String(rawValue === null || rawValue === undefined ? "" : rawValue).trim();
+      const plain = mdStripMarkers(raw);
+      const cls = [];
+      if (align === "right") cls.push("right");
+      if (align === "center") cls.push("center");
+
+      if (!plain) return { cls: cls.join(" "), html: "" };
+
+      if (isPillColumn(header)) {
+        const combo = /^(\\d+)\\/([A-Za-z][A-Za-z0-9_]*)$/.exec(plain);
+        if (combo) {
+          const pc = mdPillClass(combo[2]);
+          return {
+            cls: cls.join(" "),
+            html: `<span class="cell-qty">${esc(combo[1])}</span><span class="cell-pill ${pc}">${esc(combo[2])}</span>`
+          };
+        }
+        if (/^[A-Za-z][A-Za-z0-9_]*$/.test(plain)) {
+          const pc = mdPillClass(plain);
+          if (pc) return { cls: cls.join(" "), html: `<span class="cell-pill ${pc}">${esc(plain)}</span>` };
+        }
+      }
+
+      const ratio = /^(\\d+)\\/(\\d+)$/.exec(plain);
+      if (ratio) {
+        cls.push("tabnum");
+        if (isCoverageRatioColumn(header) && Number(ratio[1]) < Number(ratio[2])) cls.push("warnval");
+        return { cls: cls.join(" "), html: esc(plain) };
+      }
+
+      const num = parseNumberish(plain);
+      if (Number.isFinite(num) && !isTickerColumn(header)) {
+        cls.push("tabnum");
+        if (isProblemCountColumn(header)) {
+          if (num !== 0) cls.push("warnval");
+          else cls.push("mutedval");
+        } else if (/^[+-]/.test(plain) || /(pnl|p&l|chg|change|pct|%|return|net|roc)/i.test(String(header || ""))) {
+          if (num > 0) cls.push("pos");
+          if (num < 0) cls.push("neg");
+        }
+      }
+
+      return { cls: cls.join(" "), html: mdInline(raw) };
+    }
+
+    function renderMdTable(stateKey, hostEl, table) {
+      const parsed = { headers: table.headers, rows: table.rows };
+      const rows = sortedRows(parsed, stateKey);
+      const headHtml = table.headers.map((h, i) => `
+        <th class="${table.aligns[i] === "right" ? "right" : ""}">
+          <button type="button" class="th-sort-btn" data-col="${i}">
+            <span>${esc(h)}</span>
+            <span class="sort-mark">${esc(sortMark(h, stateKey, i))}</span>
+          </button>
+        </th>
+      `).join("");
+      const bodyHtml = rows.map((cells) => `
+        <tr>${table.headers.map((h, i) => {
+          const cell = mdCell(h, cells[i], table.aligns[i]);
+          return `<td class="${esc(cell.cls)}">${cell.html}</td>`;
+        }).join("")}</tr>
+      `).join("");
+
+      hostEl.innerHTML = `
+        <table class="log-table">
+          <thead><tr>${headHtml}</tr></thead>
+          <tbody>${bodyHtml}</tbody>
+        </table>
+      `;
+
+      hostEl.querySelectorAll(".th-sort-btn").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          const colIdx = Number((ev.currentTarget && ev.currentTarget.getAttribute("data-col")) || "-1");
+          if (!Number.isInteger(colIdx) || colIdx < 0) return;
+          const prev = TABLE_SORT_STATE[stateKey] || { colIdx: -1, dir: "asc" };
+          const nextDir = prev.colIdx === colIdx && prev.dir === "asc" ? "desc" : "asc";
+          TABLE_SORT_STATE[stateKey] = { colIdx, dir: nextDir };
+          renderMdTable(stateKey, hostEl, table);
+        });
+      });
+    }
+
+    function renderMarkdownReport(cardId, hostEl, blocks) {
+      const firstTableAt = blocks.findIndex((b) => b.kind === "table");
+      const tableCount = blocks.filter((b) => b.kind === "table").length;
+      const preamble = blocks.slice(0, firstTableAt);
+      const rest = blocks.slice(firstTableAt);
+
+      const metas = preamble.filter((b) => b.kind === "meta");
+      const notes = preamble.filter((b) => b.kind === "note");
+
+      const chipsHtml = metas.length
+        ? `<div class="md-meta-grid">${metas.map((m) => {
+            const plain = mdStripMarkers(m.value);
+            const pc = /^[A-Za-z][A-Za-z0-9_]*$/.test(plain) ? mdPillClass(plain) : "";
+            const valueHtml = pc
+              ? `<span class="cell-pill ${pc}">${esc(plain)}</span>`
+              : mdInline(m.value);
+            return `<div class="md-chip" title="${esc(m.label + ": " + plain)}">
+              <span class="k">${esc(m.label)}</span>
+              <span class="v">${valueHtml}</span>
+            </div>`;
+          }).join("")}</div>`
+        : "";
+
+      const notesHtml = notes.length
+        ? `<details class="md-notes"><summary>Notes &amp; invariants (${notes.length})</summary>
+             <ul>${notes.map((n) => `<li>${mdInline(n.text)}</li>`).join("")}</ul>
+           </details>`
+        : "";
+
+      const bodyParts = [];
+      const tableSlots = [];
+      rest.forEach((b) => {
+        if (b.kind === "heading") {
+          if (b.level >= 2) bodyParts.push(`<div class="md-caption">${mdInline(b.text)}</div>`);
+          return;
+        }
+        if (b.kind === "meta") {
+          bodyParts.push(`<div class="md-note-line"><strong>${esc(b.label)}:</strong> ${mdInline(b.value)}</div>`);
+          return;
+        }
+        if (b.kind === "note") {
+          bodyParts.push(`<div class="md-note-line">${mdInline(b.text)}</div>`);
+          return;
+        }
+        const slotId = `mdtbl-${bodyParts.length}`;
+        tableSlots.push({ slotId, table: b });
+        const wrapCls = tableCount > 1 ? "md-table-wrap" : "";
+        bodyParts.push(`<div class="${wrapCls}" data-md-slot="${slotId}"></div>`);
+        // Only worth stating when the table is empty, or long enough that some
+        // rows sit below the fold of the log pane.
+        if (!b.rows.length) {
+          bodyParts.push(`<div class="md-rowcount">no rows yet</div>`);
+        } else if (b.rows.length > 5) {
+          bodyParts.push(`<div class="md-rowcount">${b.rows.length} rows</div>`);
+        }
+      });
+
+      hostEl.innerHTML = chipsHtml + notesHtml + bodyParts.join("");
+
+      tableSlots.forEach(({ slotId, table }) => {
+        const slot = hostEl.querySelector(`[data-md-slot="${slotId}"]`);
+        if (slot) renderMdTable(`${cardId}#${table.tableIdx}`, slot, table);
       });
     }
 
@@ -7332,12 +7792,24 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const cardId = card.getAttribute("data-id") || "";
         const preEl = card.querySelector("pre");
         if (!preEl) return;
-        const parsed = parseTabularTail(preEl.textContent || "");
-        if (!parsed) return;
+        const text = preEl.textContent || "";
+
+        const parsed = parseTabularTail(text);
+        if (parsed) {
+          const host = document.createElement("div");
+          host.className = "table-shell";
+          preEl.replaceWith(host);
+          renderSortableTable(cardId, host, parsed);
+          return;
+        }
+
+        if (!MD_REPORT_CARDS.has(cardId)) return;
+        const blocks = parseMarkdownReport(text);
+        if (!blocks) return;
         const host = document.createElement("div");
-        host.className = "table-shell";
+        host.className = "table-shell md-report";
         preEl.replaceWith(host);
-        renderSortableTable(cardId, host, parsed);
+        renderMarkdownReport(cardId, host, blocks);
       });
     }
 
@@ -7913,6 +8385,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 tail = projected if projected else tail_text(path, lines=lines)
             elif key in ("signal_early_engine_v16_5min", "pending_data_fetcher_v16_5min", "detection_engine_v16_5min"):
                 tail = _shift_bar_slots_in_text(tail_text(path, lines=lines))
+            elif key in FNO_OI_CARD_REPORTS and path.suffix.lower() == ".md":
+                tail = report_text(path, lines=lines)
             else:
                 tail = tail_text(path, lines=lines)
             items.append(

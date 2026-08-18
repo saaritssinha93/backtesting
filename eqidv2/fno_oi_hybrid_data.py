@@ -202,7 +202,10 @@ def equity_one_minute_path(symbol: str, root: Path) -> Path:
     return Path(root) / f"{str(symbol).upper()}_stocks_indicators_1min.parquet"
 
 
-def resolve_backtest_equity_symbol(symbol: str) -> str:
+def resolve_backtest_equity_symbol(
+    symbol: str,
+    root: Path = DEFAULT_BACKTEST_EQUITY_1M_DIR,
+) -> str:
     """Resolve historical cash filenames without changing the live NSE mapping."""
     requested = str(symbol).upper().strip()
     candidates = [requested]
@@ -210,7 +213,7 @@ def resolve_backtest_equity_symbol(symbol: str) -> str:
     if alias and alias not in candidates:
         candidates.append(alias)
     for candidate in candidates:
-        if equity_one_minute_path(candidate, DEFAULT_BACKTEST_EQUITY_1M_DIR).exists():
+        if equity_one_minute_path(candidate, root).exists():
             return candidate
     return requested
 
