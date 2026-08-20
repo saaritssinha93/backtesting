@@ -197,6 +197,7 @@ def load_signals(
         "schema_version": provenance.CACHE_MANIFEST_SCHEMA_VERSION,
         "hybrid_data_contract": hybrid.cache_manifest_payload(),
         "confirmation_policy": CONFIRMATION_POLICY,
+        "forward_path_policy": sweep.FORWARD_PATH_POLICY,
         "source_snapshot": snapshot_contract,
         "square_off": str(square_off),
         "max_forward_bars": int(max_forward_bars),

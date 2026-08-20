@@ -68,6 +68,7 @@ LAST_SIGNAL_SLOT = "1500"
 
 CONFIRMATION_POLICY_V6_STRICT = "v6_strict"
 CONFIRMATION_POLICY_V7_BREAKOUT = "v7_high_low_breakout"
+FORWARD_PATH_POLICY = "same_session_date_and_square_off_v2"
 CONFIRMATION_POLICIES = frozenset(
     {CONFIRMATION_POLICY_V6_STRICT, CONFIRMATION_POLICY_V7_BREAKOUT}
 )
@@ -245,6 +246,7 @@ def build_signal_table(
         m_low = minute["low"].to_numpy(float)
         m_close = minute["close"].to_numpy(float)
         m_hhmm = minute["ts"].dt.strftime("%H%M").to_numpy()
+        m_day = minute["ts"].dt.date.to_numpy()
         if confirmation_policy == CONFIRMATION_POLICY_V7_BREAKOUT:
             m_volume = minute["volume"].to_numpy(float)
             m_source_real = np.ones(len(minute), dtype=bool)
@@ -304,7 +306,11 @@ def build_signal_table(
             stop_idx = idx + 1
             end_idx = min(stop_idx + max_forward_bars, len(minute_ts))
             fwd = slice(stop_idx, end_idx)
-            keep = m_hhmm[fwd] <= square_off
+            # Time-of-day alone admits next-session morning candles whenever
+            # max_forward_bars extends beyond this session. These strategies
+            # are intraday, so bind every forward row to the signal date.
+            signal_day = pd.Timestamp(sig["ts"]).date()
+            keep = (m_day[fwd] == signal_day) & (m_hhmm[fwd] <= square_off)
             if not keep.any():
                 continue
             paths[sid] = {
@@ -331,6 +337,12 @@ def build_signal_table(
                     "price_change_pct": float(sig["price_change_pct"]),
                     "oi_change_pct": float(sig["oi_change_pct"]),
                     "volume_ratio": float(sig["volume_ratio"]),
+                    "signal_close": float(sig["close"]),
+                    "confirmation_ts": minute.iloc[idx]["ts"],
+                    "confirmation_open": float(m_open[idx]),
+                    "confirmation_high": float(m_high[idx]),
+                    "confirmation_low": float(m_low[idx]),
+                    "confirmation_close": float(m_close[idx]),
                     "body_ratio": float(body / rng),
                     "wick_ratio": float((upper if long_side else lower) / rng),
                     "trigger": float(m_high[idx] if long_side else m_low[idx]),

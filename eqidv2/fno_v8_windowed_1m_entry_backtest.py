@@ -28,7 +28,7 @@ import json
 import math
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from enum import Enum
@@ -50,10 +50,10 @@ CONFIG_SOURCE = "LITERAL_V6_5M_BOOK_WITH_INDEPENDENT_V8_ENTRY_ENGINE"
 CACHE_SCHEMA_VERSION = "fno_v8_windowed_1m_cache_manifest_v2"
 PATH_POLICY_VERSION = "fno_v8_same_session_exact_grid_ohlcvt_v2"
 STATE_EVENT_SCHEMA_VERSION = "fno_v8_windowed_1m_state_event_v1"
-TRADE_SCHEMA_VERSION = "fno_v8_windowed_1m_trade_v2"
+TRADE_SCHEMA_VERSION = "fno_v8_windowed_1m_trade_v3"
 DIAGNOSTIC_BREAKDOWN_SCHEMA_VERSION = "fno_v8_diagnostic_breakdown_v1"
-EXCURSION_POLICY_VERSION = "fno_v8_post_fill_ohlc_bounds_v1"
-RUN_SCHEMA_VERSION = "fno_v8_windowed_1m_run_v3"
+EXCURSION_POLICY_VERSION = "fno_v8_post_fill_ohlc_bounds_v2"
+RUN_SCHEMA_VERSION = "fno_v8_windowed_1m_run_v4"
 
 BACKTEST_UNIVERSE_DATE = date(2026, 8, 11)
 BACKTEST_UNIVERSE_PATH = common.UNIVERSE_DIR / "near_month_2026-08-11.parquet"
@@ -153,9 +153,16 @@ NSE_FO_CALENDAR_SHA256 = (
 SOURCE_V6_SETUP_BOOK_SHA256 = (
     "3c3e59187768afbc015024b5735d1c1b62d91128e8d6888ccfaa6f1c6c15694a"
 )
+# Book hash after the 2026-08-19 retune of four legs.  The pre-retune
+# V6-lineage book hashed to
+# c50bc5d17fdbde3cad824a4103a6a4b4c9ebc91235dab39b6a533d601b6e24d9.
 V8_SETUP_BOOK_SHA256 = (
-    "c50bc5d17fdbde3cad824a4103a6a4b4c9ebc91235dab39b6a533d601b6e24d9"
+    "ed32937129246ca3500bd421a77bebca71c83014a4e2a4eb5cbc318e74016fb6"
 )
+
+# Sentinel for "this leg does not override the global entry seam".  It is a
+# plain string so it survives asdict()/canonical JSON hashing of the book.
+ENTRY_INHERIT = "INHERIT"
 
 BASE_PRICE_CHANGE_PCT = 0.10
 BASE_OI_CHANGE_PCT = 0.05
@@ -203,10 +210,28 @@ class V8Setup:
     min_traded_value: float
     stop_pct: float
     target_pct: float
+    # Optional per-setup overrides of the one-minute entry seam.  ``None``
+    # means "inherit the run's global EntryPolicy", which keeps every leg that
+    # does not override behaving exactly as it did under any variant.
+    # ``entry_clv`` needs its own sentinel because ``None`` is a meaningful
+    # value there (no close-location floor at all).
+    entry_conf_minute: int | None = None
+    entry_buffer_bps: float | None = None
+    entry_midpoint: bool | None = None
+    entry_clv: float | str | None = ENTRY_INHERIT
 
     @property
     def setup_id(self) -> str:
         return f"{self.signal_end}_{self.side}"
+
+    @property
+    def overrides_entry_policy(self) -> bool:
+        return (
+            self.entry_conf_minute is not None
+            or self.entry_buffer_bps is not None
+            or self.entry_midpoint is not None
+            or self.entry_clv != ENTRY_INHERIT
+        )
 
 
 @dataclass(frozen=True)
@@ -424,6 +449,7 @@ class _CandidateRuntime:
     exit_time: pd.Timestamp | None = None
     exit_price: float | None = None
     exit_reason: str = ""
+    exit_at_bar_open: bool = False
     gross_return_pct: float | None = None
     net_return_pct: float | None = None
     gap_fill: bool = False
@@ -458,15 +484,33 @@ class _CandidateRuntime:
         )
 
 
+# Four legs were retuned on 2026-08-19 from the setup-parameter sweep over
+# 2026-05-27..2026-08-17 (57 sessions, conditional-stream coverage).  Each
+# carries the entry seam its own sweep selected; the six untouched legs keep
+# the original V6-lineage values and inherit the run's global entry policy.
+#
+# Provenance for the four retuned legs (setup_param_sweeps run directories):
+#   09:25_LONG  sweep_0925_LONG_20260819T174128830527+0530_befe1256f673
+#   09:25_SHORT sweep_0925_SHORT_20260819T182024291731+0530_d8c66340bc60
+#   09:30_SHORT sweep_0930_SHORT_20260819T190613582965+0530_cadb8948a596
+#   09:40_SHORT sweep_0940_SHORT_20260819T194335202048+0530_afbcb4356b45
+#
+# These were fit on the whole 57-session window with no holdout left over, and
+# were never simulated jointly through one portfolio ledger.  Treat the book
+# below as a research configuration, not a validated one.
 ACTIVE_SETUPS: tuple[V8Setup, ...] = (
-    V8Setup("09:25", "LONG", 1, "max_liquidity", 0.30, 0.10, 3.0, 0.60, 0.50, 0.0, 0.50, 3.0),
-    V8Setup("09:25", "SHORT", 2, "max_volume", 0.20, 0.10, 1.5, 0.40, 0.50, 0.0, 0.75, 3.0),
+    V8Setup("09:25", "LONG", 4, "max_move", 0.30, 0.10, 3.0, 0.00, 0.50, 0.0, 0.40, 1.0,
+            entry_conf_minute=3, entry_buffer_bps=0.0, entry_midpoint=False, entry_clv=None),
+    V8Setup("09:25", "SHORT", 4, "max_move", 0.20, 0.10, 1.5, 0.60, 0.60, 25_000_000.0, 0.50, 3.0,
+            entry_conf_minute=3, entry_buffer_bps=2.0, entry_midpoint=False, entry_clv=None),
     V8Setup("09:30", "LONG", 1, "max_move", 0.65, 0.10, 1.0, 0.50, 0.50, 0.0, 1.00, 2.5),
-    V8Setup("09:30", "SHORT", 1, "max_move", 0.20, 0.25, 1.0, 0.40, 0.50, 0.0, 1.00, 3.0),
+    V8Setup("09:30", "SHORT", 4, "max_volume", 0.20, 1.00, 1.0, 0.45, 0.30, 25_000_000.0, 1.00, 4.0,
+            entry_conf_minute=3, entry_buffer_bps=0.0, entry_midpoint=True, entry_clv=0.50),
     V8Setup("09:35", "LONG", 1, "max_liquidity", 0.20, 0.10, 1.0, 0.60, 0.50, 0.0, 1.00, 2.5),
     V8Setup("09:35", "SHORT", 2, "max_liquidity", 0.50, 1.00, 1.0, 0.40, 0.50, 0.0, 1.00, 3.0),
     V8Setup("09:40", "LONG", 1, "max_liquidity", 0.20, 0.10, 2.0, 0.50, 0.50, 0.0, 0.50, 2.5),
-    V8Setup("09:40", "SHORT", 1, "max_move", 0.20, 0.10, 1.0, 0.40, 0.50, 0.0, 1.00, 3.0),
+    V8Setup("09:40", "SHORT", 4, "max_volume", 0.20, 0.75, 1.0, 0.00, 0.20, 0.0, 1.00, 4.0,
+            entry_conf_minute=4, entry_buffer_bps=0.0, entry_midpoint=False, entry_clv=0.50),
     V8Setup("09:45", "LONG", 1, "max_move", 0.65, 0.10, 1.0, 0.40, 0.50, 0.0, 1.00, 3.0),
     V8Setup("09:45", "SHORT", 1, "max_volume", 0.20, 0.75, 1.0, 0.40, 0.30, 0.0, 1.00, 2.0),
 )
@@ -771,6 +815,22 @@ def _exit_on_bar(
     return None
 
 
+def _exit_occurs_at_bar_open(
+    setup: V8Setup,
+    runtime: _CandidateRuntime,
+    bar: MinuteBar,
+) -> bool:
+    """Whether an already-open position deterministically exits at this open."""
+
+    assert runtime.stop_price is not None and runtime.target_price is not None
+    opening = float(bar.open)
+    stop = float(runtime.stop_price)
+    target = float(runtime.target_price)
+    if setup.side == "LONG":
+        return opening <= stop or opening >= target
+    return opening >= stop or opening <= target
+
+
 def _close_runtime(
     setup: V8Setup,
     runtime: _CandidateRuntime,
@@ -917,6 +977,7 @@ def _audit_record(
         "exit_time": runtime.exit_time or pd.NaT,
         "exit_price": runtime.exit_price,
         "exit_reason": runtime.exit_reason,
+        "exit_at_bar_open": runtime.exit_at_bar_open,
         "gross_return_pct": runtime.gross_return_pct,
         "net_return_pct": runtime.net_return_pct,
         "five_min_open": candidate.five_min_open,
@@ -1150,6 +1211,9 @@ def simulate_setup_window(
             exit_event = _exit_on_bar(setup, runtime, bar)
             if exit_event is None:
                 continue
+            runtime.exit_at_bar_open = _exit_occurs_at_bar_open(
+                setup, runtime, bar
+            )
             reason, price = exit_event
             _close_runtime(
                 setup,
@@ -1336,6 +1400,9 @@ def simulate_setup_window(
             exit_event = _exit_on_bar(setup, runtime, bar)
             if exit_event is None:
                 continue
+            runtime.exit_at_bar_open = _exit_occurs_at_bar_open(
+                setup, runtime, bar
+            )
             reason, price = exit_event
             _close_runtime(
                 setup,
@@ -2753,6 +2820,33 @@ def entry_policy_for_variant(
     return policy
 
 
+def policy_for_setup(setup: V8Setup, base_policy: EntryPolicy) -> EntryPolicy:
+    """Apply a leg's optional entry-seam overrides to the run's global policy.
+
+    Legs that override nothing return ``base_policy`` unchanged, so a run that
+    uses the frozen book behaves exactly as it did before per-setup overrides
+    existed.  Cost, slippage, square-off and EOD policy are never overridable:
+    they are run economics, not strategy.
+    """
+
+    if not setup.overrides_entry_policy:
+        return base_policy
+    changes: dict[str, Any] = {}
+    if setup.entry_conf_minute is not None:
+        changes["max_confirmation_minute"] = int(setup.entry_conf_minute)
+    if setup.entry_buffer_bps is not None:
+        changes["buffer_bps"] = float(setup.entry_buffer_bps)
+    if setup.entry_midpoint is not None:
+        changes["midpoint_invalidation"] = bool(setup.entry_midpoint)
+    if setup.entry_clv != ENTRY_INHERIT:
+        changes["close_location_min"] = (
+            None if setup.entry_clv is None else float(setup.entry_clv)
+        )
+    policy = replace(base_policy, **changes)
+    validate_backtest_policy(policy)
+    return policy
+
+
 def validate_backtest_policy(policy: EntryPolicy) -> None:
     """Validate policy independently of whether the run has any candidates."""
 
@@ -2827,6 +2921,95 @@ _EXCURSION_AMBIGUITY_COLUMNS = (
     "excursion_entry_bar_ambiguous",
     "excursion_exit_bar_ambiguous",
     "excursion_boundary_ambiguous",
+)
+
+_AUDIT_EXPORT_REQUIRED_COLUMNS = (
+    "candidate_id",
+    "session_date",
+    "signal_time",
+    "signal_end",
+    "setup_id",
+    "setup_cap",
+    "side",
+    "symbol",
+    "futures_symbol",
+    "status",
+    "reason",
+    "confirmation_minute",
+    "confirmation_time",
+    "confirmation_open",
+    "confirmation_high",
+    "confirmation_low",
+    "confirmation_close",
+    "confirmation_volume",
+    "confirmation_range",
+    "confirmation_body_ratio",
+    "confirmation_adverse_wick_ratio",
+    "confirmation_close_location",
+    "confirmation_rejection_codes",
+    "confirmation_rejection_reason",
+    "confirmation_checks",
+    "entry_minute",
+    "entry_delay_minutes",
+    "entry_time",
+    "trigger",
+    "trigger_distance_c5_bps",
+    "entry_price",
+    "gap_fill",
+    "intrabar_trigger_fill",
+    "ambiguous_entry_bar",
+    "stop_price",
+    "target_price",
+    "exit_time",
+    "exit_price",
+    "exit_reason",
+    "exit_at_bar_open",
+    "gross_return_pct",
+    "net_return_pct",
+    "five_min_open",
+    "five_min_high",
+    "five_min_low",
+    "five_min_close",
+    "five_min_volume",
+    "five_min_range_pct",
+    "ema9",
+    "ema20",
+    "ema50",
+    "ema_structure",
+    "price_change_pct",
+    "oi",
+    "prev_oi",
+    "oi_change_pct",
+    "volume_ratio",
+    "traded_value",
+    "tick_size",
+    "event_count",
+    "events",
+    "schema_version",
+    "frozen_rank",
+    "picker",
+    "picker_value",
+    "variant",
+    "buffer_bps",
+    "cost_bps",
+    "slippage_bps",
+    "eod_policy",
+    "filled",
+    "quantity",
+    "gross_pnl_rs",
+    "estimated_cost_rs",
+    "net_pnl_rs",
+    "position_notional_rs",
+    *_EXCURSION_VALUE_COLUMNS,
+    *_EXCURSION_AMBIGUITY_COLUMNS,
+    "excursion_observed_bar_count",
+    "excursion_complete_bar_count",
+    "excursion_policy_version",
+    "portfolio_mode",
+    "portfolio_decision",
+    "portfolio_reject_reason",
+    "portfolio_active_at_reservation",
+    "portfolio_reserved_margin_rs",
 )
 
 
@@ -2916,6 +3099,12 @@ def attach_excursion_diagnostics(
         gap_fill_value = row.get("gap_fill", False)
         gap_fill = bool(gap_fill_value) if not pd.isna(gap_fill_value) else False
         close_based_exit = str(row.get("exit_reason", "")) in close_based_exit_reasons
+        exit_at_open_value = row.get("exit_at_bar_open", False)
+        exit_at_open = (
+            bool(exit_at_open_value)
+            if not pd.isna(exit_at_open_value)
+            else False
+        )
         fully_held = observed["_bar_ts"].gt(entry_ts) & observed["_bar_ts"].lt(
             exit_ts
         )
@@ -2939,26 +3128,32 @@ def attach_excursion_diagnostics(
             observed_high=max(certain_highs),
             observed_low=min(certain_lows),
         )
+        # A stop-gap or target-at-open exit occurs before every later extreme
+        # in that bar.  Exclude that bar's H/L from even the upper bound.
+        upper_observed = observed.loc[
+            ~(
+                observed["_bar_ts"].eq(exit_ts)
+                if exit_at_open
+                else pd.Series(False, index=observed.index, dtype=bool)
+            )
+        ]
+        upper_highs = [entry_price, exit_price]
+        upper_lows = [entry_price, exit_price]
+        if not upper_observed.empty:
+            upper_highs.append(float(upper_observed["_high"].max()))
+            upper_lows.append(float(upper_observed["_low"].min()))
         upper_mfe, upper_mae = _excursion_percentages(
             str(row["side"]),
             entry_price,
-            observed_high=max(
-                entry_price,
-                exit_price,
-                float(observed["_high"].max()),
-            ),
-            observed_low=min(
-                entry_price,
-                exit_price,
-                float(observed["_low"].min()),
-            ),
+            observed_high=max(upper_highs),
+            observed_low=min(upper_lows),
         )
         out.at[index, "mfe_pct_ohlc_lower_bound"] = lower_mfe
         out.at[index, "mfe_pct_ohlc_upper_bound"] = upper_mfe
         out.at[index, "mae_pct_ohlc_lower_bound"] = lower_mae
         out.at[index, "mae_pct_ohlc_upper_bound"] = upper_mae
         entry_ambiguous = not gap_fill
-        exit_ambiguous = not close_based_exit
+        exit_ambiguous = not close_based_exit and not exit_at_open
         out.at[index, "excursion_entry_bar_ambiguous"] = entry_ambiguous
         out.at[index, "excursion_exit_bar_ambiguous"] = exit_ambiguous
         out.at[index, "excursion_boundary_ambiguous"] = (
@@ -3015,6 +3210,7 @@ def apply_global_portfolio_constraints(
         "exit_time",
         "exit_price",
         "exit_reason",
+        "exit_at_bar_open",
         "gross_return_pct",
         "quantity",
         "position_notional_rs",
@@ -3168,6 +3364,7 @@ def apply_global_portfolio_constraints(
             "exit_time",
             "exit_price",
             "exit_reason",
+            "exit_at_bar_open",
             "quantity",
             "position_notional_rs",
             "gross_pnl_rs",
@@ -3191,6 +3388,8 @@ def apply_global_portfolio_constraints(
                     out.at[index, column] = 0
                 elif column == "exit_reason":
                     out.at[index, column] = ""
+                elif column == "exit_at_bar_open":
+                    out.at[index, column] = False
                 elif column in _EXCURSION_AMBIGUITY_COLUMNS:
                     out.at[index, column] = pd.NA
                 else:
@@ -3260,15 +3459,22 @@ def run_v8_backtest(
             candidate_id = str(row["candidate_id"])
             path = path_by_candidate.get(candidate_id, _empty_path_frame())
             bars_by_symbol[str(row["symbol"])] = _minute_bars_from_cache(path)
-        audit = simulate_setup_window(setup, candidate_inputs, bars_by_symbol, policy)
+        leg_policy = policy_for_setup(setup, policy)
+        audit = simulate_setup_window(
+            setup, candidate_inputs, bars_by_symbol, leg_policy
+        )
         if audit.empty:
             continue
         ranks = group[["candidate_id", "frozen_rank", "picker", "picker_value"]]
         audit = audit.merge(ranks, on="candidate_id", how="left", validate="one_to_one")
         audit["variant"] = str(variant).upper()
-        audit["buffer_bps"] = policy.buffer_bps
-        audit["cost_bps"] = policy.cost_bps
-        audit["slippage_bps"] = policy.slippage_bps
+        audit["buffer_bps"] = leg_policy.buffer_bps
+        audit["cost_bps"] = leg_policy.cost_bps
+        audit["slippage_bps"] = leg_policy.slippage_bps
+        audit["entry_policy_overridden"] = setup.overrides_entry_policy
+        audit["max_confirmation_minute"] = leg_policy.max_confirmation_minute
+        audit["midpoint_invalidation"] = leg_policy.midpoint_invalidation
+        audit["close_location_min"] = leg_policy.close_location_min
         audit["eod_policy"] = policy.eod_policy
         audit_parts.append(audit)
     if not audit_parts:
@@ -3733,6 +3939,45 @@ def build_v8_diagnostic_breakdowns(
     return result.loc[:, _DIAGNOSTIC_BREAKDOWN_COLUMNS].reset_index(drop=True)
 
 
+def _normalized_diagnostic_breakdowns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a breakdown table for semantic provenance comparison."""
+
+    missing = sorted(set(_DIAGNOSTIC_BREAKDOWN_COLUMNS) - set(frame.columns))
+    if missing:
+        raise ValueError(f"V8 diagnostic breakdown is missing columns: {missing}")
+    out = frame.loc[:, _DIAGNOSTIC_BREAKDOWN_COLUMNS].copy()
+    for column in ("schema_version", "dimension", "bucket"):
+        out[column] = out[column].map(
+            lambda value: "" if pd.isna(value) else str(value)
+        )
+    for column in ("bucket_start_date", "bucket_end_date"):
+        out[column] = out[column].map(
+            lambda value: "" if pd.isna(value) else _parse_day(value).isoformat()
+        )
+    for column in (
+        "bucket_order",
+        "candidates",
+        "confirmed",
+        "fills",
+        "closed_fills",
+        "wins",
+        "losses",
+        "flat_trades",
+    ):
+        out[column] = pd.to_numeric(out[column], errors="raise").astype(int)
+    for column in (
+        "net_return_percentage_points",
+        "gross_pnl_rs",
+        "estimated_cost_rs",
+        "net_pnl_rs",
+        "profit_factor",
+    ):
+        out[column] = pd.to_numeric(out[column], errors="coerce").astype(float)
+    return out.sort_values(
+        ["dimension", "bucket_order", "bucket"], kind="stable"
+    ).reset_index(drop=True)
+
+
 def strategy_payload() -> dict[str, Any]:
     return {
         "strategy_version": STRATEGY_VERSION,
@@ -3771,6 +4016,7 @@ def strategy_payload() -> dict[str, Any]:
                 "SIDE_NORMALIZED_POST_FILL_OHLC_LOWER_AND_UPPER_BOUNDS;"
                 "ENTRY_AND_EXIT_PRICES_CERTAIN;STRICT_INTERIOR_BARS_CERTAIN;"
                 "BOUNDARY_EXTREMES_UPPER_ONLY_UNLESS_WHOLE_BAR_HELD"
+                ";EXIT_AT_OPEN_EXCLUDES_ALL_LATER_EXIT_BAR_EXTREMES"
             ),
             "breakdown_dimensions": list(DIAGNOSTIC_BREAKDOWN_DIMENSIONS),
             "chronological_block_policy": (
@@ -4067,6 +4313,16 @@ def write_v8_run_artifacts(
     )
 
     audit_export = audit.copy()
+    missing_audit_columns = sorted(
+        set(_AUDIT_EXPORT_REQUIRED_COLUMNS) - set(audit_export.columns)
+    )
+    if missing_audit_columns and not audit_export.empty:
+        raise AssertionError(
+            "V8 candidate/order audit is missing required columns: "
+            f"{missing_audit_columns}"
+        )
+    if audit_export.empty:
+        audit_export = pd.DataFrame(columns=_AUDIT_EXPORT_REQUIRED_COLUMNS)
     for event_column in (
         "events",
         "unconstrained_events",
@@ -4273,6 +4529,23 @@ def validate_v8_run_provenance(path: Path | str) -> dict[str, Any]:
     for name, record in outputs.items():
         if not provenance.artifact_matches(record.get("path", ""), record):
             raise AssertionError(f"V8 output artifact changed: {name}")
+    audit_record = dict(outputs.get("candidate_order_audit", {}))
+    audit_path = Path(str(audit_record.get("path", "")))
+    audit_frame = pd.read_csv(audit_path)
+    missing_audit_columns = sorted(
+        set(_AUDIT_EXPORT_REQUIRED_COLUMNS) - set(audit_frame.columns)
+    )
+    if missing_audit_columns:
+        raise ValueError(
+            "V8 candidate/order audit is missing required columns: "
+            f"{missing_audit_columns}"
+        )
+    if not audit_frame.empty:
+        audit_schemas = audit_frame["schema_version"]
+        if audit_schemas.isna().any() or not audit_schemas.astype(str).eq(
+            TRADE_SCHEMA_VERSION
+        ).all():
+            raise ValueError("V8 candidate/order audit schema is not supported")
     diagnostic_record = dict(outputs.get("diagnostic_breakdowns", {}))
     diagnostic_path = Path(str(diagnostic_record.get("path", "")))
     diagnostic_frame = pd.read_csv(diagnostic_path)
@@ -4284,10 +4557,10 @@ def validate_v8_run_provenance(path: Path | str) -> dict[str, Any]:
             "V8 diagnostic breakdown artifact is missing columns: "
             f"{missing_diagnostic_columns}"
         )
-    observed_diagnostic_schemas = set(
-        diagnostic_frame["schema_version"].dropna().astype(str)
-    )
-    if observed_diagnostic_schemas - {DIAGNOSTIC_BREAKDOWN_SCHEMA_VERSION}:
+    diagnostic_schemas = diagnostic_frame["schema_version"]
+    if diagnostic_frame.empty or diagnostic_schemas.isna().any() or not (
+        diagnostic_schemas.astype(str).eq(DIAGNOSTIC_BREAKDOWN_SCHEMA_VERSION).all()
+    ):
         raise ValueError("V8 diagnostic breakdown schema is not supported")
     source_record = outputs.get("strategy_source_archive", {})
     cache_record = outputs.get("cache_manifest_archive", {})
@@ -4349,6 +4622,23 @@ def validate_v8_run_provenance(path: Path | str) -> dict[str, Any]:
         common.canonical_json_sha256(calendar_contract)
     ):
         raise AssertionError("Archived V8 manifest calendar contract is invalid")
+    expected_diagnostics = build_v8_diagnostic_breakdowns(
+        audit_frame,
+        session_dates=expected_calendar_dates,
+    )
+    try:
+        pd.testing.assert_frame_equal(
+            _normalized_diagnostic_breakdowns(diagnostic_frame),
+            _normalized_diagnostic_breakdowns(expected_diagnostics),
+            check_dtype=False,
+            check_exact=False,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+    except AssertionError as exc:
+        raise AssertionError(
+            "V8 diagnostic breakdown does not reconcile to the candidate audit"
+        ) from exc
     for name, record in dict(cache_manifest.get("artifacts", {})).items():
         if not provenance.artifact_matches(record.get("path", ""), record):
             raise AssertionError(f"V8 cache artifact changed: {name}")

@@ -5967,6 +5967,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       font-variant-numeric: tabular-nums;
     }
 
+    .log-table td.clip {
+      max-width: 22ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .log-table td.right,
     .log-table th.right .th-sort-btn {
       text-align: right;
@@ -7637,8 +7643,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return /(written|valid|complete|coverage|fetched|filled|evaluated)/i.test(String(header || ""));
     }
 
-    // Returns { cls, html } for one markdown table cell.
-    function mdCell(header, rawValue, align) {
+    // Returns { cls, html, title } for one markdown table cell.
+    function mdCell(header, rawValue, align, sessionDate) {
       const raw = String(rawValue === null || rawValue === undefined ? "" : rawValue).trim();
       const plain = mdStripMarkers(raw);
       const cls = [];
@@ -7646,6 +7652,19 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (align === "center") cls.push("center");
 
       if (!plain) return { cls: cls.join(" "), html: "" };
+
+      // Same-day ISO timestamps: drop the repeated date and the microseconds,
+      // keep the full value in the tooltip.
+      const iso = /^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}:\\d{2})(?:\\.\\d+)?(.*)$/.exec(plain);
+      if (iso) {
+        cls.push("tabnum");
+        const sameDay = sessionDate && iso[1] === sessionDate;
+        return {
+          cls: cls.join(" "),
+          html: esc(sameDay ? iso[2] : `${iso[1]} ${iso[2]}`),
+          title: plain
+        };
+      }
 
       if (isPillColumn(header)) {
         const combo = /^(\\d+)\\/([A-Za-z][A-Za-z0-9_]*)$/.exec(plain);
@@ -7681,10 +7700,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         }
       }
 
+      if (plain.length > 24) {
+        cls.push("clip");
+        return { cls: cls.join(" "), html: mdInline(raw), title: plain };
+      }
+
       return { cls: cls.join(" "), html: mdInline(raw) };
     }
 
-    function renderMdTable(stateKey, hostEl, table) {
+    function renderMdTable(stateKey, hostEl, table, sessionDate) {
       const parsed = { headers: table.headers, rows: table.rows };
       const rows = sortedRows(parsed, stateKey);
       const headHtml = table.headers.map((h, i) => `
@@ -7697,8 +7721,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       `).join("");
       const bodyHtml = rows.map((cells) => `
         <tr>${table.headers.map((h, i) => {
-          const cell = mdCell(h, cells[i], table.aligns[i]);
-          return `<td class="${esc(cell.cls)}">${cell.html}</td>`;
+          const cell = mdCell(h, cells[i], table.aligns[i], sessionDate);
+          const titleAttr = cell.title ? ` title="${esc(cell.title)}"` : "";
+          return `<td class="${esc(cell.cls)}"${titleAttr}>${cell.html}</td>`;
         }).join("")}</tr>
       `).join("");
 
@@ -7716,7 +7741,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const prev = TABLE_SORT_STATE[stateKey] || { colIdx: -1, dir: "asc" };
           const nextDir = prev.colIdx === colIdx && prev.dir === "asc" ? "desc" : "asc";
           TABLE_SORT_STATE[stateKey] = { colIdx, dir: nextDir };
-          renderMdTable(stateKey, hostEl, table);
+          renderMdTable(stateKey, hostEl, table, sessionDate);
         });
       });
     }
@@ -7729,6 +7754,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
       const metas = preamble.filter((b) => b.kind === "meta");
       const notes = preamble.filter((b) => b.kind === "note");
+      const sessionMeta = metas.find((m) => /^session( date)?$/i.test(m.label));
+      const sessionDate = sessionMeta && /^\\d{4}-\\d{2}-\\d{2}$/.test(mdStripMarkers(sessionMeta.value))
+        ? mdStripMarkers(sessionMeta.value)
+        : "";
 
       const chipsHtml = metas.length
         ? `<div class="md-meta-grid">${metas.map((m) => {
@@ -7782,7 +7811,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
       tableSlots.forEach(({ slotId, table }) => {
         const slot = hostEl.querySelector(`[data-md-slot="${slotId}"]`);
-        if (slot) renderMdTable(`${cardId}#${table.tableIdx}`, slot, table);
+        if (slot) renderMdTable(`${cardId}#${table.tableIdx}`, slot, table, sessionDate);
       });
     }
 

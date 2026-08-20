@@ -547,6 +547,7 @@ def load_signals(
     input_contract = {
         "schema_version": provenance.CACHE_MANIFEST_SCHEMA_VERSION,
         "hybrid_data_contract": hybrid.cache_manifest_payload(),
+        "forward_path_policy": sw.FORWARD_PATH_POLICY,
         "square_off": str(square_off),
         "max_forward_bars": int(max_forward_bars),
         "universe": universe_record,

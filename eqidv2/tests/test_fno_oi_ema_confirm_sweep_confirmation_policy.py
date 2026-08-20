@@ -118,9 +118,38 @@ class ConfirmationPolicyTests(unittest.TestCase):
                 self.assertEqual(len(signals), 1)
                 self.assertEqual(signals.iloc[0]["side"], side)
                 self.assertEqual(signals.iloc[0]["trigger"], expected_trigger[side])
+                self.assertEqual(signals.iloc[0]["signal_close"], 101.0)
+                self.assertEqual(
+                    signals.iloc[0]["confirmation_ts"].strftime("%H:%M"),
+                    "09:26",
+                )
                 self.assertEqual(set(paths), {0})
                 self.assertEqual(paths[0]["high"].tolist(), [104.0, 105.0])
                 self.assertEqual(paths[0]["low"].tolist(), [98.0, 97.0])
+
+    def test_forward_path_never_crosses_into_the_next_session(self) -> None:
+        minute = self._one_minute_path("LONG").iloc[:2].copy()
+        next_session = minute.iloc[[-1]].copy()
+        next_session.loc[:, "ts"] = pd.Timestamp(
+            "2026-08-19 09:15", tz=common.IST
+        )
+        next_session.loc[:, ["open", "high", "low", "close"]] = [
+            900.0,
+            999.0,
+            800.0,
+            950.0,
+        ]
+        minute = pd.concat([minute, next_session], ignore_index=True)
+
+        signals, paths = self._build(
+            "LONG",
+            minute=minute,
+            confirmation_policy=sweep.CONFIRMATION_POLICY_V7_BREAKOUT,
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(paths[0]["high"].tolist(), [104.0])
+        self.assertEqual(paths[0]["low"].tolist(), [98.0])
 
     def test_v7_policy_still_requires_finite_positive_range(self) -> None:
         invalid_candles = {}

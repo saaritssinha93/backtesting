@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import json
 from dataclasses import asdict, is_dataclass
@@ -30,26 +31,45 @@ SETUP_FIELDS = (
     "min_traded_value",
     "stop_pct",
     "target_pct",
+    "entry_conf_minute",
+    "entry_buffer_bps",
+    "entry_midpoint",
+    "entry_clv",
 )
 
+_INHERIT = "INHERIT"
+
 # This is a literal, runtime-independent copy of the ten five-minute setup
-# legs that V8 is required to freeze.  The test deliberately does not import a
-# V6 or V7 strategy module to obtain the expected values.
+# legs.  The test deliberately does not import a V6 or V7 strategy module to
+# obtain the expected values.
+#
+# Six legs still carry their original V6-lineage values and inherit the run's
+# global entry policy.  Four legs (09:25 LONG/SHORT, 09:30 SHORT, 09:40 SHORT)
+# were retuned on 2026-08-19 from the setup-parameter sweep over
+# 2026-05-27..2026-08-17 and pin their own entry seam.
 EXPECTED_SETUP_BOOK = [
-    ("09:25", "LONG", 1, "max_liquidity", 0.30, 0.10, 3.0, 0.6, 0.5, 0.0, 0.50, 3.0),
-    ("09:25", "SHORT", 2, "max_volume", 0.20, 0.10, 1.5, 0.4, 0.5, 0.0, 0.75, 3.0),
-    ("09:30", "LONG", 1, "max_move", 0.65, 0.10, 1.0, 0.5, 0.5, 0.0, 1.00, 2.5),
-    ("09:30", "SHORT", 1, "max_move", 0.20, 0.25, 1.0, 0.4, 0.5, 0.0, 1.00, 3.0),
-    ("09:35", "LONG", 1, "max_liquidity", 0.20, 0.10, 1.0, 0.6, 0.5, 0.0, 1.00, 2.5),
-    ("09:35", "SHORT", 2, "max_liquidity", 0.50, 1.00, 1.0, 0.4, 0.5, 0.0, 1.00, 3.0),
-    ("09:40", "LONG", 1, "max_liquidity", 0.20, 0.10, 2.0, 0.5, 0.5, 0.0, 0.50, 2.5),
-    ("09:40", "SHORT", 1, "max_move", 0.20, 0.10, 1.0, 0.4, 0.5, 0.0, 1.00, 3.0),
-    ("09:45", "LONG", 1, "max_move", 0.65, 0.10, 1.0, 0.4, 0.5, 0.0, 1.00, 3.0),
-    ("09:45", "SHORT", 1, "max_volume", 0.20, 0.75, 1.0, 0.4, 0.3, 0.0, 1.00, 2.0),
+    ("09:25", "LONG", 4, "max_move", 0.30, 0.10, 3.0, 0.0, 0.5, 0.0, 0.40, 1.0, 3, 0.0, False, None),
+    ("09:25", "SHORT", 4, "max_move", 0.20, 0.10, 1.5, 0.6, 0.6, 25_000_000.0, 0.50, 3.0, 3, 2.0, False, None),
+    ("09:30", "LONG", 1, "max_move", 0.65, 0.10, 1.0, 0.5, 0.5, 0.0, 1.00, 2.5, None, None, None, _INHERIT),
+    ("09:30", "SHORT", 4, "max_volume", 0.20, 1.00, 1.0, 0.45, 0.3, 25_000_000.0, 1.00, 4.0, 3, 0.0, True, 0.50),
+    ("09:35", "LONG", 1, "max_liquidity", 0.20, 0.10, 1.0, 0.6, 0.5, 0.0, 1.00, 2.5, None, None, None, _INHERIT),
+    ("09:35", "SHORT", 2, "max_liquidity", 0.50, 1.00, 1.0, 0.4, 0.5, 0.0, 1.00, 3.0, None, None, None, _INHERIT),
+    ("09:40", "LONG", 1, "max_liquidity", 0.20, 0.10, 2.0, 0.5, 0.5, 0.0, 0.50, 2.5, None, None, None, _INHERIT),
+    ("09:40", "SHORT", 4, "max_volume", 0.20, 0.75, 1.0, 0.0, 0.2, 0.0, 1.00, 4.0, 4, 0.0, False, 0.50),
+    ("09:45", "LONG", 1, "max_move", 0.65, 0.10, 1.0, 0.4, 0.5, 0.0, 1.00, 3.0, None, None, None, _INHERIT),
+    ("09:45", "SHORT", 1, "max_volume", 0.20, 0.75, 1.0, 0.4, 0.3, 0.0, 1.00, 2.0, None, None, None, _INHERIT),
 ]
 EXPECTED_SETUP_BOOK_SHA256 = (
-    "c50bc5d17fdbde3cad824a4103a6a4b4c9ebc91235dab39b6a533d601b6e24d9"
+    "ed32937129246ca3500bd421a77bebca71c83014a4e2a4eb5cbc318e74016fb6"
 )
+
+# Legs that pin their own one-minute entry seam, and what they pin it to.
+EXPECTED_ENTRY_OVERRIDES = {
+    "09:25_LONG": (3, 0.0, False, None),
+    "09:25_SHORT": (3, 2.0, False, None),
+    "09:30_SHORT": (3, 0.0, True, 0.50),
+    "09:40_SHORT": (4, 0.0, False, 0.50),
+}
 
 
 def _setup(*, side: str = "LONG", max_entries: int = 1) -> v8.V8Setup:
@@ -293,6 +313,50 @@ def test_v8_configuration_is_literal_frozen_and_versioned() -> None:
     ).hexdigest()
     assert digest == EXPECTED_SETUP_BOOK_SHA256
     assert "V8" in v8.STRATEGY_VERSION.upper()
+
+
+def test_per_setup_entry_overrides_resolve_against_the_global_policy() -> None:
+    base = v8.EntryPolicy(
+        buffer_bps=2.0,
+        max_confirmation_minute=4,
+        midpoint_invalidation=True,
+        close_location_min=0.75,
+    )
+    overriding = {
+        setup.setup_id for setup in v8.ACTIVE_SETUPS if setup.overrides_entry_policy
+    }
+    assert overriding == set(EXPECTED_ENTRY_OVERRIDES)
+
+    for setup in v8.ACTIVE_SETUPS:
+        resolved = v8.policy_for_setup(setup, base)
+        if setup.setup_id not in EXPECTED_ENTRY_OVERRIDES:
+            # A leg that overrides nothing must reuse the global policy
+            # untouched, so the frozen legs behave identically under every
+            # variant to how they did before overrides existed.
+            assert resolved is base
+            continue
+        conf, buffer_bps, midpoint, clv = EXPECTED_ENTRY_OVERRIDES[setup.setup_id]
+        assert resolved.max_confirmation_minute == conf
+        assert resolved.buffer_bps == buffer_bps
+        assert resolved.midpoint_invalidation is midpoint
+        assert resolved.close_location_min == clv
+        # Run economics are never overridable by a leg.
+        assert resolved.cost_bps == base.cost_bps
+        assert resolved.slippage_bps == base.slippage_bps
+        assert resolved.square_off == base.square_off
+        assert resolved.eod_policy == base.eod_policy
+        assert resolved.entry_expiry_minute == base.entry_expiry_minute
+
+
+def test_entry_clv_override_can_switch_the_floor_off() -> None:
+    base = v8.EntryPolicy(close_location_min=0.75)
+    # ENTRY_INHERIT keeps the global floor; an explicit None removes it.
+    inheriting = v8.V8Setup(
+        "09:35", "LONG", 1, "max_liquidity", 0.20, 0.10, 1.0, 0.6, 0.5, 0.0, 1.0, 2.5
+    )
+    assert v8.policy_for_setup(inheriting, base).close_location_min == 0.75
+    disabling = dataclasses.replace(inheriting, entry_clv=None)
+    assert v8.policy_for_setup(disabling, base).close_location_min is None
     assert "V8" in v8.CACHE_SCHEMA_VERSION.upper()
     assert "SAME" in v8.PATH_POLICY_VERSION.upper()
     assert "SESSION" in v8.PATH_POLICY_VERSION.upper()
@@ -604,6 +668,7 @@ def test_target_at_open_precedes_a_later_intrabar_stop_for_open_position(
 
     assert _value(row, "status") == "TARGETED"
     assert _value(row, "exit_reason") == "TARGET"
+    assert bool(_value(row, "exit_at_bar_open"))
     assert pd.Timestamp(_value(row, "exit_time")) == SIGNAL_TIME + pd.Timedelta(
         minutes=3
     )
@@ -1303,6 +1368,73 @@ def test_run_audit_has_full_context_notional_and_excursion_bounds() -> None:
     assert float(row["mae_pct_ohlc_upper_bound"]) > 0.0
 
 
+@pytest.mark.parametrize(
+    ("exit_reason", "exit_price", "expected_mfe", "expected_mae"),
+    [
+        ("STOP_GAP", 90.0, 2.0, 10.0),
+        ("TARGET", 103.0, 3.0, 2.0),
+    ],
+)
+def test_exit_at_open_excursions_exclude_later_exit_bar_extremes(
+    exit_reason: str,
+    exit_price: float,
+    expected_mfe: float,
+    expected_mae: float,
+) -> None:
+    candidate_id = "2026-08-18|09:30_LONG|OPEN_EXIT"
+    entry_ts = SIGNAL_TIME + pd.Timedelta(minutes=2)
+    exit_ts = SIGNAL_TIME + pd.Timedelta(minutes=4)
+    audit = pd.DataFrame(
+        [
+            {
+                "candidate_id": candidate_id,
+                "side": "LONG",
+                "entry_time": entry_ts,
+                "entry_price": 100.0,
+                "exit_time": exit_ts,
+                "exit_price": exit_price,
+                "exit_reason": exit_reason,
+                "exit_at_bar_open": True,
+                "gap_fill": True,
+            }
+        ]
+    )
+    paths = pd.DataFrame(
+        [
+            {
+                "candidate_id": candidate_id,
+                "bar_ts": entry_ts,
+                "high": 101.0,
+                "low": 99.0,
+            },
+            {
+                "candidate_id": candidate_id,
+                "bar_ts": entry_ts + pd.Timedelta(minutes=1),
+                "high": 102.0,
+                "low": 98.0,
+            },
+            {
+                "candidate_id": candidate_id,
+                "bar_ts": exit_ts,
+                # These extremes occur after the deterministic open exit and
+                # therefore must not enter either excursion bound.
+                "high": 200.0,
+                "low": 50.0,
+            },
+        ]
+    )
+
+    row = v8.attach_excursion_diagnostics(audit, paths).iloc[0]
+
+    assert float(row["mfe_pct_ohlc_lower_bound"]) == pytest.approx(expected_mfe)
+    assert float(row["mfe_pct_ohlc_upper_bound"]) == pytest.approx(expected_mfe)
+    assert float(row["mae_pct_ohlc_lower_bound"]) == pytest.approx(expected_mae)
+    assert float(row["mae_pct_ohlc_upper_bound"]) == pytest.approx(expected_mae)
+    assert not bool(row["excursion_entry_bar_ambiguous"])
+    assert not bool(row["excursion_exit_bar_ambiguous"])
+    assert not bool(row["excursion_boundary_ambiguous"])
+
+
 def test_diagnostic_breakdowns_use_calendar_blocks_and_constrained_trades() -> None:
     sessions = [
         pd.Timestamp(value).date()
@@ -1422,6 +1554,17 @@ def test_diagnostic_artifact_is_json_safe_hashed_and_provenance_required(
     audit["gross_pnl_rs"] = 1.0
     audit["estimated_cost_rs"] = 0.1
     audit["net_pnl_rs"] = 0.9
+    for column in v8._AUDIT_EXPORT_REQUIRED_COLUMNS:
+        if column not in audit.columns:
+            audit[column] = float("nan")
+    audit["variant"] = "B0"
+    audit["cost_bps"] = 5.0
+    audit["slippage_bps"] = 0.0
+    audit["eod_policy"] = "LAST_REAL_BAR_SENSITIVITY"
+    audit["position_notional_rs"] = audit["entry_price"] * audit["quantity"]
+    audit["excursion_policy_version"] = v8.EXCURSION_POLICY_VERSION
+    audit["portfolio_mode"] = v8.PORTFOLIO_MODE
+    audit["portfolio_decision"] = "ACCEPTED"
     breakdowns = v8.build_v8_diagnostic_breakdowns(
         audit, session_dates=[SIGNAL_TIME.date()]
     )
