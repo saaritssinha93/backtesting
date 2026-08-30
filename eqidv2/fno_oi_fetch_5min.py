@@ -227,6 +227,7 @@ def fetch_contracts(
     max_retries: int,
     phase: str,
     from_column: str = "",
+    session: str = SESSION,
 ) -> list[dict[str, Any]]:
     partitions = _partition_rows(universe, len(runtimes))
 
@@ -242,7 +243,7 @@ def fetch_contracts(
                     from_stamp = from_stamp.tz_convert(common.IST)
                 contract_from = from_stamp.to_pydatetime()
             common.publish_heartbeat(
-                SESSION,
+                session,
                 "RUNNING",
                 phase=phase,
                 app=runtime.app_name,
@@ -326,6 +327,8 @@ def run_bootstrap(
     runtimes: list[AppRuntime],
     args: argparse.Namespace,
     holidays: set[date],
+    *,
+    session: str = SESSION,
 ) -> None:
     target = latest_completed_slot(common.now_ist(), holidays)
     if target is None:
@@ -340,7 +343,7 @@ def run_bootstrap(
         return
     start = pd.Timestamp(required["_fetch_from"].min()).to_pydatetime()
     common.publish_status(
-        SESSION,
+        session,
         "RUNNING",
         phase="BOOTSTRAP",
         target=target.isoformat(),
@@ -360,6 +363,7 @@ def run_bootstrap(
         max_retries=args.max_retries,
         phase="BOOTSTRAP",
         from_column="_fetch_from",
+        session=session,
     )
     failed = [item for item in outcomes if item["state"] == "FAILED"]
     print(
@@ -450,7 +454,7 @@ def _render_fetch_report(marker: dict[str, Any], outcomes: list[dict[str, Any]])
         lines.extend(
             [
                 "",
-                "Unverified excluded-index no-candle contracts (stock readiness unaffected):",
+                "Optional index contracts with no exact-slot candle (not retried; stock readiness unaffected):",
                 "",
                 ", ".join(f"`{symbol}`" for symbol in excluded_unverified_symbols),
             ]
@@ -479,10 +483,14 @@ def run_slot(
     universe: pd.DataFrame,
     runtimes: list[AppRuntime],
     args: argparse.Namespace,
+    *,
+    fetch_contracts_impl: Any | None = None,
+    session: str = SESSION,
 ) -> dict[str, Any]:
     started = time.monotonic()
+    fetch_impl = fetch_contracts_impl or fetch_contracts
     common.publish_status(
-        SESSION,
+        session,
         "RUNNING",
         phase="FETCH_SLOT",
         slot=slot_end.isoformat(),
@@ -500,7 +508,13 @@ def run_slot(
         for value in universe["tradingsymbol"].dropna()
         if str(value).strip()
     }
-    outcomes = fetch_contracts(
+    universe_rows = universe.to_dict("records")
+    stock_symbols = {
+        str(row.get("tradingsymbol", "")).strip().upper()
+        for row in universe_rows
+        if not _is_index_universe_row(row)
+    }
+    outcomes = fetch_impl(
         universe,
         runtimes,
         slot_end - timedelta(minutes=5),
@@ -508,6 +522,7 @@ def run_slot(
         slot_end=slot_end,
         max_retries=args.max_retries,
         phase="FETCH_SLOT",
+        session=session,
     )
     outcome_by_symbol = {
         str(item["tradingsymbol"]).strip().upper(): item for item in outcomes
@@ -530,6 +545,12 @@ def run_slot(
         }
         if not unresolved_symbols:
             break
+        # This producer serves an exact stock-FnO consumer.  Once every stock
+        # outcome is complete, do not hold its marker behind repeated queries
+        # for an excluded index future.  Index accounting remains explicit in
+        # the final marker via global_complete/index_no_candle_symbols.
+        if not (unresolved_symbols & stock_symbols):
+            break
         retries_used = retry_number
         time.sleep(max(0.0, float(args.slot_retry_delay_sec)))
         retry_universe = universe.loc[
@@ -543,7 +564,7 @@ def run_slot(
             f"contracts={len(retry_universe)}",
             flush=True,
         )
-        retry_outcomes = fetch_contracts(
+        retry_outcomes = fetch_impl(
             retry_universe,
             rotated_runtimes,
             slot_end - timedelta(minutes=5),
@@ -551,6 +572,7 @@ def run_slot(
             slot_end=slot_end,
             max_retries=args.max_retries,
             phase=f"FETCH_SLOT_RETRY_{retry_number}",
+            session=session,
         )
         for item in retry_outcomes:
             symbol = str(item["tradingsymbol"]).strip().upper()
@@ -573,12 +595,6 @@ def run_slot(
     expected = int(len(universe))
     coverage = float(written / expected) if expected else 0.0
 
-    universe_rows = universe.to_dict("records")
-    stock_symbols = {
-        str(row.get("tradingsymbol", "")).strip().upper()
-        for row in universe_rows
-        if not _is_index_universe_row(row)
-    }
     index_symbols = {
         str(row.get("tradingsymbol", "")).strip().upper()
         for row in universe_rows
@@ -747,7 +763,7 @@ def run_slot(
         report,
     )
     common.publish_status(
-        SESSION,
+        session,
         state,
         heartbeat_state="RUNNING",
         phase="SLOT_DONE",

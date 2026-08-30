@@ -12,6 +12,13 @@ set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.e
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
 set "EQIDV2_RUNTIME_ROOT=C:\TradingData\eqidv2"
+REM Use the exact canonical symbol set published by the healthy 5-minute feed.
+set "EQIDV2_1M_FEED_UNIVERSE_MANIFEST=C:\TradingData\eqidv2\runtime_status\feed_universe_5m.json"
+REM A live 1-minute cycle is complete only when every fetchable symbol reaches
+REM the exact latest completed minute. Retry verification failures in-slot.
+set "EQIDV2_1MIN_STALE_OK_MIN=0"
+set "EQIDV2_1MIN_SAME_DAY_STALE_OK=0"
+set "EQIDV2_1MIN_STRICT_VERIFY_RECOVERY=1"
 
 REM --- Scheduler timing (env-overridable; CLI below pins the requested values) ---
 set "EQIDV2_1M_FIRST_SLOT=09:17:30"

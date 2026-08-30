@@ -32,6 +32,7 @@ Optional:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -40,6 +41,7 @@ import time
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 
+import pandas as pd
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -65,6 +67,50 @@ import trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_1min as
 # fetches real tokens via kite.instruments().
 # ---------------------------------------------------------------------
 _orig_load_universe = getattr(core, "load_stocks_universe", None)
+RUNTIME_ROOT = Path(os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2"))
+FIVE_MIN_UNIVERSE_MANIFEST = Path(
+    os.getenv(
+        "EQIDV2_1M_FEED_UNIVERSE_MANIFEST",
+        str(RUNTIME_ROOT / "runtime_status" / "feed_universe_5m.json"),
+    )
+)
+
+
+def _canonical_symbols(values) -> list[str]:
+    return sorted({str(value).strip().upper() for value in values if str(value).strip()})
+
+
+def _universe_sha256(symbols: list[str]) -> str:
+    return hashlib.sha256("\n".join(_canonical_symbols(symbols)).encode("utf-8")).hexdigest()
+
+
+def _five_min_universe_contract() -> dict:
+    """Read and verify the authoritative universe published by the 5-minute feed."""
+
+    try:
+        payload = json.loads(FIVE_MIN_UNIVERSE_MANIFEST.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "symbols": []}
+    symbols = _canonical_symbols(payload.get("symbols", []))
+    observed_hash = _universe_sha256(symbols)
+    expected_count = int(payload.get("universe_count", -1))
+    expected_hash = str(payload.get("universe_sha256", "")).strip().lower()
+    ok = bool(
+        payload.get("schema_version") == "eqidv2_5m_feed_universe_v1"
+        and symbols
+        and expected_count == len(symbols)
+        and expected_hash == observed_hash
+    )
+    return {
+        "ok": ok,
+        "symbols": symbols,
+        "universe_count": len(symbols),
+        "universe_sha256": observed_hash,
+        "manifest_path": str(FIVE_MIN_UNIVERSE_MANIFEST.resolve()),
+        "published_at_ist": str(payload.get("published_at_ist", "")),
+        "slot_ist": str(payload.get("slot_ist", "")),
+        "error": "" if ok else "manifest_schema_count_or_hash_mismatch",
+    }
 
 
 def _looks_like_real_tokens(token_map: dict) -> bool:
@@ -92,10 +138,67 @@ def _load_stocks_universe_fixed(*args, **kwargs):
             except Exception:
                 pass
         token_map = {}
+    contract = _five_min_universe_contract()
+    if contract.get("ok"):
+        tickers = list(contract["symbols"])
+        allowed = set(tickers)
+        token_map = {
+            str(symbol).strip().upper(): int(token)
+            for symbol, token in dict(token_map).items()
+            if str(symbol).strip().upper() in allowed and int(token or 0) > 0
+        }
+        logger = args[0] if args else None
+        if logger is not None:
+            logger.info(
+                "[1MIN] Bound to exact live 5-minute universe: symbols=%d sha256=%s manifest=%s",
+                len(tickers),
+                str(contract["universe_sha256"]),
+                str(contract["manifest_path"]),
+            )
+    else:
+        raise RuntimeError(
+            "The authoritative 5-minute feed universe is unavailable or invalid: "
+            f"{contract.get('error', 'unknown_error')} | {FIVE_MIN_UNIVERSE_MANIFEST}"
+        )
     return tickers, token_map
 
 
 core.load_stocks_universe = _load_stocks_universe_fixed
+
+
+# The core's generic freshness rule deliberately tolerates one missing interval.
+# That is inappropriate for a live 1-minute feed: a file ending at 14:44 must
+# not be declared fresh for the completed 14:45 candle.  Require the exact
+# completed-minute timestamp while retaining the full-history start guard.
+def _ticker_is_fresh_strict(
+    mode: str,
+    out_path: str,
+    now_ist_dt: datetime,
+    holidays: set,
+    intraday_ts: str,
+    required_start_ist=None,
+) -> bool:
+    existing_path = core._resolve_existing_store_path(out_path)
+    if not os.path.exists(existing_path):
+        return False
+    last_ts = core._read_last_ts_from_store(existing_path)
+    if last_ts is None:
+        return False
+    if last_ts.tzinfo is None:
+        last_ts = last_ts.tz_localize(core.IST_TZ)
+    else:
+        last_ts = last_ts.tz_convert(core.IST_TZ)
+    if not core._history_start_satisfied(
+        mode, out_path, required_start_ist, holidays, intraday_ts
+    ):
+        return False
+    expected = core.expected_last_stamp(mode, now_ist_dt, holidays, intraday_ts)["value"]
+    if expected.tzinfo is None:
+        expected = core.IST_TZ.localize(expected)
+    return bool(last_ts >= expected - timedelta(seconds=1))
+
+
+core.ticker_is_fresh = _ticker_is_fresh_strict
 
 
 # ---------------------------------------------------------------------
@@ -199,10 +302,20 @@ def _run_one_slot(slot: datetime, *, max_workers: int, intraday_ts: str,
                   status_detail: dict | None = None) -> dict:
     started = time.perf_counter()
     started_at = now_ist()
+    universe_contract = _five_min_universe_contract()
+    if not universe_contract.get("ok"):
+        raise RuntimeError(
+            "Cannot start 1-minute slot without a valid 5-minute universe manifest: "
+            f"{universe_contract.get('error', 'unknown_error')}"
+        )
     slot_detail = {
         **(status_detail or {}),
         "current_slot_ist": slot.strftime("%Y-%m-%d %H:%M:%S%z"),
         "slot_started_at_ist": started_at.strftime("%Y-%m-%d %H:%M:%S%z"),
+        "universe_source": "LIVE_5MIN_FEED_MANIFEST",
+        "universe_count": int(universe_contract["universe_count"]),
+        "universe_sha256": str(universe_contract["universe_sha256"]),
+        "universe_manifest": str(universe_contract["manifest_path"]),
     }
     _write_status(
         "running",
@@ -254,6 +367,9 @@ def _run_one_slot(slot: datetime, *, max_workers: int, intraday_ts: str,
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=max(1.0, float(STATUS_TOUCH_SEC) + 1.0))
     summary["elapsed_sec"] = round(time.perf_counter() - started, 2)
+    summary["universe_count"] = int(universe_contract["universe_count"])
+    summary["universe_sha256"] = str(universe_contract["universe_sha256"])
+    summary["active_kite_apps"] = int(len(getattr(core, "kite_pool", []) or []))
     print(f"[SLOT] {slot.strftime('%H:%M:%S')} done in {summary['elapsed_sec']}s "
           f"ok={summary.get('ok')}", flush=True)
     return summary

@@ -39,6 +39,102 @@ def _paths(tmp_path: Path) -> session.SessionPaths:
     )
 
 
+def _cash_marker(*, source: str = "final", complete: bool = True) -> dict[str, object]:
+    return {
+        "slot_ist": "2026-08-21T09:25:00+05:30",
+        "published_at_ist": "2026-08-21T09:25:10+05:30",
+        "source": source,
+        "complete": complete,
+        "tickers_expected": 1,
+        "tickers_written": 1,
+        "tickers_complete": 1,
+        "tickers_failed": 0,
+        "unresolved_symbol_count": 0,
+        "failed_symbol_count": 0,
+        "token_missing_symbol_count": 0,
+        "fno_equity_quality_complete": True,
+        "fno_equity_expected": 1,
+        "fno_equity_ready": 1,
+        "fno_equity_failed": 0,
+        "partition_failures": [],
+        "verification_failed_count": 0,
+    }
+
+
+def _write_cash_marker(root: Path, marker: dict[str, object]) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "slot_20260821_0925.json"
+    path.write_text(json.dumps(marker), encoding="utf-8")
+    return path
+
+
+def test_provisional_cash_marker_retries_before_source_deadline(
+    tmp_path: Path,
+) -> None:
+    marker = {
+        "slot_ist": "2026-08-21T09:25:00+05:30",
+        "published_at_ist": "2026-08-21T09:25:06+05:30",
+        "source": "watcher",
+        "fresh_count": 18,
+        "checked_count": 24,
+        "fresh_ratio": 0.75,
+    }
+    _write_cash_marker(tmp_path, marker)
+
+    with pytest.raises(session.SourceNotReadyError, match="still provisional"):
+        session.load_final_cash_slot_marker(
+            datetime(2026, 8, 21, 9, 25, tzinfo=config.IST),
+            tmp_path,
+            observed_at=datetime(2026, 8, 21, 9, 25, 6, tzinfo=config.IST),
+        )
+
+
+def test_provisional_cash_marker_fails_closed_at_source_deadline(
+    tmp_path: Path,
+) -> None:
+    marker = {
+        "slot_ist": "2026-08-21T09:25:00+05:30",
+        "published_at_ist": "2026-08-21T09:25:06+05:30",
+        "source": "watcher",
+    }
+    _write_cash_marker(tmp_path, marker)
+
+    deadline = datetime(2026, 8, 21, 9, 26, tzinfo=config.IST) + timedelta(
+        seconds=session.BOUNDARY_BUFFER_SECONDS
+    )
+    with pytest.raises(session.SourceIncompleteError, match="source deadline"):
+        session.load_final_cash_slot_marker(
+            datetime(2026, 8, 21, 9, 25, tzinfo=config.IST),
+            tmp_path,
+            observed_at=deadline,
+        )
+
+
+def test_complete_final_cash_marker_is_accepted(tmp_path: Path) -> None:
+    _write_cash_marker(tmp_path, _cash_marker())
+
+    loaded = session.load_final_cash_slot_marker(
+        datetime(2026, 8, 21, 9, 25, tzinfo=config.IST),
+        tmp_path,
+        observed_at=datetime(2026, 8, 21, 9, 25, 20, tzinfo=config.IST),
+    )
+
+    assert loaded["source"] == "final"
+    assert loaded["complete"] is True
+    assert loaded["marker_path"].endswith("slot_20260821_0925.json")
+
+
+def test_incomplete_final_cash_marker_remains_terminal(tmp_path: Path) -> None:
+    _write_cash_marker(tmp_path, _cash_marker(complete=False))
+
+    with pytest.raises(session.SourceIncompleteError, match="not fully complete"):
+        session.load_final_cash_slot_marker(
+            datetime(2026, 8, 21, 9, 25, tzinfo=config.IST),
+            tmp_path,
+            observed_at=datetime(2026, 8, 21, 9, 25, 20, tzinfo=config.IST),
+        )
+
+
 def _control_paths(tmp_path: Path) -> control.ControlPaths:
     root = tmp_path / "control"
     return control.ControlPaths(
@@ -824,6 +920,8 @@ def _write_one_contract_universe(
     paths: session.SessionPaths,
     *,
     off_grid_predecessor: bool = False,
+    global_complete: bool = True,
+    general_cash_superset: bool = False,
 ) -> None:
     symbol = "AAA26AUGFUT"
     cash_symbol = "AAA"
@@ -863,7 +961,7 @@ def _write_one_contract_universe(
                 "stock_outcome_symbol_set_complete": True,
                 "stock_complete": True,
                 "stock_state": "SUCCESS",
-                "global_complete": True,
+                "global_complete": global_complete,
                 "slot_ist": "2026-08-21T09:25:00+05:30",
                 "published_at_ist": "2026-08-21T09:25:20+05:30",
                 "universe_date": DAY.isoformat(),
@@ -880,12 +978,18 @@ def _write_one_contract_universe(
                 "stock_invalid_data_symbols": [],
                 "stock_failed_count": 0,
                 "stock_failed_symbols": [],
-                "apps_used": [f"app{index}" for index in range(1, 9)],
+                # Complete upstream data is authoritative even when the
+                # finalized writer used only an approved subset of apps.
+                "apps_used": ["app2", "app3", "app4"],
             }
         ),
         encoding="utf-8",
     )
     cash_hash = session.common.symbol_set_sha256([cash_symbol])
+    general_cash_hash = session.common.symbol_set_sha256(
+        [cash_symbol, "EXTRA"] if general_cash_superset else [cash_symbol]
+    )
+    general_cash_count = 2 if general_cash_superset else 1
     paths.cash_slot_root.mkdir(parents=True, exist_ok=True)
     (paths.cash_slot_root / "slot_20260821_0925.json").write_text(
         json.dumps(
@@ -894,11 +998,11 @@ def _write_one_contract_universe(
                 "published_at_ist": "2026-08-21T09:25:10+05:30",
                 "source": "final",
                 "complete": True,
-                "tickers_expected": 1,
-                "tickers_written": 1,
-                "tickers_complete": 1,
+                "tickers_expected": general_cash_count,
+                "tickers_written": general_cash_count,
+                "tickers_complete": general_cash_count,
                 "tickers_failed": 0,
-                "current_symbol_count": 1,
+                "current_symbol_count": general_cash_count,
                 "unresolved_symbol_count": 0,
                 "failed_symbol_count": 0,
                 "token_missing_symbol_count": 0,
@@ -908,7 +1012,7 @@ def _write_one_contract_universe(
                 "fno_equity_failed": 0,
                 "partition_failures": [],
                 "verification_failed_count": 0,
-                "universe_sha256": cash_hash,
+                "universe_sha256": general_cash_hash,
                 "fno_equity_universe_sha256": cash_hash,
             }
         ),
@@ -958,6 +1062,24 @@ def test_universe_oi_proof_binds_full_bytes_and_rejects_off_grid_non_candidate(
     )
     assert proof["stock_contracts_proven"] == 1
     assert len(proof["contracts"][0]["source_file_sha256"]) == 64
+
+    stock_only = _paths(tmp_path / "stock_only")
+    _write_one_contract_universe(stock_only, global_complete=False)
+    stock_only_proof = session.prove_v6_oi_shift_is_exact_for_stock_universe(
+        stock_only,
+        "09:25",
+        observed_at=datetime(2026, 8, 21, 9, 25, 50, tzinfo=config.IST),
+    )
+    assert stock_only_proof["stock_contracts_proven"] == 1
+
+    cash_superset = _paths(tmp_path / "cash_superset")
+    _write_one_contract_universe(cash_superset, general_cash_superset=True)
+    cash_superset_proof = session.prove_v6_oi_shift_is_exact_for_stock_universe(
+        cash_superset,
+        "09:25",
+        observed_at=datetime(2026, 8, 21, 9, 25, 50, tzinfo=config.IST),
+    )
+    assert cash_superset_proof["stock_contracts_proven"] == 1
 
     other = _paths(tmp_path / "offgrid")
     _write_one_contract_universe(other, off_grid_predecessor=True)

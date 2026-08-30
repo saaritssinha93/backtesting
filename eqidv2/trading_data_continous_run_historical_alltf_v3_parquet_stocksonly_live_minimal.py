@@ -1335,7 +1335,18 @@ def _finalize_and_save(df: pd.DataFrame, out_path: str):
             ) as tmp:
                 tmp_path = tmp.name
             df.to_parquet(tmp_path, engine="pyarrow", index=False, compression=compression)
-            os.replace(tmp_path, out_path)
+            # Windows can briefly deny replacement while a dashboard or
+            # scanner has the previous Parquet open.  The encoded temporary
+            # file is complete, so retry only the atomic rename; never refetch
+            # or expose a partial destination.
+            for attempt in range(8):
+                try:
+                    os.replace(tmp_path, out_path)
+                    break
+                except PermissionError:
+                    if attempt == 7:
+                        raise
+                    _time.sleep(0.02 * (2**attempt))
             tmp_path = None
         finally:
             if tmp_path is not None:

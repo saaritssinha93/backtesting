@@ -13,6 +13,98 @@ import log_dashboard_server as dashboard
 
 
 class DashboardV7ControlsTests(unittest.TestCase):
+    def test_legacy_one_line_status_is_parsed_into_individual_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "legacy.status"
+            path.write_text(
+                "status=STOPPED script=worker.py ts=2026-06-10_06:28:25 "
+                "reason=stale_manual_override\n",
+                encoding="utf-8",
+            )
+            parsed = dashboard.parse_status_file(path)
+
+        self.assertEqual(parsed["status"], "STOPPED")
+        self.assertEqual(parsed["script"], "worker.py")
+        self.assertEqual(parsed["ts"], "2026-06-10_06:28:25")
+        self.assertEqual(parsed["reason"], "stale_manual_override")
+
+    def test_task_snapshot_timeout_keeps_last_known_good_snapshot(self) -> None:
+        previous_cache = dashboard._TASK_SNAPSHOT_CACHE
+        previous_cache_at = dashboard._TASK_SNAPSHOT_CACHE_AT
+        known = {
+            "\\EQIDV2_v11_lab_shadow_monitor_1655": {
+                "Scheduled Task State": "Enabled",
+                "Status": "Ready",
+            }
+        }
+        try:
+            dashboard._TASK_SNAPSHOT_CACHE = dict(known)
+            dashboard._TASK_SNAPSHOT_CACHE_AT = None
+            with patch.object(
+                dashboard.subprocess,
+                "run",
+                side_effect=dashboard.subprocess.TimeoutExpired("schtasks", 20),
+            ):
+                observed = dashboard.load_task_scheduler_snapshot(force=True)
+        finally:
+            dashboard._TASK_SNAPSHOT_CACHE = previous_cache
+            dashboard._TASK_SNAPSHOT_CACHE_AT = previous_cache_at
+
+        self.assertEqual(observed, known)
+
+    def test_stale_task_snapshot_returns_immediately_and_refreshes_in_background(self) -> None:
+        previous_cache = dashboard._TASK_SNAPSHOT_CACHE
+        previous_cache_at = dashboard._TASK_SNAPSHOT_CACHE_AT
+        previous_refreshing = dashboard._TASK_SNAPSHOT_REFRESHING
+        known = {
+            "\\EQIDV2_fno_v6_scanner_5min_0915": {
+                "Scheduled Task State": "Enabled",
+                "Status": "Ready",
+            }
+        }
+        try:
+            dashboard._TASK_SNAPSHOT_CACHE = dict(known)
+            dashboard._TASK_SNAPSHOT_CACHE_AT = None
+            dashboard._TASK_SNAPSHOT_REFRESHING = False
+            with patch.object(dashboard, "_query_task_scheduler_snapshot") as query:
+                with patch.object(dashboard.threading, "Thread") as thread_factory:
+                    observed = dashboard.load_task_scheduler_snapshot(force=False)
+
+            self.assertEqual(observed, known)
+            query.assert_not_called()
+            thread_factory.assert_called_once()
+            thread_factory.return_value.start.assert_called_once()
+            self.assertTrue(dashboard._TASK_SNAPSHOT_REFRESHING)
+        finally:
+            dashboard._TASK_SNAPSHOT_CACHE = previous_cache
+            dashboard._TASK_SNAPSHOT_CACHE_AT = previous_cache_at
+            dashboard._TASK_SNAPSHOT_REFRESHING = previous_refreshing
+
+    def test_newer_session_heartbeat_supersedes_old_success(self) -> None:
+        merged = dashboard.merge_runtime_status(
+            {
+                "status": "SUCCESS",
+                "ts": "2026-08-27T09:46:15+05:30",
+                "phase": "SLOT_DONE",
+                "slot": "09:45",
+            },
+            {
+                "state": "WAITING",
+                "ts": "2026-08-31T09:50:00+05:30",
+                "phase": "WAIT_SCANNER",
+                "slot": "09:45",
+                "_file_age_sec": 10_000,
+            },
+        )
+
+        self.assertEqual(merged["status"], "WAITING")
+        self.assertEqual(merged["phase"], "WAIT_SCANNER")
+        self.assertEqual(merged["ts"], "2026-08-31T09:50:00+05:30")
+        self.assertEqual(merged["previous_status"], "SUCCESS")
+        self.assertEqual(
+            merged["status_scope"], "newer_heartbeat_supersedes_prior_session"
+        )
+
     def test_active_v7_sessions_are_restartable(self) -> None:
         expected = {
             "signal_discovery_v7_5min_id",
@@ -255,6 +347,49 @@ class DashboardV7ControlsTests(unittest.TestCase):
         self.assertEqual(status["previous_phase"], "FAILED")
         self.assertEqual(status["status_scope"], "awaiting_today_scheduled_run")
 
+    def test_prior_day_failure_with_ts_ist_is_scheduled_before_todays_run(self) -> None:
+        task_snapshot = {
+            "\\EQIDV2_v11_lab_shadow_monitor_1655": {
+                "Scheduled Task State": "Enabled",
+                "Status": "Ready",
+                "Next Run Time": "31-08-2026 16:55:00",
+            }
+        }
+        old_timestamp = "2026-08-28T16:56:01.414738+05:30"
+        status = dashboard.apply_scheduler_status(
+            "v11_lab_shadow_monitor",
+            {
+                "status": "ERROR",
+                "ts_ist": old_timestamp,
+                "phase": "FAILED",
+                "error": "data verify failed",
+            },
+            task_snapshot,
+            now_ist=datetime(2026, 8, 31, 12, 30, tzinfo=dashboard.IST),
+        )
+
+        self.assertEqual(status["status"], "SCHEDULED")
+        self.assertEqual(status["previous_status"], "ERROR")
+        self.assertEqual(status["previous_status_ts"], old_timestamp)
+        self.assertEqual(status["previous_error"], "data verify failed")
+        self.assertEqual(status["phase"], "WAIT_SCHEDULE")
+        self.assertEqual(status["status_scope"], "awaiting_today_scheduled_run")
+
+    def test_blocked_fail_closed_state_is_a_watch_state_in_dashboard(self) -> None:
+        source = Path(dashboard.__file__).read_text(encoding="utf-8")
+        self.assertIn(
+            's === "BLOCKED" && ["INCOMPLETE_BY_DEADLINE", "UPSTREAM_BLOCKED"].includes(p)',
+            source,
+        )
+        self.assertIn(
+            'if (isFailClosedWatch(s, phase)) return "warn"',
+            source,
+        )
+        self.assertNotIn(
+            '"PARTIAL", "BLOCKED", "BLOCKED_STALE_ACTIVATION"].includes(s)',
+            source,
+        )
+
     def test_same_day_failure_remains_failed(self) -> None:
         status = dashboard.apply_scheduler_status(
             "fno_v6_scanner_5min",
@@ -270,6 +405,52 @@ class DashboardV7ControlsTests(unittest.TestCase):
         )
 
         self.assertEqual(status["status"], "FAILED")
+
+    def test_disabled_task_does_not_hide_manually_running_worker(self) -> None:
+        with patch.object(dashboard, "_pid_is_alive_fast", return_value=True):
+            status = dashboard.apply_scheduler_status(
+                "eod_1min_data",
+                {
+                    "status": "RUNNING",
+                    "heartbeat_state": "RUNNING",
+                    "worker_pid": "39528",
+                },
+                {
+                    "\\EQIDV2_eod_1min_data_0915": {
+                        "Scheduled Task State": "Disabled",
+                        "Status": "Disabled",
+                        "Next Run Time": "01-09-2026 09:15:00",
+                    }
+                },
+                now_ist=datetime(2026, 8, 31, 15, 10, tzinfo=dashboard.IST),
+            )
+
+        self.assertEqual(status["status"], "RUNNING")
+        self.assertEqual(status["scheduler_state"], "DISABLED")
+        self.assertEqual(status["scheduler_status"], "DISABLED")
+        self.assertEqual(status["runtime_start_mode"], "MANUAL")
+        self.assertEqual(status["scheduler_attention"], "DISABLED_WHILE_RUNNING")
+        self.assertIn("automatic scheduled start is disabled", status["derived_status"])
+
+    def test_disabled_task_with_dead_worker_is_disabled_but_section_locked(self) -> None:
+        with patch.object(dashboard, "_pid_is_alive_fast", return_value=False):
+            status = dashboard.apply_scheduler_status(
+                "eod_1min_data",
+                {"status": "RUNNING", "worker_pid": "39528"},
+                {
+                    "\\EQIDV2_eod_1min_data_0915": {
+                        "Scheduled Task State": "Disabled",
+                        "Status": "Disabled",
+                    }
+                },
+                now_ist=datetime(2026, 8, 31, 15, 20, tzinfo=dashboard.IST),
+            )
+
+        self.assertEqual(status["status"], "DISABLED")
+        source = Path(dashboard.__file__).read_text(encoding="utf-8")
+        locked_block = source.split("const SECTION_LOCKED_DISABLED_IDS", 1)[1].split("]);", 1)[0]
+        self.assertIn('"kiteticker_5min_data"', locked_block)
+        self.assertIn('"eod_1min_data"', locked_block)
 
 
 if __name__ == "__main__":

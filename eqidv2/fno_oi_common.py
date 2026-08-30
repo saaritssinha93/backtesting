@@ -655,6 +655,24 @@ def ranking_slot_path(slot_end: datetime | pd.Timestamp) -> Path:
 def _to_ist(values: Sequence[Any] | pd.Series) -> pd.Series:
     source = values if isinstance(values, pd.Series) else pd.Series(values)
 
+    # Parquet preserves these columns as datetime64 (usually already in IST).
+    # Keep that common path vectorised: the previous per-value pd.Timestamp
+    # conversion dominated every live append as contract histories grew.
+    if isinstance(source.dtype, pd.DatetimeTZDtype):
+        converted = source.dt.tz_convert(IST)
+        return pd.Series(
+            converted.array,
+            index=source.index,
+            dtype="datetime64[ns, Asia/Kolkata]",
+        )
+    if pd.api.types.is_datetime64_any_dtype(source.dtype):
+        converted = source.dt.tz_localize(IST)
+        return pd.Series(
+            converted.array,
+            index=source.index,
+            dtype="datetime64[ns, Asia/Kolkata]",
+        )
+
     def _convert(value: Any) -> pd.Timestamp:
         try:
             stamp = pd.Timestamp(value)
@@ -742,14 +760,22 @@ def normalize_historical_candles(
     return frame.loc[:, list(RAW_COLUMNS)].sort_values("timestamp").reset_index(drop=True)
 
 
-def append_contract_rows(path: Path, incoming: pd.DataFrame) -> pd.DataFrame:
+def merge_contract_rows(
+    existing: pd.DataFrame | None,
+    incoming: pd.DataFrame,
+) -> pd.DataFrame:
+    """Apply the canonical append/dedupe/order contract to in-memory frames."""
     if incoming is None or incoming.empty:
-        return pd.DataFrame() if not path.exists() else pd.read_parquet(path)
-    existing = pd.read_parquet(path) if path.exists() else pd.DataFrame(columns=incoming.columns)
+        return pd.DataFrame() if existing is None else existing.copy()
+    current = (
+        pd.DataFrame(columns=incoming.columns)
+        if existing is None
+        else existing
+    )
     combined = (
         incoming.copy()
-        if existing.empty
-        else pd.concat([existing, incoming], ignore_index=True, sort=False)
+        if current.empty
+        else pd.concat([current, incoming], ignore_index=True, sort=False)
     )
     combined["timestamp"] = _to_ist(combined["timestamp"])
     combined["candle_start"] = _to_ist(combined["candle_start"])
@@ -761,7 +787,14 @@ def append_contract_rows(path: Path, incoming: pd.DataFrame) -> pd.DataFrame:
     )
     ordered = [column for column in RAW_COLUMNS if column in combined.columns]
     extra = [column for column in combined.columns if column not in ordered]
-    combined = combined.loc[:, ordered + extra]
+    return combined.loc[:, ordered + extra]
+
+
+def append_contract_rows(path: Path, incoming: pd.DataFrame) -> pd.DataFrame:
+    if incoming is None or incoming.empty:
+        return pd.DataFrame() if not path.exists() else pd.read_parquet(path)
+    existing = pd.read_parquet(path) if path.exists() else None
+    combined = merge_contract_rows(existing, incoming)
     atomic_write_parquet(combined, path)
     return combined
 

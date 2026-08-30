@@ -129,6 +129,14 @@ def _iter_actions_for_fail(name: str) -> Iterable[Tuple[str, str, str]]:
         yield ("sync_bat", "dashboard_restart", str(BAT_DIR / "run_log_dashboard_restart_keep_url.bat"))
         return
 
+    if name == "authentication_v2":
+        # The healthcheck reports a completed-but-failed auth run under this
+        # direct label (not ``task_*``).  Retry through Task Scheduler so its
+        # IgnoreNew policy prevents overlapping Selenium login sessions.
+        task_name = "EQIDV2_authentication_v2_0900"
+        yield ("task_run", f"task:{task_name}", task_name)
+        return
+
     if name.startswith("task_"):
         task_name = name[len("task_") :]
         yield ("task_run", f"task:{task_name}", task_name)

@@ -43,16 +43,20 @@ def _data_job_status(day: str) -> tuple[str, str]:
     text = _read_text(path)
     if not text:
         return "WAIT", f"{path.name} exists but is empty"
-    m = re.search(r"END Data for backtesting parallel session \(exit=(\d+)\)", text)
-    if not m:
+    start_at = text.rfind("START Data for backtesting parallel session")
+    end_matches = list(re.finditer(r"END Data for backtesting parallel session \(exit=(\d+)\)", text))
+    if not end_matches:
         return "WAIT", f"{path.name} has not reached END yet"
+    m = end_matches[-1]
+    if start_at > m.start():
+        return "WAIT", f"{path.name} latest run has not reached END yet"
     exit_code = int(m.group(1))
     if exit_code == 0:
         return "PASS", f"{path.name} finished exit=0"
     return "FAIL", f"{path.name} finished exit={exit_code}"
 
 
-def _verify_status(day: str) -> tuple[str, str, dict[str, Any]]:
+def _verify_status(day: str, scope: str = "") -> tuple[str, str, dict[str, Any]]:
     path = VERIFY_DIR / f"data_verify_{day}.json"
     if not path.exists():
         return "WAIT", f"waiting for {path.name}", {}
@@ -60,6 +64,10 @@ def _verify_status(day: str) -> tuple[str, str, dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         return "WAIT", f"{path.name} is not readable yet: {type(exc).__name__}", {}
+    observed_scope = str(payload.get("scope", "all") or "all").strip().lower()
+    expected_scope = str(scope or "").strip().lower()
+    if expected_scope and observed_scope != expected_scope:
+        return "WAIT", f"{path.name} scope={observed_scope}, waiting for scope={expected_scope}", payload
     exit_code = int(payload.get("overall_exit_code", 2))
     status = str(payload.get("overall_status", "")).upper() or {0: "PASS", 1: "WARN", 2: "FAIL"}.get(exit_code, "FAIL")
     if exit_code == 0:
@@ -69,12 +77,12 @@ def _verify_status(day: str) -> tuple[str, str, dict[str, Any]]:
     return "FAIL", f"{path.name} {status} exit={exit_code}", payload
 
 
-def wait(day: str, timeout_sec: int, poll_sec: int) -> int:
+def wait(day: str, timeout_sec: int, poll_sec: int, scope: str = "") -> int:
     deadline = time.time() + max(timeout_sec, 1)
     last_line = ""
     while True:
         data_status, data_note = _data_job_status(day)
-        verify_status, verify_note, payload = _verify_status(day)
+        verify_status, verify_note, payload = _verify_status(day, scope=scope)
         line = f"[data-ready] data={data_status} ({data_note}); verify={verify_status} ({verify_note})"
         if line != last_line:
             print(line, flush=True)
@@ -100,8 +108,9 @@ def main() -> int:
     ap.add_argument("--date", default=_today_ist(), help="YYYY-MM-DD, defaults to today IST")
     ap.add_argument("--timeout-sec", type=int, default=3600)
     ap.add_argument("--poll-sec", type=int, default=15)
+    ap.add_argument("--scope", choices=("", "all", "fno"), default="")
     args = ap.parse_args()
-    return wait(str(args.date), args.timeout_sec, args.poll_sec)
+    return wait(str(args.date), args.timeout_sec, args.poll_sec, scope=str(args.scope))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ $hardener = Join-Path $batDir "harden_scheduled_task.ps1"
 $tasks = @(
     @{ Name = "EQIDV2_fno_oi_universe_0850"; Time = "08:50"; Runner = "run_fno_oi_universe.bat" }
     @{ Name = "EQIDV2_fno_oi_fetch_5min_0905"; Time = "09:05"; Runner = "run_fno_oi_fetch_5min.bat" }
+    @{ Name = "EQIDV2_fno_oi_fetch_5min_fast_shadow_0906"; Time = "09:06"; Runner = "run_fno_oi_fetch_5min_fast_shadow.bat" }
     @{ Name = "EQIDV2_fno_oi_feature_ranker_0915"; Time = "09:15"; Runner = "run_fno_oi_feature_ranker.bat" }
     @{ Name = "EQIDV2_fno_v6_scanner_5min_0918"; Time = "09:15"; Runner = "run_fno_v6_scanner_5min.bat" }
     @{ Name = "EQIDV2_fno_v6_equity_1min_feed_0919"; Time = "09:15"; Runner = "run_fno_v6_equity_1min_feed.bat" }

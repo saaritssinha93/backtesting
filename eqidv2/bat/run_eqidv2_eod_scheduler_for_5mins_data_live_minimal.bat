@@ -43,6 +43,10 @@ set "EQIDV2_5M_ADAPTIVE_RECOVERY_STREAK=2"
 REM Keep one authenticated process per app alive across slots. This removes
 REM Windows spawn/auth startup from the decision-critical fetch path.
 set "EQIDV2_5M_PERSISTENT_PARTITION_WORKERS=1"
+REM Never launch an interactive Selenium login from the decision-critical
+REM market-data loop.  The pre-open authentication task owns token repair;
+REM this feed immediately repartitions work across whatever apps validate.
+set "EQIDV2_5M_INLINE_APP_SELF_HEAL=0"
 REM v2 universe (1262 syms after quarantine) takes ~22-24s/slot; bump warn from 20s to 30s
 REM so the adaptive throttle does not keep stepping workers down on cosmetic SLA breaches.
 set "EQIDV2_5M_SLOT_SLA_WARN_SEC=50"
@@ -50,6 +54,8 @@ set "EQIDV2_VERIFY_SAMPLE_SIZE=32"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "SCRIPT_NAME=eqidv2_eod_scheduler_for_5mins_data_live_minimal.py"
 set "LOG_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_5mins_data_live_minimal.log"
+set "LOG_ROTATOR=%BASE_DIR%\bat\rotate_log_if_large.ps1"
+set "LOG_ROTATE_MAX_BYTES=104857600"
 set "STATUS_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status"
 set "HEARTBEAT_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat"
 set "FRESHNESS_FILE=%LOG_DIR%\eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json"
@@ -81,6 +87,9 @@ set "FRESHNESS_TIMEOUT_SEC=780"
 set "FRESHNESS_GRACE_SEC=1500"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+if exist "%LOG_ROTATOR%" if exist "%LOG_FILE%" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%LOG_ROTATOR%" -Path "%LOG_FILE%" -MaxBytes %LOG_ROTATE_MAX_BYTES%
+)
 
 cd /d "%BASE_DIR%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^

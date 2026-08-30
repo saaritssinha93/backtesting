@@ -54,8 +54,9 @@ SESSION_SCHEMA_VERSION = "fno_v8_combined_paper_session_v1"
 EVIDENCE_SCHEMA_VERSION = "fno_v8_combined_paper_evidence_v1"
 CHECKPOINT_SCHEMA_VERSION = "fno_v8_combined_paper_checkpoint_envelope_v1"
 SOURCE_POLICY_VERSION = (
-    "independent_all208_strict_cash_exact_oi_direct_kite_5x1m_v4"
+    "independent_all_mapped_strict_cash_exact_oi_approved_kite_pool_5x1m_v5"
 )
+MIN_HEALTHY_KITE_APPS = 7
 
 # The source contract is literal on purpose.  Importing V6 live code would
 # create/shared-state coupling and could change source semantics underneath an
@@ -645,7 +646,6 @@ def prove_v6_oi_shift_is_exact_for_stock_universe(
         ),
         (marker.get("stock_complete") is True, "stock complete"),
         (marker.get("stock_state") == "SUCCESS", "stock state"),
-        (marker.get("global_complete") is True, "global complete"),
         (slot_at == signal_at, "slot"),
         (published_at.date() == paths.session_date, "publication date"),
         (published_at >= signal_at, "publication chronology"),
@@ -683,9 +683,11 @@ def prove_v6_oi_shift_is_exact_for_stock_universe(
         (int(marker.get("stock_failed_count", -1)) == 0, "failed stocks"),
         (not list(marker.get("stock_failed_symbols") or []), "failed stock list"),
         (
-            sorted(str(value) for value in marker.get("apps_used") or [])
-            == [f"app{index}" for index in range(1, config.REQUIRED_KITE_APPS + 1)],
-            "eight-app roster",
+            _approved_app_names(
+                marker.get("apps_used"), minimum=1, require_order=False
+            )
+            is not None,
+            "approved Kite provenance",
         ),
     )
     marker_failures = [label for passed, label in marker_checks if not passed]
@@ -798,10 +800,10 @@ def prove_v6_oi_shift_is_exact_for_stock_universe(
         observed_at=observed,
     )
     cash_marker_checks = (
-        int(cash_marker.get("tickers_expected", -1)) == len(contracts),
-        int(cash_marker.get("current_symbol_count", -1)) == len(contracts),
+        int(cash_marker.get("tickers_expected", -1)) >= len(contracts),
+        int(cash_marker.get("current_symbol_count", -1))
+        == int(cash_marker.get("tickers_expected", -2)),
         int(cash_marker.get("fno_equity_expected", -1)) == len(contracts),
-        cash_marker.get("universe_sha256") == cash_universe_sha256,
         cash_marker.get("fno_equity_universe_sha256") == cash_universe_sha256,
     )
     if not all(cash_marker_checks):
@@ -949,6 +951,11 @@ def prove_v6_oi_shift_is_exact_for_stock_universe(
             proofs.append(future.result())
     proofs.sort(key=lambda item: item["tradingsymbol"])
     proof_rows_sha256 = common.canonical_json_sha256(proofs)
+    upstream_apps = _approved_app_names(
+        marker.get("apps_used"), minimum=1, require_order=False
+    )
+    if upstream_apps is None:  # Defensive: the marker contract above already checked it.
+        raise SourceIncompleteError("final futures marker app provenance is invalid")
     payload: dict[str, Any] = {
         "schema_version": EVIDENCE_SCHEMA_VERSION,
         "kind": "V6_OI_SHIFT_EXACT_GRID_UNIVERSE_PROOF",
@@ -957,7 +964,10 @@ def prove_v6_oi_shift_is_exact_for_stock_universe(
         "signal_timestamp": signal_at.isoformat(),
         "previous_timestamp": previous_at.isoformat(),
         "source_policy_version": SOURCE_POLICY_VERSION,
-        "proof_contract": "ALL_MAPPED_STOCK_FUTURES_SORTED_PREDECESSOR_EXACT_S_MINUS_5_V1",
+        "proof_contract": "ALL_MAPPED_STOCK_FUTURES_SORTED_PREDECESSOR_EXACT_S_MINUS_5_APPROVED_KITE_PROVENANCE_V2",
+        "upstream_app_provenance_policy": "NONEMPTY_UNIQUE_SUBSET_OF_CONFIGURED_APP1_TO_APP8_V1",
+        "upstream_apps_used": list(upstream_apps),
+        "upstream_apps_used_sha256": common.canonical_json_sha256(list(upstream_apps)),
         "marker_path": str(marker_path),
         "marker_sha256": _sha256_bytes(marker_raw),
         "marker_published_at_ist": published_at.isoformat(),
@@ -1042,6 +1052,23 @@ def _validate_universe_oi_proof_payload(
         payload.get("signal_end") == signal_end,
         payload.get("source_policy_version") == SOURCE_POLICY_VERSION,
         payload.get("all_predecessors_exact_s_minus_5") is True,
+        payload.get("upstream_app_provenance_policy")
+        == "NONEMPTY_UNIQUE_SUBSET_OF_CONFIGURED_APP1_TO_APP8_V1",
+        _approved_app_names(
+            payload.get("upstream_apps_used"), minimum=1, require_order=False
+        )
+        is not None,
+        payload.get("upstream_apps_used_sha256")
+        == common.canonical_json_sha256(
+            list(
+                _approved_app_names(
+                    payload.get("upstream_apps_used"),
+                    minimum=1,
+                    require_order=False,
+                )
+                or ()
+            )
+        ),
         payload.get("proof_completed_before_confirmation_due") is True,
         proof_started <= proof_finished < confirmation_due,
         confirmation_due
@@ -1200,10 +1227,35 @@ def load_final_cash_slot_marker(
     published = _parse_aware_ist(
         marker.get("published_at_ist"), "cash_published_at_ist"
     )
+    observed = _normalize_now(observed_at)
+    if slot != expected_end:
+        raise SourceIncompleteError("cash final-slot marker has the wrong slot")
+    if published > observed:
+        raise SourceNotReadyError(
+            f"cash slot marker is not observable yet: {path}"
+        )
+
+    # The upstream 5-minute writer deliberately publishes a lightweight
+    # `source=watcher` marker first, then atomically replaces it with the
+    # authoritative `source=final` marker.  Seeing that provisional marker
+    # before S+1+buffer is normal source latency, not permanent corruption.
+    # Once the deadline is reached, however, the absence of a final marker is
+    # terminal so the paper session remains fail-closed and never backfills.
+    source_deadline = expected_end + timedelta(
+        minutes=1, seconds=BOUNDARY_BUFFER_SECONDS
+    )
+    if marker.get("source") != "final":
+        if observed < source_deadline:
+            raise SourceNotReadyError(
+                "cash final-slot marker is still provisional "
+                f"(source={marker.get('source')!r}): {path}"
+            )
+        raise SourceIncompleteError(
+            "cash final-slot marker was not authoritative final by the source "
+            "deadline"
+        )
+
     checks = (
-        slot == expected_end,
-        published <= _normalize_now(observed_at),
-        marker.get("source") == "final",
         marker.get("complete") is True,
         int(marker.get("tickers_expected", -1)) > 0,
         int(marker.get("tickers_written", -2))
@@ -1392,14 +1444,16 @@ def fetch_exact_cash_signal_constituents(
     observations: int = market_data.DEFAULT_OBSERVATIONS,
     observation_spacing_sec: float = market_data.DEFAULT_OBSERVATION_SPACING_SEC,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    """Fetch one five-row range per candidate, partitioned across app1..app8.
+    """Fetch one exact five-row range per candidate through an approved app pool.
 
     Nothing is persisted here.  The caller must finish all other source checks,
     re-read the wall clock, and prove it is still before S+1 before sealing the
     returned audit or registering candidates.
     """
 
-    _assert_exact_roster(runtimes)
+    pool = _validate_approved_runtime_pool(
+        runtimes, minimum_healthy_apps=MIN_HEALTHY_KITE_APPS
+    )
     if observations < 1:
         raise ValueError("cash constituent observations must be positive")
 
@@ -1417,30 +1471,36 @@ def fetch_exact_cash_signal_constituents(
         for symbol, token in sorted(by_symbol.items())
     ]
     signal_at = _slot_datetime(paths.session_date, signal_end)
-    if _normalize_now(observed_at) < signal_at + timedelta(seconds=BOUNDARY_BUFFER_SECONDS):
+    normalized_observed = _normalize_now(observed_at)
+    if normalized_observed < signal_at + timedelta(seconds=BOUNDARY_BUFFER_SECONDS):
         raise SourceIncompleteError("cash signal candle is not completed yet")
+    audit_deadline = signal_at + timedelta(
+        minutes=1, seconds=BOUNDARY_BUFFER_SECONDS
+    )
+    monotonic_deadline = time.monotonic() + max(
+        0.0, (audit_deadline - normalized_observed).total_seconds()
+    )
     expected_starts = [
         pd.Timestamp(signal_at - timedelta(minutes=offset))
         for offset in range(5, 0, -1)
     ]
     expected_start_set = set(expected_starts)
-    partitions = [requests[index:: len(runtimes)] for index in range(len(runtimes))]
-
     def fetch_one(
-        runtime: market_data.AppRuntime,
+        request_index: int,
         request: market_data.CandidateRequest,
     ) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]]]:
         attempts: list[dict[str, Any]] = []
         for attempt in range(1, observations + 1):
+            runtime = pool[(request_index + attempt - 1) % len(pool)]
             try:
-                runtime.pace()
-                raw_records = runtime.client.historical_data(
+                raw_records = runtime.call_historical_data(
                     int(request.instrument_token),
                     expected_starts[0].to_pydatetime(),
                     (pd.Timestamp(signal_at) + pd.Timedelta(minutes=1)).to_pydatetime(),
                     "minute",
                     continuous=False,
                     oi=False,
+                    monotonic_deadline=monotonic_deadline,
                 )
                 by_start: dict[pd.Timestamp, Mapping[str, Any]] = {}
                 duplicate = False
@@ -1494,7 +1554,13 @@ def fetch_exact_cash_signal_constituents(
                             "app_name": runtime.app_name,
                         }
                     )
-                attempts.append({"attempt": attempt, "state": "SUCCESS"})
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "app_name": runtime.app_name,
+                        "state": "SUCCESS",
+                    }
+                )
                 return request.symbol, {
                     "open": records[0]["open"],
                     "high": max(record["high"] for record in records),
@@ -1512,6 +1578,7 @@ def fetch_exact_cash_signal_constituents(
                 attempts.append(
                     {
                         "attempt": attempt,
+                        "app_name": runtime.app_name,
                         "state": "FAILED",
                         "error": " ".join(f"{type(exc).__name__}: {exc}".split())[:500],
                     }
@@ -1520,34 +1587,28 @@ def fetch_exact_cash_signal_constituents(
                     time.sleep(float(observation_spacing_sec))
         return request.symbol, None, attempts
 
-    def work(
-        runtime: market_data.AppRuntime,
-        assigned: Sequence[market_data.CandidateRequest],
-    ) -> list[tuple[str, dict[str, Any] | None, list[dict[str, Any]]]]:
-        return [fetch_one(runtime, request) for request in assigned]
-
     fetched: dict[str, dict[str, Any]] = {}
     outcomes: list[dict[str, Any]] = []
     with ThreadPoolExecutor(
-        max_workers=len(runtimes), thread_name_prefix="fno-v8-paper-cash-audit"
+        max_workers=len(pool), thread_name_prefix="fno-v8-paper-cash-audit"
     ) as executor:
         pending = {
-            executor.submit(work, runtime, assigned): runtime.app_name
-            for runtime, assigned in zip(runtimes, partitions)
+            executor.submit(fetch_one, index, request): request
+            for index, request in enumerate(requests)
         }
         for future in as_completed(pending):
-            app_name = pending[future]
-            for symbol, value, attempts in future.result():
-                outcomes.append(
-                    {
-                        "symbol": symbol,
-                        "app_name": app_name,
-                        "state": "SUCCESS" if value is not None else "DATA_INCOMPLETE",
-                        "attempts": attempts,
-                    }
-                )
-                if value is not None:
-                    fetched[symbol] = value
+            symbol, value, attempts = future.result()
+            outcomes.append(
+                {
+                    "symbol": symbol,
+                    "app_name": None if value is None else value.get("app_name"),
+                    "attempted_apps": [item.get("app_name") for item in attempts],
+                    "state": "SUCCESS" if value is not None else "DATA_INCOMPLETE",
+                    "attempts": attempts,
+                }
+            )
+            if value is not None:
+                fetched[symbol] = value
     missing = sorted(set(by_symbol) - set(fetched))
     if missing:
         raise SourceIncompleteError(
@@ -1559,12 +1620,16 @@ def fetch_exact_cash_signal_constituents(
         "session_date": paths.session_date.isoformat(),
         "signal_end": signal_end,
         "signal_timestamp": signal_at.isoformat(),
-        "source_contract": "ONE_RANGE_REQUEST_PER_CANDIDATE_PARTITIONED_APP1_TO_APP8",
+        "source_contract": "ONE_RANGE_REQUEST_PER_CANDIDATE_APPROVED_HEALTHY_APP_POOL_WITH_CROSS_APP_RETRY_V2",
         "candidate_contract_sha256": common.canonical_json_sha256(
             [asdict(request) for request in requests]
         ),
-        "app_roster": market_data.app_roster_payload(runtimes),
-        "app_roster_sha256": market_data.app_roster_sha256(runtimes),
+        "app_roster": market_data.app_roster_payload(pool),
+        "app_roster_sha256": market_data.app_roster_sha256(pool),
+        "healthy_app_count": len(pool),
+        "minimum_healthy_app_count": MIN_HEALTHY_KITE_APPS,
+        "app_pool_degraded": len(pool) < len(market_data.EXPECTED_APP_NAMES),
+        "app_provenance_policy": "ORDERED_UNIQUE_APPROVED_HEALTHY_SUBSET_V1",
         "candidate_count": len(requests),
         "outcomes": sorted(outcomes, key=lambda item: item["symbol"]),
         "symbols": fetched,
@@ -1669,10 +1734,10 @@ def precompute_strict_cash_universe_source(
         raise SourceIncompleteError("strict cash prewarm identities are not unique")
     symbol_hash = common.symbol_set_sha256(item["symbol"] for item in identities)
     if not (
-        int(marker.get("tickers_expected", -1)) == len(identities)
-        and int(marker.get("current_symbol_count", -1)) == len(identities)
+        int(marker.get("tickers_expected", -1)) >= len(identities)
+        and int(marker.get("current_symbol_count", -1))
+        == int(marker.get("tickers_expected", -2))
         and int(marker.get("fno_equity_expected", -1)) == len(identities)
-        and marker.get("universe_sha256") == symbol_hash
         and marker.get("fno_equity_universe_sha256") == symbol_hash
     ):
         raise SourceIncompleteError("strict cash marker/universe binding mismatch")
@@ -3251,7 +3316,7 @@ def render_report(
         f"- Setup book SHA-256: `{config.COMBINED_SETUP_BOOK_SHA256}`",
         f"- Strategy fingerprint: `{config.strategy_fingerprint()}`",
         f"- Runtime bundle SHA-256: `{telemetry.runtime_bundle_sha256 or 'NOT_BOUND'}`",
-        f"- Eight-app roster SHA-256: `{telemetry.app_roster_sha256 or 'NOT_AUTHENTICATED'}`",
+        f"- Healthy app-pool roster SHA-256: `{telemetry.app_roster_sha256 or 'NOT_AUTHENTICATED'}`",
         f"- Completed minute snapshots: {telemetry.completed_minutes}",
         f"- Incomplete minute snapshots: {telemetry.incomplete_minutes}",
         f"- Economic result valid: **{validity}**",
@@ -3474,12 +3539,61 @@ def _require_runtime_activation(
     return decision
 
 
-def _assert_exact_roster(runtimes: Sequence[market_data.AppRuntime]) -> None:
-    names = tuple(str(runtime.app_name) for runtime in runtimes)
-    if len(runtimes) != config.REQUIRED_KITE_APPS or names != market_data.EXPECTED_APP_NAMES:
+def _approved_app_names(
+    values: Any,
+    *,
+    minimum: int,
+    require_order: bool = True,
+) -> tuple[str, ...] | None:
+    if not isinstance(values, (list, tuple)):
+        return None
+    names = tuple(str(value).strip() for value in values)
+    if len(names) < max(1, int(minimum)) or len(names) != len(set(names)):
+        return None
+    expected_order = tuple(
+        name for name in market_data.EXPECTED_APP_NAMES if name in set(names)
+    )
+    if set(names) != set(expected_order) or (require_order and names != expected_order):
+        return None
+    return expected_order
+
+
+def _validate_approved_runtime_pool(
+    runtimes: Sequence[market_data.AppRuntime],
+    *,
+    minimum_healthy_apps: int,
+) -> tuple[market_data.AppRuntime, ...]:
+    pool = tuple(runtimes)
+    validator = getattr(market_data, "validate_runtime_pool", None)
+    if callable(validator):
+        try:
+            pool = tuple(
+                validator(pool, minimum_healthy_apps=int(minimum_healthy_apps))
+            )
+        except Exception as exc:
+            raise SessionContractError(
+                "V8 PAPER requires an approved ordered app1..app8 subset with "
+                f"at least {int(minimum_healthy_apps)} healthy apps: {exc}"
+            ) from exc
+    names = _approved_app_names(
+        [runtime.app_name for runtime in pool], minimum=int(minimum_healthy_apps)
+    )
+    if names is None:
         raise SessionContractError(
-            f"V8 PAPER requires ordered app1..app8; observed={list(names)}"
+            "V8 PAPER requires an approved ordered app1..app8 subset with at "
+            f"least {int(minimum_healthy_apps)} healthy apps; "
+            f"observed={[str(runtime.app_name) for runtime in pool]}"
         )
+    return pool
+
+
+def _assert_exact_roster(runtimes: Sequence[market_data.AppRuntime]) -> None:
+    # Kept under its historical name because activation/preflight callers use
+    # it as the runtime availability gate.  Data completeness, not the identity
+    # of a temporarily failed app, is the actual trading-integrity boundary.
+    _validate_approved_runtime_pool(
+        runtimes, minimum_healthy_apps=MIN_HEALTHY_KITE_APPS
+    )
 
 
 def _validate_minute_evidence_contract(
@@ -3491,11 +3605,22 @@ def _validate_minute_evidence_contract(
 ) -> None:
     normalized = sorted(requests, key=lambda item: (item.symbol, item.instrument_token))
     expected_contract = common.canonical_json_sha256([asdict(item) for item in normalized])
+    recorded_roster = marker.get("app_roster")
+    recorded_names = (
+        [str(item.get("app_name", "")) for item in recorded_roster]
+        if isinstance(recorded_roster, list)
+        and all(isinstance(item, Mapping) for item in recorded_roster)
+        else []
+    )
+    approved_recorded_names = _approved_app_names(recorded_names, minimum=1)
     checks = (
         pd.Timestamp(marker.get("expected_end_ist")) == pd.Timestamp(expected_end),
         marker.get("candidate_contract_sha256") == expected_contract,
         int(marker.get("candidate_count", -1)) == len(normalized),
-        marker.get("app_roster_sha256") == market_data.app_roster_sha256(runtimes),
+        approved_recorded_names is not None,
+        all(bool(item.get("authenticated")) for item in (recorded_roster or [])),
+        marker.get("app_roster_sha256")
+        == common.canonical_json_sha256(recorded_roster),
         marker.get("policy_version") == market_data.MARKET_DATA_POLICY_VERSION,
     )
     if not all(checks):
@@ -4273,10 +4398,21 @@ def _resolve_control_intervention(
                 marker_path,
                 strategy_fingerprint=config.strategy_fingerprint(),
             )
+            recorded_roster = marker.get("app_roster")
+            recorded_names = (
+                [str(item.get("app_name", "")) for item in recorded_roster]
+                if isinstance(recorded_roster, list)
+                and all(isinstance(item, Mapping) for item in recorded_roster)
+                else []
+            )
             if (
                 pd.Timestamp(marker.get("expected_end_ist")) != pd.Timestamp(event_end)
+                or _approved_app_names(
+                    recorded_names, minimum=MIN_HEALTHY_KITE_APPS
+                )
+                is None
                 or marker.get("app_roster_sha256")
-                != market_data.app_roster_sha256(runtimes)
+                != common.canonical_json_sha256(recorded_roster)
             ):
                 raise SessionContractError("intervention snapshot binding mismatch")
         else:
@@ -4879,6 +5015,38 @@ def run_paper_session(
             )
             _finalize_session(runtime_paths, telemetry, engine)
             return 130
+        except Exception as exc:
+            # Provider, filesystem, and library failures do not necessarily
+            # inherit the reviewed contract exceptions.  Never leave a stale
+            # RUNNING dashboard or continue from partial evidence.
+            telemetry.state = "BLOCKED"
+            telemetry.phase = "UNEXPECTED_FAIL_CLOSED"
+            telemetry.data_incomplete = True
+            telemetry.messages.append(f"Unexpected {type(exc).__name__}: {exc}")
+            try:
+                persist_checkpoint(
+                    runtime_paths,
+                    engine,
+                    telemetry,
+                    processed_clock_end=processed_clock_end,
+                    ingested_slots=ingested_slots,
+                    symbol_tokens=symbol_tokens,
+                )
+            except Exception as persist_exc:
+                print(
+                    "[FNO-V8-PAPER][CHECKPOINT_FAILED] "
+                    f"{type(persist_exc).__name__}: {persist_exc}",
+                    flush=True,
+                )
+            try:
+                _finalize_session(runtime_paths, telemetry, engine)
+            except Exception as publish_exc:
+                print(
+                    "[FNO-V8-PAPER][STATUS_PUBLISH_FAILED] "
+                    f"{type(publish_exc).__name__}: {publish_exc}",
+                    flush=True,
+                )
+            return 2
 
 
 def _parse_session_date(value: str | None) -> date:

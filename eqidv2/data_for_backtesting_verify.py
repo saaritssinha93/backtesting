@@ -20,7 +20,7 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, Set
 
 import numpy as np
 import pandas as pd
@@ -102,7 +102,12 @@ def _market_file_anomaly(fpath: Path) -> str | None:
     return "; ".join(issues) or None
 
 
-def _scan_parquet_dir(data_dir: Path, date_str: str, expected_bars: int) -> dict[str, Any]:
+def _scan_parquet_dir(
+    data_dir: Path,
+    date_str: str,
+    expected_bars: int,
+    required_tickers: Optional[Set[str]] = None,
+) -> dict[str, Any]:
     """Scan a parquet directory and return bar counts for target date."""
     if not data_dir.exists():
         return {"error": f"dir not found: {data_dir}", "tickers": {}, "total": 0, "ok": 0, "warn": 0, "fail": 0, "dup_files": 0}
@@ -111,9 +116,27 @@ def _scan_parquet_dir(data_dir: Path, date_str: str, expected_bars: int) -> dict
     if not parquet_files:
         return {"error": f"no parquet files in {data_dir}", "tickers": {}, "total": 0, "ok": 0, "warn": 0, "fail": 0, "dup_files": 0}
 
+    required = {str(ticker).strip().upper() for ticker in (required_tickers or set()) if str(ticker).strip()}
+    if required:
+        files_by_ticker = {_ticker_from_path(path): path for path in parquet_files}
+        parquet_files = [files_by_ticker[ticker] for ticker in sorted(required) if ticker in files_by_ticker]
+
     target_date = pd.Timestamp(date_str).date()
     ticker_stats: dict[str, dict[str, Any]] = {}
     ok, warn, fail, dup_files = 0, 0, 0, 0
+
+    if required:
+        present = {_ticker_from_path(path) for path in parquet_files}
+        for ticker in sorted(required - present):
+            ticker_stats[ticker] = {
+                "bars": 0,
+                "unique_bars": 0,
+                "duplicates": 0,
+                "status": "FAIL",
+                "stale_min": None,
+                "error": "required ticker parquet missing",
+            }
+            fail += 1
 
     for fpath in parquet_files:
         ticker = _ticker_from_path(fpath)
@@ -201,22 +224,62 @@ def _scan_parquet_dir(data_dir: Path, date_str: str, expected_bars: int) -> dict
         "overall": overall,
         "exit_code": exit_code,
         "worst_tickers": {t: s for t, s in worst},
+        "required_tickers": len(required) if required else None,
     }
 
 
-def run_verify(date_str: str) -> int:
+def _fno_equity_universe(date_str: str) -> tuple[Set[str], Path]:
+    universe_path = runtime_dir("fno_oi", "universe", f"near_month_{date_str}.parquet")
+    if not universe_path.exists():
+        raise FileNotFoundError(f"dated FnO universe not found: {universe_path}")
+    frame = pd.read_parquet(universe_path)
+    if "equity_symbol" not in frame.columns:
+        raise ValueError(f"FnO universe lacks equity_symbol: {universe_path}")
+    if "is_index_future" in frame.columns:
+        frame = frame.loc[~frame["is_index_future"].fillna(False).astype(bool)]
+    symbols = {
+        str(value).strip().upper()
+        for value in frame["equity_symbol"].dropna().tolist()
+        if str(value).strip()
+    }
+    if not symbols:
+        raise ValueError(f"FnO universe has no mapped stock equities: {universe_path}")
+    return symbols, universe_path
+
+
+def run_verify(date_str: str, scope: str = "all") -> int:
     print(f"\n{'='*70}")
     print(f" Data Completeness Verify — {date_str}")
     print(f"{'='*70}")
 
-    result_5m = _scan_parquet_dir(DATA_5M_DIR, date_str, EXPECTED_5M_BARS)
-    result_1m = _scan_parquet_dir(DATA_1MIN_DIR, date_str, EXPECTED_1MIN_BARS)
+    scope_key = str(scope or "all").strip().lower()
+    required_tickers: Optional[Set[str]] = None
+    universe_path: Optional[Path] = None
+    if scope_key == "fno":
+        required_tickers, universe_path = _fno_equity_universe(date_str)
+        print(f" Scope: dated FnO stock-equity universe ({len(required_tickers)} symbols)")
+        print(f" Universe: {universe_path}")
+    result_5m = _scan_parquet_dir(
+        DATA_5M_DIR,
+        date_str,
+        EXPECTED_5M_BARS,
+        required_tickers=required_tickers,
+    )
+    result_1m = _scan_parquet_dir(
+        DATA_1MIN_DIR,
+        date_str,
+        EXPECTED_1MIN_BARS,
+        required_tickers=required_tickers,
+    )
 
     overall_exit = max(result_5m.get("exit_code", 2), result_1m.get("exit_code", 2))
     overall_status = {0: "PASS", 1: "WARN", 2: "FAIL"}.get(overall_exit, "FAIL")
 
     payload = {
         "date": date_str,
+        "scope": scope_key,
+        "required_ticker_count": len(required_tickers or set()),
+        "universe_path": str(universe_path) if universe_path else "",
         "overall_status": overall_status,
         "overall_exit_code": overall_exit,
         "5min": result_5m,
@@ -283,9 +346,15 @@ def _default_day() -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Verify data completeness for V7 backtesting.")
     ap.add_argument("--date", default=_default_day(), help="Trading date YYYY-MM-DD")
+    ap.add_argument(
+        "--scope",
+        choices=("all", "fno"),
+        default="all",
+        help="Verify every archived ticker or only the dated mapped FnO stock-equity universe",
+    )
     ap.add_argument("--no-fail", action="store_true", help="Always exit 0 (WARN mode only)")
     args = ap.parse_args()
-    code = run_verify(str(args.date))
+    code = run_verify(str(args.date), scope=str(args.scope))
     if args.no_fail:
         return 0
     return code

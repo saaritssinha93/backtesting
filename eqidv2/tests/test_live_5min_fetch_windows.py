@@ -166,6 +166,41 @@ class Live5MinFetchWindowTests(unittest.TestCase):
         self.assertIn("opening_snapshot", saved.columns)
         self.assertEqual(saved["opening_snapshot"].tolist(), [True, False, False])
 
+    def test_finalize_and_save_retries_transient_windows_replace_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "TEST_stocks_indicators_5min.parquet"
+            real_replace = core.os.replace
+            attempts = 0
+
+            def transient_lock(source, destination):
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise PermissionError(5, "Access is denied")
+                return real_replace(source, destination)
+
+            with (
+                patch.object(core.os, "replace", side_effect=transient_lock),
+                patch.object(core._time, "sleep") as sleep,
+            ):
+                core._finalize_and_save(
+                    pd.DataFrame(
+                        {
+                            "date": [_ist(9, 20)],
+                            "open": [100.0],
+                            "high": [101.0],
+                            "low": [99.0],
+                            "close": [100.5],
+                            "volume": [10],
+                        }
+                    ),
+                    str(out_path),
+                )
+
+            self.assertEqual(attempts, 3)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertTrue(out_path.is_file())
+
     def test_opening_snapshot_does_not_trigger_legacy_timestamp_shift(self):
         frame = pd.DataFrame(
             {

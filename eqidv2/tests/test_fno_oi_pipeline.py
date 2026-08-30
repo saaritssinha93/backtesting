@@ -352,6 +352,43 @@ class FnOOIPipelineTests(unittest.TestCase):
             marker["no_candle_observations"]["NIFTYFPI26AUGFUT"], 3
         )
 
+    def test_exact_stock_slot_does_not_wait_for_missing_index_retry(self) -> None:
+        slot = datetime(2026, 8, 17, 9, 25, tzinfo=common.IST)
+        universe = _fetch_universe(["RELIANCE"], ["NIFTYFPI"])
+        runtime = mock.Mock(app_name="app1")
+        args = mock.Mock(
+            max_retries=1,
+            slot_retry_attempts=2,
+            slot_retry_delay_sec=2.0,
+            min_coverage=0.99,
+        )
+
+        def outcomes(frame: pd.DataFrame, *_args: object, **_kwargs: object) -> list[dict]:
+            return [
+                {
+                    "tradingsymbol": symbol,
+                    "state": "NO_CANDLE" if symbol.startswith("NIFTYFPI") else "WRITTEN",
+                }
+                for symbol in frame["tradingsymbol"].astype(str)
+            ]
+
+        with (
+            mock.patch.object(fetcher, "_cash_marker_state", return_value=(True, "complete")),
+            mock.patch.object(fetcher, "fetch_contracts", side_effect=outcomes) as fetch,
+            mock.patch.object(fetcher.time, "sleep") as sleep,
+            mock.patch.object(common, "atomic_write_json"),
+            mock.patch.object(common, "atomic_write_text"),
+            mock.patch.object(common, "publish_status"),
+        ):
+            marker = fetcher.run_slot(slot, universe, [runtime], args)
+
+        self.assertEqual(fetch.call_count, 1)
+        sleep.assert_not_called()
+        self.assertTrue(marker["stock_complete"])
+        self.assertTrue(marker["complete"])
+        self.assertFalse(marker["global_complete"])
+        self.assertEqual(marker["index_no_candle_count"], 1)
+
     def test_no_candle_verification_counts_clean_empty_observations_only(self) -> None:
         slot = datetime(2026, 8, 17, 9, 25, tzinfo=common.IST)
         universe = _fetch_universe(["SAIL"])
@@ -767,19 +804,24 @@ class FnOOIPipelineTests(unittest.TestCase):
         self.assertIn('title: "FnO"', source)
         for card in (
             "fno_oi_universe",
+            "fno_oi_fetch_5min_fast_production",
             "fno_oi_fetch_5min",
+            "fno_oi_fetch_5min_fast_shadow",
             "fno_oi_feature_ranker",
             "fno_oi_eod_qc",
         ):
             self.assertIn(card, dashboard.LOG_FILES)
             self.assertIn(card, dashboard.CARD_TASK_NAMES)
+        self.assertIn("fno_oi_fetch_5min_fast_production", dashboard.RESTARTABLE_CARDS)
         self.assertIn("fno_oi_fetch_5min", dashboard.RESTARTABLE_CARDS)
+        self.assertIn("fno_oi_fetch_5min_fast_shadow", dashboard.RESTARTABLE_CARDS)
         self.assertIn("fno_oi_feature_ranker", dashboard.RESTARTABLE_CARDS)
 
     def test_fno_tasks_are_preopen_visible_and_installer_defines_all_jobs(self) -> None:
         expected = {
             "EQIDV2_fno_oi_universe_0850",
             "EQIDV2_fno_oi_fetch_5min_0905",
+            "EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",
             "EQIDV2_fno_oi_feature_ranker_0915",
             "EQIDV2_fno_v6_scanner_5min_0918",
             "EQIDV2_fno_v6_equity_1min_feed_0919",
@@ -800,6 +842,7 @@ class FnOOIPipelineTests(unittest.TestCase):
         start_at_0915 = expected - {
             "EQIDV2_fno_oi_universe_0850",
             "EQIDV2_fno_oi_fetch_5min_0905",
+            "EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",
             "EQIDV2_fno_oi_eod_qc_1540",
         }
         for task in start_at_0915:
@@ -807,6 +850,10 @@ class FnOOIPipelineTests(unittest.TestCase):
                 installer,
                 rf'Name\s*=\s*"{re.escape(task)}";\s*Time\s*=\s*"09:15"',
             )
+        self.assertRegex(
+            installer,
+            r'Name\s*=\s*"EQIDV2_fno_oi_fetch_5min_fast_shadow_0906";\s*Time\s*=\s*"09:06"',
+        )
 
     def test_preopen_uses_actual_trigger_before_legacy_task_name_suffix(self) -> None:
         query = "\n".join(

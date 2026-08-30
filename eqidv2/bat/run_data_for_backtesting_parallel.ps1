@@ -97,7 +97,7 @@ if (Test-Path $verifyScript) {
     $verifyOut = "$verifyLog.stdout.tmp"
     $verifyErr = "$verifyLog.stderr.tmp"
     $vProc = Start-Process -FilePath $PythonExe `
-        -ArgumentList @("-u", $verifyScript, "--date", $TodayIst, "--no-fail") `
+        -ArgumentList @("-u", $verifyScript, "--date", $TodayIst, "--scope", "fno") `
         -WorkingDirectory $BaseDir `
         -RedirectStandardOutput $verifyOut `
         -RedirectStandardError $verifyErr `
@@ -115,6 +115,9 @@ if (Test-Path $verifyScript) {
     }
     Remove-Item -LiteralPath $verifyOut, $verifyErr -Force -ErrorAction SilentlyContinue
     Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value "[$(Get-Date -Format 'dd-MM-yyyy HH:mm:ss.ff')] END data_for_backtesting_verify.py (exit=$verifyExit)"
+    if ($verifyExit -ne 0 -and $exitCode -eq 0) {
+        $exitCode = $verifyExit
+    }
 } else {
     Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value "[$(Get-Date -Format 'dd-MM-yyyy HH:mm:ss.ff')] SKIP data_for_backtesting_verify.py (script not found)"
 }

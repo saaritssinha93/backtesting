@@ -50,6 +50,7 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_eod_15mins_data_0900",
     "EQIDV2_fno_oi_universe_0850",
     "EQIDV2_fno_oi_fetch_5min_0905",
+    "EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",
     "EQIDV2_fno_oi_feature_ranker_0915",
     "EQIDV2_fno_v6_scanner_5min_0918",
     "EQIDV2_fno_v6_equity_1min_feed_0919",

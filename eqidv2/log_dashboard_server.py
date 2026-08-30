@@ -87,9 +87,140 @@ COLLECT_FILTERED_STOCK_DATA_ROOT = runtime_dir("collect_filtered_stock_data")
 COLLECT_FILTERED_STOCK_DATA_LATEST_DIR = COLLECT_FILTERED_STOCK_DATA_ROOT / "latest"
 FNO_OI_ROOT = runtime_dir("fno_oi")
 FNO_OI_LATEST_DIR = FNO_OI_ROOT / "latest"
+FNO_MULTI_PAPER_ROOT = FNO_OI_ROOT / "multi_strategy_paper_v1"
+FNO_MULTI_PAPER_STATUS_PATH = FNO_MULTI_PAPER_ROOT / "status.json"
+FNO_MULTI_PAPER_HEARTBEAT_PATH = FNO_MULTI_PAPER_ROOT / "heartbeat.json"
+FNO_EQ_ID_MONITOR_5M_SLOTS: Tuple[str, ...] = tuple(
+    f"09:{minute:02d}" for minute in range(15, 51, 5)
+)
+FNO_EQ_ID_MONITOR_1M_MINUTES: Tuple[str, ...] = tuple(
+    f"09:{minute:02d}" for minute in range(15, 51)
+)
+FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS: Tuple[str, ...] = (
+    "09:25", "09:30", "09:35", "09:40", "09:45",
+)
+FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL: Dict[str, str] = {
+    "09:25": "09:26",
+    "09:30": "09:31",
+    "09:35": "09:36",
+    "09:40": "09:41",
+    "09:45": "09:46",
+}
+FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS = 3
+# Only the parent is an operational session.  The three version cards are
+# read-only projections of that session's independent strategy ledgers.
+FNO_MULTI_PAPER_CARD_PROFILES: Dict[str, str] = {
+    "fno_v10_v11_v12_paper": "",
+    "fno_v10_paper": "v10",
+    "fno_v11_paper": "v11",
+    "fno_v12_paper": "v12",
+}
+FNO_MULTI_PAPER_CARD_IDS: Tuple[str, ...] = tuple(FNO_MULTI_PAPER_CARD_PROFILES)
+FNO_EQ_ID_MONITOR_CARD_ID = "v7_live_5min_monitor"
+# The card keeps its historical ID so saved dashboard pins/full-screen state do
+# not break, but its scope is now the complete FnO operational chain requested
+# by the operator.  The grouping mirrors the visible dashboard headings.
+FNO_EQ_ID_MONITOR_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    (
+        "Live Market Data",
+        (
+            "nifty_guard_fetch_v16_5min",
+            "eod_5min_data",
+            "kiteticker_5min_data",
+            "eod_1min_data",
+        ),
+    ),
+    (
+        "FnO",
+        (
+            "fno_oi_universe",
+            "fno_oi_fetch_5min_fast_production",
+            "fno_oi_fetch_5min",
+            "fno_oi_fetch_5min_fast_shadow",
+            "fno_oi_feature_ranker",
+            "fno_v6_scanner_5min",
+            "fno_v6_equity_1min_feed",
+            "fno_v6_confirmation_1min",
+            "fno_v6_live_long",
+            "fno_v6_live_short",
+            "fno_v6_trade_logger",
+            "fno_v6_net_result",
+            "fno_v8_combined_paper",
+            "fno_oi_eod_qc",
+        ),
+    ),
+    (
+        "V10 / V11 / V12 Shared Papertrade Session",
+        ("fno_v10_v11_v12_paper",),
+    ),
+    ("V10", ("fno_v10_paper",)),
+    ("V11", ("fno_v11_paper",)),
+    ("V12", ("fno_v12_paper",)),
+    (
+        "Data & Backtesting",
+        ("data_for_backtesting", "backtesting_result_v11"),
+    ),
+    ("SESSION", ("authentication_v2",)),
+)
+FNO_EQ_ID_MONITOR_STAGE_LABELS: Dict[str, str] = {
+    "nifty_guard_fetch_v16_5min": "market guard fetch",
+    "eod_5min_data": "equity 5m fetch",
+    "kiteticker_5min_data": "KiteTicker 5m fetch",
+    "eod_1min_data": "equity 1m fetch",
+    "fno_oi_universe": "futures universe",
+    "fno_oi_fetch_5min_fast_production": "fast production futures OI 5m fetch",
+    "fno_oi_fetch_5min": "old futures OI 5m fetch",
+    "fno_oi_fetch_5min_fast_shadow": "fast OI shadow validator",
+    "fno_oi_feature_ranker": "OI rank / selection",
+    "fno_v6_scanner_5min": "V6 5m selection",
+    "fno_v6_equity_1min_feed": "V6 candidate 1m fetch",
+    "fno_v6_confirmation_1min": "V6 1m entry confirmation",
+    "fno_v6_live_long": "V6 LONG paper entry",
+    "fno_v6_live_short": "V6 SHORT paper entry",
+    "fno_v6_trade_logger": "V6 papertrade ledger",
+    "fno_v6_net_result": "V6 result / P&L",
+    "fno_v8_combined_paper": "V8 selection + entry + papertrade",
+    "fno_oi_eod_qc": "FnO fetch quality guard",
+    "fno_v10_v11_v12_paper": "shared fetch + chronological reducer",
+    "fno_v10_paper": "V10 selection + guards + entry + result",
+    "fno_v11_paper": "V11 selection + guards + entry + result",
+    "fno_v12_paper": "V12 selection + guards + entry + result",
+    "data_for_backtesting": "historical-data preparation",
+    "backtesting_result_v11": "V6/V8/V10/V11/V12 backtest",
+    "authentication_v2": "Kite app authentication",
+}
+FNO_EQ_ID_MONITOR_SESSION_LABELS: Dict[str, str] = {
+    "nifty_guard_fetch_v16_5min": "NIFTY Fetch 5min",
+    "eod_5min_data": "Live Data Fetch (5mins)",
+    "kiteticker_5min_data": "Live Data kiteticker Fetch (5mins)",
+    "eod_1min_data": "Live Data Fetch (1min)",
+    "fno_oi_universe": "FnO Near-Month Futures Universe",
+    "fno_oi_fetch_5min_fast_production": "FnO Live 5-Minute Futures OI Fetch (Fast Production)",
+    "fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch (Old)",
+    "fno_oi_fetch_5min_fast_shadow": "FnO Fast Shadow OI Validator",
+    "fno_oi_feature_ranker": "FnO OI Gainers, Losers & Activity Rankings",
+    "fno_v6_scanner_5min": "FnO V6 BEST_NET Equity 5-Minute + Futures OI Scanner",
+    "fno_v6_equity_1min_feed": "FnO V6 Durable Completed Equity 1-Minute Feed",
+    "fno_v6_confirmation_1min": "FnO V6 BEST_NET Candidate Equity 1-Minute Confirmation",
+    "fno_v6_live_long": "FnO V6 BEST_NET LONG Entry Session",
+    "fno_v6_live_short": "FnO V6 BEST_NET SHORT Entry Session",
+    "fno_v6_trade_logger": "FnO V6 BEST_NET Continuous Trade Log",
+    "fno_v6_net_result": "FnO V6 BEST_NET Net Result",
+    "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
+    "fno_oi_eod_qc": "FnO EOD Data Quality Control",
+    "fno_v10_v11_v12_paper": "FnO V10/V11/V12 Papertrade - Shared Session",
+    "fno_v10_paper": "FnO V10 Papertrade View",
+    "fno_v11_paper": "FnO V11 Papertrade View",
+    "fno_v12_paper": "FnO V12 Papertrade View",
+    "data_for_backtesting": "Data for backtesting",
+    "backtesting_result_v11": "Backtesting result v6/v8/v10/v11/v12",
+    "authentication_v2": "Auth_V2",
+}
 FNO_OI_CARD_REPORTS: Dict[str, str] = {
     "fno_oi_universe": "latest_fno_oi_universe.md",
+    "fno_oi_fetch_5min_fast_production": "latest_fno_oi_fast_production.md",
     "fno_oi_fetch_5min": "latest_fno_oi_fetch.md",
+    "fno_oi_fetch_5min_fast_shadow": "latest_fno_oi_fast_shadow.md",
     "fno_oi_feature_ranker": "latest_fno_oi_leaderboard.md",
     "fno_v6_scanner_5min": "latest_fno_v6_scanner_5min.md",
     "fno_v6_equity_1min_feed": "latest_fno_v6_equity_1min_feed.md",
@@ -99,6 +230,10 @@ FNO_OI_CARD_REPORTS: Dict[str, str] = {
     "fno_v6_trade_logger": "latest_fno_v6_trade_logger.md",
     "fno_v6_net_result": "latest_fno_v6_net_result.md",
     "fno_v8_combined_paper": "latest_fno_v8_combined_paper.md",
+    "fno_v10_v11_v12_paper": "latest_fno_v10_v11_v12_paper.md",
+    "fno_v10_paper": "latest_fno_v10_paper.md",
+    "fno_v11_paper": "latest_fno_v11_paper.md",
+    "fno_v12_paper": "latest_fno_v12_paper.md",
     "fno_oi_eod_qc": "latest_fno_oi_eod_qc.md",
 }
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
@@ -160,7 +295,9 @@ LOG_FILES: Dict[str, str] = {
     "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data_live_minimal.log",
     "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
     "fno_oi_universe": "fno_oi_universe.log",
+    "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.log",
     "fno_oi_fetch_5min": "fno_oi_fetch_5min.log",
+    "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.log",
     "fno_oi_feature_ranker": "fno_oi_feature_ranker.log",
     "fno_v6_scanner_5min": "fno_v6_scanner_5min.log",
     "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.log",
@@ -170,6 +307,10 @@ LOG_FILES: Dict[str, str] = {
     "fno_v6_trade_logger": "fno_v6_trade_logger.log",
     "fno_v6_net_result": "fno_v6_net_result.log",
     "fno_v8_combined_paper": "fno_v8_combined_paper.log",
+    "fno_v10_v11_v12_paper": "fno_v10_v11_v12_paper.log",
+    "fno_v10_paper": "fno_v10_v11_v12_paper.log",
+    "fno_v11_paper": "fno_v10_v11_v12_paper.log",
+    "fno_v12_paper": "fno_v10_v11_v12_paper.log",
     "fno_oi_eod_qc": "fno_oi_eod_qc.log",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.log",
@@ -239,7 +380,9 @@ STATUS_FILES: Dict[str, str] = {
     "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.status",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.status",
     "fno_oi_universe": "fno_oi_universe.status",
+    "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.supervisor.status",
     "fno_oi_fetch_5min": "fno_oi_fetch_5min.supervisor.status",
+    "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.supervisor.status",
     "fno_oi_feature_ranker": "fno_oi_feature_ranker.supervisor.status",
     "fno_v6_scanner_5min": "fno_v6_scanner_5min.status",
     "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.status",
@@ -297,7 +440,9 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.heartbeat",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.heartbeat",
     "fno_oi_universe": "fno_oi_universe.heartbeat",
+    "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.supervisor.heartbeat",
     "fno_oi_fetch_5min": "fno_oi_fetch_5min.supervisor.heartbeat",
+    "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.supervisor.heartbeat",
     "fno_oi_feature_ranker": "fno_oi_feature_ranker.supervisor.heartbeat",
     "fno_v6_scanner_5min": "fno_v6_scanner_5min.heartbeat",
     "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.heartbeat",
@@ -344,7 +489,9 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "kiteticker_5min_data": ("\\EQIDV2_kiteticker_5mins_data_0900",),
     "eod_1min_data": ("\\EQIDV2_eod_1min_data_0915",),
     "fno_oi_universe": ("\\EQIDV2_fno_oi_universe_0850",),
+    "fno_oi_fetch_5min_fast_production": ("\\EQIDV2_fno_oi_fetch_5min_fast_production_0905",),
     "fno_oi_fetch_5min": ("\\EQIDV2_fno_oi_fetch_5min_0905",),
+    "fno_oi_fetch_5min_fast_shadow": ("\\EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",),
     "fno_oi_feature_ranker": ("\\EQIDV2_fno_oi_feature_ranker_0915",),
     "fno_v6_scanner_5min": ("\\EQIDV2_fno_v6_scanner_5min_0918",),
     "fno_v6_equity_1min_feed": ("\\EQIDV2_fno_v6_equity_1min_feed_0919",),
@@ -354,6 +501,10 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "fno_v6_trade_logger": ("\\EQIDV2_fno_v6_trade_logger_0920",),
     "fno_v6_net_result": ("\\EQIDV2_fno_v6_net_result_0920",),
     "fno_v8_combined_paper": ("\\EQIDV2_fno_v8_combined_paper_0915",),
+    "fno_v10_v11_v12_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
+    "fno_v10_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
+    "fno_v11_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
+    "fno_v12_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
     "fno_oi_eod_qc": ("\\EQIDV2_fno_oi_eod_qc_1540",),
     "eod_15min_data": ("\\EQIDV2_eod_15mins_data_0900",),
     "eod_1540_update": ("\\EQIDV2_eod_1540_update_1540",),
@@ -420,12 +571,17 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
 
 _TASK_SNAPSHOT_CACHE: Dict[str, Dict[str, str]] = {}
 _TASK_SNAPSHOT_CACHE_AT: Optional[dt.datetime] = None
+_TASK_SNAPSHOT_LOCK = threading.Lock()
+_TASK_SNAPSHOT_REFRESHING = False
+_TASK_SNAPSHOT_CACHE_TTL_SEC = 60.0
 
 RESTARTABLE_CARDS: Dict[str, str] = {
     "nifty_guard_fetch_v16_5min":    "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
     "eod_5min_data":                 "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
     "eod_1min_data":                 "run_eqidv2_eod_scheduler_for_1min_data_live.bat",
+    "fno_oi_fetch_5min_fast_production": "run_fno_oi_fetch_5min_fast_production.bat",
     "fno_oi_fetch_5min":             "run_fno_oi_fetch_5min.bat",
+    "fno_oi_fetch_5min_fast_shadow": "run_fno_oi_fetch_5min_fast_shadow.bat",
     "fno_oi_feature_ranker":         "run_fno_oi_feature_ranker.bat",
     "fno_v6_scanner_5min":           "run_fno_v6_scanner_5min.bat",
     "fno_v6_equity_1min_feed":        "run_fno_v6_equity_1min_feed.bat",
@@ -434,6 +590,7 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "fno_v6_live_short":              "run_fno_v6_live_short.bat",
     "fno_v6_trade_logger":            "run_fno_v6_trade_logger.bat",
     "fno_v6_net_result":              "run_fno_v6_net_result.bat",
+    "fno_v10_v11_v12_paper":          "run_fno_v10_v11_v12_paper_session.bat",
     "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
     "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
@@ -464,6 +621,20 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "preopen_healthcheck":           "run_preopen_session_healthcheck.bat",
     "backtesting_result_v11":        "run_backtesting_result_v11_1600.bat",
 }
+
+
+def _runtime_status_path_for_card(card_id: str) -> Optional[Path]:
+    if card_id in FNO_MULTI_PAPER_CARD_PROFILES:
+        return FNO_MULTI_PAPER_STATUS_PATH
+    filename = STATUS_FILES.get(card_id)
+    return _resolve_status_path(filename) if filename else None
+
+
+def _runtime_heartbeat_path_for_card(card_id: str) -> Optional[Path]:
+    if card_id in FNO_MULTI_PAPER_CARD_PROFILES:
+        return FNO_MULTI_PAPER_HEARTBEAT_PATH
+    filename = HEARTBEAT_FILES.get(card_id)
+    return _resolve_status_path(filename) if filename else None
 
 
 def _run_cmd_silent(cmd: Sequence[str], timeout: float = 5.0) -> Tuple[int, str]:
@@ -570,6 +741,40 @@ def _list_alive_pids(pids: Sequence[int]) -> list[int]:
     return alive
 
 
+def _pid_is_alive_fast(pid: int) -> bool:
+    """Check one PID without spawning PowerShell on every dashboard card."""
+    parsed = _parse_pid_value(pid)
+    if parsed is None:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            synchronize = 0x00100000
+            wait_timeout = 0x00000102
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            kernel32.WaitForSingleObject.restype = ctypes.c_ulong
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+            handle = kernel32.OpenProcess(synchronize, False, parsed)
+            if not handle:
+                return False
+            try:
+                return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+            finally:
+                kernel32.CloseHandle(handle)
+        except (AttributeError, OSError, ValueError):
+            return False
+    try:
+        os.kill(parsed, 0)
+    except (OSError, ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 def _kill_pid_tree(pid: int, force: bool) -> Tuple[int, str]:
     cmd = ["taskkill"]
     if force:
@@ -605,11 +810,11 @@ def _default_supervisor_spawn_path(card_id: str) -> Optional[Path]:
 def _read_restart_identity(card_id: str) -> Dict[str, str]:
     info: Dict[str, str] = {}
     filename = STATUS_FILES.get(card_id)
-    if not filename:
+    worker_status_path = _runtime_status_path_for_card(card_id)
+    if worker_status_path is None:
         return info
 
-    worker_status_path = _resolve_status_path(filename)
-    supervisor_status_path = _supervisor_status_path(card_id)
+    supervisor_status_path = _supervisor_status_path(card_id) if filename else None
 
     worker_status = parse_status_file(worker_status_path)
     if worker_status:
@@ -1274,11 +1479,34 @@ def parse_status_file(path: Path) -> Dict[str, str]:
         text = path.read_text(encoding="utf-8", errors="replace")
         if text.startswith("\ufeff"):
             text = text.lstrip("\ufeff")
+        # The modern FnO multi-paper runtime publishes one canonical JSON
+        # status/heartbeat shared by its parent card and all profile views.
+        # Preserve the legacy key=value parser, but also expose top-level JSON
+        # scalars to the existing scheduler/restart/status machinery.
+        if text.lstrip().startswith("{"):
+            payload = json.loads(text)
+            if not isinstance(payload, dict):
+                return {}
+            for key, value in payload.items():
+                if isinstance(value, bool):
+                    out[str(key)] = "true" if value else "false"
+                elif value is None:
+                    out[str(key)] = ""
+                elif not isinstance(value, (dict, list)):
+                    out[str(key)] = str(value)
+            return out
         for line in text.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                out[k.strip().lstrip("\ufeff")] = v.strip()
-    except OSError:
+            # Most writers emit one key/value per line.  A few legacy stop
+            # scripts emitted the entire status on one line, separated by
+            # spaces (``status=STOPPED script=... ts=...``).  Parse both forms
+            # so the status value does not accidentally swallow the rest of
+            # the record and become an unknown hard failure in the dashboard.
+            matches = list(re.finditer(r"(?<!\S)([A-Za-z_][A-Za-z0-9_.-]*)=", line))
+            for index, match in enumerate(matches):
+                value_end = matches[index + 1].start() if index + 1 < len(matches) else len(line)
+                key = match.group(1).strip().lstrip("\ufeff")
+                out[key] = line[match.end() : value_end].strip()
+    except (OSError, json.JSONDecodeError):
         return {}
     return out
 
@@ -1321,12 +1549,11 @@ def infer_pid_session_provenance(card_id: str, status: Dict[str, str]) -> Dict[s
         ("start_ts", "start_ts"),
     )
     sources_to_check = [("status", merged)]
-    supervisor_filename = STATUS_FILES.get(card_id, "")
-    if supervisor_filename:
-        supervisor_path = LOG_DIR / supervisor_filename
+    supervisor_path = _runtime_status_path_for_card(card_id)
+    if supervisor_path is not None:
         supervisor_status = parse_status_file(supervisor_path)
         if supervisor_status:
-            sources_to_check.append(("supervisor_status", supervisor_status))
+            sources_to_check.append(("runtime_status", supervisor_status))
 
     start_ist: Optional[dt.datetime] = None
     start_source = ""
@@ -1368,10 +1595,48 @@ def merge_runtime_status(status: Dict[str, str], heartbeat: Dict[str, str]) -> D
 
     hb_state = str(heartbeat.get("state", "")).strip().upper()
     if hb_state:
+        heartbeat_time_text = next(
+            (
+                str(heartbeat.get(field, "")).strip()
+                for field in ("ts", "ts_ist", "ts_utc", "updated_at_ist", "updated_at")
+                if str(heartbeat.get(field, "")).strip()
+            ),
+            "",
+        )
+        status_time_text = next(
+            (
+                str(merged.get(field, "")).strip()
+                for field in ("ts", "ts_ist", "updated_at_ist", "updated_at")
+                if str(merged.get(field, "")).strip()
+            ),
+            "",
+        )
+        heartbeat_time = _parse_status_datetime(heartbeat_time_text)
+        status_time = _parse_status_datetime(status_time_text)
         merged["heartbeat_state"] = hb_state
+        merged["heartbeat_ts"] = heartbeat_time_text
         merged["heartbeat_ts_utc"] = str(heartbeat.get("ts_utc", "")).strip()
         merged["heartbeat_idle_sec"] = str(heartbeat.get("idle_sec", "")).strip()
         merged["heartbeat_note"] = str(heartbeat.get("note", "")).strip()
+        # A heartbeat from a newer trading date supersedes an old terminal
+        # status file.  This prevents, for example, a Friday SUCCESS badge
+        # from painting Monday green after Monday's worker reached WAITING and
+        # exited without publishing a new terminal status.
+        if (
+            heartbeat_time is not None
+            and status_time is not None
+            and heartbeat_time.date() > status_time.date()
+            and hb_state not in {"RUNNING", "RESTARTING", "COOLDOWN"}
+        ):
+            merged["previous_status"] = str(merged.get("status", "")).strip() or "UNKNOWN"
+            merged["previous_status_ts"] = status_time_text
+            merged["status"] = hb_state
+            merged["ts"] = heartbeat_time_text
+            for field in ("phase", "slot", "reason"):
+                value = str(heartbeat.get(field, "")).strip()
+                if value:
+                    merged[field] = value
+            merged["status_scope"] = "newer_heartbeat_supersedes_prior_session"
         # Newest-evidence-wins: if the heartbeat file was not touched recently,
         # a stale RUNNING state must not override a newer worker STOPPED/CRASHED
         # status. The file age is injected by _v7_monitor_status_for before this
@@ -1509,16 +1774,7 @@ def _parse_schtasks_verbose(text: str) -> Dict[str, Dict[str, str]]:
     return tasks
 
 
-def load_task_scheduler_snapshot(force: bool = False) -> Dict[str, Dict[str, str]]:
-    global _TASK_SNAPSHOT_CACHE_AT, _TASK_SNAPSHOT_CACHE
-    now_utc = dt.datetime.now(dt.timezone.utc)
-    if (
-        not force
-        and _TASK_SNAPSHOT_CACHE_AT is not None
-        and (now_utc - _TASK_SNAPSHOT_CACHE_AT).total_seconds() < 10.0
-    ):
-        return dict(_TASK_SNAPSHOT_CACHE)
-
+def _query_task_scheduler_snapshot() -> Dict[str, Dict[str, str]]:
     tasks: Dict[str, Dict[str, str]] = {}
     try:
         completed = subprocess.run(
@@ -1539,10 +1795,58 @@ def load_task_scheduler_snapshot(force: bool = False) -> Dict[str, Dict[str, str
         }
     except (OSError, subprocess.SubprocessError):
         tasks = {}
+    return tasks
 
-    _TASK_SNAPSHOT_CACHE = tasks
-    _TASK_SNAPSHOT_CACHE_AT = now_utc
-    return dict(tasks)
+
+def _refresh_task_scheduler_snapshot_background() -> None:
+    global _TASK_SNAPSHOT_CACHE_AT, _TASK_SNAPSHOT_CACHE, _TASK_SNAPSHOT_REFRESHING
+    tasks = _query_task_scheduler_snapshot()
+    observed = dt.datetime.now(dt.timezone.utc)
+    with _TASK_SNAPSHOT_LOCK:
+        if tasks:
+            _TASK_SNAPSHOT_CACHE = tasks
+        # A transient timeout is not evidence that tasks disappeared.  Keep
+        # the last known-good data and delay the next refresh attempt.
+        _TASK_SNAPSHOT_CACHE_AT = observed
+        _TASK_SNAPSHOT_REFRESHING = False
+
+
+def load_task_scheduler_snapshot(force: bool = False) -> Dict[str, Dict[str, str]]:
+    """Return task metadata without blocking dashboard HTTP refreshes.
+
+    A full Windows ``schtasks /Query /V`` regularly takes 10-15 seconds on
+    this host.  Normal dashboard requests therefore use stale-while-refresh:
+    the last good snapshot is returned immediately and one daemon refreshes
+    it in the background.  ``force=True`` remains synchronous for diagnostics
+    and tests.
+    """
+    global _TASK_SNAPSHOT_CACHE_AT, _TASK_SNAPSHOT_CACHE, _TASK_SNAPSHOT_REFRESHING
+    if force:
+        tasks = _query_task_scheduler_snapshot()
+        observed = dt.datetime.now(dt.timezone.utc)
+        with _TASK_SNAPSHOT_LOCK:
+            if tasks:
+                _TASK_SNAPSHOT_CACHE = tasks
+            _TASK_SNAPSHOT_CACHE_AT = observed
+            return dict(_TASK_SNAPSHOT_CACHE)
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    with _TASK_SNAPSHOT_LOCK:
+        age_sec = (
+            (now_utc - _TASK_SNAPSHOT_CACHE_AT).total_seconds()
+            if _TASK_SNAPSHOT_CACHE_AT is not None
+            else float("inf")
+        )
+        if age_sec < _TASK_SNAPSHOT_CACHE_TTL_SEC:
+            return dict(_TASK_SNAPSHOT_CACHE)
+        if not _TASK_SNAPSHOT_REFRESHING:
+            _TASK_SNAPSHOT_REFRESHING = True
+            threading.Thread(
+                target=_refresh_task_scheduler_snapshot_background,
+                name="eqidv2-task-snapshot-refresh",
+                daemon=True,
+            ).start()
+        return dict(_TASK_SNAPSHOT_CACHE)
 
 
 def _parse_scheduler_datetime(raw: object) -> Optional[dt.datetime]:
@@ -1620,8 +1924,52 @@ def apply_scheduler_status(
     merged["scheduler_tasks"] = ", ".join(task_names)
 
     current = _upper(merged.get("status"))
+    runtime_active_states = {
+        "RUNNING",
+        "RESTARTING",
+        "COOLDOWN",
+        "STALE_HB_RUNNING",
+        "RECOVERED",
+    }
+    runtime_pids = [
+        parsed
+        for parsed in (
+            _parse_pid_value(merged.get("worker_pid")),
+            _parse_pid_value(merged.get("launcher_pid")),
+            _parse_pid_value(merged.get("supervisor_pid")),
+            _parse_pid_value(merged.get("pid")),
+        )
+        if parsed is not None
+    ]
     if scheduler_status == "DISABLED":
-        merged["status"] = "DISABLED"
+        # A disabled Scheduled Task does not mean an independently started
+        # worker is stopped.  Preserve fresh runtime evidence so manually
+        # launched sessions remain in their normal dashboard section, while
+        # retaining scheduler_state=DISABLED as a separate warning/future-run
+        # fact.
+        if current in runtime_active_states:
+            if runtime_pids:
+                runtime_is_live = any(_pid_is_alive_fast(pid) for pid in runtime_pids)
+            else:
+                try:
+                    heartbeat_idle_sec = float(merged.get("heartbeat_idle_sec", "inf"))
+                except (TypeError, ValueError):
+                    heartbeat_idle_sec = float("inf")
+                runtime_is_live = (
+                    _upper(merged.get("heartbeat_state")) == "RUNNING"
+                    and heartbeat_idle_sec <= HB_STALE_RUNNING_OVERRIDE_SEC
+                )
+        else:
+            runtime_is_live = False
+        if runtime_is_live:
+            merged["runtime_start_mode"] = "MANUAL"
+            merged["scheduler_attention"] = "DISABLED_WHILE_RUNNING"
+            merged = _append_status_note(
+                merged,
+                "worker is running manually; automatic scheduled start is disabled",
+            )
+        else:
+            merged["status"] = "DISABLED"
     elif not current and scheduler_status:
         merged["status"] = scheduler_status
 
@@ -1633,18 +1981,25 @@ def apply_scheduler_status(
         current_time = current_time.replace(tzinfo=IST)
     else:
         current_time = current_time.astimezone(IST)
-    status_time = _parse_status_datetime(merged.get("ts", ""))
+    # Status writers are not fully uniform: the older supervisors use ``ts``
+    # while newer research jobs (including the V11 shadow monitor) use
+    # ``ts_ist`` or ``updated_at_ist``.  Read the first populated timestamp so
+    # a prior-day terminal state can be shown as history while today's enabled
+    # run is still waiting for its scheduled start.
+    status_time_text = next(
+        (
+            str(merged.get(field, "")).strip()
+            for field in ("ts", "ts_ist", "updated_at_ist", "updated_at")
+            if str(merged.get(field, "")).strip()
+        ),
+        "",
+    )
+    status_time = _parse_status_datetime(status_time_text)
     next_run = min(
         (parsed for parsed in (_parse_scheduler_datetime(value) for value in next_runs) if parsed),
         default=None,
     )
-    active_states = {
-        "RUNNING",
-        "RESTARTING",
-        "COOLDOWN",
-        "STALE_HB_RUNNING",
-        "RECOVERED",
-    }
+    active_states = runtime_active_states
     if (
         scheduler_status == "SCHEDULED"
         and merged.get("status_scope") != "awaiting_today_scheduled_run"
@@ -1656,7 +2011,7 @@ def apply_scheduler_status(
         and next_run > current_time
     ):
         merged["previous_status"] = current or "UNKNOWN"
-        merged["previous_status_ts"] = str(merged.get("ts", "")).strip()
+        merged["previous_status_ts"] = status_time_text
         for field in ("reason", "error", "phase"):
             value = str(merged.get(field, "")).strip()
             if value:
@@ -1727,7 +2082,9 @@ def reconcile_authentication_status(
 
 
 FNO_RECOVERY_WORKER_STATUS_FILES: Dict[str, str] = {
+    "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.status",
     "fno_oi_fetch_5min": "fno_oi_fetch_5min.status",
+    "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.status",
     "fno_oi_feature_ranker": "fno_oi_feature_ranker.status",
 }
 
@@ -1809,6 +2166,69 @@ def report_text(path: Path, lines: int = 80, max_bytes: int = 400_000, max_lines
     if len(all_lines) > max_lines:
         return "\n".join(all_lines[-max(lines, max_lines // 2):])
     return "\n".join(all_lines)
+
+
+def _format_data_for_backtesting_live_view(today_ist: str) -> str:
+    """Expose the live 15:45 pipeline instead of yesterday's final combined log."""
+    stages = (
+        (
+            "File merge",
+            LOG_DIR / f"moving_files_{today_ist}.log",
+            r"END moving_files\.py \(exit=(\d+)\)",
+        ),
+        (
+            "Full-universe 1-minute build",
+            LOG_DIR / f"stocksonly_1min_{today_ist}.log",
+            r"END trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_1min\.py \(exit=(\d+)\)",
+        ),
+        (
+            "Data completeness verifier",
+            LOG_DIR / f"data_verify_{today_ist}.log",
+            r"END data_for_backtesting_verify\.py \(exit=(\d+)\)",
+        ),
+    )
+    wrapper = LOG_DIR / f"data_for_backtesting_{today_ist}.log"
+    wrapper_tail = tail_text(wrapper, lines=12)
+    wrapper_end = re.search(
+        r"END Data for backtesting parallel session \(exit=(\d+)\)",
+        wrapper_tail,
+    )
+    overall = (
+        f"DONE (exit={wrapper_end.group(1)})"
+        if wrapper_end
+        else ("RUNNING" if wrapper.exists() else "WAITING FOR 15:45 START")
+    )
+    output = [
+        "# Data for backtesting — live progress",
+        "",
+        f"- Trading date: `{today_ist}`",
+        f"- Pipeline: **{overall}**",
+        "- Dependency: the 16:20 V6/V8/V10/V11/V12 backtest waits for this pipeline and a PASS verifier.",
+        "",
+        "| Stage | State | Updated | Latest evidence |",
+        "|---|---|---|---|",
+    ]
+    for label, path, end_pattern in stages:
+        stage_tail = tail_text(path, lines=30)
+        end_match = re.search(end_pattern, stage_tail)
+        if end_match:
+            state = f"DONE exit={end_match.group(1)}"
+        elif path.exists():
+            state = "RUNNING"
+        else:
+            state = "WAITING"
+        evidence_lines = [line.strip() for line in stage_tail.splitlines() if line.strip()]
+        evidence = evidence_lines[-1] if evidence_lines else "-"
+        # While the verifier is active its redirected output is still in the
+        # temporary file; use that as the most current, honest progress line.
+        if label == "Data completeness verifier" and state == "RUNNING":
+            verify_live = tail_text(Path(f"{path}.stdout.tmp"), lines=8)
+            live_lines = [line.strip() for line in verify_live.splitlines() if line.strip()]
+            if live_lines:
+                evidence = live_lines[-1]
+        evidence = evidence.replace("|", "\\|")[:240]
+        output.append(f"| {label} | {state} | {iso_mtime(path) or '-'} | {evidence} |")
+    return "\n".join(output)
 
 
 def _read_csv_tail_rows(path: Path, limit: int = 30) -> list[dict[str, str]]:
@@ -2156,6 +2576,124 @@ def _read_json_dict(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _json_status_scalars(payload: object) -> Dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for key, value in payload.items():
+        if isinstance(value, bool):
+            out[str(key)] = "true" if value else "false"
+        elif value is None:
+            out[str(key)] = ""
+        elif not isinstance(value, (dict, list)):
+            out[str(key)] = str(value)
+    return out
+
+
+def _normalise_fno_multi_paper_state(raw: object) -> str:
+    state = str(raw or "").strip().upper()
+    return {
+        "NOT_RUN": "WAITING_OUTPUT",
+        "PREFLIGHT_OK": "READY",
+        "COMPLETE": "SUCCESS",
+        "DEGRADED": "PARTIAL",
+    }.get(state, state)
+
+
+def _load_fno_multi_paper_runtime_status(card_id: str) -> Dict[str, str]:
+    """Project one shared JSON runtime into the parent or a profile view."""
+    if card_id not in FNO_MULTI_PAPER_CARD_PROFILES:
+        return {}
+
+    payload = _read_json_dict(FNO_MULTI_PAPER_STATUS_PATH)
+    status = _json_status_scalars(payload)
+    raw_session_state = status.get("status", "")
+    if raw_session_state:
+        status["runtime_status"] = raw_session_state
+        status["status"] = _normalise_fno_multi_paper_state(raw_session_state)
+    update_ist = status.get("last_update_ist", "")
+    if update_ist:
+        status["ts"] = update_ist
+        status["updated_at_ist"] = update_ist
+    session_date = status.get("session_date", "")
+    if session_date:
+        status["session_date_ist"] = session_date
+    if status.get("message"):
+        status["derived_status"] = status["message"]
+
+    heartbeat_payload = _read_json_dict(FNO_MULTI_PAPER_HEARTBEAT_PATH)
+    heartbeat = _json_status_scalars(heartbeat_payload)
+    heartbeat_raw_state = heartbeat.get("status", "")
+    if heartbeat_raw_state:
+        heartbeat["runtime_status"] = heartbeat_raw_state
+        heartbeat["state"] = _normalise_fno_multi_paper_state(heartbeat_raw_state)
+    heartbeat_ist = heartbeat.get("heartbeat_ist", "")
+    if heartbeat_ist:
+        heartbeat["ts"] = heartbeat_ist
+        heartbeat["ts_ist"] = heartbeat_ist
+    if heartbeat.get("message"):
+        heartbeat["note"] = heartbeat["message"]
+    if heartbeat and FNO_MULTI_PAPER_HEARTBEAT_PATH.exists():
+        try:
+            heartbeat["_file_age_sec"] = str(
+                dt.datetime.now(dt.timezone.utc).timestamp()
+                - FNO_MULTI_PAPER_HEARTBEAT_PATH.stat().st_mtime
+            )
+        except OSError:
+            pass
+        status_time = _parse_status_datetime(
+            status.get("ts") or status.get("updated_at_ist")
+        )
+        heartbeat_time = _parse_status_datetime(
+            heartbeat.get("ts") or heartbeat.get("ts_ist")
+        )
+        if heartbeat_time is not None and (
+            status_time is None or heartbeat_time >= status_time
+        ):
+            for field in (
+                "phase",
+                "message",
+                "last_processed_minute",
+                "preferred_app_count",
+                "healthy_app_count",
+                "healthy_apps",
+                "unhealthy_apps",
+                "app_pool_state",
+                "last_app_event_minute",
+                "last_app_usage",
+                "last_app_retry_count",
+                "last_app_failure_count",
+            ):
+                if field in heartbeat:
+                    status[field] = heartbeat[field]
+            if heartbeat.get("message"):
+                status["derived_status"] = heartbeat["message"]
+        status = merge_runtime_status(status, heartbeat)
+
+    profile_key = FNO_MULTI_PAPER_CARD_PROFILES[card_id]
+    if not profile_key:
+        status["view_scope"] = "SESSION"
+        return status
+
+    # Apply the profile outcome after the shared heartbeat so a healthy parent
+    # process cannot paint a BLOCKED/DEGRADED strategy profile green.
+    status["view_scope"] = "PROFILE"
+    status["profile_key"] = profile_key
+    status["session_status"] = status.get("status", "")
+    profiles = payload.get("profiles", {}) if isinstance(payload, dict) else {}
+    profile_payload = profiles.get(profile_key, {}) if isinstance(profiles, dict) else {}
+    profile_status = _json_status_scalars(profile_payload)
+    if not profile_status:
+        return status
+    raw_profile_state = profile_status.get("status", "")
+    status.update(profile_status)
+    if raw_profile_state:
+        status["profile_runtime_status"] = raw_profile_state
+        status["status"] = _normalise_fno_multi_paper_state(raw_profile_state)
+    status["profile_key"] = profile_key
+    return status
 
 
 def _format_fixed_table(
@@ -2756,8 +3294,9 @@ def _v7_monitor_task_disabled(status: dict[str, str]) -> bool:
 
 
 def _v7_monitor_status_for(card_id: str, task_snapshot: Dict[str, Dict[str, str]]) -> Dict[str, str]:
-    status = parse_status_file(_resolve_status_path(STATUS_FILES[card_id])) if card_id in STATUS_FILES else {}
-    hb_path = _resolve_status_path(HEARTBEAT_FILES[card_id]) if card_id in HEARTBEAT_FILES else None
+    status_path = _runtime_status_path_for_card(card_id)
+    status = parse_status_file(status_path) if status_path is not None else {}
+    hb_path = _runtime_heartbeat_path_for_card(card_id)
     heartbeat = parse_status_file(hb_path) if hb_path else {}
     if heartbeat and hb_path is not None:
         # Inject heartbeat file age so merge_runtime_status can apply the
@@ -2825,6 +3364,1595 @@ def _v7_monitor_fetch_verdict(
         fetch_state = "WAIT"
 
     return fetch_state, fetch_ok, reasons
+
+
+def _fno_eq_id_monitor_detail_path(card_id: str) -> Optional[Path]:
+    """Return the most granular structured event source available for a card."""
+    live_fetch_name = LIVE_FETCH_STATUS_JSON_FILES.get(card_id)
+    if live_fetch_name:
+        return _resolve_status_path(live_fetch_name)
+    if card_id in {
+        "fno_oi_fetch_5min_fast_production",
+        "fno_oi_fetch_5min",
+        "fno_oi_fetch_5min_fast_shadow",
+        "fno_oi_feature_ranker",
+    }:
+        return _runtime_heartbeat_path_for_card(card_id)
+    return None
+
+
+def _fno_eq_id_monitor_clean(value: object, *, limit: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip().replace("|", "/")
+    if len(text) > limit:
+        return text[: max(0, limit - 1)].rstrip() + "~"
+    return text
+
+
+def _fno_eq_id_monitor_latest_evidence(tail: object) -> str:
+    keywords = (
+        "slot", "fetch", "select", "candidate", "entry", "guard", "paper",
+        "trade", "result", "auth", "backtest", "complete", "failed",
+        "blocked", "success",
+    )
+    fallback = ""
+    for raw in reversed(str(tail or "").splitlines()):
+        line = _fno_eq_id_monitor_clean(raw)
+        if not line or re.fullmatch(r"[-+: ]+", line):
+            continue
+        if line.startswith("#") or re.match(r"^\|?\s*:?-{3,}", line):
+            continue
+        if not fallback:
+            fallback = line
+        if any(keyword in line.lower() for keyword in keywords):
+            return line
+    return fallback
+
+
+def _fno_eq_id_monitor_safe_auth_status(today_ist: str) -> Dict[str, object]:
+    """Expose only auth health facts; never tokens, keys, or raw auth payloads."""
+    payload = _read_json_dict(AUTH_V2_STATE_FILE)
+    date_fields = ("session_date_ist",) + tuple(
+        f"session_date_ist_app{index}" for index in range(2, 9)
+    )
+    authenticated_apps = sum(
+        1 for field in date_fields if str(payload.get(field, "")).strip() == today_ist
+    )
+    try:
+        access_token_present = AUTH_V2_ACCESS_TOKEN_FILE.stat().st_size > 0
+    except OSError:
+        access_token_present = False
+    token_files_present = 0
+    token_files_current = 0
+    for index in range(1, 9):
+        suffix = "" if index == 1 else str(index)
+        token_path = BASE_DIR / f"access_token{suffix}.txt"
+        try:
+            stat = token_path.stat()
+        except OSError:
+            continue
+        if stat.st_size <= 0:
+            continue
+        token_files_present += 1
+        if dt.datetime.fromtimestamp(stat.st_mtime, tz=IST).date().isoformat() == today_ist:
+            token_files_current += 1
+    return {
+        "authenticated_apps": authenticated_apps,
+        "configured_apps": len(date_fields),
+        "token_files_present": token_files_present,
+        "token_files_current": token_files_current,
+        "auth_session_date": str(payload.get("session_date_ist", "")).strip(),
+        "auth_state_updated_at_ist": str(payload.get("updated_at_ist", "")).strip(),
+        "access_token_present": "YES" if access_token_present else "NO",
+    }
+
+
+_FNO_EQ_ID_ACTIVITY_FIELDS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "nifty_guard_fetch_v16_5min": (("slot", "slot"), ("phase", "phase")),
+    "eod_5min_data": (
+        ("slot_ist", "slot"), ("complete_symbol_count", "complete"),
+        ("universe_count", "universe"), ("unresolved_symbol_count", "unresolved"),
+        ("failed_symbol_count", "failed"), ("verification_failed_count", "verify_failed"),
+        ("total_elapsed_sec", "elapsed_s"), ("sla_state", "SLA"),
+    ),
+    "kiteticker_5min_data": (
+        ("slot_ist", "slot"), ("written_symbol_count", "written"),
+        ("universe_count", "universe"), ("failed_symbol_count", "failed"),
+        ("total_elapsed_sec", "elapsed_s"),
+    ),
+    "eod_1min_data": (
+        ("current_slot_ist", "slot"), ("slot_index", "slot_no"),
+        ("total_slots", "slots"), ("universe_count", "universe"),
+        ("slot_elapsed_sec", "elapsed_s"),
+    ),
+    "fno_oi_universe": (
+        ("active_futures", "active_futures"),
+        ("near_month_contracts", "near_month"), ("source_app", "app"),
+    ),
+    "fno_oi_fetch_5min_fast_production": (
+        ("slot", "slot"), ("processed_slots", "slots"),
+        ("contracts_written", "written"), ("contracts_expected", "expected"),
+        ("stock_contracts_written", "stock_written"),
+        ("stock_contracts_expected", "stock_expected"),
+        ("duration_sec", "elapsed_s"),
+    ),
+    "fno_oi_fetch_5min": (("slot", "slot"), ("processed_slots", "slots")),
+    "fno_oi_fetch_5min_fast_shadow": (
+        ("slot", "slot"), ("processed_slots", "slots"),
+        ("contracts_written", "written"), ("contracts_expected", "expected"),
+        ("quality_parity", "Kite_parity"),
+        ("fetch_persist_duration_sec", "elapsed_s"), ("speedup", "speedup"),
+    ),
+    "fno_oi_feature_ranker": (("slot", "slot"), ("processed_slots", "slots")),
+    "fno_v6_scanner_5min": (("processed_slots", "slots"),),
+    "fno_v6_equity_1min_feed": (
+        ("slot", "slot"), ("written", "written"), ("expected", "expected"),
+    ),
+    "fno_v6_confirmation_1min": (("processed_slots", "slots"),),
+    "fno_v6_live_long": (
+        ("signals", "signals"), ("pending_entry", "pending"), ("open", "open"),
+        ("closed", "closed"), ("no_fill", "no_fill"),
+        ("blocked_sizing", "size_guard"),
+    ),
+    "fno_v6_live_short": (
+        ("signals", "signals"), ("pending_entry", "pending"), ("open", "open"),
+        ("closed", "closed"), ("no_fill", "no_fill"),
+        ("blocked_sizing", "size_guard"),
+    ),
+    "fno_v6_trade_logger": (("rows", "trades"), ("closed", "closed")),
+    "fno_v6_net_result": (
+        ("signals", "signals"), ("open", "open"), ("closed", "closed"),
+        ("blocked", "blocked"), ("total_net_rs", "net_rs"),
+        ("return_on_capital_pct", "ROC_pct"),
+    ),
+    "fno_v8_combined_paper": (
+        ("candidate_count", "candidates"), ("fill_count", "fills"),
+        ("open_count", "open"), ("closed_count", "closed"),
+        ("net_pnl_rs", "net_rs"),
+    ),
+    "fno_oi_eod_qc": (
+        ("contracts_complete", "complete"), ("contracts_expected", "expected"),
+        ("repair_failed", "repair_failed"),
+    ),
+    "fno_v10_v11_v12_paper": (
+        ("last_processed_minute", "minute"), ("completed_minutes", "minutes"),
+        ("healthy_app_count", "apps_ok"), ("preferred_app_count", "apps_total"),
+        ("last_app_retry_count", "retries"),
+        ("last_app_failure_count", "app_errors"),
+    ),
+    "fno_v10_paper": (
+        ("candidate_count", "candidates"), ("long_candidates", "long"),
+        ("short_candidates", "short"), ("gap_guard_rejections", "gap_guard_rej"),
+        ("fill_count", "fills"), ("open_count", "open"),
+        ("closed_count", "closed"), ("net_pnl_rs", "net_rs"),
+    ),
+    "fno_v11_paper": (
+        ("candidate_count", "candidates"), ("long_candidates", "long"),
+        ("short_candidates", "short"), ("gap_guard_rejections", "gap_guard_rej"),
+        ("fill_count", "fills"), ("open_count", "open"),
+        ("closed_count", "closed"), ("net_pnl_rs", "net_rs"),
+    ),
+    "fno_v12_paper": (
+        ("candidate_count", "candidates"), ("long_candidates", "long"),
+        ("short_candidates", "short"), ("gap_guard_rejections", "gap_guard_rej"),
+        ("fill_count", "fills"), ("open_count", "open"),
+        ("closed_count", "closed"), ("net_pnl_rs", "net_rs"),
+    ),
+    "authentication_v2": (
+        ("authenticated_apps", "apps_authenticated"),
+        ("configured_apps", "apps_total"),
+        ("token_files_current", "tokens_current"),
+        ("token_files_present", "tokens_present"),
+        ("access_token_present", "access_token_file"),
+        ("auth_session_date", "session_date"),
+        ("exit_code", "exit"),
+    ),
+}
+
+
+def _fno_eq_id_monitor_activity(
+    card_id: str,
+    status: Dict[str, object],
+    tail: object,
+) -> str:
+    parts: list[str] = []
+    for field, label in _FNO_EQ_ID_ACTIVITY_FIELDS.get(card_id, ()):
+        value = _fno_eq_id_monitor_clean(status.get(field, ""), limit=64)
+        if value:
+            parts.append(f"{label}={value}")
+    if parts:
+        return "; ".join(parts)
+    for field in ("derived_status", "message", "reason", "error"):
+        value = _fno_eq_id_monitor_clean(status.get(field, ""))
+        if value:
+            return value
+    next_run = _fno_eq_id_monitor_clean(status.get("scheduler_next_run", ""), limit=64)
+    if next_run:
+        return f"next={next_run}"
+    if card_id == "authentication_v2":
+        return "authentication health evidence unavailable"
+    return _fno_eq_id_monitor_latest_evidence(tail) or "no structured activity yet"
+
+
+def _fno_eq_id_monitor_state(
+    status: Dict[str, object],
+    *,
+    exists: bool,
+) -> tuple[str, str, bool]:
+    runtime = str(status.get("status", "") or "").strip().upper()
+    phase = str(status.get("phase", "") or "").strip().upper()
+    scheduler = str(
+        status.get("scheduler_status", "") or status.get("scheduler_state", "") or ""
+    ).strip().upper()
+    manual_live = bool(
+        scheduler == "DISABLED"
+        and runtime in {"RUNNING", "RESTARTING", "COOLDOWN", "STALE_HB_RUNNING", "RECOVERED"}
+        and (
+            str(status.get("scheduler_attention", "") or "").strip().upper()
+            == "DISABLED_WHILE_RUNNING"
+            or str(status.get("runtime_start_mode", "") or "").strip().upper() == "MANUAL"
+        )
+    )
+    if runtime == "DISABLED" or (scheduler == "DISABLED" and not manual_live):
+        return "INACTIVE", runtime or "DISABLED", False
+
+    healthy = {
+        "SUCCESS", "RUNNING", "READY", "SCHEDULED", "ENABLED", "DONE",
+        "COMPLETE", "COMPLETED", "IDLE", "STOPPED_AFTER_CUTOFF",
+        "SKIPPED_CUTOFF", "SKIPPED_NON_TRADING_DAY",
+    }
+    watch = {
+        "WAITING", "WAITING_OUTPUT", "EMPTY_OUTPUT", "PARTIAL", "DEGRADED",
+        "RECOVERED", "RESTARTING", "COOLDOWN", "BLOCKED_STALE_ACTIVATION",
+    }
+    if runtime in healthy:
+        monitor = "OK"
+    elif runtime in watch or (
+        runtime == "BLOCKED" and phase in {"INCOMPLETE_BY_DEADLINE", "UPSTREAM_BLOCKED"}
+    ):
+        monitor = "WATCH"
+    elif runtime:
+        monitor = "PROBLEM"
+    else:
+        monitor = "UNKNOWN"
+    if manual_live and monitor == "OK":
+        monitor = "WATCH"
+    if not exists and runtime not in {"SCHEDULED", "ENABLED"} and monitor == "OK":
+        monitor = "WATCH"
+    return monitor, runtime or "UNKNOWN", True
+
+
+def _fno_eq_id_timeline_truth(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "complete", "success"}
+
+
+def _fno_eq_id_timeline_timestamp(
+    value: object,
+    session_date: str,
+) -> Optional[dt.datetime]:
+    """Parse one timestamp and reject evidence from another IST session date."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    parsed = parsed.replace(tzinfo=IST) if parsed.tzinfo is None else parsed.astimezone(IST)
+    return parsed if parsed.date().isoformat() == session_date else None
+
+
+def _fno_eq_id_timeline_hhmm(value: object, session_date: str) -> str:
+    parsed = _fno_eq_id_timeline_timestamp(value, session_date)
+    if parsed is not None:
+        return parsed.strftime("%H:%M")
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{2}):(\d{2})", text)
+    return text if match else ""
+
+
+def _fno_eq_id_timeline_at(session_date: str, hhmm: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(f"{session_date}T{hhmm}:00").replace(tzinfo=IST)
+
+
+def _fno_eq_id_timeline_pending_state(
+    now_ist: dt.datetime,
+    event_at: dt.datetime,
+    *,
+    deadline_minutes: int = 1,
+) -> str:
+    ready_at = event_at + dt.timedelta(seconds=FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS)
+    deadline = ready_at + dt.timedelta(minutes=deadline_minutes)
+    if now_ist < ready_at:
+        return "WAIT"
+    if now_ist < deadline:
+        return "IN PROGRESS"
+    return "BLOCKED: evidence missing after deadline"
+
+
+def _fno_eq_id_timeline_card_disabled(
+    by_id: Dict[str, Dict[str, object]],
+    card_id: str,
+) -> bool:
+    item = by_id.get(card_id, {})
+    raw = item.get("status", {}) if isinstance(item, dict) else {}
+    status = raw if isinstance(raw, dict) else {}
+    runtime = str(status.get("status", "") or "").strip().upper()
+    scheduler = str(
+        status.get("scheduler_status", "")
+        or status.get("scheduler_state", "")
+        or ""
+    ).strip().upper()
+    manual_live = bool(
+        scheduler == "DISABLED"
+        and runtime in {"RUNNING", "RESTARTING", "COOLDOWN", "STALE_HB_RUNNING", "RECOVERED"}
+        and (
+            str(status.get("scheduler_attention", "") or "").strip().upper()
+            == "DISABLED_WHILE_RUNNING"
+            or str(status.get("runtime_start_mode", "") or "").strip().upper() == "MANUAL"
+        )
+    )
+    return runtime == "DISABLED" or (scheduler == "DISABLED" and not manual_live)
+
+
+def _fno_eq_id_timeline_number(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _fno_eq_id_timeline_rs(value: float) -> str:
+    sign = "+" if value > 0 else ""
+    return f"{sign}₹{value:,.2f}"
+
+
+def _fno_eq_id_timeline_symbols(
+    values: Sequence[object],
+    *,
+    limit: int = 4,
+) -> str:
+    symbols = sorted({str(value or "").strip().upper() for value in values if str(value or "").strip()})
+    if not symbols:
+        return ""
+    shown = symbols[:limit]
+    suffix = f",+{len(symbols) - limit}" if len(symbols) > limit else ""
+    return ",".join(shown) + suffix
+
+
+def _fno_eq_id_timeline_jsonl(path: Path, *, limit: int = 50000) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: deque[dict[str, Any]] = deque(maxlen=max(1, int(limit)))
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+    except OSError:
+        return []
+    return list(rows)
+
+
+def _fno_eq_id_timeline_source_cell(
+    payload: Dict[str, Any],
+    *,
+    slot: str,
+    session_date: str,
+    now_ist: dt.datetime,
+    complete_fields: Sequence[str],
+    written_fields: Sequence[str],
+    expected_fields: Sequence[str],
+    prefix: str = "",
+) -> str:
+    if not payload:
+        pending = _fno_eq_id_timeline_pending_state(
+            now_ist,
+            _fno_eq_id_timeline_at(session_date, slot),
+        )
+        return f"{prefix}{pending}".strip()
+    slot_at = _fno_eq_id_timeline_at(session_date, slot)
+    payload_slot = _fno_eq_id_timeline_hhmm(
+        payload.get("slot_ist") or payload.get("timestamp"),
+        session_date,
+    )
+    published_at = _fno_eq_id_timeline_timestamp(payload.get("published_at_ist"), session_date)
+    if payload_slot != slot or published_at is None or published_at < slot_at:
+        observed = payload_slot or "invalid timestamp"
+        return f"{prefix}EVIDENCE MISMATCH ({observed})".strip()
+    if "source" in payload and str(payload.get("source", "")).strip().lower() != "final":
+        return f"{prefix}INCOMPLETE NON_FINAL_SOURCE".strip()
+    required_present = all(field in payload for field in complete_fields)
+    complete = required_present and all(
+        _fno_eq_id_timeline_truth(payload.get(field)) for field in complete_fields
+    )
+    written = next(
+        (payload.get(field) for field in written_fields if str(payload.get(field, "")).strip()),
+        "",
+    )
+    expected = next(
+        (payload.get(field) for field in expected_fields if str(payload.get(field, "")).strip()),
+        "",
+    )
+    coverage = f" {written}/{expected}" if str(written) and str(expected) else ""
+    written_number = _fno_eq_id_timeline_number(written)
+    expected_number = _fno_eq_id_timeline_number(expected)
+    if (
+        written_number is None
+        or expected_number is None
+        or expected_number <= 0
+        or written_number < 0
+        or written_number > expected_number
+    ):
+        return f"{prefix}EVIDENCE MISMATCH (invalid coverage)".strip()
+    state = str(payload.get("state", "") or "").strip().upper()
+    lag_seconds = (published_at - slot_at).total_seconds()
+    lag_text = f" (+{lag_seconds:.0f}s)"
+    if complete:
+        if state and state not in {"SUCCESS", "COMPLETE"}:
+            return f"{prefix}EVIDENCE MISMATCH (state={state})".strip()
+        if lag_seconds > 60 + FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS:
+            return f"{prefix}LATE{coverage}{lag_text}".strip()
+        return f"{prefix}OK{coverage}{lag_text}".strip()
+    failures = next(
+        (
+            payload.get(field)
+            for field in ("failed_count", "stock_failed_count", "tickers_failed", "verification_failed_count")
+            if str(payload.get(field, "")).strip()
+        ),
+        "",
+    )
+    failure_text = f"; fail={failures}" if str(failures) else ""
+    return f"{prefix}INCOMPLETE {state or 'NOT_COMPLETE'}{coverage}{failure_text}".strip()
+
+
+def _fno_eq_id_timeline_session_rows(
+    rows: Sequence[Dict[str, Any]],
+    session_date: str,
+) -> list[Dict[str, Any]]:
+    output: list[Dict[str, Any]] = []
+    for row in rows:
+        explicit_date = str(row.get("session_date", "") or "").strip()
+        if explicit_date and explicit_date != session_date:
+            continue
+        timestamp = next(
+            (
+                row.get(field)
+                for field in ("signal_time", "signal_end", "event_time", "entry_time", "entry_at_ist")
+                if str(row.get(field, "") or "").strip()
+            ),
+            "",
+        )
+        if explicit_date or not timestamp or _fno_eq_id_timeline_hhmm(timestamp, session_date):
+            output.append(dict(row))
+    return output
+
+
+def _fno_eq_id_timeline_row_slot(
+    row: Dict[str, Any],
+    session_date: str,
+    fields: Sequence[str],
+) -> str:
+    for field in fields:
+        value = row.get(field)
+        if not str(value or "").strip():
+            continue
+        hhmm = _fno_eq_id_timeline_hhmm(value, session_date)
+        if hhmm:
+            return hhmm
+    return ""
+
+
+def _fno_eq_id_timeline_current_trade_summary(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    entry_field: str,
+    exit_field: str,
+) -> str:
+    filled = [row for row in rows if str(row.get(entry_field, "") or "").strip()]
+    closed = [row for row in filled if str(row.get(exit_field, "") or "").strip()]
+    open_rows = [row for row in filled if row not in closed]
+    rejected = sum(1 for row in rows if _fno_eq_id_timeline_truth(row.get("gap_guard_rejected")))
+    pnl_values = [
+        number
+        for number in (_fno_eq_id_timeline_number(row.get("net_pnl_rs")) for row in filled)
+        if number is not None
+    ]
+    parts = [f"E{len(filled)} O{len(open_rows)}/C{len(closed)}"]
+    if rejected:
+        parts.append(f"G{rejected}")
+    if pnl_values:
+        parts.append(f"net={_fno_eq_id_timeline_rs(sum(pnl_values))}")
+    return " ".join(parts)
+
+
+def _fno_eq_id_timeline_book_as_of(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    minute_end: dt.datetime,
+    session_date: str,
+    entry_field: str,
+    exit_field: str,
+) -> str:
+    cutoff = minute_end + dt.timedelta(minutes=1) - dt.timedelta(microseconds=1)
+    entered: list[tuple[Dict[str, Any], dt.datetime]] = []
+    for row in rows:
+        entry_at = _fno_eq_id_timeline_timestamp(row.get(entry_field), session_date)
+        if entry_at is not None and entry_at <= cutoff:
+            entered.append((row, entry_at))
+    closed: list[Dict[str, Any]] = []
+    for row, _ in entered:
+        exit_at = _fno_eq_id_timeline_timestamp(row.get(exit_field), session_date)
+        if exit_at is not None and exit_at <= cutoff:
+            closed.append(row)
+    open_count = len(entered) - len(closed)
+    realized = sum(
+        number
+        for number in (_fno_eq_id_timeline_number(row.get("net_pnl_rs")) for row in closed)
+        if number is not None
+    )
+    return f"book O{open_count}/C{len(closed)} R={_fno_eq_id_timeline_rs(realized)}"
+
+
+def _fno_eq_id_timeline_event_symbols(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    timestamp_field: str,
+    minute: str,
+    session_date: str,
+) -> list[str]:
+    return [
+        str(row.get("symbol") or row.get("tradingsymbol") or "").strip().upper()
+        for row in rows
+        if _fno_eq_id_timeline_row_slot(row, session_date, (timestamp_field,)) == minute
+    ]
+
+
+def _fno_eq_id_timeline_signal_id_symbol(signal_id: object) -> str:
+    text = str(signal_id or "").strip()
+    match = re.match(r"^\d{8}_\d{4}_(?:LONG|SHORT)_(.+)_[0-9a-fA-F]{8,}$", text)
+    return match.group(1).upper() if match else text
+
+
+def _fno_eq_id_timeline_profile_selection_cell(
+    audit_rows: Sequence[Dict[str, Any]],
+    trade_rows: Sequence[Dict[str, Any]],
+) -> str:
+    selected = [row for row in audit_rows if _fno_eq_id_timeline_truth(row.get("selected_5m"))]
+    rejected = len(audit_rows) - len(selected)
+    longs = [row for row in selected if str(row.get("side", "")).upper() == "LONG"]
+    shorts = [row for row in selected if str(row.get("side", "")).upper() == "SHORT"]
+    if not selected:
+        return f"NO SIGNAL; audited={len(audit_rows)} rejected={rejected}"
+    symbols = _fno_eq_id_timeline_symbols([row.get("symbol") for row in selected])
+    result = _fno_eq_id_timeline_current_trade_summary(
+        trade_rows,
+        entry_field="entry_time",
+        exit_field="exit_time",
+    )
+    return (
+        f"SEL L{len(longs)}/S{len(shorts)} [{symbols}]; "
+        f"rejected={rejected}; {result}"
+    )
+
+
+def _fno_eq_id_timeline_manifest_valid(
+    manifest: Dict[str, Any],
+    *,
+    session_date: str,
+    slot: str,
+) -> bool:
+    rows = manifest.get("rows")
+    tokens = manifest.get("symbol_tokens")
+    signal_at = _fno_eq_id_timeline_timestamp(manifest.get("signal_timestamp"), session_date)
+    due_at = _fno_eq_id_timeline_timestamp(manifest.get("confirmation_due_ist"), session_date)
+    decision_at = _fno_eq_id_timeline_timestamp(manifest.get("decision_at_ist"), session_date)
+    unsigned = dict(manifest)
+    claimed = str(unsigned.pop("manifest_sha256", "") or "")
+    try:
+        calculated = hashlib.sha256(
+            json.dumps(
+                unsigned,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        universe_count = int(manifest.get("universe_count", -1))
+        row_count = int(manifest.get("row_count", -1))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        manifest.get("schema_version") == "fno_multi_paper_5m_source_v2"
+        and manifest.get("session_date") == session_date
+        and manifest.get("signal_end") == slot
+        and manifest.get("decision_before_confirmation_due") is True
+        and signal_at == _fno_eq_id_timeline_at(session_date, slot)
+        and due_at == signal_at + dt.timedelta(minutes=1)
+        and decision_at is not None
+        and due_at is not None
+        and decision_at < due_at
+        and isinstance(rows, list)
+        and isinstance(tokens, dict)
+        and universe_count == len(tokens) > 0
+        and row_count == len(rows) == 2 * universe_count
+        and len(claimed) == 64
+        and claimed == calculated
+    )
+
+
+def _fno_eq_id_timeline_v6_confirmation_valid(
+    payload: Dict[str, Any],
+    *,
+    session_date: str,
+    signal_slot: str,
+    confirmation_slot: str,
+) -> bool:
+    candidate_count = _fno_eq_id_timeline_number(payload.get("candidate_count"))
+    confirmation_bars = _fno_eq_id_timeline_number(payload.get("confirmation_bars"))
+    no_candle = _fno_eq_id_timeline_number(payload.get("ineligible_no_candle_count", 0))
+    errors = _fno_eq_id_timeline_number(payload.get("error_count"))
+    selected_long = _fno_eq_id_timeline_number(payload.get("selected_long"))
+    selected_short = _fno_eq_id_timeline_number(payload.get("selected_short"))
+    if None in (
+        candidate_count,
+        confirmation_bars,
+        no_candle,
+        errors,
+        selected_long,
+        selected_short,
+    ):
+        return False
+    return bool(
+        payload.get("session_date") == session_date
+        and payload.get("signal_end") == signal_slot
+        and payload.get("confirmation_end") == confirmation_slot
+        and str(payload.get("state", "") or "").strip().upper() in {"SUCCESS", "COMPLETE"}
+        and payload.get("scanner_complete") is True
+        and errors == 0
+        and candidate_count >= 0
+        and confirmation_bars >= 0
+        and no_candle >= 0
+        and confirmation_bars + no_candle == candidate_count
+        and selected_long >= 0
+        and selected_short >= 0
+        and selected_long + selected_short <= candidate_count
+    )
+
+
+def _build_fno_eq_id_strategy_timelines(
+    items: Sequence[Dict[str, object]],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> Dict[str, Any]:
+    """Build causal 5m selection and 1m event grids for the current IST day."""
+    current = now_ist or dt.datetime.now(IST)
+    current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
+    session_date = current.date().isoformat()
+    date_key = session_date.replace("-", "")
+    by_id = {str(item.get("id", "")): item for item in items}
+
+    v6_root = FNO_OI_ROOT / "v6_live"
+    v6_trade_path = (
+        v6_root / "consolidated" / f"fno_v6_trades_{session_date}.csv"
+    )
+    v6_trade_file_exists = v6_trade_path.is_file()
+    v6_trade_rows = _fno_eq_id_timeline_session_rows(
+        _read_csv_tail_rows(v6_trade_path, limit=50000),
+        session_date,
+    )
+    shared_day_root = FNO_MULTI_PAPER_ROOT / "sessions" / session_date
+    shared_status = _read_json_dict(FNO_MULTI_PAPER_STATUS_PATH)
+    if str(shared_status.get("session_date", "") or "").strip() != session_date:
+        shared_status = {}
+    ingested_slots = {
+        str(value) for value in shared_status.get("ingested_slots", [])
+    } if isinstance(shared_status.get("ingested_slots"), list) else set()
+    skipped_slots = {
+        str(value) for value in shared_status.get("skipped_slots", [])
+    } if isinstance(shared_status.get("skipped_slots"), list) else set()
+    shared_runtime = str(shared_status.get("status", "") or "").strip().upper()
+    shared_phase = str(shared_status.get("phase", "") or "").strip().upper()
+    shared_disabled = _fno_eq_id_timeline_card_disabled(
+        by_id, "fno_v10_v11_v12_paper"
+    )
+    v6_scanner_disabled = _fno_eq_id_timeline_card_disabled(
+        by_id, "fno_v6_scanner_5min"
+    )
+    v6_confirmation_disabled = _fno_eq_id_timeline_card_disabled(
+        by_id, "fno_v6_confirmation_1min"
+    )
+    v6_entries_disabled = all(
+        _fno_eq_id_timeline_card_disabled(by_id, card_id)
+        for card_id in ("fno_v6_live_long", "fno_v6_live_short")
+    )
+
+    profile_audits: Dict[str, list[Dict[str, Any]]] = {}
+    profile_trades: Dict[str, list[Dict[str, Any]]] = {}
+    profile_audit_exists: Dict[str, bool] = {}
+    profile_trade_exists: Dict[str, bool] = {}
+    for profile in ("v10", "v11", "v12"):
+        profile_root = shared_day_root / "profiles" / profile
+        audit_path = profile_root / "selection_audit.csv"
+        trade_path = profile_root / "trades.csv"
+        profile_audit_exists[profile] = audit_path.is_file()
+        profile_trade_exists[profile] = trade_path.is_file()
+        profile_audits[profile] = _fno_eq_id_timeline_session_rows(
+            _read_csv_tail_rows(audit_path, limit=50000),
+            session_date,
+        )
+        profile_trades[profile] = _fno_eq_id_timeline_session_rows(
+            _read_csv_tail_rows(trade_path, limit=50000),
+            session_date,
+        )
+    shared_events = _fno_eq_id_timeline_session_rows(
+        _fno_eq_id_timeline_jsonl(shared_day_root / "events.jsonl"),
+        session_date,
+    )
+
+    five_minute_rows: list[Dict[str, str]] = []
+    v6_scanners: Dict[str, Dict[str, Any]] = {}
+    v6_confirmations: Dict[str, Dict[str, Any]] = {}
+    for slot in FNO_EQ_ID_MONITOR_5M_SLOTS:
+        cash_payload = _read_json_dict(
+            SLOT_READY_5M_DIR / f"slot_{date_key}_{slot.replace(':', '')}.json"
+        )
+        if slot == "09:15" and cash_payload:
+            cash_slot = _fno_eq_id_timeline_hhmm(cash_payload.get("slot_ist"), session_date)
+            cash_published = _fno_eq_id_timeline_timestamp(
+                cash_payload.get("published_at_ist"), session_date
+            )
+            if cash_slot != slot or cash_published is None:
+                cash_cell = "OPEN SNAPSHOT EVIDENCE MISMATCH"
+            else:
+                ready = cash_payload.get("tickers_complete", cash_payload.get("tickers_written", 0))
+                expected = cash_payload.get("tickers_expected", "?")
+                cash_cell = (
+                    f"OPEN SNAPSHOT marker; completed 5m N/A; readiness={ready}/{expected}"
+                )
+        elif slot == "09:15":
+            cash_cell = "OPEN SNAPSHOT marker " + _fno_eq_id_timeline_pending_state(
+                current,
+                _fno_eq_id_timeline_at(session_date, slot),
+            )
+        else:
+            cash_cell = _fno_eq_id_timeline_source_cell(
+                cash_payload,
+                slot=slot,
+                session_date=session_date,
+                now_ist=current,
+                complete_fields=("complete", "fno_equity_quality_complete"),
+                written_fields=("tickers_complete", "tickers_written", "fno_equity_ready"),
+                expected_fields=("tickers_expected", "fno_equity_expected"),
+            )
+
+        if slot == "09:15":
+            oi_cell = "N/A (OI starts 09:20)"
+            rank_cell = "N/A (rank starts 09:20)"
+        else:
+            oi_payload = _read_json_dict(
+                FNO_OI_ROOT / "slot_ready" / f"slot_{date_key}_{slot.replace(':', '')}.json"
+            )
+            rank_payload = _read_json_dict(
+                FNO_OI_ROOT / "ranking_ready" / f"slot_{date_key}_{slot.replace(':', '')}.json"
+            )
+            oi_cell = _fno_eq_id_timeline_source_cell(
+                oi_payload,
+                slot=slot,
+                session_date=session_date,
+                now_ist=current,
+                complete_fields=("complete", "global_complete", "stock_complete"),
+                written_fields=("stock_contracts_written", "contracts_written"),
+                expected_fields=("stock_contracts_expected", "contracts_expected"),
+            )
+            if slot == "09:20" and rank_payload and not _fno_eq_id_timeline_truth(
+                rank_payload.get("complete")
+            ):
+                rank_slot = _fno_eq_id_timeline_hhmm(
+                    rank_payload.get("slot_ist"), session_date
+                )
+                rank_published = _fno_eq_id_timeline_timestamp(
+                    rank_payload.get("published_at_ist"), session_date
+                )
+                if rank_slot == slot and rank_published is not None:
+                    rank_cell = (
+                        f"WARMUP {str(rank_payload.get('state', 'PARTIAL')).upper()}; "
+                        f"features={rank_payload.get('features_available', '?')}/"
+                        f"{rank_payload.get('contracts_expected', '?')}; "
+                        f"eligible={rank_payload.get('eligible_contracts', '?')}"
+                    )
+                else:
+                    rank_cell = "WARMUP EVIDENCE MISMATCH"
+            else:
+                rank_cell = _fno_eq_id_timeline_source_cell(
+                    rank_payload,
+                    slot=slot,
+                    session_date=session_date,
+                    now_ist=current,
+                    complete_fields=("complete",),
+                    written_fields=("eligible_contracts", "features_available"),
+                    expected_fields=("contracts_expected",),
+                )
+
+        if slot == "09:15":
+            purpose = "OPEN SNAPSHOT"
+        elif slot == "09:20":
+            purpose = "DATA/OI WARMUP"
+        elif slot == "09:50":
+            purpose = "CUTOFF / S+5 FOR 09:45"
+        else:
+            purpose = "STRATEGY SELECTION"
+
+        if slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+            v6_cell = "OFF WINDOW"
+        elif v6_scanner_disabled:
+            v6_cell = "DISABLED"
+        else:
+            scanner_path = (
+                v6_root / "scanner_5m" / session_date
+                / f"slot_{slot.replace(':', '')}.json"
+            )
+            scanner = _read_json_dict(scanner_path)
+            if scanner:
+                valid_scanner = (
+                    str(scanner.get("session_date", "") or "") == session_date
+                    and str(scanner.get("signal_end", "") or "") == slot
+                )
+                if not valid_scanner:
+                    v6_cell = "EVIDENCE MISMATCH"
+                else:
+                    v6_scanners[slot] = scanner
+                    scanner_state = str(scanner.get("state", "") or "").strip().upper()
+                    long_count = int(_fno_eq_id_timeline_number(scanner.get("long_candidates")) or 0)
+                    short_count = int(_fno_eq_id_timeline_number(scanner.get("short_candidates")) or 0)
+                    selection_text = f"SEL L{long_count}/S{short_count}"
+                    if scanner_state not in {"SUCCESS", "COMPLETE"}:
+                        v6_cell = f"{selection_text}; {scanner_state or 'INCOMPLETE'}"
+                    else:
+                        confirmation_slot = FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL[slot]
+                        confirmation_path = (
+                            v6_root / "confirmation_1m" / session_date
+                            / f"slot_{confirmation_slot.replace(':', '')}.json"
+                        )
+                        confirmation = _read_json_dict(confirmation_path)
+                        if confirmation:
+                            valid_confirmation = _fno_eq_id_timeline_v6_confirmation_valid(
+                                confirmation,
+                                session_date=session_date,
+                                signal_slot=slot,
+                                confirmation_slot=confirmation_slot,
+                            )
+                            if not valid_confirmation:
+                                confirmation_text = (
+                                    "CONF BLOCKED/INCOMPLETE "
+                                    f"state={str(confirmation.get('state', 'INVALID')).upper()}"
+                                )
+                            else:
+                                v6_confirmations[confirmation_slot] = confirmation
+                                selected_ids = confirmation.get("selected_signal_ids", [])
+                                selected_ids = selected_ids if isinstance(selected_ids, list) else []
+                                selected_symbols = _fno_eq_id_timeline_symbols(
+                                    [_fno_eq_id_timeline_signal_id_symbol(value) for value in selected_ids]
+                                )
+                                confirmed_long = int(
+                                    _fno_eq_id_timeline_number(confirmation.get("selected_long")) or 0
+                                )
+                                confirmed_short = int(
+                                    _fno_eq_id_timeline_number(confirmation.get("selected_short")) or 0
+                                )
+                                symbol_text = f" [{selected_symbols}]" if selected_symbols else ""
+                                confirmation_text = (
+                                    f"CONF L{confirmed_long}/S{confirmed_short}{symbol_text}"
+                                )
+                                ledger_ids = {
+                                    str(row.get("signal_id", "") or "").strip()
+                                    for row in v6_trade_rows
+                                    if str(row.get("signal_id", "") or "").strip()
+                                }
+                                missing_ledger_ids = sorted(set(map(str, selected_ids)) - ledger_ids)
+                                if selected_ids and (not v6_trade_file_exists or missing_ledger_ids):
+                                    ledger_deadline = _fno_eq_id_timeline_at(
+                                        session_date, confirmation_slot
+                                    ) + dt.timedelta(minutes=1)
+                                    confirmation_text += (
+                                        "; LEDGER PENDING"
+                                        if current < ledger_deadline
+                                        else f"; LEDGER MISMATCH missing={len(missing_ledger_ids) or len(selected_ids)}"
+                                    )
+                        elif v6_confirmation_disabled:
+                            confirmation_text = "CONF DISABLED"
+                        else:
+                            confirmation_text = "CONF " + _fno_eq_id_timeline_pending_state(
+                                current,
+                                _fno_eq_id_timeline_at(session_date, confirmation_slot),
+                            )
+                        cohort = [
+                            row for row in v6_trade_rows
+                            if str(row.get("signal_end", "") or "").strip() == slot
+                        ]
+                        result_text = _fno_eq_id_timeline_current_trade_summary(
+                            cohort,
+                            entry_field="entry_at_ist",
+                            exit_field="exit_at_ist",
+                        )
+                        v6_cell = f"{selection_text}; {confirmation_text}; {result_text}"
+            else:
+                v6_cell = _fno_eq_id_timeline_pending_state(
+                    current,
+                    _fno_eq_id_timeline_at(session_date, slot),
+                )
+
+        if slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+            shared_source_cell = "OFF WINDOW"
+        elif shared_disabled:
+            shared_source_cell = "DISABLED"
+        else:
+            manifest_path = (
+                FNO_MULTI_PAPER_ROOT / "evidence" / session_date / "five_minute"
+                / f"slot_{slot.replace(':', '')}" / "manifest.json"
+            )
+            manifest = _read_json_dict(manifest_path)
+            if slot in skipped_slots:
+                shared_source_cell = "SKIPPED (forward-only recovery)"
+            elif manifest:
+                valid_manifest = _fno_eq_id_timeline_manifest_valid(
+                    manifest,
+                    session_date=session_date,
+                    slot=slot,
+                )
+                if not valid_manifest:
+                    shared_source_cell = "EVIDENCE MISMATCH"
+                elif slot in ingested_slots:
+                    shared_source_cell = f"PROCESSED rows={manifest.get('row_count', '?')}"
+                else:
+                    shared_source_cell = (
+                        f"SOURCE SEALED rows={manifest.get('row_count', '?')}; REDUCER PENDING"
+                    )
+            elif slot in ingested_slots:
+                shared_source_cell = "EVIDENCE MISMATCH (ingested/no manifest)"
+            else:
+                shared_source_cell = _fno_eq_id_timeline_pending_state(
+                    current,
+                    _fno_eq_id_timeline_at(session_date, slot),
+                )
+
+        profile_cells: Dict[str, str] = {}
+        for profile in ("v10", "v11", "v12"):
+            if slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+                profile_cells[profile] = "OFF WINDOW"
+                continue
+            if shared_disabled:
+                profile_cells[profile] = "DISABLED"
+                continue
+            if shared_source_cell.startswith("SKIPPED"):
+                profile_cells[profile] = "SKIPPED / NO SIGNAL"
+                continue
+            if not shared_source_cell.startswith("PROCESSED"):
+                profile_cells[profile] = shared_source_cell
+                continue
+            if not profile_audit_exists[profile]:
+                profile_cells[profile] = "MISSING SELECTION AUDIT"
+                continue
+            audits = [
+                row for row in profile_audits[profile]
+                if _fno_eq_id_timeline_row_slot(row, session_date, ("signal_time",)) == slot
+            ]
+            trades = [
+                row for row in profile_trades[profile]
+                if _fno_eq_id_timeline_row_slot(row, session_date, ("signal_time",)) == slot
+            ]
+            selected_count = sum(
+                1 for row in audits if _fno_eq_id_timeline_truth(row.get("selected_5m"))
+            )
+            if selected_count and not profile_trade_exists[profile]:
+                profile_cells[profile] = (
+                    f"SEL {selected_count}; MISSING STRATEGY LEDGER"
+                )
+                continue
+            profile_cells[profile] = _fno_eq_id_timeline_profile_selection_cell(
+                audits,
+                trades,
+            )
+
+        five_minute_rows.append(
+            {
+                "slot": slot,
+                "purpose": purpose,
+                "cash": cash_cell,
+                "oi": oi_cell,
+                "rank": rank_cell,
+                "v6": v6_cell,
+                "shared": shared_source_cell,
+                **profile_cells,
+            }
+        )
+
+    checkpoint = _read_json_dict(shared_day_root / "checkpoint.json")
+    raw_engines = (
+        checkpoint.get("engine", {}).get("engines", {})
+        if isinstance(checkpoint.get("engine"), dict)
+        else {}
+    )
+    processed_by_profile: Dict[str, set[str]] = {}
+    for profile in ("v10", "v11", "v12"):
+        raw_engine = raw_engines.get(profile, {}) if isinstance(raw_engines, dict) else {}
+        fingerprints = (
+            raw_engine.get("processed_minute_fingerprints", {})
+            if isinstance(raw_engine, dict) else {}
+        )
+        processed_by_profile[profile] = {
+            hhmm
+            for value in (fingerprints.keys() if isinstance(fingerprints, dict) else [])
+            if (hhmm := _fno_eq_id_timeline_hhmm(value, session_date))
+        }
+
+    terminal_empty_shared = bool(
+        shared_runtime in {"BLOCKED", "DEGRADED", "COMPLETE"}
+        and skipped_slots
+        and not any(profile_trades.values())
+        and not any(profile_audits.values())
+    )
+    one_minute_rows: list[Dict[str, str]] = []
+    for minute in FNO_EQ_ID_MONITOR_1M_MINUTES:
+        minute_at = _fno_eq_id_timeline_at(session_date, minute)
+        marker_path = (
+            FNO_MULTI_PAPER_ROOT / "evidence" / session_date / "one_minute_union"
+            / f"minute_{minute.replace(':', '')}.json"
+        )
+        marker = _read_json_dict(marker_path)
+        processed_flags = [minute in processed_by_profile[key] for key in ("v10", "v11", "v12")]
+        processed_all = all(processed_flags)
+        processed_conflict = any(processed_flags) and not processed_all
+        if shared_disabled:
+            minute_source = "DISABLED"
+        elif marker:
+            marker_minute = _fno_eq_id_timeline_hhmm(
+                marker.get("expected_end_ist") or marker.get("slot_ist"),
+                session_date,
+            )
+            marker_complete = (
+                marker_minute == minute
+                and _fno_eq_id_timeline_truth(marker.get("complete"))
+                and _fno_eq_id_timeline_truth(
+                    marker.get("exact_symbol_completeness", True)
+                )
+            )
+            written = marker.get("written_count", marker.get("data_rows", "?"))
+            expected = marker.get("candidate_count", marker.get("union_symbol_count", "?"))
+            if not marker_complete:
+                minute_source = "BLOCKED: incomplete/mismatched union 1m evidence"
+            elif processed_all:
+                minute_source = f"FETCHED {written}/{expected}; REDUCED"
+            else:
+                minute_source = f"FETCHED {written}/{expected}; REDUCER PENDING"
+        elif processed_conflict:
+            minute_source = "BLOCKED: reducer evidence conflict"
+        elif processed_all:
+            minute_source = "REDUCED; no required symbols"
+        else:
+            pending = _fno_eq_id_timeline_pending_state(current, minute_at)
+            if terminal_empty_shared and pending.startswith("BLOCKED"):
+                minute_source = "NOT RUN; recovery ended/no active symbols"
+            else:
+                minute_source = pending
+
+        v6_parts: list[str] = []
+        if v6_scanner_disabled and v6_confirmation_disabled and v6_entries_disabled:
+            v6_cell_1m = "DISABLED"
+        else:
+            if minute in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+                scanner = v6_scanners.get(minute)
+                if scanner:
+                    long_count = int(_fno_eq_id_timeline_number(scanner.get("long_candidates")) or 0)
+                    short_count = int(_fno_eq_id_timeline_number(scanner.get("short_candidates")) or 0)
+                    v6_parts.append(f"5m SEL L{long_count}/S{short_count}")
+            if minute in set(FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL.values()):
+                confirmation = v6_confirmations.get(minute)
+                if confirmation:
+                    selected_ids = confirmation.get("selected_signal_ids", [])
+                    selected_ids = selected_ids if isinstance(selected_ids, list) else []
+                    symbols = _fno_eq_id_timeline_symbols(
+                        [_fno_eq_id_timeline_signal_id_symbol(value) for value in selected_ids]
+                    )
+                    count = int(_fno_eq_id_timeline_number(confirmation.get("selected_long")) or 0) + int(
+                        _fno_eq_id_timeline_number(confirmation.get("selected_short")) or 0
+                    )
+                    v6_parts.append(f"1m CONF {count}" + (f" [{symbols}]" if symbols else ""))
+                elif v6_confirmation_disabled:
+                    v6_parts.append("1m CONF DISABLED")
+                else:
+                    signal = next(
+                        key for key, value in FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL.items()
+                        if value == minute
+                    )
+                    upstream = "upstream 5m missing" if signal not in v6_scanners else "evidence missing"
+                    state = _fno_eq_id_timeline_pending_state(current, minute_at)
+                    v6_parts.append(f"1m CONF {state} ({upstream})")
+            entry_symbols = _fno_eq_id_timeline_event_symbols(
+                v6_trade_rows,
+                timestamp_field="entry_at_ist",
+                minute=minute,
+                session_date=session_date,
+            )
+            exit_symbols = _fno_eq_id_timeline_event_symbols(
+                v6_trade_rows,
+                timestamp_field="exit_at_ist",
+                minute=minute,
+                session_date=session_date,
+            )
+            if entry_symbols:
+                v6_parts.append(f"ENTRY {len(entry_symbols)} [{_fno_eq_id_timeline_symbols(entry_symbols)}]")
+            if exit_symbols:
+                v6_parts.append(f"EXIT {len(exit_symbols)} [{_fno_eq_id_timeline_symbols(exit_symbols)}]")
+            book = _fno_eq_id_timeline_book_as_of(
+                v6_trade_rows,
+                minute_end=minute_at,
+                session_date=session_date,
+                entry_field="entry_at_ist",
+                exit_field="exit_at_ist",
+            )
+            v6_cell_1m = "; ".join(v6_parts or ["NO EVENT"]) + f"; {book}"
+
+        profile_minute_cells: Dict[str, str] = {}
+        for profile in ("v10", "v11", "v12"):
+            if shared_disabled:
+                profile_minute_cells[profile] = "DISABLED"
+                continue
+            trades = profile_trades[profile]
+            audits = profile_audits[profile]
+            parts: list[str] = []
+            selected_now = [
+                row for row in audits
+                if _fno_eq_id_timeline_truth(row.get("selected_5m"))
+                and _fno_eq_id_timeline_row_slot(row, session_date, ("signal_time",)) == minute
+            ]
+            five_row_for_minute = next(
+                (row for row in five_minute_rows if row["slot"] == minute),
+                None,
+            )
+            shared_processed_now = bool(
+                five_row_for_minute
+                and five_row_for_minute["shared"].startswith("PROCESSED")
+            )
+            if shared_processed_now and not profile_audit_exists[profile]:
+                parts.append("MISSING SELECTION AUDIT")
+            elif selected_now:
+                longs = sum(1 for row in selected_now if str(row.get("side", "")).upper() == "LONG")
+                shorts = len(selected_now) - longs
+                parts.append(
+                    f"5m SEL L{longs}/S{shorts} "
+                    f"[{_fno_eq_id_timeline_symbols([row.get('symbol') for row in selected_now])}]"
+                )
+                if not profile_trade_exists[profile]:
+                    parts.append("MISSING STRATEGY LEDGER")
+            for label, field in (
+                ("CONF", "confirmation_time"),
+                ("ENTRY", "entry_time"),
+                ("EXIT", "exit_time"),
+                ("GAP-REJ", "gap_guard_event_time"),
+            ):
+                symbols = _fno_eq_id_timeline_event_symbols(
+                    trades,
+                    timestamp_field=field,
+                    minute=minute,
+                    session_date=session_date,
+                )
+                if symbols:
+                    parts.append(f"{label} {len(symbols)} [{_fno_eq_id_timeline_symbols(symbols)}]")
+            direct_states = {
+                "CONFIRMED_WAITING_CAP", "PENDING_STOP", "FILLED_OPEN",
+                "STOPPED", "TARGETED", "SQUARE_OFF", "POSTCONF_CANCELLED",
+            }
+            other_events = [
+                row for row in shared_events
+                if str(row.get("profile_key", "") or "").lower() == profile
+                and _fno_eq_id_timeline_row_slot(row, session_date, ("event_time",)) == minute
+                and str(row.get("state_after", "") or "").upper() not in direct_states
+            ]
+            if other_events:
+                reasons = _fno_eq_id_timeline_symbols(
+                    [row.get("reason") for row in other_events],
+                    limit=2,
+                )
+                parts.append(f"OTHER {len(other_events)} [{reasons}]")
+            book = _fno_eq_id_timeline_book_as_of(
+                trades,
+                minute_end=minute_at,
+                session_date=session_date,
+                entry_field="entry_time",
+                exit_field="exit_time",
+            )
+            if not parts:
+                if minute in skipped_slots:
+                    parts.append("5m SOURCE SKIPPED")
+                elif minute_source.startswith(("WAIT", "IN PROGRESS", "BLOCKED")):
+                    parts.append(minute_source)
+                elif terminal_empty_shared:
+                    parts.append("NO SIGNAL")
+                else:
+                    parts.append("NO EVENT")
+            profile_minute_cells[profile] = "; ".join(parts) + f"; {book}"
+
+        one_minute_rows.append(
+            {
+                "minute": minute,
+                "shared_source": minute_source,
+                "v6": v6_cell_1m,
+                **profile_minute_cells,
+            }
+        )
+
+    generic_1m_disabled = _fno_eq_id_timeline_card_disabled(by_id, "eod_1min_data")
+    generic_1m_state = "DISABLED (intentional)" if generic_1m_disabled else "ENABLED"
+    hard_terms = ("BLOCKED", "INCOMPLETE", "MISMATCH", "CONFLICT", "MISSING")
+    hard_issue_count = 0
+    watch_issue_count = 0
+    for row in five_minute_rows:
+        if row["slot"] not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+            continue
+        market_cells = [row[key] for key in ("cash", "oi", "rank")]
+        strategy_cells = [row[key] for key in ("v6", "shared", "v10", "v11", "v12")]
+        cells = market_cells + strategy_cells
+        if any(any(term in cell for term in hard_terms) for cell in cells):
+            hard_issue_count += 1
+        elif any("LATE" in cell for cell in market_cells) or any(
+            "SKIPPED" in cell for cell in strategy_cells
+        ):
+            watch_issue_count += 1
+    for row in one_minute_rows:
+        cells = [row[key] for key in ("shared_source", "v6", "v10", "v11", "v12")]
+        if any(any(term in cell for term in hard_terms) for cell in cells):
+            hard_issue_count += 1
+    timeline_window_closed = current >= (
+        _fno_eq_id_timeline_at(session_date, "09:50")
+        + dt.timedelta(minutes=1, seconds=FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS)
+    )
+    active_hard_issue_count = 0 if timeline_window_closed else hard_issue_count
+    closed_hard_issue_count = hard_issue_count if timeline_window_closed else 0
+    issue_count = hard_issue_count + watch_issue_count
+    return {
+        "session_date": session_date,
+        "generated_at_ist": current.isoformat(timespec="seconds"),
+        "five_minute_rows": five_minute_rows,
+        "one_minute_rows": one_minute_rows,
+        "generic_1m_state": generic_1m_state,
+        "shared_runtime": shared_runtime or "NOT_RUN",
+        "shared_phase": shared_phase or "-",
+        "hard_issue_count": hard_issue_count,
+        "active_hard_issue_count": active_hard_issue_count,
+        "closed_hard_issue_count": closed_hard_issue_count,
+        "watch_issue_count": watch_issue_count,
+        "timeline_window_closed": timeline_window_closed,
+        "issue_count": issue_count,
+    }
+
+
+def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
+    lines = [
+        "",
+        "## 5-Minute Market Readiness (09:15-09:50 IST)",
+        "",
+        f"- Session date: `{_fno_eq_id_monitor_clean(timeline.get('session_date'))}`; every label is a completed-candle end in IST.",
+        "- `09:15` is the opening snapshot, `09:20` is data/OI warm-up, `09:25-09:45` are the five frozen selection windows, and `09:50` is the cutoff/S+5 minute for the 09:45 cohort.",
+        "",
+        "| 5m end | Purpose | Equity 5m | Futures OI | OI ranker |",
+        "|---|---|---|---|---|",
+    ]
+    five_rows = timeline.get("five_minute_rows", [])
+    for row in five_rows if isinstance(five_rows, list) else []:
+        lines.append(
+            "| {slot} | {purpose} | {cash} | {oi} | {rank} |".format(
+                **{key: _fno_eq_id_monitor_clean(row.get(key, ""), limit=220) for key in (
+                    "slot", "purpose", "cash", "oi", "rank"
+                )}
+            )
+        )
+    lines.extend((
+        "",
+        "## 5-Minute Strategy Selection and Current Cohort Result",
+        "",
+        "| 5m signal end | V6 selection -> S+1 confirmation -> current cohort | Shared source | V10 | V11 | V12 |",
+        "|---|---|---|---|---|---|",
+    ))
+    for row in five_rows if isinstance(five_rows, list) else []:
+        lines.append(
+            "| {slot} | {v6} | {shared} | {v10} | {v11} | {v12} |".format(
+                **{key: _fno_eq_id_monitor_clean(row.get(key, ""), limit=300) for key in (
+                    "slot", "v6", "shared", "v10", "v11", "v12"
+                )}
+            )
+        )
+    lines.extend((
+        "",
+        "## 1-Minute Strategy Events (09:15-09:50 IST)",
+        "",
+        f"- Generic `Live Data Fetch (1min)`: **{_fno_eq_id_monitor_clean(timeline.get('generic_1m_state'))}**. V6 and the shared V10/V11/V12 session use their own candidate-scoped 1-minute evidence and do not depend on that generic card.",
+        f"- Shared runtime: `{_fno_eq_id_monitor_clean(timeline.get('shared_runtime'))}` / `{_fno_eq_id_monitor_clean(timeline.get('shared_phase'))}`.",
+        f"- Timeline evidence flags: `{int(timeline.get('active_hard_issue_count', timeline.get('hard_issue_count', 0)) or 0)}` active hard / `{int(timeline.get('closed_hard_issue_count', 0) or 0)}` closed historical gaps / `{int(timeline.get('watch_issue_count', 0) or 0)}` watch. Expected 09:15 opening and 09:20 rank warm-up states are excluded.",
+        "- V6 completed-candle confirmations are valid only at `09:26`, `09:31`, `09:36`, `09:41`, and `09:46`; its PAPER entry/exit events may occur at other wall-clock minutes.",
+        "- `REDUCED; no required symbols` means the chronological reducer advanced without fetching a union bar because no active candidate needed one. It does not mean a 1-minute fetch occurred.",
+        "- One-minute books use only causal entry/exit timestamps and realized P&L. Current ledger MTM appears only in the 5-minute cohort table because immutable historical per-minute MTM snapshots do not exist.",
+        "",
+        "| 1m end/event minute | Shared 1m source / reducer | V6 | V10 | V11 | V12 |",
+        "|---|---|---|---|---|---|",
+    ))
+    minute_rows = timeline.get("one_minute_rows", [])
+    for row in minute_rows if isinstance(minute_rows, list) else []:
+        lines.append(
+            "| {minute} | {shared_source} | {v6} | {v10} | {v11} | {v12} |".format(
+                **{key: _fno_eq_id_monitor_clean(row.get(key, ""), limit=320) for key in (
+                    "minute", "shared_source", "v6", "v10", "v11", "v12"
+                )}
+            )
+        )
+    lines.extend((
+        "",
+        "### Timeline state legend",
+        "",
+        "- `OFF WINDOW`: the frozen strategy has no 5-minute selection at that time.",
+        "- `NO SIGNAL` / `NO EVENT`: processing completed but no candidate or transition occurred.",
+        "- `WAIT` / `IN PROGRESS`: the causal completed-candle boundary or evidence deadline has not passed.",
+        "- `SKIPPED`, `BLOCKED`, `INCOMPLETE`, `MISMATCH`, or `CONFLICT`: explicit fail-visible evidence; no result is fabricated.",
+    ))
+    return lines
+
+
+def _format_fno_eq_id_monitor(
+    items: Sequence[Dict[str, object]],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> tuple[str, Dict[str, str], Optional[str], int, bool]:
+    """Build one live, fail-visible monitor across the selected dashboard scope."""
+    current = now_ist or dt.datetime.now(IST)
+    current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
+    by_id = {str(item.get("id", "")): item for item in items}
+    strategy_timeline = _build_fno_eq_id_strategy_timelines(items, now_ist=current)
+    rows_by_group: list[tuple[str, list[dict[str, str]]]] = []
+    counts = {"OK": 0, "WATCH": 0, "PROBLEM": 0, "UNKNOWN": 0, "INACTIVE": 0}
+    unique_tasks: set[str] = set()
+    mtimes: list[str] = []
+
+    for group_name, card_ids in FNO_EQ_ID_MONITOR_GROUPS:
+        group_rows: list[dict[str, str]] = []
+        for card_id in card_ids:
+            item = by_id.get(card_id, {})
+            base_status = dict(item.get("status") or {}) if isinstance(item, dict) else {}
+            detail_path = _fno_eq_id_monitor_detail_path(card_id)
+            detail_status = parse_status_file(detail_path) if detail_path is not None else {}
+            activity_status: Dict[str, object] = dict(base_status)
+            # Granular files add slot/counter evidence; reconciled card state
+            # remains authoritative for health and scheduler eligibility.
+            for field, value in detail_status.items():
+                if field not in {"status", "scheduler_status", "scheduler_state"}:
+                    activity_status[field] = value
+            if card_id == "authentication_v2":
+                activity_status.update(
+                    _fno_eq_id_monitor_safe_auth_status(current.date().isoformat())
+                )
+            exists = bool(item.get("exists")) if isinstance(item, dict) else False
+            monitor, runtime, eligible = _fno_eq_id_monitor_state(base_status, exists=exists)
+            if not item:
+                monitor, runtime, eligible = "PROBLEM", "MISSING_CARD", True
+            if card_id == "authentication_v2" and eligible:
+                authenticated = _fno_eq_id_timeline_number(
+                    activity_status.get("authenticated_apps")
+                )
+                configured = _fno_eq_id_timeline_number(
+                    activity_status.get("configured_apps")
+                )
+                current_tokens = _fno_eq_id_timeline_number(
+                    activity_status.get("token_files_current")
+                )
+                auth_incomplete = bool(
+                    authenticated is not None
+                    and configured is not None
+                    and authenticated < configured
+                )
+                tokens_incomplete = bool(
+                    current_tokens is not None
+                    and configured is not None
+                    and current_tokens < configured
+                )
+                if auth_incomplete or tokens_incomplete:
+                    minimum_healthy = 7
+                    usable = min(
+                        value
+                        for value in (authenticated, current_tokens)
+                        if value is not None
+                    )
+                    monitor = "WATCH" if usable >= minimum_healthy else "PROBLEM"
+                    runtime = "PARTIAL_AUTH_ROSTER"
+            counts[monitor] = counts.get(monitor, 0) + 1
+            scheduler = _fno_eq_id_monitor_clean(
+                base_status.get("scheduler_status") or base_status.get("scheduler_state") or "UNMANAGED",
+                limit=32,
+            )
+            phase = _fno_eq_id_monitor_clean(
+                activity_status.get("phase") or activity_status.get("overall_state") or activity_status.get("state"),
+                limit=64,
+            )
+            slot = _fno_eq_id_monitor_clean(
+                activity_status.get("slot") or activity_status.get("slot_ist")
+                or activity_status.get("current_slot_ist")
+                or activity_status.get("last_processed_minute"),
+                limit=64,
+            )
+            phase_slot = phase
+            if slot and slot not in phase_slot:
+                phase_slot = f"{phase_slot}; slot={slot}" if phase_slot else f"slot={slot}"
+            updated = next(
+                (
+                    _fno_eq_id_monitor_clean(activity_status.get(field), limit=64)
+                    for field in ("updated_at_ist", "last_update_ist", "heartbeat_ts", "ts", "session_date_ist")
+                    if _fno_eq_id_monitor_clean(activity_status.get(field), limit=64)
+                ),
+                _fno_eq_id_monitor_clean(item.get("mtime", "") if isinstance(item, dict) else "", limit=64),
+            )
+            item_mtime = _fno_eq_id_monitor_clean(item.get("mtime", "") if isinstance(item, dict) else "", limit=64)
+            if item_mtime:
+                mtimes.append(item_mtime)
+            tasks = str(base_status.get("scheduler_tasks", "") or "")
+            unique_tasks.update(task.strip() for task in tasks.split(",") if task.strip())
+            evidence_name = _fno_eq_id_monitor_clean(
+                detail_path.name if detail_path is not None and detail_path.exists()
+                else (item.get("file_name", "") if isinstance(item, dict) else ""),
+                limit=80,
+            )
+            if card_id == "authentication_v2":
+                detail_value = (
+                    f"safe auth roster: {activity_status.get('authenticated_apps', '?')}/"
+                    f"{activity_status.get('configured_apps', '?')} apps; "
+                    f"{activity_status.get('token_files_current', '?')}/"
+                    f"{activity_status.get('configured_apps', '?')} current token files"
+                )
+            else:
+                detail_value = (
+                    base_status.get("derived_status") or base_status.get("message")
+                    or base_status.get("reason") or base_status.get("error") or ""
+                )
+            group_rows.append(
+                {
+                    "stage": FNO_EQ_ID_MONITOR_STAGE_LABELS.get(card_id, card_id),
+                    "session": FNO_EQ_ID_MONITOR_SESSION_LABELS.get(card_id, card_id),
+                    "eligible": "YES" if eligible else "NO (disabled)",
+                    "monitor": monitor,
+                    "runtime": runtime,
+                    "scheduler": scheduler,
+                    "phase_slot": phase_slot or "-",
+                    "activity": _fno_eq_id_monitor_activity(
+                        card_id, activity_status,
+                        item.get("tail", "") if isinstance(item, dict) else "",
+                    ),
+                    "updated": updated or "-",
+                    "evidence": evidence_name or "-",
+                    "detail": _fno_eq_id_monitor_clean(
+                        detail_value,
+                        limit=240,
+                    ),
+                }
+            )
+        rows_by_group.append((group_name, group_rows))
+
+    eligible_count = sum(counts[key] for key in ("OK", "WATCH", "PROBLEM", "UNKNOWN"))
+    configured_count = eligible_count + counts["INACTIVE"]
+    timeline_total_hard = int(strategy_timeline.get("hard_issue_count", 0) or 0)
+    timeline_hard = int(
+        strategy_timeline.get("active_hard_issue_count", timeline_total_hard) or 0
+    )
+    timeline_closed_hard = int(
+        strategy_timeline.get("closed_hard_issue_count", 0) or 0
+    )
+    timeline_watch = int(strategy_timeline.get("watch_issue_count", 0) or 0)
+    if counts["PROBLEM"] or timeline_hard:
+        overall, flow_state = "FAILED", "PROBLEM"
+    elif counts["WATCH"] or counts["UNKNOWN"] or timeline_watch or timeline_closed_hard:
+        overall, flow_state = "PARTIAL", "WATCH"
+    elif eligible_count:
+        any_running = any(
+            str((by_id.get(card_id, {}).get("status") or {}).get("status", "")).upper() == "RUNNING"
+            for _, card_ids in FNO_EQ_ID_MONITOR_GROUPS for card_id in card_ids
+        )
+        overall, flow_state = ("RUNNING" if any_running else "SUCCESS"), "OK"
+    else:
+        overall, flow_state = "DISABLED", "INACTIVE"
+
+    generated = current.isoformat(timespec="seconds")
+    lines = [
+        "# FnO EQ ID monitoring", "",
+        f"- Refreshed: `{generated}`",
+        f"- Overall: **{flow_state}**",
+        f"- Coverage: `{configured_count}` configured views / `{eligible_count}` eligible / `{counts['INACTIVE']}` intentionally disabled",
+        f"- Health: `{counts['OK']}` OK / `{counts['WATCH']}` watch / `{counts['PROBLEM']}` problem / `{counts['UNKNOWN']}` unknown",
+        f"- Strategy timeline evidence: `{timeline_hard}` active hard / `{timeline_closed_hard}` closed historical gaps / `{timeline_watch}` watch",
+        f"- Physical scheduled tasks covered: `{len(unique_tasks)}` (V10/V11/V12 profile rows share one task)",
+        "- Refresh contract: rebuilt from current task state, heartbeat/status, detailed fetch marker, report/log mtime and strategy ledger every dashboard refresh.",
+    ]
+    lines.extend(_format_fno_eq_id_strategy_timelines(strategy_timeline))
+    for group_name, group_rows in rows_by_group:
+        lines.extend((
+            "", f"## {group_name}", "",
+            "| Stage | Session | Eligible | Monitor | Runtime | Scheduler | Phase / slot | Latest activity | Updated | Evidence |",
+            "|---|---|---|---|---|---|---|---|---|---|",
+        ))
+        for row in group_rows:
+            lines.append(
+                "| {stage} | {session} | {eligible} | {monitor} | {runtime} | {scheduler} | {phase_slot} | {activity} | {updated} | {evidence} |".format(**row)
+            )
+
+    attention_rows = [
+        (group_name, row) for group_name, group_rows in rows_by_group for row in group_rows
+        if row["monitor"] in {"WATCH", "PROBLEM", "UNKNOWN"}
+    ]
+    lines.extend(("", "## Attention ledger", ""))
+    if attention_rows:
+        lines.extend((
+            "| Subheading | Session | Monitor | Runtime / phase | Exact evidence |",
+            "|---|---|---|---|---|",
+        ))
+        for group_name, row in attention_rows:
+            detail = row["detail"] or row["activity"]
+            lines.append(
+                f"| {_fno_eq_id_monitor_clean(group_name)} | {row['session']} | {row['monitor']} | {row['runtime']} / {row['phase_slot']} | {detail} |"
+            )
+    else:
+        lines.append("No eligible session currently needs attention.")
+    lines.extend((
+        "", "## Interpretation", "",
+        "- `NO (disabled)` is intentional inactivity and is excluded from alarm totals.",
+        "- `WATCH` preserves fail-closed, waiting, partial or degraded states without falsely calling them healthy.",
+        "- `PROBLEM` means an eligible card is failed, stale, missing or otherwise in a hard-failure state.",
+        "- Strategy profile rows expose selection, LONG/SHORT candidate, guard-rejection, fill, open/closed and net-P&L counters whenever their shared ledger publishes them.",
+    ))
+    latest_mtime = max(mtimes) if mtimes else None
+    scoped_ids = {
+        card_id for _, card_ids in FNO_EQ_ID_MONITOR_GROUPS for card_id in card_ids
+    }
+    monitor_exists = any(
+        bool(item.get("exists"))
+        for card_id, item in by_id.items()
+        if card_id in scoped_ids
+    )
+    status = {
+        "status": overall,
+        "session": "FnO EQ ID monitoring",
+        "phase": "LIVE_AGGREGATE",
+        "flow_status": flow_state,
+        "configured_views": str(configured_count),
+        "eligible_sessions": str(eligible_count),
+        "inactive_sessions": str(counts["INACTIVE"]),
+        "healthy_sessions": str(counts["OK"]),
+        "watch_sessions": str(counts["WATCH"]),
+        "problem_sessions": str(counts["PROBLEM"]),
+        "unknown_sessions": str(counts["UNKNOWN"]),
+        "physical_tasks": str(len(unique_tasks)),
+        "timeline_issues": str(strategy_timeline.get("issue_count", 0)),
+        "timeline_hard_issues": str(timeline_hard),
+        "timeline_total_hard_issues": str(timeline_total_hard),
+        "timeline_closed_hard_issues": str(timeline_closed_hard),
+        "timeline_watch_issues": str(timeline_watch),
+        "five_minute_rows": str(len(strategy_timeline.get("five_minute_rows", []))),
+        "one_minute_rows": str(len(strategy_timeline.get("one_minute_rows", []))),
+        "ts": generated,
+        "derived_status": (
+            f"coverage={configured_count}; eligible={eligible_count}; OK={counts['OK']}; "
+            f"watch={counts['WATCH']}; problem={counts['PROBLEM']}; disabled={counts['INACTIVE']}; "
+            f"timeline_active_hard={timeline_hard}; timeline_closed_hard={timeline_closed_hard}; "
+            f"timeline_watch={timeline_watch}"
+        ),
+    }
+    return "\n".join(lines).rstrip() + "\n", status, latest_mtime, configured_count, monitor_exists
 
 
 def _format_v7_live_5min_monitor(
@@ -5399,6 +7527,25 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       --section-accent: var(--disabled);
     }
 
+    .section-banner.is-sub {
+      margin-left: 12px;
+      padding: 6px 10px 6px 12px;
+      border-bottom-color: transparent;
+    }
+
+    .section-banner.is-sub::before {
+      top: 5px;
+      bottom: 5px;
+      width: 2px;
+      opacity: 0.6;
+    }
+
+    .section-banner.is-sub .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      opacity: 0.82;
+    }
+
     .section-banner.market { --section-accent: #2563eb; }
     .section-banner.v7 { --section-accent: #059669; }
     .section-banner.research { --section-accent: #7c3aed; }
@@ -6486,7 +8633,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "kiteticker_5min_data",
       "eod_1min_data",
       "fno_oi_universe",
+      "fno_oi_fetch_5min_fast_production",
       "fno_oi_fetch_5min",
+      "fno_oi_fetch_5min_fast_shadow",
       "fno_oi_feature_ranker",
       "fno_v6_scanner_5min",
       "fno_v6_equity_1min_feed",
@@ -6496,6 +8645,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_trade_logger",
       "fno_v6_net_result",
       "fno_v8_combined_paper",
+      "fno_v10_v11_v12_paper",
+      "fno_v10_paper",
+      "fno_v11_paper",
+      "fno_v12_paper",
       "fno_oi_eod_qc",
       "fundamental_price_action_v1",
       "live_signals_csv_fpa_v1_short",
@@ -6566,7 +8719,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_1min_data": "Live Data Fetch (1min)",
       "eod_15min_data": "Live Data Fetch (15mins)",
       "fno_oi_universe": "FnO Near-Month Futures Universe",
-      "fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch",
+      "fno_oi_fetch_5min_fast_production": "FnO Live 5-Minute Futures OI Fetch (Fast Production)",
+      "fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch (Old)",
+      "fno_oi_fetch_5min_fast_shadow": "FnO Fast Shadow OI Validator",
       "fno_oi_feature_ranker": "FnO OI Gainers, Losers & Activity Rankings",
       "fno_v6_scanner_5min": "FnO V6 BEST_NET Equity 5-Minute + Futures OI Scanner",
       "fno_v6_equity_1min_feed": "FnO V6 Durable Completed Equity 1-Minute Feed",
@@ -6576,6 +8731,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_trade_logger": "FnO V6 BEST_NET Continuous Trade Log",
       "fno_v6_net_result": "FnO V6 BEST_NET Net Result",
       "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
+      "fno_v10_v11_v12_paper": "FnO V10/V11/V12 Papertrade - Shared Session",
+      "fno_v10_paper": "FnO V10 Papertrade View",
+      "fno_v11_paper": "FnO V11 Papertrade View",
+      "fno_v12_paper": "FnO V12 Papertrade View",
       "fno_oi_eod_qc": "FnO EOD Data Quality Control",
       "live_combined_csv_v16_5min": "V16 5min Scanner (anti-exhaustion, 5min slots)",
       "live_signals_csv_v16_5min_short": "V16 5min Signals SHORT",
@@ -6589,7 +8748,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "signal_discovery_v7_5min_id": "Signal discovery v7 5mins ID",
       "candidate_tickers_v7_5min_id": "Candidate tickers",
       "entry_engine_1min_v5_id": "Entry engine 1min v7 ID",
-      "v7_live_5min_monitor": "V7 ID 5min Live Monitor",
+      "v7_live_5min_monitor": "FnO EQ ID monitoring",
       "v7_research_layer": "Suggestions v7 live research",
       "daily_live_v7_research_session": "Daily Live V7 Research",
       "fundamental_price_action_v1": "fundamental_price_action_v1",
@@ -6615,7 +8774,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "live_kite_trades_csv_id_5min_v7": "V7 ID 5min Live Kite Trades CSV",
       "kite_trade_id_5min_v7": "V7 ID 5min Live Trade Runner Log",
       "data_for_backtesting": "Data for backtesting",
-      "backtesting_result_v11": "Backtesting Result v11",
+      "backtesting_result_v11": "Backtesting result v6/v8/v10/v11/v12",
       "nifty_guard_fetch_v15": "NIFTY Fetch V15",
       "nifty_guard_fetch_v16_5min": "NIFTY Fetch 5min",
       "live_signals_csv_v15_new_short": "Live Entries CSV V15 Short New",
@@ -6649,8 +8808,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         title: "FnO",
         accent: "market",
         ids: [
+          "v7_live_5min_monitor",
           "fno_oi_universe",
+          "fno_oi_fetch_5min_fast_production",
           "fno_oi_fetch_5min",
+          "fno_oi_fetch_5min_fast_shadow",
           "fno_oi_feature_ranker",
           "fno_v6_scanner_5min",
           "fno_v6_equity_1min_feed",
@@ -6660,7 +8822,37 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "fno_v6_trade_logger",
           "fno_v6_net_result",
           "fno_v8_combined_paper",
+          "fno_v10_v11_v12_paper",
+          "fno_v10_paper",
+          "fno_v11_paper",
+          "fno_v12_paper",
           "fno_oi_eod_qc"
+        ],
+        subgroups: [
+          {
+            key: "fno-modern-paper-session",
+            title: "V10 / V11 / V12 Shared Papertrade Session",
+            note: "one task | one engine | one heartbeat | three independent ledgers",
+            ids: ["fno_v10_v11_v12_paper"]
+          },
+          {
+            key: "fno-v10",
+            title: "V10",
+            note: "5m selection | 1m entry | LONG | SHORT | result | logs",
+            ids: ["fno_v10_paper"]
+          },
+          {
+            key: "fno-v11",
+            title: "V11",
+            note: "5m selection | 1m entry | LONG | SHORT | result | logs",
+            ids: ["fno_v11_paper"]
+          },
+          {
+            key: "fno-v12",
+            title: "V12",
+            note: "5m selection | 1m entry | LONG | SHORT | result | logs",
+            ids: ["fno_v12_paper"]
+          }
         ]
       },
       {
@@ -6686,7 +8878,6 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "signal_discovery_v7_5min_id",
           "candidate_tickers_v7_5min_id",
           "entry_engine_1min_v5_id",
-          "v7_live_5min_monitor",
           "live_signals_csv_id_5min_v7_short",
           "live_signals_csv_id_5min_v7_long",
           "live_papertrade_result_csv_id_5min_v7",
@@ -6765,14 +8956,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     // Only the section assignment is locked; this does not make them runnable.
     const SECTION_LOCKED_DISABLED_IDS = new Set([
       "kiteticker_5min_data",
-      "fno_v8_combined_paper"
+      "eod_1min_data",
+      "fno_v8_combined_paper",
+      "fno_v10_v11_v12_paper",
+      "fno_v10_paper",
+      "fno_v11_paper",
+      "fno_v12_paper"
     ]);
     const SESSION_TIMELINE = [
       { time: "08:50", id: "fno_oi_universe", label: "FnO Universe" },
       { time: "09:00", id: "authentication_v2", label: "Auth" },
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
       { time: "09:00", id: "kiteticker_5min_data", label: "Live Data KiteTicker Fetch 5min (shadow monitoring)" },
-      { time: "09:05", id: "fno_oi_fetch_5min", label: "FnO Futures OI Fetch" },
+      { time: "09:05", id: "fno_oi_fetch_5min_fast_production", label: "FnO Futures OI Fetch (Fast Production)" },
+      { time: "09:05", id: "fno_oi_fetch_5min", label: "FnO Futures OI Fetch (Old)" },
+      { time: "09:06", id: "fno_oi_fetch_5min_fast_shadow", label: "FnO Fast Shadow OI Validator" },
       { time: "09:15", id: "fno_oi_feature_ranker", label: "FnO OI Rankings" },
       { time: "09:15", id: "fno_v6_scanner_5min", label: "FnO V6 BEST_NET 5m Scanner" },
       { time: "09:15", id: "fno_v6_equity_1min_feed", label: "FnO V6 Durable Completed 1m Feed" },
@@ -6782,6 +8980,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:15", id: "fno_v6_trade_logger", label: "FnO V6 BEST_NET Trade Log" },
       { time: "09:15", id: "fno_v6_net_result", label: "FnO V6 BEST_NET Net Result" },
       { time: "09:15", id: "fno_v8_combined_paper", label: "FnO V8-Combined Paper Shadow" },
+      { time: "09:15", id: "fno_v10_v11_v12_paper", label: "FnO V10/V11/V12 Papertrade" },
       { time: "09:17", id: "eod_1min_data", label: "Live Data Fetch 1min" },
       { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
       { time: "09:15", id: "fundamental_price_action_v1", label: "fundamental_price_action_v1" },
@@ -6795,7 +8994,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:22", id: "kite_trade_id_5min_v7", label: "Live Trade FALSE" },
       { time: "15:40", id: "fno_oi_eod_qc", label: "FnO EOD QC" },
       { time: "15:45", id: "data_for_backtesting", label: "Data for Backtesting" },
-      { time: "16:00", id: "backtesting_result_v11", label: "Backtesting Result v11" },
+      { time: "16:20", id: "backtesting_result_v11", label: "Backtesting result v6/v8/v10/v11/v12" },
       { time: "16:05", id: "v7_nse_id_cost", label: "V7 NSE ID Cost" },
       { time: "16:05", id: "v7_causality_audit", label: "V7 Causality Audit" },
       { time: "16:15", id: "v7_research_layer", label: "Suggestions v7 Research" },
@@ -6847,6 +9046,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     // Cards whose tail is a published markdown report: rendered as meta chips,
     // collapsed invariant notes and real sortable tables instead of raw text.
     const MD_REPORT_CARDS = new Set([
+      "fno_oi_fetch_5min_fast_production",
+      "fno_oi_fetch_5min_fast_shadow",
       "fno_v6_scanner_5min",
       "fno_v6_equity_1min_feed",
       "fno_v6_confirmation_1min",
@@ -6854,13 +9055,26 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_live_short",
       "fno_v6_trade_logger",
       "fno_v6_net_result",
-      "fno_v8_combined_paper"
+      "fno_v8_combined_paper",
+      "fno_v10_v11_v12_paper",
+      "fno_v10_paper",
+      "fno_v11_paper",
+      "fno_v12_paper",
+      "v7_live_5min_monitor"
+    ]);
+    const FNO_MULTI_PAPER_CARDS = new Set([
+      "fno_v10_v11_v12_paper",
+      "fno_v10_paper",
+      "fno_v11_paper",
+      "fno_v12_paper"
     ]);
     const RESTARTABLE_CARDS = new Set([
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
       "eod_1min_data",
+      "fno_oi_fetch_5min_fast_production",
       "fno_oi_fetch_5min",
+      "fno_oi_fetch_5min_fast_shadow",
       "fno_oi_feature_ranker",
       "fno_v6_scanner_5min",
       "fno_v6_equity_1min_feed",
@@ -6869,6 +9083,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_live_short",
       "fno_v6_trade_logger",
       "fno_v6_net_result",
+      "fno_v10_v11_v12_paper",
       "signal_early_engine_v16_5min",
       "detection_engine_v16_5min",
       "pending_data_fetcher_v16_5min",
@@ -6967,12 +9182,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       localStorage.setItem("eqidv2_pinned_cards", JSON.stringify(PINNED_CARDS));
     }
 
-    function statusBadge(status) {
+    function isFailClosedWatch(status, phase) {
+      const s = String(status || "").toUpperCase();
+      const p = String(phase || "").toUpperCase();
+      return s === "BLOCKED" && ["INCOMPLETE_BY_DEADLINE", "UPSTREAM_BLOCKED"].includes(p);
+    }
+
+    function statusBadge(status, phase) {
       const s = String(status || "").toUpperCase();
       if (!s) return '<span class="pill">UNKNOWN</span>';
       if (s === "SUCCESS" || s === "RUNNING") return `<span class="pill ok">${esc(s)}</span>`;
       if (s === "STALE_HB_RUNNING") return `<span class="pill warn" title="Heartbeat stale — process may be dead">${esc(s)}</span>`;
-      if (["RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return `<span class="pill warn">${esc(s)}</span>`;
+      if (isFailClosedWatch(s, phase) || ["RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "MISSING_OUTPUT") return `<span class="pill fail">${esc(s)}</span>`;
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return `<span class="pill info">${esc(s)}</span>`;
@@ -6980,10 +9201,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return `<span class="pill fail">${esc(s)}</span>`;
     }
 
-    function statusBucket(status) {
+    function statusBucket(status, phase) {
       const s = String(status || "").toUpperCase();
       if (s === "DISABLED") return "disabled";
       if (s === "SUCCESS" || s === "RUNNING") return "ok";
+      if (isFailClosedWatch(s, phase)) return "warn";
       if (["STALE_HB_RUNNING", "RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return "warn";
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "warn";
       if (s === "MISSING_OUTPUT") return "bad";
@@ -6993,10 +9215,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return "bad";
     }
 
+    function isReadOnlyProfileView(item) {
+      return String(item && item.status && item.status.view_scope || "").toUpperCase() === "PROFILE";
+    }
+
     function renderHealthSummary(items) {
       const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
       for (const item of (items || [])) {
-        const bucket = statusBucket(item && item.status ? item.status.status : "");
+        if (isReadOnlyProfileView(item)) continue;
+        const bucket = statusBucket(
+          item && item.status ? item.status.status : "",
+          item && item.status ? item.status.phase : ""
+        );
         counts[bucket] = (counts[bucket] || 0) + 1;
       }
       const total = Object.values(counts).reduce((acc, n) => acc + n, 0);
@@ -7021,8 +9251,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       let liveRows = 0;
       let paperRows = 0;
       for (const item of (items || [])) {
+        if (isReadOnlyProfileView(item)) continue;
         const id = String((item && item.id) || "");
-        const bucket = statusBucket(item && item.status ? item.status.status : "");
+        const bucket = statusBucket(
+          item && item.status ? item.status.status : "",
+          item && item.status ? item.status.phase : ""
+        );
         counts[bucket] = (counts[bucket] || 0) + 1;
         if (id === "candidate_tickers_v7_5min_id" && item.status) {
           candidates = Number(item.status.total_candidates || 0) || rowsShownFromTail(item.tail);
@@ -7052,8 +9286,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       let paperRows = 0;
       let liveRows = 0;
       for (const item of (items || [])) {
+        if (isReadOnlyProfileView(item)) continue;
         const id = String((item && item.id) || "");
-        const bucket = statusBucket(item && item.status ? item.status.status : "");
+        const bucket = statusBucket(
+          item && item.status ? item.status.status : "",
+          item && item.status ? item.status.phase : ""
+        );
         counts[bucket] = (counts[bucket] || 0) + 1;
         const age = formatAge(item && item.mtime ? item.mtime : "");
         if (age.cls === "ok") fresh += 1;
@@ -7104,21 +9342,27 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     function renderTodayTimeline(itemsById) {
       const now = nowHHMM();
-      let activeIdx = -1;
-      for (let i = 0; i < SESSION_TIMELINE.length; i += 1) {
-        if (SESSION_TIMELINE[i].time <= now) activeIdx = i;
-      }
-      const steps = SESSION_TIMELINE.map((step, idx) => {
+      // Disabled steps are dropped entirely: a disabled task is not part of
+      // today's session, so it should neither occupy a slot nor count toward
+      // the "steps reached" progress.
+      const visible = SESSION_TIMELINE.map((step) => {
         const item = step.id ? (itemsById[step.id] || { status: {} }) : { status: { status: "SCHEDULED" } };
         const rawStatus = step.id ? String((item.status && item.status.status) || "UNKNOWN").toUpperCase() : "SCHEDULED";
-        const bucket = statusBucket(rawStatus);
-        const cls = [statusClassForBucket(bucket), idx === activeIdx ? "is-now" : ""].filter(Boolean).join(" ");
-        const label = step.label || (step.id ? displayName(step.id) : "Step");
+        const bucket = statusBucket(rawStatus, item.status && item.status.phase);
+        return { step, rawStatus, bucket };
+      }).filter((entry) => entry.bucket !== "disabled");
+      let activeIdx = -1;
+      for (let i = 0; i < visible.length; i += 1) {
+        if (visible[i].step.time <= now) activeIdx = i;
+      }
+      const steps = visible.map((entry, idx) => {
+        const cls = [statusClassForBucket(entry.bucket), idx === activeIdx ? "is-now" : ""].filter(Boolean).join(" ");
+        const label = entry.step.label || (entry.step.id ? displayName(entry.step.id) : "Step");
         return `
           <div class="timeline-step ${cls}">
-            <div class="timeline-time">${esc(step.time)}</div>
+            <div class="timeline-time">${esc(entry.step.time)}</div>
             <div class="timeline-name">${esc(label)}</div>
-            <div class="timeline-status">${esc(rawStatus)}</div>
+            <div class="timeline-status">${esc(entry.rawStatus)}</div>
           </div>
         `;
       }).join("");
@@ -7129,7 +9373,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       el.innerHTML = `
         <div class="timeline-head">
           <div class="timeline-title">Today Timeline</div>
-          <div class="timeline-note">${esc(completed)} / ${esc(String(SESSION_TIMELINE.length))} steps reached</div>
+          <div class="timeline-note">${esc(completed)} / ${esc(String(visible.length))} steps reached</div>
         </div>
         <div class="timeline-track">${steps}</div>
       `;
@@ -7192,7 +9436,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       const rawFilter = requestedFilter || ACTIVE_FILTER;
       const filter = FILTERS.some((f) => f.id === rawFilter) ? rawFilter : "all";
       const status = item && item.status ? item.status.status : "";
-      const bucket = statusBucket(status);
+      const bucket = statusBucket(status, item && item.status ? item.status.phase : "");
       const title = `${id} ${displayName(id)}`.toLowerCase();
       const query = normalizeText(SEARCH_QUERY).trim();
       if (query) {
@@ -7211,7 +9455,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         return title.includes("v7") || title.includes("id_5min") || title.includes("5mins id");
       }
       if (filter === "v16") return title.includes("v16");
-      if (filter === "fno") return id.startsWith("fno_");
+      if (filter === "fno") return id.startsWith("fno_") || id === "v7_live_5min_monitor";
       if (filter === "paper") return title.includes("paper");
       if (filter === "live") return title.includes("live") || title.includes("kite");
       if (filter === "research") {
@@ -7363,12 +9607,37 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       const age = formatAge(mtime);
       const badges = [`<span class="mini-badge ${age.cls}">${esc(age.label)}</span>`];
       badges.push(`<span class="mini-badge">size: ${esc(String(size || 0))}b</span>`);
+      if (
+        FNO_MULTI_PAPER_CARDS.has(String(item && item.id || ""))
+        && item && item.status
+        && Object.prototype.hasOwnProperty.call(item.status, "app_pool_state")
+      ) {
+        const runtime = item && item.status ? item.status : {};
+        const healthy = String(runtime.healthy_app_count || "0");
+        const preferred = String(runtime.preferred_app_count || "8");
+        const poolState = String(runtime.app_pool_state || "NOT_CHECKED").toUpperCase();
+        const poolClass = poolState === "HEALTHY" ? "ok" : (
+          poolState === "DEGRADED_HEALTHY" ? "warn" : (
+            poolState === "NOT_CHECKED" ? "" : "bad"
+          )
+        );
+        const retries = String(runtime.last_app_retry_count || "0");
+        const failures = String(runtime.last_app_failure_count || "0");
+        const attemptClass = Number(failures) > 0 ? "warn" : "ok";
+        badges.push(
+          `<span class="mini-badge ${poolClass}" title="${esc(poolState)}">apps: ${esc(healthy)}/${esc(preferred)}</span>`
+        );
+        badges.push(
+          `<span class="mini-badge ${attemptClass}" title="${esc(String(runtime.last_app_usage || "last completed union minute"))}">retry/error: ${esc(retries)}/${esc(failures)}</span>`
+        );
+      }
       return `<div class="mini-badges">${badges.join("")}</div>`;
     }
 
-    function cardStatusClass(status) {
+    function cardStatusClass(status, phase) {
       const s = String(status || "").toUpperCase();
       if (s === "SUCCESS" || s === "RUNNING") return "card is-ok";
+      if (isFailClosedWatch(s, phase)) return "card is-warn";
       if (["STALE_HB_RUNNING", "RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return "card is-warn";
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "card is-warn";
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "DONE") return "card";
@@ -8176,7 +10445,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       }
     });
 
+    let SNAPSHOT_LOAD_IN_FLIGHT = false;
     async function loadNow() {
+      if (SNAPSHOT_LOAD_IN_FLIGHT) return;
+      SNAPSHOT_LOAD_IN_FLIGHT = true;
       try {
         const prevY = window.scrollY;
         const res = await fetch(apiUrl('/api/snapshot?lines=80'), { cache: 'no-store' });
@@ -8207,7 +10479,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             const it = byId[id] || { status: {} };
             const status = String((it.status && it.status.status) || "").toUpperCase();
             const disabled = status === "DISABLED";
-            const bucket = statusBucket(status);
+            const bucket = statusBucket(status, it.status && it.status.phase);
             return { id, idx, disabled, bucket, pinned: isPinned(id) };
           })
           .sort((a, b) => {
@@ -8249,6 +10521,24 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           `;
         }
 
+        // Nested heading for strategy views. It intentionally has no section
+        // action button: only the top-level Disabled banner may own that DOM id.
+        function renderSubBanner(title, note, accent, sectionKey, disabled) {
+          const cls = ["section-banner", disabled ? "is-disabled" : "", "is-sub", accent || ""].filter(Boolean).join(" ");
+          return `
+            <div class="${cls}" id="${esc(sectionDomId("sub-" + (sectionKey || title)))}">
+              <div class="section-left">
+                <div class="section-title">${esc(title)}</div>
+                <div class="section-note">${esc(note)}</div>
+              </div>
+            </div>
+          `;
+        }
+
+        function renderDisabledSubBanner(title, count, accent, sectionKey) {
+          return renderSubBanner(title, String(count) + " disabled", accent, "disabled-" + (sectionKey || title), true);
+        }
+
         function renderCard(id, idx) {
           const it = byId[id] || {id,exists:false,tail:""};
           const status = it.status && it.status.status ? it.status.status : "";
@@ -8263,7 +10553,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             it.status && it.status.derived_status ? String(it.status.derived_status).split(";")[0].trim() : ""
           ].filter(Boolean).join(" | ");
           const miniBadges = renderMiniBadges(it, mtime, size);
-          const cardCls = cardStatusClass(status);
+          const phase = it.status && it.status.phase ? it.status.phase : "";
+          const cardCls = cardStatusClass(status, phase);
           const isFs = FULLSCREEN_ID === id ? " is-fullscreen" : "";
           const disabledCompact = isDisabled && FULLSCREEN_ID !== id ? " is-disabled-compact" : "";
           const logHidden = isLogHidden(id, it);
@@ -8291,7 +10582,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                   <button type="button" class="${toggleCls}" data-toggle-id="${esc(id)}" title="${FULLSCREEN_ID === id ? "Exit fullscreen" : "Maximize"}">${toggleLabel}</button>
                   <button type="button" class="${logToggleCls}" data-log-id="${esc(id)}" title="${logHidden ? "Show log" : "Hide log"}">${logToggleLabel}</button>
                   ${renderRestartButton(it.id, isDisabled)}
-                  <div>${statusBadge(status)}</div>
+                  <div>${statusBadge(status, phase)}</div>
                 </div>
               </div>
               ${killControls}
@@ -8311,7 +10602,19 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             groupIds.forEach((id) => used.add(id));
             navItems.push({ key: group.key, label: group.nav || group.title, count: groupIds.length });
             sections.push(renderSectionBanner(group.title, `${groupIds.length} active/scheduled`, false, group.accent, group.key));
-            sections.push(groupIds.map((id) => renderCard(id, renderIdx++)).join(''));
+            const subgroups = Array.isArray(group.subgroups) ? group.subgroups : [];
+            const nestedIds = new Set(subgroups.flatMap((subgroup) => subgroup.ids || []));
+            const directIds = groupIds.filter((id) => !nestedIds.has(id));
+            if (directIds.length) {
+              sections.push(directIds.map((id) => renderCard(id, renderIdx++)).join(''));
+            }
+            for (const subgroup of subgroups) {
+              const subgroupIds = (subgroup.ids || []).filter((id) => groupIds.includes(id));
+              if (!subgroupIds.length) continue;
+              const subgroupNote = subgroup.note || `${subgroupIds.length} view(s)`;
+              sections.push(renderSubBanner(subgroup.title, subgroupNote, group.accent, subgroup.key, false));
+              sections.push(subgroupIds.map((id) => renderCard(id, renderIdx++)).join(''));
+            }
           }
           const otherActive = visibleActiveOrdered.filter((id) => !used.has(id));
           if (otherActive.length) {
@@ -8328,7 +10631,19 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           navItems.push({ key: "disabled", label: "Disabled", count: visibleDisabledOrdered.length });
           sections.push(renderSectionBanner("Disabled", note, true, "admin", "disabled"));
           if (forceShowDisabled || !DISABLED_SECTION_MINIMIZED) {
-            sections.push(visibleDisabledOrdered.map((id) => renderCard(id, renderIdx++)).join(''));
+            const usedDisabled = new Set();
+            for (const group of ACTIVE_GROUPS) {
+              const groupIds = group.ids.filter((id) => visibleDisabledOrdered.includes(id));
+              if (!groupIds.length) continue;
+              groupIds.forEach((id) => usedDisabled.add(id));
+              sections.push(renderDisabledSubBanner(group.title, groupIds.length, group.accent, group.key));
+              sections.push(groupIds.map((id) => renderCard(id, renderIdx++)).join(''));
+            }
+            const otherDisabled = visibleDisabledOrdered.filter((id) => !usedDisabled.has(id));
+            if (otherDisabled.length) {
+              sections.push(renderDisabledSubBanner("Other", otherDisabled.length, "other", "other"));
+              sections.push(otherDisabled.map((id) => renderCard(id, renderIdx++)).join(''));
+            }
           }
         }
         if (!sections.length) {
@@ -8370,6 +10685,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/Chrome.</pre>
           </div>
         `;
+      } finally {
+        SNAPSHOT_LOAD_IN_FLIGHT = false;
       }
     }
 
@@ -8401,17 +10718,21 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         today_ist = dt.datetime.now(IST).date().isoformat()
         for key in LOG_IDS:
             path, file_name = resolve_log_target(key)
-            status = parse_status_file(_resolve_status_path(STATUS_FILES[key])) if key in STATUS_FILES else {}
-            _hb_path2 = _resolve_status_path(HEARTBEAT_FILES[key]) if key in HEARTBEAT_FILES else None
-            heartbeat = parse_status_file(_hb_path2) if _hb_path2 else {}
-            if heartbeat and _hb_path2 is not None:
-                try:
-                    heartbeat["_file_age_sec"] = (
-                        dt.datetime.now(dt.timezone.utc).timestamp() - _hb_path2.stat().st_mtime
-                    )
-                except OSError:
-                    pass
-                status = merge_runtime_status(status, heartbeat)
+            if key in FNO_MULTI_PAPER_CARD_PROFILES:
+                status = _load_fno_multi_paper_runtime_status(key)
+            else:
+                status_path = _runtime_status_path_for_card(key)
+                status = parse_status_file(status_path) if status_path is not None else {}
+                _hb_path2 = _runtime_heartbeat_path_for_card(key)
+                heartbeat = parse_status_file(_hb_path2) if _hb_path2 else {}
+                if heartbeat and _hb_path2 is not None:
+                    try:
+                        heartbeat["_file_age_sec"] = (
+                            dt.datetime.now(dt.timezone.utc).timestamp() - _hb_path2.stat().st_mtime
+                        )
+                    except OSError:
+                        pass
+                    status = merge_runtime_status(status, heartbeat)
             status = infer_scanner_runtime_status(key, path, status)
             status = reconcile_fno_worker_recovery(key, status)
             status = apply_scheduler_status(key, status, task_snapshot)
@@ -8493,10 +10814,25 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 report = V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.md"
                 projected = tail_text(report, lines=lines)
                 tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "data_for_backtesting":
+                today_ist = dt.datetime.now(IST).date().isoformat()
+                tail = _format_data_for_backtesting_live_view(today_ist)
             elif key == "backtesting_result_v11":
-                report = runtime_dir("backtesting_result_v11", "latest", "latest_backtesting_result_v11.md")
-                projected = tail_text(report, lines=lines)
-                tail = projected if projected else tail_text(path, lines=lines)
+                today_ist = dt.datetime.now(IST).date().isoformat()
+                current_log = LOG_DIR / f"backtesting_result_v11_{today_ist}.log"
+                runtime = str(status.get("status", "") or "").strip().upper()
+                if runtime in {"RUNNING", "RESTARTING", "COOLDOWN"} and current_log.exists():
+                    path = current_log
+                    file_name = current_log.name
+                    try:
+                        size = current_log.stat().st_size
+                    except OSError:
+                        size = 0
+                    tail = tail_text(current_log, lines=lines)
+                else:
+                    report = runtime_dir("backtesting_result_v11", "latest", "latest_backtesting_result_v11.md")
+                    projected = tail_text(report, lines=lines)
+                    tail = projected if projected else tail_text(path, lines=lines)
             elif key == "paper_trade_id_5min_v7":
                 today_ist = dt.datetime.now(IST).date().isoformat()
                 projected = _format_v7_id_papertrade_runner_view(path, today_ist)
@@ -8579,18 +10915,20 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
-        monitor_path = runtime_dir("entry_engine_1min_v5_ID") / "latest" / "latest_summary.json"
-        monitor_tail, monitor_status = _format_v7_live_5min_monitor(today_ist, task_snapshot)
-        try:
-            monitor_size = monitor_path.stat().st_size if monitor_path.exists() else 0
-        except OSError:
-            monitor_size = 0
+        (
+            monitor_tail,
+            monitor_status,
+            monitor_mtime,
+            _monitor_configured_count,
+            monitor_exists,
+        ) = _format_fno_eq_id_monitor(items)
+        monitor_size = len(monitor_tail.encode("utf-8", errors="replace"))
         items.append(
             {
-                "id": "v7_live_5min_monitor",
-                "file_name": str(Path("entry_engine_1min_v5_ID") / "latest" / monitor_path.name),
-                "exists": monitor_path.exists(),
-                "mtime": iso_mtime(monitor_path),
+                "id": FNO_EQ_ID_MONITOR_CARD_ID,
+                "file_name": "virtual/fno_eq_id_monitoring.md",
+                "exists": monitor_exists,
+                "mtime": monitor_mtime,
                 "size_bytes": monitor_size,
                 "status": monitor_status,
                 "tail": monitor_tail,

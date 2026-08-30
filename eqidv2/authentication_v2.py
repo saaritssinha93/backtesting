@@ -236,17 +236,27 @@ def _find_first(
     locators: Iterable[Tuple[str, str]],
     condition,
 ):
-    last = None
-    for by, val in locators:
-        try:
-            el = wait.until(condition((by, val)))
-            if el is not None:
-                return el
-        except TimeoutException as exc:
-            last = exc
-    if last:
-        raise last
-    raise TimeoutException("No locator matched.")
+    predicates = [condition((by, val)) for by, val in locators]
+    if not predicates:
+        raise TimeoutException("No locator matched.")
+
+    # WebDriverWait owns the single deadline.  Each poll checks every fallback
+    # locator instead of starting a fresh full-length wait for each one.
+    ignored_exceptions = tuple(getattr(wait, "_ignored_exceptions", ()))
+
+    def first_match(driver):
+        for predicate in predicates:
+            try:
+                value = predicate(driver)
+            except Exception as exc:
+                if isinstance(exc, ignored_exceptions):
+                    continue
+                raise
+            if value:
+                return value
+        return False
+
+    return wait.until(first_match)
 
 
 def _type_with_retry(
@@ -400,6 +410,68 @@ def _access_token_is_valid(kite: KiteConnect) -> bool:
         return False
 
 
+def _redact_url_for_log(url: str) -> str:
+    """Keep a useful URL location without leaking auth query values."""
+    raw = str(url or "").strip()
+    if not raw:
+        return "unavailable"
+    try:
+        parsed = urlparse(raw)
+        base = parsed._replace(query="", fragment="").geturl()
+        return f"{base}?<redacted>" if parsed.query else base
+    except Exception:
+        return "unavailable"
+
+
+def _wait_for_request_token_in_url(
+    driver: webdriver.Chrome,
+    timeout_seconds: float,
+    poll_seconds: float = 0.5,
+) -> Optional[str]:
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while True:
+        request_token = _extract_request_token(driver.current_url)
+        if request_token:
+            return request_token
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(max(0.0, float(poll_seconds)), remaining))
+
+
+def _request_token_after_totp(
+    driver: webdriver.Chrome,
+    wait: WebDriverWait,
+    submit_btn_locators: Iterable[Tuple[str, str]],
+) -> str:
+    # Kite's TOTP form can auto-submit.  Give that redirect a brief chance to
+    # complete before looking for a submit button that may already be gone.
+    request_token = _wait_for_request_token_in_url(
+        driver,
+        timeout_seconds=2.0,
+        poll_seconds=0.1,
+    )
+    if request_token:
+        return request_token
+
+    try:
+        _click_with_retry(driver, wait, submit_btn_locators, retries=3)
+    except Exception:
+        # Preserve the existing optional-click behavior: the redirect may
+        # still complete even when no explicit submit control is available.
+        pass
+
+    request_token = _wait_for_request_token_in_url(
+        driver,
+        timeout_seconds=45.0,
+        poll_seconds=0.5,
+    )
+    if not request_token:
+        raise TimeoutException("request_token not found in URL")
+    return request_token
+
+
 def _do_browser_login_for_request_token(kite: KiteConnect, user_id: str, password: str, totp_secret: str) -> str:
     service = Service(ChromeDriverManager().install())
     options = Options()
@@ -442,26 +514,11 @@ def _do_browser_login_for_request_token(kite: KiteConnect, user_id: str, passwor
         print(f"[AUTH] TOTP source: {source}", flush=True)
         _fill_totp(wait, otp)
 
-        try:
-            _click_with_retry(driver, wait, submit_btn_locators, retries=3)
-        except Exception:
-            pass
-
-        deadline = time.time() + 45
-        request_token = None
-        while time.time() < deadline:
-            request_token = _extract_request_token(driver.current_url)
-            if request_token:
-                break
-            time.sleep(0.5)
-
-        if not request_token:
-            raise TimeoutException("request_token not found in URL")
-
-        return request_token
+        return _request_token_after_totp(driver, wait, submit_btn_locators)
     except TimeoutException as exc:
         raise RuntimeError(
-            f"Login flow timed out before request_token was available. Last URL: {driver.current_url}"
+            "Login flow timed out before request_token was available. "
+            f"Last URL: {_redact_url_for_log(driver.current_url)}"
         ) from exc
     finally:
         driver.quit()
@@ -641,6 +698,28 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     parts = _read_key_secret()
+
+    # The primary app feeds the time-critical live jobs, so authenticate it
+    # before spending time on any optional secondary app.  If it fails, retain
+    # the failure, still attempt every secondary app for a complete auth pass,
+    # and then re-raise so the scheduled task keeps its existing non-zero exit
+    # semantics for a primary failure.
+    primary_error: Optional[Exception] = None
+    try:
+        run_slot_scheduler(
+            parts=parts,
+            force_login=bool(args.force_login),
+            test_now=bool(args.test_now),
+            max_refresh=int(args.max_refresh),
+        )
+    except Exception as e:
+        primary_error = e
+        print(
+            f"[ERROR] [AUTH1] Primary app token generation failed: {e}. "
+            "Continuing with secondary apps before exiting.",
+            flush=True,
+        )
+
     for app_idx in (2, 3, 4, 5, 6, 7, 8):
         try:
             _seed_additional_session_for_today(
@@ -651,15 +730,12 @@ def main() -> None:
         except Exception as e:
             print(
                 f"[WARN] [AUTH{app_idx}] App{app_idx} token generation failed: {e}. "
-                "Continuing with primary app only.",
+                "Continuing with remaining apps.",
                 flush=True,
             )
-    run_slot_scheduler(
-        parts=parts,
-        force_login=bool(args.force_login),
-        test_now=bool(args.test_now),
-        max_refresh=int(args.max_refresh),
-    )
+
+    if primary_error is not None:
+        raise primary_error
 
 
 if __name__ == "__main__":

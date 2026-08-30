@@ -47,7 +47,7 @@ class RuntimeSpec:
     def is_neutral(self) -> bool:
         return not self.active_mechanisms
 
-    def validate(self) -> None:
+    def validate(self, *, allow_composite: bool = False) -> None:
         if (self.entry_setup_id is None) != (self.entry_not_before_minute is None):
             raise ValueError("entry setup and earliest minute must be specified together")
         if self.entry_not_before_minute is not None:
@@ -82,7 +82,16 @@ class RuntimeSpec:
         if self.same_side_symbol_limit not in {1, 2}:
             raise ValueError("V11 supports same-side symbol limits 1 or 2 only")
         if len(self.active_mechanisms) > 1:
-            raise ValueError("isolated V11 runtime specs may change one mechanism only")
+            allowed_post_hoc_composite = {
+                "ENTRY_NOT_BEFORE",
+                "PORTFOLIO_SYMBOL_LIMIT",
+            }
+            if not allow_composite or set(self.active_mechanisms) != allowed_post_hoc_composite:
+                raise ValueError(
+                    "isolated V11 runtime specs may change one mechanism only; "
+                    "the only permitted post-hoc composite is entry timing plus "
+                    "the same-side symbol limit"
+                )
 
 
 def _dynamic_stop_is_better(side: str, proposed: float, current: float) -> bool:
@@ -167,10 +176,12 @@ def _label_dynamic_stop_exit(
 
 
 @contextlib.contextmanager
-def installed_runtime_hooks(spec: RuntimeSpec) -> Iterator[None]:
+def installed_runtime_hooks(
+    spec: RuntimeSpec, *, allow_composite: bool = False
+) -> Iterator[None]:
     """Install and later restore one causal V11 runtime hypothesis."""
 
-    spec.validate()
+    spec.validate(allow_composite=allow_composite)
     original_entry_fill = engine._entry_fill
     original_exit_on_bar = engine._exit_on_bar
     original_audit_record = engine._audit_record

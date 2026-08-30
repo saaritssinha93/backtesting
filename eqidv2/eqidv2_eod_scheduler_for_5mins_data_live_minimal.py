@@ -381,6 +381,14 @@ DEFAULT_ENABLE_OPENING_SLOT_FETCH = str(
 }
 _APP_VALIDATION_CACHE: dict[str, tuple[tuple[tuple[str, int, int], ...], bool, str]] = {}
 _APP_SELF_HEAL_STATE: dict[str, dict[str, object]] = {}
+DEFAULT_INLINE_APP_SELF_HEAL = str(
+    os.getenv("EQIDV2_5M_INLINE_APP_SELF_HEAL", "0")
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 DEFAULT_APP_SELF_HEAL_COOLDOWN_SEC = int(os.getenv("EQIDV2_5M_APP_SELF_HEAL_COOLDOWN_SEC", "1800"))
 DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY = max(
     1,
@@ -399,6 +407,18 @@ class ParallelPartitionRunError(RuntimeError):
     def __init__(self, message: str, summary: dict[str, object]):
         super().__init__(message)
         self.summary = dict(summary)
+
+
+class NoHealthyKiteSessionsError(RuntimeError):
+    def __init__(self, failed_apps: list[tuple[str, str]]):
+        self.failed_apps = [(str(app), str(detail)) for app, detail in failed_apps]
+        self.summary: dict[str, object] = {}
+        failure_summary = " | ".join(
+            f"{app_name}: {detail}" for app_name, detail in self.failed_apps
+        ) or "no auth profiles found"
+        super().__init__(
+            f"No valid Kite sessions available for 5min fetch. {failure_summary}"
+        )
 
 
 # ---------------------------------------------------------------------
@@ -1079,7 +1099,10 @@ def _validate_app_session(app_name: str, setup_fn: Callable[[], object]) -> tupl
             auth_files.append((fname, -1, -1))
     signature = tuple(auth_files)
     cached = _APP_VALIDATION_CACHE.get(app_name)
-    if cached and cached[0] == signature:
+    # A successful profile check remains valid while its auth files are
+    # unchanged.  A failed check must be retried: transient network/API errors
+    # must not quarantine an otherwise healthy app for the life of the process.
+    if cached and cached[0] == signature and cached[1]:
         return cached[1], cached[2]
     try:
         kite = setup_fn()
@@ -1091,7 +1114,7 @@ def _validate_app_session(app_name: str, setup_fn: Callable[[], object]) -> tupl
         return True, user_name
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
-        _APP_VALIDATION_CACHE[app_name] = (signature, False, msg)
+        _APP_VALIDATION_CACHE.pop(app_name, None)
         return False, msg
 
 def _attempt_app_session_self_heal(
@@ -1165,27 +1188,29 @@ def _build_working_app_partitions(
     tickers: list[str],
     token_map: dict[str, int],
     partition_shift: int = 0,
+    allow_inline_self_heal: bool = DEFAULT_INLINE_APP_SELF_HEAL,
 ) -> tuple[list[tuple[str, list[str], dict[str, int], str]], list[tuple[str, str]]]:
     working_apps: list[tuple[str, str]] = []
     failed_apps: list[tuple[str, str]] = []
 
     for app_name, setup_fn in _setup_fn_map().items():
         ok, detail = _validate_app_session(app_name, setup_fn)
-        if not ok:
+        if not ok and allow_inline_self_heal:
             healed, healed_detail = _attempt_app_session_self_heal(app_name, setup_fn, detail)
             if healed:
                 ok = True
                 detail = healed_detail
             else:
                 detail = f"{detail}; {healed_detail}"
+        elif not ok:
+            detail = f"{detail}; self_heal_deferred=preopen_auth_required"
         if ok:
             working_apps.append((app_name, detail))
         else:
             failed_apps.append((app_name, detail))
 
     if not working_apps:
-        failure_summary = " | ".join(f"{app_name}: {detail}" for app_name, detail in failed_apps) or "no auth profiles found"
-        raise RuntimeError(f"No valid Kite sessions available for 5min fetch. {failure_summary}")
+        raise NoHealthyKiteSessionsError(failed_apps)
 
     ticker_partitions = _split_tickers_evenly(
         tickers, len(working_apps), shift=partition_shift
@@ -1641,9 +1666,119 @@ def run_update_5m_once(
             "(attempting 09:15 opening snapshot fetch)."
         )
 
-    app_assignments, failed_apps = _build_working_app_partitions(
-        all_tickers, token_map, partition_shift=partition_shift
-    )
+    try:
+        app_assignments, failed_apps = _build_working_app_partitions(
+            all_tickers, token_map, partition_shift=partition_shift
+        )
+    except NoHealthyKiteSessionsError as exc:
+        total_elapsed_sec = time.perf_counter() - slot_started_at
+        failed_app_detail = " | ".join(
+            f"{app_name}={detail}" for app_name, detail in exc.failed_apps
+        ) or "no auth profiles found"
+        auth_failure = f"auth_no_healthy_apps: {failed_app_detail}"
+        completion_failures = [*preflight_failures, auth_failure]
+        unresolved_count = len(universe_symbols)
+        failure_summary: dict[str, object] = {
+            "total_elapsed_sec": float(total_elapsed_sec),
+            "partition_elapsed_sec": {},
+            "partition_symbol_counts": {},
+            "partition_complete_counts": {},
+            "max_partition_elapsed_sec": 0.0,
+            "min_partition_elapsed_sec": 0.0,
+            "avg_partition_elapsed_sec": 0.0,
+            "total_worker_budget": int(max_workers),
+            "per_app_cap": int(max_workers_per_app),
+            "effective_per_app": 0,
+            "partition_timeout_sec": float(partition_timeout_sec),
+            "sla_warn_sec": float(slot_sla_warn_sec),
+            "fetch_sla_target_sec": float(DEFAULT_FETCH_SLA_TARGET_SEC),
+            "sla_breached": bool(total_elapsed_sec > float(slot_sla_warn_sec)),
+            "persistent_partition_workers": bool(DEFAULT_PERSISTENT_PARTITION_WORKERS),
+            "universe_count": int(len(universe_symbols)),
+            "universe_sha256": universe_hash,
+            "current_symbol_count": 0,
+            "previous_slot_symbol_count": 0,
+            "complete_symbol_count": 0,
+            "unresolved_symbol_count": int(unresolved_count),
+            "failed_symbol_count": 0,
+            "token_missing_symbol_count": 0,
+            "written_symbol_count": 0,
+            "noop_symbol_count": 0,
+            "exact_accounting_partitions": 0,
+            "accounting_exact": False,
+            "accounting_failure": auth_failure,
+            "failures": list(completion_failures),
+            "completion_failures": list(completion_failures),
+            "verification_failed_count": 0,
+            "verification_failure_sample": [],
+            "failed_apps": list(exc.failed_apps),
+        }
+        exc.summary = dict(failure_summary)
+
+        if slot_end is not None:
+            try:
+                _write_slot_status(
+                    slot_end,
+                    total_elapsed_sec=total_elapsed_sec,
+                    partition_elapsed={},
+                    partition_symbol_counts={},
+                    total_budget=max_workers,
+                    per_app_cap=max_workers_per_app,
+                    effective_per_app=0,
+                    sla_warn_sec=slot_sla_warn_sec,
+                    failures=completion_failures,
+                    verification_failed_count=0,
+                    verification_failure_sample=[],
+                    universe_count=len(universe_symbols),
+                    universe_sha256=universe_hash,
+                    current_symbol_count=0,
+                    previous_slot_symbol_count=0,
+                    complete_symbol_count=0,
+                    unresolved_symbol_count=unresolved_count,
+                    failed_symbol_count=0,
+                    token_missing_symbol_count=0,
+                    written_symbol_count=0,
+                    noop_symbol_count=0,
+                    accounting_exact=False,
+                )
+            except Exception as status_exc:
+                print(
+                    f"[WARN] Failed to write zero-health 5min slot status: {status_exc}",
+                    flush=True,
+                )
+
+            if bool(publish_completion_marker):
+                try:
+                    fno_auth_failures = [
+                        f"{ticker}:auth_no_healthy_apps" for ticker in fno_equity_symbols
+                    ]
+                    _publish_slot_completion_marker(
+                        slot_end,
+                        tickers_expected=len(universe_symbols),
+                        tickers_written=0,
+                        failures=completion_failures,
+                        verification_failed_count=0,
+                        verification_failure_sample=[],
+                        duration_ms=float(total_elapsed_sec) * 1000.0,
+                        sample_fresh=0,
+                        sample_checked=0,
+                        universe_sha256=universe_hash,
+                        current_symbol_count=0,
+                        previous_slot_symbol_count=0,
+                        unresolved_symbol_count=unresolved_count,
+                        failed_symbol_count=0,
+                        token_missing_symbol_count=0,
+                        fno_equity_expected=len(fno_equity_symbols),
+                        fno_equity_ready=0,
+                        fno_equity_failures=fno_auth_failures,
+                        fno_equity_universe_sha256=fno_equity_hash,
+                    )
+                except Exception as marker_exc:
+                    print(
+                        f"[WARN] Failed to write zero-health 5min completion marker: {marker_exc}",
+                        flush=True,
+                    )
+        raise
     active_apps = [app_name for app_name, ptickers, _, _ in app_assignments if ptickers]
 
     print(
@@ -2306,6 +2441,7 @@ def main() -> None:
     )
     print(
         "       Auth self-heal:",
+        f"inline_enabled={DEFAULT_INLINE_APP_SELF_HEAL}, "
         f"cooldown={DEFAULT_APP_SELF_HEAL_COOLDOWN_SEC}s, "
         f"max_attempts_per_day={DEFAULT_APP_SELF_HEAL_MAX_ATTEMPTS_PER_DAY}",
     )

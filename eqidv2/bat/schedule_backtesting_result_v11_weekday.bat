@@ -15,8 +15,8 @@ if not exist "%BAT_BACKTEST%" (
 
 schtasks /Delete /F /TN "%OLD_TASK_BACKTEST%" >nul 2>&1
 
-echo [INFO] Creating weekday Backtesting Result v11 task at 16:00 ...
-schtasks /Create /F /TN "%TASK_BACKTEST%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:00 /TR "%BAT_BACKTEST%"
+echo [INFO] Creating weekday Backtesting Result v11 task at 16:20 ...
+schtasks /Create /F /TN "%TASK_BACKTEST%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:20 /TR "%BAT_BACKTEST%"
 if errorlevel 1 endlocal & exit /b 1
 
 if exist "%TASK_HARDENER%" (
@@ -25,6 +25,6 @@ if exist "%TASK_HARDENER%" (
 )
 
 echo [INFO] Backtesting Result v11 task created/updated successfully:
-echo        %TASK_BACKTEST%  ^(Mon-Fri 16:00^)
+echo        %TASK_BACKTEST%  ^(Mon-Fri 16:20; waits for 15:45 data readiness^)
 
 endlocal & exit /b 0

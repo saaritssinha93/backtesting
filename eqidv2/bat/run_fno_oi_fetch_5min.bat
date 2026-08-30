@@ -2,6 +2,14 @@
 setlocal EnableExtensions
 
 set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
+set "TRIAL_GATE_PS1=%BASE_DIR%\bat\fno_oi_fast_production_trial_date_gate.ps1"
+set "TRIAL_GATE_LOG=%BASE_DIR%\logs\fno_oi_fast_production_trial_legacy_fetch_gate.log"
+if not exist "%BASE_DIR%\logs" mkdir "%BASE_DIR%\logs"
+if not exist "%TRIAL_GATE_PS1%" exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TRIAL_GATE_PS1%" -Role Legacy -TrialDate 2026-09-02 >>"%TRIAL_GATE_LOG%" 2>&1
+set "TRIAL_GATE_EXIT=%ERRORLEVEL%"
+if "%TRIAL_GATE_EXIT%"=="42" endlocal & exit /b 0
+if not "%TRIAL_GATE_EXIT%"=="0" endlocal & exit /b %TRIAL_GATE_EXIT%
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set "PYTHONUNBUFFERED=1"
