@@ -1,8 +1,8 @@
-"""Backfill missing NSE-equity 1-minute histories required by FnO V5.
+"""Backfill missing NSE-equity 1-minute histories required by FnO research.
 
-The current FnO universe is authoritative for cash symbols and instrument
-tokens. LTM additionally inherits the pre-rename LTIM cash history before the
-new symbol's first row. All writes are atomic and existing files are archived.
+The selected persisted FnO universe is authoritative for cash symbols and
+instrument tokens. LTM additionally inherits the pre-rename LTIM cash history
+before the new symbol's first row. Existing files are archived before repair.
 """
 
 from __future__ import annotations
@@ -27,8 +27,14 @@ PREDECESSOR_SYMBOLS = {"LTM": "LTIM"}
 BASE_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 
 
-def _mapped_tokens() -> dict[str, int]:
-    path = common.UNIVERSE_DIR / "latest_near_month.parquet"
+def _mapped_tokens(universe_path: Path | None = None) -> dict[str, int]:
+    path = (
+        Path(universe_path)
+        if universe_path is not None
+        else common.UNIVERSE_DIR / "latest_near_month.parquet"
+    )
+    if not path.exists():
+        raise FileNotFoundError(f"FnO universe is missing: {path}")
     universe = pd.read_parquet(path)
     required = {"equity_symbol", "equity_instrument_token"}
     if not required.issubset(universe.columns):
@@ -108,8 +114,10 @@ def run(
     end_date: str,
     output_dir: Path,
     backup_root: Path,
+    universe_path: Path | None = None,
+    force_window: bool = False,
 ) -> list[dict[str, Any]]:
-    tokens = _mapped_tokens()
+    tokens = _mapped_tokens(universe_path)
     requested = sorted({value.strip().upper() for value in symbols if value.strip()})
     missing_tokens = [symbol for symbol in requested if symbol not in tokens]
     if missing_tokens:
@@ -128,30 +136,62 @@ def run(
     for symbol in requested:
         path = _symbol_path(output_dir, symbol)
         backup = _archive_existing(path, backup_root)
-        report = stock_1m.process_ticker(
-            "1min",
-            symbol,
-            tokens[symbol],
-            primary,
-            start,
-            end,
-            logger,
-            holidays,
-            False,
-            "end",
-            str(common.FNO_ROOT / "historical_repair" / "equity_1m_reports"),
-            False,
-            5,
-        )
-        if report.status == "failed" or not path.exists():
-            raise RuntimeError(f"{symbol} 1-minute backfill failed: {report}")
+        if force_window:
+            try:
+                client = stock_1m.get_kite_client_rr()
+                fetched = stock_1m.fetch_historical_1min_df(
+                    client,
+                    tokens[symbol],
+                    start,
+                    end,
+                    logger,
+                    "end",
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{symbol} explicit-window 1-minute fetch failed: {exc}"
+                ) from exc
+            if fetched is None or fetched.empty:
+                raise RuntimeError(
+                    f"{symbol} explicit-window 1-minute fetch returned no candles"
+                )
+            existing = (
+                pd.read_parquet(path, columns=list(BASE_COLUMNS))
+                if path.exists()
+                else pd.DataFrame(columns=list(BASE_COLUMNS))
+            )
+            combined = _recompute(
+                pd.concat([existing, fetched], ignore_index=True, sort=False)
+            )
+            common.atomic_write_parquet(combined, path)
+            status = "updated" if not existing.empty else "created"
+        else:
+            report = stock_1m.process_ticker(
+                "1min",
+                symbol,
+                tokens[symbol],
+                primary,
+                start,
+                end,
+                logger,
+                holidays,
+                False,
+                "end",
+                str(common.FNO_ROOT / "historical_repair" / "equity_1m_reports"),
+                False,
+                5,
+            )
+            if report.status == "failed" or not path.exists():
+                raise RuntimeError(f"{symbol} 1-minute backfill failed: {report}")
+            status = report.status
         predecessor_rows = _merge_predecessor(output_dir, symbol)
         dates = pd.to_datetime(pd.read_parquet(path, columns=["date"])["date"], errors="coerce")
         outcomes.append(
             {
                 "symbol": symbol,
                 "token": tokens[symbol],
-                "status": report.status,
+                "status": status,
+                "force_window": bool(force_window),
                 "rows": int(len(dates)),
                 "first": str(dates.min()),
                 "last": str(dates.max()),
@@ -164,21 +204,73 @@ def run(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--symbols", default="IDEA,LTM")
+    symbols = parser.add_mutually_exclusive_group()
+    symbols.add_argument("--symbols", default="IDEA,LTM")
+    symbols.add_argument(
+        "--all-mapped",
+        action="store_true",
+        help="Backfill every mapped cash symbol in the selected FnO universe.",
+    )
     parser.add_argument("--start-date", default="2025-06-01")
     parser.add_argument("--end-date", default=common.now_ist().date().isoformat())
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--backup-root", type=Path, default=DEFAULT_BACKUP_ROOT)
+    parser.add_argument(
+        "--universe-path",
+        type=Path,
+        default=common.UNIVERSE_DIR / "latest_near_month.parquet",
+        help="Persisted mapped FnO universe whose cash symbols/tokens are authoritative.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate the universe and print the selected symbols without calling Kite.",
+    )
+    parser.add_argument(
+        "--force-window",
+        action="store_true",
+        help=(
+            "Fetch the complete requested window and merge it explicitly instead of "
+            "using the incremental warm-up boundary. Use this to repair older partial "
+            "session tails inside an already-populated file."
+        ),
+    )
     args = parser.parse_args(argv)
+    mapped = _mapped_tokens(args.universe_path)
+    selected = sorted(mapped) if args.all_mapped else args.symbols.split(",")
+    if args.dry_run:
+        requested = sorted({value.strip().upper() for value in selected if value.strip()})
+        print(
+            json.dumps(
+                {
+                    "universe_path": str(args.universe_path.resolve()),
+                    "mapped_symbol_count": len(mapped),
+                    "selected_symbol_count": len(requested),
+                    "symbols": requested,
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+        return 0
     outcomes = run(
-        args.symbols.split(","),
+        selected,
         start_date=args.start_date,
         end_date=args.end_date,
         output_dir=args.output_dir,
         backup_root=args.backup_root,
+        universe_path=args.universe_path,
+        force_window=args.force_window,
     )
     report_path = common.FNO_ROOT / "historical_repair" / "equity_1m_backfill.json"
-    common.atomic_write_json(report_path, {"generated_at_ist": common.now_ist().isoformat(), "outcomes": outcomes})
+    common.atomic_write_json(
+        report_path,
+        {
+            "generated_at_ist": common.now_ist().isoformat(),
+            "universe_path": str(args.universe_path.resolve()),
+            "outcomes": outcomes,
+        },
+    )
     print(json.dumps(outcomes, indent=2), flush=True)
     return 0
 

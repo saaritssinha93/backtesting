@@ -57,6 +57,10 @@ RUN_SCHEMA_VERSION = "fno_v8_windowed_1m_run_v4"
 
 BACKTEST_UNIVERSE_DATE = date(2026, 8, 11)
 BACKTEST_UNIVERSE_PATH = common.UNIVERSE_DIR / "near_month_2026-08-11.parquet"
+# Isolated launchers may replace the complete universe identity plus these
+# source labels before invoking ``main``.  The canonical V8/V9 launchers retain
+# the original static-August contract below.
+BACKTEST_CONTRACT_MONTH_FILTER = "26AUG"
 BACKTEST_UNIVERSE_HASHES = {
     "file_sha256": "24170f39c7cf99021553396e40e0d88a435f857364b2423dcfbe9312539dbf09",
     "universe_sha256": "18c496bbf9e09b6914d073cba21c4c6c56305da1ed5759f4f91cc8cb66c19ad5",
@@ -1442,6 +1446,106 @@ def _setup_payload() -> list[dict[str, Any]]:
     return [asdict(setup) for setup in ACTIVE_SETUPS]
 
 
+def _assert_setup_csv_matches_payload(
+    archived_frame: pd.DataFrame,
+    expected_records: Sequence[Mapping[str, Any]],
+) -> None:
+    """Compare the lossy CSV representation with the typed setup payload.
+
+    Mixed override columns such as ``entry_clv`` contain both numbers and the
+    ``INHERIT`` sentinel, so pandas reads numeric values back as strings.  The
+    strategy JSON is authoritative; normalize each CSV cell according to the
+    expected type and fail closed on any semantic mismatch.
+    """
+
+    expected = [dict(record) for record in expected_records]
+    expected_columns = list(expected[0]) if expected else []
+    if set(archived_frame.columns) != set(expected_columns):
+        raise ValueError("V8 setups artifact columns differ from strategy payload")
+    if len(archived_frame) != len(expected):
+        raise AssertionError("V8 setups artifact row count differs from strategy payload")
+
+    actual = archived_frame[expected_columns].reset_index(drop=True)
+    for row_index, expected_row in enumerate(expected):
+        for column in expected_columns:
+            observed = actual.at[row_index, column]
+            wanted = expected_row[column]
+            matches = False
+            if wanted is None:
+                matches = bool(pd.isna(observed))
+            elif isinstance(wanted, bool):
+                if isinstance(observed, (bool, np.bool_)):
+                    matches = bool(observed) is wanted
+                elif not pd.isna(observed):
+                    matches = str(observed).strip().lower() == str(wanted).lower()
+            elif isinstance(wanted, int) and not isinstance(wanted, bool):
+                try:
+                    numeric = float(observed)
+                    matches = math.isfinite(numeric) and numeric == float(wanted)
+                except (TypeError, ValueError):
+                    matches = False
+            elif isinstance(wanted, float):
+                try:
+                    numeric = float(observed)
+                    matches = math.isfinite(numeric) and math.isclose(
+                        numeric,
+                        wanted,
+                        rel_tol=1e-12,
+                        abs_tol=1e-12,
+                    )
+                except (TypeError, ValueError):
+                    matches = False
+            else:
+                matches = not pd.isna(observed) and str(observed) == str(wanted)
+            if not matches:
+                raise AssertionError(
+                    "V8 setups artifact does not match the frozen strategy payload: "
+                    f"row={row_index}, field={column}"
+                )
+
+
+def _signal_slots_from_setup_payload(
+    setups: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {str(setup["signal_end"]) for setup in setups},
+            key=lambda value: datetime.strptime(value, "%H:%M").time(),
+        )
+    )
+
+
+def _required_futures_clocks_from_signal_slots(
+    signal_slots: Sequence[str],
+) -> tuple[str, ...]:
+    clocks: set[str] = set()
+    for value in signal_slots:
+        moment = datetime.strptime(value, "%H:%M")
+        clocks.add(value)
+        clocks.add((moment - pd.Timedelta(minutes=5)).strftime("%H:%M"))
+    return tuple(
+        sorted(clocks, key=lambda value: datetime.strptime(value, "%H:%M").time())
+    )
+
+
+def active_signal_slots() -> tuple[str, ...]:
+    """Return the immutable setup book's distinct signal clocks in order."""
+
+    return _signal_slots_from_setup_payload(_setup_payload())
+
+
+def required_futures_signal_clocks() -> tuple[str, ...]:
+    """Return every signal clock and its exact preceding five-minute clock.
+
+    A setup's OI change is causal only when both the signal row and the exact
+    t-5 row exist.  Deriving this grid from the literal setup book keeps the
+    original 09:20..09:45 V8 contract unchanged while allowing an isolated
+    later-slot launcher to extend the same honest completeness rule.
+    """
+
+    return _required_futures_clocks_from_signal_slots(active_signal_slots())
+
+
 def _module_source_sha256() -> str:
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
@@ -1449,20 +1553,34 @@ def _module_source_sha256() -> str:
 def validate_configuration() -> None:
     if _module_source_sha256() != MODULE_IMPORT_SOURCE_SHA256:
         raise RuntimeError("V8 source file changed after this process imported it")
-    if len(ACTIVE_SETUPS) != 10:
-        raise AssertionError("V8 must contain ten literal setup legs")
-    if len({setup.setup_id for setup in ACTIVE_SETUPS}) != 10:
+    if not ACTIVE_SETUPS:
+        raise AssertionError("V8 must contain at least one literal setup leg")
+    if len({setup.setup_id for setup in ACTIVE_SETUPS}) != len(ACTIVE_SETUPS):
         raise AssertionError("V8 setup IDs must be unique")
-    expected = {
-        "09:25": "09:25",
-        "09:30": "09:30",
-        "09:35": "09:35",
-        "09:40": "09:40",
-        "09:45": "09:45",
-    }
+    slots = active_signal_slots()
+    expected_legs = {(slot, side) for slot in slots for side in ("LONG", "SHORT")}
+    observed_legs = {(setup.signal_end, setup.side) for setup in ACTIVE_SETUPS}
+    if observed_legs != expected_legs:
+        raise AssertionError(
+            "V8 requires exactly one LONG and one SHORT leg for every active "
+            "signal slot"
+        )
     for setup in ACTIVE_SETUPS:
-        if setup.signal_end not in expected:
-            raise AssertionError(f"Unexpected V8 signal time: {setup.signal_end}")
+        try:
+            signal_time = datetime.strptime(setup.signal_end, "%H:%M").time()
+        except ValueError as exc:
+            raise AssertionError(
+                f"Invalid V8 signal time: {setup.signal_end}"
+            ) from exc
+        if setup.signal_end != signal_time.strftime("%H:%M") or signal_time.minute % 5 or not (
+            datetime.strptime("09:25", "%H:%M").time()
+            <= signal_time
+            <= datetime.strptime("15:20", "%H:%M").time()
+        ):
+            raise AssertionError(
+                f"V8 signal time must be a regular-session five-minute end "
+                f"label with room for S+5: {setup.signal_end}"
+            )
         if setup.side not in {"LONG", "SHORT"}:
             raise AssertionError(f"Unexpected V8 side: {setup.side}")
         if setup.max_entries <= 0:
@@ -1502,6 +1620,19 @@ def validate_configuration() -> None:
 
 EXECUTION_INSTRUMENT = "NSE_CASH_EQUITY"
 OI_INSTRUMENT = "STATIC_26AUG_NFO_FUTURE_RESEARCH_ONLY"
+SOURCE_LIMITATION_LABELS = (
+    "STATIC_2026_08_11_UNIVERSE_SURVIVORSHIP_RESEARCH",
+    "STATIC_26AUG_FUTURES_OI_NOT_POINT_IN_TIME_ROLLING",
+    "LEGACY_EQUITY_1M_HAS_NO_ROW_LINEAGE_FLAGS",
+    "SOURCE_SNAPSHOT_IS_PER_FILE_STABLE_NOT_GLOBAL_TRANSACTION",
+)
+BASE_PROMOTION_BLOCKER_LABELS = (
+    "STATIC_LATER_DATED_UNIVERSE",
+    "STATIC_AUGUST_FUTURES_OI_NOT_ROLLING_POINT_IN_TIME",
+    "LEGACY_EQUITY_ROW_LINEAGE_UNPROVEN",
+    "GLOBAL_PORTFOLIO_LEDGER_USES_CONSERVATIVE_NO_BACKFILL_OVERLAY",
+    "PROSPECTIVE_20_SESSIONS_AND_100_FILLS_NOT_COMPLETED",
+)
 FIVE_MINUTE_CONSTRUCTION = "FIVE_EXACT_REAL_END_LABELLED_NSE_1M_BARS"
 TIMESTAMP_CONVENTION = "CANDLE_END_ASIA_KOLKATA"
 PORTFOLIO_MODE = (
@@ -1643,7 +1774,7 @@ def load_validated_source_contract(
     mapped, universe_record = provenance.load_backtest_universe(
         universe_path=snapshot["universe_path"],
         universe_date=BACKTEST_UNIVERSE_DATE,
-        contract_month_contains="26AUG",
+        contract_month_contains=BACKTEST_CONTRACT_MONTH_FILTER,
         require_persisted_mapping=True,
         expected_file_sha256=BACKTEST_UNIVERSE_HASHES["file_sha256"],
         expected_universe_sha256=BACKTEST_UNIVERSE_HASHES["universe_sha256"],
@@ -2229,25 +2360,31 @@ def build_v8_candidate_tables(
                 pd.Timestamp(
                     f"{session_day.isoformat()} {clock}", tz=common.IST
                 )
-                for clock in ("09:20", "09:25", "09:30", "09:35", "09:40", "09:45")
+                for clock in required_futures_signal_clocks()
             ]
             futures_window_rows = futures.loc[
                 date_mask_futures
                 & futures["ts"].dt.date.eq(session_day)
-                & futures["ts"].between(
-                    required_futures_times[0], required_futures_times[-1]
-                )
+                & futures["ts"].isin(required_futures_times)
             ]
             futures_complete = (
                 len(futures_window_rows) == len(required_futures_times)
                 and set(futures_window_rows["ts"]) == set(required_futures_times)
             )
-            for index, timestamp in enumerate(required_futures_times):
+            active_signal_times = {
+                pd.Timestamp(
+                    f"{session_day.isoformat()} {clock}", tz=common.IST
+                )
+                for clock in active_signal_slots()
+            }
+            for timestamp in required_futures_times:
                 row = futures_by_ts.get(timestamp)
                 if row is None or not bool(row["oi_valid"]):
                     futures_complete = False
                     break
-                if index > 0 and not math.isfinite(float(row["oi_change_pct"])):
+                if timestamp in active_signal_times and not math.isfinite(
+                    float(row["oi_change_pct"])
+                ):
                     futures_complete = False
                     break
             if minute_complete and futures_complete:
@@ -2550,6 +2687,8 @@ def _cache_contract_payload(
         "strategy_code_sha256": _module_source_sha256(),
         "setup_book_sha256": V8_SETUP_BOOK_SHA256,
         "source_v6_setup_book_sha256": SOURCE_V6_SETUP_BOOK_SHA256,
+        "active_signal_slots": list(active_signal_slots()),
+        "required_futures_signal_clocks": list(required_futures_signal_clocks()),
         "execution_instrument": EXECUTION_INSTRUMENT,
         "oi_instrument": OI_INSTRUMENT,
         "five_minute_construction": FIVE_MINUTE_CONSTRUCTION,
@@ -2569,13 +2708,32 @@ def _cache_contract_payload(
             "expected_session_count": len(expected_sessions),
         },
         "symbols": list(symbols),
-        "source_limitations": [
-            "STATIC_2026_08_11_UNIVERSE_SURVIVORSHIP_RESEARCH",
-            "STATIC_26AUG_FUTURES_OI_NOT_POINT_IN_TIME_ROLLING",
-            "LEGACY_EQUITY_1M_HAS_NO_ROW_LINEAGE_FLAGS",
-            "SOURCE_SNAPSHOT_IS_PER_FILE_STABLE_NOT_GLOBAL_TRANSACTION",
-        ],
+        "source_limitations": list(SOURCE_LIMITATION_LABELS),
     }
+
+
+def _assert_cache_matches_active_strategy(
+    cache_manifest: Mapping[str, Any],
+) -> None:
+    """Reject replay when a launcher changed the active book after caching."""
+
+    contract = dict(cache_manifest.get("input_contract", {}))
+    setup_payload = _setup_payload()
+    setup_hash = common.canonical_json_sha256(setup_payload)
+    expected_slots = list(_signal_slots_from_setup_payload(setup_payload))
+    expected_clocks = list(
+        _required_futures_clocks_from_signal_slots(expected_slots)
+    )
+    if setup_hash != V8_SETUP_BOOK_SHA256:
+        raise AssertionError("Active V8 setup payload does not match its frozen hash")
+    if str(contract.get("setup_book_sha256", "")) != setup_hash:
+        raise AssertionError("V8 cache setup book does not match the active strategy")
+    if list(contract.get("active_signal_slots", [])) != expected_slots:
+        raise AssertionError("V8 cache signal slots do not match the active strategy")
+    if list(contract.get("required_futures_signal_clocks", [])) != expected_clocks:
+        raise AssertionError(
+            "V8 cache futures/OI clock grid does not match the active strategy"
+        )
 
 
 def _cache_paths(input_fingerprint: str) -> dict[str, Path]:
@@ -3649,13 +3807,7 @@ def summarize_v8_results(
             max(0.0, float(-drawdown.min())) if drawdown.size else 0.0
         ),
     }
-    promotion_blockers = [
-        "STATIC_LATER_DATED_UNIVERSE",
-        "STATIC_AUGUST_FUTURES_OI_NOT_ROLLING_POINT_IN_TIME",
-        "LEGACY_EQUITY_ROW_LINEAGE_UNPROVEN",
-        "GLOBAL_PORTFOLIO_LEDGER_USES_CONSERVATIVE_NO_BACKFILL_OVERLAY",
-        "PROSPECTIVE_20_SESSIONS_AND_100_FILLS_NOT_COMPLETED",
-    ]
+    promotion_blockers = list(BASE_PROMOTION_BLOCKER_LABELS)
     if incomplete_candidates:
         promotion_blockers.append("DATA_INCOMPLETE_CANDIDATE_PATHS")
     if unresolved_filled_trades:
@@ -3986,6 +4138,8 @@ def strategy_payload() -> dict[str, Any]:
         "setup_book_sha256": V8_SETUP_BOOK_SHA256,
         "source_v6_setup_book_sha256": SOURCE_V6_SETUP_BOOK_SHA256,
         "setups": _setup_payload(),
+        "active_signal_slots": list(active_signal_slots()),
+        "required_futures_signal_clocks": list(required_futures_signal_clocks()),
         "variant_registry": VARIANT_REGISTRY,
         "entry_state_machine": {
             "confirmation_bars": "S+1_THROUGH_CONFIGURED_MAX_AT_MOST_S+4",
@@ -4039,6 +4193,10 @@ def strategy_payload() -> dict[str, Any]:
             "source_completeness": (
                 "EVERY_SELECTED_SYMBOL_X_EXPECTED_SESSION_EXACT_CASH_1M_GRID_"
                 "AND_REQUIRED_FUTURES_SIGNAL_SLOTS"
+            ),
+            "active_signal_slots": list(active_signal_slots()),
+            "required_futures_signal_clocks": list(
+                required_futures_signal_clocks()
             ),
         },
         "portfolio": {
@@ -4261,6 +4419,7 @@ def write_v8_run_artifacts(
     diagnostic_breakdowns: pd.DataFrame | None = None,
 ) -> tuple[Path, Path, dict[str, Any]]:
     generated_at = common.now_ist()
+    _assert_cache_matches_active_strategy(cache_manifest)
     expected_code_sha256 = str(
         dict(cache_manifest.get("input_contract", {})).get(
             "strategy_code_sha256", ""
@@ -4436,6 +4595,7 @@ def execute_v8_run(
             rebuild=rebuild_cache,
         )
     )
+    _assert_cache_matches_active_strategy(manifest)
     cache_contract = dict(manifest.get("input_contract", {}))
     derived_completeness = derive_coverage_completeness(
         coverage,
@@ -4582,6 +4742,37 @@ def validate_v8_run_provenance(path: Path | str) -> dict[str, Any]:
         input_contract
     ):
         raise AssertionError("Archived V8 cache input contract fingerprint is invalid")
+    archived_strategy = dict(payload.get("strategy_payload", {}))
+    archived_setups = list(archived_strategy.get("setups", []))
+    if not archived_setups:
+        raise ValueError("V8 run strategy payload has no frozen setups")
+    archived_setup_hash = common.canonical_json_sha256(archived_setups)
+    if archived_setup_hash != str(
+        archived_strategy.get("setup_book_sha256", "")
+    ) or archived_setup_hash != str(input_contract.get("setup_book_sha256", "")):
+        raise AssertionError("Archived V8 setup book identity is inconsistent")
+    archived_slots = list(_signal_slots_from_setup_payload(archived_setups))
+    archived_clocks = list(
+        _required_futures_clocks_from_signal_slots(archived_slots)
+    )
+    has_dynamic_slot_contract = any(
+        key in value
+        for value in (input_contract, archived_strategy)
+        for key in ("active_signal_slots", "required_futures_signal_clocks")
+    )
+    if has_dynamic_slot_contract and (
+        list(input_contract.get("active_signal_slots", [])) != archived_slots
+        or list(archived_strategy.get("active_signal_slots", []))
+        != archived_slots
+        or list(input_contract.get("required_futures_signal_clocks", []))
+        != archived_clocks
+        or list(archived_strategy.get("required_futures_signal_clocks", []))
+        != archived_clocks
+    ):
+        raise AssertionError("Archived V8 signal-slot/OI-clock contract is invalid")
+    setup_record = dict(outputs.get("setups", {}))
+    archived_setup_frame = pd.read_csv(Path(str(setup_record.get("path", ""))))
+    _assert_setup_csv_matches_payload(archived_setup_frame, archived_setups)
     if cache_manifest.get("input_fingerprint") != payload.get(
         "cache_input_fingerprint"
     ):
@@ -4773,7 +4964,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             mapped, universe_record = provenance.load_backtest_universe(
                 universe_path=BACKTEST_UNIVERSE_PATH,
                 universe_date=BACKTEST_UNIVERSE_DATE,
-                contract_month_contains="26AUG",
+                contract_month_contains=BACKTEST_CONTRACT_MONTH_FILTER,
                 require_persisted_mapping=True,
                 expected_file_sha256=BACKTEST_UNIVERSE_HASHES["file_sha256"],
                 expected_universe_sha256=BACKTEST_UNIVERSE_HASHES["universe_sha256"],

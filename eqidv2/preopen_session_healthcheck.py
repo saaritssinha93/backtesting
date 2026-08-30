@@ -10,10 +10,13 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from eqidv2_runtime_paths import LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR
+from eqidv2_runtime_paths import (
+    LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
+    RUNTIME_STATUS_DIR,
+)
 
 from zoneinfo import ZoneInfo
 
@@ -24,6 +27,21 @@ LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
 BAT_DIR = BASE_DIR / "bat"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 V15_NEW_TASK = "EQIDV2_live_combined_csv_v15_new_0900"
+FNO_V6_EQUITY_1MIN_FEED_TASK = "EQIDV2_fno_v6_equity_1min_feed_0919"
+FNO_V8_COMBINED_PAPER_TASK = "EQIDV2_fno_v8_combined_paper_0915"
+FNO_V8_COMBINED_PAPER_HEARTBEAT = (
+    RUNTIME_STATUS_DIR / "fno_v8_combined_paper.heartbeat"
+)
+FNO_V8_STARTUP_GRACE_END = dt.time(9, 17)
+FNO_V6_SCANNER_TASK = "EQIDV2_fno_v6_scanner_5min_0918"
+FNO_V6_CUTOVER_DOWNSTREAM_TASKS = (
+    FNO_V6_EQUITY_1MIN_FEED_TASK,
+    "EQIDV2_fno_v6_confirmation_1min_0919",
+    "EQIDV2_fno_v6_live_long_0920",
+    "EQIDV2_fno_v6_live_short_0920",
+    "EQIDV2_fno_v6_trade_logger_0920",
+    "EQIDV2_fno_v6_net_result_0920",
+)
 
 DASHBOARD_SESSION_TASKS = (
     "EQIDV2_log_dashboard_start_0855",
@@ -69,7 +87,7 @@ DASHBOARD_SESSION_TASKS = (
 # task every V6 confirmation slot must fail closed, so a missing/disabled task
 # is a preopen failure rather than an optional inactive session.
 REQUIRED_DASHBOARD_SESSION_TASKS = frozenset(
-    {"EQIDV2_fno_v6_equity_1min_feed_0919"}
+    {FNO_V6_EQUITY_1MIN_FEED_TASK}
 )
 
 
@@ -82,6 +100,143 @@ class CheckResult:
 
 def now_ist() -> dt.datetime:
     return dt.datetime.now(IST)
+
+
+def check_v8_paper_cutover_activation(
+    *,
+    v8_task_enabled: bool,
+    observed_at: dt.datetime,
+    task_probe: Callable[[str], Tuple[bool, bool, bool, str, str]] | None = None,
+    v8_task_state: Tuple[bool, bool, bool, str, str] | None = None,
+) -> CheckResult:
+    """Fail closed when Task Scheduler selects V8 but today's permit is invalid.
+
+    The enabled V8 task is the persistent, scheduler-backed cutover-mode marker.
+    While it is enabled, the deliberately disabled V6 one-minute feed must not
+    be treated as an autofix target.  A missing/expired V8 permit remains a
+    visible failure, but has no automatic start action.
+    """
+
+    label = "fno_v8_combined_paper_cutover_activation"
+    probe = task_probe or _task_cutover_state
+    v8_state = v8_task_state or probe(FNO_V8_COMBINED_PAPER_TASK)
+    if not v8_task_enabled:
+        exists, enabled, _running, state, _status = v8_state
+        if exists and not enabled and state == "DISABLED":
+            return CheckResult(label, "PASS", "V8 paper cutover mode not selected")
+        _feed_exists, _feed_enabled, _feed_running, feed_state, _ = probe(
+            FNO_V6_EQUITY_1MIN_FEED_TASK
+        )
+        return CheckResult(
+            label,
+            "FAIL",
+            "V8 scheduler identity is missing/unavailable/ambiguous; automatic mode "
+            "selection is blocked regardless of V6 feed state: "
+            f"v8_state={state or 'UNKNOWN'}, v6_feed_state={feed_state or 'UNKNOWN'}",
+        )
+    scanner_exists, scanner_enabled, _scanner_running, scanner_state, _ = probe(
+        FNO_V6_SCANNER_TASK
+    )
+    if not scanner_exists or not scanner_enabled:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"V8 mode selected but shared V6 scanner is not enabled: {scanner_state or 'MISSING'}",
+        )
+    conflicts: list[str] = []
+    for task_name in FNO_V6_CUTOVER_DOWNSTREAM_TASKS:
+        exists, enabled, running, state, status = probe(task_name)
+        if not exists or enabled or running:
+            conflicts.append(
+                f"{task_name}[state={state or 'MISSING'},status={status or 'N/A'}]"
+            )
+    if conflicts:
+        return CheckResult(
+            label,
+            "FAIL",
+            "V8 mode is not mutually exclusive with all six V6 downstream tasks: "
+            + ", ".join(conflicts),
+        )
+    try:
+        import fno_v8_combined_paper_control as v8_control
+
+        decision = v8_control.evaluate_activation(
+            observed_at.astimezone(IST).date(),
+            now=observed_at.astimezone(IST),
+        )
+    except Exception as exc:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"V8 task enabled but activation validation errored: {type(exc).__name__}",
+        )
+    if not decision.allowed:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"V8 task enabled but today's PAPER activation is blocked: {decision.reason}",
+        )
+    return CheckResult(
+        label,
+        "PASS",
+        f"V8 task enabled with valid one-session PAPER permit {decision.permit_id}",
+    )
+
+
+def check_v8_paper_runtime_liveness(
+    *,
+    v8_task_enabled: bool,
+    observed_at: dt.datetime,
+    v8_task_state: Tuple[bool, bool, bool, str, str] | None = None,
+    heartbeat_path: Path = FNO_V8_COMBINED_PAPER_HEARTBEAT,
+    max_heartbeat_age_seconds: float = 120.0,
+) -> CheckResult:
+    """Expose a selected-but-dead V8 pipeline without any autofix action."""
+
+    label = "fno_v8_combined_paper_runtime_liveness"
+    if not v8_task_enabled:
+        return CheckResult(label, "PASS", "V8 paper cutover mode not selected")
+    if observed_at.astimezone(IST).time() < FNO_V8_STARTUP_GRACE_END:
+        return CheckResult(label, "PASS", "V8 paper task is within its 09:15 startup grace")
+
+    state = v8_task_state or _task_cutover_state(FNO_V8_COMBINED_PAPER_TASK)
+    exists, enabled, running, scheduled_state, task_status = state
+    if not exists or not enabled or not running:
+        return CheckResult(
+            label,
+            "FAIL",
+            "V8 mode selected but the 09:15 PAPER task is not running after grace: "
+            f"state={scheduled_state or 'MISSING'},status={task_status or 'N/A'}",
+        )
+
+    heartbeat = parse_keyfile(Path(heartbeat_path))
+    heartbeat_state = str(heartbeat.get("state", "")).strip().upper()
+    heartbeat_ts = _parse_keyfile_ts(
+        heartbeat.get("ts_utc", "") or heartbeat.get("ts", "")
+    )
+    if heartbeat_state != "RUNNING" or heartbeat_ts is None:
+        return CheckResult(
+            label,
+            "FAIL",
+            "V8 task is running but its PAPER heartbeat is missing/invalid: "
+            f"state={heartbeat_state or 'N/A'}",
+        )
+    observed = observed_at.astimezone(IST)
+    age_seconds = (observed - heartbeat_ts.astimezone(IST)).total_seconds()
+    if heartbeat_ts.date() != observed.date() or age_seconds < -5.0 or age_seconds > float(
+        max_heartbeat_age_seconds
+    ):
+        return CheckResult(
+            label,
+            "FAIL",
+            "V8 task heartbeat is not a fresh same-session observation: "
+            f"age_seconds={age_seconds:.1f}",
+        )
+    return CheckResult(
+        label,
+        "PASS",
+        f"V8 PAPER task running; heartbeat age={max(0.0, age_seconds):.1f}s",
+    )
 
 
 def _fmt_ts(ts: dt.datetime) -> str:
@@ -356,6 +511,16 @@ def _task_is_enabled(task_name: str) -> bool:
     return state.strip().upper() == "ENABLED"
 
 
+def _task_cutover_state(task_name: str) -> Tuple[bool, bool, bool, str, str]:
+    out = _run_schtasks_query(task_name)
+    if not out:
+        return False, False, False, "", ""
+    lines = out.splitlines()
+    state = _extract_value(lines, "Scheduled Task State").strip().upper()
+    status = _extract_value(lines, "Status").strip().upper()
+    return True, state == "ENABLED", status == "RUNNING", state, status
+
+
 def _extract_value(lines: List[str], prefix: str) -> str:
     prefix_l = prefix.lower()
     for ln in lines:
@@ -495,6 +660,38 @@ def check_task_enabled_state(
     return CheckResult(label, "PASS", f"ran today | status={status or 'N/A'} | last_run={last_run}")
 
 
+def check_dashboard_session_task(
+    task_name: str,
+    observed_at: dt.datetime,
+    v8_positively_disabled: bool,
+) -> CheckResult:
+    """Check one dashboard task without ever autofixing V6 behind V8/unknown mode."""
+
+    if (
+        task_name == FNO_V6_EQUITY_1MIN_FEED_TASK
+        and not v8_positively_disabled
+    ):
+        # This deliberately does not use the ``task_`` label namespace because
+        # the autofix process maps every such failure to ``schtasks /Run`` and,
+        # for the V6 feed, a direct BAT fallback.  V8 enabled *or an ambiguous
+        # V8 scheduler query* must therefore suppress this check completely;
+        # the separate cutover-coherence check remains the fail-closed alert.
+        return CheckResult(
+            "fno_v6_equity_1min_feed_autofix_suppressed",
+            "PASS",
+            "V6 feed task/action checks suppressed until V8 is positively observed Disabled",
+        )
+
+    required = task_name in REQUIRED_DASHBOARD_SESSION_TASKS
+    return check_task_enabled_state(
+        task_name,
+        f"task_{task_name}",
+        require_run_today=_task_should_have_run_today(task_name, observed_at),
+        inactive_ok=not required,
+        inactive_detail="session not enabled",
+    )
+
+
 def check_file_recent_if_enabled(
     path: Path,
     max_age_min: int,
@@ -528,6 +725,13 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     v15_nifty_enabled = _task_is_enabled("EQIDV2_nifty_guard_fetch_v15_0915")
     v16_5min_nifty_enabled = _task_is_enabled("EQIDV2_nifty_guard_fetch_v16_5min_0915")
     kite_export_enabled = _task_is_enabled("EQIDV2_kite_export_start_0915")
+    v8_task_state = _task_cutover_state(FNO_V8_COMBINED_PAPER_TASK)
+    v8_paper_enabled = bool(v8_task_state[0] and v8_task_state[1])
+    v8_positively_disabled = bool(
+        v8_task_state[0]
+        and not v8_task_state[1]
+        and v8_task_state[3] == "DISABLED"
+    )
     now_local = now_ist()
     v15_nifty_log_due = now_local.time() >= dt.time(9, 15)
     v16_5min_nifty_log_due = now_local.time() >= dt.time(9, 15)
@@ -535,16 +739,31 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     # Dashboard scheduled sessions. Future slots are reported as waiting; past
     # enabled slots must have a same-day scheduler run.
     for task in DASHBOARD_SESSION_TASKS:
-        required = task in REQUIRED_DASHBOARD_SESSION_TASKS
         checks.append(
-            check_task_enabled_state(
-                task,
-                f"task_{task}",
-                require_run_today=_task_should_have_run_today(task, now_local),
-                inactive_ok=not required,
-                inactive_detail="session not enabled",
+            check_dashboard_session_task(
+                task_name=task,
+                observed_at=now_local,
+                v8_positively_disabled=v8_positively_disabled,
             )
         )
+
+    # This failure intentionally has no autofix mapping.  If V8 is selected
+    # but today's two-key activation is absent/expired, stay fail-closed rather
+    # than launching the disabled V6 feed and overlapping entry pipelines.
+    checks.append(
+        check_v8_paper_cutover_activation(
+            v8_task_enabled=v8_paper_enabled,
+            observed_at=now_local,
+            v8_task_state=v8_task_state,
+        )
+    )
+    checks.append(
+        check_v8_paper_runtime_liveness(
+            v8_task_enabled=v8_paper_enabled,
+            observed_at=now_local,
+            v8_task_state=v8_task_state,
+        )
+    )
 
     # Dashboard sessions mapped 1:1 to live cards.
     checks.append(

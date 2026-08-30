@@ -7,11 +7,13 @@ import argparse
 import base64
 import csv
 import datetime as dt
+import hashlib
 import json
 import math
 import os
 import re
 import subprocess
+import threading
 import time
 from collections import deque
 from http import HTTPStatus
@@ -35,6 +37,8 @@ except Exception:  # pragma: no cover - dashboard can still render legacy gross 
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
+DASHBOARD_RUNTIME_IDENTITY_SCHEMA_VERSION = "eqidv2_log_dashboard_runtime_identity_v1"
+DASHBOARD_RUNTIME_IDENTITY_PATH = RUNTIME_STATUS_DIR / "log_dashboard_server.runtime.json"
 
 
 def _resolve_status_path(filename: str) -> Path:
@@ -94,6 +98,7 @@ FNO_OI_CARD_REPORTS: Dict[str, str] = {
     "fno_v6_live_short": "latest_fno_v6_live_short.md",
     "fno_v6_trade_logger": "latest_fno_v6_trade_logger.md",
     "fno_v6_net_result": "latest_fno_v6_net_result.md",
+    "fno_v8_combined_paper": "latest_fno_v8_combined_paper.md",
     "fno_oi_eod_qc": "latest_fno_oi_eod_qc.md",
 }
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
@@ -164,6 +169,7 @@ LOG_FILES: Dict[str, str] = {
     "fno_v6_live_short": "fno_v6_live_short.log",
     "fno_v6_trade_logger": "fno_v6_trade_logger.log",
     "fno_v6_net_result": "fno_v6_net_result.log",
+    "fno_v8_combined_paper": "fno_v8_combined_paper.log",
     "fno_oi_eod_qc": "fno_oi_eod_qc.log",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.log",
@@ -242,6 +248,7 @@ STATUS_FILES: Dict[str, str] = {
     "fno_v6_live_short": "fno_v6_live_short.status",
     "fno_v6_trade_logger": "fno_v6_trade_logger.status",
     "fno_v6_net_result": "fno_v6_net_result.status",
+    "fno_v8_combined_paper": "fno_v8_combined_paper.status",
     "fno_oi_eod_qc": "fno_oi_eod_qc.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
     "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
@@ -299,6 +306,7 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "fno_v6_live_short": "fno_v6_live_short.heartbeat",
     "fno_v6_trade_logger": "fno_v6_trade_logger.heartbeat",
     "fno_v6_net_result": "fno_v6_net_result.heartbeat",
+    "fno_v8_combined_paper": "fno_v8_combined_paper.heartbeat",
     "fno_oi_eod_qc": "fno_oi_eod_qc.heartbeat",
     "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.heartbeat",
     "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
@@ -345,6 +353,7 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "fno_v6_live_short": ("\\EQIDV2_fno_v6_live_short_0920",),
     "fno_v6_trade_logger": ("\\EQIDV2_fno_v6_trade_logger_0920",),
     "fno_v6_net_result": ("\\EQIDV2_fno_v6_net_result_0920",),
+    "fno_v8_combined_paper": ("\\EQIDV2_fno_v8_combined_paper_0915",),
     "fno_oi_eod_qc": ("\\EQIDV2_fno_oi_eod_qc_1540",),
     "eod_15min_data": ("\\EQIDV2_eod_15mins_data_0900",),
     "eod_1540_update": ("\\EQIDV2_eod_1540_update_1540",),
@@ -736,12 +745,70 @@ def _verify_restart_success(card_id: str, before: Dict[str, str], trace: list[st
     }
 
 
+def _fresh_task_restart_eligibility(task_name: str) -> Tuple[bool, str]:
+    """Fail closed unless a fresh Task Scheduler query says Enabled.
+
+    This deliberately bypasses the dashboard's ten-second scheduler cache and
+    `_run_cmd_silent`.  A V6/V8 cutover can disable a task between dashboard
+    refreshes, and a restart attempt must be rejected before reading stale PID
+    files, issuing `/End`, or terminating any process tree.
+    """
+
+    kwargs: Dict[str, Any] = {
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "timeout": 5.0,
+        "check": False,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            ["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"],
+            **kwargs,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"Task Scheduler query failed: {exc}"
+
+    raw = "\n".join(
+        part for part in (completed.stdout, completed.stderr) if part
+    ).strip()
+    if completed.returncode != 0:
+        detail = raw[:240] if raw else f"exit={completed.returncode}"
+        return False, f"Task Scheduler query failed: {detail}"
+
+    records = _parse_schtasks_verbose(raw)
+    normalized = str(task_name or "").strip().lstrip("\\").upper()
+    record: Optional[Dict[str, str]] = None
+    for observed_name, observed in records.items():
+        if str(observed_name).strip().lstrip("\\").upper() == normalized:
+            record = observed
+            break
+    if record is None:
+        return False, "Task Scheduler returned no matching task definition."
+
+    scheduled_state = str(record.get("Scheduled Task State", "")).strip().upper()
+    if scheduled_state != "ENABLED":
+        observed = scheduled_state or "UNKNOWN"
+        return False, f"Scheduled task is not enabled (state={observed})."
+    return True, "ENABLED"
+
+
 def _restart_card_session(card_id: str) -> Dict[str, Any]:
     task_names = CARD_TASK_NAMES.get(card_id, ())
     bat_basename = RESTARTABLE_CARDS.get(card_id, "")
     if not task_names or not bat_basename:
         return {"ok": False, "message": "Session is not restartable."}
     task_name = task_names[0]
+    restart_allowed, scheduler_detail = _fresh_task_restart_eligibility(task_name)
+    if not restart_allowed:
+        return {
+            "ok": False,
+            "message": f"Restart blocked: {scheduler_detail}",
+            "task_name": task_name,
+        }
     trace: list[str] = []
     identity_before = _read_restart_identity(card_id)
     cutoff_hhmm = str(identity_before.get("supervisor_cutoff_hhmm", "")).strip()
@@ -6428,6 +6495,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_live_short",
       "fno_v6_trade_logger",
       "fno_v6_net_result",
+      "fno_v8_combined_paper",
       "fno_oi_eod_qc",
       "fundamental_price_action_v1",
       "live_signals_csv_fpa_v1_short",
@@ -6507,6 +6575,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_live_short": "FnO V6 BEST_NET SHORT Entry Session",
       "fno_v6_trade_logger": "FnO V6 BEST_NET Continuous Trade Log",
       "fno_v6_net_result": "FnO V6 BEST_NET Net Result",
+      "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
       "fno_oi_eod_qc": "FnO EOD Data Quality Control",
       "live_combined_csv_v16_5min": "V16 5min Scanner (anti-exhaustion, 5min slots)",
       "live_signals_csv_v16_5min_short": "V16 5min Signals SHORT",
@@ -6590,6 +6659,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "fno_v6_live_short",
           "fno_v6_trade_logger",
           "fno_v6_net_result",
+          "fno_v8_combined_paper",
           "fno_oi_eod_qc"
         ]
       },
@@ -6690,11 +6760,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         ]
       }
     ];
-    // Keep explicitly staged market-data feeds in their operational section
-    // regardless of whether their scheduled task is disabled between shadow
-    // test runs. Only the section assignment is locked.
+    // Keep explicitly staged feeds and paper-shadow sessions in their
+    // operational section even while their scheduled tasks are disabled.
+    // Only the section assignment is locked; this does not make them runnable.
     const SECTION_LOCKED_DISABLED_IDS = new Set([
-      "kiteticker_5min_data"
+      "kiteticker_5min_data",
+      "fno_v8_combined_paper"
     ]);
     const SESSION_TIMELINE = [
       { time: "08:50", id: "fno_oi_universe", label: "FnO Universe" },
@@ -6710,6 +6781,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:15", id: "fno_v6_live_short", label: "FnO V6 BEST_NET SHORT Entries" },
       { time: "09:15", id: "fno_v6_trade_logger", label: "FnO V6 BEST_NET Trade Log" },
       { time: "09:15", id: "fno_v6_net_result", label: "FnO V6 BEST_NET Net Result" },
+      { time: "09:15", id: "fno_v8_combined_paper", label: "FnO V8-Combined Paper Shadow" },
       { time: "09:17", id: "eod_1min_data", label: "Live Data Fetch 1min" },
       { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
       { time: "09:15", id: "fundamental_price_action_v1", label: "fundamental_price_action_v1" },
@@ -6781,7 +6853,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_live_long",
       "fno_v6_live_short",
       "fno_v6_trade_logger",
-      "fno_v6_net_result"
+      "fno_v6_net_result",
+      "fno_v8_combined_paper"
     ]);
     const RESTARTABLE_CARDS = new Set([
       "nifty_guard_fetch_v16_5min",
@@ -6821,6 +6894,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "authentication_v2",
       "preopen_healthcheck"
     ]);
+    let ENABLED_RESTARTABLE_CARDS = new Set(RESTARTABLE_CARDS);
     const KILL_CARD_SCOPE = {
       "kite_trade_v16_5min": "false_v16_5min",
       "live_kite_trades_csv_v16_5min": "false_v16_5min",
@@ -7306,8 +7380,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return KILL_CARD_SCOPE[cardId] || "";
     }
 
-    function renderRestartButton(cardId) {
-      if (!RESTARTABLE_CARDS.has(cardId)) return "";
+    function renderRestartButton(cardId, isDisabled) {
+      if (!RESTARTABLE_CARDS.has(cardId) || isDisabled) return "";
       return `
         <button type="button" class="restart-btn" data-restart-id="${esc(cardId)}"
                 title="Restart session (1: scheduler restart, 2: graceful stop, 3: force stop)"
@@ -7912,11 +7986,16 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       const origLabel = labelEl ? labelEl.textContent : "Restart All";
       btn.addEventListener('click', async () => {
         if (btn.disabled) return;
-        if (!window.confirm(`Restart all ${RESTARTABLE_CARDS.size} managed sessions?`)) return;
+        const eligibleIds = Array.from(ENABLED_RESTARTABLE_CARDS);
+        if (!eligibleIds.length) {
+          btn.title = "No enabled managed sessions are restartable.";
+          return;
+        }
+        if (!window.confirm(`Restart all ${eligibleIds.length} enabled managed sessions?`)) return;
         btn.disabled = true;
         btn.classList.remove('is-ok', 'is-err');
         btn.classList.add('is-busy');
-        const ids = Array.from(RESTARTABLE_CARDS);
+        const ids = eligibleIds;
         const total = ids.length;
         let done = 0;
         let failed = 0;
@@ -8110,6 +8189,16 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
         const byId = {};
         for (const item of data.items) byId[item.id] = item;
+        ENABLED_RESTARTABLE_CARDS = new Set(
+          Array.from(RESTARTABLE_CARDS).filter((id) => {
+            const it = byId[id] || { status: {} };
+            const status = String((it.status && it.status.status) || "").toUpperCase();
+            const schedulerState = String(
+              (it.status && it.status.scheduler_state) || ""
+            ).toUpperCase();
+            return status !== "DISABLED" && schedulerState !== "DISABLED";
+          })
+        );
         renderTodayTimeline(byId);
         const killSnapshot = data.kill_switch || {};
         const orderedBase = LOG_ORDER.concat(Object.keys(byId).filter((id) => !LOG_ORDER.includes(id)));
@@ -8201,7 +8290,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                   ${renderPinButton(it.id)}
                   <button type="button" class="${toggleCls}" data-toggle-id="${esc(id)}" title="${FULLSCREEN_ID === id ? "Exit fullscreen" : "Maximize"}">${toggleLabel}</button>
                   <button type="button" class="${logToggleCls}" data-log-id="${esc(id)}" title="${logHidden ? "Show log" : "Hide log"}">${logToggleLabel}</button>
-                  ${renderRestartButton(it.id)}
+                  ${renderRestartButton(it.id, isDisabled)}
                   <div>${statusBadge(status)}</div>
                 </div>
               </div>
@@ -9414,16 +9503,80 @@ def main() -> int:
     if mode == "NO AUTH":
         print("[ERROR] Dashboard refused to start: no authentication configured.")
         print("[ERROR] Set LOG_DASH_PASS in the BAT or as a User env var before starting.")
+        httpd.server_close()
+        return 1
+
+    source_path = Path(__file__).resolve()
+    started_at_utc = dt.datetime.now(dt.timezone.utc)
+    identity_path = DASHBOARD_RUNTIME_IDENTITY_PATH
+    if str(args.host) != "127.0.0.1" or int(args.port) != 8787:
+        safe_host = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(args.host)) or "unknown"
+        identity_path = RUNTIME_STATUS_DIR / (
+            f"log_dashboard_server.{safe_host}.{int(args.port)}.runtime.json"
+        )
+    runtime_identity = {
+        "schema_version": DASHBOARD_RUNTIME_IDENTITY_SCHEMA_VERSION,
+        "pid": os.getpid(),
+        "source_path": str(source_path),
+        "source_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "started_at_utc": started_at_utc.isoformat(),
+        "started_at_ist": started_at_utc.astimezone(IST).isoformat(),
+        "host": str(args.host),
+        "port": int(args.port),
+    }
+    identity_stop = threading.Event()
+
+    def _publish_runtime_heartbeat() -> None:
+        while not identity_stop.is_set():
+            payload = dict(runtime_identity)
+            heartbeat_at_utc = dt.datetime.now(dt.timezone.utc)
+            payload["heartbeat_at_utc"] = heartbeat_at_utc.isoformat()
+            payload["heartbeat_at_ist"] = heartbeat_at_utc.astimezone(IST).isoformat()
+            try:
+                _atomic_write_json(identity_path, payload)
+            except OSError as exc:
+                print(f"[ERROR] Dashboard runtime identity heartbeat failed: {exc}")
+            identity_stop.wait(5.0)
+
+    try:
+        initial_identity = dict(runtime_identity)
+        initial_identity["heartbeat_at_utc"] = started_at_utc.isoformat()
+        initial_identity["heartbeat_at_ist"] = started_at_utc.astimezone(IST).isoformat()
+        _atomic_write_json(identity_path, initial_identity)
+    except OSError as exc:
+        print(f"[ERROR] Dashboard runtime identity publication failed: {exc}")
+        httpd.server_close()
         return 1
     print(f"[INFO] Serving EQIDV2 dashboard on http://{args.host}:{args.port} ({mode})")
     print(f"[INFO] Reading logs from: {LOG_DIR}")
+    identity_thread = threading.Thread(
+        target=_publish_runtime_heartbeat,
+        name="dashboard-runtime-identity",
+        daemon=True,
+    )
+    identity_thread.start()
 
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        identity_stop.set()
+        identity_thread.join(timeout=2.0)
         httpd.server_close()
+        try:
+            current = json.loads(
+                identity_path.read_text(encoding="utf-8")
+            )
+            if (
+                isinstance(current, dict)
+                and int(current.get("pid", -1)) == os.getpid()
+                and str(current.get("source_sha256", ""))
+                == str(runtime_identity["source_sha256"])
+            ):
+                identity_path.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
     return 0
 
 

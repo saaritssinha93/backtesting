@@ -315,6 +315,124 @@ def test_v8_configuration_is_literal_frozen_and_versioned() -> None:
     assert "V8" in v8.STRATEGY_VERSION.upper()
 
 
+def test_neutral_engine_derives_later_slot_pairs_and_oi_predecessors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extended = tuple(v8.ACTIVE_SETUPS) + (
+        dataclasses.replace(_setup(side="LONG"), signal_end="09:50"),
+        dataclasses.replace(_setup(side="SHORT"), signal_end="09:50"),
+        dataclasses.replace(_setup(side="LONG"), signal_end="09:55"),
+        dataclasses.replace(_setup(side="SHORT"), signal_end="09:55"),
+    )
+    monkeypatch.setattr(v8, "ACTIVE_SETUPS", extended)
+    monkeypatch.setattr(
+        v8,
+        "V8_SETUP_BOOK_SHA256",
+        common.canonical_json_sha256([asdict(setup) for setup in extended]),
+    )
+
+    v8.validate_configuration()
+    assert v8.active_signal_slots() == (
+        "09:25",
+        "09:30",
+        "09:35",
+        "09:40",
+        "09:45",
+        "09:50",
+        "09:55",
+    )
+    assert v8.required_futures_signal_clocks() == (
+        "09:20",
+        "09:25",
+        "09:30",
+        "09:35",
+        "09:40",
+        "09:45",
+        "09:50",
+        "09:55",
+    )
+
+
+def test_neutral_engine_rejects_a_slot_without_both_sides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incomplete = tuple(v8.ACTIVE_SETUPS) + (
+        dataclasses.replace(_setup(side="LONG"), signal_end="09:50"),
+    )
+    monkeypatch.setattr(v8, "ACTIVE_SETUPS", incomplete)
+    monkeypatch.setattr(
+        v8,
+        "V8_SETUP_BOOK_SHA256",
+        common.canonical_json_sha256([asdict(setup) for setup in incomplete]),
+    )
+    with pytest.raises(AssertionError, match="one LONG and one SHORT"):
+        v8.validate_configuration()
+
+
+def test_neutral_engine_rejects_signal_before_first_supported_end_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    too_early = tuple(v8.ACTIVE_SETUPS) + (
+        dataclasses.replace(_setup(side="LONG"), signal_end="09:20"),
+        dataclasses.replace(_setup(side="SHORT"), signal_end="09:20"),
+    )
+    monkeypatch.setattr(v8, "ACTIVE_SETUPS", too_early)
+    monkeypatch.setattr(
+        v8,
+        "V8_SETUP_BOOK_SHA256",
+        common.canonical_json_sha256([asdict(setup) for setup in too_early]),
+    )
+    with pytest.raises(AssertionError, match="regular-session five-minute"):
+        v8.validate_configuration()
+
+
+def test_neutral_engine_rejects_noncanonical_signal_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    malformed = (
+        dataclasses.replace(_setup(side="LONG"), signal_end="9:50"),
+        dataclasses.replace(_setup(side="SHORT"), signal_end="9:50"),
+    )
+    monkeypatch.setattr(v8, "ACTIVE_SETUPS", malformed)
+    monkeypatch.setattr(
+        v8,
+        "V8_SETUP_BOOK_SHA256",
+        common.canonical_json_sha256([asdict(setup) for setup in malformed]),
+    )
+    with pytest.raises(AssertionError, match="regular-session five-minute"):
+        v8.validate_configuration()
+
+
+def test_cache_manifest_rejects_an_active_setup_book_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_manifest = {
+        "input_contract": {
+            "setup_book_sha256": v8.V8_SETUP_BOOK_SHA256,
+            "active_signal_slots": list(v8.active_signal_slots()),
+            "required_futures_signal_clocks": list(
+                v8.required_futures_signal_clocks()
+            ),
+        }
+    }
+    swapped = (
+        dataclasses.replace(
+            v8.ACTIVE_SETUPS[0],
+            target_pct=v8.ACTIVE_SETUPS[0].target_pct + 0.5,
+        ),
+        *v8.ACTIVE_SETUPS[1:],
+    )
+    monkeypatch.setattr(v8, "ACTIVE_SETUPS", swapped)
+    monkeypatch.setattr(
+        v8,
+        "V8_SETUP_BOOK_SHA256",
+        common.canonical_json_sha256([asdict(setup) for setup in swapped]),
+    )
+
+    with pytest.raises(AssertionError, match="cache setup book"):
+        v8._assert_cache_matches_active_strategy(cache_manifest)
+
+
 def test_per_setup_entry_overrides_resolve_against_the_global_policy() -> None:
     base = v8.EntryPolicy(
         buffer_bps=2.0,
@@ -1570,7 +1688,14 @@ def test_diagnostic_artifact_is_json_safe_hashed_and_provenance_required(
     )
     manifest = {
         "input_fingerprint": "test-cache",
-        "input_contract": {"strategy_code_sha256": v8._module_source_sha256()},
+        "input_contract": {
+            "strategy_code_sha256": v8._module_source_sha256(),
+            "setup_book_sha256": v8.V8_SETUP_BOOK_SHA256,
+            "active_signal_slots": list(v8.active_signal_slots()),
+            "required_futures_signal_clocks": list(
+                v8.required_futures_signal_clocks()
+            ),
+        },
         "session_dates": [SIGNAL_TIME.date().isoformat()],
     }
     manifest_path = tmp_path / "cache_manifest.json"
@@ -1632,6 +1757,118 @@ def test_diagnostic_artifact_is_json_safe_hashed_and_provenance_required(
     )
     with pytest.raises(ValueError, match="diagnostic_breakdowns"):
         v8.validate_v8_run_provenance(incomplete_provenance)
+
+
+def _write_contract_guard_provenance(
+    tmp_path: Path,
+    *,
+    tamper_dynamic_slots: bool = False,
+    tamper_setup_csv: bool = False,
+) -> Path:
+    setup_records = v8._setup_payload()
+    setup_hash = common.canonical_json_sha256(setup_records)
+    slots = list(v8.active_signal_slots())
+    clocks = list(v8.required_futures_signal_clocks())
+
+    audit_path = tmp_path / "candidate_order_audit.csv"
+    pd.DataFrame(columns=v8._AUDIT_EXPORT_REQUIRED_COLUMNS).to_csv(
+        audit_path, index=False
+    )
+    diagnostic_path = tmp_path / "diagnostic_breakdowns.csv"
+    diagnostic_row = {column: 0 for column in v8._DIAGNOSTIC_BREAKDOWN_COLUMNS}
+    diagnostic_row.update(
+        {
+            "schema_version": v8.DIAGNOSTIC_BREAKDOWN_SCHEMA_VERSION,
+            "dimension": "side",
+            "bucket": "LONG",
+            "bucket_start_date": "",
+            "bucket_end_date": "",
+        }
+    )
+    pd.DataFrame([diagnostic_row]).to_csv(diagnostic_path, index=False)
+
+    setups_path = tmp_path / "setups.csv"
+    setup_frame = pd.DataFrame(setup_records)
+    if tamper_setup_csv:
+        setup_frame.loc[0, "entry_clv"] = 0.75
+    setup_frame.to_csv(setups_path, index=False)
+
+    marker_path = tmp_path / "unused_required_output.txt"
+    marker_path.write_text("contract-guard fixture\n", encoding="utf-8")
+    cache_manifest = {
+        "schema_version": v8.CACHE_SCHEMA_VERSION,
+        "input_contract": {
+            "strategy_code_sha256": v8._module_source_sha256(),
+            "setup_book_sha256": setup_hash,
+            "active_signal_slots": slots,
+            "required_futures_signal_clocks": clocks,
+        },
+    }
+    cache_manifest["input_fingerprint"] = common.canonical_json_sha256(
+        cache_manifest["input_contract"]
+    )
+    cache_path = tmp_path / "cache_manifest.json"
+    cache_path.write_text(
+        json.dumps(cache_manifest, sort_keys=True), encoding="utf-8"
+    )
+
+    source_path = Path(v8.__file__).resolve()
+    outputs = {
+        "candidate_order_audit": v8.provenance.artifact_record(audit_path),
+        "state_events": v8.provenance.artifact_record(marker_path),
+        "daily": v8.provenance.artifact_record(marker_path),
+        "diagnostic_breakdowns": v8.provenance.artifact_record(diagnostic_path),
+        "coverage": v8.provenance.artifact_record(marker_path),
+        "setups": v8.provenance.artifact_record(setups_path),
+        "report": v8.provenance.artifact_record(marker_path),
+        "strategy_source_archive": v8.provenance.artifact_record(source_path),
+        "cache_manifest_archive": v8.provenance.artifact_record(cache_path),
+    }
+    strategy_slots = slots[:-1] if tamper_dynamic_slots else slots
+    payload = {
+        "v8_run_schema_version": v8.RUN_SCHEMA_VERSION,
+        "strategy_version": v8.STRATEGY_VERSION,
+        "strategy_source_sha256": v8._module_source_sha256(),
+        "cache_manifest_sha256": v8.provenance.sha256_file(cache_path),
+        "cache_input_fingerprint": cache_manifest["input_fingerprint"],
+        "parameters": {
+            "cache_manifest_sha256": v8.provenance.sha256_file(cache_path)
+        },
+        "strategy_payload": {
+            "setup_book_sha256": setup_hash,
+            "setups": setup_records,
+            "active_signal_slots": strategy_slots,
+            "required_futures_signal_clocks": clocks,
+        },
+        "outputs": outputs,
+    }
+    provenance_path = tmp_path / "provenance.json"
+    provenance_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return provenance_path
+
+
+def test_provenance_rejects_dynamic_signal_slot_contract_tamper(
+    tmp_path: Path,
+) -> None:
+    provenance_path = _write_contract_guard_provenance(
+        tmp_path,
+        tamper_dynamic_slots=True,
+    )
+
+    with pytest.raises(AssertionError, match="signal-slot/OI-clock contract"):
+        v8.validate_v8_run_provenance(provenance_path)
+
+
+def test_provenance_rejects_semantically_tampered_setup_csv(
+    tmp_path: Path,
+) -> None:
+    provenance_path = _write_contract_guard_provenance(
+        tmp_path,
+        tamper_setup_csv=True,
+    )
+
+    with pytest.raises(AssertionError, match="setups artifact"):
+        v8.validate_v8_run_provenance(provenance_path)
 
 
 def test_diagnostic_conventions_are_fingerprinted() -> None:

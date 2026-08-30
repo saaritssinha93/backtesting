@@ -127,6 +127,11 @@ class DashboardV7ControlsTests(unittest.TestCase):
             return 0, ""
 
         with (
+            patch.object(
+                dashboard,
+                "_fresh_task_restart_eligibility",
+                return_value=(True, "ENABLED"),
+            ),
             patch.object(dashboard, "_read_restart_identity", return_value={}),
             patch.object(dashboard, "_run_cmd_silent", side_effect=fake_run),
             patch.object(

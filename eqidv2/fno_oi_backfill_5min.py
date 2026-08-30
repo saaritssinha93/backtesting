@@ -109,7 +109,12 @@ def plan_windows(start: date, end: date, *, max_days: int = MAX_REQUEST_DAYS) ->
     return windows
 
 
-def select_contracts(months: str, limit: int, underlyings: str) -> pd.DataFrame:
+def select_contracts(
+    months: str,
+    limit: int,
+    underlyings: str,
+    contract_months: str = "",
+) -> pd.DataFrame:
     """Pick which contracts to backfill.
 
     ``near``  -- current front month only (matches the live fetcher's scope)
@@ -125,7 +130,45 @@ def select_contracts(months: str, limit: int, underlyings: str) -> pd.DataFrame:
         )
     near = pd.read_parquet(universe_path)
 
-    if months == "near":
+    requested_contract_months = {
+        value.strip()
+        for value in contract_months.split(",")
+        if value.strip()
+    }
+    if requested_contract_months:
+        registry_path = common.CONTRACT_REGISTRY_PATH
+        if not registry_path.exists():
+            raise FileNotFoundError(f"Contract registry missing: {registry_path}")
+        frame = pd.read_parquet(registry_path)
+        required = {
+            "underlying",
+            "tradingsymbol",
+            "instrument_token",
+            "exchange_token",
+            "expiry",
+            "contract_month",
+            "lot_size",
+            "tick_size",
+            "is_index_future",
+        }
+        missing_columns = sorted(required - set(frame.columns))
+        if missing_columns:
+            raise ValueError(
+                f"Contract registry is missing columns: {', '.join(missing_columns)}"
+            )
+        frame = frame.loc[
+            frame["contract_month"].astype(str).isin(requested_contract_months)
+        ].copy()
+        frame = frame.drop_duplicates("tradingsymbol", keep="last")
+        missing_months = requested_contract_months - set(
+            frame["contract_month"].astype(str)
+        )
+        if missing_months:
+            print(
+                f"[PLAN][WARN] contract months not in registry: {sorted(missing_months)}",
+                flush=True,
+            )
+    elif months == "near":
         frame = near.copy()
     else:
         if not master_path.exists():
@@ -417,6 +460,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Which contract months to backfill. 'all' captures next/far months "
         "now so the near-month series survives future rollovers (default).",
     )
+    parser.add_argument(
+        "--contract-months",
+        default="",
+        help=(
+            "Comma-separated registry months such as 2026-08,2026-09. When set, "
+            "selects those exact active or expired contracts from the retained "
+            "contract registry and overrides --months."
+        ),
+    )
     parser.add_argument("--underlyings", default="", help="Comma-separated subset.")
     parser.add_argument("--limit", type=int, default=0, help="Process only the first N contracts.")
     parser.add_argument(
@@ -444,7 +496,12 @@ def main(argv: list[str] | None = None) -> int:
         # Inclusive of both endpoints, so --days 100 is exactly one request.
         start = end - timedelta(days=max(1, int(args.days)) - 1)
 
-    contracts = select_contracts(args.months, args.limit, args.underlyings)
+    contracts = select_contracts(
+        args.months,
+        args.limit,
+        args.underlyings,
+        args.contract_months,
+    )
     if contracts.empty:
         print("[PLAN] Nothing to do.", flush=True)
         return 0

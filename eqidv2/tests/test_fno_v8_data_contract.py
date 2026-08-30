@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 
 import numpy as np
@@ -69,6 +70,101 @@ def test_source_snapshot_is_explicit_not_a_v7_default() -> None:
         v8.load_validated_source_contract(None)  # type: ignore[arg-type]
 
 
+def test_default_source_identity_labels_are_preserved() -> None:
+    assert v8.BACKTEST_CONTRACT_MONTH_FILTER == "26AUG"
+    assert v8.OI_INSTRUMENT == "STATIC_26AUG_NFO_FUTURE_RESEARCH_ONLY"
+    assert v8.SOURCE_LIMITATION_LABELS == (
+        "STATIC_2026_08_11_UNIVERSE_SURVIVORSHIP_RESEARCH",
+        "STATIC_26AUG_FUTURES_OI_NOT_POINT_IN_TIME_ROLLING",
+        "LEGACY_EQUITY_1M_HAS_NO_ROW_LINEAGE_FLAGS",
+        "SOURCE_SNAPSHOT_IS_PER_FILE_STABLE_NOT_GLOBAL_TRANSACTION",
+    )
+    assert v8.BASE_PROMOTION_BLOCKER_LABELS == (
+        "STATIC_LATER_DATED_UNIVERSE",
+        "STATIC_AUGUST_FUTURES_OI_NOT_ROLLING_POINT_IN_TIME",
+        "LEGACY_EQUITY_ROW_LINEAGE_UNPROVEN",
+        "GLOBAL_PORTFOLIO_LEDGER_USES_CONSERVATIVE_NO_BACKFILL_OVERLAY",
+        "PROSPECTIVE_20_SESSIONS_AND_100_FILLS_NOT_COMPLETED",
+    )
+
+
+def test_configured_contract_month_filter_reaches_load_and_snapshot(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    observed_filters: list[str] = []
+    mapped = pd.DataFrame([{"equity_symbol": "TEST"}])
+    universe_record: dict[str, object] = {}
+    snapshot = {"universe_path": str(tmp_path / "near_month_2026-08-24.parquet")}
+
+    def fake_load_backtest_universe(**kwargs):
+        observed_filters.append(str(kwargs["contract_month_contains"]))
+        return mapped, universe_record
+
+    monkeypatch.setattr(v8, "BACKTEST_CONTRACT_MONTH_FILTER", "26SEP")
+    monkeypatch.setattr(v8.provenance, "load_source_snapshot", lambda _: snapshot)
+    monkeypatch.setattr(
+        v8.provenance, "load_backtest_universe", fake_load_backtest_universe
+    )
+    monkeypatch.setattr(
+        v8.provenance,
+        "validate_source_snapshot",
+        lambda *_args, **_kwargs: (snapshot, {"entries": []}),
+    )
+
+    loaded, *_ = v8.load_validated_source_contract(tmp_path / "manifest.json")
+    assert loaded["equity_symbol"].tolist() == ["TEST"]
+
+    manifest = tmp_path / "snapshot" / "manifest.json"
+    monkeypatch.setattr(
+        v8.provenance,
+        "create_source_snapshot",
+        lambda *_args, **_kwargs: {"manifest_path": str(manifest)},
+    )
+    assert v8.main(["snapshot", "--snapshot-root", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == str(manifest)
+    assert observed_filters == ["26SEP", "26SEP"]
+
+
+def test_configured_oi_and_limitation_labels_flow_to_outputs(monkeypatch) -> None:
+    monkeypatch.setattr(v8, "OI_INSTRUMENT", "RECONSTRUCTED_26SEP_NFO_FUTURE")
+    monkeypatch.setattr(
+        v8,
+        "SOURCE_LIMITATION_LABELS",
+        ("RETROSPECTIVE_ROLLOVER_UNIVERSE_RECONSTRUCTION",),
+    )
+    monkeypatch.setattr(
+        v8,
+        "BASE_PROMOTION_BLOCKER_LABELS",
+        ("RECONSTRUCTED_ROLLOVER_DIAGNOSTIC_ONLY",),
+    )
+    contract = v8._cache_contract_payload(
+        snapshot={},
+        inventory={},
+        universe_record={},
+        symbols=["TEST"],
+        from_day=date(2026, 8, 24),
+        through_day=date(2026, 8, 24),
+    )
+    assert contract["oi_instrument"] == "RECONSTRUCTED_26SEP_NFO_FUTURE"
+    assert contract["source_limitations"] == [
+        "RETROSPECTIVE_ROLLOVER_UNIVERSE_RECONSTRUCTION"
+    ]
+    assert (
+        v8.strategy_payload()["data_contract"]["oi_instrument"]
+        == "RECONSTRUCTED_26SEP_NFO_FUTURE"
+    )
+
+    summary, _ = v8.summarize_v8_results(
+        pd.DataFrame(),
+        session_dates=[date(2026, 8, 24)],
+        eod_policy="EXACT_SQUARE_OFF",
+        source_complete=True,
+    )
+    assert summary["promotion_blockers"] == [
+        "RECONSTRUCTED_ROLLOVER_DIAGNOSTIC_ONLY"
+    ]
+
+
 def test_frozen_nse_fo_calendar_is_hashed_and_drives_expected_sessions() -> None:
     assert (
         v8.common.canonical_json_sha256(v8.nse_fo_calendar_payload())
@@ -124,7 +220,11 @@ def test_futures_oi_delta_uses_exact_previous_five_minute_timestamp(
 
 
 def _write_builder_sources(
-    tmp_path, *, add_off_grid: bool = False, session_day: str = "2026-07-28"
+    tmp_path,
+    *,
+    add_off_grid: bool = False,
+    session_day: str = "2026-07-28",
+    futures_clocks: tuple[str, ...] | None = None,
 ):
     minute_ts = pd.date_range(
         f"{session_day} 09:16", f"{session_day} 15:30", freq="1min", tz=IST
@@ -160,8 +260,14 @@ def _write_builder_sources(
             ],
             ignore_index=True,
         ).sort_values("date")
-    futures_ts = pd.date_range(
-        f"{session_day} 09:20", f"{session_day} 09:45", freq="5min", tz=IST
+    futures_ts = pd.DatetimeIndex(
+        [
+            pd.Timestamp(f"{session_day} {clock}", tz=IST)
+            for clock in (
+                futures_clocks
+                or ("09:20", "09:25", "09:30", "09:35", "09:40", "09:45")
+            )
+        ]
     )
     futures = pd.DataFrame(
         {
@@ -196,6 +302,123 @@ def _write_builder_sources(
         ("NFO_FUTURES_5M", "TEST26AUGFUT"): futures_path,
     }
     return mapped, lookup
+
+
+def _paired_later_setup_book() -> tuple[v8.V8Setup, ...]:
+    long_template = next(
+        setup for setup in v8.ACTIVE_SETUPS if setup.setup_id == "09:45_LONG"
+    )
+    short_template = next(
+        setup for setup in v8.ACTIVE_SETUPS if setup.setup_id == "09:45_SHORT"
+    )
+    return tuple(v8.ACTIVE_SETUPS) + (
+        replace(long_template, signal_end="09:50"),
+        replace(short_template, signal_end="09:50"),
+        replace(long_template, signal_end="09:55"),
+        replace(short_template, signal_end="09:55"),
+    )
+
+
+def test_later_slot_builder_extends_completeness_candidates_and_paths(
+    tmp_path, monkeypatch
+) -> None:
+    extended = _paired_later_setup_book()
+    monkeypatch.setattr(v8, "ACTIVE_SETUPS", extended)
+    mapped, lookup = _write_builder_sources(
+        tmp_path,
+        futures_clocks=(
+            "09:20",
+            "09:25",
+            "09:30",
+            "09:35",
+            "09:40",
+            "09:45",
+            "09:50",
+            "09:55",
+        ),
+    )
+
+    def admit_signal_row(joined: pd.DataFrame, setup) -> pd.DataFrame:
+        return joined.loc[
+            joined["ts"].dt.strftime("%H:%M").eq(setup.signal_end)
+        ].copy()
+
+    monkeypatch.setattr(v8, "_setup_eligible_rows", admit_signal_row)
+    monkeypatch.setattr(v8, "five_minute_candidate_passes", lambda *_: True)
+    candidates, paths, coverage = v8.build_v8_candidate_tables(
+        mapped,
+        lookup,
+        from_day="2026-07-28",
+        through_day="2026-07-28",
+    )
+
+    assert coverage.iloc[0]["source_complete_session_count"] == 1
+    later = candidates.loc[candidates["signal_end"].isin(["09:50", "09:55"])]
+    assert set(later["setup_id"]) == {
+        "09:50_LONG",
+        "09:50_SHORT",
+        "09:55_LONG",
+        "09:55_SHORT",
+    }
+    later_paths = paths.loc[paths["candidate_id"].isin(later["candidate_id"])]
+    assert not later_paths.empty
+    assert set(later_paths["bar_ts"].dt.date) == {date(2026, 7, 28)}
+    assert later_paths["bar_ts"].max().strftime("%H:%M") == "15:30"
+
+
+@pytest.mark.parametrize("missing_clock", ["09:50", "09:55"])
+def test_later_slot_missing_futures_signal_is_source_incomplete(
+    tmp_path, monkeypatch, missing_clock: str
+) -> None:
+    monkeypatch.setattr(v8, "ACTIVE_SETUPS", _paired_later_setup_book())
+    clocks = tuple(
+        clock
+        for clock in (
+            "09:20",
+            "09:25",
+            "09:30",
+            "09:35",
+            "09:40",
+            "09:45",
+            "09:50",
+            "09:55",
+        )
+        if clock != missing_clock
+    )
+    mapped, lookup = _write_builder_sources(tmp_path, futures_clocks=clocks)
+    _, _, coverage = v8.build_v8_candidate_tables(
+        mapped,
+        lookup,
+        from_day="2026-07-28",
+        through_day="2026-07-28",
+    )
+    assert coverage.iloc[0]["source_complete_session_count"] == 0
+    assert coverage.iloc[0]["source_incomplete_session_count"] == 1
+
+
+def test_predecessor_only_futures_row_need_not_have_its_own_oi_delta(
+    tmp_path, monkeypatch
+) -> None:
+    long_template = v8.ACTIVE_SETUPS[0]
+    short_template = v8.ACTIVE_SETUPS[1]
+    sparse = (
+        replace(long_template, signal_end="09:25"),
+        replace(short_template, signal_end="09:25"),
+        replace(long_template, signal_end="12:45"),
+        replace(short_template, signal_end="12:45"),
+    )
+    monkeypatch.setattr(v8, "ACTIVE_SETUPS", sparse)
+    mapped, lookup = _write_builder_sources(
+        tmp_path,
+        futures_clocks=("09:20", "09:25", "12:40", "12:45"),
+    )
+    _, _, coverage = v8.build_v8_candidate_tables(
+        mapped,
+        lookup,
+        from_day="2026-07-28",
+        through_day="2026-07-28",
+    )
+    assert coverage.iloc[0]["source_complete_session_count"] == 1
 
 
 def test_source_completeness_uses_exchange_calendar_not_observed_date_union(
