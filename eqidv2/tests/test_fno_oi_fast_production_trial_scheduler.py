@@ -73,6 +73,8 @@ class FnoOiFastProductionTrialSchedulerTests(unittest.TestCase):
         self.assertIn('"2026-09-02 09:05"', content)
         self.assertIn("New-ScheduledTaskTrigger -Once", content)
         self.assertIn("Assert-TrialTaskContract", content)
+        self.assertIn("-TaskName $taskName -WakeToRun", content)
+        self.assertIn("must wake the workstation", content)
         self.assertNotIn("-Force", content)
 
 

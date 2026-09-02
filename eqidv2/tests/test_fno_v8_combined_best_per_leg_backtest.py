@@ -65,9 +65,14 @@ def test_combined_launcher_has_no_parent_strategy_import() -> None:
 
 def test_configured_engine_uses_combined_isolated_namespace() -> None:
     try:
-        combined.configure_engine()
-        assert engine.ACTIVE_SETUPS == combined.COMBINED_SETUPS
-        assert engine.V8_SETUP_BOOK_SHA256 == combined.COMBINED_SETUP_BOOK_SHA256
+        # Other research-launcher tests deliberately monkeypatch the shared
+        # neutral engine module.  Reload both modules so this test models the
+        # clean Python process used by the scheduled/CLI launcher.
+        importlib.reload(engine)
+        isolated_combined = importlib.reload(combined)
+        isolated_combined.configure_engine()
+        assert engine.ACTIVE_SETUPS == isolated_combined.COMBINED_SETUPS
+        assert engine.V8_SETUP_BOOK_SHA256 == isolated_combined.COMBINED_SETUP_BOOK_SHA256
         assert set(engine.VARIANT_REGISTRY) == {"VC"}
         policy = engine.entry_policy_for_variant(
             "VC",
@@ -78,8 +83,8 @@ def test_configured_engine_uses_combined_isolated_namespace() -> None:
         )
         assert policy.max_confirmation_minute == 1
         assert policy.buffer_bps == 0.0
-        assert engine.CACHE_DIR.is_relative_to(combined.ROOT)
-        assert engine.RUN_ROOT.is_relative_to(combined.ROOT)
+        assert engine.CACHE_DIR.is_relative_to(isolated_combined.ROOT)
+        assert engine.RUN_ROOT.is_relative_to(isolated_combined.ROOT)
         assert "v8_windowed_strict_v1" not in str(engine.CACHE_DIR)
         assert "v8_strict_v6_logic_v1" not in str(engine.CACHE_DIR)
     finally:

@@ -15,6 +15,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from eqidv2_runtime_paths import (
     LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
+    RUNTIME_ROOT,
     RUNTIME_STATUS_DIR,
 )
 
@@ -28,6 +29,26 @@ BAT_DIR = BASE_DIR / "bat"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 V15_NEW_TASK = "EQIDV2_live_combined_csv_v15_new_0900"
 FNO_V6_EQUITY_1MIN_FEED_TASK = "EQIDV2_fno_v6_equity_1min_feed_0919"
+FNO_LEGACY_PRODUCTION_TASK = "EQIDV2_fno_oi_fetch_5min_0905"
+FNO_FAST_PRODUCTION_TASK = "EQIDV2_fno_oi_fetch_5min_fast_production_0905"
+FNO_FAST_PRODUCTION_TRIAL_DATE = dt.date(2026, 9, 2)
+FNO_FAST_PRODUCTION_START = dt.time(9, 5)
+FNO_FAST_PRODUCTION_STARTUP_GRACE_END = dt.time(9, 6)
+FNO_FAST_PRODUCTION_FIRST_SLOT = dt.time(9, 20)
+FNO_FAST_PRODUCTION_STATUS = (
+    LOG_DIR / "fno_oi_fetch_5min_fast_production.supervisor.status"
+)
+FNO_FAST_PRODUCTION_HEARTBEAT = (
+    LOG_DIR / "fno_oi_fetch_5min_fast_production.supervisor.heartbeat"
+)
+FNO_FAST_PRODUCTION_FIRST_MARKER = (
+    RUNTIME_ROOT / "fno_oi" / "slot_ready" / "slot_20260902_0920.json"
+)
+FNO_V10_V11_V12_PAPER_TASK = "EQIDV2_fno_v10_v11_v12_paper_0915"
+FNO_V10_V11_V12_STATUS = (
+    RUNTIME_ROOT / "fno_oi" / "multi_strategy_paper_v1" / "status.json"
+)
+FNO_V6_LIVE_KITE_TASK = "EQIDV2_fno_v6_live_kite_qty1_0915"
 FNO_V8_COMBINED_PAPER_TASK = "EQIDV2_fno_v8_combined_paper_0915"
 FNO_V8_COMBINED_PAPER_HEARTBEAT = (
     RUNTIME_STATUS_DIR / "fno_v8_combined_paper.heartbeat"
@@ -41,6 +62,7 @@ FNO_V6_CUTOVER_DOWNSTREAM_TASKS = (
     "EQIDV2_fno_v6_live_short_0920",
     "EQIDV2_fno_v6_trade_logger_0920",
     "EQIDV2_fno_v6_net_result_0920",
+    FNO_V6_LIVE_KITE_TASK,
 )
 
 DASHBOARD_SESSION_TASKS = (
@@ -49,7 +71,8 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_eod_5mins_data_0900",
     "EQIDV2_eod_15mins_data_0900",
     "EQIDV2_fno_oi_universe_0850",
-    "EQIDV2_fno_oi_fetch_5min_0905",
+    FNO_LEGACY_PRODUCTION_TASK,
+    FNO_FAST_PRODUCTION_TASK,
     "EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",
     "EQIDV2_fno_oi_feature_ranker_0915",
     "EQIDV2_fno_v6_scanner_5min_0918",
@@ -59,6 +82,8 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_fno_v6_live_short_0920",
     "EQIDV2_fno_v6_trade_logger_0920",
     "EQIDV2_fno_v6_net_result_0920",
+    FNO_V6_LIVE_KITE_TASK,
+    FNO_V10_V11_V12_PAPER_TASK,
     "EQIDV2_fno_oi_eod_qc_1540",
     "EQIDV2_live_combined_csv_v15_new_0900",
     "EQIDV2_avwap_paper_trade_v15_0900",
@@ -80,7 +105,6 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_backtesting_result_v11_1600",
     "EQIDV2_suggestions_v7_live_research_1615",
     "EQIDV2_kite_export_start_0915",
-    "EQIDV2_preopen_session_healthcheck_0905",
     "EQIDV2_eod_1540_update_1540",
 )
 
@@ -155,7 +179,7 @@ def check_v8_paper_cutover_activation(
         return CheckResult(
             label,
             "FAIL",
-            "V8 mode is not mutually exclusive with all six V6 downstream tasks: "
+            "V8 mode is not mutually exclusive with all V6 downstream tasks: "
             + ", ".join(conflicts),
         )
     try:
@@ -571,8 +595,8 @@ def check_task_ran_today(task_name: str) -> CheckResult:
     state = _extract_value(lines, "Scheduled Task State")
     status = _extract_value(lines, "Status")
     last_run = _extract_value(lines, "Last Run Time")
-    start_date = _extract_value(lines, "Start Date")
     next_run = _extract_value(lines, "Next Run Time")
+    last_result = _extract_value(lines, "Last Result")
 
     if state.upper() != "ENABLED":
         return CheckResult(label, "FAIL", f"task not enabled (state={state or 'N/A'})")
@@ -580,20 +604,17 @@ def check_task_ran_today(task_name: str) -> CheckResult:
     # Expected format in this environment: DD-MM-YYYY HH:MM:SS
     today_dmy = now_ist().strftime("%d-%m-%Y")
     if not last_run.startswith(today_dmy):
-        # Transitional acceptance:
-        # If task was created today (first run pending tomorrow) schtasks reports a
-        # sentinel last-run date 30-11-1999. Avoid false FAIL in that case.
-        never_ran = last_run.startswith("30-11-1999") or last_run.startswith("N/A")
-        if never_ran and start_date.startswith(today_dmy):
-            return CheckResult(
-                label,
-                "PASS",
-                f"new task created today | first run pending | status={status or 'N/A'} | next_run={next_run or 'N/A'}",
-            )
         return CheckResult(
             label,
             "FAIL",
             f"not run today | last_run={last_run or 'N/A'} | status={status or 'N/A'}",
+        )
+
+    if status.strip().upper() != "RUNNING" and last_result.strip() not in {"0", "0x0"}:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"ran today but completed nonzero | last_result={last_result or 'N/A'} | status={status or 'N/A'}",
         )
 
     return CheckResult(label, "PASS", f"ran today | status={status or 'N/A'} | last_run={last_run}")
@@ -617,7 +638,7 @@ def check_task_enabled_state(
     status = _extract_value(lines, "Status")
     last_run = _extract_value(lines, "Last Run Time")
     next_run = _extract_value(lines, "Next Run Time")
-    start_date = _extract_value(lines, "Start Date")
+    last_result = _extract_value(lines, "Last Result")
 
     if state.upper() != "ENABLED":
         if inactive_ok:
@@ -641,12 +662,6 @@ def check_task_enabled_state(
     if not last_run.startswith(today_dmy):
         never_ran = last_run.startswith("30-11-1999") or last_run.startswith("N/A")
         if never_ran:
-            if start_date.startswith(today_dmy):
-                return CheckResult(
-                    label,
-                    "PASS",
-                    f"new task created today | first run pending | status={status or 'N/A'} | next_run={next_run or 'N/A'}",
-                )
             return CheckResult(
                 label,
                 "FAIL",
@@ -656,6 +671,13 @@ def check_task_enabled_state(
             label,
             "FAIL",
             f"not run today | last_run={last_run or 'N/A'} | status={status or 'N/A'}",
+        )
+
+    if status.strip().upper() != "RUNNING" and last_result.strip() not in {"0", "0x0"}:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"ran today but completed nonzero | last_result={last_result or 'N/A'} | status={status or 'N/A'}",
         )
 
     return CheckResult(label, "PASS", f"ran today | status={status or 'N/A'} | last_run={last_run}")
@@ -668,28 +690,230 @@ def check_dashboard_session_task(
 ) -> CheckResult:
     """Check one dashboard task without ever autofixing V6 behind V8/unknown mode."""
 
-    if (
-        task_name == FNO_V6_EQUITY_1MIN_FEED_TASK
-        and not v8_positively_disabled
-    ):
+    if task_name in FNO_V6_CUTOVER_DOWNSTREAM_TASKS and not v8_positively_disabled:
         # This deliberately does not use the ``task_`` label namespace because
         # the autofix process maps every such failure to ``schtasks /Run`` and,
         # for the V6 feed, a direct BAT fallback.  V8 enabled *or an ambiguous
         # V8 scheduler query* must therefore suppress this check completely;
         # the separate cutover-coherence check remains the fail-closed alert.
+        label = (
+            "fno_v6_equity_1min_feed_autofix_suppressed"
+            if task_name == FNO_V6_EQUITY_1MIN_FEED_TASK
+            else f"fno_v6_downstream_autofix_suppressed_{task_name}"
+        )
         return CheckResult(
-            "fno_v6_equity_1min_feed_autofix_suppressed",
+            label,
             "PASS",
-            "V6 feed task/action checks suppressed until V8 is positively observed Disabled",
+            "V6 downstream task/action checks suppressed until V8 is positively observed Disabled",
         )
 
-    required = task_name in REQUIRED_DASHBOARD_SESSION_TASKS
-    return check_task_enabled_state(
+    local_date = observed_at.astimezone(IST).date()
+    selected_production_task = (
+        FNO_FAST_PRODUCTION_TASK
+        if local_date == FNO_FAST_PRODUCTION_TRIAL_DATE
+        else FNO_LEGACY_PRODUCTION_TASK
+    )
+    required = (
+        task_name in REQUIRED_DASHBOARD_SESSION_TASKS
+        or task_name == selected_production_task
+    )
+    result = check_task_enabled_state(
         task_name,
         f"task_{task_name}",
         require_run_today=_task_should_have_run_today(task_name, observed_at),
         inactive_ok=not required,
         inactive_detail="session not enabled",
+    )
+    if task_name == FNO_V6_LIVE_KITE_TASK and result.status == "FAIL":
+        # This task owns a real broker executor.  Report a scheduler problem,
+        # but keep it outside the generic ``task_*`` autofix namespace so the
+        # health loop never creates an extra live-execution start attempt.
+        return CheckResult(
+            "fno_v6_live_kite_manual_review",
+            "FAIL",
+            result.detail + " | automatic live-executor start suppressed",
+        )
+    return result
+
+
+def check_fast_production_trial_runtime(
+    observed_at: dt.datetime,
+    *,
+    status_path: Path = FNO_FAST_PRODUCTION_STATUS,
+    heartbeat_path: Path = FNO_FAST_PRODUCTION_HEARTBEAT,
+) -> CheckResult:
+    """Require same-session supervisor evidence after the Sep-2 startup grace."""
+
+    label = "fno_fast_production_trial_runtime"
+    local = observed_at.astimezone(IST)
+    if local.date() != FNO_FAST_PRODUCTION_TRIAL_DATE:
+        return CheckResult(label, "PASS", "Sep-2 fast-production trial not active today")
+    if local.time() < FNO_FAST_PRODUCTION_START:
+        return CheckResult(label, "PASS", "fast-production start is scheduled for 09:05")
+    if local.time() < FNO_FAST_PRODUCTION_STARTUP_GRACE_END:
+        return CheckResult(label, "PASS", "fast-production task is within its 09:05 startup grace")
+
+    status = parse_keyfile(status_path)
+    status_value = str(status.get("status", "")).strip().upper()
+    status_ts = _parse_keyfile_ts(status.get("ts", ""))
+    status_is_today = status_ts is not None and status_ts.date() == local.date()
+    terminal = {
+        "FAILED", "ERROR", "CRASHED", "STOPPED", "BLOCKED",
+        "COOLDOWN_EXHAUSTED", "SKIPPED_CUTOFF",
+    }
+    if status_is_today and status_value in terminal:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"fast-production supervisor terminal status={status_value} @ {status_ts.strftime('%H:%M:%S')}",
+        )
+    if status_is_today and status_value in {
+        "RUNNING", "RESTARTING", "COOLDOWN", "SUCCESS",
+    }:
+        return CheckResult(
+            label,
+            "PASS",
+            f"fast-production supervisor status={status_value} @ {status_ts.strftime('%H:%M:%S')}",
+        )
+
+    heartbeat = parse_keyfile(heartbeat_path)
+    heartbeat_state = str(
+        heartbeat.get("state", "") or heartbeat.get("status", "")
+    ).strip().upper()
+    heartbeat_ts = _parse_keyfile_ts(
+        heartbeat.get("ts_utc", "") or heartbeat.get("ts", "")
+    )
+    heartbeat_is_today = heartbeat_ts is not None and heartbeat_ts.date() == local.date()
+    if heartbeat_is_today and heartbeat_state in {"RUNNING", "RESTARTING", "COOLDOWN"}:
+        return CheckResult(
+            label,
+            "PASS",
+            f"fast-production heartbeat={heartbeat_state} @ {heartbeat_ts.strftime('%H:%M:%S')}",
+        )
+    return CheckResult(
+        label,
+        "FAIL",
+        "no same-session fast-production RUNNING/SUCCESS supervisor evidence after 09:06",
+    )
+
+
+def check_fast_production_trial_first_slot(
+    observed_at: dt.datetime,
+    *,
+    marker_path: Path = FNO_FAST_PRODUCTION_FIRST_MARKER,
+) -> CheckResult:
+    """Keep the autofix monitor open until the first canonical stock marker passes."""
+
+    label = "fno_fast_production_trial_first_slot"
+    local = observed_at.astimezone(IST)
+    if local.date() != FNO_FAST_PRODUCTION_TRIAL_DATE:
+        return CheckResult(label, "PASS", "Sep-2 fast-production trial not active today")
+    if local.time() < FNO_FAST_PRODUCTION_FIRST_SLOT:
+        return CheckResult(
+            label,
+            "WARN",
+            "acceptance pending: waiting for the first canonical 09:20 stock-futures marker",
+        )
+    try:
+        payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return CheckResult(label, "FAIL", f"first canonical marker missing/invalid: {marker_path}")
+    if not isinstance(payload, dict):
+        return CheckResult(label, "FAIL", "first canonical marker is not a JSON object")
+
+    expected_slot = "2026-09-02T09:20:00+05:30"
+    required_truth = {
+        "schema_version": "fno_oi_fetch_slot_v2",
+        "slot_ist": expected_slot,
+        "universe_date": "2026-09-02",
+    }
+    mismatches = [
+        f"{key}={payload.get(key)!r}"
+        for key, expected in required_truth.items()
+        if payload.get(key) != expected
+    ]
+    if not bool(payload.get("stock_complete")):
+        mismatches.append("stock_complete=false")
+    if str(payload.get("stock_state", "")).strip().upper() != "SUCCESS":
+        mismatches.append(f"stock_state={payload.get('stock_state')!r}")
+    if mismatches:
+        return CheckResult(label, "FAIL", "first marker failed quality gates: " + ", ".join(mismatches))
+
+    published = _parse_keyfile_ts(str(payload.get("published_at_ist", "")))
+    if published is None or published.date() != local.date():
+        return CheckResult(label, "FAIL", "first marker has missing/stale published_at_ist")
+    delay_seconds = (
+        published
+        - dt.datetime(2026, 9, 2, 9, 20, tzinfo=IST)
+    ).total_seconds()
+    if delay_seconds < 0 or delay_seconds > 60:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"first marker stock-complete but late: publish_delay={delay_seconds:.1f}s (limit=60s)",
+        )
+    return CheckResult(
+        label,
+        "PASS",
+        f"first canonical marker stock-complete in {delay_seconds:.1f}s",
+    )
+
+
+def check_v10_v11_v12_shared_runtime(
+    observed_at: dt.datetime,
+    *,
+    enabled: bool,
+    status_path: Path = FNO_V10_V11_V12_STATUS,
+) -> CheckResult:
+    """Reject a scheduler-successful but late/NOT_RUN shared paper session."""
+
+    label = "fno_v10_v11_v12_shared_runtime"
+    if not enabled:
+        return CheckResult(label, "PASS", "shared V10/V11/V12 PAPER session not enabled")
+    local = observed_at.astimezone(IST)
+    if local.time() < dt.time(9, 17):
+        return CheckResult(label, "PASS", "shared PAPER session is within startup grace")
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return CheckResult(label, "FAIL", f"shared PAPER status missing/invalid: {status_path}")
+    if not isinstance(payload, dict):
+        return CheckResult(label, "FAIL", "shared PAPER status is not a JSON object")
+    session_date = str(payload.get("session_date", "")).strip()
+    status = str(payload.get("status", "")).strip().upper()
+    phase = str(payload.get("phase", "")).strip().upper()
+    if session_date != local.date().isoformat():
+        return CheckResult(
+            label,
+            "FAIL",
+            f"shared PAPER status is stale: session_date={session_date or 'N/A'}",
+        )
+    if status in {"NOT_RUN", "BLOCKED", "FAILED", "ERROR"}:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"shared PAPER session status={status} phase={phase or 'N/A'}",
+        )
+    if status not in {"RUNNING", "COMPLETE", "DEGRADED"}:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"shared PAPER session has unexpected status={status or 'N/A'}",
+        )
+    try:
+        healthy_apps = int(payload.get("healthy_app_count", 0) or 0)
+    except (TypeError, ValueError):
+        healthy_apps = 0
+    if healthy_apps < 7:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"shared PAPER session has only {healthy_apps}/7 required healthy Kite apps",
+        )
+    return CheckResult(
+        label,
+        "PASS",
+        f"shared PAPER session status={status} phase={phase or 'N/A'} apps={healthy_apps}/7+",
     )
 
 
@@ -726,6 +950,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
     v15_nifty_enabled = _task_is_enabled("EQIDV2_nifty_guard_fetch_v15_0915")
     v16_5min_nifty_enabled = _task_is_enabled("EQIDV2_nifty_guard_fetch_v16_5min_0915")
     kite_export_enabled = _task_is_enabled("EQIDV2_kite_export_start_0915")
+    v10_v11_v12_paper_enabled = _task_is_enabled(FNO_V10_V11_V12_PAPER_TASK)
     v8_task_state = _task_cutover_state(FNO_V8_COMBINED_PAPER_TASK)
     v8_paper_enabled = bool(v8_task_state[0] and v8_task_state[1])
     v8_positively_disabled = bool(
@@ -747,6 +972,15 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
                 v8_positively_disabled=v8_positively_disabled,
             )
         )
+
+    checks.append(check_fast_production_trial_runtime(now_local))
+    checks.append(check_fast_production_trial_first_slot(now_local))
+    checks.append(
+        check_v10_v11_v12_shared_runtime(
+            now_local,
+            enabled=v10_v11_v12_paper_enabled,
+        )
+    )
 
     # This failure intentionally has no autofix mapping.  If V8 is selected
     # but today's two-key activation is absent/expired, stay fail-closed rather
@@ -922,7 +1156,7 @@ def render_report(checks: List[CheckResult]) -> str:
     passed = sum(1 for c in checks if c.status == "PASS")
     warned = sum(1 for c in checks if c.status == "WARN")
     failed = sum(1 for c in checks if c.status == "FAIL")
-    overall = "PASS" if failed == 0 else "FAIL"
+    overall = "FAIL" if failed else ("WAIT" if warned else "PASS")
 
     lines: List[str] = []
     lines.append(f"EQIDV2 PREOPEN HEALTHCHECK | {_fmt_ts(now)}")
@@ -971,9 +1205,11 @@ def main() -> int:
     dated_path = LOG_DIR / dated_name
     latest_path = LOG_DIR / "preopen_session_healthcheck_latest.log"
     explicit_path = Path(args.report_path).expanduser() if str(args.report_path).strip() else None
+    failed = any(c.status == "FAIL" for c in checks)
+    warned = any(c.status == "WARN" for c in checks)
     payload_json = {
         "ts_ist": _fmt_ts(ts),
-        "overall": "PASS" if all(c.status != "FAIL" for c in checks) else "FAIL",
+        "overall": "FAIL" if failed else ("WAIT" if warned else "PASS"),
         "checks": [c.__dict__ for c in checks],
     }
     json_path = LOG_DIR / "preopen_session_healthcheck_latest.json"
@@ -989,7 +1225,7 @@ def main() -> int:
     except OSError as exc:
         print(f"[WARN] Unable to persist report: {exc}", file=sys.stderr)
 
-    return 0 if all(c.status != "FAIL" for c in checks) else 1
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

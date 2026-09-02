@@ -17,7 +17,7 @@ schtasks /Create /F /TN "%TASK_MOVING_FILES%" /SC WEEKLY /D MON,TUE,WED,THU,FRI 
 if errorlevel 1 endlocal & exit /b 1
 
 if exist "%TASK_HARDENER%" (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_MOVING_FILES%"
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_MOVING_FILES%" -WakeToRun
   if errorlevel 1 endlocal & exit /b 1
 )
 

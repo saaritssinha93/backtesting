@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import hashlib
+import importlib
 import json
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, Iterable, Mapping
 import pandas as pd
 import pytest
 
+import fno_oi_backtest_provenance as v8_provenance
 import fno_oi_common as common
 import fno_v8_windowed_1m_entry_backtest as v8
 
@@ -1647,6 +1649,10 @@ def test_diagnostic_breakdowns_use_calendar_blocks_and_constrained_trades() -> N
 def test_diagnostic_artifact_is_json_safe_hashed_and_provenance_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Experiment-launcher tests replace provenance hooks on this shared module.
+    # A real V8 run starts in a clean interpreter, so restore that state here.
+    importlib.reload(v8_provenance)
+    importlib.reload(v8)
     candidate = _candidate("EXPORT")
     audit = pd.DataFrame(
         _simulate(

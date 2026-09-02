@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$TaskName
+    [string]$TaskName,
+
+    [switch]$WakeToRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +50,7 @@ try {
     $definition.Settings.ExecutionTimeLimit = "PT0S"
     $definition.Settings.StartWhenAvailable = $true
     $definition.Settings.RunOnlyIfNetworkAvailable = $false
-    $definition.Settings.WakeToRun = $false
+    $definition.Settings.WakeToRun = [bool]$WakeToRun
     $definition.Settings.Enabled = $true
     $definition.Settings.Hidden = $false
     $definition.Settings.Priority = 7
@@ -68,6 +70,7 @@ try {
         "stop_on_batteries=$($updated.Settings.StopIfGoingOnBatteries)"
         "execution_time_limit=$($updated.Settings.ExecutionTimeLimit)"
         "start_when_available=$($updated.Settings.StartWhenAvailable)"
+        "wake_to_run=$($updated.Settings.WakeToRun)"
         "multiple_instances=$($updated.Settings.MultipleInstances)"
     ) -join " | "
 

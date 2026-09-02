@@ -462,6 +462,19 @@ def _render_fetch_report(marker: dict[str, Any], outcomes: list[dict[str, Any]])
     return "\n".join(lines) + "\n"
 
 
+def _publish_fetch_report(report: str, *, session: str = SESSION) -> None:
+    """Publish the shared report and isolate the legacy-session evidence."""
+    common.atomic_write_text(
+        common.LATEST_DIR / "latest_fno_oi_fetch.md",
+        report,
+    )
+    if session == SESSION:
+        common.atomic_write_text(
+            common.LATEST_DIR / "latest_fno_oi_fetch_old.md",
+            report,
+        )
+
+
 def _is_index_universe_row(row: dict[str, Any]) -> bool:
     raw_flag = row.get("is_index_future", False)
     if isinstance(raw_flag, str):
@@ -758,10 +771,7 @@ def run_slot(
     }
     common.atomic_write_json(common.fetch_slot_path(slot_end), marker)
     report = _render_fetch_report(marker, outcomes)
-    common.atomic_write_text(
-        common.LATEST_DIR / "latest_fno_oi_fetch.md",
-        report,
-    )
+    _publish_fetch_report(report, session=session)
     common.publish_status(
         session,
         state,

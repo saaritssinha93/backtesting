@@ -16,7 +16,10 @@ $producer = Join-Path $baseDir "fno_oi_fetch_5min_fast_production.py"
 $hardener = Join-Path $baseDir "bat\harden_scheduled_task.ps1"
 
 function Assert-TrialTaskContract {
-    param([Microsoft.Management.Infrastructure.CimInstance]$Task)
+    param(
+        [Microsoft.Management.Infrastructure.CimInstance]$Task,
+        [switch]$IdentityOnly
+    )
 
     $actions = @($Task.Actions)
     $triggers = @($Task.Triggers)
@@ -40,6 +43,9 @@ function Assert-TrialTaskContract {
     if ($observedStart -ne $trialAt) {
         throw "$taskName trigger differs from $($trialAt.ToString('s')): $($observedStart.ToString('s'))"
     }
+    if ($IdentityOnly) {
+        return
+    }
     if (-not $Task.Settings.Enabled) {
         throw "$taskName is disabled."
     }
@@ -48,6 +54,9 @@ function Assert-TrialTaskContract {
     }
     if (-not $Task.Settings.StartWhenAvailable) {
         throw "$taskName must be StartWhenAvailable; the runner date gate prevents late-day execution."
+    }
+    if (-not $Task.Settings.WakeToRun) {
+        throw "$taskName must wake the workstation for the one-time trial."
     }
 }
 
@@ -60,8 +69,22 @@ if (-not (Test-Path -LiteralPath $producer -PathType Leaf)) {
 
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($null -ne $existing) {
-    Assert-TrialTaskContract -Task $existing
-    Write-Output "[VERIFIED] Existing one-time trial task matches the approved contract: $taskName"
+    Assert-TrialTaskContract -Task $existing -IdentityOnly
+    if ($VerifyOnly) {
+        Assert-TrialTaskContract -Task $existing
+        Write-Output "[VERIFIED] Existing one-time trial task matches the approved contract: $taskName"
+        exit 0
+    }
+    if (-not (Test-Path -LiteralPath $hardener -PathType Leaf)) {
+        throw "Task hardener is missing: $hardener"
+    }
+    & $hardener -TaskName $taskName -WakeToRun
+    if (-not $?) {
+        throw "Task hardening failed for $taskName"
+    }
+    $updatedExisting = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    Assert-TrialTaskContract -Task $updatedExisting
+    Write-Output "[UPDATED] Existing one-time trial task was safely hardened: $taskName"
     exit 0
 }
 
@@ -97,7 +120,7 @@ $registrationArguments = @{
 $null = Register-ScheduledTask @registrationArguments
 
 if (Test-Path -LiteralPath $hardener -PathType Leaf) {
-    & $hardener -TaskName $taskName
+    & $hardener -TaskName $taskName -WakeToRun
     if (-not $?) {
         throw "Task hardening failed for $taskName"
     }

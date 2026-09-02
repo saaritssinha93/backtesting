@@ -36,6 +36,8 @@ def test_installer_defines_one_future_weekday_task_without_running_it() -> None:
     assert "Register-ScheduledTask" in source
     assert "Enable-ScheduledTask -TaskName $taskName" in source
     assert "StartWhenAvailable" in source
+    assert "WakeToRun must be true" in source
+    assert "-WakeToRun" in source
     assert "Start-ScheduledTask" not in source
     assert "Stop-ScheduledTask" not in source
     assert "Demand starts must be enabled for the dashboard restart contract." in source

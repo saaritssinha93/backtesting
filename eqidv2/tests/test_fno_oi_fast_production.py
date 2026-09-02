@@ -46,6 +46,26 @@ def _slot_frame(contract: dict[str, object], slot: datetime) -> pd.DataFrame:
 
 
 class FastProductionTests(unittest.TestCase):
+    def test_legacy_old_report_is_not_overwritten_by_fast_session(self) -> None:
+        with mock.patch.object(common, "atomic_write_text") as write:
+            producer.legacy._publish_fetch_report(
+                "legacy report", session=producer.legacy.SESSION
+            )
+        self.assertEqual(
+            [call.args[0].name for call in write.call_args_list],
+            ["latest_fno_oi_fetch.md", "latest_fno_oi_fetch_old.md"],
+        )
+
+        with mock.patch.object(common, "atomic_write_text") as write:
+            producer.legacy._publish_fetch_report(
+                "fast report", session=producer.SESSION
+            )
+        self.assertEqual(write.call_count, 1)
+        self.assertEqual(
+            write.call_args.args[0].name,
+            "latest_fno_oi_fetch.md",
+        )
+
     def test_parser_keeps_legacy_defaults_and_adds_fast_worker_controls(self) -> None:
         parser = producer.build_parser()
         self.assertEqual(parser.get_default("boundary_buffer_sec"), 3.0)

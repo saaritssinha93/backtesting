@@ -118,7 +118,19 @@ def _run_healthcheck(max_age_min: int) -> Tuple[int, str, List[dict]]:
             payload = json.loads(HEALTHCHECK_JSON.read_text(encoding="utf-8"))
             checks = payload.get("checks", [])
             if isinstance(checks, list):
-                failures = [c for c in checks if isinstance(c, dict) and str(c.get("status")) == "FAIL"]
+                failures = [
+                    c
+                    for c in checks
+                    if isinstance(c, dict)
+                    and (
+                        str(c.get("status")) == "FAIL"
+                        or (
+                            str(c.get("name"))
+                            == "fno_fast_production_trial_first_slot"
+                            and str(c.get("status")) == "WARN"
+                        )
+                    )
+                ]
         except Exception:
             failures = []
     return code, out, failures
@@ -134,6 +146,21 @@ def _iter_actions_for_fail(name: str) -> Iterable[Tuple[str, str, str]]:
         # direct label (not ``task_*``).  Retry through Task Scheduler so its
         # IgnoreNew policy prevents overlapping Selenium login sessions.
         task_name = "EQIDV2_authentication_v2_0900"
+        yield ("task_run", f"task:{task_name}", task_name)
+        return
+
+    if name == "fno_fast_production_trial_runtime":
+        # Retry only through the one-time Task Scheduler identity.  Its
+        # IgnoreNew policy and runner exclusivity guard prevent a second
+        # canonical writer; never use a detached BAT fallback here.
+        task_name = "EQIDV2_fno_oi_fetch_5min_fast_production_0905"
+        yield ("task_run", f"task:{task_name}", task_name)
+        return
+
+    if name == "fno_v10_v11_v12_shared_runtime":
+        # PAPER-only and IgnoreNew.  A scheduler-only retry before the 09:26
+        # prospective deadline is safe; the runtime itself rejects late replay.
+        task_name = "EQIDV2_fno_v10_v11_v12_paper_0915"
         yield ("task_run", f"task:{task_name}", task_name)
         return
 

@@ -196,6 +196,7 @@ def test_approval_switch_has_exact_narrow_scope_and_no_start_command() -> None:
         "EQIDV2_fno_v6_confirmation_1min_0919",
         "EQIDV2_fno_v6_live_long_0920",
         "EQIDV2_fno_v6_live_short_0920",
+        "EQIDV2_fno_v6_live_kite_qty1_0915",
         "EQIDV2_fno_v6_trade_logger_0920",
         "EQIDV2_fno_v6_net_result_0920",
     }
@@ -436,6 +437,7 @@ def test_preopen_restore_disables_v8_before_enabling_exact_v6_scope() -> None:
         "EQIDV2_fno_v6_confirmation_1min_0919",
         "EQIDV2_fno_v6_live_long_0920",
         "EQIDV2_fno_v6_live_short_0920",
+        "EQIDV2_fno_v6_live_kite_qty1_0915",
         "EQIDV2_fno_v6_trade_logger_0920",
         "EQIDV2_fno_v6_net_result_0920",
     }

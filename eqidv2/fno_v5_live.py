@@ -23,6 +23,7 @@ import hashlib
 import io
 import importlib
 import os
+import re
 import sys
 import time
 from dataclasses import asdict
@@ -44,6 +45,16 @@ if LIVE_GENERATION not in {"v5", "v6"}:
 config = importlib.import_module(f"fno_{LIVE_GENERATION}_live_config")
 LIVE_LABEL = LIVE_GENERATION.upper()
 LIVE_SCHEMA_PREFIX = f"fno_{LIVE_GENERATION}"
+EXECUTION_SESSION_NAMESPACE = os.getenv(
+    f"FNO_{LIVE_LABEL}_EXECUTION_SESSION_NAMESPACE", ""
+).strip().lower()
+if EXECUTION_SESSION_NAMESPACE and not re.fullmatch(
+    r"[a-z0-9][a-z0-9_-]{0,39}", EXECUTION_SESSION_NAMESPACE
+):
+    raise RuntimeError(
+        "Invalid FnO execution-session namespace: "
+        f"{EXECUTION_SESSION_NAMESPACE!r}"
+    )
 
 
 ROLE_SESSIONS = {
@@ -62,6 +73,22 @@ ROLE_REPORTS = {
     "trade-logger": f"latest_fno_{LIVE_GENERATION}_trade_logger.md",
     "net-result": f"latest_fno_{LIVE_GENERATION}_net_result.md",
 }
+if EXECUTION_SESSION_NAMESPACE:
+    # A dedicated LIVE worker must not overwrite the promoted PAPER worker's
+    # status, heartbeat, or report. Signal and order roots remain canonical;
+    # orders themselves are already isolated below orders/LIVE.
+    for _role, _suffix in (
+        ("long-entry", "long"),
+        ("short-entry", "short"),
+        ("trade-logger", "trade_logger"),
+        ("net-result", "net_result"),
+    ):
+        ROLE_SESSIONS[_role] = (
+            f"fno_{LIVE_GENERATION}_{EXECUTION_SESSION_NAMESPACE}_{_suffix}"
+        )
+        ROLE_REPORTS[_role] = (
+            f"latest_fno_{LIVE_GENERATION}_{EXECUTION_SESSION_NAMESPACE}_{_suffix}.md"
+        )
 
 LIVE_ROOT = common.FNO_ROOT / f"{LIVE_GENERATION}_live"
 SCANNER_ROOT = LIVE_ROOT / "scanner_5m"
@@ -127,7 +154,10 @@ def signal_day_dir(session_date: date) -> Path:
 
 
 def order_day_dir(session_date: date, mode: str) -> Path:
-    return ORDER_ROOT / mode.upper() / session_date.isoformat()
+    root = ORDER_ROOT / mode.upper()
+    if mode.upper() == "LIVE" and EXECUTION_SESSION_NAMESPACE:
+        root = root / EXECUTION_SESSION_NAMESPACE
+    return root / session_date.isoformat()
 
 
 def consolidated_csv_path(session_date: date) -> Path:
@@ -1159,6 +1189,8 @@ def _authoritative_signal_ids(session_date: date) -> set[str]:
             continue
         if snapshot.get("session_date") != session_date.isoformat():
             continue
+        if snapshot.get("state") != "SUCCESS":
+            continue
         signal_ids.update(str(value) for value in snapshot.get("selected_signal_ids", []))
     return signal_ids
 
@@ -1715,11 +1747,22 @@ def load_order_states(
     return rows
 
 
-def create_order_state(signal: dict[str, Any], mode: str) -> dict[str, Any]:
+def create_order_state(
+    signal: dict[str, Any],
+    mode: str,
+    *,
+    live_quantity: int | None = None,
+) -> dict[str, Any]:
     execution_mode = mode.upper()
     sizing_key = "live_sizing" if execution_mode == "LIVE" else "paper_sizing"
     sizing = dict(signal[sizing_key])
-    status = "PENDING_ENTRY" if int(sizing["quantity"]) > 0 else "BLOCKED_SIZING"
+    strategy_quantity = int(sizing["quantity"])
+    execution_quantity = strategy_quantity
+    if execution_mode == "LIVE" and live_quantity is not None:
+        if int(live_quantity) <= 0:
+            raise ValueError("LIVE execution quantity must be positive.")
+        execution_quantity = min(strategy_quantity, int(live_quantity))
+    status = "PENDING_ENTRY" if execution_quantity > 0 else "BLOCKED_SIZING"
     return {
         "schema_version": f"{LIVE_SCHEMA_PREFIX}_equity_order_state_v2",
         "strategy_version": signal["strategy_version"],
@@ -1741,7 +1784,23 @@ def create_order_state(signal: dict[str, Any], mode: str) -> dict[str, Any]:
         "mode": execution_mode,
         "status": status,
         "status_reason": sizing["state"],
-        "quantity": int(sizing["quantity"]),
+        "quantity": execution_quantity,
+        "strategy_sized_quantity": strategy_quantity,
+        "execution_quantity_override": (
+            int(live_quantity)
+            if execution_mode == "LIVE" and live_quantity is not None
+            else None
+        ),
+        "execution_profile": (
+            EXECUTION_SESSION_NAMESPACE
+            if execution_mode == "LIVE" and EXECUTION_SESSION_NAMESPACE
+            else ""
+        ),
+        "quantity_policy": (
+            "FIXED_ONE_SHARE"
+            if execution_mode == "LIVE" and int(live_quantity or 0) == 1
+            else "STRATEGY_SIZED"
+        ),
         "capital_rs": float(signal["capital_rs"]),
         "leverage": float(signal["leverage"]),
         "target_exposure_rs": float(signal["target_exposure_rs"]),
@@ -1776,6 +1835,8 @@ def _validate_order_state(
     state: dict[str, Any],
     signal: dict[str, Any],
     mode: str,
+    *,
+    live_quantity: int | None = None,
 ) -> None:
     execution_mode = mode.upper()
     expected_fields = {
@@ -1815,6 +1876,31 @@ def _validate_order_state(
             )
     sizing_key = "live_sizing" if execution_mode == "LIVE" else "paper_sizing"
     expected_quantity = int(signal[sizing_key]["quantity"])
+    if execution_mode == "LIVE" and live_quantity is not None:
+        if int(live_quantity) <= 0:
+            raise ValueError("LIVE execution quantity must be positive.")
+        expected_quantity = min(expected_quantity, int(live_quantity))
+        if _safe_int(state.get("execution_quantity_override"), -1) != int(
+            live_quantity
+        ):
+            raise RuntimeError(
+                f"Order state {state.get('signal_id')} does not carry the "
+                f"required LIVE quantity override {int(live_quantity)}."
+            )
+        expected_profile = EXECUTION_SESSION_NAMESPACE
+        if str(state.get("execution_profile", "")) != expected_profile:
+            raise RuntimeError(
+                f"Order state {state.get('signal_id')} has execution profile "
+                f"{state.get('execution_profile')!r}; expected {expected_profile!r}."
+            )
+        expected_policy = (
+            "FIXED_ONE_SHARE" if int(live_quantity) == 1 else "STRATEGY_SIZED"
+        )
+        if str(state.get("quantity_policy", "")) != expected_policy:
+            raise RuntimeError(
+                f"Order state {state.get('signal_id')} has quantity policy "
+                f"{state.get('quantity_policy')!r}; expected {expected_policy!r}."
+            )
     observed_quantity = _safe_int(state.get("quantity"), -1)
     status = str(state.get("status", ""))
     if status == "PENDING_ENTRY" or execution_mode == "PAPER":
@@ -1886,6 +1972,16 @@ def advance_paper_order(
     long_side = state["side"] == "LONG"
     square_off = config.slot_datetime(now.date(), config.SQUARE_OFF)
     if status == "PENDING_ENTRY":
+        activation_deadline = datetime.fromisoformat(
+            str(state["entry_activation_deadline_ist"])
+        )
+        if now > activation_deadline:
+            state.update(
+                status="CANCELLED",
+                status_reason="ENTRY_ACTIVATION_DEADLINE_EXPIRED",
+                updated_at_ist=now.isoformat(timespec="seconds"),
+            )
+            return state
         if now >= square_off:
             state.update(
                 status="NO_FILL",
@@ -1992,7 +2088,29 @@ def _broker_find_tagged_order(
 
 
 def _live_tag(signal_id: str) -> str:
-    return ORDER_TAG_PREFIX + hashlib.sha1(signal_id.encode("ascii")).hexdigest()[:14]
+    tag_seed = (
+        f"{EXECUTION_SESSION_NAMESPACE}:{signal_id}"
+        if EXECUTION_SESSION_NAMESPACE
+        else signal_id
+    )
+    return ORDER_TAG_PREFIX + hashlib.sha1(tag_seed.encode("ascii")).hexdigest()[:14]
+
+
+def _validate_recovered_order_quantity(
+    state: dict[str, Any],
+    recovered: dict[str, Any],
+) -> None:
+    """Fail closed before adopting a broker order from a previous process."""
+
+    if not EXECUTION_SESSION_NAMESPACE:
+        return
+    observed = _safe_int(recovered.get("quantity"), -1)
+    expected = int(state["quantity"])
+    if observed != expected:
+        raise RuntimeError(
+            "Recovered broker order quantity does not match the isolated "
+            f"execution profile: observed={observed}, expected={expected}."
+        )
 
 
 def _apply_live_entry_fill(
@@ -2091,6 +2209,9 @@ def advance_live_order(
     tag = _live_tag(str(state["signal_id"]))
 
     if status == "PENDING_ENTRY":
+        activation_deadline = datetime.fromisoformat(
+            str(state["entry_activation_deadline_ist"])
+        )
         if not state.get("entry_order_id"):
             recovered = _broker_find_tagged_order(
                 client,
@@ -2100,6 +2221,7 @@ def advance_live_order(
                 order_type="SL-M",
             )
             if recovered:
+                _validate_recovered_order_quantity(state, recovered)
                 state["entry_order_id"] = str(recovered.get("order_id", ""))
                 state["entry_order_activated_at_ist"] = str(
                     recovered.get("order_timestamp") or now.isoformat(timespec="seconds")
@@ -2116,24 +2238,36 @@ def advance_live_order(
                     updated_at_ist=now.isoformat(timespec="seconds"),
                 )
                 return state
-            elif not armed or now >= square_off:
+            elif now > activation_deadline or not armed or now >= square_off:
                 _broker_cancel(client, str(state["entry_order_id"]))
                 refreshed = _broker_order(client, str(state["entry_order_id"]))
                 refreshed_status = str(refreshed.get("status", "")).upper()
                 if refreshed_status == "COMPLETE":
                     _apply_live_entry_fill(state, refreshed, now)
                 elif refreshed_status == "CANCELLED":
+                    deadline_expired = now > activation_deadline
                     state.update(
                         status="NO_FILL" if now >= square_off else "CANCELLED",
                         status_reason=(
-                            "SQUARE_OFF_BEFORE_FILL" if now >= square_off else arm_reason
+                            "SQUARE_OFF_BEFORE_FILL"
+                            if now >= square_off
+                            else (
+                                "ENTRY_ACTIVATION_DEADLINE_EXPIRED"
+                                if deadline_expired
+                                else arm_reason
+                            )
                         ),
                         updated_at_ist=now.isoformat(timespec="seconds"),
                     )
                     return state
                 else:
+                    cancel_reason = (
+                        "ENTRY_ACTIVATION_DEADLINE_EXPIRED"
+                        if now > activation_deadline
+                        else arm_reason
+                    )
                     state.update(
-                        status_reason=f"ENTRY_CANCEL_PENDING:{arm_reason}",
+                        status_reason=f"ENTRY_CANCEL_PENDING:{cancel_reason}",
                         updated_at_ist=now.isoformat(timespec="seconds"),
                     )
                     return state
@@ -2144,9 +2278,6 @@ def advance_live_order(
                 )
                 return state
         else:
-            activation_deadline = datetime.fromisoformat(
-                str(state["entry_activation_deadline_ist"])
-            )
             if now > activation_deadline:
                 state.update(
                     status="CANCELLED",
@@ -2194,6 +2325,7 @@ def advance_live_order(
                 order_type="MARKET",
             )
             if recovered_market:
+                _validate_recovered_order_quantity(state, recovered_market)
                 state["squareoff_order_id"] = str(recovered_market.get("order_id", ""))
                 state["status"] = "SQUARE_OFF_PENDING"
         if state["status"] == "OPEN" and not state.get("stop_order_id"):
@@ -2205,6 +2337,7 @@ def advance_live_order(
                 order_type="SL-M",
             )
             if recovered_stop:
+                _validate_recovered_order_quantity(state, recovered_stop)
                 state["stop_order_id"] = str(recovered_stop.get("order_id", ""))
         if state["status"] == "OPEN" and not state.get("stop_order_id"):
             try:
@@ -2239,6 +2372,7 @@ def advance_live_order(
                 order_type="LIMIT",
             )
             if recovered_target:
+                _validate_recovered_order_quantity(state, recovered_target)
                 state["target_order_id"] = str(recovered_target.get("order_id", ""))
         if state["status"] == "OPEN" and not state.get("target_order_id"):
             state["target_order_id"] = _broker_place(
@@ -2842,6 +2976,7 @@ def run_worker(
     session_date: date,
     side: str,
 ) -> int:
+    live_quantity = getattr(args, "live_quantity", None)
     role = "long-entry" if side == "LONG" else "short-entry"
     mode = args.execution_mode.upper()
     pool: KitePool | None = None
@@ -2859,8 +2994,17 @@ def run_worker(
         for signal in signals:
             path = _order_path(session_date, mode, str(signal["signal_id"]))
             existing_state = _read_json(path)
-            state = existing_state or create_order_state(signal, mode)
-            _validate_order_state(state, signal, mode)
+            state = existing_state or create_order_state(
+                signal,
+                mode,
+                live_quantity=live_quantity,
+            )
+            _validate_order_state(
+                state,
+                signal,
+                mode,
+                live_quantity=live_quantity,
+            )
             if not existing_state and mode == "PAPER" and state["status"] == "PENDING_ENTRY":
                 activation_deadline = datetime.fromisoformat(
                     str(state["entry_activation_deadline_ist"])
@@ -2977,6 +3121,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--capital", type=float, default=config.CAPITAL_PER_ENTRY_RS)
     parser.add_argument("--leverage", type=float, default=config.LEVERAGE)
+    parser.add_argument(
+        "--live-quantity",
+        type=int,
+        default=None,
+        help=(
+            "Explicit maximum LIVE order quantity. It never increases the "
+            "strategy-sized quantity and is rejected in PAPER mode."
+        ),
+    )
     parser.add_argument("--poll-sec", type=float, default=1.0)
     parser.add_argument("--reporting-poll-sec", type=float, default=5.0)
     parser.add_argument("--boundary-buffer-sec", type=float, default=3.0)
@@ -2990,6 +3143,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> int:
+    live_quantity = getattr(args, "live_quantity", None)
+    if live_quantity is not None:
+        if str(args.execution_mode).upper() != "LIVE":
+            raise ValueError("--live-quantity is valid only with LIVE execution mode.")
+        if int(live_quantity) <= 0:
+            raise ValueError("--live-quantity must be positive.")
     if LIVE_GENERATION == "v6":
         if abs(
             float(args.confirmation_max_wait_sec)

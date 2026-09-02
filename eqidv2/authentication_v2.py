@@ -130,6 +130,20 @@ MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 SLOT_GRACE_SEC = 75
 
+# A TOTP generated near the end of its 30-second window can expire while
+# Selenium is still locating the field and typing the digits.  Kite then
+# rejects the code, the page never redirects, and the login fails with
+# "timed out before request_token was available".  When fewer than this many
+# seconds remain, wait for the next window instead of using a doomed code.
+TOTP_MIN_REMAINING_SEC = 10
+
+# A secondary-app login that fails for a transient reason (expired TOTP
+# window, a slow page, a dropped connection) almost always succeeds on a
+# second attempt.  Without a retry a single failure silently costs one app
+# for the whole trading day.
+SECONDARY_LOGIN_ATTEMPTS = 2
+SECONDARY_RETRY_DELAY_SEC = 5.0
+
 
 def now_ist() -> datetime:
     return datetime.now(IST)
@@ -208,7 +222,19 @@ def _resolve_totp(secret: str) -> Tuple[str, str]:
             time.sleep(0.5)
 
     try:
-        otp = TOTP(secret).now()
+        totp = TOTP(secret)
+        interval = int(getattr(totp, "interval", 30) or 30)
+        remaining = interval - (int(time.time()) % interval)
+        if remaining < TOTP_MIN_REMAINING_SEC:
+            # Using this code would race the window rollover; wait it out so
+            # the browser gets a code with a full interval ahead of it.
+            print(
+                f"[AUTH] TOTP window has {remaining}s left "
+                f"(< {TOTP_MIN_REMAINING_SEC}s); waiting for the next code.",
+                flush=True,
+            )
+            time.sleep(remaining + 0.5)
+        otp = totp.now()
         otp = _extract_otp(otp)
         if otp:
             return otp, "pyotp_secret"
@@ -705,34 +731,80 @@ def main() -> None:
     # and then re-raise so the scheduled task keeps its existing non-zero exit
     # semantics for a primary failure.
     primary_error: Optional[Exception] = None
-    try:
-        run_slot_scheduler(
-            parts=parts,
-            force_login=bool(args.force_login),
-            test_now=bool(args.test_now),
-            max_refresh=int(args.max_refresh),
-        )
-    except Exception as e:
-        primary_error = e
+    # The primary app feeds the time-critical live jobs, so it deserves at
+    # least the same transient-failure tolerance as every secondary app.
+    for attempt in range(1, SECONDARY_LOGIN_ATTEMPTS + 1):
+        try:
+            run_slot_scheduler(
+                parts=parts,
+                force_login=bool(args.force_login),
+                test_now=bool(args.test_now),
+                max_refresh=int(args.max_refresh),
+            )
+            primary_error = None
+            break
+        except Exception as e:
+            primary_error = e
+            if attempt < SECONDARY_LOGIN_ATTEMPTS:
+                print(
+                    f"[WARN] [AUTH1] Primary attempt {attempt}/"
+                    f"{SECONDARY_LOGIN_ATTEMPTS} failed: {e}. "
+                    f"Retrying in {SECONDARY_RETRY_DELAY_SEC:.0f}s.",
+                    flush=True,
+                )
+                time.sleep(SECONDARY_RETRY_DELAY_SEC)
+    if primary_error is not None:
         print(
-            f"[ERROR] [AUTH1] Primary app token generation failed: {e}. "
+            f"[ERROR] [AUTH1] Primary app token generation failed after "
+            f"{SECONDARY_LOGIN_ATTEMPTS} attempts: {primary_error}. "
             "Continuing with secondary apps before exiting.",
             flush=True,
         )
 
+    failed_apps: list[int] = []
     for app_idx in (2, 3, 4, 5, 6, 7, 8):
-        try:
-            _seed_additional_session_for_today(
-                primary_parts=parts,
-                force_login=bool(args.force_login),
-                app_idx=app_idx,
-            )
-        except Exception as e:
+        last_error: Optional[Exception] = None
+        for attempt in range(1, SECONDARY_LOGIN_ATTEMPTS + 1):
+            try:
+                _seed_additional_session_for_today(
+                    primary_parts=parts,
+                    force_login=bool(args.force_login),
+                    app_idx=app_idx,
+                )
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                if attempt < SECONDARY_LOGIN_ATTEMPTS:
+                    print(
+                        f"[WARN] [AUTH{app_idx}] App{app_idx} attempt {attempt}/"
+                        f"{SECONDARY_LOGIN_ATTEMPTS} failed: {e}. "
+                        f"Retrying in {SECONDARY_RETRY_DELAY_SEC:.0f}s.",
+                        flush=True,
+                    )
+                    time.sleep(SECONDARY_RETRY_DELAY_SEC)
+        if last_error is not None:
+            failed_apps.append(app_idx)
             print(
-                f"[WARN] [AUTH{app_idx}] App{app_idx} token generation failed: {e}. "
+                f"[WARN] [AUTH{app_idx}] App{app_idx} token generation failed after "
+                f"{SECONDARY_LOGIN_ATTEMPTS} attempts: {last_error}. "
                 "Continuing with remaining apps.",
                 flush=True,
             )
+
+    # A single silent secondary failure costs one app for the whole trading
+    # day, and the downstream shared papertrade session needs 7 of 8 healthy.
+    # Always end with an explicit, greppable verdict.
+    healthy = 8 - len(failed_apps) - (1 if primary_error is not None else 0)
+    if failed_apps or primary_error is not None:
+        detail = ", ".join(f"app{i}" for i in failed_apps) or "none"
+        print(
+            f"[ERROR] [AUTH-SUMMARY] healthy={healthy}/8 "
+            f"primary_ok={primary_error is None} failed_secondary=[{detail}]",
+            flush=True,
+        )
+    else:
+        print("[AUTH-SUMMARY] healthy=8/8 all apps authenticated.", flush=True)
 
     if primary_error is not None:
         raise primary_error

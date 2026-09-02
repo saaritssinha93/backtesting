@@ -87,6 +87,7 @@ COLLECT_FILTERED_STOCK_DATA_ROOT = runtime_dir("collect_filtered_stock_data")
 COLLECT_FILTERED_STOCK_DATA_LATEST_DIR = COLLECT_FILTERED_STOCK_DATA_ROOT / "latest"
 FNO_OI_ROOT = runtime_dir("fno_oi")
 FNO_OI_LATEST_DIR = FNO_OI_ROOT / "latest"
+FNO_V6_LIVE_KITE_ROOT = FNO_OI_ROOT / "v6_live" / "live_kite"
 FNO_MULTI_PAPER_ROOT = FNO_OI_ROOT / "multi_strategy_paper_v1"
 FNO_MULTI_PAPER_STATUS_PATH = FNO_MULTI_PAPER_ROOT / "status.json"
 FNO_MULTI_PAPER_HEARTBEAT_PATH = FNO_MULTI_PAPER_ROOT / "heartbeat.json"
@@ -153,6 +154,15 @@ FNO_EQ_ID_MONITOR_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "V10 / V11 / V12 Shared Papertrade Session",
         ("fno_v10_v11_v12_paper",),
     ),
+    (
+        "FnO V6 Live Kite - Quantity 1",
+        (
+            "live_signals_csv_fno_id_v6_short",
+            "live_signals_csv_fno_id_v6_long",
+            "live_kite_trades_csv_fno_id_v6",
+            "kite_trade_fno_id_v6",
+        ),
+    ),
     ("V10", ("fno_v10_paper",)),
     ("V11", ("fno_v11_paper",)),
     ("V12", ("fno_v12_paper",)),
@@ -179,6 +189,10 @@ FNO_EQ_ID_MONITOR_STAGE_LABELS: Dict[str, str] = {
     "fno_v6_live_short": "V6 SHORT paper entry",
     "fno_v6_trade_logger": "V6 papertrade ledger",
     "fno_v6_net_result": "V6 result / P&L",
+    "live_signals_csv_fno_id_v6_short": "V6 qty-1 SHORT live-entry sheet",
+    "live_signals_csv_fno_id_v6_long": "V6 qty-1 LONG live-entry sheet",
+    "live_kite_trades_csv_fno_id_v6": "V6 qty-1 live Kite trade ledger",
+    "kite_trade_fno_id_v6": "V6 qty-1 live Kite executor",
     "fno_v8_combined_paper": "V8 selection + entry + papertrade",
     "fno_oi_eod_qc": "FnO fetch quality guard",
     "fno_v10_v11_v12_paper": "shared fetch + chronological reducer",
@@ -206,6 +220,10 @@ FNO_EQ_ID_MONITOR_SESSION_LABELS: Dict[str, str] = {
     "fno_v6_live_short": "FnO V6 BEST_NET SHORT Entry Session",
     "fno_v6_trade_logger": "FnO V6 BEST_NET Continuous Trade Log",
     "fno_v6_net_result": "FnO V6 BEST_NET Net Result",
+    "live_signals_csv_fno_id_v6_short": "Live Entries CSV fno ID V6 Short",
+    "live_signals_csv_fno_id_v6_long": "Live Entries CSV fno ID V6 Long",
+    "live_kite_trades_csv_fno_id_v6": "fno ID V6 Live Kite Trades CSV",
+    "kite_trade_fno_id_v6": "fno ID V6 Live Trade Runner Log",
     "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
     "fno_oi_eod_qc": "FnO EOD Data Quality Control",
     "fno_v10_v11_v12_paper": "FnO V10/V11/V12 Papertrade - Shared Session",
@@ -219,7 +237,7 @@ FNO_EQ_ID_MONITOR_SESSION_LABELS: Dict[str, str] = {
 FNO_OI_CARD_REPORTS: Dict[str, str] = {
     "fno_oi_universe": "latest_fno_oi_universe.md",
     "fno_oi_fetch_5min_fast_production": "latest_fno_oi_fast_production.md",
-    "fno_oi_fetch_5min": "latest_fno_oi_fetch.md",
+    "fno_oi_fetch_5min": "latest_fno_oi_fetch_old.md",
     "fno_oi_fetch_5min_fast_shadow": "latest_fno_oi_fast_shadow.md",
     "fno_oi_feature_ranker": "latest_fno_oi_leaderboard.md",
     "fno_v6_scanner_5min": "latest_fno_v6_scanner_5min.md",
@@ -306,6 +324,7 @@ LOG_FILES: Dict[str, str] = {
     "fno_v6_live_short": "fno_v6_live_short.log",
     "fno_v6_trade_logger": "fno_v6_trade_logger.log",
     "fno_v6_net_result": "fno_v6_net_result.log",
+    "kite_trade_fno_id_v6": "fno_v6_live_kite_qty1.log",
     "fno_v8_combined_paper": "fno_v8_combined_paper.log",
     "fno_v10_v11_v12_paper": "fno_v10_v11_v12_paper.log",
     "fno_v10_paper": "fno_v10_v11_v12_paper.log",
@@ -391,6 +410,10 @@ STATUS_FILES: Dict[str, str] = {
     "fno_v6_live_short": "fno_v6_live_short.status",
     "fno_v6_trade_logger": "fno_v6_trade_logger.status",
     "fno_v6_net_result": "fno_v6_net_result.status",
+    "live_signals_csv_fno_id_v6_short": "fno_v6_live_kite_qty1.status",
+    "live_signals_csv_fno_id_v6_long": "fno_v6_live_kite_qty1.status",
+    "live_kite_trades_csv_fno_id_v6": "fno_v6_live_kite_qty1.status",
+    "kite_trade_fno_id_v6": "fno_v6_live_kite_qty1.status",
     "fno_v8_combined_paper": "fno_v8_combined_paper.status",
     "fno_oi_eod_qc": "fno_oi_eod_qc.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
@@ -451,6 +474,10 @@ HEARTBEAT_FILES: Dict[str, str] = {
     "fno_v6_live_short": "fno_v6_live_short.heartbeat",
     "fno_v6_trade_logger": "fno_v6_trade_logger.heartbeat",
     "fno_v6_net_result": "fno_v6_net_result.heartbeat",
+    "live_signals_csv_fno_id_v6_short": "fno_v6_live_kite_qty1.heartbeat",
+    "live_signals_csv_fno_id_v6_long": "fno_v6_live_kite_qty1.heartbeat",
+    "live_kite_trades_csv_fno_id_v6": "fno_v6_live_kite_qty1.heartbeat",
+    "kite_trade_fno_id_v6": "fno_v6_live_kite_qty1.heartbeat",
     "fno_v8_combined_paper": "fno_v8_combined_paper.heartbeat",
     "fno_oi_eod_qc": "fno_oi_eod_qc.heartbeat",
     "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.heartbeat",
@@ -500,6 +527,10 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "fno_v6_live_short": ("\\EQIDV2_fno_v6_live_short_0920",),
     "fno_v6_trade_logger": ("\\EQIDV2_fno_v6_trade_logger_0920",),
     "fno_v6_net_result": ("\\EQIDV2_fno_v6_net_result_0920",),
+    "live_signals_csv_fno_id_v6_short": ("\\EQIDV2_fno_v6_live_kite_qty1_0915",),
+    "live_signals_csv_fno_id_v6_long": ("\\EQIDV2_fno_v6_live_kite_qty1_0915",),
+    "live_kite_trades_csv_fno_id_v6": ("\\EQIDV2_fno_v6_live_kite_qty1_0915",),
+    "kite_trade_fno_id_v6": ("\\EQIDV2_fno_v6_live_kite_qty1_0915",),
     "fno_v8_combined_paper": ("\\EQIDV2_fno_v8_combined_paper_0915",),
     "fno_v10_v11_v12_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
     "fno_v10_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
@@ -1229,6 +1260,16 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
             return legacy_path, legacy_name
         fallback_name = f"eqidv2_nifty_guard_fetcher_supervised_v16_5min_{today_ist}.log"
         return LOG_DIR / fallback_name, fallback_name
+
+    if name == "kite_trade_fno_id_v6":
+        today_name = f"fno_v6_live_kite_qty1_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "fno_v6_live_kite_qty1_*.log")
+        if latest is not None:
+            return latest, latest.name
+        return today_path, today_name
 
     if name in LOG_FILES:
         file_name = LOG_FILES[name]
@@ -3604,7 +3645,18 @@ def _fno_eq_id_monitor_state(
         "WAITING", "WAITING_OUTPUT", "EMPTY_OUTPUT", "PARTIAL", "DEGRADED",
         "RECOVERED", "RESTARTING", "COOLDOWN", "BLOCKED_STALE_ACTIVATION",
     }
-    if runtime in healthy:
+    stop_reason = " ".join(
+        str(status.get(field, "") or "").strip().upper()
+        for field in ("reason", "phase", "exit_reason")
+    )
+    normal_market_stop = runtime == "STOPPED" and any(
+        marker in stop_reason
+        for marker in (
+            "HARD_STOP_REACHED", "NORMAL_EXIT", "AFTER_CUTOFF",
+            "MARKET_CLOSED", "END_TIME",
+        )
+    )
+    if runtime in healthy or normal_market_stop:
         monitor = "OK"
     elif runtime in watch or (
         runtime == "BLOCKED" and phase in {"INCOMPLETE_BY_DEADLINE", "UPSTREAM_BLOCKED"}
@@ -3884,6 +3936,7 @@ def _fno_eq_id_timeline_book_as_of(
     session_date: str,
     entry_field: str,
     exit_field: str,
+    pnl_field: str = "net_pnl_rs",
 ) -> str:
     cutoff = minute_end + dt.timedelta(minutes=1) - dt.timedelta(microseconds=1)
     entered: list[tuple[Dict[str, Any], dt.datetime]] = []
@@ -3899,7 +3952,7 @@ def _fno_eq_id_timeline_book_as_of(
     open_count = len(entered) - len(closed)
     realized = sum(
         number
-        for number in (_fno_eq_id_timeline_number(row.get("net_pnl_rs")) for row in closed)
+        for number in (_fno_eq_id_timeline_number(row.get(pnl_field)) for row in closed)
         if number is not None
     )
     return f"book O{open_count}/C{len(closed)} R={_fno_eq_id_timeline_rs(realized)}"
@@ -3912,11 +3965,43 @@ def _fno_eq_id_timeline_event_symbols(
     minute: str,
     session_date: str,
 ) -> list[str]:
+    # The V6 PAPER ledger uses `tradingsymbol`; the V6 LIVE Kite qty-1 ledger
+    # uses `ticker`.  Accept both so one helper serves both schemas.
     return [
-        str(row.get("symbol") or row.get("tradingsymbol") or "").strip().upper()
+        str(
+            row.get("symbol")
+            or row.get("tradingsymbol")
+            or row.get("ticker")
+            or ""
+        ).strip().upper()
         for row in rows
         if _fno_eq_id_timeline_row_slot(row, session_date, (timestamp_field,)) == minute
     ]
+
+
+def _fno_eq_id_timeline_v6_live_arm_state(
+    *,
+    disabled: bool,
+    status_present: bool,
+    armed: bool,
+    arm_reason: str,
+    kill_switch: bool,
+) -> str:
+    """Return the V6 LIVE executor's gating state.
+
+    An unarmed live executor is a normal, deliberate condition - LIVE requires
+    an explicit same-day acknowledgement - so it must be reported as its own
+    state rather than being indistinguishable from "armed but no signal fired".
+    """
+    if disabled:
+        return "DISABLED"
+    if not status_present:
+        return "NO LIVE STATUS"
+    if kill_switch:
+        return "KILL SWITCH ON"
+    if not armed:
+        return f"NOT ARMED ({arm_reason})" if arm_reason else "NOT ARMED"
+    return "ARMED"
 
 
 def _fno_eq_id_timeline_signal_id_symbol(signal_id: object) -> str:
@@ -4052,6 +4137,33 @@ def _build_fno_eq_id_strategy_timelines(
     v6_trade_rows = _fno_eq_id_timeline_session_rows(
         _read_csv_tail_rows(v6_trade_path, limit=50000),
         session_date,
+    )
+
+    # V6 LIVE Kite qty-1 executor.  This is a separate execution path from the
+    # PAPER ledger above: same signals, real orders, fixed quantity 1.  Its
+    # armed state matters as much as its fills - an unarmed session produces no
+    # trades for a legitimate reason, which must not read as "nothing happened".
+    v6_live_root = v6_root / "live_kite"
+    v6_live_trade_path = (
+        v6_live_root / f"live_trades_{session_date}_fno_id_v6.csv"
+    )
+    v6_live_trade_file_exists = v6_live_trade_path.is_file()
+    v6_live_trade_rows = _fno_eq_id_timeline_session_rows(
+        _read_csv_tail_rows(v6_live_trade_path, limit=50000),
+        session_date,
+    )
+    v6_live_status = _read_json_dict(v6_live_root / "status.json")
+    if str(v6_live_status.get("session_date", "") or "").strip() != session_date:
+        v6_live_status = {}
+    v6_live_armed = bool(v6_live_status.get("armed"))
+    v6_live_arm_reason = str(v6_live_status.get("arm_reason", "") or "").strip()
+    v6_live_kill_switch = bool(v6_live_status.get("kill_switch_enabled"))
+    v6_live_state = str(v6_live_status.get("state", "") or "").strip().upper()
+    v6_live_signals = int(
+        _fno_eq_id_timeline_number(v6_live_status.get("signals")) or 0
+    )
+    v6_live_disabled = _fno_eq_id_timeline_card_disabled(
+        by_id, "kite_trade_fno_id_v6"
     )
     shared_day_root = FNO_MULTI_PAPER_ROOT / "sessions" / session_date
     shared_status = _read_json_dict(FNO_MULTI_PAPER_STATUS_PATH)
@@ -4366,6 +4478,52 @@ def _build_fno_eq_id_strategy_timelines(
                 trades,
             )
 
+        v6_live_arm_state = _fno_eq_id_timeline_v6_live_arm_state(
+            disabled=v6_live_disabled,
+            status_present=bool(v6_live_status),
+            armed=v6_live_armed,
+            arm_reason=v6_live_arm_reason,
+            kill_switch=v6_live_kill_switch,
+        )
+        if slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+            v6_live_cell = "OFF WINDOW"
+        elif v6_live_arm_state != "ARMED":
+            # Still show the cohort so an unarmed day remains auditable.
+            slot_live_rows = [
+                row for row in v6_live_trade_rows
+                if str(row.get("signal_end", "") or "").strip() == slot
+            ]
+            v6_live_cell = f"{v6_live_arm_state}; {len(slot_live_rows)} live fill(s)"
+        elif not v6_live_trade_file_exists:
+            v6_live_cell = "ARMED; MISSING LIVE LEDGER"
+        else:
+            slot_live_rows = [
+                row for row in v6_live_trade_rows
+                if str(row.get("signal_end", "") or "").strip() == slot
+            ]
+            if slot_live_rows:
+                symbols = _fno_eq_id_timeline_symbols(
+                    [
+                        str(row.get("ticker") or "").strip().upper()
+                        for row in slot_live_rows
+                    ]
+                )
+                realized = sum(
+                    number
+                    for number in (
+                        _fno_eq_id_timeline_number(row.get("pnl_rs"))
+                        for row in slot_live_rows
+                    )
+                    if number is not None
+                )
+                v6_live_cell = (
+                    f"ARMED; LIVE {len(slot_live_rows)}"
+                    + (f" [{symbols}]" if symbols else "")
+                    + f"; R={_fno_eq_id_timeline_rs(realized)}"
+                )
+            else:
+                v6_live_cell = "ARMED; NO LIVE FILL"
+
         five_minute_rows.append(
             {
                 "slot": slot,
@@ -4374,6 +4532,7 @@ def _build_fno_eq_id_strategy_timelines(
                 "oi": oi_cell,
                 "rank": rank_cell,
                 "v6": v6_cell,
+                "v6_live": v6_live_cell,
                 "shared": shared_source_cell,
                 **profile_cells,
             }
@@ -4585,11 +4744,62 @@ def _build_fno_eq_id_strategy_timelines(
                     parts.append("NO EVENT")
             profile_minute_cells[profile] = "; ".join(parts) + f"; {book}"
 
+        v6_live_arm_state_1m = _fno_eq_id_timeline_v6_live_arm_state(
+            disabled=v6_live_disabled,
+            status_present=bool(v6_live_status),
+            armed=v6_live_armed,
+            arm_reason=v6_live_arm_reason,
+            kill_switch=v6_live_kill_switch,
+        )
+        if v6_live_arm_state_1m == "DISABLED":
+            v6_live_cell_1m = "DISABLED"
+        else:
+            live_parts: list[str] = []
+            live_entry_symbols = _fno_eq_id_timeline_event_symbols(
+                v6_live_trade_rows,
+                timestamp_field="entry_time",
+                minute=minute,
+                session_date=session_date,
+            )
+            live_exit_symbols = _fno_eq_id_timeline_event_symbols(
+                v6_live_trade_rows,
+                timestamp_field="exit_time",
+                minute=minute,
+                session_date=session_date,
+            )
+            if live_entry_symbols:
+                live_parts.append(
+                    f"ENTRY {len(live_entry_symbols)} "
+                    f"[{_fno_eq_id_timeline_symbols(live_entry_symbols)}]"
+                )
+            if live_exit_symbols:
+                live_parts.append(
+                    f"EXIT {len(live_exit_symbols)} "
+                    f"[{_fno_eq_id_timeline_symbols(live_exit_symbols)}]"
+                )
+            live_book = _fno_eq_id_timeline_book_as_of(
+                v6_live_trade_rows,
+                minute_end=minute_at,
+                session_date=session_date,
+                entry_field="entry_time",
+                exit_field="exit_time",
+                pnl_field="pnl_rs",
+            )
+            if not live_parts:
+                # Carry the gate reason on every quiet minute: without it an
+                # unarmed session is visually identical to an armed idle one.
+                live_parts.append(
+                    "NO EVENT" if v6_live_arm_state_1m == "ARMED"
+                    else v6_live_arm_state_1m
+                )
+            v6_live_cell_1m = "; ".join(live_parts) + f"; {live_book}"
+
         one_minute_rows.append(
             {
                 "minute": minute,
                 "shared_source": minute_source,
                 "v6": v6_cell_1m,
+                "v6_live": v6_live_cell_1m,
                 **profile_minute_cells,
             }
         )
@@ -4604,6 +4814,12 @@ def _build_fno_eq_id_strategy_timelines(
             continue
         market_cells = [row[key] for key in ("cash", "oi", "rank")]
         strategy_cells = [row[key] for key in ("v6", "shared", "v10", "v11", "v12")]
+        # A deliberately unarmed LIVE executor reports "NOT ARMED
+        # (LIVE_ACK_MISSING)".  That is an intended state, not a fault, and its
+        # reason string contains a hard-issue term - so only scan this cell
+        # once the executor is actually armed and expected to trade.
+        if str(row.get("v6_live", "")).startswith("ARMED"):
+            strategy_cells.append(row["v6_live"])
         cells = market_cells + strategy_cells
         if any(any(term in cell for term in hard_terms) for cell in cells):
             hard_issue_count += 1
@@ -4613,6 +4829,8 @@ def _build_fno_eq_id_strategy_timelines(
             watch_issue_count += 1
     for row in one_minute_rows:
         cells = [row[key] for key in ("shared_source", "v6", "v10", "v11", "v12")]
+        if str(row.get("v6_live", "")).startswith("ARMED"):
+            cells.append(row["v6_live"])
         if any(any(term in cell for term in hard_terms) for cell in cells):
             hard_issue_count += 1
     timeline_window_closed = current >= (
@@ -4663,14 +4881,14 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         "",
         "## 5-Minute Strategy Selection and Current Cohort Result",
         "",
-        "| 5m signal end | V6 selection -> S+1 confirmation -> current cohort | Shared source | V10 | V11 | V12 |",
-        "|---|---|---|---|---|---|",
+        "| 5m signal end | V6 selection -> S+1 confirmation -> current cohort | V6 LIVE (Kite qty-1) | Shared source | V10 | V11 | V12 |",
+        "|---|---|---|---|---|---|---|",
     ))
     for row in five_rows if isinstance(five_rows, list) else []:
         lines.append(
-            "| {slot} | {v6} | {shared} | {v10} | {v11} | {v12} |".format(
+            "| {slot} | {v6} | {v6_live} | {shared} | {v10} | {v11} | {v12} |".format(
                 **{key: _fno_eq_id_monitor_clean(row.get(key, ""), limit=300) for key in (
-                    "slot", "v6", "shared", "v10", "v11", "v12"
+                    "slot", "v6", "v6_live", "shared", "v10", "v11", "v12"
                 )}
             )
         )
@@ -4685,15 +4903,15 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         "- `REDUCED; no required symbols` means the chronological reducer advanced without fetching a union bar because no active candidate needed one. It does not mean a 1-minute fetch occurred.",
         "- One-minute books use only causal entry/exit timestamps and realized P&L. Current ledger MTM appears only in the 5-minute cohort table because immutable historical per-minute MTM snapshots do not exist.",
         "",
-        "| 1m end/event minute | Shared 1m source / reducer | V6 | V10 | V11 | V12 |",
-        "|---|---|---|---|---|---|",
+        "| 1m end/event minute | Shared 1m source / reducer | V6 (paper) | V6 LIVE (Kite qty-1) | V10 | V11 | V12 |",
+        "|---|---|---|---|---|---|---|",
     ))
     minute_rows = timeline.get("one_minute_rows", [])
     for row in minute_rows if isinstance(minute_rows, list) else []:
         lines.append(
-            "| {minute} | {shared_source} | {v6} | {v10} | {v11} | {v12} |".format(
+            "| {minute} | {shared_source} | {v6} | {v6_live} | {v10} | {v11} | {v12} |".format(
                 **{key: _fno_eq_id_monitor_clean(row.get(key, ""), limit=320) for key in (
-                    "minute", "shared_source", "v6", "v10", "v11", "v12"
+                    "minute", "shared_source", "v6", "v6_live", "v10", "v11", "v12"
                 )}
             )
         )
@@ -4705,6 +4923,8 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         "- `NO SIGNAL` / `NO EVENT`: processing completed but no candidate or transition occurred.",
         "- `WAIT` / `IN PROGRESS`: the causal completed-candle boundary or evidence deadline has not passed.",
         "- `SKIPPED`, `BLOCKED`, `INCOMPLETE`, `MISMATCH`, or `CONFLICT`: explicit fail-visible evidence; no result is fabricated.",
+        "- `V6 LIVE (Kite qty-1)` is the real-order execution path at fixed quantity 1, separate from the V6 PAPER ledger in the neighbouring column. Both act on the same V6 signals.",
+        "- `NOT ARMED (...)`, `KILL SWITCH ON`, and `NO LIVE STATUS` are deliberate gates, not faults: LIVE needs an explicit same-day acknowledgement, so an unarmed session legitimately produces no fills. These states are excluded from the hard-issue count; `ARMED; MISSING LIVE LEDGER` is not.",
     ))
     return lines
 
@@ -8644,6 +8864,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_live_short",
       "fno_v6_trade_logger",
       "fno_v6_net_result",
+      "live_signals_csv_fno_id_v6_short",
+      "live_signals_csv_fno_id_v6_long",
+      "live_kite_trades_csv_fno_id_v6",
+      "kite_trade_fno_id_v6",
       "fno_v8_combined_paper",
       "fno_v10_v11_v12_paper",
       "fno_v10_paper",
@@ -8730,6 +8954,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v6_live_short": "FnO V6 BEST_NET SHORT Entry Session",
       "fno_v6_trade_logger": "FnO V6 BEST_NET Continuous Trade Log",
       "fno_v6_net_result": "FnO V6 BEST_NET Net Result",
+      "live_signals_csv_fno_id_v6_short": "Live Entries CSV fno ID V6 Short",
+      "live_signals_csv_fno_id_v6_long": "Live Entries CSV fno ID V6 Long",
+      "live_kite_trades_csv_fno_id_v6": "fno ID V6 Live Kite Trades CSV",
+      "kite_trade_fno_id_v6": "fno ID V6 Live Trade Runner Log",
       "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
       "fno_v10_v11_v12_paper": "FnO V10/V11/V12 Papertrade - Shared Session",
       "fno_v10_paper": "FnO V10 Papertrade View",
@@ -8821,6 +9049,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "fno_v6_live_short",
           "fno_v6_trade_logger",
           "fno_v6_net_result",
+          "live_signals_csv_fno_id_v6_short",
+          "live_signals_csv_fno_id_v6_long",
+          "live_kite_trades_csv_fno_id_v6",
+          "kite_trade_fno_id_v6",
           "fno_v8_combined_paper",
           "fno_v10_v11_v12_paper",
           "fno_v10_paper",
@@ -8829,6 +9061,17 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "fno_oi_eod_qc"
         ],
         subgroups: [
+          {
+            key: "fno-v6-live-kite-qty1",
+            title: "FnO V6 Live Kite - Quantity 1",
+            note: "one task | fixed quantity 1 | SHORT | LONG | trades | runner log",
+            ids: [
+              "live_signals_csv_fno_id_v6_short",
+              "live_signals_csv_fno_id_v6_long",
+              "live_kite_trades_csv_fno_id_v6",
+              "kite_trade_fno_id_v6"
+            ]
+          },
           {
             key: "fno-modern-paper-session",
             title: "V10 / V11 / V12 Shared Papertrade Session",
@@ -8965,7 +9208,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     ]);
     const SESSION_TIMELINE = [
       { time: "08:50", id: "fno_oi_universe", label: "FnO Universe" },
-      { time: "09:00", id: "authentication_v2", label: "Auth" },
+      { time: "08:30", id: "authentication_v2", label: "Auth" },
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
       { time: "09:00", id: "kiteticker_5min_data", label: "Live Data KiteTicker Fetch 5min (shadow monitoring)" },
       { time: "09:05", id: "fno_oi_fetch_5min_fast_production", label: "FnO Futures OI Fetch (Fast Production)" },
@@ -8979,6 +9222,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:15", id: "fno_v6_live_short", label: "FnO V6 BEST_NET SHORT Entries" },
       { time: "09:15", id: "fno_v6_trade_logger", label: "FnO V6 BEST_NET Trade Log" },
       { time: "09:15", id: "fno_v6_net_result", label: "FnO V6 BEST_NET Net Result" },
+      { time: "09:15", id: "kite_trade_fno_id_v6", label: "FnO V6 Live Kite Qty 1" },
       { time: "09:15", id: "fno_v8_combined_paper", label: "FnO V8-Combined Paper Shadow" },
       { time: "09:15", id: "fno_v10_v11_v12_paper", label: "FnO V10/V11/V12 Papertrade" },
       { time: "09:17", id: "eod_1min_data", label: "Live Data Fetch 1min" },
@@ -10912,6 +11156,122 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 "size_bytes": candidate_size,
                 "status": candidate_status,
                 "tail": candidate_tail,
+            }
+        )
+
+        # FnO V6 quantity-1 live execution publishes isolated entry and trade
+        # sheets.  Add these before building the aggregate FnO monitor so the
+        # monitor sees the same four views that are rendered in its subgroup.
+        fno_v6_live_kite_status = _v7_monitor_status_for(
+            "kite_trade_fno_id_v6", task_snapshot
+        )
+        fno_v6_live_kite_payload = _json_status_scalars(
+            _read_json_dict(FNO_V6_LIVE_KITE_ROOT / "status.json")
+        )
+        if fno_v6_live_kite_payload:
+            fno_v6_live_kite_payload["execution_state"] = (
+                fno_v6_live_kite_payload.pop("state", "")
+            )
+            fno_v6_live_kite_status.update(fno_v6_live_kite_payload)
+            for existing_item in items:
+                if existing_item.get("id") == "kite_trade_fno_id_v6":
+                    existing_item.setdefault("status", {}).update(
+                        fno_v6_live_kite_payload
+                    )
+                    break
+        fno_v6_live_entry_cols: list[Tuple[str, Sequence[str]]] = [
+            (
+                "signal_datetime",
+                (
+                    "signal_datetime",
+                    "signal_timestamp",
+                    "confirmation_timestamp",
+                    "created_at_ist",
+                ),
+            ),
+            ("detected_time_ist", ("detected_time_ist", "published_at_ist")),
+            ("ticker", ("ticker", "tradingsymbol")),
+            ("side", ("side",)),
+            ("entry_price", ("entry_price", "trigger_price", "trigger")),
+            ("target_price", ("target_price",)),
+            ("stop_price", ("stop_price", "_stop_price")),
+            ("quantity", ("quantity",)),
+        ]
+        for fno_v6_side in ("short", "long"):
+            fno_v6_signal_name = (
+                f"signals_{today_ist}_fno_id_v6_{fno_v6_side}.csv"
+            )
+            fno_v6_signal_path = FNO_V6_LIVE_KITE_ROOT / fno_v6_signal_name
+            try:
+                fno_v6_signal_size = (
+                    fno_v6_signal_path.stat().st_size
+                    if fno_v6_signal_path.exists()
+                    else 0
+                )
+            except OSError:
+                fno_v6_signal_size = 0
+            items.append(
+                {
+                    "id": f"live_signals_csv_fno_id_v6_{fno_v6_side}",
+                    "file_name": str(
+                        Path("fno_oi")
+                        / "v6_live"
+                        / "live_kite"
+                        / fno_v6_signal_name
+                    ),
+                    "exists": fno_v6_signal_path.exists(),
+                    "mtime": iso_mtime(fno_v6_signal_path),
+                    "size_bytes": fno_v6_signal_size,
+                    "status": dict(fno_v6_live_kite_status),
+                    "tail": _format_csv_projection(
+                        fno_v6_signal_path,
+                        fno_v6_live_entry_cols,
+                        limit_rows=5000,
+                        time_only_cols={"signal_datetime", "detected_time_ist"},
+                    ),
+                }
+            )
+
+        fno_v6_live_trade_name = f"live_trades_{today_ist}_fno_id_v6.csv"
+        fno_v6_live_trade_path = FNO_V6_LIVE_KITE_ROOT / fno_v6_live_trade_name
+        try:
+            fno_v6_live_trade_size = (
+                fno_v6_live_trade_path.stat().st_size
+                if fno_v6_live_trade_path.exists()
+                else 0
+            )
+        except OSError:
+            fno_v6_live_trade_size = 0
+        fno_v6_live_trade_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("ticker", "tradingsymbol")),
+            ("entry_time", ("entry_time", "entry_at_ist")),
+            ("exit_time", ("exit_time", "exit_at_ist")),
+            ("side", ("side",)),
+            ("outcome", ("outcome", "status", "exit_reason")),
+            ("quantity", ("quantity",)),
+            ("entry", ("filled_price", "entry_price")),
+            ("exit", ("exit_price",)),
+            ("pnl_rs", ("pnl_rs", "net_pnl_rs")),
+        ]
+        items.append(
+            {
+                "id": "live_kite_trades_csv_fno_id_v6",
+                "file_name": str(
+                    Path("fno_oi")
+                    / "v6_live"
+                    / "live_kite"
+                    / fno_v6_live_trade_name
+                ),
+                "exists": fno_v6_live_trade_path.exists(),
+                "mtime": iso_mtime(fno_v6_live_trade_path),
+                "size_bytes": fno_v6_live_trade_size,
+                "status": dict(fno_v6_live_kite_status),
+                "tail": _format_csv_projection(
+                    fno_v6_live_trade_path,
+                    fno_v6_live_trade_cols,
+                    limit_rows=5000,
+                    time_only_cols={"entry_time", "exit_time"},
+                ),
             }
         )
 

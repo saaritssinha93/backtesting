@@ -28,6 +28,7 @@ $v6DownstreamTasks = @(
     "EQIDV2_fno_v6_confirmation_1min_0919",
     "EQIDV2_fno_v6_live_long_0920",
     "EQIDV2_fno_v6_live_short_0920",
+    "EQIDV2_fno_v6_live_kite_qty1_0915",
     "EQIDV2_fno_v6_trade_logger_0920",
     "EQIDV2_fno_v6_net_result_0920"
 )

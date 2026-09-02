@@ -684,6 +684,56 @@ class FnoV5LiveTests(unittest.TestCase):
         self.assertEqual(live_blocked.quantity, 0)
         self.assertEqual(live_blocked.state, "BLOCKED_LOT_EXCEEDS_BUDGET")
 
+    def test_live_quantity_override_persists_exactly_one_share(self) -> None:
+        signal = self._sample_signal()
+
+        state = live.create_order_state(signal, "LIVE", live_quantity=1)
+
+        self.assertGreater(signal["live_sizing"]["quantity"], 1)
+        self.assertEqual(state["quantity"], 1)
+        self.assertEqual(
+            state["strategy_sized_quantity"], signal["live_sizing"]["quantity"]
+        )
+        self.assertEqual(state["execution_quantity_override"], 1)
+        self.assertEqual(state["status"], "PENDING_ENTRY")
+        live._validate_order_state(state, signal, "LIVE", live_quantity=1)
+
+    def test_live_quantity_override_validation_rejects_tampering(self) -> None:
+        signal = self._sample_signal()
+        state = live.create_order_state(signal, "LIVE", live_quantity=1)
+
+        tampered_quantity = dict(state)
+        tampered_quantity["quantity"] = 2
+        with self.assertRaisesRegex(RuntimeError, "invalid quantity 2"):
+            live._validate_order_state(
+                tampered_quantity,
+                signal,
+                "LIVE",
+                live_quantity=1,
+            )
+
+        tampered_override = dict(state)
+        tampered_override["execution_quantity_override"] = 2
+        with self.assertRaisesRegex(RuntimeError, "required LIVE quantity override 1"):
+            live._validate_order_state(
+                tampered_override,
+                signal,
+                "LIVE",
+                live_quantity=1,
+            )
+
+    def test_live_quantity_override_does_not_change_paper_quantity(self) -> None:
+        signal = self._sample_signal()
+
+        state = live.create_order_state(signal, "PAPER")
+
+        self.assertEqual(state["quantity"], signal["paper_sizing"]["quantity"])
+        self.assertEqual(
+            state["strategy_sized_quantity"], signal["paper_sizing"]["quantity"]
+        )
+        self.assertIsNone(state["execution_quantity_override"])
+        live._validate_order_state(state, signal, "PAPER")
+
     def test_paper_order_requires_trigger_then_uses_selected_bracket_and_cost(self) -> None:
         signal = {
             "strategy_version": config.STRATEGY_VERSION,
@@ -731,6 +781,25 @@ class FnoV5LiveTests(unittest.TestCase):
         self.assertEqual(state["exit_reason"], "TARGET")
         self.assertGreater(state["gross_pnl_rs"], state["net_pnl_rs"])
         self.assertGreater(state["estimated_cost_rs"], 0)
+
+    def test_pending_paper_entry_cancels_after_activation_deadline(self) -> None:
+        signal = self._sample_signal()
+        state = live.create_order_state(signal, "PAPER")
+        after_deadline = datetime.fromisoformat(
+            signal["entry_activation_deadline_ist"]
+        ) + pd.Timedelta(seconds=1)
+
+        state = live.advance_paper_order(
+            state,
+            float(signal["trigger_price"]) - 0.05,
+            after_deadline,
+        )
+
+        self.assertEqual(state["status"], "CANCELLED")
+        self.assertEqual(
+            state["status_reason"], "ENTRY_ACTIVATION_DEADLINE_EXPIRED"
+        )
+        self.assertEqual(state["entry_price"], 0.0)
 
     def test_live_orders_are_not_armed_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1113,6 +1182,33 @@ class FnoV5LiveTests(unittest.TestCase):
 
         self.assertEqual(state["entry_order_id"], "EXISTING1")
         self.assertEqual(state["status"], "CANCELLED")
+        self.assertEqual(broker.placed, [])
+
+    def test_working_live_entry_is_cancelled_after_activation_deadline(self) -> None:
+        signal = self._sample_signal()
+        state = live.create_order_state(signal, "LIVE", live_quantity=1)
+        state.update(
+            entry_order_id="WORKING1",
+            entry_order_activated_at_ist="2026-08-10T09:42:00+05:30",
+        )
+        broker = FakeBroker([{"order_id": "WORKING1", "status": "OPEN"}])
+        after_deadline = datetime.fromisoformat(
+            signal["entry_activation_deadline_ist"]
+        ) + pd.Timedelta(seconds=1)
+
+        with (
+            patch.object(live, "_live_arm_state", return_value=(True, "LIVE_ARMED")),
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(live, "KILL_SWITCH_PATH", Path(temp_dir) / "kill.json"),
+        ):
+            state = live.advance_live_order(state, broker, after_deadline)
+
+        self.assertEqual(state["quantity"], 1)
+        self.assertEqual(state["status"], "CANCELLED")
+        self.assertEqual(
+            state["status_reason"], "ENTRY_ACTIVATION_DEADLINE_EXPIRED"
+        )
+        self.assertEqual(broker.cancelled, ["WORKING1"])
         self.assertEqual(broker.placed, [])
 
     def test_late_live_start_does_not_place_retroactive_entry(self) -> None:

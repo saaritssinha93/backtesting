@@ -83,6 +83,9 @@ function Test-TaskDefinition {
     if ([bool]$Task.Settings.StartWhenAvailable) {
         throw "StartWhenAvailable must be false; missed 09:15 triggers must not catch up."
     }
+    if (-not [bool]$Task.Settings.WakeToRun) {
+        throw "WakeToRun must be true so the prospective 09:15 start is not missed."
+    }
     if ([string]$Task.Settings.MultipleInstances -ne "IgnoreNew") {
         throw "MultipleInstances must be IgnoreNew."
     }
@@ -183,6 +186,7 @@ try {
         -Disable `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
+        -WakeToRun `
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -MultipleInstances IgnoreNew `
         -RestartCount $restartCount `
@@ -224,7 +228,7 @@ try {
     }
 
     Write-Output "[SUCCESS] Scheduled $taskName for weekdays at 09:15 India time."
-    Write-Output "[INFO] State=$($installed.State); StartWhenAvailable=False; AllowDemandStart=True; restart=5x/PT1M; no task run was requested."
+    Write-Output "[INFO] State=$($installed.State); StartWhenAvailable=False; WakeToRun=True; AllowDemandStart=True; restart=5x/PT1M; no task run was requested."
 }
 catch {
     $failure = $_.Exception.Message

@@ -70,6 +70,7 @@ def test_main_reports_secondary_failure_and_continues_with_success_exit(
         "run_slot_scheduler",
         lambda **kwargs: events.append("app1"),
     )
+    monkeypatch.setattr(auth.time, "sleep", lambda _seconds: None)
 
     def seed_secondary(**kwargs) -> None:
         app_idx = kwargs["app_idx"]
@@ -81,10 +82,14 @@ def test_main_reports_secondary_failure_and_continues_with_success_exit(
 
     auth.main()
 
-    assert events == [f"app{app_idx}" for app_idx in range(1, 9)]
+    assert events == [
+        "app1", "app2", "app3", "app4", "app4", "app5", "app6", "app7", "app8"
+    ]
     output = capsys.readouterr().out
-    assert "[WARN] [AUTH4] App4 token generation failed" in output
+    assert "[WARN] [AUTH4] App4 attempt 1/2 failed" in output
+    assert "[WARN] [AUTH4] App4 token generation failed after 2 attempts" in output
     assert "Continuing with remaining apps." in output
+    assert "[ERROR] [AUTH-SUMMARY] healthy=7/8" in output
 def test_auth_url_log_redaction_hides_query_values():
     raw = "https://kite.example/connect/login?api_key=private-key&request_token=private-token"
 

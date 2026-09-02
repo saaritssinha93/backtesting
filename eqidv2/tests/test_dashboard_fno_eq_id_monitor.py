@@ -110,6 +110,15 @@ def _scoped_items() -> list[dict[str, object]]:
                         "net_pnl_rs": "12.50",
                     }
                 )
+            if card_id in {
+                "live_signals_csv_fno_id_v6_short",
+                "live_signals_csv_fno_id_v6_long",
+                "live_kite_trades_csv_fno_id_v6",
+                "kite_trade_fno_id_v6",
+            }:
+                status["scheduler_tasks"] = (
+                    "\\EQIDV2_fno_v6_live_kite_qty1_0915"
+                )
             items.append(
                 {
                     "id": card_id,
@@ -140,19 +149,20 @@ def _empty_timeline(*_args, **_kwargs) -> dict[str, object]:
     }
 
 
-def test_monitor_scope_has_exact_requested_25_unique_views() -> None:
+def test_monitor_scope_has_exact_requested_29_unique_views() -> None:
     ids = [
         card_id
         for _, card_ids in dashboard.FNO_EQ_ID_MONITOR_GROUPS
         for card_id in card_ids
     ]
 
-    assert len(ids) == 25
-    assert len(set(ids)) == 25
+    assert len(ids) == 29
+    assert len(set(ids)) == 29
     assert [name for name, _ in dashboard.FNO_EQ_ID_MONITOR_GROUPS] == [
         "Live Market Data",
         "FnO",
         "V10 / V11 / V12 Shared Papertrade Session",
+        "FnO V6 Live Kite - Quantity 1",
         "V10",
         "V11",
         "V12",
@@ -171,6 +181,12 @@ def test_disabled_is_inactive_and_fail_closed_block_is_watch() -> None:
     assert dashboard._fno_eq_id_monitor_state(
         {"status": "FAILED", "phase": "CRASHED"}, exists=True
     ) == ("PROBLEM", "FAILED", True)
+    assert dashboard._fno_eq_id_monitor_state(
+        {"status": "STOPPED", "reason": "hard_stop_reached"}, exists=True
+    ) == ("OK", "STOPPED", True)
+    assert dashboard._fno_eq_id_monitor_state(
+        {"status": "STOPPED", "reason": "worker_missing"}, exists=True
+    ) == ("PROBLEM", "STOPPED", True)
     assert dashboard._fno_eq_id_monitor_state(
         {
             "status": "RUNNING",
@@ -208,12 +224,12 @@ def test_aggregate_deduplicates_shared_task_and_keeps_profile_counters(monkeypat
         now_ist=datetime(2026, 9, 1, 10, 0, tzinfo=dashboard.IST),
     )
 
-    assert configured == 25
+    assert configured == 29
     assert exists is True
     assert mtime == "2026-09-01 10:00:00"
     assert status["status"] == "PARTIAL"
     assert status["inactive_sessions"] == "3"
-    assert status["physical_tasks"] == "22"
+    assert status["physical_tasks"] == "23"
     assert "# FnO EQ ID monitoring" in tail
     assert "gap_guard_rej=1" in tail
     assert "V10 selection + guards + entry + result" in tail
@@ -380,6 +396,14 @@ def test_fast_production_old_and_shadow_validator_have_exact_fetch_order() -> No
         dashboard.FNO_OI_CARD_REPORTS["fno_oi_fetch_5min_fast_production"]
         == "latest_fno_oi_fast_production.md"
     )
+    assert (
+        dashboard.FNO_OI_CARD_REPORTS["fno_oi_fetch_5min"]
+        == "latest_fno_oi_fetch_old.md"
+    )
+    assert (
+        dashboard.FNO_OI_CARD_REPORTS["fno_oi_fetch_5min_fast_production"]
+        != dashboard.FNO_OI_CARD_REPORTS["fno_oi_fetch_5min"]
+    )
 
     source = Path(dashboard.__file__).read_text(encoding="utf-8")
     adjacency = (
@@ -398,6 +422,7 @@ def test_fast_production_old_and_shadow_validator_have_exact_fetch_order() -> No
     assert '"fno_oi_fetch_5min_fast_production": "FnO Live 5-Minute Futures OI Fetch (Fast Production)"' in source
     assert '"fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch (Old)"' in source
     assert '"fno_oi_fetch_5min_fast_shadow": "FnO Fast Shadow OI Validator"' in source
+    assert '{ time: "08:30", id: "authentication_v2", label: "Auth" }' in source
 
 
 def test_strategy_timelines_have_exact_inclusive_grids_and_windows(
