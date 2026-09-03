@@ -83,6 +83,10 @@ FIRST_SIGNAL_END = day_time.fromisoformat("09:25")
 FIRST_CONFIRMATION_END = day_time.fromisoformat("09:26")
 SQUARE_OFF_TIME = day_time.fromisoformat(config.SQUARE_OFF)
 BOUNDARY_BUFFER_SECONDS = market_data.DEFAULT_BOUNDARY_BUFFER_SEC
+# An untraded contract at S/S-5 is excluded from that slot rather than
+# vetoing the session; more than this many means the feed itself failed.
+MAX_OI_PROOF_EXCLUSIONS = 5
+MAX_OI_PROOF_EXCLUSION_RATIO = 0.02
 DEFAULT_POLL_SECONDS = 1.0
 
 # Frozen official regular-session calendar used by the V8 research contract.
@@ -119,6 +123,23 @@ class SessionContractError(RuntimeError):
 
 class SourceNotReadyError(SessionContractError):
     """The upstream scanner has not published the exact slot yet."""
+
+
+class UniverseOIProofExcluded(Exception):
+    """One contract cannot be proven at this slot and is dropped from it.
+
+    Raised ONLY when the exchange published no bar at S or S-5 for a contract
+    (an illiquid future that simply did not trade in that window). It is not a
+    data-integrity failure: there is nothing to fetch and nothing to repair, so
+    vetoing the whole session for all strategies loses real trading days to a
+    contract that could never have been selected. Every other proof failure
+    remains fatal.
+    """
+
+    def __init__(self, symbol: str, reason: str) -> None:
+        super().__init__(f"{symbol}: {reason}")
+        self.symbol = symbol
+        self.reason = reason
 
 
 class SourceIncompleteError(SessionContractError):
@@ -862,8 +883,8 @@ def prove_v6_oi_shift_is_exact_for_stock_universe(
         exact_s = ordered.index[ordered["ts"].eq(pd.Timestamp(signal_at))].tolist()
         exact_prev = ordered.index[ordered["ts"].eq(pd.Timestamp(previous_at))].tolist()
         if len(exact_s) != 1 or len(exact_prev) != 1:
-            raise SourceIncompleteError(
-                f"universe OI proof requires unique exact S/S-5 rows: {symbol}"
+            raise UniverseOIProofExcluded(
+                symbol, "no unique exact S/S-5 rows published for this slot"
             )
         current_index = exact_s[0]
         if current_index <= 0 or current_index - 1 != exact_prev[0]:
@@ -942,13 +963,29 @@ def prove_v6_oi_shift_is_exact_for_stock_universe(
         }
 
     proofs: list[dict[str, Any]] = []
+    excluded_contracts: list[dict[str, str]] = []
     with ThreadPoolExecutor(
         max_workers=max(1, min(int(max_workers), len(contracts))),
         thread_name_prefix="fno-v8-paper-oi-grid-proof",
     ) as executor:
         futures = {executor.submit(prove_contract, contract): contract for contract in contracts}
         for future in as_completed(futures):
-            proofs.append(future.result())
+            try:
+                proofs.append(future.result())
+            except UniverseOIProofExcluded as excluded:
+                excluded_contracts.append(
+                    {"tradingsymbol": excluded.symbol, "reason": excluded.reason}
+                )
+    excluded_contracts.sort(key=lambda item: item["tradingsymbol"])
+    # A handful of untraded contracts is normal; a large number means the feed
+    # itself is broken, which must still stop the session.
+    if len(excluded_contracts) > max(
+        MAX_OI_PROOF_EXCLUSIONS, int(len(contracts) * MAX_OI_PROOF_EXCLUSION_RATIO)
+    ):
+        raise SourceIncompleteError(
+            "universe OI proof excluded too many contracts "
+            f"({len(excluded_contracts)}/{len(contracts)}); treating as a feed failure"
+        )
     proofs.sort(key=lambda item: item["tradingsymbol"])
     proof_rows_sha256 = common.canonical_json_sha256(proofs)
     upstream_apps = _approved_app_names(
@@ -976,8 +1013,11 @@ def prove_v6_oi_shift_is_exact_for_stock_universe(
         "cash_final_marker_path": cash_marker["marker_path"],
         "cash_final_marker_sha256": cash_marker["marker_sha256"],
         "cash_symbol_set_sha256": cash_universe_sha256,
-        "stock_contracts_expected": len(contracts),
+        "stock_contracts_expected": len(contracts) - len(excluded_contracts),
         "stock_contracts_proven": len(proofs),
+        "stock_contracts_in_universe": len(contracts),
+        "stock_contracts_excluded": len(excluded_contracts),
+        "excluded_contracts": excluded_contracts,
         "stock_symbol_set_sha256": common.symbol_set_sha256(expected_symbols),
         "all_predecessors_exact_s_minus_5": True,
         "contracts": proofs,
@@ -2133,6 +2173,11 @@ def build_v8_candidate_book(
     }
     if len(proof_by_future) != len(proof_contracts):
         raise SourceIncompleteError("universe proof mapping is not unique/complete")
+    proof_excluded_futures = {
+        str(item.get("tradingsymbol", "")).strip().upper()
+        for item in (universe_oi_proof.get("excluded_contracts") or [])
+        if isinstance(item, Mapping)
+    }
     independent_authority = independent_candidate_source is not None
     if independent_authority:
         source_candidates = [
@@ -2171,6 +2216,9 @@ def build_v8_candidate_book(
             raise SourceIncompleteError("scanner candidate lacks frozen cash/futures mapping")
         proof_mapping = proof_by_future.get(futures_symbol)
         if not isinstance(proof_mapping, Mapping):
+            if futures_symbol in proof_excluded_futures:
+                # Untraded at S or S-5, so it has no valid OI pair to gate on.
+                continue
             raise SourceIncompleteError(
                 f"scanner future is absent from frozen universe proof: {futures_symbol}"
             )

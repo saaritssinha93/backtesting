@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from unittest import mock
 
 import fno_v8_combined_paper_config as config
 import fno_v8_combined_paper_control as control
@@ -922,6 +923,7 @@ def _write_one_contract_universe(
     off_grid_predecessor: bool = False,
     global_complete: bool = True,
     general_cash_superset: bool = False,
+    drop_predecessor: bool = False,
 ) -> None:
     symbol = "AAA26AUGFUT"
     cash_symbol = "AAA"
@@ -1024,6 +1026,10 @@ def _write_one_contract_universe(
     ]
     if off_grid_predecessor:
         ends.insert(1, datetime(2026, 8, 21, 9, 23, tzinfo=config.IST))
+    if drop_predecessor:
+        # The contract simply did not trade in 09:15-09:20, so the exchange
+        # published no S-5 bar at all (the real LICHSGFIN 2026-09-02 case).
+        ends = [end for end in ends if end != datetime(2026, 8, 21, 9, 20, tzinfo=config.IST)]
     rows = []
     for index, end in enumerate(ends):
         rows.append(
@@ -1991,3 +1997,39 @@ def test_candidate_rejects_oi_source_hash_change_after_universe_proof(
             universe_oi_proof=proof,
             independent_candidate_source=authority,
         )
+
+
+def test_untraded_contract_is_excluded_from_slot_not_fatal(tmp_path: Path) -> None:
+    """A contract with no S-5 bar is dropped from the slot, not session-fatal.
+
+    Regression for 2026-09-02, when LICHSGFIN26SEPFUT did not trade between
+    09:15 and 09:20. The exchange published no bar, so there was nothing to
+    fetch or repair, yet the all-universe proof vetoed the entire session and
+    V10/V11/V12 all produced zero candidates.
+    """
+    paths = _paths(tmp_path)
+    _write_one_contract_universe(paths, drop_predecessor=True)
+    proof = session.prove_v6_oi_shift_is_exact_for_stock_universe(
+        paths,
+        "09:25",
+        observed_at=datetime(2026, 8, 21, 9, 25, 50, tzinfo=config.IST),
+    )
+    assert proof["stock_contracts_proven"] == 0
+    assert proof["stock_contracts_excluded"] == 1
+    assert proof["stock_contracts_in_universe"] == 1
+    assert proof["excluded_contracts"][0]["tradingsymbol"] == "AAA26AUGFUT"
+    # expected must stay equal to proven so the payload validator still binds.
+    assert proof["stock_contracts_expected"] == proof["stock_contracts_proven"]
+
+
+def test_excluding_too_many_contracts_is_still_fatal(tmp_path: Path) -> None:
+    """A broad feed outage must not pass silently as a pile of exclusions."""
+    paths = _paths(tmp_path)
+    _write_one_contract_universe(paths, drop_predecessor=True)
+    with mock.patch.object(session, "MAX_OI_PROOF_EXCLUSIONS", 0):
+        with pytest.raises(session.SourceIncompleteError, match="too many contracts"):
+            session.prove_v6_oi_shift_is_exact_for_stock_universe(
+                paths,
+                "09:25",
+                observed_at=datetime(2026, 8, 21, 9, 25, 50, tzinfo=config.IST),
+            )

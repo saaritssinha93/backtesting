@@ -118,18 +118,27 @@ def validate_snapshot(path: Path, session: date) -> dict[str, Any]:
     universe = dict(payload.get("universe", {}))
     if str(universe.get("master_date", "")) != session.isoformat():
         raise ValueError("Snapshot master date does not match requested session")
-    if str(universe.get("contract_month_filter", "")).upper() != "26SEP":
-        raise ValueError("Today snapshot must use 26SEP")
-    if int(universe.get("mapped_stock_futures", -1)) != 210:
-        raise ValueError("Today snapshot must contain 210 mapped stock futures")
+    contract_month = str(universe.get("contract_month_filter", "")).upper().strip()
+    if not contract_month:
+        raise ValueError("Today snapshot has no contract-month binding")
+    mapped_count = int(universe.get("mapped_stock_futures", -1))
+    if mapped_count <= 0:
+        raise ValueError("Today snapshot has no mapped stock futures")
     captures = list(payload.get("captures", []))
-    if len(captures) != 420:
-        raise ValueError(f"Expected 420 physical captures, observed {len(captures)}")
+    expected_captures = mapped_count * 2
+    if len(captures) != expected_captures:
+        raise ValueError(
+            f"Expected {expected_captures} physical captures, observed {len(captures)}"
+        )
     roles: dict[str, int] = {}
     for item in captures:
         role = str(item.get("role", ""))
         roles[role] = roles.get(role, 0) + 1
-    if roles != EXPECTED_CAPTURE_ROLES:
+    expected_roles = {
+        "NSE_EQUITY_1M": mapped_count,
+        "NFO_FUTURES_5M": mapped_count,
+    }
+    if roles != expected_roles:
         raise ValueError(f"Unexpected snapshot roles: {roles}")
     return {
         "manifest": artifact(resolved),
@@ -344,6 +353,12 @@ def replay_v10(
 def replay_v6(
     snapshot: Path, session: date, output: Path
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    snapshot_payload = json.loads(snapshot.resolve().read_text(encoding="utf-8"))
+    snapshot_universe = dict(snapshot_payload.get("universe", {}))
+    contract_month = str(snapshot_universe.get("contract_month_filter", "")).upper().strip()
+    mapped_count = int(snapshot_universe.get("mapped_stock_futures", -1))
+    if not contract_month or mapped_count <= 0:
+        raise ValueError("Snapshot does not contain a usable dated FnO universe binding")
     v6.validate_registry()
     v6.strict.configure_engine()
     candidates, minute_paths, coverage, cache, cache_manifest = v6._build_snapshot_inputs(
@@ -351,10 +366,10 @@ def replay_v6(
         output / "v6_cache",
         from_day=session.isoformat(),
         through_day=session.isoformat(),
-        run_label=f"TODAY_{session.isoformat()}_SEP_DIAGNOSTIC",
+        run_label=f"TODAY_{session.isoformat()}_{contract_month}_DIAGNOSTIC",
         expected_master_date=session.isoformat(),
-        expected_contract_month_filter="26SEP",
-        expected_mapped_stock_futures=210,
+        expected_contract_month_filter=contract_month,
+        expected_mapped_stock_futures=mapped_count,
     )
     policy = v6.engine.entry_policy_for_variant(
         "VS",
