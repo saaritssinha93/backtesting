@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
+from nse_market_calendar import market_closed_reason
 from eqidv2_runtime_paths import (
     LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
     RUNTIME_STATUS_DIR,
@@ -34,6 +35,17 @@ try:
 except Exception:  # pragma: no cover - dashboard can still render legacy gross rows
     _NseCostConfig = None
     _nse_intraday_equity_costs = None
+
+try:
+    from fno_v13_run_vintage import (
+        DEFAULT_FAMILIES as _V13_VINTAGE_FAMILIES,
+        build_vintage_status as _build_v13_vintage_status,
+        render_markdown as _render_v13_vintage_markdown,
+    )
+except Exception:  # pragma: no cover - dashboard remains usable without research files
+    _V13_VINTAGE_FAMILIES = None
+    _build_v13_vintage_status = None
+    _render_v13_vintage_markdown = None
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
@@ -87,7 +99,11 @@ COLLECT_FILTERED_STOCK_DATA_ROOT = runtime_dir("collect_filtered_stock_data")
 COLLECT_FILTERED_STOCK_DATA_LATEST_DIR = COLLECT_FILTERED_STOCK_DATA_ROOT / "latest"
 FNO_OI_ROOT = runtime_dir("fno_oi")
 FNO_OI_LATEST_DIR = FNO_OI_ROOT / "latest"
-FNO_V6_LIVE_KITE_ROOT = FNO_OI_ROOT / "v6_live" / "live_kite"
+FNO_G_BACKTEST_ROOT = runtime_dir("backtesting_result_v13_v10_g")
+FNO_G_BACKTEST_REPORT = FNO_G_BACKTEST_ROOT / "latest" / "latest_backtesting_result_v13_v10_g.md"
+# G owns canonical dashboard/task names and an isolated evidence directory.
+FNO_V13_V10_G_STRATEGY_VERSION = "FNO_V13_V10_G_RETAINED_20260914"
+FNO_V6_LIVE_KITE_ROOT = FNO_OI_ROOT / "v13_v10_g_live" / "live_kite"
 FNO_MULTI_PAPER_ROOT = FNO_OI_ROOT / "multi_strategy_paper_v1"
 FNO_MULTI_PAPER_STATUS_PATH = FNO_MULTI_PAPER_ROOT / "status.json"
 FNO_MULTI_PAPER_HEARTBEAT_PATH = FNO_MULTI_PAPER_ROOT / "heartbeat.json"
@@ -106,7 +122,40 @@ FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL: Dict[str, str] = {
     "09:35": "09:36",
     "09:40": "09:41",
     "09:45": "09:46",
+    "09:50": "09:51",
+    "09:55": "09:56",
+    "10:00": "10:01",
+    "11:20": "11:21",
 }
+FNO_V13_V10_G_SIGNAL_SLOTS: Tuple[str, ...] = tuple(FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL)
+FNO_V13_V10_G_CARD_IDS: Tuple[str, ...] = (
+    "fno_v13_v10_g_scanner_5min", "fno_v13_v10_g_equity_1min_feed",
+    "fno_v13_v10_g_confirmation_1min", "fno_v13_v10_g_live_long", "fno_v13_v10_g_live_short",
+    "fno_v13_v10_g_trade_logger", "fno_v13_v10_g_net_result",
+    "live_signals_csv_fno_id_v13_v10_g_short", "live_signals_csv_fno_id_v13_v10_g_long",
+    "live_kite_trades_csv_fno_id_v13_v10_g", "kite_trade_fno_id_v13_v10_g",
+)
+FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS: Tuple[str, ...] = (
+    "fno_v13_v10_g_options_live_long",
+    "fno_v13_v10_g_options_live_short",
+    "fno_v13_v10_g_options_trade_logger",
+    "fno_v13_v10_g_options_net_result",
+)
+FNO_V13_V10_G_LIVE_ENTRY_COLUMNS: Tuple[Tuple[str, Sequence[str]], ...] = (
+    ("signal_datetime", ("signal_datetime", "signal_timestamp", "confirmation_timestamp", "created_at_ist")),
+    ("detected_time_ist", ("detected_time_ist", "published_at_ist")),
+    ("ticker", ("ticker", "tradingsymbol")),
+    ("side", ("side",)),
+    ("setup_id", ("setup_id",)),
+    ("strategy_version", ("strategy_version",)),
+    ("entry_price", ("entry_price", "trigger_price", "trigger")),
+    ("target_price", ("target_price",)),
+    ("stop_price", ("stop_price", "_stop_price")),
+    ("stop_pct", ("stop_pct",)),
+    ("target_pct", ("target_pct",)),
+    ("quantity", ("quantity",)),
+    ("entry_expires_at_ist", ("entry_expires_at_ist", "entry_expiry_at_ist", "expires_at_ist", "activation_deadline_ist")),
+)
 FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS = 3
 # Only the parent is an operational session.  The three version cards are
 # read-only projections of that session's independent strategy ledgers.
@@ -138,14 +187,15 @@ FNO_EQ_ID_MONITOR_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             "fno_oi_fetch_5min_fast_production",
             "fno_oi_fetch_5min",
             "fno_oi_fetch_5min_fast_shadow",
+            "fno_options_atm_fetch_5min",
             "fno_oi_feature_ranker",
-            "fno_v6_scanner_5min",
-            "fno_v6_equity_1min_feed",
-            "fno_v6_confirmation_1min",
-            "fno_v6_live_long",
-            "fno_v6_live_short",
-            "fno_v6_trade_logger",
-            "fno_v6_net_result",
+            "fno_v13_v10_g_scanner_5min",
+            "fno_v13_v10_g_equity_1min_feed",
+            "fno_v13_v10_g_confirmation_1min",
+            "fno_v13_v10_g_live_long",
+            "fno_v13_v10_g_live_short",
+            "fno_v13_v10_g_trade_logger",
+            "fno_v13_v10_g_net_result",
             "fno_v8_combined_paper",
             "fno_oi_eod_qc",
         ),
@@ -155,20 +205,24 @@ FNO_EQ_ID_MONITOR_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ("fno_v10_v11_v12_paper",),
     ),
     (
-        "FnO V6 Live Kite - Quantity 1",
+        "FnO V13-V10-G Live Kite - Quantity 1",
         (
-            "live_signals_csv_fno_id_v6_short",
-            "live_signals_csv_fno_id_v6_long",
-            "live_kite_trades_csv_fno_id_v6",
-            "kite_trade_fno_id_v6",
+            "live_signals_csv_fno_id_v13_v10_g_short",
+            "live_signals_csv_fno_id_v13_v10_g_long",
+            "live_kite_trades_csv_fno_id_v13_v10_g",
+            "kite_trade_fno_id_v13_v10_g",
         ),
+    ),
+    (
+        "Options V13-V10-G Paper Trading",
+        FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS,
     ),
     ("V10", ("fno_v10_paper",)),
     ("V11", ("fno_v11_paper",)),
     ("V12", ("fno_v12_paper",)),
     (
         "Data & Backtesting",
-        ("data_for_backtesting", "backtesting_result_v11"),
+        ("data_for_backtesting", "backtesting_result_v13_v10_g"),
     ),
     ("SESSION", ("authentication_v2",)),
 )
@@ -179,20 +233,25 @@ FNO_EQ_ID_MONITOR_STAGE_LABELS: Dict[str, str] = {
     "eod_1min_data": "equity 1m fetch",
     "fno_oi_universe": "futures universe",
     "fno_oi_fetch_5min_fast_production": "fast production futures OI 5m fetch",
+    "fno_options_atm_fetch_5min": "ATM CE/PE options 5m + 1m fetch",
     "fno_oi_fetch_5min": "old futures OI 5m fetch",
     "fno_oi_fetch_5min_fast_shadow": "fast OI shadow validator",
     "fno_oi_feature_ranker": "OI rank / selection",
-    "fno_v6_scanner_5min": "V6 5m selection",
-    "fno_v6_equity_1min_feed": "V6 candidate 1m fetch",
-    "fno_v6_confirmation_1min": "V6 1m entry confirmation",
-    "fno_v6_live_long": "V6 LONG paper entry",
-    "fno_v6_live_short": "V6 SHORT paper entry",
-    "fno_v6_trade_logger": "V6 papertrade ledger",
-    "fno_v6_net_result": "V6 result / P&L",
-    "live_signals_csv_fno_id_v6_short": "V6 qty-1 SHORT live-entry sheet",
-    "live_signals_csv_fno_id_v6_long": "V6 qty-1 LONG live-entry sheet",
-    "live_kite_trades_csv_fno_id_v6": "V6 qty-1 live Kite trade ledger",
-    "kite_trade_fno_id_v6": "V6 qty-1 live Kite executor",
+    "fno_v13_v10_g_scanner_5min": "V13-V10-G 5m selection",
+    "fno_v13_v10_g_equity_1min_feed": "V13-V10-G candidate 1m fetch",
+    "fno_v13_v10_g_confirmation_1min": "V13-V10-G 1m entry confirmation",
+    "fno_v13_v10_g_live_long": "V13-V10-G LONG paper entry",
+    "fno_v13_v10_g_live_short": "V13-V10-G SHORT paper entry",
+    "fno_v13_v10_g_trade_logger": "V13-V10-G papertrade ledger",
+    "fno_v13_v10_g_net_result": "V13-V10-G result / P&L",
+    "live_signals_csv_fno_id_v13_v10_g_short": "V13-V10-G qty-1 SHORT live-entry sheet",
+    "live_signals_csv_fno_id_v13_v10_g_long": "V13-V10-G qty-1 LONG live-entry sheet",
+    "live_kite_trades_csv_fno_id_v13_v10_g": "V13-V10-G qty-1 live Kite trade ledger",
+    "kite_trade_fno_id_v13_v10_g": "V13-V10-G qty-1 live Kite executor",
+    "fno_v13_v10_g_options_live_long": "V13-V10-G LONG to ATM CE paper entry",
+    "fno_v13_v10_g_options_live_short": "V13-V10-G SHORT to ATM PE paper entry",
+    "fno_v13_v10_g_options_trade_logger": "V13-V10-G options papertrade ledger",
+    "fno_v13_v10_g_options_net_result": "V13-V10-G options result / P&L",
     "fno_v8_combined_paper": "V8 selection + entry + papertrade",
     "fno_oi_eod_qc": "FnO fetch quality guard",
     "fno_v10_v11_v12_paper": "shared fetch + chronological reducer",
@@ -200,7 +259,7 @@ FNO_EQ_ID_MONITOR_STAGE_LABELS: Dict[str, str] = {
     "fno_v11_paper": "V11 selection + guards + entry + result",
     "fno_v12_paper": "V12 selection + guards + entry + result",
     "data_for_backtesting": "historical-data preparation",
-    "backtesting_result_v11": "V6/V8/V10/V11/V12 backtest",
+    "backtesting_result_v13_v10_g": "V13-v10-G daily backtest",
     "authentication_v2": "Kite app authentication",
 }
 FNO_EQ_ID_MONITOR_SESSION_LABELS: Dict[str, str] = {
@@ -210,20 +269,25 @@ FNO_EQ_ID_MONITOR_SESSION_LABELS: Dict[str, str] = {
     "eod_1min_data": "Live Data Fetch (1min)",
     "fno_oi_universe": "FnO Near-Month Futures Universe",
     "fno_oi_fetch_5min_fast_production": "FnO Live 5-Minute Futures OI Fetch (Fast Production)",
+    "fno_options_atm_fetch_5min": "FnO ATM CE/PE Options Fetch (5-Minute + 1-Minute)",
     "fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch (Old)",
     "fno_oi_fetch_5min_fast_shadow": "FnO Fast Shadow OI Validator",
     "fno_oi_feature_ranker": "FnO OI Gainers, Losers & Activity Rankings",
-    "fno_v6_scanner_5min": "FnO V6 BEST_NET Equity 5-Minute + Futures OI Scanner",
-    "fno_v6_equity_1min_feed": "FnO V6 Durable Completed Equity 1-Minute Feed",
-    "fno_v6_confirmation_1min": "FnO V6 BEST_NET Candidate Equity 1-Minute Confirmation",
-    "fno_v6_live_long": "FnO V6 BEST_NET LONG Entry Session",
-    "fno_v6_live_short": "FnO V6 BEST_NET SHORT Entry Session",
-    "fno_v6_trade_logger": "FnO V6 BEST_NET Continuous Trade Log",
-    "fno_v6_net_result": "FnO V6 BEST_NET Net Result",
-    "live_signals_csv_fno_id_v6_short": "Live Entries CSV fno ID V6 Short",
-    "live_signals_csv_fno_id_v6_long": "Live Entries CSV fno ID V6 Long",
-    "live_kite_trades_csv_fno_id_v6": "fno ID V6 Live Kite Trades CSV",
-    "kite_trade_fno_id_v6": "fno ID V6 Live Trade Runner Log",
+    "fno_v13_v10_g_scanner_5min": "FnO V13-V10-G Equity 5-Minute + Futures OI Scanner",
+    "fno_v13_v10_g_equity_1min_feed": "FnO V13-V10-G Durable Completed Equity 1-Minute Feed",
+    "fno_v13_v10_g_confirmation_1min": "FnO V13-V10-G Candidate Equity 1-Minute Confirmation",
+    "fno_v13_v10_g_live_long": "FnO V13-V10-G LONG Paper Entry Session",
+    "fno_v13_v10_g_live_short": "FnO V13-V10-G SHORT Paper Entry Session",
+    "fno_v13_v10_g_trade_logger": "FnO V13-V10-G Continuous Paper Trade Log",
+    "fno_v13_v10_g_net_result": "FnO V13-V10-G Paper Net Result",
+    "live_signals_csv_fno_id_v13_v10_g_short": "FnO V13-V10-G Live Entries CSV Short",
+    "live_signals_csv_fno_id_v13_v10_g_long": "FnO V13-V10-G Live Entries CSV Long",
+    "live_kite_trades_csv_fno_id_v13_v10_g": "FnO V13-V10-G Live Kite Trades CSV",
+    "kite_trade_fno_id_v13_v10_g": "FnO V13-V10-G Live Trade Runner Log",
+    "fno_v13_v10_g_options_live_long": "Options V13-V10-G LONG ATM CE Buy Paper Entry Session",
+    "fno_v13_v10_g_options_live_short": "Options V13-V10-G SHORT ATM PE Buy Paper Entry Session",
+    "fno_v13_v10_g_options_trade_logger": "Options V13-V10-G Continuous Paper Trade Log",
+    "fno_v13_v10_g_options_net_result": "Options V13-V10-G Paper Net Result",
     "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
     "fno_oi_eod_qc": "FnO EOD Data Quality Control",
     "fno_v10_v11_v12_paper": "FnO V10/V11/V12 Papertrade - Shared Session",
@@ -231,22 +295,27 @@ FNO_EQ_ID_MONITOR_SESSION_LABELS: Dict[str, str] = {
     "fno_v11_paper": "FnO V11 Papertrade View",
     "fno_v12_paper": "FnO V12 Papertrade View",
     "data_for_backtesting": "Data for backtesting",
-    "backtesting_result_v11": "Backtesting result v6/v8/v10/v11/v12",
+    "backtesting_result_v13_v10_g": "Backtesting result v13-v10-G",
     "authentication_v2": "Auth_V2",
 }
 FNO_OI_CARD_REPORTS: Dict[str, str] = {
     "fno_oi_universe": "latest_fno_oi_universe.md",
     "fno_oi_fetch_5min_fast_production": "latest_fno_oi_fast_production.md",
+    "fno_options_atm_fetch_5min": "latest_fno_options_atm.md",
     "fno_oi_fetch_5min": "latest_fno_oi_fetch_old.md",
     "fno_oi_fetch_5min_fast_shadow": "latest_fno_oi_fast_shadow.md",
     "fno_oi_feature_ranker": "latest_fno_oi_leaderboard.md",
-    "fno_v6_scanner_5min": "latest_fno_v6_scanner_5min.md",
-    "fno_v6_equity_1min_feed": "latest_fno_v6_equity_1min_feed.md",
-    "fno_v6_confirmation_1min": "latest_fno_v6_confirmation_1min.md",
-    "fno_v6_live_long": "latest_fno_v6_live_long.md",
-    "fno_v6_live_short": "latest_fno_v6_live_short.md",
-    "fno_v6_trade_logger": "latest_fno_v6_trade_logger.md",
-    "fno_v6_net_result": "latest_fno_v6_net_result.md",
+    "fno_v13_v10_g_scanner_5min": "latest_fno_v13_v10_g_scanner_5min.md",
+    "fno_v13_v10_g_equity_1min_feed": "latest_fno_v13_v10_g_equity_1min_feed.md",
+    "fno_v13_v10_g_confirmation_1min": "latest_fno_v13_v10_g_confirmation_1min.md",
+    "fno_v13_v10_g_live_long": "latest_fno_v13_v10_g_live_long.md",
+    "fno_v13_v10_g_live_short": "latest_fno_v13_v10_g_live_short.md",
+    "fno_v13_v10_g_trade_logger": "latest_fno_v13_v10_g_trade_logger.md",
+    "fno_v13_v10_g_net_result": "latest_fno_v13_v10_g_net_result.md",
+    "fno_v13_v10_g_options_live_long": "latest_fno_v13_v10_g_options_live_long.md",
+    "fno_v13_v10_g_options_live_short": "latest_fno_v13_v10_g_options_live_short.md",
+    "fno_v13_v10_g_options_trade_logger": "latest_fno_v13_v10_g_options_trade_logger.md",
+    "fno_v13_v10_g_options_net_result": "latest_fno_v13_v10_g_options_net_result.md",
     "fno_v8_combined_paper": "latest_fno_v8_combined_paper.md",
     "fno_v10_v11_v12_paper": "latest_fno_v10_v11_v12_paper.md",
     "fno_v10_paper": "latest_fno_v10_paper.md",
@@ -316,15 +385,20 @@ LOG_FILES: Dict[str, str] = {
     "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.log",
     "fno_oi_fetch_5min": "fno_oi_fetch_5min.log",
     "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.log",
+    "fno_options_atm_fetch_5min": "fno_options_atm_fetch_5min.log",
     "fno_oi_feature_ranker": "fno_oi_feature_ranker.log",
-    "fno_v6_scanner_5min": "fno_v6_scanner_5min.log",
-    "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.log",
-    "fno_v6_confirmation_1min": "fno_v6_confirmation_1min.log",
-    "fno_v6_live_long": "fno_v6_live_long.log",
-    "fno_v6_live_short": "fno_v6_live_short.log",
-    "fno_v6_trade_logger": "fno_v6_trade_logger.log",
-    "fno_v6_net_result": "fno_v6_net_result.log",
-    "kite_trade_fno_id_v6": "fno_v6_live_kite_qty1.log",
+    "fno_v13_v10_g_scanner_5min": "fno_v13_v10_g_scanner_5min.log",
+    "fno_v13_v10_g_equity_1min_feed": "fno_v13_v10_g_equity_1min_feed.log",
+    "fno_v13_v10_g_confirmation_1min": "fno_v13_v10_g_confirmation_1min.log",
+    "fno_v13_v10_g_live_long": "fno_v13_v10_g_live_long.log",
+    "fno_v13_v10_g_live_short": "fno_v13_v10_g_live_short.log",
+    "fno_v13_v10_g_trade_logger": "fno_v13_v10_g_trade_logger.log",
+    "fno_v13_v10_g_net_result": "fno_v13_v10_g_net_result.log",
+    "kite_trade_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.log",
+    "fno_v13_v10_g_options_live_long": "fno_v13_v10_g_options_live_long.log",
+    "fno_v13_v10_g_options_live_short": "fno_v13_v10_g_options_live_short.log",
+    "fno_v13_v10_g_options_trade_logger": "fno_v13_v10_g_options_trade_logger.log",
+    "fno_v13_v10_g_options_net_result": "fno_v13_v10_g_options_net_result.log",
     "fno_v8_combined_paper": "fno_v8_combined_paper.log",
     "fno_v10_v11_v12_paper": "fno_v10_v11_v12_paper.log",
     "fno_v10_paper": "fno_v10_v11_v12_paper.log",
@@ -357,7 +431,7 @@ LOG_FILES: Dict[str, str] = {
     "fundamental_price_action_v1":         "fundamental_price_action_v1/latest/latest_fundamental_price_action_v1.md",
     "collect_filtered_stock_data":         "collect_filtered_stock_data/latest/latest_collect_filtered_stock_data.md",
     "data_for_backtesting":             "data_for_backtesting_latest.log",
-    "backtesting_result_v11":            "backtesting_result_v11_latest.log",
+    "backtesting_result_v13_v10_g":            "backtesting_result_v13_v10_g_latest.log",
     "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.log",
     "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.log",
     "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.log",
@@ -393,6 +467,7 @@ LOG_IDS = tuple(LOG_FILES.keys()) + (
 )
 
 STATUS_FILES: Dict[str, str] = {
+    "backtesting_result_v13_v10_g": "backtesting_result_v13_v10_g.status",
     "authentication_v2": "authentication_v2_runner.status",
     "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.status",
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status",
@@ -400,20 +475,25 @@ STATUS_FILES: Dict[str, str] = {
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.status",
     "fno_oi_universe": "fno_oi_universe.status",
     "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.supervisor.status",
+    "fno_options_atm_fetch_5min": "fno_options_atm_fetch_5min.supervisor.status",
     "fno_oi_fetch_5min": "fno_oi_fetch_5min.supervisor.status",
     "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.supervisor.status",
     "fno_oi_feature_ranker": "fno_oi_feature_ranker.supervisor.status",
-    "fno_v6_scanner_5min": "fno_v6_scanner_5min.status",
-    "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.status",
-    "fno_v6_confirmation_1min": "fno_v6_confirmation_1min.status",
-    "fno_v6_live_long": "fno_v6_live_long.status",
-    "fno_v6_live_short": "fno_v6_live_short.status",
-    "fno_v6_trade_logger": "fno_v6_trade_logger.status",
-    "fno_v6_net_result": "fno_v6_net_result.status",
-    "live_signals_csv_fno_id_v6_short": "fno_v6_live_kite_qty1.status",
-    "live_signals_csv_fno_id_v6_long": "fno_v6_live_kite_qty1.status",
-    "live_kite_trades_csv_fno_id_v6": "fno_v6_live_kite_qty1.status",
-    "kite_trade_fno_id_v6": "fno_v6_live_kite_qty1.status",
+    "fno_v13_v10_g_scanner_5min": "fno_v13_v10_g_scanner_5min.status",
+    "fno_v13_v10_g_equity_1min_feed": "fno_v13_v10_g_equity_1min_feed.status",
+    "fno_v13_v10_g_confirmation_1min": "fno_v13_v10_g_confirmation_1min.status",
+    "fno_v13_v10_g_live_long": "fno_v13_v10_g_live_long.status",
+    "fno_v13_v10_g_live_short": "fno_v13_v10_g_live_short.status",
+    "fno_v13_v10_g_trade_logger": "fno_v13_v10_g_trade_logger.status",
+    "fno_v13_v10_g_net_result": "fno_v13_v10_g_net_result.status",
+    "live_signals_csv_fno_id_v13_v10_g_short": "fno_v13_v10_g_live_kite_qty1.status",
+    "live_signals_csv_fno_id_v13_v10_g_long": "fno_v13_v10_g_live_kite_qty1.status",
+    "live_kite_trades_csv_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.status",
+    "kite_trade_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.status",
+    "fno_v13_v10_g_options_live_long": "fno_v13_v10_g_options_live_long.status",
+    "fno_v13_v10_g_options_live_short": "fno_v13_v10_g_options_live_short.status",
+    "fno_v13_v10_g_options_trade_logger": "fno_v13_v10_g_options_trade_logger.status",
+    "fno_v13_v10_g_options_net_result": "fno_v13_v10_g_options_net_result.status",
     "fno_v8_combined_paper": "fno_v8_combined_paper.status",
     "fno_oi_eod_qc": "fno_oi_eod_qc.status",
     "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
@@ -459,25 +539,31 @@ HB_STALE_RUNNING_OVERRIDE_SEC: int = int(
 )
 
 HEARTBEAT_FILES: Dict[str, str] = {
+    "backtesting_result_v13_v10_g": "backtesting_result_v13_v10_g.heartbeat",
     "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat",
     "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.heartbeat",
     "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.heartbeat",
     "fno_oi_universe": "fno_oi_universe.heartbeat",
     "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.supervisor.heartbeat",
+    "fno_options_atm_fetch_5min": "fno_options_atm_fetch_5min.supervisor.heartbeat",
     "fno_oi_fetch_5min": "fno_oi_fetch_5min.supervisor.heartbeat",
     "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.supervisor.heartbeat",
     "fno_oi_feature_ranker": "fno_oi_feature_ranker.supervisor.heartbeat",
-    "fno_v6_scanner_5min": "fno_v6_scanner_5min.heartbeat",
-    "fno_v6_equity_1min_feed": "fno_v6_equity_1min_feed.heartbeat",
-    "fno_v6_confirmation_1min": "fno_v6_confirmation_1min.heartbeat",
-    "fno_v6_live_long": "fno_v6_live_long.heartbeat",
-    "fno_v6_live_short": "fno_v6_live_short.heartbeat",
-    "fno_v6_trade_logger": "fno_v6_trade_logger.heartbeat",
-    "fno_v6_net_result": "fno_v6_net_result.heartbeat",
-    "live_signals_csv_fno_id_v6_short": "fno_v6_live_kite_qty1.heartbeat",
-    "live_signals_csv_fno_id_v6_long": "fno_v6_live_kite_qty1.heartbeat",
-    "live_kite_trades_csv_fno_id_v6": "fno_v6_live_kite_qty1.heartbeat",
-    "kite_trade_fno_id_v6": "fno_v6_live_kite_qty1.heartbeat",
+    "fno_v13_v10_g_scanner_5min": "fno_v13_v10_g_scanner_5min.heartbeat",
+    "fno_v13_v10_g_equity_1min_feed": "fno_v13_v10_g_equity_1min_feed.heartbeat",
+    "fno_v13_v10_g_confirmation_1min": "fno_v13_v10_g_confirmation_1min.heartbeat",
+    "fno_v13_v10_g_live_long": "fno_v13_v10_g_live_long.heartbeat",
+    "fno_v13_v10_g_live_short": "fno_v13_v10_g_live_short.heartbeat",
+    "fno_v13_v10_g_trade_logger": "fno_v13_v10_g_trade_logger.heartbeat",
+    "fno_v13_v10_g_net_result": "fno_v13_v10_g_net_result.heartbeat",
+    "live_signals_csv_fno_id_v13_v10_g_short": "fno_v13_v10_g_live_kite_qty1.heartbeat",
+    "live_signals_csv_fno_id_v13_v10_g_long": "fno_v13_v10_g_live_kite_qty1.heartbeat",
+    "live_kite_trades_csv_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.heartbeat",
+    "kite_trade_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.heartbeat",
+    "fno_v13_v10_g_options_live_long": "fno_v13_v10_g_options_live_long.heartbeat",
+    "fno_v13_v10_g_options_live_short": "fno_v13_v10_g_options_live_short.heartbeat",
+    "fno_v13_v10_g_options_trade_logger": "fno_v13_v10_g_options_trade_logger.heartbeat",
+    "fno_v13_v10_g_options_net_result": "fno_v13_v10_g_options_net_result.heartbeat",
     "fno_v8_combined_paper": "fno_v8_combined_paper.heartbeat",
     "fno_oi_eod_qc": "fno_oi_eod_qc.heartbeat",
     "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.heartbeat",
@@ -516,21 +602,26 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "kiteticker_5min_data": ("\\EQIDV2_kiteticker_5mins_data_0900",),
     "eod_1min_data": ("\\EQIDV2_eod_1min_data_0915",),
     "fno_oi_universe": ("\\EQIDV2_fno_oi_universe_0850",),
+    "fno_options_atm_fetch_5min": ("\\EQIDV2_fno_options_atm_fetch_5min_0907",),
     "fno_oi_fetch_5min_fast_production": ("\\EQIDV2_fno_oi_fetch_5min_fast_production_0905",),
     "fno_oi_fetch_5min": ("\\EQIDV2_fno_oi_fetch_5min_0905",),
     "fno_oi_fetch_5min_fast_shadow": ("\\EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",),
     "fno_oi_feature_ranker": ("\\EQIDV2_fno_oi_feature_ranker_0915",),
-    "fno_v6_scanner_5min": ("\\EQIDV2_fno_v6_scanner_5min_0918",),
-    "fno_v6_equity_1min_feed": ("\\EQIDV2_fno_v6_equity_1min_feed_0919",),
-    "fno_v6_confirmation_1min": ("\\EQIDV2_fno_v6_confirmation_1min_0919",),
-    "fno_v6_live_long": ("\\EQIDV2_fno_v6_live_long_0920",),
-    "fno_v6_live_short": ("\\EQIDV2_fno_v6_live_short_0920",),
-    "fno_v6_trade_logger": ("\\EQIDV2_fno_v6_trade_logger_0920",),
-    "fno_v6_net_result": ("\\EQIDV2_fno_v6_net_result_0920",),
-    "live_signals_csv_fno_id_v6_short": ("\\EQIDV2_fno_v6_live_kite_qty1_0915",),
-    "live_signals_csv_fno_id_v6_long": ("\\EQIDV2_fno_v6_live_kite_qty1_0915",),
-    "live_kite_trades_csv_fno_id_v6": ("\\EQIDV2_fno_v6_live_kite_qty1_0915",),
-    "kite_trade_fno_id_v6": ("\\EQIDV2_fno_v6_live_kite_qty1_0915",),
+    "fno_v13_v10_g_scanner_5min": ("\\EQIDV2_fno_v13_v10_g_scanner_5min_0915",),
+    "fno_v13_v10_g_equity_1min_feed": ("\\EQIDV2_fno_v13_v10_g_equity_1min_feed_0915",),
+    "fno_v13_v10_g_confirmation_1min": ("\\EQIDV2_fno_v13_v10_g_confirmation_1min_0915",),
+    "fno_v13_v10_g_live_long": ("\\EQIDV2_fno_v13_v10_g_live_long_0915",),
+    "fno_v13_v10_g_live_short": ("\\EQIDV2_fno_v13_v10_g_live_short_0915",),
+    "fno_v13_v10_g_trade_logger": ("\\EQIDV2_fno_v13_v10_g_trade_logger_0915",),
+    "fno_v13_v10_g_net_result": ("\\EQIDV2_fno_v13_v10_g_net_result_0915",),
+    "live_signals_csv_fno_id_v13_v10_g_short": ("\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915",),
+    "live_signals_csv_fno_id_v13_v10_g_long": ("\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915",),
+    "live_kite_trades_csv_fno_id_v13_v10_g": ("\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915",),
+    "kite_trade_fno_id_v13_v10_g": ("\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915",),
+    "fno_v13_v10_g_options_live_long": ("\\EQIDV2_fno_v13_v10_g_options_live_long_0915",),
+    "fno_v13_v10_g_options_live_short": ("\\EQIDV2_fno_v13_v10_g_options_live_short_0915",),
+    "fno_v13_v10_g_options_trade_logger": ("\\EQIDV2_fno_v13_v10_g_options_trade_logger_0915",),
+    "fno_v13_v10_g_options_net_result": ("\\EQIDV2_fno_v13_v10_g_options_net_result_0915",),
     "fno_v8_combined_paper": ("\\EQIDV2_fno_v8_combined_paper_0915",),
     "fno_v10_v11_v12_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
     "fno_v10_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
@@ -578,7 +669,7 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
     "kite_trade_id_5min_v7": ("\\EQIDV2_live_trade_id_5min_v7_0900",),
     "live_kite_trades_csv_id_5min_v7": ("\\EQIDV2_live_trade_id_5min_v7_0900",),
     "data_for_backtesting": ("\\EQIDV2_data_for_backtesting_1545",),
-    "backtesting_result_v11": ("\\EQIDV2_backtesting_result_v11_1600",),
+    "backtesting_result_v13_v10_g": ("\\EQIDV2_backtesting_result_v13_v10_g_1620",),
     "paper_trade_v15": ("\\EQIDV2_avwap_paper_trade_v15_0900",),
     "live_papertrade_result_csv_v15": ("\\EQIDV2_avwap_paper_trade_v15_0900",),
     "kite_trade_v15": ("\\EQIDV2_avwap_live_trade_v15_0905",),
@@ -611,16 +702,19 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "eod_5min_data":                 "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
     "eod_1min_data":                 "run_eqidv2_eod_scheduler_for_1min_data_live.bat",
     "fno_oi_fetch_5min_fast_production": "run_fno_oi_fetch_5min_fast_production.bat",
-    "fno_oi_fetch_5min":             "run_fno_oi_fetch_5min.bat",
-    "fno_oi_fetch_5min_fast_shadow": "run_fno_oi_fetch_5min_fast_shadow.bat",
+    "fno_options_atm_fetch_5min":       "run_fno_options_atm_fetch_5min.bat",
     "fno_oi_feature_ranker":         "run_fno_oi_feature_ranker.bat",
-    "fno_v6_scanner_5min":           "run_fno_v6_scanner_5min.bat",
-    "fno_v6_equity_1min_feed":        "run_fno_v6_equity_1min_feed.bat",
-    "fno_v6_confirmation_1min":       "run_fno_v6_confirmation_1min.bat",
-    "fno_v6_live_long":               "run_fno_v6_live_long.bat",
-    "fno_v6_live_short":              "run_fno_v6_live_short.bat",
-    "fno_v6_trade_logger":            "run_fno_v6_trade_logger.bat",
-    "fno_v6_net_result":              "run_fno_v6_net_result.bat",
+    "fno_v13_v10_g_scanner_5min":           "run_fno_v13_v10_g_scanner_5min.bat",
+    "fno_v13_v10_g_equity_1min_feed":        "run_fno_v13_v10_g_equity_1min_feed.bat",
+    "fno_v13_v10_g_confirmation_1min":       "run_fno_v13_v10_g_confirmation_1min.bat",
+    "fno_v13_v10_g_live_long":               "run_fno_v13_v10_g_live_long.bat",
+    "fno_v13_v10_g_live_short":              "run_fno_v13_v10_g_live_short.bat",
+    "fno_v13_v10_g_trade_logger":            "run_fno_v13_v10_g_trade_logger.bat",
+    "fno_v13_v10_g_net_result":              "run_fno_v13_v10_g_net_result.bat",
+    "fno_v13_v10_g_options_live_long":        "run_fno_v13_v10_g_options_live_long.bat",
+    "fno_v13_v10_g_options_live_short":       "run_fno_v13_v10_g_options_live_short.bat",
+    "fno_v13_v10_g_options_trade_logger":     "run_fno_v13_v10_g_options_trade_logger.bat",
+    "fno_v13_v10_g_options_net_result":       "run_fno_v13_v10_g_options_net_result.bat",
     "fno_v10_v11_v12_paper":          "run_fno_v10_v11_v12_paper_session.bat",
     "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
     "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
@@ -650,7 +744,7 @@ RESTARTABLE_CARDS: Dict[str, str] = {
     "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
     "authentication_v2":             "run_authentication_v2.bat",
     "preopen_healthcheck":           "run_preopen_session_healthcheck.bat",
-    "backtesting_result_v11":        "run_backtesting_result_v11_1600.bat",
+    "backtesting_result_v13_v10_g":        "run_backtesting_result_v13_v10_g_1620.bat",
 }
 
 
@@ -1164,6 +1258,10 @@ def _latest_matching_file(base_dir: Path, glob_pattern: str) -> Optional[Path]:
 
 def resolve_log_target(name: str) -> Tuple[Path, str]:
     today_ist = dt.datetime.now(IST).date().isoformat()
+    if name == "backtesting_result_v13_v10_g":
+        return FNO_G_BACKTEST_REPORT, str(
+            Path("backtesting_result_v13_v10_g") / "latest" / FNO_G_BACKTEST_REPORT.name
+        )
     if name in FNO_OI_CARD_REPORTS:
         report_name = FNO_OI_CARD_REPORTS[name]
         report_path = FNO_OI_LATEST_DIR / report_name
@@ -1261,12 +1359,12 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         fallback_name = f"eqidv2_nifty_guard_fetcher_supervised_v16_5min_{today_ist}.log"
         return LOG_DIR / fallback_name, fallback_name
 
-    if name == "kite_trade_fno_id_v6":
-        today_name = f"fno_v6_live_kite_qty1_{today_ist}.log"
+    if name == "kite_trade_fno_id_v13_v10_g":
+        today_name = f"fno_v13_v10_g_live_kite_qty1_{today_ist}.log"
         today_path = LOG_DIR / today_name
         if today_path.exists():
             return today_path, today_name
-        latest = _latest_matching_file(LOG_DIR, "fno_v6_live_kite_qty1_*.log")
+        latest = _latest_matching_file(LOG_DIR, "fno_v13_v10_g_live_kite_qty1_*.log")
         if latest is not None:
             return latest, latest.name
         return today_path, today_name
@@ -1923,6 +2021,9 @@ def apply_scheduler_status(
 
     records = [task_snapshot.get(task_name) for task_name in task_names if task_snapshot.get(task_name)]
     if not records:
+        if card_id == "fno_options_atm_fetch_5min" and task_snapshot and not merged.get("status"):
+            merged["status"] = "NOT_SCHEDULED"
+            merged["derived_status"] = "Options fetch is delivered but intentionally not scheduled."
         return merged
 
     def _upper(value: object) -> str:
@@ -2124,6 +2225,7 @@ def reconcile_authentication_status(
 
 FNO_RECOVERY_WORKER_STATUS_FILES: Dict[str, str] = {
     "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.status",
+    "fno_options_atm_fetch_5min": "fno_options_atm_fetch_5min.status",
     "fno_oi_fetch_5min": "fno_oi_fetch_5min.status",
     "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.status",
     "fno_oi_feature_ranker": "fno_oi_feature_ranker.status",
@@ -2209,6 +2311,46 @@ def report_text(path: Path, lines: int = 80, max_bytes: int = 400_000, max_lines
     return "\n".join(all_lines)
 
 
+def _backtesting_v13_v10_g_view(
+    status: Dict[str, Any], *, today_ist: str, lines: int = 500,
+) -> Tuple[Path, str, str]:
+    """Render only the dedicated G daily report or its current running log."""
+    session_date = str(status.get("session_date") or status.get("session_date_ist") or today_ist)
+    display = str(Path("backtesting_result_v13_v10_g") / "latest" / FNO_G_BACKTEST_REPORT.name)
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session_date):
+            raise ValueError("Session date must use YYYY-MM-DD")
+        session_date = dt.date.fromisoformat(session_date).isoformat()
+    except ValueError:
+        return FNO_G_BACKTEST_REPORT, display, (
+            "# Backtesting result v13-v10-G\n\nStatus: INVALID_SESSION_DATE\n\n"
+            "The runtime session date must be a valid YYYY-MM-DD date.\n"
+            "No dated log or previous report has been substituted.\n"
+        )
+    runtime = str(status.get("status", "") or "").strip().upper()
+    current_log = LOG_DIR / f"backtesting_result_v13_v10_g_{session_date}.log"
+    if runtime in {"RUNNING", "RESTARTING", "COOLDOWN"} and current_log.is_file():
+        text = (
+            "# Backtesting result v13-v10-G\n\n"
+            f"Session date: {session_date}\nStatus: {runtime}\n\n"
+            + tail_text(current_log, lines=lines)
+        )
+        return current_log, current_log.name, text
+    projected = report_text(FNO_G_BACKTEST_REPORT, lines=lines)
+    if projected:
+        return FNO_G_BACKTEST_REPORT, display, projected
+    # A missing G artifact must never fall back to a V6/V8/V10/V11/V12 ledger,
+    # its old latest log, or a prior session's current-looking comparison.
+    text = (
+        "# Backtesting result v13-v10-G\n\n"
+        f"Session date: {session_date}\nStatus: AWAITING_G_REPORT\n"
+        f"Runtime status: {runtime or 'NOT_RUN'}\n\n"
+        "The dedicated V13-v10-G daily report has not been published.\n"
+        "No result is inferred from historical multi-strategy comparisons.\n"
+    )
+    return FNO_G_BACKTEST_REPORT, display, text
+
+
 def _format_data_for_backtesting_live_view(today_ist: str) -> str:
     """Expose the live 15:45 pipeline instead of yesterday's final combined log."""
     stages = (
@@ -2244,7 +2386,7 @@ def _format_data_for_backtesting_live_view(today_ist: str) -> str:
         "",
         f"- Trading date: `{today_ist}`",
         f"- Pipeline: **{overall}**",
-        "- Dependency: the 16:20 V6/V8/V10/V11/V12 backtest waits for this pipeline and a PASS verifier.",
+        "- Dependency: the 16:20 V13-v10-G daily backtest waits for this pipeline and a PASS verifier.",
         "",
         "| Stage | State | Updated | Latest evidence |",
         "|---|---|---|---|",
@@ -2631,6 +2773,121 @@ def _json_status_scalars(payload: object) -> Dict[str, str]:
         elif not isinstance(value, (dict, list)):
             out[str(key)] = str(value)
     return out
+
+
+def _apply_fno_v13_v10_g_identity(card_id: str, status: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep old task status from presenting a V6 process as a healthy G worker."""
+    if card_id not in (
+        *FNO_V13_V10_G_CARD_IDS,
+        *FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS,
+    ):
+        return status
+    result = dict(status)
+    observed = str(status.get("strategy_version", "") or "").strip()
+    result["expected_strategy_version"] = FNO_V13_V10_G_STRATEGY_VERSION
+    if observed == FNO_V13_V10_G_STRATEGY_VERSION:
+        result["strategy_identity_state"] = "MATCH"
+        # A read-only G readiness export is distinct from an older supervisor
+        # failure. Preserve that failure while showing what was checked now.
+        if (card_id in FNO_V13_V10_G_CARD_IDS[-4:]
+                and str(status.get("readiness_only", "")).lower() == "true"
+                and str(status.get("workers_started", "")).lower() == "false"
+                and str(status.get("execution_enabled", "")).lower() == "false"
+                and str(status.get("armed", "")).lower() == "false"
+                and str(status.get("order_states", "")) == "0"
+                and status.get("execution_state") == "READY_DISARMED"
+                and status.get("session_date") == dt.datetime.now(IST).date().isoformat()
+                and str(status.get("status", "")).upper() != "DISABLED"
+                and str(status.get("scheduler_state", "")).upper() != "DISABLED"):
+            exported_at = _parse_status_datetime(status.get("updated_at_ist"))
+            runtime_at = _parse_status_datetime(status.get("ts"))
+            if exported_at and (runtime_at is None or exported_at > runtime_at):
+                result.setdefault("previous_status", status.get("status", ""))
+                result.setdefault("previous_reason", status.get("reason", ""))
+                result["status"] = "READY_DISARMED"
+                result["derived_status"] = (
+                    "G readiness checked; no LIVE workers started or broker requests made. "
+                    f"Earlier supervisor status: {result['previous_status']}."
+                )
+        return result
+    result["strategy_identity_state"] = "MISMATCH" if observed else "AWAITING_G_RUNTIME"
+    result["strategy_identity_detail"] = (
+        f"Expected V13-V10-G; observed {observed}. Awaiting the G runtime."
+        if observed else "Awaiting V13-V10-G runtime evidence in its isolated data directory."
+    )
+    previous_detail = str(status.get("derived_status", "") or "").strip()
+    result["derived_status"] = result["strategy_identity_detail"] + (
+        f" Previous runtime: {previous_detail}" if previous_detail else ""
+    )
+    if str(status.get("status", "") or "").upper() in {
+        "", "RUNNING", "SUCCESS", "COMPLETE", "COMPLETED", "READY", "IDLE", "DONE",
+    }:
+        result["status"] = "PARTIAL" if observed else "WAITING"
+    return result
+
+
+def _apply_fno_market_calendar(
+    card_id: str, status: Dict[str, Any], *, now_ist: Optional[dt.datetime] = None
+) -> Dict[str, Any]:
+    """Explain expected inactivity without concealing runtime failures."""
+    market_cards = (set(FNO_OI_CARD_REPORTS) - {"fno_oi_universe"}) | {
+        "live_signals_csv_fno_id_v13_v10_g_short", "live_signals_csv_fno_id_v13_v10_g_long",
+        "live_kite_trades_csv_fno_id_v13_v10_g", "kite_trade_fno_id_v13_v10_g",
+        "nifty_guard_fetch_v16_5min", "eod_5min_data", "kiteticker_5min_data",
+        "eod_1min_data",
+    }
+    if card_id not in market_cards:
+        return status
+    current = now_ist or dt.datetime.now(IST)
+    current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
+    reason = market_closed_reason(current.date())
+    if not reason:
+        return status
+    result = dict(status)
+    result["market_closed_reason"] = reason
+    result["market_session_date"] = current.date().isoformat()
+    runtime = str(status.get("status", "")).upper()
+    scheduler = str(status.get("scheduler_status") or status.get("scheduler_state") or "").upper()
+    if runtime == "DISABLED" or scheduler == "DISABLED":
+        return result
+    if (
+        status.get("execution_state") == "SKIPPED_NON_TRADING_DAY"
+        and status.get("session_date") == current.date().isoformat()
+        and str(status.get("armed", "")).lower() == "false"
+        and str(status.get("order_states", "")) == "0"
+    ):
+        # A newer closed-day export explains today's empty live sheets. Keep
+        # the earlier failed supervisor run as evidence; this is not a claim
+        # that the live executor was restarted or armed.
+        exported_at = _parse_status_datetime(status.get("updated_at_ist"))
+        runtime_at = _parse_status_datetime(status.get("ts"))
+        if exported_at and runtime_at and exported_at > runtime_at:
+            result.setdefault("previous_status", runtime)
+            result.setdefault("previous_reason", status.get("reason", ""))
+            result["status"] = "SKIPPED_NON_TRADING_DAY"
+            result["derived_status"] = reason + f"; current export skipped; earlier supervisor={result['previous_status']}."
+            return result
+    worker_filename = FNO_RECOVERY_WORKER_STATUS_FILES.get(card_id)
+    if runtime == "SUCCESS" and worker_filename:
+        worker = parse_status_file(RUNTIME_STATUS_DIR / worker_filename)
+        if (
+            worker.get("status") == "SKIPPED_NON_TRADING_DAY"
+            and worker.get("session_date_ist") == current.date().isoformat()
+        ):
+            result["observed_runtime_status"] = runtime
+            result["status"] = "SKIPPED_NON_TRADING_DAY"
+            result["derived_status"] = reason + "; worker skipped; supervisor exited normally."
+            return result
+    # Failures, active processes and degraded outputs remain visible. Only an
+    # idle/waiting card gets a calendar-derived state, preserving raw evidence.
+    if runtime in {
+        "NOT_RUN", "WAITING", "WAITING_OUTPUT", "SCHEDULED", "ENABLED",
+        "READY", "SKIPPED_NON_TRADING_DAY",
+    }:
+        result.setdefault("observed_runtime_status", runtime)
+        result["status"] = "SKIPPED_NON_TRADING_DAY"
+        result["derived_status"] = reason + "; no regular-session candles or entries expected."
+    return result
 
 
 def _normalise_fno_multi_paper_state(raw: object) -> str:
@@ -3414,6 +3671,7 @@ def _fno_eq_id_monitor_detail_path(card_id: str) -> Optional[Path]:
         return _resolve_status_path(live_fetch_name)
     if card_id in {
         "fno_oi_fetch_5min_fast_production",
+        "fno_options_atm_fetch_5min",
         "fno_oi_fetch_5min",
         "fno_oi_fetch_5min_fast_shadow",
         "fno_oi_feature_ranker",
@@ -3488,6 +3746,10 @@ def _fno_eq_id_monitor_safe_auth_status(today_ist: str) -> Dict[str, object]:
 
 
 _FNO_EQ_ID_ACTIVITY_FIELDS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "backtesting_result_v13_v10_g": (
+        ("session_date", "day"), ("phase", "phase"), ("fills", "trades"),
+        ("win_rate_pct", "win_pct"), ("trade_pf", "PF"), ("net_profit_rupees", "net_rs"),
+    ),
     "nifty_guard_fetch_v16_5min": (("slot", "slot"), ("phase", "phase")),
     "eod_5min_data": (
         ("slot_ist", "slot"), ("complete_symbol_count", "complete"),
@@ -3516,6 +3778,11 @@ _FNO_EQ_ID_ACTIVITY_FIELDS: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("stock_contracts_expected", "stock_expected"),
         ("duration_sec", "elapsed_s"),
     ),
+    "fno_options_atm_fetch_5min": (
+        ("slot_ist", "slot"), ("contracts_written", "written"),
+        ("contracts_expected", "expected"), ("rows_written", "rows"),
+        ("coverage", "coverage"), ("expiry_policy", "expiry"),
+    ),
     "fno_oi_fetch_5min": (("slot", "slot"), ("processed_slots", "slots")),
     "fno_oi_fetch_5min_fast_shadow": (
         ("slot", "slot"), ("processed_slots", "slots"),
@@ -3524,26 +3791,50 @@ _FNO_EQ_ID_ACTIVITY_FIELDS: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("fetch_persist_duration_sec", "elapsed_s"), ("speedup", "speedup"),
     ),
     "fno_oi_feature_ranker": (("slot", "slot"), ("processed_slots", "slots")),
-    "fno_v6_scanner_5min": (("processed_slots", "slots"),),
-    "fno_v6_equity_1min_feed": (
+    "fno_v13_v10_g_scanner_5min": (("processed_slots", "slots"),),
+    "fno_v13_v10_g_equity_1min_feed": (
         ("slot", "slot"), ("written", "written"), ("expected", "expected"),
     ),
-    "fno_v6_confirmation_1min": (("processed_slots", "slots"),),
-    "fno_v6_live_long": (
+    "fno_v13_v10_g_confirmation_1min": (("processed_slots", "slots"),),
+    "fno_v13_v10_g_live_long": (
         ("signals", "signals"), ("pending_entry", "pending"), ("open", "open"),
         ("closed", "closed"), ("no_fill", "no_fill"),
         ("blocked_sizing", "size_guard"),
     ),
-    "fno_v6_live_short": (
+    "fno_v13_v10_g_live_short": (
         ("signals", "signals"), ("pending_entry", "pending"), ("open", "open"),
         ("closed", "closed"), ("no_fill", "no_fill"),
         ("blocked_sizing", "size_guard"),
     ),
-    "fno_v6_trade_logger": (("rows", "trades"), ("closed", "closed")),
-    "fno_v6_net_result": (
+    "fno_v13_v10_g_trade_logger": (("rows", "trades"), ("closed", "closed")),
+    "fno_v13_v10_g_net_result": (
         ("signals", "signals"), ("open", "open"), ("closed", "closed"),
         ("blocked", "blocked"), ("total_net_rs", "net_rs"),
         ("return_on_capital_pct", "ROC_pct"),
+    ),
+    "fno_v13_v10_g_options_live_long": (
+        ("equity_entries", "equity_fills"), ("trades", "trades"),
+        ("open", "open"), ("closed", "closed"), ("skipped", "skipped"),
+        ("blocked", "blocked"), ("unresolved", "unresolved"),
+        ("net_pnl_rs", "net_rs"), ("free_cash_rs", "free_cash_rs"),
+    ),
+    "fno_v13_v10_g_options_live_short": (
+        ("equity_entries", "equity_fills"), ("trades", "trades"),
+        ("open", "open"), ("closed", "closed"), ("skipped", "skipped"),
+        ("blocked", "blocked"), ("unresolved", "unresolved"),
+        ("net_pnl_rs", "net_rs"), ("free_cash_rs", "free_cash_rs"),
+    ),
+    "fno_v13_v10_g_options_trade_logger": (
+        ("trades", "trades"), ("open", "open"), ("closed", "closed"),
+        ("skipped", "skipped"), ("blocked", "blocked"),
+        ("unresolved", "unresolved"), ("net_pnl_rs", "net_rs"),
+        ("free_cash_rs", "free_cash_rs"),
+    ),
+    "fno_v13_v10_g_options_net_result": (
+        ("trades", "trades"), ("open", "open"), ("closed", "closed"),
+        ("skipped", "skipped"), ("blocked", "blocked"),
+        ("unresolved", "unresolved"), ("net_pnl_rs", "net_rs"),
+        ("free_cash_rs", "free_cash_rs"),
     ),
     "fno_v8_combined_paper": (
         ("candidate_count", "candidates"), ("fill_count", "fills"),
@@ -3595,6 +3886,8 @@ def _fno_eq_id_monitor_activity(
     status: Dict[str, object],
     tail: object,
 ) -> str:
+    if status.get("strategy_identity_state") in {"MISMATCH", "AWAITING_G_RUNTIME"}:
+        return _fno_eq_id_monitor_clean(status.get("strategy_identity_detail", ""))
     parts: list[str] = []
     for field, label in _FNO_EQ_ID_ACTIVITY_FIELDS.get(card_id, ()):
         value = _fno_eq_id_monitor_clean(status.get(field, ""), limit=64)
@@ -3633,7 +3926,7 @@ def _fno_eq_id_monitor_state(
             or str(status.get("runtime_start_mode", "") or "").strip().upper() == "MANUAL"
         )
     )
-    if runtime == "DISABLED" or (scheduler == "DISABLED" and not manual_live):
+    if runtime in {"DISABLED", "NOT_SCHEDULED"} or (scheduler == "DISABLED" and not manual_live):
         return "INACTIVE", runtime or "DISABLED", False
 
     healthy = {
@@ -3668,7 +3961,7 @@ def _fno_eq_id_monitor_state(
         monitor = "UNKNOWN"
     if manual_live and monitor == "OK":
         monitor = "WATCH"
-    if not exists and runtime not in {"SCHEDULED", "ENABLED"} and monitor == "OK":
+    if not exists and runtime not in {"SCHEDULED", "ENABLED", "SKIPPED_NON_TRADING_DAY"} and monitor == "OK":
         monitor = "WATCH"
     return monitor, runtime or "UNKNOWN", True
 
@@ -3965,7 +4258,7 @@ def _fno_eq_id_timeline_event_symbols(
     minute: str,
     session_date: str,
 ) -> list[str]:
-    # The V6 PAPER ledger uses `tradingsymbol`; the V6 LIVE Kite qty-1 ledger
+    # The G PAPER ledger uses `tradingsymbol`; the G LIVE Kite qty-1 ledger
     # uses `ticker`.  Accept both so one helper serves both schemas.
     return [
         str(
@@ -3987,7 +4280,7 @@ def _fno_eq_id_timeline_v6_live_arm_state(
     arm_reason: str,
     kill_switch: bool,
 ) -> str:
-    """Return the V6 LIVE executor's gating state.
+    """Return the G LIVE executor's gating state.
 
     An unarmed live executor is a normal, deliberate condition - LIVE requires
     an explicit same-day acknowledgement - so it must be reported as its own
@@ -4102,6 +4395,7 @@ def _fno_eq_id_timeline_v6_confirmation_valid(
         return False
     return bool(
         payload.get("session_date") == session_date
+        and payload.get("strategy_version") == FNO_V13_V10_G_STRATEGY_VERSION
         and payload.get("signal_end") == signal_slot
         and payload.get("confirmation_end") == confirmation_slot
         and str(payload.get("state", "") or "").strip().upper() in {"SUCCESS", "COMPLETE"}
@@ -4117,6 +4411,26 @@ def _fno_eq_id_timeline_v6_confirmation_valid(
     )
 
 
+def _fno_v13_v10_g_timeline_minutes(
+    session_date: str, paper_rows: Sequence[Dict[str, Any]], live_rows: Sequence[Dict[str, Any]],
+) -> Tuple[str, ...]:
+    """Cover signal/expiry windows and actual later events without 360 idle rows."""
+    minutes = set(FNO_EQ_ID_MONITOR_1M_MINUTES)
+    for signal in FNO_V13_V10_G_SIGNAL_SLOTS:
+        start = _fno_eq_id_timeline_at(session_date, signal)
+        minutes.update((start + dt.timedelta(minutes=offset)).strftime("%H:%M") for offset in range(13))
+    for rows, fields in (
+        (paper_rows, ("entry_at_ist", "exit_at_ist")),
+        (live_rows, ("entry_time", "exit_time")),
+    ):
+        for row in rows:
+            for field in fields:
+                minute = _fno_eq_id_timeline_hhmm(row.get(field), session_date)
+                if minute and "09:15" <= minute <= "15:15":
+                    minutes.add(minute)
+    return tuple(sorted(minutes))
+
+
 def _build_fno_eq_id_strategy_timelines(
     items: Sequence[Dict[str, object]],
     *,
@@ -4126,12 +4440,22 @@ def _build_fno_eq_id_strategy_timelines(
     current = now_ist or dt.datetime.now(IST)
     current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
     session_date = current.date().isoformat()
+    closed_reason = market_closed_reason(current.date())
+    if closed_reason:
+        return {
+            "session_date": session_date, "generated_at_ist": current.isoformat(),
+            "market_closed_reason": closed_reason,
+            "five_minute_rows": [], "one_minute_rows": [],
+            "hard_issue_count": 0, "active_hard_issue_count": 0,
+            "closed_hard_issue_count": 0, "watch_issue_count": 0,
+            "issue_count": 0, "timeline_window_closed": True,
+        }
     date_key = session_date.replace("-", "")
     by_id = {str(item.get("id", "")): item for item in items}
 
-    v6_root = FNO_OI_ROOT / "v6_live"
+    v6_root = FNO_OI_ROOT / "v13_v10_g_live"
     v6_trade_path = (
-        v6_root / "consolidated" / f"fno_v6_trades_{session_date}.csv"
+        v6_root / "consolidated" / f"fno_v13_v10_g_trades_{session_date}.csv"
     )
     v6_trade_file_exists = v6_trade_path.is_file()
     v6_trade_rows = _fno_eq_id_timeline_session_rows(
@@ -4139,13 +4463,13 @@ def _build_fno_eq_id_strategy_timelines(
         session_date,
     )
 
-    # V6 LIVE Kite qty-1 executor.  This is a separate execution path from the
+    # G LIVE Kite qty-1 executor.  This is a separate execution path from the
     # PAPER ledger above: same signals, real orders, fixed quantity 1.  Its
     # armed state matters as much as its fills - an unarmed session produces no
     # trades for a legitimate reason, which must not read as "nothing happened".
     v6_live_root = v6_root / "live_kite"
     v6_live_trade_path = (
-        v6_live_root / f"live_trades_{session_date}_fno_id_v6.csv"
+        v6_live_root / f"live_trades_{session_date}_fno_id_v13_v10_g.csv"
     )
     v6_live_trade_file_exists = v6_live_trade_path.is_file()
     v6_live_trade_rows = _fno_eq_id_timeline_session_rows(
@@ -4163,7 +4487,7 @@ def _build_fno_eq_id_strategy_timelines(
         _fno_eq_id_timeline_number(v6_live_status.get("signals")) or 0
     )
     v6_live_disabled = _fno_eq_id_timeline_card_disabled(
-        by_id, "kite_trade_fno_id_v6"
+        by_id, "kite_trade_fno_id_v13_v10_g"
     )
     shared_day_root = FNO_MULTI_PAPER_ROOT / "sessions" / session_date
     shared_status = _read_json_dict(FNO_MULTI_PAPER_STATUS_PATH)
@@ -4181,14 +4505,14 @@ def _build_fno_eq_id_strategy_timelines(
         by_id, "fno_v10_v11_v12_paper"
     )
     v6_scanner_disabled = _fno_eq_id_timeline_card_disabled(
-        by_id, "fno_v6_scanner_5min"
+        by_id, "fno_v13_v10_g_scanner_5min"
     )
     v6_confirmation_disabled = _fno_eq_id_timeline_card_disabled(
-        by_id, "fno_v6_confirmation_1min"
+        by_id, "fno_v13_v10_g_confirmation_1min"
     )
     v6_entries_disabled = all(
         _fno_eq_id_timeline_card_disabled(by_id, card_id)
-        for card_id in ("fno_v6_live_long", "fno_v6_live_short")
+        for card_id in ("fno_v13_v10_g_live_long", "fno_v13_v10_g_live_short")
     )
 
     profile_audits: Dict[str, list[Dict[str, Any]]] = {}
@@ -4217,7 +4541,7 @@ def _build_fno_eq_id_strategy_timelines(
     five_minute_rows: list[Dict[str, str]] = []
     v6_scanners: Dict[str, Dict[str, Any]] = {}
     v6_confirmations: Dict[str, Dict[str, Any]] = {}
-    for slot in FNO_EQ_ID_MONITOR_5M_SLOTS:
+    for slot in sorted(set(FNO_EQ_ID_MONITOR_5M_SLOTS) | set(FNO_V13_V10_G_SIGNAL_SLOTS)):
         cash_payload = _read_json_dict(
             SLOT_READY_5M_DIR / f"slot_{date_key}_{slot.replace(':', '')}.json"
         )
@@ -4302,12 +4626,12 @@ def _build_fno_eq_id_strategy_timelines(
             purpose = "OPEN SNAPSHOT"
         elif slot == "09:20":
             purpose = "DATA/OI WARMUP"
-        elif slot == "09:50":
-            purpose = "CUTOFF / S+5 FOR 09:45"
+        elif slot in FNO_V13_V10_G_SIGNAL_SLOTS and slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+            purpose = "G STRATEGY SELECTION"
         else:
             purpose = "STRATEGY SELECTION"
 
-        if slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+        if slot not in FNO_V13_V10_G_SIGNAL_SLOTS:
             v6_cell = "OFF WINDOW"
         elif v6_scanner_disabled:
             v6_cell = "DISABLED"
@@ -4321,6 +4645,7 @@ def _build_fno_eq_id_strategy_timelines(
                 valid_scanner = (
                     str(scanner.get("session_date", "") or "") == session_date
                     and str(scanner.get("signal_end", "") or "") == slot
+                    and scanner.get("strategy_version") == FNO_V13_V10_G_STRATEGY_VERSION
                 )
                 if not valid_scanner:
                     v6_cell = "EVIDENCE MISMATCH"
@@ -4485,7 +4810,7 @@ def _build_fno_eq_id_strategy_timelines(
             arm_reason=v6_live_arm_reason,
             kill_switch=v6_live_kill_switch,
         )
-        if slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+        if slot not in FNO_V13_V10_G_SIGNAL_SLOTS:
             v6_live_cell = "OFF WINDOW"
         elif v6_live_arm_state != "ARMED":
             # Still show the cohort so an unarmed day remains auditable.
@@ -4564,7 +4889,7 @@ def _build_fno_eq_id_strategy_timelines(
         and not any(profile_audits.values())
     )
     one_minute_rows: list[Dict[str, str]] = []
-    for minute in FNO_EQ_ID_MONITOR_1M_MINUTES:
+    for minute in _fno_v13_v10_g_timeline_minutes(session_date, v6_trade_rows, v6_live_trade_rows):
         minute_at = _fno_eq_id_timeline_at(session_date, minute)
         marker_path = (
             FNO_MULTI_PAPER_ROOT / "evidence" / session_date / "one_minute_union"
@@ -4600,6 +4925,8 @@ def _build_fno_eq_id_strategy_timelines(
             minute_source = "BLOCKED: reducer evidence conflict"
         elif processed_all:
             minute_source = "REDUCED; no required symbols"
+        elif minute not in FNO_EQ_ID_MONITOR_1M_MINUTES:
+            minute_source = "OFF MONITOR WINDOW"
         else:
             pending = _fno_eq_id_timeline_pending_state(current, minute_at)
             if terminal_empty_shared and pending.startswith("BLOCKED"):
@@ -4611,7 +4938,7 @@ def _build_fno_eq_id_strategy_timelines(
         if v6_scanner_disabled and v6_confirmation_disabled and v6_entries_disabled:
             v6_cell_1m = "DISABLED"
         else:
-            if minute in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+            if minute in FNO_V13_V10_G_SIGNAL_SLOTS:
                 scanner = v6_scanners.get(minute)
                 if scanner:
                     long_count = int(_fno_eq_id_timeline_number(scanner.get("long_candidates")) or 0)
@@ -4810,7 +5137,7 @@ def _build_fno_eq_id_strategy_timelines(
     hard_issue_count = 0
     watch_issue_count = 0
     for row in five_minute_rows:
-        if row["slot"] not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+        if row["slot"] not in FNO_V13_V10_G_SIGNAL_SLOTS:
             continue
         market_cells = [row[key] for key in ("cash", "oi", "rank")]
         strategy_cells = [row[key] for key in ("v6", "shared", "v10", "v11", "v12")]
@@ -4834,7 +5161,7 @@ def _build_fno_eq_id_strategy_timelines(
         if any(any(term in cell for term in hard_terms) for cell in cells):
             hard_issue_count += 1
     timeline_window_closed = current >= (
-        _fno_eq_id_timeline_at(session_date, "09:50")
+        _fno_eq_id_timeline_at(session_date, "11:32")
         + dt.timedelta(minutes=1, seconds=FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS)
     )
     active_hard_issue_count = 0 if timeline_window_closed else hard_issue_count
@@ -4858,12 +5185,19 @@ def _build_fno_eq_id_strategy_timelines(
 
 
 def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
+    if timeline.get("market_closed_reason"):
+        return [
+            "", "## Market session", "",
+            f"- {timeline['market_closed_reason']}",
+            "- Five-minute selection and one-minute execution timelines are not due.",
+            "- Runtime failures, if any, remain visible in the session table.",
+        ]
     lines = [
         "",
-        "## 5-Minute Market Readiness (09:15-09:50 IST)",
+        "## 5-Minute Market Readiness (G selection slots through 11:20 IST)",
         "",
         f"- Session date: `{_fno_eq_id_monitor_clean(timeline.get('session_date'))}`; every label is a completed-candle end in IST.",
-        "- `09:15` is the opening snapshot, `09:20` is data/OI warm-up, `09:25-09:45` are the five frozen selection windows, and `09:50` is the cutoff/S+5 minute for the 09:45 cohort.",
+        "- `09:15` is the opening snapshot and `09:20` is data/OI warm-up. G uses nine signal times: `09:25`, `09:30`, `09:35`, `09:40`, `09:45`, `09:50`, `09:55`, `10:00`, `11:20`. The separate shared V10/V11/V12 session keeps its `09:25-09:45` windows.",
         "",
         "| 5m end | Purpose | Equity 5m | Futures OI | OI ranker |",
         "|---|---|---|---|---|",
@@ -4881,7 +5215,7 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         "",
         "## 5-Minute Strategy Selection and Current Cohort Result",
         "",
-        "| 5m signal end | V6 selection -> S+1 confirmation -> current cohort | V6 LIVE (Kite qty-1) | Shared source | V10 | V11 | V12 |",
+        "| 5m signal end | V13-V10-G selection -> S+1 confirmation -> current cohort | G LIVE (Kite qty-1) | Shared source | V10 | V11 | V12 |",
         "|---|---|---|---|---|---|---|",
     ))
     for row in five_rows if isinstance(five_rows, list) else []:
@@ -4894,16 +5228,16 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         )
     lines.extend((
         "",
-        "## 1-Minute Strategy Events (09:15-09:50 IST)",
+        "## 1-Minute Strategy Events (G entry windows and later trade events)",
         "",
-        f"- Generic `Live Data Fetch (1min)`: **{_fno_eq_id_monitor_clean(timeline.get('generic_1m_state'))}**. V6 and the shared V10/V11/V12 session use their own candidate-scoped 1-minute evidence and do not depend on that generic card.",
+        f"- Generic `Live Data Fetch (1min)`: **{_fno_eq_id_monitor_clean(timeline.get('generic_1m_state'))}**. G and the shared V10/V11/V12 session use their own candidate-scoped 1-minute evidence and do not depend on that generic card.",
         f"- Shared runtime: `{_fno_eq_id_monitor_clean(timeline.get('shared_runtime'))}` / `{_fno_eq_id_monitor_clean(timeline.get('shared_phase'))}`.",
         f"- Timeline evidence flags: `{int(timeline.get('active_hard_issue_count', timeline.get('hard_issue_count', 0)) or 0)}` active hard / `{int(timeline.get('closed_hard_issue_count', 0) or 0)}` closed historical gaps / `{int(timeline.get('watch_issue_count', 0) or 0)}` watch. Expected 09:15 opening and 09:20 rank warm-up states are excluded.",
-        "- V6 completed-candle confirmations are valid only at `09:26`, `09:31`, `09:36`, `09:41`, and `09:46`; its PAPER entry/exit events may occur at other wall-clock minutes.",
+        "- G confirms at `09:26`, `09:31`, `09:36`, `09:41`, `09:46`, `09:51`, `09:56`, `10:01`, `11:21`. Its ten-minute entry windows and actual later paper/live entry and exit events are shown. Quiet minutes outside those windows are omitted; this is not a continuous MTM history.",
         "- `REDUCED; no required symbols` means the chronological reducer advanced without fetching a union bar because no active candidate needed one. It does not mean a 1-minute fetch occurred.",
         "- One-minute books use only causal entry/exit timestamps and realized P&L. Current ledger MTM appears only in the 5-minute cohort table because immutable historical per-minute MTM snapshots do not exist.",
         "",
-        "| 1m end/event minute | Shared 1m source / reducer | V6 (paper) | V6 LIVE (Kite qty-1) | V10 | V11 | V12 |",
+        "| 1m end/event minute | Shared 1m source / reducer | V13-V10-G (paper) | G LIVE (Kite qty-1) | V10 | V11 | V12 |",
         "|---|---|---|---|---|---|---|",
     ))
     minute_rows = timeline.get("one_minute_rows", [])
@@ -4923,7 +5257,7 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         "- `NO SIGNAL` / `NO EVENT`: processing completed but no candidate or transition occurred.",
         "- `WAIT` / `IN PROGRESS`: the causal completed-candle boundary or evidence deadline has not passed.",
         "- `SKIPPED`, `BLOCKED`, `INCOMPLETE`, `MISMATCH`, or `CONFLICT`: explicit fail-visible evidence; no result is fabricated.",
-        "- `V6 LIVE (Kite qty-1)` is the real-order execution path at fixed quantity 1, separate from the V6 PAPER ledger in the neighbouring column. Both act on the same V6 signals.",
+        "- `G LIVE (Kite qty-1)` is the real-order execution path at fixed quantity 1. G PAPER uses its configured strategy sizing. Both consume the same G signals, while broker fills and costs remain separately recorded.",
         "- `NOT ARMED (...)`, `KILL SWITCH ON`, and `NO LIVE STATUS` are deliberate gates, not faults: LIVE needs an explicit same-day acknowledgement, so an unarmed session legitimately produces no fills. These states are excluded from the hard-issue count; `ARMED; MISSING LIVE LEDGER` is not.",
     ))
     return lines
@@ -4949,6 +5283,8 @@ def _format_fno_eq_id_monitor(
         for card_id in card_ids:
             item = by_id.get(card_id, {})
             base_status = dict(item.get("status") or {}) if isinstance(item, dict) else {}
+            base_status = _apply_fno_v13_v10_g_identity(card_id, base_status)
+            base_status = _apply_fno_market_calendar(card_id, base_status, now_ist=current)
             detail_path = _fno_eq_id_monitor_detail_path(card_id)
             detail_status = parse_status_file(detail_path) if detail_path is not None else {}
             activity_status: Dict[str, object] = dict(base_status)
@@ -5046,7 +5382,7 @@ def _format_fno_eq_id_monitor(
                 {
                     "stage": FNO_EQ_ID_MONITOR_STAGE_LABELS.get(card_id, card_id),
                     "session": FNO_EQ_ID_MONITOR_SESSION_LABELS.get(card_id, card_id),
-                    "eligible": "YES" if eligible else "NO (disabled)",
+                    "eligible": "YES" if eligible else ("NO (not scheduled)" if runtime == "NOT_SCHEDULED" else "NO (disabled)"),
                     "monitor": monitor,
                     "runtime": runtime,
                     "scheduler": scheduler,
@@ -6285,6 +6621,10 @@ def _format_preopen_scheduled_sessions() -> str:
     ts_ist = str(payload.get("ts_ist", "") or "").strip()
     overall = str(payload.get("overall", "") or "").strip()
     checks = payload.get("checks", []) or []
+
+    calendar_check = next((c for c in checks if isinstance(c, dict) and c.get("name") == "market_calendar"), None)
+    if calendar_check:
+        return f"{calendar_check.get('detail', '')}\nReport: {ts_ist} | overall={overall}"
 
     task_checks = [
         c for c in checks
@@ -8442,7 +8782,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       margin-right: 4px;
     }
 
-    /* markdown-report cards (FnO V6 sessions) */
+    /* markdown-report cards (FnO V13-V10-G sessions) */
     .md-meta-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
@@ -8856,18 +9196,23 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_oi_fetch_5min_fast_production",
       "fno_oi_fetch_5min",
       "fno_oi_fetch_5min_fast_shadow",
+      "fno_options_atm_fetch_5min",
       "fno_oi_feature_ranker",
-      "fno_v6_scanner_5min",
-      "fno_v6_equity_1min_feed",
-      "fno_v6_confirmation_1min",
-      "fno_v6_live_long",
-      "fno_v6_live_short",
-      "fno_v6_trade_logger",
-      "fno_v6_net_result",
-      "live_signals_csv_fno_id_v6_short",
-      "live_signals_csv_fno_id_v6_long",
-      "live_kite_trades_csv_fno_id_v6",
-      "kite_trade_fno_id_v6",
+      "fno_v13_v10_g_scanner_5min",
+      "fno_v13_v10_g_equity_1min_feed",
+      "fno_v13_v10_g_confirmation_1min",
+      "fno_v13_v10_g_live_long",
+      "fno_v13_v10_g_live_short",
+      "fno_v13_v10_g_trade_logger",
+      "fno_v13_v10_g_net_result",
+      "live_signals_csv_fno_id_v13_v10_g_short",
+      "live_signals_csv_fno_id_v13_v10_g_long",
+      "live_kite_trades_csv_fno_id_v13_v10_g",
+      "kite_trade_fno_id_v13_v10_g",
+      "fno_v13_v10_g_options_live_long",
+      "fno_v13_v10_g_options_live_short",
+      "fno_v13_v10_g_options_trade_logger",
+      "fno_v13_v10_g_options_net_result",
       "fno_v8_combined_paper",
       "fno_v10_v11_v12_paper",
       "fno_v10_paper",
@@ -8904,7 +9249,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "live_kite_trades_csv_id_5min_v7",
       "kite_trade_id_5min_v7",
       "data_for_backtesting",
-      "backtesting_result_v11",
+      "backtesting_result_v13_v10_g",
       "signal_early_engine_v16_5min",
       "pending_signals_v16_5min",
       "pending_data_fetcher_v16_5min",
@@ -8944,20 +9289,25 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_15min_data": "Live Data Fetch (15mins)",
       "fno_oi_universe": "FnO Near-Month Futures Universe",
       "fno_oi_fetch_5min_fast_production": "FnO Live 5-Minute Futures OI Fetch (Fast Production)",
+      "fno_options_atm_fetch_5min": "FnO ATM CE/PE Options Fetch (5-Minute + 1-Minute)",
       "fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch (Old)",
       "fno_oi_fetch_5min_fast_shadow": "FnO Fast Shadow OI Validator",
       "fno_oi_feature_ranker": "FnO OI Gainers, Losers & Activity Rankings",
-      "fno_v6_scanner_5min": "FnO V6 BEST_NET Equity 5-Minute + Futures OI Scanner",
-      "fno_v6_equity_1min_feed": "FnO V6 Durable Completed Equity 1-Minute Feed",
-      "fno_v6_confirmation_1min": "FnO V6 BEST_NET Candidate Equity 1-Minute Confirmation",
-      "fno_v6_live_long": "FnO V6 BEST_NET LONG Entry Session",
-      "fno_v6_live_short": "FnO V6 BEST_NET SHORT Entry Session",
-      "fno_v6_trade_logger": "FnO V6 BEST_NET Continuous Trade Log",
-      "fno_v6_net_result": "FnO V6 BEST_NET Net Result",
-      "live_signals_csv_fno_id_v6_short": "Live Entries CSV fno ID V6 Short",
-      "live_signals_csv_fno_id_v6_long": "Live Entries CSV fno ID V6 Long",
-      "live_kite_trades_csv_fno_id_v6": "fno ID V6 Live Kite Trades CSV",
-      "kite_trade_fno_id_v6": "fno ID V6 Live Trade Runner Log",
+      "fno_v13_v10_g_scanner_5min": "FnO V13-V10-G Equity 5-Minute + Futures OI Scanner",
+      "fno_v13_v10_g_equity_1min_feed": "FnO V13-V10-G Durable Completed Equity 1-Minute Feed",
+      "fno_v13_v10_g_confirmation_1min": "FnO V13-V10-G Candidate Equity 1-Minute Confirmation",
+      "fno_v13_v10_g_live_long": "FnO V13-V10-G LONG Paper Entry Session",
+      "fno_v13_v10_g_live_short": "FnO V13-V10-G SHORT Paper Entry Session",
+      "fno_v13_v10_g_trade_logger": "FnO V13-V10-G Continuous Paper Trade Log",
+      "fno_v13_v10_g_net_result": "FnO V13-V10-G Paper Net Result",
+      "live_signals_csv_fno_id_v13_v10_g_short": "FnO V13-V10-G Live Entries CSV Short",
+      "live_signals_csv_fno_id_v13_v10_g_long": "FnO V13-V10-G Live Entries CSV Long",
+      "live_kite_trades_csv_fno_id_v13_v10_g": "FnO V13-V10-G Live Kite Trades CSV",
+      "kite_trade_fno_id_v13_v10_g": "FnO V13-V10-G Live Trade Runner Log",
+      "fno_v13_v10_g_options_live_long": "Options V13-V10-G LONG ATM CE Buy Paper Entry Session",
+      "fno_v13_v10_g_options_live_short": "Options V13-V10-G SHORT ATM PE Buy Paper Entry Session",
+      "fno_v13_v10_g_options_trade_logger": "Options V13-V10-G Continuous Paper Trade Log",
+      "fno_v13_v10_g_options_net_result": "Options V13-V10-G Paper Net Result",
       "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
       "fno_v10_v11_v12_paper": "FnO V10/V11/V12 Papertrade - Shared Session",
       "fno_v10_paper": "FnO V10 Papertrade View",
@@ -9002,7 +9352,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "live_kite_trades_csv_id_5min_v7": "V7 ID 5min Live Kite Trades CSV",
       "kite_trade_id_5min_v7": "V7 ID 5min Live Trade Runner Log",
       "data_for_backtesting": "Data for backtesting",
-      "backtesting_result_v11": "Backtesting result v6/v8/v10/v11/v12",
+      "backtesting_result_v13_v10_g": "Backtesting result v13-v10-G",
+      "v13_research_run_vintage": "V13 Research Run Vintage Gate",
       "nifty_guard_fetch_v15": "NIFTY Fetch V15",
       "nifty_guard_fetch_v16_5min": "NIFTY Fetch 5min",
       "live_signals_csv_v15_new_short": "Live Entries CSV V15 Short New",
@@ -9041,60 +9392,47 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "fno_oi_fetch_5min_fast_production",
           "fno_oi_fetch_5min",
           "fno_oi_fetch_5min_fast_shadow",
+          "fno_options_atm_fetch_5min",
           "fno_oi_feature_ranker",
-          "fno_v6_scanner_5min",
-          "fno_v6_equity_1min_feed",
-          "fno_v6_confirmation_1min",
-          "fno_v6_live_long",
-          "fno_v6_live_short",
-          "fno_v6_trade_logger",
-          "fno_v6_net_result",
-          "live_signals_csv_fno_id_v6_short",
-          "live_signals_csv_fno_id_v6_long",
-          "live_kite_trades_csv_fno_id_v6",
-          "kite_trade_fno_id_v6",
-          "fno_v8_combined_paper",
-          "fno_v10_v11_v12_paper",
-          "fno_v10_paper",
-          "fno_v11_paper",
-          "fno_v12_paper",
+          "fno_v13_v10_g_scanner_5min",
+          "fno_v13_v10_g_equity_1min_feed",
+          "fno_v13_v10_g_confirmation_1min",
+          "fno_v13_v10_g_live_long",
+          "fno_v13_v10_g_live_short",
+          "fno_v13_v10_g_trade_logger",
+          "fno_v13_v10_g_net_result",
+          "live_signals_csv_fno_id_v13_v10_g_short",
+          "live_signals_csv_fno_id_v13_v10_g_long",
+          "live_kite_trades_csv_fno_id_v13_v10_g",
+          "kite_trade_fno_id_v13_v10_g",
+          "fno_v13_v10_g_options_live_long",
+          "fno_v13_v10_g_options_live_short",
+          "fno_v13_v10_g_options_trade_logger",
+          "fno_v13_v10_g_options_net_result",
           "fno_oi_eod_qc"
         ],
         subgroups: [
           {
-            key: "fno-v6-live-kite-qty1",
-            title: "FnO V6 Live Kite - Quantity 1",
+            key: "fno-v13-v10-g-live-kite-qty1",
+            title: "FnO V13-V10-G Live Kite - Quantity 1",
             note: "one task | fixed quantity 1 | SHORT | LONG | trades | runner log",
             ids: [
-              "live_signals_csv_fno_id_v6_short",
-              "live_signals_csv_fno_id_v6_long",
-              "live_kite_trades_csv_fno_id_v6",
-              "kite_trade_fno_id_v6"
+              "live_signals_csv_fno_id_v13_v10_g_short",
+              "live_signals_csv_fno_id_v13_v10_g_long",
+              "live_kite_trades_csv_fno_id_v13_v10_g",
+              "kite_trade_fno_id_v13_v10_g"
             ]
           },
           {
-            key: "fno-modern-paper-session",
-            title: "V10 / V11 / V12 Shared Papertrade Session",
-            note: "one task | one engine | one heartbeat | three independent ledgers",
-            ids: ["fno_v10_v11_v12_paper"]
-          },
-          {
-            key: "fno-v10",
-            title: "V10",
-            note: "5m selection | 1m entry | LONG | SHORT | result | logs",
-            ids: ["fno_v10_paper"]
-          },
-          {
-            key: "fno-v11",
-            title: "V11",
-            note: "5m selection | 1m entry | LONG | SHORT | result | logs",
-            ids: ["fno_v11_paper"]
-          },
-          {
-            key: "fno-v12",
-            title: "V12",
-            note: "5m selection | 1m entry | LONG | SHORT | result | logs",
-            ids: ["fno_v12_paper"]
+            key: "options-v13-v10-g-paper",
+            title: "Options V13-V10-G Paper Trading",
+            note: "underlying LONG buys ATM CE | underlying SHORT buys ATM PE | one exchange lot | SL 30% | target 40.4%",
+            ids: [
+              "fno_v13_v10_g_options_live_long",
+              "fno_v13_v10_g_options_live_short",
+              "fno_v13_v10_g_options_trade_logger",
+              "fno_v13_v10_g_options_net_result"
+            ]
           }
         ]
       },
@@ -9136,7 +9474,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         accent: "research",
         ids: [
           "data_for_backtesting",
-          "backtesting_result_v11"
+          "backtesting_result_v13_v10_g",
+          "v13_research_run_vintage"
         ]
       },
       {
@@ -9199,7 +9538,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     // Only the section assignment is locked; this does not make them runnable.
     const SECTION_LOCKED_DISABLED_IDS = new Set([
       "kiteticker_5min_data",
-      "eod_1min_data",
+      "eod_1min_data"
+    ]);
+    // Retired paper views remain available to the backend audit/monitoring
+    // code, but are intentionally absent from every dashboard UI surface.
+    const DASHBOARD_HIDDEN_IDS = new Set([
       "fno_v8_combined_paper",
       "fno_v10_v11_v12_paper",
       "fno_v10_paper",
@@ -9212,19 +9555,22 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
       { time: "09:00", id: "kiteticker_5min_data", label: "Live Data KiteTicker Fetch 5min (shadow monitoring)" },
       { time: "09:05", id: "fno_oi_fetch_5min_fast_production", label: "FnO Futures OI Fetch (Fast Production)" },
+      { time: "09:07", id: "fno_options_atm_fetch_5min", label: "FnO ATM Options 5m + 1m Fetch" },
       { time: "09:05", id: "fno_oi_fetch_5min", label: "FnO Futures OI Fetch (Old)" },
       { time: "09:06", id: "fno_oi_fetch_5min_fast_shadow", label: "FnO Fast Shadow OI Validator" },
       { time: "09:15", id: "fno_oi_feature_ranker", label: "FnO OI Rankings" },
-      { time: "09:15", id: "fno_v6_scanner_5min", label: "FnO V6 BEST_NET 5m Scanner" },
-      { time: "09:15", id: "fno_v6_equity_1min_feed", label: "FnO V6 Durable Completed 1m Feed" },
-      { time: "09:15", id: "fno_v6_confirmation_1min", label: "FnO V6 BEST_NET 1m Confirmation" },
-      { time: "09:15", id: "fno_v6_live_long", label: "FnO V6 BEST_NET LONG Entries" },
-      { time: "09:15", id: "fno_v6_live_short", label: "FnO V6 BEST_NET SHORT Entries" },
-      { time: "09:15", id: "fno_v6_trade_logger", label: "FnO V6 BEST_NET Trade Log" },
-      { time: "09:15", id: "fno_v6_net_result", label: "FnO V6 BEST_NET Net Result" },
-      { time: "09:15", id: "kite_trade_fno_id_v6", label: "FnO V6 Live Kite Qty 1" },
-      { time: "09:15", id: "fno_v8_combined_paper", label: "FnO V8-Combined Paper Shadow" },
-      { time: "09:15", id: "fno_v10_v11_v12_paper", label: "FnO V10/V11/V12 Papertrade" },
+      { time: "09:15", id: "fno_v13_v10_g_scanner_5min", label: "FnO V13-V10-G 5m Scanner" },
+      { time: "09:15", id: "fno_v13_v10_g_equity_1min_feed", label: "FnO V13-V10-G Durable Completed 1m Feed" },
+      { time: "09:15", id: "fno_v13_v10_g_confirmation_1min", label: "FnO V13-V10-G 1m Confirmation" },
+      { time: "09:15", id: "fno_v13_v10_g_live_long", label: "FnO V13-V10-G LONG Paper Entries" },
+      { time: "09:15", id: "fno_v13_v10_g_live_short", label: "FnO V13-V10-G SHORT Paper Entries" },
+      { time: "09:15", id: "fno_v13_v10_g_trade_logger", label: "FnO V13-V10-G Paper Trade Log" },
+      { time: "09:15", id: "fno_v13_v10_g_net_result", label: "FnO V13-V10-G Paper Net Result" },
+      { time: "09:15", id: "kite_trade_fno_id_v13_v10_g", label: "FnO V13-V10-G Live Kite Qty 1" },
+      { time: "09:15", id: "fno_v13_v10_g_options_live_long", label: "Options V13-V10-G LONG ATM CE Paper Entries" },
+      { time: "09:15", id: "fno_v13_v10_g_options_live_short", label: "Options V13-V10-G SHORT ATM PE Paper Entries" },
+      { time: "09:15", id: "fno_v13_v10_g_options_trade_logger", label: "Options V13-V10-G Paper Trade Log" },
+      { time: "09:15", id: "fno_v13_v10_g_options_net_result", label: "Options V13-V10-G Paper Net Result" },
       { time: "09:17", id: "eod_1min_data", label: "Live Data Fetch 1min" },
       { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
       { time: "09:15", id: "fundamental_price_action_v1", label: "fundamental_price_action_v1" },
@@ -9238,7 +9584,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:22", id: "kite_trade_id_5min_v7", label: "Live Trade FALSE" },
       { time: "15:40", id: "fno_oi_eod_qc", label: "FnO EOD QC" },
       { time: "15:45", id: "data_for_backtesting", label: "Data for Backtesting" },
-      { time: "16:20", id: "backtesting_result_v11", label: "Backtesting result v6/v8/v10/v11/v12" },
+      { time: "16:20", id: "backtesting_result_v13_v10_g", label: "Backtesting result v13-v10-G" },
       { time: "16:05", id: "v7_nse_id_cost", label: "V7 NSE ID Cost" },
       { time: "16:05", id: "v7_causality_audit", label: "V7 Causality Audit" },
       { time: "16:15", id: "v7_research_layer", label: "Suggestions v7 Research" },
@@ -9291,20 +9637,27 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     // collapsed invariant notes and real sortable tables instead of raw text.
     const MD_REPORT_CARDS = new Set([
       "fno_oi_fetch_5min_fast_production",
+      "fno_options_atm_fetch_5min",
       "fno_oi_fetch_5min_fast_shadow",
-      "fno_v6_scanner_5min",
-      "fno_v6_equity_1min_feed",
-      "fno_v6_confirmation_1min",
-      "fno_v6_live_long",
-      "fno_v6_live_short",
-      "fno_v6_trade_logger",
-      "fno_v6_net_result",
+      "fno_v13_v10_g_scanner_5min",
+      "fno_v13_v10_g_equity_1min_feed",
+      "fno_v13_v10_g_confirmation_1min",
+      "fno_v13_v10_g_live_long",
+      "fno_v13_v10_g_live_short",
+      "fno_v13_v10_g_trade_logger",
+      "fno_v13_v10_g_net_result",
+      "fno_v13_v10_g_options_live_long",
+      "fno_v13_v10_g_options_live_short",
+      "fno_v13_v10_g_options_trade_logger",
+      "fno_v13_v10_g_options_net_result",
       "fno_v8_combined_paper",
       "fno_v10_v11_v12_paper",
       "fno_v10_paper",
       "fno_v11_paper",
       "fno_v12_paper",
-      "v7_live_5min_monitor"
+      "v7_live_5min_monitor",
+      "v13_research_run_vintage",
+      "backtesting_result_v13_v10_g"
     ]);
     const FNO_MULTI_PAPER_CARDS = new Set([
       "fno_v10_v11_v12_paper",
@@ -9313,20 +9666,26 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v12_paper"
     ]);
     const RESTARTABLE_CARDS = new Set([
+      "backtesting_result_v13_v10_g",
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
       "eod_1min_data",
       "fno_oi_fetch_5min_fast_production",
+      "fno_options_atm_fetch_5min",
       "fno_oi_fetch_5min",
       "fno_oi_fetch_5min_fast_shadow",
       "fno_oi_feature_ranker",
-      "fno_v6_scanner_5min",
-      "fno_v6_equity_1min_feed",
-      "fno_v6_confirmation_1min",
-      "fno_v6_live_long",
-      "fno_v6_live_short",
-      "fno_v6_trade_logger",
-      "fno_v6_net_result",
+      "fno_v13_v10_g_scanner_5min",
+      "fno_v13_v10_g_equity_1min_feed",
+      "fno_v13_v10_g_confirmation_1min",
+      "fno_v13_v10_g_live_long",
+      "fno_v13_v10_g_live_short",
+      "fno_v13_v10_g_trade_logger",
+      "fno_v13_v10_g_net_result",
+      "fno_v13_v10_g_options_live_long",
+      "fno_v13_v10_g_options_live_short",
+      "fno_v13_v10_g_options_trade_logger",
+      "fno_v13_v10_g_options_net_result",
       "fno_v10_v11_v12_paper",
       "signal_early_engine_v16_5min",
       "detection_engine_v16_5min",
@@ -9441,7 +9800,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return `<span class="pill warn">${esc(s)}</span>`;
       if (s === "MISSING_OUTPUT") return `<span class="pill fail">${esc(s)}</span>`;
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return `<span class="pill info">${esc(s)}</span>`;
-      if (s === "DISABLED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "STOPPED" || s === "DONE") return `<span class="pill muted">${esc(s)}</span>`;
+      if (s === "DISABLED" || s === "NOT_SCHEDULED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "STOPPED" || s === "DONE") return `<span class="pill muted">${esc(s)}</span>`;
       return `<span class="pill fail">${esc(s)}</span>`;
     }
 
@@ -9454,7 +9813,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "warn";
       if (s === "MISSING_OUTPUT") return "bad";
       if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return "scheduled";
-      if (s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "STOPPED" || s === "DONE") return "scheduled";
+      if (s === "NOT_SCHEDULED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "STOPPED" || s === "DONE") return "scheduled";
       if (!s) return "unknown";
       return "bad";
     }
@@ -9711,7 +10070,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           || id === "v7_gate_promotion"
           || id === "v7_qualification"
           || id === "v7_pre_momentum_filter_analyst"
-          || id === "backtesting_result_v11"
+          || id === "backtesting_result_v13_v10_g"
           || id === "data_for_backtesting";
       }
       return true;
@@ -9884,7 +10243,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (isFailClosedWatch(s, phase)) return "card is-warn";
       if (["STALE_HB_RUNNING", "RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return "card is-warn";
       if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "card is-warn";
-      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "DONE") return "card";
+      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "NOT_SCHEDULED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "DONE") return "card";
       if (s) return "card is-bad";
       return "card";
     }
@@ -10137,7 +10496,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return cells.every((c) => /^:?-{2,}:?$/.test(c));
     }
 
-    // Parses the markdown reports the FnO V6 sessions publish (title, key: value
+    // Parses the markdown reports the FnO G sessions publish (title, key: value
     // preamble, invariant notes, one or more pipe tables) into render blocks.
     function parseMarkdownReport(tailText) {
       const lines = String(tailText || "").split(/\\r?\\n/);
@@ -10699,12 +11058,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         document.getElementById('info').textContent = `server ${data.server_time} | auto refresh every 15s`;
-        renderHealthSummary(data.items || []);
-        renderMiniStatus(data.items || [], data.server_time);
-        renderOpsSnapshot(data.items || []);
+        const dashboardItems = (data.items || []).filter((item) => !DASHBOARD_HIDDEN_IDS.has(item.id));
+        renderHealthSummary(dashboardItems);
+        renderMiniStatus(dashboardItems, data.server_time);
+        renderOpsSnapshot(dashboardItems);
 
         const byId = {};
-        for (const item of data.items) byId[item.id] = item;
+        for (const item of dashboardItems) byId[item.id] = item;
         ENABLED_RESTARTABLE_CARDS = new Set(
           Array.from(RESTARTABLE_CARDS).filter((id) => {
             const it = byId[id] || { status: {} };
@@ -10717,7 +11077,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         );
         renderTodayTimeline(byId);
         const killSnapshot = data.kill_switch || {};
-        const orderedBase = LOG_ORDER.concat(Object.keys(byId).filter((id) => !LOG_ORDER.includes(id)));
+        const orderedBase = LOG_ORDER
+          .concat(Object.keys(byId).filter((id) => !LOG_ORDER.includes(id)))
+          .filter((id) => !DASHBOARD_HIDDEN_IDS.has(id));
         const ordered = orderedBase
           .map((id, idx) => {
             const it = byId[id] || { status: {} };
@@ -10783,7 +11145,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           return renderSubBanner(title, String(count) + " disabled", accent, "disabled-" + (sectionKey || title), true);
         }
 
-        function renderCard(id, idx) {
+        function renderCard(id, idx, nameOverride = "") {
           const it = byId[id] || {id,exists:false,tail:""};
           const status = it.status && it.status.status ? it.status.status : "";
           const statusUpper = String(status || "").toUpperCase();
@@ -10817,7 +11179,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             <div class="${cardCls}${isFs}${disabledCompact}${logHiddenClass}${expandedClass}" data-id="${esc(id)}" style="animation-delay:${Math.min(idx * 0.05, 0.55)}s">
               <div class="card-head">
                 <div class="card-head-left">
-                  <div class="name">${esc(displayName(it.id))}</div>
+                  <div class="name">${esc(nameOverride || displayName(it.id))}</div>
                   ${miniBadges}
                   <div class="compact-desc" title="${esc(compactDesc)}">${esc(compactDesc)}</div>
                 </div>
@@ -10862,9 +11224,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           }
           const otherActive = visibleActiveOrdered.filter((id) => !used.has(id));
           if (otherActive.length) {
-            navItems.push({ key: "other", label: "Other", count: otherActive.length });
-            sections.push(renderSectionBanner("Other Active / Scheduled", `${otherActive.length} cards`, false, "other", "other"));
-            sections.push(otherActive.map((id) => renderCard(id, renderIdx++)).join(''));
+            navItems.push({ key: "other", label: "Options V13 Strategy", count: otherActive.length });
+            sections.push(renderSectionBanner("Options V13 Strategy", `${otherActive.length} cards`, false, "other", "other"));
+            sections.push(otherActive.map((id) => renderCard(
+              id,
+              renderIdx++,
+              displayName(id).replaceAll("_", " ").toUpperCase()
+            )).join(''));
           }
         }
         if (visibleDisabledOrdered.length) {
@@ -11061,22 +11427,15 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             elif key == "data_for_backtesting":
                 today_ist = dt.datetime.now(IST).date().isoformat()
                 tail = _format_data_for_backtesting_live_view(today_ist)
-            elif key == "backtesting_result_v11":
+            elif key == "backtesting_result_v13_v10_g":
                 today_ist = dt.datetime.now(IST).date().isoformat()
-                current_log = LOG_DIR / f"backtesting_result_v11_{today_ist}.log"
-                runtime = str(status.get("status", "") or "").strip().upper()
-                if runtime in {"RUNNING", "RESTARTING", "COOLDOWN"} and current_log.exists():
-                    path = current_log
-                    file_name = current_log.name
-                    try:
-                        size = current_log.stat().st_size
-                    except OSError:
-                        size = 0
-                    tail = tail_text(current_log, lines=lines)
-                else:
-                    report = runtime_dir("backtesting_result_v11", "latest", "latest_backtesting_result_v11.md")
-                    projected = tail_text(report, lines=lines)
-                    tail = projected if projected else tail_text(path, lines=lines)
+                path, file_name, tail = _backtesting_v13_v10_g_view(
+                    status, today_ist=today_ist, lines=lines,
+                )
+                try:
+                    size = path.stat().st_size if path.is_file() else 0
+                except OSError:
+                    size = 0
             elif key == "paper_trade_id_5min_v7":
                 today_ist = dt.datetime.now(IST).date().isoformat()
                 projected = _format_v7_id_papertrade_runner_view(path, today_ist)
@@ -11098,6 +11457,56 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                     "tail": tail,
                 }
             )
+
+        # V13 research results are displayed only through their newest complete
+        # manifest. Hash or vintage failure is fail-closed and never falls back
+        # to an older green run.
+        if (
+            _build_v13_vintage_status is not None
+            and _render_v13_vintage_markdown is not None
+            and _V13_VINTAGE_FAMILIES is not None
+        ):
+            try:
+                vintage_payload = _build_v13_vintage_status(_V13_VINTAGE_FAMILIES)
+                vintage_tail = _render_v13_vintage_markdown(vintage_payload)
+                vintage_state = str(vintage_payload.get("status", "BLOCKED_UNKNOWN"))
+                vintage_mtime = str(vintage_payload.get("generated_at_ist", "")) or None
+                vintage_status = {
+                    "status": vintage_state,
+                    "phase": "manifest_hash_and_data_vintage_gate",
+                    "coherent_data_through": str(
+                        vintage_payload.get("coherent_data_through") or ""
+                    ),
+                }
+            except Exception as exc:
+                vintage_state = "BLOCKED_VALIDATION_ERROR"
+                vintage_mtime = None
+                vintage_status = {
+                    "status": vintage_state,
+                    "phase": "manifest_hash_and_data_vintage_gate",
+                    "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+                }
+                vintage_tail = (
+                    "# V13 Research Run Vintage Gate\n\n"
+                    f"- Gate: **{vintage_state}**\n"
+                    f"- Error: `{vintage_status['error']}`\n"
+                )
+        else:
+            vintage_state = "BLOCKED_VALIDATOR_UNAVAILABLE"
+            vintage_mtime = None
+            vintage_status = {"status": vintage_state, "phase": "import_gate"}
+            vintage_tail = "# V13 Research Run Vintage Gate\n\n- Gate: **BLOCKED_VALIDATOR_UNAVAILABLE**\n"
+        items.append(
+            {
+                "id": "v13_research_run_vintage",
+                "file_name": "newest validated V13 run manifests",
+                "exists": vintage_state == "READY",
+                "mtime": vintage_mtime,
+                "size_bytes": len(vintage_tail.encode("utf-8")),
+                "status": vintage_status,
+                "tail": vintage_tail,
+            }
+        )
 
         # Output session directly after "Signal discovery v7 5mins ID":
         # signal-candle candidate tickers only; no entry candle/entry price.
@@ -11159,90 +11568,73 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             }
         )
 
-        # FnO V6 quantity-1 live execution publishes isolated entry and trade
+        # FnO G quantity-1 live execution publishes isolated entry and trade
         # sheets.  Add these before building the aggregate FnO monitor so the
         # monitor sees the same four views that are rendered in its subgroup.
-        fno_v6_live_kite_status = _v7_monitor_status_for(
-            "kite_trade_fno_id_v6", task_snapshot
+        fno_v13_v10_g_live_kite_status = _v7_monitor_status_for(
+            "kite_trade_fno_id_v13_v10_g", task_snapshot
         )
-        fno_v6_live_kite_payload = _json_status_scalars(
+        fno_v13_v10_g_live_kite_payload = _json_status_scalars(
             _read_json_dict(FNO_V6_LIVE_KITE_ROOT / "status.json")
         )
-        if fno_v6_live_kite_payload:
-            fno_v6_live_kite_payload["execution_state"] = (
-                fno_v6_live_kite_payload.pop("state", "")
+        if fno_v13_v10_g_live_kite_payload:
+            fno_v13_v10_g_live_kite_payload["execution_state"] = (
+                fno_v13_v10_g_live_kite_payload.pop("state", "")
             )
-            fno_v6_live_kite_status.update(fno_v6_live_kite_payload)
+            fno_v13_v10_g_live_kite_status.update(fno_v13_v10_g_live_kite_payload)
             for existing_item in items:
-                if existing_item.get("id") == "kite_trade_fno_id_v6":
+                if existing_item.get("id") == "kite_trade_fno_id_v13_v10_g":
                     existing_item.setdefault("status", {}).update(
-                        fno_v6_live_kite_payload
+                        fno_v13_v10_g_live_kite_payload
                     )
                     break
-        fno_v6_live_entry_cols: list[Tuple[str, Sequence[str]]] = [
-            (
-                "signal_datetime",
-                (
-                    "signal_datetime",
-                    "signal_timestamp",
-                    "confirmation_timestamp",
-                    "created_at_ist",
-                ),
-            ),
-            ("detected_time_ist", ("detected_time_ist", "published_at_ist")),
-            ("ticker", ("ticker", "tradingsymbol")),
-            ("side", ("side",)),
-            ("entry_price", ("entry_price", "trigger_price", "trigger")),
-            ("target_price", ("target_price",)),
-            ("stop_price", ("stop_price", "_stop_price")),
-            ("quantity", ("quantity",)),
-        ]
-        for fno_v6_side in ("short", "long"):
-            fno_v6_signal_name = (
-                f"signals_{today_ist}_fno_id_v6_{fno_v6_side}.csv"
+        fno_v13_v10_g_live_entry_cols = FNO_V13_V10_G_LIVE_ENTRY_COLUMNS
+        for fno_v13_v10_g_side in ("short", "long"):
+            fno_v13_v10_g_signal_name = (
+                f"signals_{today_ist}_fno_id_v13_v10_g_{fno_v13_v10_g_side}.csv"
             )
-            fno_v6_signal_path = FNO_V6_LIVE_KITE_ROOT / fno_v6_signal_name
+            fno_v13_v10_g_signal_path = FNO_V6_LIVE_KITE_ROOT / fno_v13_v10_g_signal_name
             try:
-                fno_v6_signal_size = (
-                    fno_v6_signal_path.stat().st_size
-                    if fno_v6_signal_path.exists()
+                fno_v13_v10_g_signal_size = (
+                    fno_v13_v10_g_signal_path.stat().st_size
+                    if fno_v13_v10_g_signal_path.exists()
                     else 0
                 )
             except OSError:
-                fno_v6_signal_size = 0
+                fno_v13_v10_g_signal_size = 0
             items.append(
                 {
-                    "id": f"live_signals_csv_fno_id_v6_{fno_v6_side}",
+                    "id": f"live_signals_csv_fno_id_v13_v10_g_{fno_v13_v10_g_side}",
                     "file_name": str(
                         Path("fno_oi")
-                        / "v6_live"
+                        / "v13_v10_g_live"
                         / "live_kite"
-                        / fno_v6_signal_name
+                        / fno_v13_v10_g_signal_name
                     ),
-                    "exists": fno_v6_signal_path.exists(),
-                    "mtime": iso_mtime(fno_v6_signal_path),
-                    "size_bytes": fno_v6_signal_size,
-                    "status": dict(fno_v6_live_kite_status),
+                    "exists": fno_v13_v10_g_signal_path.exists(),
+                    "mtime": iso_mtime(fno_v13_v10_g_signal_path),
+                    "size_bytes": fno_v13_v10_g_signal_size,
+                    "status": dict(fno_v13_v10_g_live_kite_status),
                     "tail": _format_csv_projection(
-                        fno_v6_signal_path,
-                        fno_v6_live_entry_cols,
+                        fno_v13_v10_g_signal_path,
+                        fno_v13_v10_g_live_entry_cols,
                         limit_rows=5000,
                         time_only_cols={"signal_datetime", "detected_time_ist"},
                     ),
                 }
             )
 
-        fno_v6_live_trade_name = f"live_trades_{today_ist}_fno_id_v6.csv"
-        fno_v6_live_trade_path = FNO_V6_LIVE_KITE_ROOT / fno_v6_live_trade_name
+        fno_v13_v10_g_live_trade_name = f"live_trades_{today_ist}_fno_id_v13_v10_g.csv"
+        fno_v13_v10_g_live_trade_path = FNO_V6_LIVE_KITE_ROOT / fno_v13_v10_g_live_trade_name
         try:
-            fno_v6_live_trade_size = (
-                fno_v6_live_trade_path.stat().st_size
-                if fno_v6_live_trade_path.exists()
+            fno_v13_v10_g_live_trade_size = (
+                fno_v13_v10_g_live_trade_path.stat().st_size
+                if fno_v13_v10_g_live_trade_path.exists()
                 else 0
             )
         except OSError:
-            fno_v6_live_trade_size = 0
-        fno_v6_live_trade_cols: list[Tuple[str, Sequence[str]]] = [
+            fno_v13_v10_g_live_trade_size = 0
+        fno_v13_v10_g_live_trade_cols: list[Tuple[str, Sequence[str]]] = [
             ("ticker", ("ticker", "tradingsymbol")),
             ("entry_time", ("entry_time", "entry_at_ist")),
             ("exit_time", ("exit_time", "exit_at_ist")),
@@ -11255,20 +11647,20 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         ]
         items.append(
             {
-                "id": "live_kite_trades_csv_fno_id_v6",
+                "id": "live_kite_trades_csv_fno_id_v13_v10_g",
                 "file_name": str(
                     Path("fno_oi")
-                    / "v6_live"
+                    / "v13_v10_g_live"
                     / "live_kite"
-                    / fno_v6_live_trade_name
+                    / fno_v13_v10_g_live_trade_name
                 ),
-                "exists": fno_v6_live_trade_path.exists(),
-                "mtime": iso_mtime(fno_v6_live_trade_path),
-                "size_bytes": fno_v6_live_trade_size,
-                "status": dict(fno_v6_live_kite_status),
+                "exists": fno_v13_v10_g_live_trade_path.exists(),
+                "mtime": iso_mtime(fno_v13_v10_g_live_trade_path),
+                "size_bytes": fno_v13_v10_g_live_trade_size,
+                "status": dict(fno_v13_v10_g_live_kite_status),
                 "tail": _format_csv_projection(
-                    fno_v6_live_trade_path,
-                    fno_v6_live_trade_cols,
+                    fno_v13_v10_g_live_trade_path,
+                    fno_v13_v10_g_live_trade_cols,
                     limit_rows=5000,
                     time_only_cols={"entry_time", "exit_time"},
                 ),
@@ -12139,6 +12531,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
 
         for item in items:
             item["status"] = apply_scheduler_status(str(item.get("id", "")), item.get("status", {}), task_snapshot)
+            item["status"] = _apply_fno_v13_v10_g_identity(str(item.get("id", "")), item["status"])
+            item["status"] = _apply_fno_market_calendar(str(item.get("id", "")), item["status"])
 
         items = [item for item in items if str(item.get("id", "")) not in HIDDEN_CARD_IDS]
 

@@ -111,14 +111,16 @@ def _scoped_items() -> list[dict[str, object]]:
                     }
                 )
             if card_id in {
-                "live_signals_csv_fno_id_v6_short",
-                "live_signals_csv_fno_id_v6_long",
-                "live_kite_trades_csv_fno_id_v6",
-                "kite_trade_fno_id_v6",
+                "live_signals_csv_fno_id_v13_v10_g_short",
+                "live_signals_csv_fno_id_v13_v10_g_long",
+                "live_kite_trades_csv_fno_id_v13_v10_g",
+                "kite_trade_fno_id_v13_v10_g",
             }:
                 status["scheduler_tasks"] = (
-                    "\\EQIDV2_fno_v6_live_kite_qty1_0915"
+                    "\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915"
                 )
+            if card_id in dashboard.FNO_V13_V10_G_CARD_IDS:
+                status["strategy_version"] = dashboard.FNO_V13_V10_G_STRATEGY_VERSION
             items.append(
                 {
                     "id": card_id,
@@ -149,20 +151,21 @@ def _empty_timeline(*_args, **_kwargs) -> dict[str, object]:
     }
 
 
-def test_monitor_scope_has_exact_requested_29_unique_views() -> None:
+def test_monitor_scope_has_exact_requested_34_unique_views() -> None:
     ids = [
         card_id
         for _, card_ids in dashboard.FNO_EQ_ID_MONITOR_GROUPS
         for card_id in card_ids
     ]
 
-    assert len(ids) == 29
-    assert len(set(ids)) == 29
+    assert len(ids) == 34
+    assert len(set(ids)) == 34
     assert [name for name, _ in dashboard.FNO_EQ_ID_MONITOR_GROUPS] == [
         "Live Market Data",
         "FnO",
         "V10 / V11 / V12 Shared Papertrade Session",
-        "FnO V6 Live Kite - Quantity 1",
+        "FnO V13-V10-G Live Kite - Quantity 1",
+        "Options V13-V10-G Paper Trading",
         "V10",
         "V11",
         "V12",
@@ -200,7 +203,7 @@ def test_disabled_is_inactive_and_fail_closed_block_is_watch() -> None:
 
 def test_aggregate_deduplicates_shared_task_and_keeps_profile_counters(monkeypatch) -> None:
     items = _scoped_items()
-    scanner = next(item for item in items if item["id"] == "fno_v6_scanner_5min")
+    scanner = next(item for item in items if item["id"] == "fno_v13_v10_g_scanner_5min")
     scanner["status"] = {
         **scanner["status"],
         "status": "BLOCKED",
@@ -224,12 +227,12 @@ def test_aggregate_deduplicates_shared_task_and_keeps_profile_counters(monkeypat
         now_ist=datetime(2026, 9, 1, 10, 0, tzinfo=dashboard.IST),
     )
 
-    assert configured == 29
+    assert configured == 34
     assert exists is True
     assert mtime == "2026-09-01 10:00:00"
     assert status["status"] == "PARTIAL"
     assert status["inactive_sessions"] == "3"
-    assert status["physical_tasks"] == "23"
+    assert status["physical_tasks"] == "28"
     assert "# FnO EQ ID monitoring" in tail
     assert "gap_guard_rej=1" in tail
     assert "V10 selection + guards + entry + result" in tail
@@ -447,15 +450,20 @@ def test_strategy_timelines_have_exact_inclusive_grids_and_windows(
         "09:40",
         "09:45",
         "09:50",
+        "09:55",
+        "10:00",
+        "11:20",
     ]
     assert [row["minute"] for row in minute_rows] == [
-        f"09:{minute:02d}" for minute in range(15, 51)
+        *[f"09:{minute:02d}" for minute in range(15, 60)],
+        *[f"10:{minute:02d}" for minute in range(0, 13)],
+        *[f"11:{minute:02d}" for minute in range(20, 33)],
     ]
-    assert len(five_rows) == 8
-    assert len(minute_rows) == 36
+    assert len(five_rows) == 11
+    assert len(minute_rows) == 71
 
     by_slot = {row["slot"]: row for row in five_rows}
-    for slot in ("09:15", "09:20", "09:50"):
+    for slot in ("09:15", "09:20"):
         assert by_slot[slot]["v6"] == "OFF WINDOW"
         assert by_slot[slot]["shared"] == "OFF WINDOW"
         assert by_slot[slot]["v10"] == "OFF WINDOW"
@@ -545,8 +553,9 @@ def test_skipped_shared_five_minute_slot_is_explicit_not_missing(
     assert not any(
         term in five["shared"] for term in ("BLOCKED", "MISMATCH", "INCOMPLETE")
     )
-    assert timeline["active_hard_issue_count"] == 0
-    assert timeline["closed_hard_issue_count"] == timeline["hard_issue_count"]
+    # G's late entry window is still open; gaps do not become historical at 09:50.
+    assert timeline["active_hard_issue_count"] == timeline["hard_issue_count"]
+    assert timeline["closed_hard_issue_count"] == 0
 
 
 def test_v6_signal_confirms_at_s_plus_1_and_entry_book_has_no_future_pnl(
@@ -554,11 +563,12 @@ def test_v6_signal_confirms_at_s_plus_1_and_entry_book_has_no_future_pnl(
     monkeypatch,
 ) -> None:
     _, fno_root, _ = _timeline_roots(tmp_path, monkeypatch)
-    v6_root = fno_root / "v6_live"
+    v6_root = fno_root / "v13_v10_g_live"
     _write_json(
         v6_root / "scanner_5m" / DAY / "slot_0925.json",
         {
             "session_date": DAY,
+            "strategy_version": dashboard.FNO_V13_V10_G_STRATEGY_VERSION,
             "signal_end": "09:25",
             "state": "SUCCESS",
             "long_candidates": 1,
@@ -569,6 +579,7 @@ def test_v6_signal_confirms_at_s_plus_1_and_entry_book_has_no_future_pnl(
         v6_root / "confirmation_1m" / DAY / "slot_0926.json",
         {
             "session_date": DAY,
+            "strategy_version": dashboard.FNO_V13_V10_G_STRATEGY_VERSION,
             "signal_end": "09:25",
             "confirmation_end": "09:26",
             "state": "SUCCESS",
@@ -583,7 +594,7 @@ def test_v6_signal_confirms_at_s_plus_1_and_entry_book_has_no_future_pnl(
         },
     )
     _write_csv(
-        v6_root / "consolidated" / f"fno_v6_trades_{DAY}.csv",
+        v6_root / "consolidated" / f"fno_v13_v10_g_trades_{DAY}.csv",
         [
             {
                 "session_date": DAY,
@@ -643,11 +654,12 @@ def test_failed_v6_confirmation_is_not_rendered_as_confirmed(
     monkeypatch,
 ) -> None:
     _, fno_root, _ = _timeline_roots(tmp_path, monkeypatch)
-    v6_root = fno_root / "v6_live"
+    v6_root = fno_root / "v13_v10_g_live"
     _write_json(
         v6_root / "scanner_5m" / DAY / "slot_0925.json",
         {
             "session_date": DAY,
+            "strategy_version": dashboard.FNO_V13_V10_G_STRATEGY_VERSION,
             "signal_end": "09:25",
             "state": "SUCCESS",
             "long_candidates": 1,
@@ -658,6 +670,7 @@ def test_failed_v6_confirmation_is_not_rendered_as_confirmed(
         v6_root / "confirmation_1m" / DAY / "slot_0926.json",
         {
             "session_date": DAY,
+            "strategy_version": dashboard.FNO_V13_V10_G_STRATEGY_VERSION,
             "signal_end": "09:25",
             "confirmation_end": "09:26",
             "state": "FAILED",

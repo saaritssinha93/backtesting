@@ -159,7 +159,7 @@ def test_shared_json_status_is_projected_without_hiding_profile_failures(
     assert v12["status"] == "BLOCKED"
 
 
-def test_fno_page_has_nested_v10_v11_v12_views_but_one_timeline_session() -> None:
+def test_retired_v10_v11_v12_views_are_hidden_from_dashboard_ui() -> None:
     source = _source()
     fno_group = source[
         source.index('key: "fno"') : source.index('key: "forensic-positional"')
@@ -167,24 +167,14 @@ def test_fno_page_has_nested_v10_v11_v12_views_but_one_timeline_session() -> Non
     timeline = source[
         source.index("const SESSION_TIMELINE") : source.index("const API_TOKEN")
     ]
-    restartable = _javascript_set(source, "RESTARTABLE_CARDS")
-    markdown_cards = _javascript_set(source, "MD_REPORT_CARDS")
+    hidden = _javascript_set(source, "DASHBOARD_HIDDEN_IDS")
 
-    assert 'title: "V10"' in fno_group
-    assert 'title: "V11"' in fno_group
-    assert 'title: "V12"' in fno_group
-    assert "5m selection | 1m entry | LONG | SHORT | result | logs" in fno_group
-    assert all(card_id in fno_group for card_id in ALL_IDS)
-    assert all(card_id in markdown_cards for card_id in ALL_IDS)
-    assert PARENT_ID in restartable
-    assert all(card_id not in restartable for card_id in PROFILE_IDS)
-    assert timeline.count(PARENT_ID) == 1
+    assert 'title: "V10 / V11 / V12 Shared Papertrade Session"' not in fno_group
+    assert 'title: "V10"' not in fno_group
+    assert 'title: "V11"' not in fno_group
+    assert 'title: "V12"' not in fno_group
+    assert all(card_id not in fno_group for card_id in ALL_IDS)
+    assert set(ALL_IDS).issubset(hidden)
+    assert PARENT_ID not in timeline
     assert all(card_id not in timeline for card_id in PROFILE_IDS)
-    assert "isReadOnlyProfileView(item)" in source
-    assert "const FNO_MULTI_PAPER_CARDS" in source
-    assert "runtime.healthy_app_count" in source
-    assert "runtime.preferred_app_count" in source
-    assert "runtime.app_pool_state" in source
-    assert "runtime.last_app_retry_count" in source
-    assert "runtime.last_app_failure_count" in source
-    assert "retry/error:" in source
+    assert ".filter((id) => !DASHBOARD_HIDDEN_IDS.has(id))" in source

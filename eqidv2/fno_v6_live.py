@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 os.environ["FNO_LIVE_GENERATION"] = "v6"
+os.environ.setdefault("FNO_V6_STRATEGY_PROFILE", "V13_V10_G")
 
 import fno_v5_live as runtime  # noqa: E402
 

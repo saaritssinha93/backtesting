@@ -390,15 +390,16 @@ def test_status_summary_is_fail_closed_without_both_ack_and_arm(
 
 
 def test_batch_and_scheduler_preserve_frozen_live_contract() -> None:
-    batch = (ROOT / "bat" / "run_fno_v6_live_kite_qty1.bat").read_text(
+    batch = (ROOT / "bat" / "run_fno_v13_v10_g_live_kite_qty1.bat").read_text(
         encoding="utf-8"
     )
     scheduler = (
-        ROOT / "bat" / "schedule_fno_v6_live_kite_qty1_weekday.ps1"
+        ROOT / "bat" / "schedule_fno_v13_v10_g_live_kite_qty1_weekday.ps1"
     ).read_text(encoding="utf-8")
 
-    assert 'set "SESSION_ID=fno_v6_live_kite_qty1"' in batch
-    assert 'set "SESSION_SCRIPT=%BASE_DIR%\\fno_v6_live_kite_session.py"' in batch
+    assert 'set "SESSION_ID=fno_v13_v10_g_live_kite_qty1"' in batch
+    assert 'set "SESSION_SCRIPT=%BASE_DIR%\\fno_v13_v10_g_live_kite_session.py"' in batch
+    assert 'set "FNO_V6_STRATEGY_PROFILE=V13_V10_G"' in batch
     assert 'set "FNO_V6_EXECUTION_MODE=LIVE"' in batch
     assert (
         'set "FNO_V6_LIVE_ACK=I_UNDERSTAND_REAL_FNO_V6_EQUITY_ORDERS"'
@@ -410,7 +411,7 @@ def test_batch_and_scheduler_preserve_frozen_live_contract() -> None:
     assert "live_arm" not in batch.lower()
     assert "kill_switch" not in batch.lower()
 
-    assert '$taskLeaf = "EQIDV2_fno_v6_live_kite_qty1_0915"' in scheduler
+    assert '$taskLeaf = "EQIDV2_fno_v13_v10_g_live_kite_qty1_0915"' in scheduler
     assert '$startTime = "09:15"' in scheduler
     assert "/SC WEEKLY /D MON,TUE,WED,THU,FRI /ST $startTime" in scheduler
     assert "& schtasks.exe /Create /F" in scheduler
@@ -418,3 +419,7 @@ def test_batch_and_scheduler_preserve_frozen_live_contract() -> None:
     assert "Existing task is running; replacement was refused." in scheduler
     assert "Runner must not create or alter live-arm or kill-switch state." in scheduler
     assert "Task unexpectedly started during installation." in scheduler
+    compatibility_batch = (ROOT / "bat" / "run_fno_v6_live_kite_qty1.bat").read_text(encoding="utf-8")
+    compatibility_scheduler = (ROOT / "bat" / "schedule_fno_v6_live_kite_qty1_weekday.ps1").read_text(encoding="utf-8")
+    assert 'call "%~dp0run_fno_v13_v10_g_live_kite_qty1.bat" %*' in compatibility_batch
+    assert "schedule_fno_v13_v10_g_live_kite_qty1_weekday.ps1" in compatibility_scheduler

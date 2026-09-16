@@ -153,6 +153,26 @@ def _normalize_ticker_list(obj) -> list[str]:
     return sorted(set(tickers))
 
 
+def include_dated_fno_equities(
+    symbols: list[str], token_map: dict[str, int], logger: logging.Logger,
+    *, session_date: date | None = None, runtime_root: Path = RUNTIME_ROOT,
+) -> tuple[list[str], dict[str, int]]:
+    """Keep MIS filters from excluding stocks required by the FnO replay."""
+    day = session_date or datetime.now(IST_TZ).date()
+    path = runtime_root / "fno_oi" / "universe" / f"near_month_{day.isoformat()}.parquet"
+    if not path.is_file():
+        logger.warning("Dated FnO universe unavailable: %s", path)
+        return symbols, token_map
+    import fno_oi_hybrid_data as hybrid
+    mapped, excluded = hybrid.ensure_equity_mapping(pd.read_parquet(path))
+    tokens = dict(token_map)
+    for row in mapped.to_dict("records"):
+        tokens[str(row["equity_symbol"]).upper()] = int(row["equity_instrument_token"])
+    combined = sorted(set(symbols) | set(mapped["equity_symbol"].str.upper()))
+    logger.info("Included dated FnO cash universe: %d required, %d added", len(mapped), len(set(combined) - set(symbols)))
+    return combined, tokens
+
+
 def load_stocks_universe(logger: logging.Logger) -> tuple[list[str], dict[str, int]]:
     """
     Universe loader (ETF-ready):
@@ -1683,6 +1703,7 @@ def run_mode(
         return
 
     syms, pre_token_map = load_stocks_universe(logger)
+    syms, pre_token_map = include_dated_fno_equities(syms, pre_token_map, logger)
 
     missing_files: list[str] = []
     missing_rows: list[str] = []

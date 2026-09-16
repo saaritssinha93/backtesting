@@ -808,6 +808,10 @@ def expected_slot_ends(session_date: date) -> pd.DatetimeIndex:
 
 
 def load_holidays(path: Path | None = None) -> set[date]:
+    if path is None:
+        from nse_market_calendar import trading_holidays
+
+        return trading_holidays()
     holiday_path = path or (SCRIPT_DIR / "nse_holidays.csv")
     if not holiday_path.exists():
         return set()
@@ -822,7 +826,11 @@ def load_holidays(path: Path | None = None) -> set[date]:
 
 
 def is_trading_day(day: date, holidays: set[date] | None = None) -> bool:
-    return day.weekday() < 5 and day not in (holidays or set())
+    from nse_market_calendar import REGULAR_SPECIAL_SESSIONS
+
+    return (day.weekday() < 5 or day in REGULAR_SPECIAL_SESSIONS) and day not in (
+        load_holidays() if holidays is None else holidays
+    )
 
 
 def read_json(path: Path) -> dict[str, Any]:

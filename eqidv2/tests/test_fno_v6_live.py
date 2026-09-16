@@ -205,20 +205,20 @@ class FnoV6LiveTests(unittest.TestCase):
 
     def test_dashboard_exposes_only_promoted_v6_fno_execution_cards(self) -> None:
         promoted = {
-            "fno_v6_scanner_5min",
-            "fno_v6_confirmation_1min",
-            "fno_v6_live_long",
-            "fno_v6_live_short",
-            "fno_v6_trade_logger",
-            "fno_v6_net_result",
+            "fno_v13_v10_g_scanner_5min",
+            "fno_v13_v10_g_confirmation_1min",
+            "fno_v13_v10_g_live_long",
+            "fno_v13_v10_g_live_short",
+            "fno_v13_v10_g_trade_logger",
+            "fno_v13_v10_g_net_result",
         }
-        replaced = {value.replace("v6", "v5") for value in promoted}
+        replaced = {value.replace("v13_v10_g", version) for value in promoted for version in ("v5", "v6")}
 
         self.assertTrue(promoted.issubset(dashboard.FNO_OI_CARD_REPORTS))
         self.assertTrue(promoted.issubset(dashboard.RESTARTABLE_CARDS))
         self.assertTrue(replaced.isdisjoint(dashboard.FNO_OI_CARD_REPORTS))
         for card_id in promoted:
-            self.assertIn("run_fno_v6_", dashboard.RESTARTABLE_CARDS[card_id])
+            self.assertIn("run_fno_v13_v10_g_", dashboard.RESTARTABLE_CARDS[card_id])
 
 
 if __name__ == "__main__":

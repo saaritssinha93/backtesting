@@ -11,6 +11,13 @@ python log_dashboard_server.py --port 8787
 This document covers the four dashboard groups you asked about, in the order they
 appear in the navigation:
 
+Migration note (2026-09-14): the existing `fno_v6_*` paper/feed cards and the
+four `fno_id_v6` live views now launch the retained **V13-v10-G** profile.
+Their operational IDs remain stable. G has its own state root and a separate
+quantity-one live pilot; the `PAPER`-only statement above describes the shared
+V10/V11/V12 module. See [V13-v10-G integration](V13_V10_G_DASHBOARD_INTEGRATION.md)
+for the exact setup, timing, sizing, paths and live controls.
+
 | # | Group | Nav label | Accent | Cards |
 |---|---|---|---|---:|
 | 1 | [Live Market Data](#1-live-market-data) | Live Market | `market` | 4 |
@@ -92,15 +99,17 @@ V16 but consumed more widely.
 
 **`eod_5min_data` — Live Data Fetch (5mins)**
 The primary five-minute equity bar producer. This is the feed the FnO scanners
-join against, and the one whose `slot_ready_5m/` marker gates every V6 scan.
+join against, and the one whose `slot_ready_5m/` marker gates every G scan.
 
 **`kiteticker_5min_data` — Live Data kiteticker Fetch (5mins)**
 The websocket-derived five-minute path, running alongside the REST fetch as a
 cross-check and fallback.
 
 **`eod_1min_data` — Live Data Fetch (1min)**
-The one-minute equity bar producer. Every confirmation candle, every entry
-trigger and every exit path in the FnO stack resolves against this feed.
+The generic one-minute equity producer. G uses its own
+`fno_v6_equity_1min_feed` completed-candle evidence, while the shared
+V10/V11/V12 session uses its own union-minute source. An intentionally disabled
+generic feed does not, by itself, block either of these strategy paths.
 
 ### Reading order when something breaks
 
@@ -108,17 +117,17 @@ trigger and every exit path in the FnO stack resolves against this feed.
 1min feed stale?      → confirmation and entry cannot resolve  → session DEGRADED
 5min feed stale?      → no candidates are raised at all        → session BLOCKED
 kiteticker divergent? → cross-check failure; REST path is authoritative
-NIFTY stale?          → regime guards fall back to neutral
+NIFTY futures stale?  → G 09:25 SHORT guard blocks; no neutral fallback
 ```
 
 ---
 
 ## 2. FnO
 
-**`key: "fno"` · nav `FnO` · accent `market` · 17 cards, 4 subgroups**
+**`key: "fno"` · nav `FnO` · accent `market`**
 
-The full FnO stack: shared upstream, the V6 live generation, and the three
-modern papertrade profiles.
+The full FnO stack: shared upstream, V13-v10-G through the stable V6 transport
+sessions, the quantity-one G live pilot, and the three modern papertrade profiles.
 
 ### 2.0 Cards in the parent grid
 
@@ -128,20 +137,28 @@ These render above the subgroup bands.
 |---|---|---|
 | `fno_oi_universe` | FnO Near-Month Futures Universe | `latest_fno_oi_universe.md` |
 | `fno_oi_fetch_5min_fast_production` | FnO Live 5-Minute Futures OI Fetch (Fast Production) | `latest_fno_oi_fast_production.md` |
+| `fno_options_atm_fetch_5min` | FnO ATM CE/PE Options Fetch (5-Minute + 1-Minute) | `latest_fno_options_atm.md` |
 | `fno_oi_fetch_5min` | FnO Live 5-Minute Futures OI Fetch (Old) | `latest_fno_oi_fetch_old.md` |
 | `fno_oi_fetch_5min_fast_shadow` | FnO Fast Shadow OI Validator | `latest_fno_oi_fast_shadow.md` |
 | `fno_oi_feature_ranker` | FnO OI Gainers, Losers & Activity Rankings | `latest_fno_oi_leaderboard.md` |
-| `fno_v6_scanner_5min` | FnO V6 BEST_NET Equity 5-Minute + Futures OI Scanner | `latest_fno_v6_scanner_5min.md` |
-| `fno_v6_equity_1min_feed` | FnO V6 Durable Completed Equity 1-Minute Feed | `latest_fno_v6_equity_1min_feed.md` |
-| `fno_v6_confirmation_1min` | FnO V6 BEST_NET Candidate Equity 1-Minute Confirmation | `latest_fno_v6_confirmation_1min.md` |
-| `fno_v6_live_long` | FnO V6 BEST_NET LONG Entry Session | `latest_fno_v6_live_long.md` |
-| `fno_v6_live_short` | FnO V6 BEST_NET SHORT Entry Session | `latest_fno_v6_live_short.md` |
-| `fno_v6_trade_logger` | FnO V6 BEST_NET Continuous Trade Log | `latest_fno_v6_trade_logger.md` |
-| `fno_v6_net_result` | FnO V6 BEST_NET Net Result | `latest_fno_v6_net_result.md` |
+| `fno_v6_scanner_5min` | FnO V13-v10-G Equity 5-Minute + Futures OI Scanner | `latest_fno_v13_v10_g_scanner_5min.md` |
+| `fno_v6_equity_1min_feed` | FnO V13-v10-G Durable Completed Equity 1-Minute Feed | `latest_fno_v13_v10_g_equity_1min_feed.md` |
+| `fno_v6_confirmation_1min` | FnO V13-v10-G Candidate Equity 1-Minute Confirmation | `latest_fno_v13_v10_g_confirmation_1min.md` |
+| `fno_v6_live_long` | FnO V13-v10-G LONG Paper Entry Session | `latest_fno_v13_v10_g_live_long.md` |
+| `fno_v6_live_short` | FnO V13-v10-G SHORT Paper Entry Session | `latest_fno_v13_v10_g_live_short.md` |
+| `fno_v6_trade_logger` | FnO V13-v10-G Continuous Paper Trade Log | `latest_fno_v13_v10_g_trade_logger.md` |
+| `fno_v6_net_result` | FnO V13-v10-G Paper Net Result | `latest_fno_v13_v10_g_net_result.md` |
+| `fno_v13_v10_g_options_live_long` | Options V13-V10-G LONG ATM CE Buy Paper Entry Session | `latest_fno_v13_v10_g_options_live_long.md` |
+| `fno_v13_v10_g_options_live_short` | Options V13-V10-G SHORT ATM PE Buy Paper Entry Session | `latest_fno_v13_v10_g_options_live_short.md` |
+| `fno_v13_v10_g_options_trade_logger` | Options V13-V10-G Continuous Paper Trade Log | `latest_fno_v13_v10_g_options_trade_logger.md` |
+| `fno_v13_v10_g_options_net_result` | Options V13-V10-G Paper Net Result | `latest_fno_v13_v10_g_options_net_result.md` |
 | `fno_v8_combined_paper` | FnO V8-Combined Paper Shadow Session | `latest_fno_v8_combined_paper.md` |
 | `fno_oi_eod_qc` | FnO EOD Data Quality Control | `latest_fno_oi_eod_qc.md` |
 
-**Every FnO card renders a markdown report.** None of them tail a raw log.
+The listed paper/feed cards prefer their markdown reports and can fall back to
+logs when a report is not yet published. The G live subgroup projects the LONG
+and SHORT signal CSVs, the actual live-trade CSV, and its coordinator log. It
+does not copy paper P&L into broker results.
 
 ### 2.0.1 Daily flow through the parent cards
 
@@ -149,13 +166,14 @@ These render above the subgroup bands.
 08:50  fno_oi_universe          near-month futures universe, mapped to cash symbols
          │
 09:05  fno_oi_fetch_5min_fast_production  fast production futures 5m OI + readiness markers
+09:07  fno_options_atm_fetch_5min          ATM CE/PE option 5m + 1m OHLCV/OI
 09:05  fno_oi_fetch_5min                  old production session, retained and labeled Old
          │
 09:06  fno_oi_fetch_5min_fast_shadow      isolated shadow validation + exact Kite parity
          │
 09:15  fno_oi_feature_ranker    OI gainers / losers / activity leaderboard
          │
-       ┌─┴──────────────── V6 generation (six roles) ────────────────┐
+       ┌─┴──────────── V13-v10-G (stable V6 session IDs) ─────────────┐
        │ fno_v6_scanner_5min        candidate superset per slot      │
        │ fno_v6_equity_1min_feed    durable completed 1m bars        │
        │ fno_v6_confirmation_1min   confirm → rank → select          │
@@ -168,6 +186,49 @@ These render above the subgroup bands.
          │
 15:40  fno_oi_eod_qc            end-of-day data quality control
 ```
+
+G scans nine signal times through 11:20, confirms at the exact next minute,
+and squares off at 15:15. Its paper book allocates ₹1 lakh per trade at modeled
+5× exposure against ₹10 lakh total capital. The live pilot remains one share
+per order. State is isolated in `fno_oi/v13_v10_g_live/`; the existing arm and
+kill files remain under `fno_oi/v6_live/`, and arming additionally requires the
+current G strategy fingerprint. No old V6 state is imported into the G book.
+
+| Stable live view ID | G view |
+|---|---|
+| `live_signals_csv_fno_id_v6_short` | SHORT entry sheet |
+| `live_signals_csv_fno_id_v6_long` | LONG entry sheet |
+| `live_kite_trades_csv_fno_id_v6` | Actual quantity-one Kite trades |
+| `kite_trade_fno_id_v6` | Live coordinator log |
+
+These four views share the existing coordinator and do not add a new live-start
+control to the dashboard. Use the safe `--readiness-only` command in the
+[G integration guide](V13_V10_G_DASHBOARD_INTEGRATION.md) to prepare local
+CSV/status views without starting workers or placing orders.
+
+### 2.0.2 ATM options data runner
+
+`fno_options_atm_fetch_5min` anchors every CE/PE selection to the exact
+completed cash-equity 5-minute close, resolves the selected monthly or weekly
+expiry from a hashed NFO master, and stores both the completed 5-minute option
+candle and its five component 1-minute candles. Output lives below
+`common.FNO_ROOT` in `raw_options_5m/`, `raw_options_1m/`,
+`options_atm_map/`, and `options_slot_ready/`. A slot is consumable only when
+its marker has `source=final` and `complete=true`.
+
+The supervisor entry point is `bat/run_fno_options_atm_fetch_5min.bat`. The
+ATM fetcher and four Options V13-V10-G PAPER sessions use a dedicated,
+review-first weekday installer. Its default invocation prints the exact plan
+and changes no scheduled task:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File bat/schedule_fno_v13_v10_g_options_weekday.ps1 -StartDate 2026-09-16
+powershell -NoProfile -ExecutionPolicy Bypass -File bat/schedule_fno_v13_v10_g_options_weekday.ps1 -StartDate 2026-09-16 -Apply
+```
+
+The applied schedule runs the ATM fetcher at 09:07 and the four PAPER views at
+09:15 on weekdays. It uses `IgnoreNew`, unlimited execution time, wake/start
+when available, and never starts a task during installation.
 
 ---
 
@@ -562,11 +623,11 @@ start — `MIN_HEALTHY_APP_COUNT = 7`.
 09:25 + buffer  eod_5min_data publishes the completed slot
               fno_oi_fetch_5min_fast_production publishes the futures OI slot marker
               │
-              ├─ fno_v6_scanner_5min      raises the V6 candidate superset
+              ├─ fno_v6_scanner_5min      raises the G candidate superset
               └─ fno_v10_v11_v12_paper    registers candidates into ALL THREE ledgers
                                           from the same source bytes
 09:25–09:26   confirmation candle forms
-09:26 + buffer  eod_1min_data publishes it
+09:26 + buffer  G durable feed / shared union source publish their evidence
               │
               ├─ fno_v6_confirmation_1min  confirms → ranks → selects → writes signals
               └─ shared session            process_completed_minute() advances
@@ -595,13 +656,14 @@ the profile, never to the data.
 |---|---|
 | `fno_v10_v11_v12_paper` | one heartbeat, status `RUNNING`, source complete |
 | `fno_v10_paper` / `_v11_` / `_v12_` | per-profile fills, open positions, running net |
-| `eod_1min_data` | staleness — this feed drives every exit path |
-| `fno_v6_*` | the V6 generation runs in parallel and independently |
+| `fno_v6_equity_1min_feed` | G completed-minute evidence, timestamps and completeness |
+| `fno_v6_*` | G runs through these stable IDs, independently of shared V10/V11/V12 |
 
 ### 5.5 Close and post-close
 
 ```
-15:30   square-off; the paper profiles need a REAL 15:30 bar
+15:15   V13-v10-G paper/live square-off
+15:30   shared V10/V11/V12 square-off; these profiles need a REAL 15:30 bar
         (EXACT_SQUARE_OFF — no last-real-bar fallback)
 15:40   eod_1540_update
         fno_oi_eod_qc            data quality control
@@ -663,5 +725,6 @@ raises on anything other than `PAPER`.
 - [FNO_V10_MAX050_GAP2_BACKTEST_STRATEGY.md](FNO_V10_MAX050_GAP2_BACKTEST_STRATEGY.md)
 - [FNO_V11_STAGE10_BACKTEST_STRATEGY.md](FNO_V11_STAGE10_BACKTEST_STRATEGY.md)
 - [FNO_V12_LATE_SHORT_VOLUME_BACKTEST_STRATEGY.md](FNO_V12_LATE_SHORT_VOLUME_BACKTEST_STRATEGY.md)
-- [FNO_V6_LIVE_STRATEGY.md](FNO_V6_LIVE_STRATEGY.md) — the generation behind the `fno_v6_*` cards
+- [V13_V10_G_DASHBOARD_INTEGRATION.md](V13_V10_G_DASHBOARD_INTEGRATION.md) — current strategy behind the stable `fno_v6_*` and `fno_id_v6` cards
+- [FNO_V6_LIVE_STRATEGY.md](FNO_V6_LIVE_STRATEGY.md) — historical V6 strategy and transport lineage
 - [FNO_V8_BACKTEST_STRATEGY.md](FNO_V8_BACKTEST_STRATEGY.md) — behind `fno_v8_combined_paper`

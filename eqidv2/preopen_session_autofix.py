@@ -29,7 +29,7 @@ TASK_TO_BAT: Dict[str, Path] = {
     "EQIDV2_avwap_live_trade_v15_0905": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_FALSE_v15.bat",
     "EQIDV2_nifty_guard_fetch_v15_0915": BAT_DIR / "run_nifty_guard_fetcher_v15.bat",
     "EQIDV2_nifty_guard_fetch_v16_5min_0915": BAT_DIR / "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
-    "EQIDV2_fno_v6_equity_1min_feed_0919": BAT_DIR / "run_fno_v6_equity_1min_feed.bat",
+    "EQIDV2_fno_v13_v10_g_equity_1min_feed_0915": BAT_DIR / "run_fno_v13_v10_g_equity_1min_feed.bat",
 }
 
 FAIL_CHECK_TO_BAT: Dict[str, Path] = {
@@ -126,7 +126,7 @@ def _run_healthcheck(max_age_min: int) -> Tuple[int, str, List[dict]]:
                         str(c.get("status")) == "FAIL"
                         or (
                             str(c.get("name"))
-                            == "fno_fast_production_trial_first_slot"
+                            == "fno_fast_production_first_slot"
                             and str(c.get("status")) == "WARN"
                         )
                     )
@@ -149,8 +149,8 @@ def _iter_actions_for_fail(name: str) -> Iterable[Tuple[str, str, str]]:
         yield ("task_run", f"task:{task_name}", task_name)
         return
 
-    if name == "fno_fast_production_trial_runtime":
-        # Retry only through the one-time Task Scheduler identity.  Its
+    if name == "fno_fast_production_runtime":
+        # Retry only through the recurring Task Scheduler identity. Its
         # IgnoreNew policy and runner exclusivity guard prevent a second
         # canonical writer; never use a detached BAT fallback here.
         task_name = "EQIDV2_fno_oi_fetch_5min_fast_production_0905"
@@ -215,6 +215,13 @@ def main() -> int:
         return 2
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    from nse_market_calendar import market_closed_reason
+
+    closed_reason = market_closed_reason(_now_ist().date())
+    if closed_reason:
+        print(f"[AUTOFIX] {closed_reason}; market-session recovery skipped.", flush=True)
+        code, _output, _fails = _run_healthcheck(max_age_min=max(1, int(args.max_age_min)))
+        return code
     _sleep_until(start_t)
 
     attempts: Dict[str, int] = {}

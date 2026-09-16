@@ -1,5 +1,7 @@
 # FnO V6 — Live / Paper Trading Strategy (Complete Reference)
 
+> Current dashboard operation moved to V13-V10-G on 2026-09-14. See [the current G integration and operations guide](V13_V10_G_DASHBOARD_INTEGRATION.md) for canonical G session/task names, launchers, sizing and controls. This file preserves the legacy V6 strategy reference; its V6 BAT filenames now forward to G and must not be treated as separate scheduled workers.
+
 **Generation:** `v6` · **Strategy version:** `FNO_V6_BEST_NET_CASH_EQUITY_20260811` ·
 **Selection objective:** `BEST_NET` · **Default execution mode:** `PAPER`
 

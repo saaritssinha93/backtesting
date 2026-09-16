@@ -20,6 +20,7 @@ from eqidv2_runtime_paths import (
 )
 
 from zoneinfo import ZoneInfo
+from nse_market_calendar import market_closed_reason
 
 IST = ZoneInfo("Asia/Kolkata")
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,10 +29,9 @@ LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
 BAT_DIR = BASE_DIR / "bat"
 KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
 V15_NEW_TASK = "EQIDV2_live_combined_csv_v15_new_0900"
-FNO_V6_EQUITY_1MIN_FEED_TASK = "EQIDV2_fno_v6_equity_1min_feed_0919"
+FNO_V6_EQUITY_1MIN_FEED_TASK = "EQIDV2_fno_v13_v10_g_equity_1min_feed_0915"
 FNO_LEGACY_PRODUCTION_TASK = "EQIDV2_fno_oi_fetch_5min_0905"
 FNO_FAST_PRODUCTION_TASK = "EQIDV2_fno_oi_fetch_5min_fast_production_0905"
-FNO_FAST_PRODUCTION_TRIAL_DATE = dt.date(2026, 9, 2)
 FNO_FAST_PRODUCTION_START = dt.time(9, 5)
 FNO_FAST_PRODUCTION_STARTUP_GRACE_END = dt.time(9, 6)
 FNO_FAST_PRODUCTION_FIRST_SLOT = dt.time(9, 20)
@@ -41,27 +41,25 @@ FNO_FAST_PRODUCTION_STATUS = (
 FNO_FAST_PRODUCTION_HEARTBEAT = (
     LOG_DIR / "fno_oi_fetch_5min_fast_production.supervisor.heartbeat"
 )
-FNO_FAST_PRODUCTION_FIRST_MARKER = (
-    RUNTIME_ROOT / "fno_oi" / "slot_ready" / "slot_20260902_0920.json"
-)
+FNO_FAST_PRODUCTION_SLOT_READY_DIR = RUNTIME_ROOT / "fno_oi" / "slot_ready"
 FNO_V10_V11_V12_PAPER_TASK = "EQIDV2_fno_v10_v11_v12_paper_0915"
 FNO_V10_V11_V12_STATUS = (
     RUNTIME_ROOT / "fno_oi" / "multi_strategy_paper_v1" / "status.json"
 )
-FNO_V6_LIVE_KITE_TASK = "EQIDV2_fno_v6_live_kite_qty1_0915"
+FNO_V6_LIVE_KITE_TASK = "EQIDV2_fno_v13_v10_g_live_kite_qty1_0915"
 FNO_V8_COMBINED_PAPER_TASK = "EQIDV2_fno_v8_combined_paper_0915"
 FNO_V8_COMBINED_PAPER_HEARTBEAT = (
     RUNTIME_STATUS_DIR / "fno_v8_combined_paper.heartbeat"
 )
 FNO_V8_STARTUP_GRACE_END = dt.time(9, 17)
-FNO_V6_SCANNER_TASK = "EQIDV2_fno_v6_scanner_5min_0918"
+FNO_V6_SCANNER_TASK = "EQIDV2_fno_v13_v10_g_scanner_5min_0915"
 FNO_V6_CUTOVER_DOWNSTREAM_TASKS = (
     FNO_V6_EQUITY_1MIN_FEED_TASK,
-    "EQIDV2_fno_v6_confirmation_1min_0919",
-    "EQIDV2_fno_v6_live_long_0920",
-    "EQIDV2_fno_v6_live_short_0920",
-    "EQIDV2_fno_v6_trade_logger_0920",
-    "EQIDV2_fno_v6_net_result_0920",
+    "EQIDV2_fno_v13_v10_g_confirmation_1min_0915",
+    "EQIDV2_fno_v13_v10_g_live_long_0915",
+    "EQIDV2_fno_v13_v10_g_live_short_0915",
+    "EQIDV2_fno_v13_v10_g_trade_logger_0915",
+    "EQIDV2_fno_v13_v10_g_net_result_0915",
     FNO_V6_LIVE_KITE_TASK,
 )
 
@@ -75,13 +73,13 @@ DASHBOARD_SESSION_TASKS = (
     FNO_FAST_PRODUCTION_TASK,
     "EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",
     "EQIDV2_fno_oi_feature_ranker_0915",
-    "EQIDV2_fno_v6_scanner_5min_0918",
-    "EQIDV2_fno_v6_equity_1min_feed_0919",
-    "EQIDV2_fno_v6_confirmation_1min_0919",
-    "EQIDV2_fno_v6_live_long_0920",
-    "EQIDV2_fno_v6_live_short_0920",
-    "EQIDV2_fno_v6_trade_logger_0920",
-    "EQIDV2_fno_v6_net_result_0920",
+    "EQIDV2_fno_v13_v10_g_scanner_5min_0915",
+    "EQIDV2_fno_v13_v10_g_equity_1min_feed_0915",
+    "EQIDV2_fno_v13_v10_g_confirmation_1min_0915",
+    "EQIDV2_fno_v13_v10_g_live_long_0915",
+    "EQIDV2_fno_v13_v10_g_live_short_0915",
+    "EQIDV2_fno_v13_v10_g_trade_logger_0915",
+    "EQIDV2_fno_v13_v10_g_net_result_0915",
     FNO_V6_LIVE_KITE_TASK,
     FNO_V10_V11_V12_PAPER_TASK,
     "EQIDV2_fno_oi_eod_qc_1540",
@@ -102,7 +100,7 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_entry_engine_1min_v5_ID",
     "EQIDV2_v7_research_layer_0917",
     "EQIDV2_data_for_backtesting_1545",
-    "EQIDV2_backtesting_result_v11_1600",
+    "EQIDV2_backtesting_result_v13_v10_g_1620",
     "EQIDV2_suggestions_v7_live_research_1615",
     "EQIDV2_kite_export_start_0915",
     "EQIDV2_eod_1540_update_1540",
@@ -708,11 +706,7 @@ def check_dashboard_session_task(
         )
 
     local_date = observed_at.astimezone(IST).date()
-    selected_production_task = (
-        FNO_FAST_PRODUCTION_TASK
-        if local_date == FNO_FAST_PRODUCTION_TRIAL_DATE
-        else FNO_LEGACY_PRODUCTION_TASK
-    )
+    selected_production_task = FNO_FAST_PRODUCTION_TASK
     required = (
         task_name in REQUIRED_DASHBOARD_SESSION_TASKS
         or task_name == selected_production_task
@@ -736,18 +730,16 @@ def check_dashboard_session_task(
     return result
 
 
-def check_fast_production_trial_runtime(
+def check_fast_production_runtime(
     observed_at: dt.datetime,
     *,
     status_path: Path = FNO_FAST_PRODUCTION_STATUS,
     heartbeat_path: Path = FNO_FAST_PRODUCTION_HEARTBEAT,
 ) -> CheckResult:
-    """Require same-session supervisor evidence after the Sep-2 startup grace."""
+    """Require same-session supervisor evidence after the daily startup grace."""
 
-    label = "fno_fast_production_trial_runtime"
+    label = "fno_fast_production_runtime"
     local = observed_at.astimezone(IST)
-    if local.date() != FNO_FAST_PRODUCTION_TRIAL_DATE:
-        return CheckResult(label, "PASS", "Sep-2 fast-production trial not active today")
     if local.time() < FNO_FAST_PRODUCTION_START:
         return CheckResult(label, "PASS", "fast-production start is scheduled for 09:05")
     if local.time() < FNO_FAST_PRODUCTION_STARTUP_GRACE_END:
@@ -797,17 +789,20 @@ def check_fast_production_trial_runtime(
     )
 
 
-def check_fast_production_trial_first_slot(
+def check_fast_production_first_slot(
     observed_at: dt.datetime,
     *,
-    marker_path: Path = FNO_FAST_PRODUCTION_FIRST_MARKER,
+    marker_path: Path | None = None,
 ) -> CheckResult:
     """Keep the autofix monitor open until the first canonical stock marker passes."""
 
-    label = "fno_fast_production_trial_first_slot"
+    label = "fno_fast_production_first_slot"
     local = observed_at.astimezone(IST)
-    if local.date() != FNO_FAST_PRODUCTION_TRIAL_DATE:
-        return CheckResult(label, "PASS", "Sep-2 fast-production trial not active today")
+    session_date = local.date()
+    if marker_path is None:
+        marker_path = FNO_FAST_PRODUCTION_SLOT_READY_DIR / (
+            f"slot_{session_date.strftime('%Y%m%d')}_0920.json"
+        )
     if local.time() < FNO_FAST_PRODUCTION_FIRST_SLOT:
         return CheckResult(
             label,
@@ -821,11 +816,16 @@ def check_fast_production_trial_first_slot(
     if not isinstance(payload, dict):
         return CheckResult(label, "FAIL", "first canonical marker is not a JSON object")
 
-    expected_slot = "2026-09-02T09:20:00+05:30"
+    expected_slot_dt = dt.datetime.combine(
+        session_date,
+        FNO_FAST_PRODUCTION_FIRST_SLOT,
+        tzinfo=IST,
+    )
+    expected_slot = expected_slot_dt.isoformat()
     required_truth = {
         "schema_version": "fno_oi_fetch_slot_v2",
         "slot_ist": expected_slot,
-        "universe_date": "2026-09-02",
+        "universe_date": session_date.isoformat(),
     }
     mismatches = [
         f"{key}={payload.get(key)!r}"
@@ -842,10 +842,7 @@ def check_fast_production_trial_first_slot(
     published = _parse_keyfile_ts(str(payload.get("published_at_ist", "")))
     if published is None or published.date() != local.date():
         return CheckResult(label, "FAIL", "first marker has missing/stale published_at_ist")
-    delay_seconds = (
-        published
-        - dt.datetime(2026, 9, 2, 9, 20, tzinfo=IST)
-    ).total_seconds()
+    delay_seconds = (published - expected_slot_dt).total_seconds()
     if delay_seconds < 0 or delay_seconds > 60:
         return CheckResult(
             label,
@@ -942,6 +939,13 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
 
     # Core reachability.
     checks.append(check_http("http://127.0.0.1:8787/", timeout_sec=8.0))
+    closed_reason = market_closed_reason(now_ist().date())
+    if closed_reason:
+        checks.append(CheckResult(
+            "market_calendar", "PASS",
+            f"{closed_reason}; market-dependent readiness checks skipped."
+        ))
+        return checks
 
     eod_15min_enabled = _task_is_enabled("EQIDV2_eod_15mins_data_0900")
     v15_new_enabled = _task_is_enabled(V15_NEW_TASK)
@@ -973,8 +977,8 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             )
         )
 
-    checks.append(check_fast_production_trial_runtime(now_local))
-    checks.append(check_fast_production_trial_first_slot(now_local))
+    checks.append(check_fast_production_runtime(now_local))
+    checks.append(check_fast_production_first_slot(now_local))
     checks.append(
         check_v10_v11_v12_shared_runtime(
             now_local,

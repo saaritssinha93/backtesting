@@ -604,6 +604,12 @@ def run_session(args: argparse.Namespace) -> int:
             "SKIPPED_NON_TRADING_DAY",
             session_date_ist=session_date.isoformat(),
         )
+        common.atomic_write_text(
+            common.LATEST_DIR / "latest_fno_oi_leaderboard.md",
+            f"# FnO feature ranker\n\n- Session date: {session_date}\n"
+            "- Status: SKIPPED_NON_TRADING_DAY\n"
+            "- No regular NSE session; no rankings expected.\n",
+        )
         return 0
     universe = common.load_near_month_universe(expected_date=session_date)
     processed = {

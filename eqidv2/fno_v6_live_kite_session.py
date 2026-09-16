@@ -1,9 +1,9 @@
-"""Isolated quantity-one LIVE execution session for the frozen FnO V6 strategy.
+"""Isolated quantity-one LIVE session for the selected FnO strategy profile.
 
-The V6 scanner and 1-minute confirmation pipeline remain the sole signal
+The selected scanner and 1-minute confirmation pipeline are the sole signal
 producers.  This coordinator starts one LIVE worker per side, pins every
 executable order state to one NSE equity share, and publishes dashboard CSVs
-from authoritative V6 signals and this profile's LIVE-only order directory.
+from authoritative signals and this profile's LIVE-only order directory.
 
 Real orders remain fail-closed behind the V6 acknowledgement, same-day arm
 file, kill switch, and the signal activation deadline enforced by
@@ -13,7 +13,9 @@ file, kill switch, and the signal activation deadline enforced by
 from __future__ import annotations
 
 import argparse
+import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -24,17 +26,29 @@ from typing import Any
 import pandas as pd
 
 import fno_oi_common as common
-import fno_v6_live_config as config
+from fno_live_profile import config_for_generation, is_g_config
+
+
+config = config_for_generation("v6")
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-SESSION_ID = "fno_v6_live_kite_qty1"
+SESSION_ID = (
+    "fno_v13_v10_g_live_kite_qty1" if is_g_config(config) else "fno_v6_live_kite_qty1"
+)
 EXECUTION_PROFILE = "live_kite_qty1"
 EXECUTION_MODE = "LIVE"
 EXECUTION_QUANTITY = 1
 QUANTITY_POLICY = "FIXED_ONE_SHARE"
 
-LIVE_ROOT = common.FNO_ROOT / "v6_live"
+LIVE_ROOT = common.FNO_ROOT / getattr(config, "LIVE_ROOT_NAME", "v6_live")
+# Keep the existing controls authoritative across the strategy migration.
+# None preserves the legacy test/embedding contract where LIVE_ROOT is injected.
+CONTROL_ROOT = (
+    common.FNO_ROOT / getattr(config, "CONTROL_ROOT_NAME", "v6_live")
+    if getattr(config, "LIVE_ROOT_NAME", "v6_live") != "v6_live"
+    else None
+)
 CONFIRMATION_ROOT = LIVE_ROOT / "confirmation_1m"
 SIGNAL_ROOT = LIVE_ROOT / "signals"
 PROFILE_ORDER_ROOT = LIVE_ROOT / "orders" / "LIVE" / EXECUTION_PROFILE
@@ -66,6 +80,8 @@ ENTRY_COLUMNS = [
     "execution_mode",
     "execution_profile",
     "quantity_policy",
+    "stop_pct",
+    "target_pct",
 ]
 
 TRADE_COLUMNS = [
@@ -95,17 +111,26 @@ TRADE_COLUMNS = [
     "execution_profile",
     "quantity_policy",
     "updated_at_ist",
+    "setup_id",
+    "stop_pct",
+    "target_pct",
+    "stop_price",
+    "target_price",
+    "strategy_version",
+    "strategy_fingerprint",
 ]
 
 
 def entry_csv_path(session_date: date, side: str) -> Path:
+    strategy_id = "v13_v10_g" if _is_g_profile() else "v6"
     return EXPORT_ROOT / (
-        f"signals_{session_date.isoformat()}_fno_id_v6_{side.lower()}.csv"
+        f"signals_{session_date.isoformat()}_fno_id_{strategy_id}_{side.lower()}.csv"
     )
 
 
 def trades_csv_path(session_date: date) -> Path:
-    return EXPORT_ROOT / f"live_trades_{session_date.isoformat()}_fno_id_v6.csv"
+    strategy_id = "v13_v10_g" if _is_g_profile() else "v6"
+    return EXPORT_ROOT / f"live_trades_{session_date.isoformat()}_fno_id_{strategy_id}.csv"
 
 
 def open_positions_path(session_date: date) -> Path:
@@ -133,11 +158,53 @@ def _confirmation_path(session_date: date, signal_end: str) -> Path:
     )
 
 
+def _is_g_profile() -> bool:
+    return is_g_config(config)
+
+
+def _display_label() -> str:
+    return "V13-V10-G" if _is_g_profile() else "V6"
+
+
+def _validate_g_contract(row: dict[str, Any], session_date: date) -> None:
+    """Refuse stale V6 rows or G rows whose frozen execution terms changed."""
+    setup = config.setup_for(str(row.get("signal_end", "")), str(row.get("side", "")))
+    if setup is None:
+        raise RuntimeError("V13-V10-G row is not an active setup.")
+    expected = {
+        "strategy_version": config.STRATEGY_VERSION,
+        "strategy_fingerprint": config.strategy_fingerprint(),
+        "session_date": session_date.isoformat(),
+        "setup_id": setup.setup_id,
+        "confirmation_end": setup.confirmation_end,
+        "entry_activation_deadline_ist": config.activation_deadline(
+            session_date, setup.confirmation_end
+        ).isoformat(timespec="seconds"),
+        "stop_pct": float(setup.stop_pct),
+        "target_pct": float(setup.target_pct),
+    }
+    for key, wanted in expected.items():
+        actual = row.get(key)
+        if isinstance(wanted, float):
+            try:
+                matches = math.isfinite(float(actual)) and abs(float(actual) - wanted) <= 1e-9
+            except (TypeError, ValueError):
+                matches = False
+        else:
+            matches = actual == wanted
+        if not matches:
+            raise RuntimeError(
+                f"V13-V10-G row {row.get('signal_id')} failed {key}: "
+                f"expected {wanted!r}, observed {actual!r}"
+            )
+
+
 def load_authoritative_signals(session_date: date) -> list[dict[str, Any]]:
-    """Load only IDs committed by a matching frozen-V6 confirmation snapshot."""
+    """Load only IDs committed by a matching strategy confirmation snapshot."""
 
     expected_fingerprint = config.strategy_fingerprint()
     authoritative_ids: set[str] = set()
+    authoritative_slots: dict[str, str] = {}
     for signal_end in config.SIGNAL_TO_CONFIRMATION:
         snapshot = _read_json(_confirmation_path(session_date, signal_end))
         if not snapshot:
@@ -150,9 +217,16 @@ def load_authoritative_signals(session_date: date) -> list[dict[str, Any]]:
         )
         if not identity:
             continue
-        authoritative_ids.update(
-            str(value) for value in snapshot.get("selected_signal_ids", []) if value
-        )
+        for value in snapshot.get("selected_signal_ids", []):
+            if not value:
+                continue
+            signal_id = str(value)
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", signal_id):
+                raise RuntimeError("Confirmation snapshot contains an unsafe signal ID.")
+            if signal_id in authoritative_slots and authoritative_slots[signal_id] != signal_end:
+                raise RuntimeError(f"Signal is committed in multiple confirmation slots: {signal_id}")
+            authoritative_slots[signal_id] = signal_end
+            authoritative_ids.add(signal_id)
 
     rows: list[dict[str, Any]] = []
     signal_day = SIGNAL_ROOT / session_date.isoformat()
@@ -160,7 +234,7 @@ def load_authoritative_signals(session_date: date) -> list[dict[str, Any]]:
         signal = _read_json(signal_day / f"{signal_id}.json")
         if not signal:
             raise RuntimeError(
-                f"Authoritative V6 signal file is missing or invalid: {signal_id}"
+                f"Authoritative {_display_label()} signal file is missing or invalid: {signal_id}"
             )
         side = str(signal.get("side", "")).upper()
         signal_end = str(signal.get("signal_end", ""))
@@ -170,14 +244,17 @@ def load_authoritative_signals(session_date: date) -> list[dict[str, Any]]:
             or signal.get("strategy_version") != config.STRATEGY_VERSION
             or signal.get("strategy_fingerprint") != expected_fingerprint
             or signal.get("session_date") != session_date.isoformat()
+            or signal_end != authoritative_slots[signal_id]
             or setup is None
             or signal.get("confirmation_end") != setup.confirmation_end
             or signal.get("setup_id") != setup.setup_id
         ):
-            raise RuntimeError(f"Authoritative V6 signal failed identity checks: {signal_id}")
+            raise RuntimeError(f"Authoritative {_display_label()} signal failed identity checks: {signal_id}")
+        if _is_g_profile():
+            _validate_g_contract(signal, session_date)
         if int(dict(signal.get("live_sizing") or {}).get("quantity", 0)) < 1:
             raise RuntimeError(
-                f"Authoritative V6 signal cannot support one-share execution: {signal_id}"
+                f"Authoritative {_display_label()} signal cannot support one-share execution: {signal_id}"
             )
         rows.append(signal)
 
@@ -204,11 +281,11 @@ def load_profile_order_states(
     for path in sorted(root.glob("*.json")):
         state = _read_json(path)
         if not state:
-            raise RuntimeError(f"Invalid V6 LIVE order-state JSON: {path}")
+            raise RuntimeError(f"Invalid {_display_label()} LIVE order-state JSON: {path}")
         signal_id = str(state.get("signal_id", ""))
         if signal_id not in authoritative_ids:
             raise RuntimeError(
-                f"V6 LIVE order state is not backed by an authoritative signal: {signal_id}"
+                f"{_display_label()} LIVE order state is not backed by an authoritative signal: {signal_id}"
             )
         expected = {
             "session_date": session_date.isoformat(),
@@ -225,8 +302,10 @@ def load_profile_order_states(
         }
         if mismatches:
             raise RuntimeError(
-                f"V6 LIVE quantity-one state failed validation ({signal_id}): {mismatches}"
+                f"{_display_label()} LIVE quantity-one state failed validation ({signal_id}): {mismatches}"
             )
+        if _is_g_profile():
+            _validate_g_contract(state, session_date)
         rows.append(state)
     return rows
 
@@ -270,6 +349,8 @@ def _entry_rows(
                 "execution_mode": EXECUTION_MODE,
                 "execution_profile": EXECUTION_PROFILE,
                 "quantity_policy": QUANTITY_POLICY,
+                "stop_pct": signal.get("stop_pct", ""),
+                "target_pct": signal.get("target_pct", ""),
             }
         )
     return pd.DataFrame(rows, columns=ENTRY_COLUMNS)
@@ -309,19 +390,31 @@ def _trade_rows(states: list[dict[str, Any]]) -> pd.DataFrame:
                 "execution_profile": state.get("execution_profile", ""),
                 "quantity_policy": state.get("quantity_policy", ""),
                 "updated_at_ist": state.get("updated_at_ist", ""),
+                "setup_id": state.get("setup_id", ""),
+                "stop_pct": state.get("stop_pct", ""),
+                "target_pct": state.get("target_pct", ""),
+                "stop_price": state.get("stop_price", ""),
+                "target_price": state.get("target_price", ""),
+                "strategy_version": state.get("strategy_version", ""),
+                "strategy_fingerprint": state.get("strategy_fingerprint", ""),
             }
         )
     return pd.DataFrame(rows, columns=TRADE_COLUMNS)
 
 
 def _arm_status(session_date: date) -> dict[str, Any]:
-    arm = _read_json(LIVE_ROOT / "live_arm.json")
-    kill = _read_json(LIVE_ROOT / "kill_switch.json")
+    control_root = CONTROL_ROOT if CONTROL_ROOT is not None else LIVE_ROOT
+    arm = _read_json(control_root / "live_arm.json")
+    kill = _read_json(control_root / "kill_switch.json")
     acknowledgement_valid = (
         os.getenv(config.LIVE_ACK_ENV, "").strip() == config.LIVE_ACK
     )
     arm_enabled = bool(arm.get("enabled"))
     arm_date_matches = str(arm.get("session_date", "")) == session_date.isoformat()
+    arm_strategy_matches = (
+        not _is_g_profile()
+        or arm.get("strategy_fingerprint") == config.strategy_fingerprint()
+    )
     kill_enabled = bool(kill.get("enabled"))
     if not acknowledgement_valid:
         reason = "LIVE_ACK_MISSING"
@@ -329,6 +422,8 @@ def _arm_status(session_date: date) -> dict[str, Any]:
         reason = "LIVE_ARM_FILE_DISABLED"
     elif not arm_date_matches:
         reason = "LIVE_ARM_DATE_MISMATCH"
+    elif not arm_strategy_matches:
+        reason = "LIVE_ARM_STRATEGY_MISMATCH"
     elif kill_enabled:
         reason = "KILL_SWITCH_ENABLED"
     else:
@@ -339,8 +434,27 @@ def _arm_status(session_date: date) -> dict[str, Any]:
         "acknowledgement_valid": acknowledgement_valid,
         "arm_enabled": arm_enabled,
         "arm_date_matches": arm_date_matches,
+        "arm_strategy_matches": arm_strategy_matches,
         "kill_switch_enabled": kill_enabled,
     }
+
+
+def _auto_arm_session(session_date: date) -> Path:
+    """Persist explicit authorization for this strategy and session date."""
+    control_root = CONTROL_ROOT if CONTROL_ROOT is not None else LIVE_ROOT
+    path = control_root / "live_arm.json"
+    common.atomic_write_json(
+        path,
+        {
+            "enabled": True,
+            "session_date": session_date.isoformat(),
+            "strategy_version": config.STRATEGY_VERSION,
+            "strategy_fingerprint": config.strategy_fingerprint(),
+            "source": "V13_V10_G_QTY1_AUTO_ARM",
+            "updated_at_ist": common.now_ist().isoformat(timespec="seconds"),
+        },
+    )
+    return path
 
 
 def export_snapshot(
@@ -372,6 +486,8 @@ def export_snapshot(
         {
             "schema_version": "fno_v6_live_kite_qty1_open_positions_v1",
             "session_date": session_date.isoformat(),
+            "strategy_version": config.STRATEGY_VERSION,
+            "strategy_fingerprint": config.strategy_fingerprint(),
             "execution_profile": EXECUTION_PROFILE,
             "quantity_policy": QUANTITY_POLICY,
             "open_trades": [
@@ -404,6 +520,8 @@ def export_snapshot(
         "schema_version": "fno_v6_live_kite_qty1_status_v1",
         "session_id": SESSION_ID,
         "session_date": session_date.isoformat(),
+        "strategy_version": config.STRATEGY_VERSION,
+        "strategy_fingerprint": config.strategy_fingerprint(),
         "state": state,
         "execution_mode": EXECUTION_MODE,
         "execution_profile": EXECUTION_PROFILE,
@@ -426,6 +544,8 @@ def export_snapshot(
             "schema_version": "fno_v6_live_kite_qty1_heartbeat_v1",
             "session_id": SESSION_ID,
             "session_date": session_date.isoformat(),
+            "strategy_version": config.STRATEGY_VERSION,
+            "strategy_fingerprint": config.strategy_fingerprint(),
             "state": payload["state"],
             "heartbeat_ist": observed.isoformat(timespec="seconds"),
             "signals": counts["signals"],
@@ -438,10 +558,11 @@ def export_snapshot(
 
 def worker_command(session_date: date, side: str) -> list[str]:
     role = "long-entry" if side.upper() == "LONG" else "short-entry"
+    script = "fno_v13_v10_g_live.py" if _is_g_profile() else "fno_v6_live.py"
     return [
         sys.executable,
         "-u",
-        str(SCRIPT_DIR / "fno_v6_live.py"),
+        str(SCRIPT_DIR / script),
         "--role",
         role,
         "--session-date",
@@ -458,7 +579,49 @@ def worker_environment() -> dict[str, str]:
     env["FNO_LIVE_GENERATION"] = "v6"
     env["FNO_V6_EXECUTION_MODE"] = EXECUTION_MODE
     env["FNO_V6_EXECUTION_SESSION_NAMESPACE"] = EXECUTION_PROFILE
+    # Pin the same profile for both child workers even if the parent environment
+    # was changed after its configuration was loaded.
+    if _is_g_profile():
+        env["FNO_V6_STRATEGY_PROFILE"] = "V13_V10_G"
+    else:
+        env.pop("FNO_V6_STRATEGY_PROFILE", None)
     return env
+
+
+def worker_session_id(side: str) -> str:
+    prefix = "fno_v13_v10_g" if _is_g_profile() else "fno_v6"
+    return f"{prefix}_{EXECUTION_PROFILE}_{side.lower()}"
+
+
+def _publish_export_failure(
+    session_date: date, child_status: dict[str, Any], exc: Exception
+) -> dict[str, Any]:
+    """Expose export failures without stopping workers protecting broker positions."""
+    observed = common.now_ist().isoformat(timespec="seconds")
+    payload = {
+        "schema_version": "fno_v6_live_kite_qty1_status_v1",
+        "session_id": SESSION_ID,
+        "session_date": session_date.isoformat(),
+        "strategy_version": config.STRATEGY_VERSION,
+        "strategy_fingerprint": config.strategy_fingerprint(),
+        "state": "DEGRADED",
+        "execution_mode": EXECUTION_MODE,
+        "execution_profile": EXECUTION_PROFILE,
+        "quantity": EXECUTION_QUANTITY,
+        "quantity_policy": QUANTITY_POLICY,
+        "updated_at_ist": observed,
+        "export_unavailable": True,
+        "error": f"{type(exc).__name__}: {exc}",
+        "children": child_status,
+        **_arm_status(session_date),
+    }
+    # Failure to write reporting files must not terminate the trade managers.
+    try:
+        common.atomic_write_json(STATUS_PATH, payload)
+        common.atomic_write_json(HEARTBEAT_PATH, {**payload, "heartbeat_ist": observed})
+    except Exception as reporting_exc:
+        print(f"[{SESSION_ID}] reporting unavailable: {reporting_exc}", file=sys.stderr)
+    return payload
 
 
 def _terminate_children(children: dict[str, subprocess.Popen[Any]]) -> None:
@@ -483,6 +646,26 @@ def run(args: argparse.Namespace) -> int:
     )
     config.validate_strategy()
     config.attest_selected_backtest()
+    if getattr(args, "readiness_only", False):
+        arm_status = _arm_status(session_date)
+        payload = export_snapshot(
+            session_date,
+            state="READY_DISARMED" if not arm_status["armed"] else "READINESS_ONLY",
+        )
+        payload.update(
+            readiness_only=True,
+            workers_started=False,
+            execution_enabled=False,
+            readiness_note="Configuration checked; CSVs prepared; no LIVE workers or broker requests started.",
+        )
+        common.atomic_write_json(STATUS_PATH, payload)
+        print(
+            f"[{SESSION_ID}] {payload['state']} {session_date}: "
+            f"strategy={config.STRATEGY_VERSION} signals={payload['signals']} "
+            f"arm={payload['arm_reason']} quantity={EXECUTION_QUANTITY}; "
+            "no LIVE workers or broker requests started."
+        )
+        return 0
     if not args.allow_non_trading_day and not common.is_trading_day(
         session_date, common.load_holidays()
     ):
@@ -497,6 +680,10 @@ def run(args: argparse.Namespace) -> int:
             f"arm={payload['arm_reason']} quantity={EXECUTION_QUANTITY}"
         )
         return 0
+
+    if getattr(args, "auto_arm", False):
+        arm_path = _auto_arm_session(session_date)
+        print(f"[{SESSION_ID}] auto-armed LIVE quantity 1 for {session_date}: {arm_path}")
 
     env = worker_environment()
     children: dict[str, subprocess.Popen[Any]] = {}
@@ -518,18 +705,34 @@ def run(args: argparse.Namespace) -> int:
         while True:
             child_status = {
                 side.lower(): {
+                    "session_id": worker_session_id(side),
                     "pid": process.pid,
                     "return_code": process.poll(),
                 }
                 for side, process in children.items()
             }
-            payload = export_snapshot(session_date, child_status=child_status)
+            failures = {
+                side: info["return_code"]
+                for side, info in child_status.items()
+                if info["return_code"] not in (None, 0)
+            }
+            try:
+                payload = export_snapshot(
+                    session_date,
+                    child_status=child_status,
+                    state="DEGRADED" if failures else "RUNNING",
+                )
+            except Exception as exc:
+                payload = _publish_export_failure(session_date, child_status, exc)
             now_monotonic = time.monotonic()
             if now_monotonic - last_log >= 60.0:
                 print(
-                    f"[{SESSION_ID}] signals={payload['signals']} "
-                    f"orders={payload['order_states']} fills={payload['filled_trades']} "
-                    f"open={payload['open']} arm={payload['arm_reason']} qty=1"
+                    f"[{SESSION_ID}] signals={payload.get('signals', 'unavailable')} "
+                    f"orders={payload.get('order_states', 'unavailable')} "
+                    f"fills={payload.get('filled_trades', 'unavailable')} "
+                    f"open={payload.get('open', 'unavailable')} "
+                    f"arm={payload['arm_reason']} qty=1 "
+                    f"export_error={payload.get('error', '')} worker_failures={failures}"
                 )
                 last_log = now_monotonic
 
@@ -537,17 +740,12 @@ def run(args: argparse.Namespace) -> int:
                 side: process.poll() for side, process in children.items()
             }
             completed = {side: code for side, code in return_codes.items() if code is not None}
-            if completed:
-                if len(completed) == len(children) and all(
-                    code == 0 for code in completed.values()
-                ):
-                    final_state = "DONE"
-                    return 0
+            if len(completed) == len(children):
                 failures = {side: code for side, code in completed.items() if code != 0}
-                if failures:
-                    final_state = "FAILED"
-                    print(f"[{SESSION_ID}] worker failure: {failures}", file=sys.stderr)
-                    return next(iter(failures.values())) or 2
+                final_state = "FAILED" if failures else "DONE"
+                return (next(iter(failures.values())) or 2) if failures else 0
+            # A failed side is reported above. Keep the other side alive so that
+            # its existing broker positions continue to receive exit management.
             time.sleep(args.poll_sec)
     except KeyboardInterrupt:
         final_state = "INTERRUPTED"
@@ -560,6 +758,7 @@ def run(args: argparse.Namespace) -> int:
                 state=final_state,
                 child_status={
                     side.lower(): {
+                        "session_id": worker_session_id(side),
                         "pid": process.pid,
                         "return_code": process.poll(),
                     }
@@ -575,6 +774,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session-date", default="")
     parser.add_argument("--poll-sec", type=float, default=2.0)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--auto-arm",
+        action="store_true",
+        help="Write the current dated strategy arm record before starting LIVE workers.",
+    )
+    parser.add_argument(
+        "--readiness-only",
+        action="store_true",
+        help="Validate and prepare CSV/status outputs without starting LIVE workers or contacting the broker.",
+    )
     parser.add_argument("--allow-non-trading-day", action="store_true")
     return parser
 

@@ -1,5 +1,7 @@
 # FnO V6 — Strategy, Backtest Flow and Live Flow
 
+> Current dashboard operation moved to V13-V10-G on 2026-09-14. See [the current G integration and operations guide](V13_V10_G_DASHBOARD_INTEGRATION.md) for canonical G session/task names, launchers, sizing and controls. This file preserves the legacy V6 strategy reference; its V6 BAT filenames now forward to G and must not be treated as separate scheduled workers.
+
 Reference document for the **FnO EMA/OI opening-window strategy**: the frozen V6
 setup book, the backtest that produced and attests it, the dedicated durable
 1-minute feed producer, and the six-role live/paper runtime that trades it.

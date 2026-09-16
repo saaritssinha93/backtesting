@@ -813,15 +813,13 @@ class FnOOIPipelineTests(unittest.TestCase):
             self.assertIn(card, dashboard.LOG_FILES)
             self.assertIn(card, dashboard.CARD_TASK_NAMES)
         self.assertIn("fno_oi_fetch_5min_fast_production", dashboard.RESTARTABLE_CARDS)
-        self.assertIn("fno_oi_fetch_5min", dashboard.RESTARTABLE_CARDS)
-        self.assertIn("fno_oi_fetch_5min_fast_shadow", dashboard.RESTARTABLE_CARDS)
+        self.assertNotIn("fno_oi_fetch_5min", dashboard.RESTARTABLE_CARDS)
+        self.assertNotIn("fno_oi_fetch_5min_fast_shadow", dashboard.RESTARTABLE_CARDS)
         self.assertIn("fno_oi_feature_ranker", dashboard.RESTARTABLE_CARDS)
 
     def test_fno_tasks_are_preopen_visible_and_installer_defines_all_jobs(self) -> None:
         expected = {
             "EQIDV2_fno_oi_universe_0850",
-            "EQIDV2_fno_oi_fetch_5min_0905",
-            "EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",
             "EQIDV2_fno_oi_feature_ranker_0915",
             "EQIDV2_fno_v6_scanner_5min_0918",
             "EQIDV2_fno_v6_equity_1min_feed_0919",
@@ -839,10 +837,18 @@ class FnOOIPipelineTests(unittest.TestCase):
         for task in expected:
             self.assertIn(task, installer)
 
-        start_at_0915 = expected - {
-            "EQIDV2_fno_oi_universe_0850",
+        retired = {
             "EQIDV2_fno_oi_fetch_5min_0905",
             "EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",
+        }
+        self.assertTrue(retired.issubset(set(preopen.DASHBOARD_SESSION_TASKS)))
+        for task in retired:
+            self.assertIn(task, installer)
+        self.assertIn("$retiredTasks", installer)
+        self.assertIn("/Change /TN $retiredTask /Disable", installer)
+
+        start_at_0915 = expected - {
+            "EQIDV2_fno_oi_universe_0850",
             "EQIDV2_fno_oi_eod_qc_1540",
         }
         for task in start_at_0915:
@@ -850,7 +856,7 @@ class FnOOIPipelineTests(unittest.TestCase):
                 installer,
                 rf'Name\s*=\s*"{re.escape(task)}";\s*Time\s*=\s*"09:15"',
             )
-        self.assertRegex(
+        self.assertNotRegex(
             installer,
             r'Name\s*=\s*"EQIDV2_fno_oi_fetch_5min_fast_shadow_0906";\s*Time\s*=\s*"09:06"',
         )

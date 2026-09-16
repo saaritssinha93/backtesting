@@ -442,3 +442,17 @@ def test_cross_stage_symbol_contract_mismatch_is_blocked() -> None:
             proof=proof,
             frozen_metadata=frozen,
         )
+
+
+def test_opening_oi_exclusion_is_named_without_weakening_full_universe_gate():
+    symbol_hash = common.symbol_set_sha256(["AAA", "KAYNES"])
+    frozen = {"cash_symbol_tokens": {"AAA": 1, "KAYNES": 2},
+              "near_month_universe_sha256": "a" * 64, "cash_symbol_set_sha256": symbol_hash}
+    cash = {**frozen, "rows": [{"symbol": "AAA", "instrument_token": 1},
+                               {"symbol": "KAYNES", "instrument_token": 2}]}
+    proof = {**frozen, "contracts": [{"equity_symbol": "AAA", "equity_instrument_token": 1}],
+             "excluded_contracts": [{"tradingsymbol": "KAYNES26SEPFUT", "reason": "no exact S/S-5 rows"}]}
+    authority = {"universe_symbol_set_sha256": common.symbol_set_sha256(["AAA"]),
+                 "universe_rows": [{"tradingsymbol": "AAA", "instrument_token": 1}]}
+    with pytest.raises(source.SourceContractError, match=r"missing OI=\['KAYNES'\].*KAYNES26SEPFUT"):
+        source._validate_cross_stage_symbol_binding(authority=authority, cash=cash, proof=proof, frozen_metadata=frozen)

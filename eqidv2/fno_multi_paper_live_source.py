@@ -1199,8 +1199,22 @@ def _validate_cross_stage_symbol_binding(
         == frozen_metadata.get("cash_symbol_set_sha256"),
     )
     if not all(checks):
+        missing_oi = sorted(set(expected_tokens) - set(proof_tokens))
+        missing_authority = sorted(set(expected_tokens) - set(authority_tokens))
+        detail = (
+            f"; expected={len(expected_tokens)}, cash={len(cash_tokens)}, "
+            f"OI={len(proof_tokens)}, authority={len(authority_tokens)}; "
+            f"missing OI={missing_oi}; missing authority={missing_authority}"
+        )
+        excluded = proof.get("excluded_contracts") or []
+        if excluded:
+            detail += "; OI exclusions=" + "; ".join(
+                f"{item.get('tradingsymbol')}: {item.get('reason')}"
+                for item in excluded if isinstance(item, Mapping)
+            )
         raise SourceContractError(
             "raw direct audit and finalized cash/OI/authority symbol contracts differ"
+            + detail
         )
 
 

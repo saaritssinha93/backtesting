@@ -57,7 +57,7 @@ class DashboardV7ControlsTests(unittest.TestCase):
         previous_cache_at = dashboard._TASK_SNAPSHOT_CACHE_AT
         previous_refreshing = dashboard._TASK_SNAPSHOT_REFRESHING
         known = {
-            "\\EQIDV2_fno_v6_scanner_5min_0915": {
+            "\\EQIDV2_fno_v13_v10_g_scanner_5min_0915": {
                 "Scheduled Task State": "Enabled",
                 "Status": "Ready",
             }
@@ -392,10 +392,10 @@ class DashboardV7ControlsTests(unittest.TestCase):
 
     def test_same_day_failure_remains_failed(self) -> None:
         status = dashboard.apply_scheduler_status(
-            "fno_v6_scanner_5min",
+            "fno_v13_v10_g_scanner_5min",
             {"status": "FAILED", "ts": "2026-08-13T09:15:02+05:30"},
             {
-                "\\EQIDV2_fno_v6_scanner_5min_0918": {
+                "\\EQIDV2_fno_v13_v10_g_scanner_5min_0915": {
                     "Scheduled Task State": "Enabled",
                     "Status": "Ready",
                     "Next Run Time": "14-08-2026 09:15:00",

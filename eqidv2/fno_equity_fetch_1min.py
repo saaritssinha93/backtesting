@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import importlib
 import json
+import math
 import os
 import tempfile
 import time
@@ -27,6 +28,7 @@ import pandas as pd
 
 import fno_oi_common as common
 import fno_oi_hybrid_data as hybrid
+from fno_live_profile import config_for_generation, is_g_config
 
 
 FEED_POLICY_VERSION = "candidate_exact_completed_1m_verified_no_candle_v1"
@@ -35,6 +37,23 @@ MIN_NO_CANDLE_OBSERVATIONS = 3
 MIN_NO_CANDLE_VERIFICATION_AGE_SEC = 15
 DEFAULT_NO_CANDLE_OBSERVATION_SPACING_SEC = 2.0
 DEFAULT_GENERATION = os.getenv("FNO_LIVE_GENERATION", "v6").strip().lower()
+
+
+def _status_identity(session: str) -> dict[str, str]:
+    generation = "v6" if session.startswith(("fno_v6_", "fno_v13_v10_g_")) else "v5"
+    profile = _config(generation)
+    if not hasattr(profile, "strategy_fingerprint"):
+        return {}
+    return {"strategy_version": profile.STRATEGY_VERSION,
+            "strategy_fingerprint": profile.strategy_fingerprint()}
+
+
+def _publish_status(session: str, state: str, **extra: Any) -> None:
+    common.publish_status(session, state, **{**_status_identity(session), **extra})
+
+
+def _publish_heartbeat(session: str, state: str, **extra: Any) -> None:
+    common.publish_heartbeat(session, state, **{**_status_identity(session), **extra})
 
 
 @dataclass
@@ -57,13 +76,13 @@ def _config(generation: str):
     normalized = str(generation).strip().lower()
     if normalized not in {"v5", "v6"}:
         raise ValueError(f"Unsupported FNO generation: {generation}")
-    return importlib.import_module(f"fno_{normalized}_live_config")
+    return config_for_generation(normalized)
 
 
 def scanner_slot_path(generation: str, session_date: date, signal_end: str) -> Path:
     return (
         common.FNO_ROOT
-        / f"{generation}_live"
+        / getattr(_config(generation), "LIVE_ROOT_NAME", f"{generation}_live")
         / "scanner_5m"
         / session_date.isoformat()
         / f"slot_{signal_end.replace(':', '')}.json"
@@ -239,6 +258,46 @@ def _persist_bar(
     return reloaded
 
 
+def _g_completed_volume_history(records: list[dict[str, Any]], expected_end: datetime) -> pd.DataFrame:
+    import fno_v13_v10_g_live_config as g_config
+    history = []
+    for record in records:
+        stamp = _to_ist(record["date"]) + timedelta(minutes=1)
+        if stamp >= pd.Timestamp(expected_end) or not (
+                g_config.LIVE_CONFIRMATION_FIRST_MINUTE_END <= stamp.strftime("%H:%M")
+                <= g_config.LIVE_CONFIRMATION_LAST_MINUTE_END):
+            continue
+        volume = float(record.get("volume", float("nan")))
+        if not math.isfinite(volume) or volume < 0:
+            raise ValueError("Invalid completed volume in G confirmation history")
+        history.append({"timestamp": stamp.isoformat(), "volume": volume})
+    return pd.DataFrame(history, columns=["timestamp", "volume"]).drop_duplicates("timestamp", keep="last")
+
+
+def _g_volume_snapshot_valid(bar: dict[str, Any], expected_end: datetime, config: Any) -> bool:
+    try:
+        if (bar.get("confirmation_volume_policy") != config.CONFIRMATION_VOLUME_POLICY
+                or _to_ist(bar.get("v9_1m_feature_ts")) != pd.Timestamp(expected_end)):
+            return False
+        count = int(bar["confirmation_prior_volume_count"])
+        if not 0 <= count <= config.CONFIRMATION_VOLUME_LOOKBACK:
+            return False
+        digest = str(bar["confirmation_prior_volume_sha256"])
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            return False
+        if count and _to_ist(bar["confirmation_prior_volume_last_ts"]) >= pd.Timestamp(expected_end):
+            return False
+        if not bool(bar.get("confirmation_history_complete", False)):
+            return pd.isna(bar.get("v9_1m_volume_ratio"))
+        mean = float(bar["confirmation_prior_volume_mean"])
+        ratio = float(bar["v9_1m_volume_ratio"])
+        return (count == config.CONFIRMATION_VOLUME_LOOKBACK and math.isfinite(mean) and mean > 0
+                and math.isfinite(ratio) and ratio >= 0
+                and math.isclose(ratio, float(bar["volume"]) / mean, rel_tol=1e-10))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _fetch_one(
     runtime: AppRuntime,
     candidate: dict[str, Any],
@@ -247,10 +306,17 @@ def _fetch_one(
 ) -> dict[str, Any]:
     symbol = str(candidate["tradingsymbol"]).strip().upper()
     try:
+        g_profile = candidate.get("strategy_profile") == "V13_V10_G"
+        # G's denominator spans sessions; a one-candle request cannot provide it.
+        # Snapshot the history in the producer, before publishing immutable data.
+        if g_profile:
+            import fno_v13_v10_g_live_config as g_config
+        request_start = (slot_start - timedelta(days=g_config.LIVE_CONFIRMATION_HISTORY_DAYS)
+                         if g_profile else slot_start)
         runtime.pace()
         records = runtime.client.historical_data(
             int(candidate["instrument_token"]),
-            slot_start,
+            request_start,
             slot_start + timedelta(minutes=2),
             "minute",
             continuous=False,
@@ -272,6 +338,24 @@ def _fetch_one(
                 "error": error,
                 "observed_at_ist": common.now_ist().isoformat(timespec="microseconds"),
             }
+        if g_profile:
+            import fno_v13_v10_g_live_config as g_config
+            history = _g_completed_volume_history(records, expected_end)
+            if len(history) < g_config.LIVE_CONFIRMATION_VOLUME_REQUIRED_PRIOR:
+                # Suspended/new symbols must not use a truncated seven-day mean.
+                request_start = slot_start - timedelta(days=g_config.LIVE_CONFIRMATION_HISTORY_FALLBACK_DAYS)
+                runtime.pace()
+                earlier = runtime.client.historical_data(
+                    int(candidate["instrument_token"]), request_start, slot_start,
+                    "minute", continuous=False, oi=False)
+                history = _g_completed_volume_history(list(earlier) + list(records), expected_end)
+            bar = g_config.annotate_confirmation_volume(bar, history)
+            bar["confirmation_history_complete"] = len(history) >= g_config.LIVE_CONFIRMATION_VOLUME_REQUIRED_PRIOR
+            if not bar["confirmation_history_complete"]:
+                bar["v9_1m_volume_ratio"] = None
+                bar["confirmation_history_reason"] = "INSUFFICIENT_CAUSAL_20_BAR_WARMUP"
+            bar["confirmation_history_requested_from_ist"] = request_start.isoformat()
+            bar["confirmation_history_source"] = "KITE_HISTORICAL_COMPLETED_1M"
         persisted = _persist_bar(candidate, bar, slot_start.date(), expected_end)
         return {
             "tradingsymbol": symbol,
@@ -690,6 +774,7 @@ def produce_slot(
             )
         )
         is not None
+        and (not is_g_config(config) or _g_volume_snapshot_valid(bar, confirmation_end, config))
     }
     outcomes: dict[str, dict[str, Any]] = {
         symbol: {
@@ -960,7 +1045,7 @@ def _prewarm_runtimes(
     try:
         runtimes = _build_runtimes(args)
     except Exception as exc:
-        common.publish_status(
+        _publish_status(
             session,
             "DEGRADED",
             heartbeat_state="WAITING",
@@ -969,7 +1054,7 @@ def _prewarm_runtimes(
             error=f"{type(exc).__name__}: {exc}",
         )
         return None
-    common.publish_status(
+    _publish_status(
         session,
         "RUNNING",
         phase="KITE_RUNTIMES_PREWARMED",
@@ -1024,7 +1109,7 @@ def _render_report(generation: str, session_date: date, config: Any) -> str:
         )
     return "\n".join(
         [
-            f"# FnO {generation.upper()} durable equity 1-minute feed",
+            f"# FnO {getattr(config, 'DISPLAY_LABEL', generation.upper())} durable equity 1-minute feed",
             "",
             f"Session: {session_date.isoformat()}",
             "Confirmation is a read-only consumer of these immutable markers and bar snapshots.",
@@ -1054,12 +1139,22 @@ def run(args: argparse.Namespace) -> int:
         if args.session_date
         else common.now_ist().date()
     )
+    session = f"{getattr(config, 'SESSION_PREFIX', f'fno_{generation}')}_equity_1min_feed"
+    report_prefix = getattr(config, "REPORT_PREFIX", f"fno_{generation}")
+    report_path = common.LATEST_DIR / f"latest_{report_prefix}_equity_1min_feed.md"
     if not args.allow_non_trading_day and not common.is_trading_day(
         session_date, common.load_holidays()
     ):
+        _publish_status(
+            session, "SKIPPED_NON_TRADING_DAY", session_date_ist=session_date.isoformat()
+        )
+        common.atomic_write_text(
+            report_path,
+            f"# {session}\n\n- Session date: {session_date}\n"
+            "- Status: SKIPPED_NON_TRADING_DAY\n"
+            "- No regular NSE session; no one-minute candles expected.\n",
+        )
         return 0
-    session = f"fno_{generation}_equity_1min_feed"
-    report_path = common.LATEST_DIR / f"latest_fno_{generation}_equity_1min_feed.md"
     selected_slots = (
         [_resolve_signal_end(config, args.slot)]
         if args.slot
@@ -1116,7 +1211,7 @@ def run(args: argparse.Namespace) -> int:
                                 signal_end,
                             )
                         except (KeyError, TypeError, ValueError) as exc:
-                            common.publish_status(
+                            _publish_status(
                                 session,
                                 "DEGRADED",
                                 heartbeat_state="WAITING",
@@ -1126,7 +1221,7 @@ def run(args: argparse.Namespace) -> int:
                             )
                         else:
                             maybe_prewarm(signal_end)
-                common.publish_heartbeat(
+                _publish_heartbeat(
                     session,
                     "WAITING",
                     phase="WAIT_COMPLETED_CANDLE_BOUNDARY",
@@ -1138,7 +1233,7 @@ def run(args: argparse.Namespace) -> int:
                 continue
             snapshot = _load_scanner(generation, session_date, signal_end)
             if not snapshot:
-                common.publish_heartbeat(
+                _publish_heartbeat(
                     session, "WAITING", phase="WAIT_SCANNER", slot=signal_end
                 )
                 if args.once:
@@ -1151,7 +1246,7 @@ def run(args: argparse.Namespace) -> int:
             if has_candidates and runtimes is None and now <= deadline:
                 maybe_prewarm(signal_end)
                 if runtimes is None:
-                    common.publish_heartbeat(
+                    _publish_heartbeat(
                         session,
                         "WAITING",
                         phase="WAIT_KITE_RUNTIME_PREWARM",
@@ -1171,7 +1266,7 @@ def run(args: argparse.Namespace) -> int:
                 finalize_incomplete=bool(common.now_ist() > deadline),
             )
             if str(marker.get("source")) != "final":
-                common.publish_heartbeat(
+                _publish_heartbeat(
                     session,
                     "WAITING",
                     phase="WAIT_COMPLETED_BAR",
@@ -1184,7 +1279,7 @@ def run(args: argparse.Namespace) -> int:
                 continue
             processed.add(signal_end)
             made_progress = True
-            common.publish_status(
+            _publish_status(
                 session,
                 marker["state"],
                 phase="SLOT_DONE",
@@ -1196,10 +1291,11 @@ def run(args: argparse.Namespace) -> int:
             if args.once:
                 return 0 if marker.get("state") == "SUCCESS" else 2
         if not made_progress:
-            if now.date() != session_date or now.time() >= datetime.strptime("09:50", "%H:%M").time():
+            if now.date() != session_date or now.time() >= datetime.strptime(
+                getattr(config, "PIPELINE_DEADLINE", "09:50"), "%H:%M").time():
                 return 2
             time.sleep(max(0.2, float(args.poll_sec)))
-    common.publish_status(session, "DONE", processed_slots=len(processed))
+    _publish_status(session, "DONE", processed_slots=len(processed))
     return 0
 
 
@@ -1233,8 +1329,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         return 0
     except Exception as exc:
-        session = f"fno_{args.generation}_equity_1min_feed"
-        common.publish_status(
+        config = _config(args.generation)
+        session = f"{getattr(config, 'SESSION_PREFIX', f'fno_{args.generation}')}_equity_1min_feed"
+        _publish_status(
             session,
             "FAILED",
             heartbeat_state="CRASHED",

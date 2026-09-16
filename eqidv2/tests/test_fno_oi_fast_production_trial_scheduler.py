@@ -56,26 +56,25 @@ class FnoOiFastProductionTrialSchedulerTests(unittest.TestCase):
             self.assertIn("-Role Legacy -TrialDate 2026-09-02", content)
             self.assertIn('if "%TRIAL_GATE_EXIT%"=="42" endlocal & exit /b 0', content)
 
-    def test_trial_runner_is_date_locked_and_full_session_configured(self) -> None:
+    def test_production_runner_is_recurring_and_full_session_configured(self) -> None:
         content = (BAT / "run_fno_oi_fetch_5min_fast_production.bat").read_text(
             encoding="utf-8"
         )
-        self.assertIn("-Role Trial -TrialDate 2026-09-02", content)
-        self.assertIn('"--session-date","2026-09-02"', content)
+        self.assertNotIn("-Role Trial", content)
+        self.assertNotIn('"--session-date"', content)
         self.assertIn('"--workers-per-app","2"', content)
         self.assertIn('"--writer-workers","8"', content)
         self.assertIn("assert_fno_oi_fast_production_trial_exclusive.ps1", content)
 
-    def test_task_installer_is_one_time_and_fail_closed(self) -> None:
+    def test_weekday_installer_owns_fast_production_schedule(self) -> None:
         content = (
-            BAT / "schedule_fno_oi_fast_production_trial_20260902.ps1"
+            BAT / "schedule_fno_oi_weekday.ps1"
         ).read_text(encoding="utf-8")
-        self.assertIn('"2026-09-02 09:05"', content)
-        self.assertIn("New-ScheduledTaskTrigger -Once", content)
-        self.assertIn("Assert-TrialTaskContract", content)
-        self.assertIn("-TaskName $taskName -WakeToRun", content)
-        self.assertIn("must wake the workstation", content)
-        self.assertNotIn("-Force", content)
+        self.assertRegex(
+            content,
+            r'Name\s*=\s*"EQIDV2_fno_oi_fetch_5min_fast_production_0905";\s*Time\s*=\s*"09:05"',
+        )
+        self.assertIn("/SC WEEKLY /D MON,TUE,WED,THU,FRI", content)
 
 
 if __name__ == "__main__":

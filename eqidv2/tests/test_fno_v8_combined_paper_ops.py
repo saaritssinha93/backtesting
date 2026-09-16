@@ -39,12 +39,13 @@ def test_dashboard_maps_staged_v8_card_to_isolated_ops_artifacts() -> None:
     assert dashboard.CARD_TASK_NAMES[CARD_ID] == (f"\\{TASK_NAME}",)
 
 
-def test_v8_card_is_visible_in_fno_but_has_no_restart_or_autofix_path() -> None:
+def test_v8_card_is_hidden_and_has_no_restart_or_autofix_path() -> None:
     source = _source(ROOT / "log_dashboard_server.py")
     fno_group = source[source.index('key: "fno"') : source.index('key: "forensic-positional"')]
 
-    assert CARD_ID in fno_group
-    assert CARD_ID in _javascript_set(source, "SECTION_LOCKED_DISABLED_IDS")
+    assert CARD_ID not in fno_group
+    assert CARD_ID not in _javascript_set(source, "SECTION_LOCKED_DISABLED_IDS")
+    assert CARD_ID in _javascript_set(source, "DASHBOARD_HIDDEN_IDS")
     assert CARD_ID in _javascript_set(source, "MD_REPORT_CARDS")
     assert CARD_ID not in dashboard.RESTARTABLE_CARDS
     assert CARD_ID not in _javascript_set(source, "RESTARTABLE_CARDS")

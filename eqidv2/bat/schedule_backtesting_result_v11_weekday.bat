@@ -1,30 +1,4 @@
 @echo off
-setlocal EnableExtensions
-
-set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
-set "BAT_DIR=%BASE_DIR%\bat"
-set "TASK_HARDENER=%BAT_DIR%\harden_scheduled_task.ps1"
-set "OLD_TASK_BACKTEST=EQIDV2_backtesting_result_v7_v8_1600"
-set "TASK_BACKTEST=EQIDV2_backtesting_result_v11_1600"
-set "BAT_BACKTEST=%BAT_DIR%\run_backtesting_result_v11_1600.bat"
-
-if not exist "%BAT_BACKTEST%" (
-  echo [ERROR] Missing bat file: %BAT_BACKTEST%
-  endlocal & exit /b 1
-)
-
-schtasks /Delete /F /TN "%OLD_TASK_BACKTEST%" >nul 2>&1
-
-echo [INFO] Creating weekday FnO V6/V8/V10/V11/V12 comparison task at 16:20 ...
-schtasks /Create /F /TN "%TASK_BACKTEST%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:20 /TR "%BAT_BACKTEST%"
-if errorlevel 1 endlocal & exit /b 1
-
-if exist "%TASK_HARDENER%" (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_BACKTEST%"
-  if errorlevel 1 endlocal & exit /b 1
-)
-
-echo [INFO] FnO V6/V8/V10/V11/V12 comparison task created/updated successfully:
-echo        %TASK_BACKTEST%  ^(Mon-Fri 16:20; waits for 15:45 FnO data readiness^)
-
-endlocal & exit /b 0
+rem Compatibility installer: only the canonical G daily task is installed.
+call "%~dp0schedule_backtesting_result_v13_v10_g_weekday.bat" %*
+exit /b %ERRORLEVEL%

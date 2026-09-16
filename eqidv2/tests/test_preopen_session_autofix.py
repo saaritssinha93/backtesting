@@ -23,7 +23,7 @@ def test_first_slot_warning_keeps_autofix_polling(tmp_path, monkeypatch) -> None
     payload = {
         "checks": [
             {
-                "name": "fno_fast_production_trial_first_slot",
+                "name": "fno_fast_production_first_slot",
                 "status": "WARN",
                 "detail": "acceptance pending",
             }
@@ -38,5 +38,5 @@ def test_first_slot_warning_keeps_autofix_polling(tmp_path, monkeypatch) -> None
 
     assert code == 0
     assert [item["name"] for item in blockers] == [
-        "fno_fast_production_trial_first_slot"
+        "fno_fast_production_first_slot"
     ]

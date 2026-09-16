@@ -1268,12 +1268,12 @@ class FnoV5LiveTests(unittest.TestCase):
 
     def test_dashboard_promotes_all_six_fno_v6_sessions(self) -> None:
         expected = {
-            "fno_v6_scanner_5min",
-            "fno_v6_confirmation_1min",
-            "fno_v6_live_long",
-            "fno_v6_live_short",
-            "fno_v6_trade_logger",
-            "fno_v6_net_result",
+            "fno_v13_v10_g_scanner_5min",
+            "fno_v13_v10_g_confirmation_1min",
+            "fno_v13_v10_g_live_long",
+            "fno_v13_v10_g_live_short",
+            "fno_v13_v10_g_trade_logger",
+            "fno_v13_v10_g_net_result",
         }
 
         self.assertTrue(expected.issubset(dashboard.FNO_OI_CARD_REPORTS))
@@ -1284,7 +1284,7 @@ class FnoV5LiveTests(unittest.TestCase):
         self.assertTrue(expected.issubset(dashboard.RESTARTABLE_CARDS))
         for card_id in expected:
             self.assertTrue(
-                dashboard.FNO_OI_CARD_REPORTS[card_id].startswith("latest_fno_v6_")
+                dashboard.FNO_OI_CARD_REPORTS[card_id].startswith("latest_fno_v13_v10_g_")
             )
 
         source = Path(dashboard.__file__).read_text(encoding="utf-8", errors="replace")

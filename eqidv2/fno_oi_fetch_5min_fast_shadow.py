@@ -186,7 +186,9 @@ class AppLaneSession:
     _refresh_next: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def acquire(self, args: argparse.Namespace) -> tuple[list[AppLane], list[str], bool]:
+    def acquire(
+        self, args: argparse.Namespace, *, auth_tag: str = "[SHADOW]"
+    ) -> tuple[list[AppLane], list[str], bool]:
         credentials = common.discover_kite_credentials(max_apps=args.max_apps)
         signature = _credential_pool_signature(args, credentials)
         with self._lock:
@@ -199,7 +201,9 @@ class AppLaneSession:
             if reusable:
                 return self._lanes, list(self._failures), True
 
-            lanes, failures = build_app_lanes(args, credentials=credentials)
+            lanes, failures = build_app_lanes(
+                args, credentials=credentials, auth_tag=auth_tag
+            )
             self._signature = signature
             self._lanes = lanes
             self._failures = list(failures)
@@ -439,6 +443,7 @@ def build_app_lanes(
     args: argparse.Namespace,
     *,
     credentials: Iterable[common.KiteCredential] | None = None,
+    auth_tag: str = "[SHADOW]",
 ) -> tuple[list[AppLane], list[str]]:
     lanes: list[AppLane] = []
     failures: list[str] = []
@@ -466,14 +471,14 @@ def build_app_lanes(
                 )
             )
             print(
-                f"[SHADOW][AUTH] {credential.app_name} validated for {user_name} "
+                f"{auth_tag}[AUTH] {credential.app_name} validated for {user_name} "
                 f"workers={workers_per_app}",
                 flush=True,
             )
         except Exception as exc:
             detail = f"{credential.app_name}:{type(exc).__name__}:{exc}"
             failures.append(detail)
-            print(f"[SHADOW][AUTH][WARN] {detail}", flush=True)
+            print(f"{auth_tag}[AUTH][WARN] {detail}", flush=True)
     if not lanes:
         raise RuntimeError("No authenticated Kite apps are usable: " + " | ".join(failures))
     return lanes, failures
@@ -487,6 +492,7 @@ def _historical_call(
     to_dt: datetime,
     *,
     max_retries: int,
+    interval: str = "5minute",
 ) -> list[dict[str, Any]]:
     last_error: Exception | None = None
     attempts = max(1, int(max_retries))
@@ -497,7 +503,7 @@ def _historical_call(
                 int(contract["instrument_token"]),
                 from_dt,
                 to_dt,
-                "5minute",
+                interval,
                 continuous=False,
                 oi=True,
             )

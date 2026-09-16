@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import io
 import importlib
+import json
 import os
 import re
 import sys
@@ -39,11 +40,15 @@ import fno_equity_fetch_1min as equity_feed
 import fno_live_evidence as live_evidence
 import fno_oi_ema_confirm_backtest as backtest
 import fno_oi_hybrid_data as hybrid
+from fno_live_profile import config_for_generation, is_g_config
 LIVE_GENERATION = os.getenv("FNO_LIVE_GENERATION", "v5").strip().lower()
 if LIVE_GENERATION not in {"v5", "v6"}:
     raise RuntimeError(f"Unsupported FnO live generation: {LIVE_GENERATION}")
-config = importlib.import_module(f"fno_{LIVE_GENERATION}_live_config")
+config = config_for_generation(LIVE_GENERATION)
 LIVE_LABEL = LIVE_GENERATION.upper()
+DISPLAY_LABEL = getattr(config, "DISPLAY_LABEL", LIVE_LABEL)
+REPORT_PREFIX = getattr(config, "REPORT_PREFIX", f"fno_{LIVE_GENERATION}")
+SESSION_PREFIX = getattr(config, "SESSION_PREFIX", f"fno_{LIVE_GENERATION}")
 LIVE_SCHEMA_PREFIX = f"fno_{LIVE_GENERATION}"
 EXECUTION_SESSION_NAMESPACE = os.getenv(
     f"FNO_{LIVE_LABEL}_EXECUTION_SESSION_NAMESPACE", ""
@@ -58,20 +63,20 @@ if EXECUTION_SESSION_NAMESPACE and not re.fullmatch(
 
 
 ROLE_SESSIONS = {
-    "scanner-5m": f"fno_{LIVE_GENERATION}_scanner_5min",
-    "confirmation-1m": f"fno_{LIVE_GENERATION}_confirmation_1min",
-    "long-entry": f"fno_{LIVE_GENERATION}_live_long",
-    "short-entry": f"fno_{LIVE_GENERATION}_live_short",
-    "trade-logger": f"fno_{LIVE_GENERATION}_trade_logger",
-    "net-result": f"fno_{LIVE_GENERATION}_net_result",
+    "scanner-5m": f"{SESSION_PREFIX}_scanner_5min",
+    "confirmation-1m": f"{SESSION_PREFIX}_confirmation_1min",
+    "long-entry": f"{SESSION_PREFIX}_live_long",
+    "short-entry": f"{SESSION_PREFIX}_live_short",
+    "trade-logger": f"{SESSION_PREFIX}_trade_logger",
+    "net-result": f"{SESSION_PREFIX}_net_result",
 }
 ROLE_REPORTS = {
-    "scanner-5m": f"latest_fno_{LIVE_GENERATION}_scanner_5min.md",
-    "confirmation-1m": f"latest_fno_{LIVE_GENERATION}_confirmation_1min.md",
-    "long-entry": f"latest_fno_{LIVE_GENERATION}_live_long.md",
-    "short-entry": f"latest_fno_{LIVE_GENERATION}_live_short.md",
-    "trade-logger": f"latest_fno_{LIVE_GENERATION}_trade_logger.md",
-    "net-result": f"latest_fno_{LIVE_GENERATION}_net_result.md",
+    "scanner-5m": f"latest_{REPORT_PREFIX}_scanner_5min.md",
+    "confirmation-1m": f"latest_{REPORT_PREFIX}_confirmation_1min.md",
+    "long-entry": f"latest_{REPORT_PREFIX}_live_long.md",
+    "short-entry": f"latest_{REPORT_PREFIX}_live_short.md",
+    "trade-logger": f"latest_{REPORT_PREFIX}_trade_logger.md",
+    "net-result": f"latest_{REPORT_PREFIX}_net_result.md",
 }
 if EXECUTION_SESSION_NAMESPACE:
     # A dedicated LIVE worker must not overwrite the promoted PAPER worker's
@@ -84,13 +89,13 @@ if EXECUTION_SESSION_NAMESPACE:
         ("net-result", "net_result"),
     ):
         ROLE_SESSIONS[_role] = (
-            f"fno_{LIVE_GENERATION}_{EXECUTION_SESSION_NAMESPACE}_{_suffix}"
+            f"{SESSION_PREFIX}_{EXECUTION_SESSION_NAMESPACE}_{_suffix}"
         )
         ROLE_REPORTS[_role] = (
-            f"latest_fno_{LIVE_GENERATION}_{EXECUTION_SESSION_NAMESPACE}_{_suffix}.md"
+            f"latest_{REPORT_PREFIX}_{EXECUTION_SESSION_NAMESPACE}_{_suffix}.md"
         )
 
-LIVE_ROOT = common.FNO_ROOT / f"{LIVE_GENERATION}_live"
+LIVE_ROOT = common.FNO_ROOT / getattr(config, "LIVE_ROOT_NAME", f"{LIVE_GENERATION}_live")
 SCANNER_ROOT = LIVE_ROOT / "scanner_5m"
 CONFIRMATION_ROOT = LIVE_ROOT / "confirmation_1m"
 SIGNAL_ROOT = LIVE_ROOT / "signals"
@@ -98,21 +103,23 @@ ORDER_ROOT = LIVE_ROOT / "orders"
 CONSOLIDATED_ROOT = LIVE_ROOT / "consolidated"
 EVIDENCE_ROOT = LIVE_ROOT / "evidence"
 STRATEGY_MANIFEST_PATH = LIVE_ROOT / "strategy_manifest.json"
-LIVE_ARM_PATH = LIVE_ROOT / "live_arm.json"
-KILL_SWITCH_PATH = LIVE_ROOT / "kill_switch.json"
+CONTROL_ROOT = common.FNO_ROOT / getattr(config, "CONTROL_ROOT_NAME", LIVE_ROOT.name)
+LIVE_ARM_PATH = CONTROL_ROOT / "live_arm.json"
+KILL_SWITCH_PATH = CONTROL_ROOT / "kill_switch.json"
 LIVE_ACK_ENV = getattr(config, "LIVE_ACK_ENV", f"FNO_{LIVE_LABEL}_LIVE_ACK")
 LIVE_ACK = getattr(
     config, "LIVE_ACK", f"I_UNDERSTAND_REAL_FNO_{LIVE_LABEL}_EQUITY_ORDERS"
 )
 ORDER_TAG_PREFIX = getattr(config, "ORDER_TAG_PREFIX", f"F{LIVE_LABEL}")
 
-SESSION_END = dtime(15, 32)
-PIPELINE_DEADLINE = dtime(9, 50)
+SESSION_END = dtime.fromisoformat(getattr(config, "SESSION_END", "15:32"))
+PIPELINE_DEADLINE = dtime.fromisoformat(getattr(config, "PIPELINE_DEADLINE", "09:50"))
 TERMINAL_STATES = {
     "CLOSED",
     "NO_FILL",
     "ENTRY_REJECTED",
     "BLOCKED_SIZING",
+    "BLOCKED_PORTFOLIO",
     "CANCELLED",
 }
 
@@ -162,7 +169,7 @@ def order_day_dir(session_date: date, mode: str) -> Path:
 
 def consolidated_csv_path(session_date: date) -> Path:
     return CONSOLIDATED_ROOT / (
-        f"fno_{LIVE_GENERATION}_trades_{session_date.isoformat()}.csv"
+        f"{SESSION_PREFIX}_trades_{session_date.isoformat()}.csv"
     )
 
 
@@ -480,7 +487,28 @@ def _load_universe(session_date: date) -> pd.DataFrame:
     return mapped
 
 
+def _g_nifty_first_bar_context(session_date: date) -> dict[str, Any]:
+    """Read only the dated near-month NIFTY future's completed 09:20 bar."""
+    context = {"nifty_first_bar_return_pct": None, "nifty_context_state": "MISSING"}
+    try:
+        universe = common.load_near_month_universe(expected_date=session_date)
+        rows = universe.loc[universe["underlying"].astype(str).str.upper().eq("NIFTY")]
+        if len(rows) != 1:
+            raise ValueError("Expected one dated near-month NIFTY future")
+        symbol = str(rows.iloc[0]["tradingsymbol"])
+        value = config.nifty_context_from_bars(backtest.load_five_minute(symbol), session_date)
+        context.update(nifty_futures_tradingsymbol=symbol,
+                       nifty_feature_timestamp=config.slot_datetime(session_date, "09:20").isoformat())
+        if np.isfinite(value):
+            context.update(nifty_first_bar_return_pct=float(value), nifty_context_state="READY")
+    except (OSError, KeyError, ValueError, TypeError) as exc:
+        context["nifty_context_reason"] = f"{type(exc).__name__}: {exc}"
+    return context
+
+
 def _base_signal_side(row: pd.Series) -> str | None:
+    if hasattr(config, "base_signal_side"):
+        return config.base_signal_side(row)
     required = (
         "ema9",
         "ema20",
@@ -536,6 +564,9 @@ def scan_five_minute_slot(
     missing_contracts: list[dict[str, Any]] = []
     evaluated = 0
     invalid = 0
+    nifty_context: dict[str, Any] = {}
+    if is_g_config(config) and signal_end == "09:25":
+        nifty_context = _g_nifty_first_bar_context(session_date)
     for contract in universe.to_dict("records"):
         futures_symbol = str(contract["futures_tradingsymbol"])
         equity_symbol = str(contract["equity_symbol"])
@@ -591,7 +622,11 @@ def scan_five_minute_slot(
             continue
         row = selected.iloc[-1]
         evaluated += 1
-        side = _base_signal_side(row)
+        side = (
+            config.base_signal_side(row, signal_end=signal_end,
+                                    nifty_first_bar_return_pct=nifty_context.get("nifty_first_bar_return_pct"))
+            if is_g_config(config) else _base_signal_side(row)
+        )
         if side is None:
             continue
         values = {
@@ -622,6 +657,10 @@ def scan_five_minute_slot(
             "ema20": _safe_float(row["ema20"]),
             "ema50": _safe_float(row["ema50"]),
         }
+        if is_g_config(config):
+            values.update(nifty_context)
+            values["strategy_profile"] = config.STRATEGY_PROFILE
+            values["feature_available_at_ist"] = slot.isoformat()
         if values["instrument_token"] <= 0 or values["signal_close"] <= 0:
             invalid += 1
             continue
@@ -662,6 +701,7 @@ def scan_five_minute_slot(
         "long_candidates": sum(item["side"] == "LONG" for item in candidates),
         "short_candidates": sum(item["side"] == "SHORT" for item in candidates),
         "candidates": candidates,
+        "index_context": nifty_context,
         "state": (
             "SUCCESS"
             if not missing_contracts
@@ -676,6 +716,8 @@ def confirmation_metrics(
     candidate: dict[str, Any],
     bar: dict[str, Any],
 ) -> dict[str, Any]:
+    if hasattr(config, "confirmation_metrics"):
+        return config.confirmation_metrics(candidate, bar)
     result = dict(candidate)
     o = _safe_float(bar.get("open"), np.nan)
     h = _safe_float(bar.get("high"), np.nan)
@@ -1147,7 +1189,7 @@ def _render_scanner_report(session_date: date) -> str:
             }
         )
     lines = [
-        f"# FnO {LIVE_LABEL} 5-Minute Scanner",
+        f"# FnO {DISPLAY_LABEL} 5-Minute Scanner",
         "",
         f"Session: {session_date.isoformat()}",
         f"Strategy: {config.STRATEGY_VERSION}",
@@ -1270,13 +1312,15 @@ def _render_confirmation_report(session_date: date) -> str:
     ]
     signals = load_signals(session_date)
     lines = [
-        f"# FnO {LIVE_LABEL} 1-Minute Confirmation and Entry Scanner",
+        f"# FnO {DISPLAY_LABEL} 1-Minute Confirmation and Entry Scanner",
         "",
         f"Session: {session_date.isoformat()}",
         f"Selected objective: {config.SELECTED_OBJECTIVE}",
         "Entry is a stop order at the confirmation candle extreme and may activate only afterward.",
-        f"A first-time entry must be armed within {config.ENTRY_ACTIVATION_GRACE_SEC}s of confirmation; stale starts are blocked.",
-        f"Only active {LIVE_LABEL} setup legs can publish entry signals.",
+        ("Confirmation publication deadline: 90 seconds; pending G entry trigger expires after 10 minutes."
+         if is_g_config(config) else
+         f"A first-time entry must be armed within {config.ENTRY_ACTIVATION_GRACE_SEC}s of confirmation; stale starts are blocked."),
+        f"Only active {DISPLAY_LABEL} setup legs can publish entry signals.",
         "",
         *notice,
         "Signal | Confirm | State | Directional | Ineligible no-candle | Selected L/S | Errors",
@@ -1555,6 +1599,8 @@ def _load_completed_confirmation_feed(
         error = equity_feed._validate_bar(row, confirmation_end)
         if error:
             return {}, {"_feed": f"durable_confirmation_data_{error}"}, marker
+        if is_g_config(config) and not equity_feed._g_volume_snapshot_valid(row, confirmation_end, config):
+            return {}, {"_feed": "durable_confirmation_volume_snapshot_invalid"}, marker
         row["timestamp"] = confirmation_end.isoformat()
         bars[symbol] = row
     return bars, {}, marker
@@ -1648,8 +1694,10 @@ def process_confirmation_slot(
         "ineligible_no_candle_count": len(ineligible_no_candle),
         "ineligible_no_candle_symbols": sorted(ineligible_no_candle),
         "candidate_rejections": {
-            symbol: "INELIGIBLE_NO_CANDLE"
-            for symbol in sorted(ineligible_no_candle)
+            **({str(row["tradingsymbol"]): str(row.get("confirmation_reason", "CONFIRMATION_REJECTED"))
+                for row in confirmed_rows if not row.get("confirmed")} if is_g_config(config) else {}),
+            **{symbol: "INELIGIBLE_NO_CANDLE"
+               for symbol in sorted(ineligible_no_candle)},
         },
         "directional_confirmed": sum(bool(row.get("confirmed")) for row in confirmed_rows),
         "selected_long": sum(signal["side"] == "LONG" for signal in signals),
@@ -1768,6 +1816,10 @@ def create_order_state(
         "strategy_version": signal["strategy_version"],
         "strategy_fingerprint": signal["strategy_fingerprint"],
         "signal_id": signal["signal_id"],
+        "setup_id": signal.get("setup_id", ""),
+        "picker": signal.get("picker", ""),
+        "rank": signal.get("rank_within_scan", signal.get("rank", 0)),
+        "rank_within_scan": signal.get("rank_within_scan", signal.get("rank", 0)),
         "session_date": signal["session_date"],
         "signal_end": signal["signal_end"],
         "confirmation_end": signal["confirmation_end"],
@@ -1964,6 +2016,13 @@ def advance_paper_order(
     status = str(state["status"])
     if status in TERMINAL_STATES:
         return state
+    if is_g_config(config):
+        from fno_v13_v10_g_paper import expire_pending
+        if expire_pending(state, now):
+            return state
+        if last_price is None:
+            state.update(status_reason="WAITING_FOR_VALID_QUOTE", updated_at_ist=now.isoformat(timespec="seconds"))
+            return state
     price = float(last_price)
     if not np.isfinite(price) or price <= 0:
         state.update(status_reason="INVALID_LTP", updated_at_ist=now.isoformat(timespec="seconds"))
@@ -2038,6 +2097,8 @@ def _live_arm_state(session_date: date) -> tuple[bool, str]:
         return False, "LIVE_ARM_FILE_DISABLED"
     if str(arm.get("session_date", "")) != session_date.isoformat():
         return False, "LIVE_ARM_DATE_MISMATCH"
+    if is_g_config(config) and arm.get("strategy_fingerprint") != config.strategy_fingerprint():
+        return False, "LIVE_ARM_STRATEGY_MISMATCH"
     kill = _read_json(KILL_SWITCH_PATH)
     if bool(kill.get("enabled")):
         return False, "KILL_SWITCH_ENABLED"
@@ -2496,18 +2557,38 @@ def _write_order_state(state: dict[str, Any]) -> None:
     )
 
 
+def _advance_g_paper_state(state: dict[str, Any], price: float | None,
+                           now: datetime) -> dict[str, Any]:
+    """Serialize both side workers' capital admission and state persistence."""
+    from fno_v13_v10_g_paper import paper_portfolio_lock, enforce_fill_capacity
+    day = date.fromisoformat(str(state["session_date"]))
+    root = order_day_dir(day, "PAPER")
+    path = _order_path(day, "PAPER", str(state["signal_id"]))
+    with paper_portfolio_lock(root):
+        previous = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else dict(state)
+        if (not isinstance(previous, dict) or previous.get("signal_id") != state["signal_id"]
+                or previous.get("strategy_fingerprint") != config.strategy_fingerprint()):
+            raise ValueError("G paper state identity changed while acquiring portfolio lock")
+        proposed = advance_paper_order(dict(previous), price, now)
+        result = enforce_fill_capacity(previous, proposed, root)
+        _write_order_state(result)
+        return result
+
+
 def _render_worker_report(session_date: date, side: str, mode: str) -> str:
     states = load_order_states(session_date, mode=mode, side=side)
     notice, issue = _pipeline_notice_lines(session_date)
     lines = [
-        f"# FnO {LIVE_LABEL} {side} Entry Session",
+        f"# FnO {DISPLAY_LABEL} {side} Entry Session",
         "",
         f"Session: {session_date.isoformat()}",
         f"Execution mode: **{mode}**",
         f"Capital per entry: Rs {config.CAPITAL_PER_ENTRY_RS:,.0f}",
         f"Target leverage/exposure: {config.LEVERAGE:.1f}x / Rs {config.TARGET_EXPOSURE_RS:,.0f}",
         "PAPER uses quote-observed fills. LIVE requires exact acknowledgement plus a same-day arm file.",
-        f"First-time entries are blocked after the {config.ENTRY_ACTIVATION_GRACE_SEC}s activation deadline.",
+        ("G pending entries expire 10 minutes after confirmation; confirmation data must publish within 90 seconds."
+         if is_g_config(config) else
+         f"First-time entries are blocked after the {config.ENTRY_ACTIVATION_GRACE_SEC}s activation deadline."),
         "",
         *notice,
         "Confirmation | Symbol | Status | Qty | Trigger | Entry | Stop | Target | Last/Exit | Net Rs | Reason",
@@ -2578,7 +2659,7 @@ def render_trade_log(session_date: date) -> str:
     notice, issue = _pipeline_notice_lines(session_date)
     common.atomic_write_csv(frame, consolidated_csv_path(session_date))
     lines = [
-        f"# FnO {LIVE_LABEL} Continuous Trade Log",
+        f"# FnO {DISPLAY_LABEL} Continuous Trade Log",
         "",
         f"Session: {session_date.isoformat()}",
         f"Updated: {_iso_now()}",
@@ -2639,7 +2720,7 @@ def render_net_result(session_date: date) -> str:
     modes = sorted({str(state.get("mode", "")) for state in states}) or ["PAPER"]
     notice, _ = _pipeline_notice_lines(session_date)
     lines = [
-        f"# FnO {LIVE_LABEL} Net Result",
+        f"# FnO {DISPLAY_LABEL} Net Result",
         "",
         f"Session: {session_date.isoformat()}",
         f"Updated: {_iso_now()}",
@@ -3020,6 +3101,12 @@ def run_worker(
                         timespec="seconds"
                     )
             states.append(state)
+        if mode == "PAPER" and is_g_config(config):
+            # Persist pending expiries even if authentication or quotes fail next.
+            for state in states:
+                result = _advance_g_paper_state(state, None, now)
+                state.clear()
+                state.update(result)
         active = [state for state in states if state.get("status") not in TERMINAL_STATES]
         if active and pool is None:
             pool = KitePool(args.max_apps, args.timeout_sec)
@@ -3036,7 +3123,11 @@ def run_worker(
             try:
                 if mode == "PAPER":
                     price = prices.get(str(state["tradingsymbol"]))
-                    if price is not None:
+                    if is_g_config(config):
+                        result = _advance_g_paper_state(state, price, now)
+                        state.clear()
+                        state.update(result)
+                    elif price is not None:
                         state = advance_paper_order(state, price, now)
                 else:
                     if pool is None:
@@ -3047,7 +3138,8 @@ def run_worker(
                     status_reason=f"{type(exc).__name__}: {exc}",
                     updated_at_ist=now.isoformat(timespec="seconds"),
                 )
-            _write_order_state(state)
+            if mode != "PAPER" or not is_g_config(config):
+                _write_order_state(state)
         common.atomic_write_text(report_path(role), _render_worker_report(session_date, side, mode))
         counts = {name: sum(state.get("status") == name for state in states) for name in (
             "PENDING_ENTRY", "OPEN", "CLOSED", "NO_FILL", "BLOCKED_SIZING"
@@ -3184,13 +3276,19 @@ def run(args: argparse.Namespace) -> int:
         or abs(args.leverage - config.LEVERAGE) > 1e-9
     ):
         raise ValueError(
-            f"This locked {LIVE_LABEL} runtime requires Rs 10,000 capital and "
-            "5x leverage per entry."
+            f"This locked {DISPLAY_LABEL} runtime requires Rs {config.CAPITAL_PER_ENTRY_RS:,.0f} capital and "
+            f"{config.LEVERAGE:g}x leverage per entry."
         )
     if not args.allow_non_trading_day and not common.is_trading_day(
         session_date, common.load_holidays()
     ):
         _publish(role, "SKIPPED_NON_TRADING_DAY", session_date_ist=session_date)
+        common.atomic_write_text(
+            report_path(role),
+            f"# {DISPLAY_LABEL} {role}\n\n- Session date: {session_date}\n"
+            "- Status: SKIPPED_NON_TRADING_DAY\n"
+            "- No regular NSE session; no selection or execution expected.\n",
+        )
         return 0
     if args.slot:
         normalized = args.slot.replace(":", "")

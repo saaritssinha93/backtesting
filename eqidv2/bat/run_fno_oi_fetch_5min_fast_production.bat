@@ -2,15 +2,8 @@
 setlocal EnableExtensions
 
 set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
-set "TRIAL_GATE_PS1=%BASE_DIR%\bat\fno_oi_fast_production_trial_date_gate.ps1"
 set "LOG_DIR=%BASE_DIR%\logs"
-set "TRIAL_GATE_LOG=%LOG_DIR%\fno_oi_fast_production_trial_gate.log"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-if not exist "%TRIAL_GATE_PS1%" exit /b 1
-powershell -NoProfile -ExecutionPolicy Bypass -File "%TRIAL_GATE_PS1%" -Role Trial -TrialDate 2026-09-02 >>"%TRIAL_GATE_LOG%" 2>&1
-set "TRIAL_GATE_EXIT=%ERRORLEVEL%"
-if "%TRIAL_GATE_EXIT%"=="42" endlocal & exit /b 0
-if not "%TRIAL_GATE_EXIT%"=="0" endlocal & exit /b %TRIAL_GATE_EXIT%
 
 set "EXCLUSIVITY_PS1=%BASE_DIR%\bat\assert_fno_oi_fast_production_trial_exclusive.ps1"
 set "EXCLUSIVITY_LOG=%LOG_DIR%\fno_oi_fast_production_trial_exclusivity.log"
@@ -38,7 +31,7 @@ cd /d "%BASE_DIR%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
   -Name "%SCRIPT_NAME%" ^
   -FilePath "%PYTHON_EXE%" ^
-  -ArgumentList "-u","%BASE_DIR%\%SCRIPT_NAME%","--session-date","2026-09-02","--boundary-buffer-sec","3","--request-interval-sec","0.36","--workers-per-app","2","--writer-workers","8","--min-coverage","0.99","--bootstrap-days","60","--slot-retry-attempts","2","--slot-retry-delay-sec","2" ^
+  -ArgumentList "-u","%BASE_DIR%\%SCRIPT_NAME%","--boundary-buffer-sec","3","--request-interval-sec","0.36","--workers-per-app","2","--writer-workers","8","--min-coverage","0.99","--bootstrap-days","60","--slot-retry-attempts","2","--slot-retry-delay-sec","2" ^
   -WorkDir "%BASE_DIR%" ^
   -LogFile "%LOG_FILE%" ^
   -StatusFile "%STATUS_FILE%" ^
