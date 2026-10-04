@@ -1,0 +1,15 @@
+{
+  "session": "backtesting_result_v13_v10_g",
+  "session_date": "2026-09-17",
+  "strategy": "V13-V10-G",
+  "strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+  "strategy_fingerprint": "fixture-fingerprint",
+  "status": "RUNNING",
+  "phase": "REPLAY",
+  "reason": "Synthetic incomplete run",
+  "result": {
+    "metrics": {
+      "net_profit_rupees": 999999
+    }
+  }
+}

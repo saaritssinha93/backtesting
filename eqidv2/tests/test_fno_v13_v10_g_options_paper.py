@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 import fno_v13_v10_g_live_config as equity_config
 import fno_v13_v10_g_options_paper as options
@@ -56,6 +58,154 @@ def test_only_actual_filled_current_g_equity_states_trigger(tmp_path, monkeypatc
     rows = options.load_equity_entries(DAY, "SHORT", "PAPER")
     assert [row["status"] for row in rows] == ["OPEN", "CLOSED"]
     assert all(row["source_equity_mode"] == "PAPER" for row in rows)
+
+
+def test_equity_source_read_retries_transient_lock_and_hashes_parsed_bytes(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "state.json"
+    raw = json.dumps(_equity_state()).encode("utf-8")
+    calls = []
+    sleeps = []
+
+    def flaky_read_bytes(self):
+        assert self == path
+        calls.append(self)
+        if len(calls) < 3:
+            raise PermissionError(13, "sharing violation", str(self))
+        return raw
+
+    monkeypatch.setattr(Path, "read_bytes", flaky_read_bytes)
+    monkeypatch.setattr(options.time, "sleep", sleeps.append)
+
+    row, digest = options._read_json_with_sha256(path)
+
+    assert row == _equity_state()
+    assert digest == hashlib.sha256(raw).hexdigest()
+    assert len(calls) == 3
+    assert sleeps == list(options.SOURCE_READ_RETRY_DELAYS_SEC[:2])
+
+
+def test_equity_source_row_and_digest_use_one_successful_generation(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "state.json"
+    first = _equity_state()
+    second = first | {"entry_price": 999.0}
+    generations = [json.dumps(first).encode(), json.dumps(second).encode()]
+    calls = []
+
+    def changing_read_bytes(self):
+        calls.append(self)
+        return generations[min(len(calls) - 1, 1)]
+
+    monkeypatch.setattr(Path, "read_bytes", changing_read_bytes)
+
+    row, digest = options._read_json_with_sha256(path)
+
+    assert len(calls) == 1
+    assert row["entry_price"] == first["entry_price"]
+    assert digest == hashlib.sha256(generations[0]).hexdigest()
+
+
+def test_persistent_transient_lock_skips_only_that_source_and_reports_issue(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "orders"
+    monkeypatch.setattr(options, "EQUITY_ORDER_ROOT", root)
+    day_root = root / "PAPER" / DAY.isoformat()
+    day_root.mkdir(parents=True)
+    locked = day_root / "locked.json"
+    locked.write_text(json.dumps(_equity_state()), encoding="utf-8")
+    available_row = _equity_state() | {"signal_id": "available-signal"}
+    available = day_root / "available.json"
+    available.write_text(json.dumps(available_row), encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+
+    def selective_read_bytes(self):
+        if self == locked:
+            raise PermissionError(13, "sharing violation", str(self))
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", selective_read_bytes)
+    monkeypatch.setattr(options.time, "sleep", lambda _seconds: None)
+    issues = []
+
+    rows = options.load_equity_entries(DAY, "SHORT", "PAPER", issues=issues)
+
+    assert [row["signal_id"] for row in rows] == ["available-signal"]
+    assert len(issues) == 1
+    assert issues[0]["reason"] == "SOURCE_EQUITY_UNREADABLE"
+    assert issues[0]["error_type"] == "TransientSourceReadError"
+
+
+def test_non_transient_source_os_error_is_not_swallowed(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "state.json"
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda _self: (_ for _ in ()).throw(OSError(22, "invalid argument")),
+    )
+
+    with pytest.raises(OSError, match="invalid argument"):
+        options._read_json_with_sha256(path)
+
+
+def test_auto_source_does_not_fall_back_to_paper_for_unreadable_live_signal(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "orders"
+    monkeypatch.setattr(options, "EQUITY_ORDER_ROOT", root)
+    live_root = root / "LIVE" / "live_kite_qty1" / DAY.isoformat()
+    paper_root = root / "PAPER" / DAY.isoformat()
+    live_root.mkdir(parents=True)
+    paper_root.mkdir(parents=True)
+    shared_id = "shared-signal"
+    live_path = live_root / f"{shared_id}.json"
+    live_path.write_text(
+        json.dumps(_equity_state() | {"signal_id": shared_id, "mode": "LIVE"}),
+        encoding="utf-8",
+    )
+    (paper_root / f"{shared_id}.json").write_text(
+        json.dumps(_equity_state() | {"signal_id": shared_id}), encoding="utf-8"
+    )
+    (paper_root / "paper-only.json").write_text(
+        json.dumps(_equity_state() | {"signal_id": "paper-only"}),
+        encoding="utf-8",
+    )
+    original_read_bytes = Path.read_bytes
+
+    def selective_read_bytes(self):
+        if self == live_path:
+            raise PermissionError(13, "sharing violation", str(self))
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", selective_read_bytes)
+    monkeypatch.setattr(options.time, "sleep", lambda _seconds: None)
+    issues = []
+
+    rows = options.load_equity_entries(DAY, "SHORT", "AUTO", issues=issues)
+
+    assert [row["signal_id"] for row in rows] == ["paper-only"]
+    assert len(issues) == 1
+    assert issues[0]["signal_id_hint"] == shared_id
+
+
+def test_malformed_source_json_is_degraded_evidence_not_a_valid_row(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "orders"
+    monkeypatch.setattr(options, "EQUITY_ORDER_ROOT", root)
+    day_root = root / "PAPER" / DAY.isoformat()
+    day_root.mkdir(parents=True)
+    (day_root / "bad.json").write_text("{not-json", encoding="utf-8")
+    issues = []
+
+    rows = options.load_equity_entries(DAY, "SHORT", "PAPER", issues=issues)
+
+    assert rows == []
+    assert len(issues) == 1
+    assert issues[0]["error_type"] == "JSONDecodeError"
 
 
 def test_long_maps_ce_short_maps_pe_and_quantity_is_one_lot(tmp_path) -> None:

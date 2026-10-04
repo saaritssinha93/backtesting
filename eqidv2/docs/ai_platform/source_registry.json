@@ -1,0 +1,69 @@
+{
+  "schema_version": "v13_v10_g_ai_source_registry_v1",
+  "runtime_root_env": "EQIDV2_RUNTIME_ROOT",
+  "default_runtime_root": "C:/TradingData/eqidv2",
+  "sources": {
+    "daily_replay_latest_json": {
+      "relative_path": "backtesting_result_v13_v10_g/latest/latest_backtesting_result_v13_v10_g.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.daily_replay.read_daily_replay"
+    },
+    "daily_replay_latest_markdown": {
+      "relative_path": "backtesting_result_v13_v10_g/latest/latest_backtesting_result_v13_v10_g.md",
+      "access": "read_only",
+      "adapter": null
+    },
+    "strategy_manifest": {
+      "relative_path": "fno_oi/v13_v10_g_live/strategy_manifest.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.snapshot.read_coherent_snapshot"
+    },
+    "equity_live_status": {
+      "relative_path": "fno_oi/v13_v10_g_live/live_kite/status.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.status.inspect_status"
+    },
+    "equity_live_heartbeat": {
+      "relative_path": "fno_oi/v13_v10_g_live/live_kite/heartbeat.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.status.inspect_status"
+    },
+    "equity_paper_orders": {
+      "relative_path": "fno_oi/v13_v10_g_live/orders/PAPER",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.equity_orders.read_equity_orders"
+    },
+    "equity_live_orders": {
+      "relative_path": "fno_oi/v13_v10_g_live/orders/LIVE/live_kite_qty1",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.equity_orders.read_equity_orders"
+    },
+    "option_paper_orders": {
+      "relative_path": "fno_oi/v13_v10_g_options_paper/orders",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.options_orders.read_option_orders"
+    },
+    "immutable_evidence": {
+      "relative_path": "fno_oi/v13_v10_g_live/evidence",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.evidence.list_evidence"
+    },
+    "frozen_strategy_config": {
+      "relative_path": "fno_oi/strategy_research/v13_corrected_v10_g/run_20260914_opportunity_expansion/frozen_config.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.strategy.read_strategy_contract"
+    },
+    "options_three_lot_historical_result": {
+      "relative_path": "fno_oi/strategy_research/v13_corrected_v10_g/options_3lots_5min_20260914_sl30_target40p4/V13_V10_G_OPTIONS_FIXED_PROFILE_RESULTS.md",
+      "sha256": "27de739431e3adb0daf036dbdad4a728619d91e7721ff2162d8825ae3f8c3cfa",
+      "access": "read_only_historical_reference",
+      "adapter": null
+    },
+    "options_three_lot_historical_validation": {
+      "relative_path": "fno_oi/strategy_research/v13_corrected_v10_g/options_3lots_5min_20260914_sl30_target40p4/validation.json",
+      "sha256": "f1053a235c07a292ce5388f14450d49841499596ab6426a7778800f6d5b369ae",
+      "access": "read_only_historical_reference",
+      "adapter": "ai_platform.adapters.snapshot.read_coherent_snapshot"
+    }
+  }
+}

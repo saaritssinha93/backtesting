@@ -1,6 +1,6 @@
 """Shared live/paper runtime for locked FNO EMA/OI strategy generations.
 
-Six independently monitored roles share this module:
+Seven independently monitored roles share this module:
 
 * ``scanner-5m`` waits for exact-slot final markers from both feeds, reads NSE
   equity price/volume/indicators, joins only OI fields from the mapped future,
@@ -11,6 +11,7 @@ Six independently monitored roles share this module:
 * ``long-entry`` and ``short-entry`` manage one side each.
 * ``trade-logger`` continuously consolidates immutable signal/order state.
 * ``net-result`` continuously marks the current book and reports net results.
+* ``broker-reconciliation`` performs read-only broker/local position checks.
 
 Scheduled runners default to PAPER.  Real broker orders require LIVE mode, an
 exact acknowledgement environment variable, and a same-day arm file.
@@ -23,9 +24,11 @@ import hashlib
 import io
 import importlib
 import json
+import math
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import asdict
 from datetime import date, datetime, time as dtime, timedelta
@@ -38,9 +41,19 @@ import pandas as pd
 import fno_oi_common as common
 import fno_equity_fetch_1min as equity_feed
 import fno_live_evidence as live_evidence
+from ai_platform.observability.data_quality import (
+    canonical_frame_sha256,
+    canonical_payload_sha256,
+    evaluate_ohlcv,
+)
+from ai_platform.observability.feature_ledger import (
+    FEATURE_LEDGER_SCHEMA,
+    evaluate_v13_v10_g_base_row,
+)
 import fno_oi_ema_confirm_backtest as backtest
 import fno_oi_hybrid_data as hybrid
 from fno_live_profile import config_for_generation, is_g_config
+from fno_v13_v10_g_identity import canonical_signal_id
 LIVE_GENERATION = os.getenv("FNO_LIVE_GENERATION", "v5").strip().lower()
 if LIVE_GENERATION not in {"v5", "v6"}:
     raise RuntimeError(f"Unsupported FnO live generation: {LIVE_GENERATION}")
@@ -53,6 +66,9 @@ LIVE_SCHEMA_PREFIX = f"fno_{LIVE_GENERATION}"
 EXECUTION_SESSION_NAMESPACE = os.getenv(
     f"FNO_{LIVE_LABEL}_EXECUTION_SESSION_NAMESPACE", ""
 ).strip().lower()
+RUN_ID = os.getenv("EQIDV2_OBS_RUN_ID", "").strip() or (
+    f"{SESSION_PREFIX}_{common.now_ist().strftime('%Y%m%dT%H%M%S')}_{os.getpid()}"
+)
 if EXECUTION_SESSION_NAMESPACE and not re.fullmatch(
     r"[a-z0-9][a-z0-9_-]{0,39}", EXECUTION_SESSION_NAMESPACE
 ):
@@ -69,6 +85,7 @@ ROLE_SESSIONS = {
     "short-entry": f"{SESSION_PREFIX}_live_short",
     "trade-logger": f"{SESSION_PREFIX}_trade_logger",
     "net-result": f"{SESSION_PREFIX}_net_result",
+    "broker-reconciliation": f"{SESSION_PREFIX}_broker_reconciliation",
 }
 ROLE_REPORTS = {
     "scanner-5m": f"latest_{REPORT_PREFIX}_scanner_5min.md",
@@ -77,6 +94,9 @@ ROLE_REPORTS = {
     "short-entry": f"latest_{REPORT_PREFIX}_live_short.md",
     "trade-logger": f"latest_{REPORT_PREFIX}_trade_logger.md",
     "net-result": f"latest_{REPORT_PREFIX}_net_result.md",
+    "broker-reconciliation": (
+        f"latest_{REPORT_PREFIX}_broker_reconciliation.md"
+    ),
 }
 if EXECUTION_SESSION_NAMESPACE:
     # A dedicated LIVE worker must not overwrite the promoted PAPER worker's
@@ -87,6 +107,7 @@ if EXECUTION_SESSION_NAMESPACE:
         ("short-entry", "short"),
         ("trade-logger", "trade_logger"),
         ("net-result", "net_result"),
+        ("broker-reconciliation", "broker_reconciliation"),
     ):
         ROLE_SESSIONS[_role] = (
             f"{SESSION_PREFIX}_{EXECUTION_SESSION_NAMESPACE}_{_suffix}"
@@ -111,6 +132,13 @@ LIVE_ACK = getattr(
     config, "LIVE_ACK", f"I_UNDERSTAND_REAL_FNO_{LIVE_LABEL}_EQUITY_ORDERS"
 )
 ORDER_TAG_PREFIX = getattr(config, "ORDER_TAG_PREFIX", f"F{LIVE_LABEL}")
+AUTO_MARKET_PROTECTION = -1
+ORDER_ROLE_TAG_SUFFIX = {
+    "entry": "E",
+    "stop": "S",
+    "target": "T",
+    "squareoff": "X",
+}
 
 SESSION_END = dtime.fromisoformat(getattr(config, "SESSION_END", "15:32"))
 PIPELINE_DEADLINE = dtime.fromisoformat(getattr(config, "PIPELINE_DEADLINE", "09:50"))
@@ -122,6 +150,19 @@ TERMINAL_STATES = {
     "BLOCKED_PORTFOLIO",
     "CANCELLED",
 }
+BROKER_TERMINAL_ORDER_STATUSES = frozenset({"COMPLETE", "CANCELLED", "REJECTED"})
+BROKER_ACTIVE_ORDER_STATUSES = frozenset(
+    {
+        "OPEN",
+        "OPEN PENDING",
+        "TRIGGER PENDING",
+        "VALIDATION PENDING",
+        "PUT ORDER REQ RECEIVED",
+        "MODIFY VALIDATION PENDING",
+        "MODIFY PENDING",
+        "CANCEL PENDING",
+    }
+)
 
 for _directory in (
     LIVE_ROOT,
@@ -133,6 +174,136 @@ for _directory in (
     EVIDENCE_ROOT,
 ):
     _directory.mkdir(parents=True, exist_ok=True)
+
+
+_OBSERVABILITY_RUNTIME: Any | None = None
+_OBSERVABILITY_INITIALIZED = False
+_OBSERVABILITY_LOCK = threading.Lock()
+_OBSERVABILITY_EVENT_LOCK = threading.Lock()
+_REPORTED_DUPLICATE_ORDER_GROUPS: set[tuple[str, ...]] = set()
+_PENDING_DUPLICATE_ORDER_EVENTS: list[dict[str, Any]] = []
+
+
+def _observability_runtime() -> Any | None:
+    """Lazily create fail-open live telemetry only for supervised/opted-in runs."""
+
+    global _OBSERVABILITY_RUNTIME, _OBSERVABILITY_INITIALIZED
+    configured = os.getenv("EQIDV2_OBSERVABILITY_ENABLED", "").strip().lower()
+    enabled = (
+        configured in {"1", "true", "yes", "on"}
+        if configured
+        else bool(os.getenv("EQIDV2_OBS_RUN_ID", "").strip())
+    )
+    if not enabled:
+        return None
+    if _OBSERVABILITY_INITIALIZED:
+        return _OBSERVABILITY_RUNTIME
+    with _OBSERVABILITY_LOCK:
+        if _OBSERVABILITY_INITIALIZED:
+            return _OBSERVABILITY_RUNTIME
+        _OBSERVABILITY_INITIALIZED = True
+        try:
+            from ai_platform.observability.runtime import create_observability
+
+            service = f"{REPORT_PREFIX}-live-runtime"
+            root = common.runtime_dir("observability")
+            _OBSERVABILITY_RUNTIME = create_observability(
+                service,
+                # RotatingFileHandler is process-safe only when each worker
+                # owns its file. Alloy aggregates the per-PID JSONL glob while
+                # the stable service label preserves one logical pipeline.
+                log_path=root / "logs" / f"{service}-{os.getpid()}.jsonl",
+                journal_path=root / "journals" / f"{service}-events.jsonl",
+                async_span_logging=True,
+            )
+        except Exception:
+            _OBSERVABILITY_RUNTIME = None
+        return _OBSERVABILITY_RUNTIME
+
+
+def _flush_observability_metrics(runtime: Any | None = None) -> None:
+    """Publish a per-process textfile snapshot for the read-only collector."""
+
+    observed = runtime or _observability_runtime()
+    if observed is None:
+        return
+    try:
+        path = (
+            common.runtime_dir("observability", "metrics")
+            / f"{SESSION_PREFIX}_{os.getpid()}.prom"
+        )
+        common.atomic_write_text(path, observed.metrics.render_prometheus())
+    except Exception:
+        try:
+            observed.standard_metrics.telemetry_dropped_total.inc(
+                component="textfile", reason="write_failure"
+            )
+        except Exception:
+            pass
+
+
+def _observe_broker_call(operation: str, callback: Any) -> Any:
+    try:
+        runtime = _observability_runtime()
+    except Exception:
+        # Even a malformed/custom telemetry runtime cannot gate broker I/O.
+        return callback()
+    if runtime is None:
+        return callback()
+    started = time.perf_counter()
+    outcome = "error"
+    span = None
+    span_entered = False
+    callback_error: BaseException | None = None
+    callback_traceback = None
+    try:
+        try:
+            span = runtime.span(
+                f"broker.{operation}",
+                kind="client",
+                attributes={"broker.operation": operation},
+            )
+            span.__enter__()
+            span_entered = True
+        except Exception:
+            # Span creation/export is diagnostic. Continue with the broker
+            # operation exactly once even when the telemetry object is broken.
+            span = None
+        try:
+            result = callback()
+            outcome = "success"
+        except BaseException as exc:
+            callback_error = exc
+            callback_traceback = exc.__traceback__
+        finally:
+            if span_entered and span is not None:
+                try:
+                    span.__exit__(
+                        type(callback_error) if callback_error is not None else None,
+                        callback_error,
+                        callback_traceback,
+                    )
+                except Exception:
+                    pass
+        if callback_error is not None:
+            raise callback_error.with_traceback(callback_traceback)
+        return result
+    finally:
+        # Telemetry must not mask a broker exception or replace a successful
+        # broker result with an instrumentation failure.
+        try:
+            elapsed = time.perf_counter() - started
+            runtime.standard_metrics.broker_requests_total.inc(
+                operation=operation, outcome=outcome
+            )
+            runtime.standard_metrics.broker_request_duration_seconds.observe(
+                elapsed, operation=operation, outcome=outcome
+            )
+            # The worker heartbeat/status path publishes the coalesced metric
+            # snapshot after canonical state has been persisted. Never perform
+            # textfile I/O inline with a broker operation.
+        except Exception:
+            pass
 
 
 def report_path(role: str) -> Path:
@@ -250,6 +421,7 @@ def _archive_mapped_universe_evidence(
     )
     payload = {
         "schema_version": "fno_mapped_stock_universe_evidence_v1",
+        "run_id": RUN_ID,
         "generation": LIVE_GENERATION,
         "session_date": session_date.isoformat(),
         "signal_end": signal_end,
@@ -430,6 +602,13 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return number if np.isfinite(number) else default
 
 
+def _optional_finite_float(value: Any) -> float | None:
+    """Return a JSON-stable optional number for diagnostic snapshot fields."""
+
+    number = _safe_float(value, np.nan)
+    return float(number) if np.isfinite(number) else None
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(float(value))
@@ -455,14 +634,13 @@ def _iso_now() -> str:
 
 
 def _signal_id(session_date: date, setup: config.SetupSpec, symbol: str) -> str:
-    raw = (
-        f"{config.STRATEGY_VERSION}|{session_date}|{setup.signal_end}|"
-        f"{setup.confirmation_end}|{setup.side}|{symbol}"
-    )
-    digest = hashlib.sha1(raw.encode("ascii")).hexdigest()[:12]
-    return (
-        f"{session_date.strftime('%Y%m%d')}_{setup.confirmation_end.replace(':', '')}_"
-        f"{setup.side}_{common.safe_contract_stem(symbol)}_{digest}"
+    return canonical_signal_id(
+        config.STRATEGY_VERSION,
+        session_date,
+        setup.signal_end,
+        setup.confirmation_end,
+        setup.side,
+        symbol,
     )
 
 
@@ -549,6 +727,8 @@ def scan_five_minute_slot(
 ) -> dict[str, Any]:
     slot = config.slot_datetime(session_date, signal_end)
     candidates: list[dict[str, Any]] = []
+    feature_evaluations: list[dict[str, Any]] = []
+    raw_data_quality: list[dict[str, Any]] = []
     verified_skips = {
         str(symbol).strip().upper()
         for symbol in (verified_no_candle_symbols or set())
@@ -565,6 +745,7 @@ def scan_five_minute_slot(
     evaluated = 0
     invalid = 0
     nifty_context: dict[str, Any] = {}
+    g_strategy_fingerprint = config.strategy_fingerprint() if is_g_config(config) else ""
     if is_g_config(config) and signal_end == "09:25":
         nifty_context = _g_nifty_first_bar_context(session_date)
     for contract in universe.to_dict("records"):
@@ -605,6 +786,76 @@ def scan_five_minute_slot(
                 }
             )
             continue
+        effective_input: dict[str, Any] = {}
+        if is_g_config(config):
+            try:
+                equity_columns = [name for name in (
+                    "ts", "open", "high", "low", "close", "volume"
+                ) if name in equity_frame]
+                futures_columns = [name for name in (
+                    "ts", "open", "high", "low", "close", "volume", "oi"
+                ) if name in futures_frame]
+                equity_history = equity_frame.loc[
+                    equity_frame["ts"].le(pd.Timestamp(slot)), equity_columns
+                ] if "ts" in equity_frame else equity_frame.loc[:, equity_columns]
+                futures_pair = futures_frame.loc[
+                    futures_frame["ts"].le(pd.Timestamp(slot)), futures_columns
+                ].tail(2) if "ts" in futures_frame else futures_frame.loc[:, futures_columns].tail(2)
+                effective_input = {
+                    "schema_version": "v13_v10_g_live_base_input_slice_v1",
+                    "equity_5m_history_sha256": canonical_frame_sha256(
+                        equity_history, sort_by=["ts"] if "ts" in equity_history else None
+                    ),
+                    "equity_5m_history_rows": len(equity_history),
+                    "futures_oi_pair_sha256": canonical_frame_sha256(
+                        futures_pair, sort_by=["ts"] if "ts" in futures_pair else None
+                    ),
+                    "futures_oi_pair_rows": len(futures_pair),
+                    "signal_ts": slot.isoformat(),
+                }
+                effective_input["input_slice_sha256"] = canonical_payload_sha256(
+                    effective_input
+                )
+                raw_data_quality.extend([
+                    {
+                        **evaluate_ohlcv(
+                            equity_history,
+                            source="NSE_EQUITY_5M_LIVE",
+                            symbol=equity_symbol,
+                        ).to_dict(),
+                        "session_date": session_date.isoformat(),
+                        "signal_end": signal_end,
+                        "input_slice_sha256": effective_input[
+                            "equity_5m_history_sha256"
+                        ],
+                    },
+                    {
+                        **evaluate_ohlcv(
+                            futures_pair,
+                            expected_timestamps=[slot - timedelta(minutes=5), slot],
+                            source="NFO_FUTURE_5M_LIVE",
+                            symbol=futures_symbol,
+                        ).to_dict(),
+                        "session_date": session_date.isoformat(),
+                        "signal_end": signal_end,
+                        "input_slice_sha256": effective_input[
+                            "futures_oi_pair_sha256"
+                        ],
+                    },
+                ])
+            except Exception as exc:
+                # Observability is fail-open. Existing scanner readiness and
+                # strategy gates remain the authoritative safety controls.
+                raw_data_quality.append({
+                    "schema_version": "ai_platform_data_quality_v1",
+                    "session_date": session_date.isoformat(),
+                    "signal_end": signal_end,
+                    "source": "SCANNER_INPUTS",
+                    "symbol": equity_symbol,
+                    "status": "TELEMETRY_ERROR",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                })
         featured = hybrid.join_equity_price_with_futures_oi(
             equity_frame, futures_frame
         )
@@ -622,6 +873,41 @@ def scan_five_minute_slot(
             continue
         row = selected.iloc[-1]
         evaluated += 1
+        if is_g_config(config):
+            try:
+                feature_evaluations.append(evaluate_v13_v10_g_base_row(
+                    {
+                        **row.to_dict(),
+                        "session_date": session_date.isoformat(),
+                        "signal_ts": slot,
+                        "confirmation_ts": slot + timedelta(minutes=1),
+                        "signal_end": signal_end,
+                        "confirmation_end": config.SIGNAL_TO_CONFIRMATION[signal_end],
+                        "tradingsymbol": equity_symbol,
+                        "futures_tradingsymbol": futures_symbol,
+                        "run_id": RUN_ID,
+                        "nifty_first_bar_return_pct": nifty_context.get(
+                            "nifty_first_bar_return_pct"
+                        ),
+                        "input_slice_sha256": effective_input.get(
+                            "input_slice_sha256", ""
+                        ),
+                    },
+                    nifty_return=nifty_context.get("nifty_first_bar_return_pct"),
+                    strategy_version=config.STRATEGY_VERSION,
+                    strategy_fingerprint=g_strategy_fingerprint,
+                ))
+            except Exception as exc:
+                feature_evaluations.append({
+                    "schema_version": FEATURE_LEDGER_SCHEMA,
+                    "session_date": session_date.isoformat(),
+                    "signal_ts": slot.isoformat(),
+                    "tradingsymbol": equity_symbol,
+                    "futures_tradingsymbol": futures_symbol,
+                    "run_id": RUN_ID,
+                    "evaluation_state": "TELEMETRY_ERROR",
+                    "error_type": type(exc).__name__,
+                })
         side = (
             config.base_signal_side(row, signal_end=signal_end,
                                     nifty_first_bar_return_pct=nifty_context.get("nifty_first_bar_return_pct"))
@@ -646,6 +932,11 @@ def scan_five_minute_slot(
             "side": side,
             "signal_end": signal_end,
             "signal_timestamp": slot.isoformat(),
+            "open": _optional_finite_float(row.get("open")),
+            "high": _optional_finite_float(row.get("high")),
+            "low": _optional_finite_float(row.get("low")),
+            "close": _optional_finite_float(row.get("close")),
+            "volume": _optional_finite_float(row.get("volume")),
             "signal_close": _safe_float(row["close"]),
             "price_change_pct": _safe_float(row["price_change_pct"]),
             "oi_change_pct": _safe_float(row["oi_change_pct"]),
@@ -656,6 +947,13 @@ def scan_five_minute_slot(
             "ema9": _safe_float(row["ema9"]),
             "ema20": _safe_float(row["ema20"]),
             "ema50": _safe_float(row["ema50"]),
+            "equity_5m_history_sha256": effective_input.get(
+                "equity_5m_history_sha256", ""
+            ),
+            "futures_oi_pair_sha256": effective_input.get(
+                "futures_oi_pair_sha256", ""
+            ),
+            "input_slice_sha256": effective_input.get("input_slice_sha256", ""),
         }
         if is_g_config(config):
             values.update(nifty_context)
@@ -672,8 +970,9 @@ def scan_five_minute_slot(
     missing_symbols = sorted(
         item["futures_tradingsymbol"] for item in missing_contracts
     )
-    return {
+    snapshot = {
         "schema_version": f"{LIVE_SCHEMA_PREFIX}_scanner_5m_hybrid_v3",
+        "run_id": RUN_ID,
         "strategy_version": config.STRATEGY_VERSION,
         "strategy_fingerprint": config.strategy_fingerprint(),
         "session_date": session_date.isoformat(),
@@ -710,6 +1009,18 @@ def scan_five_minute_slot(
             else "PARTIAL"
         ),
     }
+    if is_g_config(config):
+        snapshot.update(
+            feature_ledger_schema=FEATURE_LEDGER_SCHEMA,
+            feature_evaluation_phase="SCANNER_BASE_GATES",
+            feature_evaluation_count=len(feature_evaluations),
+            feature_evaluations=feature_evaluations,
+            feature_evaluations_sha256=canonical_payload_sha256(feature_evaluations),
+            raw_data_quality_count=len(raw_data_quality),
+            raw_data_quality=raw_data_quality,
+            raw_data_quality_sha256=canonical_payload_sha256(raw_data_quality),
+        )
+    return snapshot
 
 
 def confirmation_metrics(
@@ -808,6 +1119,7 @@ def select_entry_signals(
                 {
                     **candidate,
                     "schema_version": f"{LIVE_SCHEMA_PREFIX}_equity_entry_signal_v2",
+                    "run_id": RUN_ID,
                     "strategy_version": config.STRATEGY_VERSION,
                     "strategy_fingerprint": config.strategy_fingerprint(),
                     "selected_objective": config.SELECTED_OBJECTIVE,
@@ -842,19 +1154,343 @@ def select_entry_signals(
     return selected_signals
 
 
+class BrokerMutationUncertain(RuntimeError):
+    """A broker mutation may have reached Kite and must be reconciled by tag."""
+
+
+def _is_explicit_broker_auth_error(exc: Exception) -> bool:
+    """Return true only when Kite explicitly rejected the client credentials."""
+
+    if type(exc).__name__ == "TokenException":
+        return True
+    message = str(exc).lower()
+    return "incorrect `api_key` or `access_token`" in message
+
+
+def _is_explicit_broker_rejection(exc: Exception) -> bool:
+    """Return whether Kite definitively rejected a mutation request.
+
+    These exception types are created from a structured broker error response,
+    so the request outcome is known and failover/retry would only repeat the
+    same rejected mutation.  Transport, malformed-response and server-side
+    errors remain ambiguous and continue through tag reconciliation.
+    """
+
+    if type(exc).__name__ in {"InputException", "OrderException", "PermissionException"}:
+        return True
+    try:
+        code = int(getattr(exc, "code", 0))
+    except (TypeError, ValueError):
+        return False
+    return 400 <= code < 500
+
+
+def _is_stop_trigger_relation_rejection(exc: Exception) -> bool:
+    """Recognise Kite's definite rejection after a stop trigger was crossed."""
+
+    message = str(exc).lower()
+    return (
+        _is_explicit_broker_rejection(exc)
+        and "trigger price" in message
+        and (
+            ("stoploss" in message and "last traded price" in message)
+            or ("crossed" in message and "ltp" in message)
+        )
+    )
+
+
+def _broker_order_type_matches(
+    expected: Any,
+    observed: Any,
+    *,
+    protected: bool = False,
+) -> bool:
+    """Match Kite order types, including protected-market normalization."""
+
+    expected_type = str(expected or "").strip().upper()
+    observed_type = str(observed or "").strip().upper()
+    if expected_type == observed_type:
+        return True
+    return protected and expected_type in {"MARKET", "SL-M"} and observed_type == "LIMIT"
+
+
+def _kite_place_order_compat(client: Any, payload: dict[str, Any]) -> Any:
+    """Submit market protection through old Kite SDKs that lack the argument."""
+
+    if payload.get("market_protection") is None:
+        return client.place_order(**payload)
+    post = getattr(client, "_post", None)
+    if not callable(post):
+        return client.place_order(**payload)
+    response = post(
+        "order.place",
+        url_args={"variety": payload["variety"]},
+        params=dict(payload),
+    )
+    if isinstance(response, dict) and response.get("order_id"):
+        return str(response["order_id"])
+    return response
+
+
 class KitePool:
-    def __init__(self, max_apps: int, timeout_sec: float) -> None:
-        credentials = common.discover_kite_credentials(max_apps=max_apps)
-        self.clients = [
-            common.make_kite_client(credential, timeout_sec=timeout_sec)
+    """Ordered Kite clients with hot credential reload and safe failover."""
+
+    def __init__(
+        self,
+        max_apps: int,
+        timeout_sec: float,
+        *,
+        credential_loader: Any = None,
+        client_factory: Any = None,
+    ) -> None:
+        self.max_apps = int(max_apps)
+        self.timeout_sec = float(timeout_sec)
+        self._credential_loader = (
+            credential_loader or common.discover_kite_credentials
+        )
+        self._client_factory = client_factory or common.make_kite_client
+        self.app_names: list[str] = []
+        self.clients: list[Any] = []
+        self._credential_fingerprint = ""
+        self._auth_failed_apps: set[str] = set()
+        self.credential_reload_count = 0
+        self.last_operation = ""
+        self.last_operation_app = ""
+        self.last_operation_failures: list[dict[str, str]] = []
+        self._install_credentials(self._load_credentials(), initial=True)
+
+    def _load_credentials(self) -> list[Any]:
+        return list(self._credential_loader(max_apps=self.max_apps))
+
+    @staticmethod
+    def _fingerprint(credentials: list[Any]) -> str:
+        digest = hashlib.sha256()
+        for credential in credentials:
+            for value in (
+                credential.app_name,
+                credential.api_key,
+                credential.access_token,
+            ):
+                digest.update(str(value).encode("utf-8"))
+                digest.update(b"\0")
+        return digest.hexdigest()
+
+    def _install_credentials(
+        self, credentials: list[Any], *, initial: bool = False
+    ) -> None:
+        if not credentials:
+            raise RuntimeError("No authenticated Kite client is available.")
+        clients = [
+            self._client_factory(credential, timeout_sec=self.timeout_sec)
             for credential in credentials
         ]
-        if not self.clients:
-            raise RuntimeError("No authenticated Kite client is available.")
+        self.app_names = [str(credential.app_name) for credential in credentials]
+        self.clients = clients
+        self._credential_fingerprint = self._fingerprint(credentials)
+        self._auth_failed_apps.clear()
+        if not initial:
+            self.credential_reload_count += 1
+
+    def refresh_if_changed(self) -> bool:
+        """Atomically rebuild clients when any configured credential changes."""
+
+        credentials = self._load_credentials()
+        if self._fingerprint(credentials) == self._credential_fingerprint:
+            return False
+        self._install_credentials(credentials)
+        return True
+
+    def _lanes(self) -> list[tuple[str, Any]]:
+        self.refresh_if_changed()
+        return [
+            (app_name, client)
+            for app_name, client in zip(self.app_names, self.clients)
+            if app_name not in self._auth_failed_apps
+        ]
+
+    @staticmethod
+    def _failure(app_name: str, exc: Exception) -> dict[str, str]:
+        return {
+            "app": app_name,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    @staticmethod
+    def _failure_summary(failures: list[dict[str, str]]) -> str:
+        return "; ".join(
+            f"{item['app']}={item['error_type']}: {item['message']}"
+            for item in failures
+        )
+
+    def _record_operation(
+        self,
+        operation: str,
+        app_name: str,
+        failures: list[dict[str, str]],
+    ) -> None:
+        self.last_operation = operation
+        self.last_operation_app = app_name
+        self.last_operation_failures = list(failures)
+
+    def _call_read(self, operation: str, callback: Any) -> Any:
+        failures: list[dict[str, str]] = []
+        last_error: Exception | None = None
+        lanes = self._lanes()
+        for app_name, client in lanes:
+            try:
+                result = callback(client)
+                self._record_operation(operation, app_name, failures)
+                return result
+            except Exception as exc:
+                last_error = exc
+                failures.append(self._failure(app_name, exc))
+                if _is_explicit_broker_auth_error(exc):
+                    self._auth_failed_apps.add(app_name)
+        self._record_operation(operation, "", failures)
+        unavailable = sorted(self._auth_failed_apps)
+        raise RuntimeError(
+            f"All configured Kite apps failed {operation}; "
+            f"auth_unavailable={unavailable}; failures={self._failure_summary(failures)}"
+        ) from last_error
+
+    @staticmethod
+    def _order_matches_submission(row: dict[str, Any], payload: dict[str, Any]) -> bool:
+        identity_matches = all(
+            (
+                str(row.get(field, "")).upper()
+                if field == "transaction_type"
+                else str(row.get(field, ""))
+            )
+            == (
+                str(payload.get(field, "")).upper()
+                if field == "transaction_type"
+                else str(payload.get(field, ""))
+            )
+            for field in ("tag", "tradingsymbol", "transaction_type")
+        )
+        protected = _safe_int(payload.get("market_protection"), 0) != 0
+        return (
+            identity_matches
+            and _broker_order_type_matches(
+                payload.get("order_type"),
+                row.get("order_type"),
+                protected=protected,
+            )
+            and _safe_int(row.get("quantity"), -1)
+            == _safe_int(payload.get("quantity"), -2)
+        )
+
+    def _recover_unknown_submission(self, payload: dict[str, Any]) -> str:
+        if not str(payload.get("tag", "")):
+            return ""
+        rows = self._call_read(
+            "reconcile_unknown_submission", lambda client: client.orders()
+        )
+        matches = [
+            dict(row)
+            for row in rows
+            if self._order_matches_submission(dict(row), payload)
+        ]
+        if len(matches) > 1:
+            order_ids = sorted(str(row.get("order_id", "")) for row in matches)
+            raise RuntimeError(
+                "Multiple broker orders match an uncertain submission: "
+                f"{order_ids}"
+            )
+        return str(matches[0].get("order_id", "")) if matches else ""
+
+    def _call_mutation(self, operation: str, callback: Any, payload: dict[str, Any]) -> Any:
+        failures: list[dict[str, str]] = []
+        last_error: Exception | None = None
+        lanes = self._lanes()
+        for app_name, client in lanes:
+            try:
+                result = callback(client)
+                self._record_operation(operation, app_name, failures)
+                return result
+            except Exception as exc:
+                last_error = exc
+                failures.append(self._failure(app_name, exc))
+                if _is_explicit_broker_auth_error(exc):
+                    self._auth_failed_apps.add(app_name)
+                    continue
+                if _is_explicit_broker_rejection(exc):
+                    # Kite returned a structured rejection.  No order was
+                    # accepted, so neither app failover nor uncertain-outcome
+                    # reconciliation is appropriate.
+                    self._record_operation(operation, app_name, failures)
+                    raise
+                if operation == "place_order":
+                    try:
+                        recovered_order_id = self._recover_unknown_submission(payload)
+                    except Exception as reconcile_exc:
+                        failures.append(self._failure(app_name, reconcile_exc))
+                        self._record_operation(operation, app_name, failures)
+                        raise BrokerMutationUncertain(
+                            f"{operation} outcome is unknown on {app_name}; "
+                            "tag reconciliation also failed; "
+                            f"cause={type(exc).__name__}: {exc}; "
+                            "reconciliation_cause="
+                            f"{type(reconcile_exc).__name__}: {reconcile_exc}"
+                        ) from exc
+                    if recovered_order_id:
+                        self._record_operation(
+                            "place_order_reconciled", app_name, failures
+                        )
+                        return recovered_order_id
+                self._record_operation(operation, app_name, failures)
+                raise BrokerMutationUncertain(
+                    f"{operation} outcome is unknown on {app_name}; mutation was "
+                    "not retried and must be reconciled by deterministic order tag; "
+                    f"cause={type(exc).__name__}: {exc}"
+                ) from exc
+        self._record_operation(operation, "", failures)
+        raise RuntimeError(
+            f"All configured Kite apps explicitly rejected {operation}; "
+            f"failures={self._failure_summary(failures)}"
+        ) from last_error
 
     @property
     def primary(self) -> Any:
+        self.refresh_if_changed()
         return self.clients[0]
+
+    def quote_prices(
+        self, symbols: list[str]
+    ) -> tuple[dict[str, float], str, list[dict[str, str]]]:
+        """Fetch paper quotes with one bounded attempt per configured app."""
+
+        if not symbols:
+            return {}, "", []
+        prices = self._call_read(
+            "ltp", lambda client: _quote_prices(client, symbols)
+        )
+        return prices, self.last_operation_app, list(self.last_operation_failures)
+
+    def orders(self) -> Any:
+        return self._call_read("orders", lambda client: client.orders())
+
+    def order_history(self, order_id: str) -> Any:
+        return self._call_read(
+            "order_history", lambda client: client.order_history(order_id)
+        )
+
+    def positions(self) -> Any:
+        return self._call_read("positions", lambda client: client.positions())
+
+    def place_order(self, **kwargs: Any) -> Any:
+        payload = dict(kwargs)
+        return self._call_mutation(
+            "place_order",
+            lambda client: _kite_place_order_compat(client, payload),
+            payload,
+        )
+
+    def cancel_order(self, **kwargs: Any) -> Any:
+        return self._call_mutation(
+            "cancel_order", lambda client: client.cancel_order(**kwargs), dict(kwargs)
+        )
 
 
 def _marker_matches_slot(marker: dict[str, Any], expected_slot: datetime) -> bool:
@@ -1649,6 +2285,28 @@ def process_confirmation_slot(
         for candidate in candidates
         if str(candidate["tradingsymbol"]).strip().upper() in bars
     ]
+    confirmation_feature_evaluations: list[dict[str, Any]] = []
+    if is_g_config(config):
+        for row in confirmed_rows:
+            try:
+                confirmation_feature_evaluations.append(
+                    evaluate_v13_v10_g_base_row(
+                        {**row, "run_id": RUN_ID},
+                        nifty_return=row.get("nifty_first_bar_return_pct"),
+                        strategy_version=config.STRATEGY_VERSION,
+                        strategy_fingerprint=config.strategy_fingerprint(),
+                    )
+                )
+            except Exception as exc:
+                confirmation_feature_evaluations.append({
+                    "schema_version": FEATURE_LEDGER_SCHEMA,
+                    "session_date": session_date.isoformat(),
+                    "signal_ts": str(row.get("signal_ts", "")),
+                    "tradingsymbol": str(row.get("tradingsymbol", "")),
+                    "run_id": RUN_ID,
+                    "evaluation_state": "TELEMETRY_ERROR",
+                    "error_type": type(exc).__name__,
+                })
     candidate_symbols = {
         str(candidate.get("tradingsymbol", "")).strip().upper()
         for candidate in candidates
@@ -1673,6 +2331,7 @@ def process_confirmation_slot(
     )
     result = {
         "schema_version": f"{LIVE_SCHEMA_PREFIX}_equity_confirmation_1m_v3",
+        "run_id": RUN_ID,
         "strategy_version": config.STRATEGY_VERSION,
         "strategy_fingerprint": config.strategy_fingerprint(),
         "session_date": session_date.isoformat(),
@@ -1709,6 +2368,16 @@ def process_confirmation_slot(
         "state": "SUCCESS" if complete else "BLOCKED_INCOMPLETE_DATA",
         "_selected_signals": signals,
     }
+    if is_g_config(config):
+        result.update(
+            feature_ledger_schema=FEATURE_LEDGER_SCHEMA,
+            feature_evaluation_phase="CONFIRMATION_AND_SETUP_GATES",
+            feature_evaluation_count=len(confirmation_feature_evaluations),
+            feature_evaluations=confirmation_feature_evaluations,
+            feature_evaluations_sha256=canonical_payload_sha256(
+                confirmation_feature_evaluations
+            ),
+        )
     return result
 
 
@@ -1720,6 +2389,7 @@ def _blocked_stale_confirmation(
 ) -> dict[str, Any]:
     return {
         "schema_version": f"{LIVE_SCHEMA_PREFIX}_equity_confirmation_1m_v3",
+        "run_id": RUN_ID,
         "strategy_version": config.STRATEGY_VERSION,
         "strategy_fingerprint": config.strategy_fingerprint(),
         "session_date": session_date.isoformat(),
@@ -1811,8 +2481,12 @@ def create_order_state(
             raise ValueError("LIVE execution quantity must be positive.")
         execution_quantity = min(strategy_quantity, int(live_quantity))
     status = "PENDING_ENTRY" if execution_quantity > 0 else "BLOCKED_SIZING"
+    created_at_ist = _iso_now()
     return {
         "schema_version": f"{LIVE_SCHEMA_PREFIX}_equity_order_state_v2",
+        "run_id": signal.get("run_id", RUN_ID),
+        "origin_run_id": signal.get("run_id", RUN_ID),
+        "last_managed_run_id": RUN_ID,
         "strategy_version": signal["strategy_version"],
         "strategy_fingerprint": signal["strategy_fingerprint"],
         "signal_id": signal["signal_id"],
@@ -1862,8 +2536,30 @@ def create_order_state(
         "stop_price": float(signal["stop_price"]),
         "target_price": float(signal["target_price"]),
         "round_trip_cost_bps": float(signal["round_trip_cost_bps"]),
-        "created_at_ist": _iso_now(),
-        "updated_at_ist": _iso_now(),
+        "created_at_ist": created_at_ist,
+        "updated_at_ist": created_at_ist,
+        # Keep the diagnostic cause separate from ``status_reason``.  The
+        # latter is a current-state label and used to be overwritten by the
+        # activation-deadline transition, which made an authentication or
+        # placement failure look like a process that started late.
+        "first_entry_blocker_reason": "",
+        "last_entry_blocker_reason": "",
+        "last_entry_blocker_at_ist": "",
+        "execution_error_count": 0,
+        "first_execution_error_type": "",
+        "first_execution_error_message": "",
+        "first_execution_error_at_ist": "",
+        "last_execution_error_type": "",
+        "last_execution_error_message": "",
+        "last_execution_error_at_ist": "",
+        "entry_terminal_cause": "",
+        "entry_order_type": "",
+        "entry_submission_reason": "",
+        "entry_submission_attempt_count": 0,
+        "entry_submission_uncertain": False,
+        "entry_submission_uncertain_at_ist": "",
+        "entry_submission_uncertain_reason": "",
+        "entry_submission_reconciled_at_ist": "",
         "entry_order_activated_at_ist": "",
         "entry_order_id": "",
         "stop_order_id": "",
@@ -2108,21 +2804,65 @@ def _live_arm_state(session_date: date) -> tuple[bool, str]:
 def _broker_order(client: Any, order_id: str) -> dict[str, Any]:
     if not order_id:
         return {}
-    history = client.order_history(order_id)
+    history = _observe_broker_call(
+        "order_history", lambda: client.order_history(order_id)
+    )
     return dict(history[-1]) if history else {}
 
 
 def _broker_place(client: Any, **kwargs: Any) -> str:
-    return str(client.place_order(**kwargs))
+    payload = dict(kwargs)
+    if str(payload.get("order_type", "")).upper() in {"MARKET", "SL-M"}:
+        payload.setdefault("market_protection", AUTO_MARKET_PROTECTION)
+    return str(
+        _observe_broker_call("place_order", lambda: client.place_order(**payload))
+    )
 
 
 def _broker_cancel(client: Any, order_id: str) -> None:
     if not order_id:
         return
     try:
-        client.cancel_order(variety="regular", order_id=order_id)
-    except Exception:
-        pass
+        _observe_broker_call(
+            "cancel_order",
+            lambda: client.cancel_order(variety="regular", order_id=order_id),
+        )
+    except Exception as exc:
+        # Cancellation failures must be visible, but the telemetry path must
+        # not replace the existing protective-management behavior.
+        try:
+            from ai_platform.observability.context import CorrelationContext
+            from ai_platform.observability.journal import AppendOnlyEventJournal
+
+            AppendOnlyEventJournal(
+                LIVE_ROOT / "order_events" / "broker_errors.jsonl",
+                service=f"{REPORT_PREFIX}-broker",
+                strict=False,
+            ).append(
+                "broker_cancel_failed",
+                {
+                    "order_id": order_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+                severity="ERROR",
+                context=CorrelationContext(
+                    service=f"{REPORT_PREFIX}-broker",
+                    profile=getattr(config, "STRATEGY_PROFILE", "V13_V10_G"),
+                    strategy_version=config.STRATEGY_VERSION,
+                    strategy_fingerprint=config.strategy_fingerprint(),
+                    run_id=RUN_ID,
+                    order_id=order_id,
+                ),
+            )
+        except Exception:
+            pass
+        print(
+            f"[{REPORT_PREFIX}] broker cancel failed for order {order_id}: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _broker_find_tagged_order(
@@ -2131,10 +2871,14 @@ def _broker_find_tagged_order(
     tag: str,
     tradingsymbol: str,
     transaction_type: str,
-    order_type: str,
+    order_type: str | tuple[str, ...],
 ) -> dict[str, Any]:
+    expected_order_types = (
+        (order_type,) if isinstance(order_type, str) else tuple(order_type)
+    )
+    order_type_label = "|".join(value.upper() for value in expected_order_types)
     matches = []
-    for raw in client.orders():
+    for raw in _observe_broker_call("list_orders", client.orders):
         row = dict(raw)
         if str(row.get("tag", "")) != tag:
             continue
@@ -2142,9 +2886,48 @@ def _broker_find_tagged_order(
             continue
         if str(row.get("transaction_type", "")).upper() != transaction_type.upper():
             continue
-        if str(row.get("order_type", "")).upper() != order_type.upper():
+        if not any(
+            _broker_order_type_matches(
+                expected,
+                row.get("order_type"),
+                protected=expected.upper() in {"MARKET", "SL-M"},
+            )
+            for expected in expected_order_types
+        ):
             continue
         matches.append(row)
+    if len(matches) > 1:
+        order_ids = tuple(sorted(str(row.get("order_id", "")) for row in matches))
+        duplicate_key = (
+            tag,
+            tradingsymbol,
+            transaction_type.upper(),
+            order_type_label,
+            *order_ids,
+        )
+        with _OBSERVABILITY_EVENT_LOCK:
+            first_observation = duplicate_key not in _REPORTED_DUPLICATE_ORDER_GROUPS
+            if first_observation:
+                _REPORTED_DUPLICATE_ORDER_GROUPS.add(duplicate_key)
+                _PENDING_DUPLICATE_ORDER_EVENTS.append(
+                    {
+                        "tag": tag,
+                        "tradingsymbol": tradingsymbol,
+                        "transaction_type": transaction_type.upper(),
+                        "order_type": order_type_label,
+                        "order_ids": list(order_ids),
+                        "duplicate_count": len(matches) - 1,
+                    }
+                )
+        if first_observation:
+            try:
+                runtime = _observability_runtime()
+                if runtime is not None:
+                    runtime.standard_metrics.duplicate_order_total.inc(
+                        len(matches) - 1, mode="live", asset="equity"
+                    )
+            except Exception:
+                pass
     return matches[-1] if matches else {}
 
 
@@ -2155,6 +2938,90 @@ def _live_tag(signal_id: str) -> str:
         else signal_id
     )
     return ORDER_TAG_PREFIX + hashlib.sha1(tag_seed.encode("ascii")).hexdigest()[:14]
+
+
+def _live_order_tag(signal_id: str, role: str) -> str:
+    """Return a unique deterministic tag for one broker-order role."""
+
+    return _live_tag(signal_id) + ORDER_ROLE_TAG_SUFFIX[role]
+
+
+def _broker_find_role_order(
+    client: Any,
+    *,
+    signal_id: str,
+    role: str,
+    tradingsymbol: str,
+    transaction_type: str,
+    order_type: str | tuple[str, ...],
+) -> dict[str, Any]:
+    """Recover a role-specific order, including the pre-role-tag contract.
+
+    Older live processes used one deterministic tag for every order belonging
+    to a signal.  The symbol, side and order type still disambiguate those
+    orders.  Looking up the legacy tag after the current role tag prevents a
+    restart from placing a duplicate against retained broker state.
+    """
+
+    recovered = _broker_find_tagged_order(
+        client,
+        tag=_live_order_tag(signal_id, role),
+        tradingsymbol=tradingsymbol,
+        transaction_type=transaction_type,
+        order_type=order_type,
+    )
+    if recovered:
+        return recovered
+    return _broker_find_tagged_order(
+        client,
+        tag=_live_tag(signal_id),
+        tradingsymbol=tradingsymbol,
+        transaction_type=transaction_type,
+        order_type=order_type,
+    )
+
+
+def _entry_trigger_touched(state: dict[str, Any], last_price: float) -> bool:
+    trigger = float(state["trigger_price"])
+    return last_price >= trigger if str(state["side"]) == "LONG" else last_price <= trigger
+
+
+def _valid_live_price(value: Any) -> float | None:
+    price = _safe_float(value)
+    return price if np.isfinite(price) and price > 0 else None
+
+
+def _live_quote_price(client: Any, tradingsymbol: str) -> float | None:
+    """Read one NSE quote through either KitePool or a direct Kite client."""
+
+    quote_prices = getattr(client, "quote_prices", None)
+    if callable(quote_prices):
+        result = quote_prices([tradingsymbol])
+        values = result[0] if isinstance(result, tuple) else result
+    else:
+        values = _quote_prices(client, [tradingsymbol])
+    if not isinstance(values, dict):
+        return None
+    return _valid_live_price(values.get(tradingsymbol))
+
+
+def _broker_find_entry_order(
+    client: Any,
+    *,
+    signal_id: str,
+    tradingsymbol: str,
+    transaction_type: str,
+) -> dict[str, Any]:
+    """Recover stop or catch-up-market entries by the same role tag."""
+
+    return _broker_find_role_order(
+        client,
+        signal_id=signal_id,
+        role="entry",
+        tradingsymbol=tradingsymbol,
+        transaction_type=transaction_type,
+        order_type=("SL-M", "MARKET"),
+    )
 
 
 def _validate_recovered_order_quantity(
@@ -2209,6 +3076,141 @@ def _apply_live_entry_fill(
     return True
 
 
+def _entry_state_created_by_deadline(
+    state: dict[str, Any], activation_deadline: datetime
+) -> bool:
+    """Return whether this persisted entry state existed inside its live window.
+
+    Missing or malformed legacy timestamps deliberately return ``False`` so a
+    process can never use this diagnostic distinction to justify a retroactive
+    order.  The result changes only the terminal reason; the deadline remains
+    fail-closed in both cases.
+    """
+
+    try:
+        created = datetime.fromisoformat(str(state.get("created_at_ist", "")))
+        if created.tzinfo is None and activation_deadline.tzinfo is not None:
+            created = created.replace(tzinfo=activation_deadline.tzinfo)
+        return created <= activation_deadline
+    except (TypeError, ValueError):
+        return False
+
+
+def _record_live_execution_error(
+    state: dict[str, Any], exc: BaseException, now: datetime
+) -> None:
+    """Retain the first and latest broker-management failure on active state."""
+
+    observed_at = now.isoformat(timespec="seconds")
+    error_type = type(exc).__name__
+    error_message = str(exc)
+    try:
+        error_count = int(state.get("execution_error_count", 0)) + 1
+    except (TypeError, ValueError):
+        error_count = 1
+    if not state.get("first_execution_error_type"):
+        state.update(
+            first_execution_error_type=error_type,
+            first_execution_error_message=error_message,
+            first_execution_error_at_ist=observed_at,
+        )
+    state.update(
+        execution_error_count=error_count,
+        last_execution_error_type=error_type,
+        last_execution_error_message=error_message,
+        last_execution_error_at_ist=observed_at,
+        status_reason=f"{error_type}: {error_message}",
+        updated_at_ist=observed_at,
+    )
+
+
+def _pending_entry_terminal_cause(state: dict[str, Any]) -> str:
+    error_type = str(state.get("last_execution_error_type", "")).strip()
+    if error_type:
+        return f"EXECUTION_ERROR:{error_type}"
+    blocker = str(state.get("last_entry_blocker_reason", "")).strip()
+    if blocker:
+        return f"ENTRY_BLOCKER:{blocker}"
+    return "NO_ENTRY_ORDER_RECORDED"
+
+
+def _record_entry_submission_attempt(
+    state: dict[str, Any],
+    *,
+    order_type: str,
+    reason: str,
+    now: datetime,
+) -> None:
+    try:
+        attempts = int(state.get("entry_submission_attempt_count", 0)) + 1
+    except (TypeError, ValueError):
+        attempts = 1
+    state.update(
+        entry_order_type=order_type,
+        entry_submission_reason=reason,
+        entry_submission_attempt_count=attempts,
+        updated_at_ist=now.isoformat(timespec="seconds"),
+    )
+
+
+def _place_live_entry_order(
+    state: dict[str, Any],
+    client: Any,
+    now: datetime,
+    *,
+    transaction_type: str,
+    tag: str,
+    order_type: str,
+    reason: str,
+) -> str:
+    _record_entry_submission_attempt(
+        state,
+        order_type=order_type,
+        reason=reason,
+        now=now,
+    )
+    payload: dict[str, Any] = {
+        "variety": "regular",
+        "exchange": str(state["exchange"]),
+        "tradingsymbol": state["tradingsymbol"],
+        "transaction_type": transaction_type,
+        "quantity": int(state["quantity"]),
+        "product": "MIS",
+        "order_type": order_type,
+        "validity": "DAY",
+        "tag": tag,
+    }
+    if order_type == "SL-M":
+        payload["trigger_price"] = float(state["trigger_price"])
+    try:
+        return _broker_place(client, **payload)
+    except BrokerMutationUncertain as exc:
+        state.update(
+            entry_submission_uncertain=True,
+            entry_submission_uncertain_at_ist=now.isoformat(timespec="seconds"),
+            entry_submission_uncertain_reason=str(exc),
+            status_reason="ENTRY_SUBMISSION_UNCERTAIN_AWAITING_RECONCILIATION",
+            updated_at_ist=now.isoformat(timespec="seconds"),
+        )
+        raise
+
+
+def _reject_live_entry(
+    state: dict[str, Any],
+    exc: Exception,
+    now: datetime,
+) -> None:
+    """Persist a definite broker rejection as a terminal entry outcome."""
+
+    _record_live_execution_error(state, exc, now)
+    state.update(
+        status="ENTRY_REJECTED",
+        status_reason=f"BROKER_REJECTED:{type(exc).__name__}: {exc}",
+        entry_terminal_cause=f"EXECUTION_ERROR:{type(exc).__name__}",
+        updated_at_ist=now.isoformat(timespec="seconds"),
+    )
+
+
 def _begin_live_squareoff(
     state: dict[str, Any],
     client: Any,
@@ -2220,9 +3222,10 @@ def _begin_live_squareoff(
     _broker_cancel(client, str(state.get("target_order_id", "")))
     _broker_cancel(client, str(state.get("stop_order_id", "")))
     if not state.get("squareoff_order_id"):
-        recovered = _broker_find_tagged_order(
+        recovered = _broker_find_role_order(
             client,
-            tag=tag,
+            signal_id=str(state["signal_id"]),
+            role="squareoff",
             tradingsymbol=str(state["tradingsymbol"]),
             transaction_type=exit_transaction,
             order_type="MARKET",
@@ -2253,6 +3256,8 @@ def advance_live_order(
     state: dict[str, Any],
     client: Any,
     now: datetime,
+    *,
+    last_price: float | None = None,
 ) -> dict[str, Any]:
     status = str(state["status"])
     if status in TERMINAL_STATES:
@@ -2267,26 +3272,41 @@ def advance_live_order(
     long_side = side == "LONG"
     entry_transaction = "BUY" if long_side else "SELL"
     exit_transaction = "SELL" if long_side else "BUY"
-    tag = _live_tag(str(state["signal_id"]))
+    signal_id = str(state["signal_id"])
+    entry_tag = _live_order_tag(signal_id, "entry")
+    stop_tag = _live_order_tag(signal_id, "stop")
+    target_tag = _live_order_tag(signal_id, "target")
+    squareoff_tag = _live_order_tag(signal_id, "squareoff")
 
     if status == "PENDING_ENTRY":
         activation_deadline = datetime.fromisoformat(
             str(state["entry_activation_deadline_ist"])
         )
         if not state.get("entry_order_id"):
-            recovered = _broker_find_tagged_order(
+            recovered = _broker_find_entry_order(
                 client,
-                tag=tag,
+                signal_id=signal_id,
                 tradingsymbol=str(state["tradingsymbol"]),
                 transaction_type=entry_transaction,
-                order_type="SL-M",
             )
             if recovered:
                 _validate_recovered_order_quantity(state, recovered)
                 state["entry_order_id"] = str(recovered.get("order_id", ""))
+                state["entry_order_type"] = str(
+                    state.get("entry_order_type")
+                    or recovered.get("order_type")
+                    or ""
+                ).upper()
                 state["entry_order_activated_at_ist"] = str(
                     recovered.get("order_timestamp") or now.isoformat(timespec="seconds")
                 )
+                if state.get("entry_submission_uncertain"):
+                    state.update(
+                        entry_submission_uncertain=False,
+                        entry_submission_reconciled_at_ist=now.isoformat(
+                            timespec="seconds"
+                        ),
+                    )
         if state.get("entry_order_id"):
             entry_order = _broker_order(client, str(state["entry_order_id"]))
             broker_status = str(entry_order.get("status", "")).upper()
@@ -2334,15 +3354,27 @@ def advance_live_order(
                     return state
             else:
                 state.update(
-                    status_reason="LIVE_STOP_ENTRY_WORKING",
+                    status_reason=(
+                        "LIVE_MARKET_ENTRY_WORKING"
+                        if str(state.get("entry_order_type", "")).upper() == "MARKET"
+                        else "LIVE_STOP_ENTRY_WORKING"
+                    ),
                     updated_at_ist=now.isoformat(timespec="seconds"),
                 )
                 return state
         else:
             if now > activation_deadline:
+                existed_in_window = _entry_state_created_by_deadline(
+                    state, activation_deadline
+                )
                 state.update(
                     status="CANCELLED",
-                    status_reason="LATE_START_NO_RETROACTIVE_ENTRY",
+                    status_reason=(
+                        "ENTRY_ACTIVATION_DEADLINE_EXPIRED"
+                        if existed_in_window
+                        else "LATE_START_NO_RETROACTIVE_ENTRY"
+                    ),
+                    entry_terminal_cause=_pending_entry_terminal_cause(state),
                     updated_at_ist=now.isoformat(timespec="seconds"),
                 )
                 return state
@@ -2350,37 +3382,112 @@ def advance_live_order(
                 state.update(status="NO_FILL", status_reason="SQUARE_OFF_BEFORE_ENTRY")
                 return state
             if not armed:
+                state.setdefault("first_entry_blocker_reason", arm_reason)
+                if not state.get("first_entry_blocker_reason"):
+                    state["first_entry_blocker_reason"] = arm_reason
                 state.update(
                     status_reason=arm_reason,
+                    last_entry_blocker_reason=arm_reason,
+                    last_entry_blocker_at_ist=now.isoformat(timespec="seconds"),
                     updated_at_ist=now.isoformat(timespec="seconds"),
                 )
                 return state
-            order_id = _broker_place(
-                client,
-                variety="regular",
-                exchange=str(state["exchange"]),
-                tradingsymbol=state["tradingsymbol"],
-                transaction_type=entry_transaction,
-                quantity=int(state["quantity"]),
-                product="MIS",
-                order_type="SL-M",
-                trigger_price=float(state["trigger_price"]),
-                validity="DAY",
-                tag=tag,
+            if state.get("entry_submission_uncertain"):
+                state.update(
+                    status_reason="ENTRY_SUBMISSION_UNCERTAIN_AWAITING_RECONCILIATION",
+                    updated_at_ist=now.isoformat(timespec="seconds"),
+                )
+                return state
+            observed_price = _valid_live_price(last_price)
+            if observed_price is None:
+                try:
+                    observed_price = _live_quote_price(
+                        client, str(state["tradingsymbol"])
+                    )
+                except Exception:
+                    observed_price = None
+            if observed_price is None:
+                state.update(
+                    status_reason="WAITING_FOR_VALID_QUOTE",
+                    updated_at_ist=now.isoformat(timespec="seconds"),
+                )
+                return state
+            state["last_price"] = observed_price
+            trigger_touched = _entry_trigger_touched(state, observed_price)
+            order_type = "MARKET" if trigger_touched else "SL-M"
+            submission_reason = (
+                "TRIGGER_ALREADY_TOUCHED"
+                if trigger_touched
+                else "STOP_ENTRY_ARMED_BEFORE_TRIGGER"
             )
+            try:
+                order_id = _place_live_entry_order(
+                    state,
+                    client,
+                    now,
+                    transaction_type=entry_transaction,
+                    tag=entry_tag,
+                    order_type=order_type,
+                    reason=submission_reason,
+                )
+            except Exception as exc:
+                if order_type == "SL-M" and _is_stop_trigger_relation_rejection(exc):
+                    state.update(
+                        entry_stop_rejection_type=type(exc).__name__,
+                        entry_stop_rejection_message=str(exc),
+                        entry_stop_rejection_at_ist=now.isoformat(timespec="seconds"),
+                    )
+                    try:
+                        fresh_price = _live_quote_price(
+                            client, str(state["tradingsymbol"])
+                        )
+                    except Exception:
+                        fresh_price = None
+                    if fresh_price is not None and _entry_trigger_touched(
+                        state, fresh_price
+                    ):
+                        state["last_price"] = fresh_price
+                        try:
+                            order_id = _place_live_entry_order(
+                                state,
+                                client,
+                                now,
+                                transaction_type=entry_transaction,
+                                tag=entry_tag,
+                                order_type="MARKET",
+                                reason="TRIGGER_CROSSED_DURING_STOP_SUBMISSION",
+                            )
+                        except Exception as market_exc:
+                            if _is_explicit_broker_rejection(market_exc):
+                                _reject_live_entry(state, market_exc, now)
+                                return state
+                            raise
+                    else:
+                        _reject_live_entry(state, exc, now)
+                        return state
+                elif _is_explicit_broker_rejection(exc):
+                    _reject_live_entry(state, exc, now)
+                    return state
+                else:
+                    raise
             state.update(
                 entry_order_id=order_id,
                 entry_order_activated_at_ist=now.isoformat(timespec="seconds"),
-                status_reason="LIVE_STOP_ENTRY_PLACED",
+                status_reason=(
+                    "LIVE_MARKET_ENTRY_PLACED"
+                    if str(state.get("entry_order_type", "")).upper() == "MARKET"
+                    else "LIVE_STOP_ENTRY_PLACED"
+                ),
                 updated_at_ist=now.isoformat(timespec="seconds"),
             )
             return state
 
     if state["status"] == "OPEN":
         if not state.get("squareoff_order_id"):
-            recovered_market = _broker_find_tagged_order(
+            recovered_market = _broker_find_role_order(
                 client,
-                tag=tag,
+                signal_id=signal_id,
+                role="squareoff",
                 tradingsymbol=str(state["tradingsymbol"]),
                 transaction_type=exit_transaction,
                 order_type="MARKET",
@@ -2390,9 +3497,10 @@ def advance_live_order(
                 state["squareoff_order_id"] = str(recovered_market.get("order_id", ""))
                 state["status"] = "SQUARE_OFF_PENDING"
         if state["status"] == "OPEN" and not state.get("stop_order_id"):
-            recovered_stop = _broker_find_tagged_order(
+            recovered_stop = _broker_find_role_order(
                 client,
-                tag=tag,
+                signal_id=signal_id,
+                role="stop",
                 tradingsymbol=str(state["tradingsymbol"]),
                 transaction_type=exit_transaction,
                 order_type="SL-M",
@@ -2413,21 +3521,27 @@ def advance_live_order(
                     order_type="SL-M",
                     trigger_price=float(state["stop_price"]),
                     validity="DAY",
-                    tag=tag,
+                    tag=stop_tag,
                 )
+            except BrokerMutationUncertain:
+                # The stop may exist at Kite even though no response arrived.
+                # Leave the state OPEN so the next loop reconciles the exact
+                # deterministic tag before attempting another mutation.
+                raise
             except Exception as exc:
                 _begin_live_squareoff(
                     state,
                     client,
                     now,
                     exit_transaction,
-                    tag,
+                    squareoff_tag,
                     f"STOP_ORDER_PLACE_FAILED:{type(exc).__name__}",
                 )
         if state["status"] == "OPEN" and not state.get("target_order_id"):
-            recovered_target = _broker_find_tagged_order(
+            recovered_target = _broker_find_role_order(
                 client,
-                tag=tag,
+                signal_id=signal_id,
+                role="target",
                 tradingsymbol=str(state["tradingsymbol"]),
                 transaction_type=exit_transaction,
                 order_type="LIMIT",
@@ -2447,12 +3561,19 @@ def advance_live_order(
                 order_type="LIMIT",
                 price=float(state["target_price"]),
                 validity="DAY",
-                tag=tag,
+                tag=target_tag,
             )
     if state["status"] == "OPEN":
         target_order = _broker_order(client, str(state["target_order_id"]))
         stop_order = _broker_order(client, str(state["stop_order_id"]))
-        if str(stop_order.get("status", "")).upper() == "COMPLETE":
+        stop_status = str(stop_order.get("status", "")).upper()
+        target_status = str(target_order.get("status", "")).upper()
+        state.update(
+            stop_order_status=stop_status,
+            stop_order_status_observed_at_ist=now.isoformat(timespec="seconds"),
+            protection_confirmed=stop_status in {"OPEN", "TRIGGER PENDING"},
+        )
+        if stop_status == "COMPLETE":
             _broker_cancel(client, str(state["target_order_id"]))
             return _close_state(
                 state,
@@ -2460,7 +3581,7 @@ def advance_live_order(
                 "STOP",
                 now,
             )
-        if str(target_order.get("status", "")).upper() == "COMPLETE":
+        if target_status == "COMPLETE":
             _broker_cancel(client, str(state["stop_order_id"]))
             return _close_state(
                 state,
@@ -2468,15 +3589,13 @@ def advance_live_order(
                 "TARGET",
                 now,
             )
-        stop_status = str(stop_order.get("status", "")).upper()
-        target_status = str(target_order.get("status", "")).upper()
         if stop_status in {"REJECTED", "CANCELLED"}:
             _begin_live_squareoff(
                 state,
                 client,
                 now,
                 exit_transaction,
-                tag,
+                squareoff_tag,
                 f"STOP_ORDER_{stop_status}",
             )
         elif target_status in {"REJECTED", "CANCELLED"}:
@@ -2485,7 +3604,7 @@ def advance_live_order(
                 client,
                 now,
                 exit_transaction,
-                tag,
+                squareoff_tag,
                 f"TARGET_ORDER_{target_status}",
             )
         elif kill_enabled:
@@ -2494,7 +3613,7 @@ def advance_live_order(
                 client,
                 now,
                 exit_transaction,
-                tag,
+                squareoff_tag,
                 "KILL_SWITCH_SQUARE_OFF",
             )
         elif now >= square_off:
@@ -2503,7 +3622,7 @@ def advance_live_order(
                 client,
                 now,
                 exit_transaction,
-                tag,
+                squareoff_tag,
                 "LIVE_SQUARE_OFF_SENT",
             )
     if state["status"] == "SQUARE_OFF_PENDING":
@@ -2513,7 +3632,7 @@ def advance_live_order(
                 client,
                 now,
                 exit_transaction,
-                tag,
+                squareoff_tag,
                 str(state.get("status_reason") or "SQUARE_OFF_RECOVERY"),
             )
         order = _broker_order(client, str(state["squareoff_order_id"]))
@@ -2539,7 +3658,7 @@ def _quote_prices(client: Any, symbols: list[str]) -> dict[str, float]:
     if not symbols:
         return {}
     keys = [f"NSE:{symbol}" for symbol in sorted(set(symbols))]
-    payload = client.ltp(keys)
+    payload = _observe_broker_call("ltp", lambda: client.ltp(keys))
     prices: dict[str, float] = {}
     for key, row in payload.items():
         symbol = str(key).split(":", 1)[-1]
@@ -2549,12 +3668,229 @@ def _quote_prices(client: Any, symbols: list[str]) -> dict[str, float]:
     return prices
 
 
+def _quote_prices_with_failover(
+    clients: list[tuple[str, Any]], symbols: list[str]
+) -> tuple[dict[str, float], str, list[dict[str, str]]]:
+    """Prefer app1, then try each remaining Kite app once on quote failure."""
+
+    if not symbols:
+        return {}, "", []
+    failures: list[dict[str, str]] = []
+    last_error: Exception | None = None
+    for app_name, client in clients:
+        try:
+            return _quote_prices(client, symbols), app_name, failures
+        except Exception as exc:
+            last_error = exc
+            failures.append(
+                {
+                    "app": app_name,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+    failure_summary = "; ".join(
+        f"{item['app']}={item['error_type']}: {item['message']}"
+        for item in failures
+    )
+    raise RuntimeError(
+        f"All configured Kite quote apps failed ({failure_summary})"
+    ) from last_error
+
+
 def _write_order_state(state: dict[str, Any]) -> None:
     session_date = date.fromisoformat(str(state["session_date"]))
-    common.atomic_write_json(
-        _order_path(session_date, str(state["mode"]), str(state["signal_id"])),
-        state,
+    state_path = _order_path(session_date, str(state["mode"]), str(state["signal_id"]))
+    previous: dict[str, Any] = {}
+    if state_path.is_file():
+        try:
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+            previous = loaded if isinstance(loaded, dict) else {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            previous = {}
+
+    # Persist the recovery authority before any diagnostic disk/network work.
+    # A successful broker call must never wait for, or be lost behind, a log,
+    # journal, textfile, or exporter failure.
+    common.atomic_write_json(state_path, state)
+
+    # This hash-chained journal adds a durable transition history without being
+    # able to block order management if observability itself is unavailable.
+    significant = (
+        "status",
+        "status_reason",
+        "entry_order_id",
+        "stop_order_id",
+        "target_order_id",
+        "squareoff_order_id",
+        "entry_price",
+        "exit_price",
+        "quantity",
+        "gross_pnl_rs",
+        "estimated_cost_rs",
+        "net_pnl_rs",
+        "exit_reason",
+        "first_execution_error_type",
+        "entry_terminal_cause",
     )
+    changed = [name for name in significant if previous.get(name) != state.get(name)]
+    if changed or not previous:
+        try:
+            from ai_platform.observability.context import CorrelationContext
+            from ai_platform.observability.journal import AppendOnlyEventJournal
+
+            journal_path = (
+                LIVE_ROOT
+                / "order_events"
+                / str(state["mode"]).upper()
+                / f"{session_date.isoformat()}.jsonl"
+            )
+            context = CorrelationContext(
+                service=f"{REPORT_PREFIX}-order-worker",
+                profile=getattr(config, "STRATEGY_PROFILE", "V13_V10_G"),
+                strategy_version=str(state.get("strategy_version", "")),
+                strategy_fingerprint=str(state.get("strategy_fingerprint", "")),
+                mode=str(state.get("mode", "")),
+                asset="EQUITY",
+                session_date=session_date.isoformat(),
+                run_id=RUN_ID,
+                signal_id=str(state.get("signal_id", "")),
+                order_id=str(
+                    state.get("entry_order_id")
+                    or state.get("squareoff_order_id")
+                    or ""
+                ),
+            )
+            AppendOnlyEventJournal(
+                journal_path,
+                service=f"{REPORT_PREFIX}-order-worker",
+                strict=False,
+            ).append(
+                "order_state_transition",
+                {
+                    "state_before": previous.get("status", "UNSEEN"),
+                    "state_after": state.get("status", "UNKNOWN"),
+                    "reason": state.get("status_reason", ""),
+                    "changed_fields": changed,
+                    "tradingsymbol": state.get("tradingsymbol", ""),
+                    "side": state.get("side", ""),
+                    "entry_order_id": state.get("entry_order_id", ""),
+                    "stop_order_id": state.get("stop_order_id", ""),
+                    "target_order_id": state.get("target_order_id", ""),
+                    "squareoff_order_id": state.get("squareoff_order_id", ""),
+                    "quantity": state.get("quantity", 0),
+                    "entry_price": state.get("entry_price", 0.0),
+                    "exit_price": state.get("exit_price", 0.0),
+                    "net_pnl_rs": state.get("net_pnl_rs", 0.0),
+                    "first_execution_error_type": state.get(
+                        "first_execution_error_type", ""
+                    ),
+                    "first_execution_error_at_ist": state.get(
+                        "first_execution_error_at_ist", ""
+                    ),
+                    "last_execution_error_type": state.get(
+                        "last_execution_error_type", ""
+                    ),
+                    "last_execution_error_at_ist": state.get(
+                        "last_execution_error_at_ist", ""
+                    ),
+                    "execution_error_count": state.get("execution_error_count", 0),
+                    "entry_terminal_cause": state.get("entry_terminal_cause", ""),
+                    "updated_at_ist": state.get("updated_at_ist", ""),
+                    "origin_run_id": state.get("origin_run_id", state.get("run_id", "")),
+                },
+                severity=(
+                    "ERROR"
+                    if str(state.get("status", "")).upper() in {"ENTRY_REJECTED", "FAILED"}
+                    else "INFO"
+                ),
+                context=context,
+            )
+        except Exception:
+            # Telemetry is deliberately fail-open; the canonical recovery state
+            # below must still be written and managed.
+            pass
+        try:
+            runtime = _observability_runtime()
+            if runtime is not None:
+                status = str(state.get("status", "unknown")).lower()
+                outcome = (
+                    "error"
+                    if str(state.get("status", "")).upper()
+                    in {"ENTRY_REJECTED", "FAILED", "BLOCKED_SIZING", "BLOCKED_PORTFOLIO"}
+                    else "success"
+                )
+                mode = str(state.get("mode", "PAPER")).lower()
+                strategy = getattr(config, "STRATEGY_PROFILE", "V13_V10_G").lower()
+                with runtime.bind(
+                    profile=getattr(config, "STRATEGY_PROFILE", "V13_V10_G"),
+                    strategy_version=str(state.get("strategy_version", "")),
+                    strategy_fingerprint=str(state.get("strategy_fingerprint", "")),
+                    mode=mode,
+                    asset="EQUITY",
+                    session_date=session_date.isoformat(),
+                    run_id=RUN_ID,
+                    signal_id=str(state.get("signal_id", "")),
+                    order_id=str(
+                        state.get("entry_order_id")
+                        or state.get("squareoff_order_id")
+                        or ""
+                    ),
+                ):
+                    runtime.standard_metrics.order_events_total.inc(
+                        strategy=strategy,
+                        mode=mode,
+                        asset="equity",
+                        event=status,
+                        outcome=outcome,
+                    )
+                    semantic_events: list[tuple[str, str]] = []
+                    if (
+                        mode == "live"
+                        and not previous.get("entry_order_id")
+                        and state.get("entry_order_id")
+                    ) or (
+                        mode == "paper"
+                        and not previous
+                        and str(state.get("status", "")).upper() == "PENDING_ENTRY"
+                    ):
+                        semantic_events.append(("submit", "success"))
+                    if (
+                        str(state.get("status", "")).upper() == "OPEN"
+                        and str(previous.get("status", "")).upper() != "OPEN"
+                    ):
+                        semantic_events.append(("fill", "success"))
+                    if (
+                        str(state.get("status", "")).upper() == "ENTRY_REJECTED"
+                        and str(previous.get("status", "")).upper() != "ENTRY_REJECTED"
+                    ):
+                        semantic_events.append(("submit", "error"))
+                    if (
+                        str(state.get("status", "")).upper() == "CLOSED"
+                        and str(previous.get("status", "")).upper() != "CLOSED"
+                    ):
+                        semantic_events.append(("exit", "success"))
+                    for event_name, event_outcome in semantic_events:
+                        runtime.standard_metrics.order_events_total.inc(
+                            strategy=strategy,
+                            mode=mode,
+                            asset="equity",
+                            event=event_name,
+                            outcome=event_outcome,
+                        )
+                    runtime.event(
+                        "order.state.transition",
+                        severity="ERROR" if outcome == "error" else "INFO",
+                        state_before=previous.get("status", "UNSEEN"),
+                        state_after=state.get("status", "UNKNOWN"),
+                        reason=state.get("status_reason", ""),
+                        changed_fields=changed,
+                        tradingsymbol=state.get("tradingsymbol", ""),
+                    )
+                _flush_observability_metrics(runtime)
+        except Exception:
+            # The latest canonical order state below is always the authority.
+            pass
 
 
 def _advance_g_paper_state(state: dict[str, Any], price: float | None,
@@ -2753,8 +4089,105 @@ def _publish(role: str, state: str, **extra: Any) -> None:
         role=role,
         strategy_version=config.STRATEGY_VERSION,
         strategy_fingerprint=config.strategy_fingerprint(),
+        run_id=RUN_ID,
         **extra,
     )
+    _record_worker_observability(role, state, extra, heartbeat=False)
+
+
+def _record_worker_observability(
+    role: str,
+    state: str,
+    extra: dict[str, Any],
+    *,
+    heartbeat: bool,
+) -> None:
+    """Record worker health without allowing telemetry to escape to callers."""
+
+    try:
+        runtime = _observability_runtime()
+        if runtime is None:
+            return
+        mode = str(
+            extra.get("execution_mode")
+            or os.getenv(f"FNO_{LIVE_LABEL}_EXECUTION_MODE", "PAPER")
+        ).lower()
+        runtime.standard_metrics.heartbeat_age_seconds.set(
+            0, service=ROLE_SESSIONS[role], mode=mode
+        )
+        if not heartbeat:
+            strategy = getattr(config, "STRATEGY_PROFILE", "V13_V10_G").lower()
+            duration = _safe_float(extra.get("stage_duration_sec"), np.nan)
+            if math.isfinite(duration) and duration >= 0:
+                runtime.standard_metrics.stage_duration_seconds.observe(
+                    duration, strategy=strategy, mode=mode, stage=role
+                )
+            deadline_lag = _safe_float(extra.get("deadline_lag_sec"), np.nan)
+            if math.isfinite(deadline_lag):
+                runtime.standard_metrics.slot_deadline_lag_seconds.observe(
+                    deadline_lag, pipeline=role, mode=mode
+                )
+            for item in extra.get("signal_funnel", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                count = max(0, _safe_int(item.get("count"), 0))
+                if count:
+                    runtime.standard_metrics.signal_events_total.inc(
+                        count,
+                        strategy=strategy,
+                        mode=mode,
+                        event=str(item.get("event", "unknown"))[:64],
+                        outcome=str(item.get("outcome", "unknown"))[:64],
+                    )
+            for item in extra.get("raw_anomalies", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                count = max(0, _safe_int(item.get("count"), 0))
+                if count:
+                    runtime.standard_metrics.raw_data_anomaly_total.inc(
+                        count,
+                        source=str(item.get("source", "unknown"))[:64],
+                        anomaly_type=str(item.get("anomaly_type", "unknown"))[:64],
+                    )
+        if not heartbeat or state not in {"RUNNING", "DONE"}:
+            with runtime.bind(
+                profile=getattr(config, "STRATEGY_PROFILE", "V13_V10_G"),
+                strategy_version=config.STRATEGY_VERSION,
+                strategy_fingerprint=config.strategy_fingerprint(),
+                mode=mode,
+                run_id=RUN_ID,
+                session_date=str(
+                    extra.get("session_date") or common.now_ist().date()
+                ),
+            ):
+                runtime.event(
+                    "worker.heartbeat.state" if heartbeat else "worker.status",
+                    severity=(
+                        "ERROR"
+                        if state in {"FAILED", "BLOCKED"}
+                        else "WARNING"
+                        if state in {"WAITING", "DEGRADED"}
+                        else "INFO"
+                    ),
+                    role=role,
+                    state=state,
+                    fields=extra,
+                )
+        pending_duplicates: list[dict[str, Any]] = []
+        with _OBSERVABILITY_EVENT_LOCK:
+            if _PENDING_DUPLICATE_ORDER_EVENTS:
+                pending_duplicates = list(_PENDING_DUPLICATE_ORDER_EVENTS)
+                _PENDING_DUPLICATE_ORDER_EVENTS.clear()
+        for duplicate in pending_duplicates:
+            runtime.event(
+                "order.duplicate.detected",
+                severity="ERROR",
+                durable=True,
+                **duplicate,
+            )
+        _flush_observability_metrics(runtime)
+    except Exception:
+        return
 
 
 def _heartbeat(role: str, state: str, **extra: Any) -> None:
@@ -2764,8 +4197,11 @@ def _heartbeat(role: str, state: str, **extra: Any) -> None:
         worker_pid=os.getpid(),
         role=role,
         strategy_version=config.STRATEGY_VERSION,
+        strategy_fingerprint=config.strategy_fingerprint(),
+        run_id=RUN_ID,
         **extra,
     )
+    _record_worker_observability(role, state, extra, heartbeat=True)
 
 
 def _continuous_state(now: datetime, session_date: date, once: bool) -> str:
@@ -2832,7 +4268,15 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 continue
             ready, reason = _slot_marker_ready(session_date, signal_end, universe)
             if not ready and not args.ignore_fetch_marker:
-                _heartbeat("scanner-5m", "WAITING", phase="WAIT_FETCH", slot=signal_end, reason=reason)
+                _heartbeat(
+                    "scanner-5m",
+                    "WAITING",
+                    phase="WAIT_FETCH",
+                    slot=signal_end,
+                    last_completed_slot=max(processed) if processed else "",
+                    processed_slots=len(processed),
+                    reason=reason,
+                )
                 if args.once:
                     _publish(
                         "scanner-5m",
@@ -2850,6 +4294,7 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 if ready
                 else set()
             )
+            stage_started = time.perf_counter()
             snapshot = scan_five_minute_slot(
                 universe,
                 session_date,
@@ -2857,6 +4302,22 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 verified_no_candle_symbols=verified_skips,
             )
             _write_scanner_snapshot(session_date, signal_end, snapshot)
+            completed_at = common.now_ist()
+            raw_anomalies = [
+                {
+                    "source": str(report.get("source", "unknown")),
+                    "anomaly_type": str(issue.get("code", "unknown")).lower(),
+                    "count": max(1, _safe_int(issue.get("count"), 1)),
+                }
+                for report in snapshot.get("raw_data_quality", []) or []
+                if isinstance(report, dict)
+                for issue in report.get("issues", []) or []
+                if isinstance(issue, dict)
+            ]
+            evaluated = _safe_int(snapshot.get("contracts_evaluated"), 0)
+            candidates = _safe_int(snapshot.get("long_candidates"), 0) + _safe_int(
+                snapshot.get("short_candidates"), 0
+            )
             processed.add(signal_end)
             made_progress = True
             common.atomic_write_text(report_path("scanner-5m"), _render_scanner_report(session_date))
@@ -2867,6 +4328,17 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 slot=signal_end,
                 long_candidates=snapshot["long_candidates"],
                 short_candidates=snapshot["short_candidates"],
+                stage_duration_sec=time.perf_counter() - stage_started,
+                deadline_lag_sec=(completed_at - due).total_seconds(),
+                signal_funnel=[
+                    {"event": "base_gate", "outcome": "passed", "count": candidates},
+                    {
+                        "event": "base_gate",
+                        "outcome": "rejected",
+                        "count": max(0, evaluated - candidates),
+                    },
+                ],
+                raw_anomalies=raw_anomalies,
             )
             if args.once:
                 return 0
@@ -2882,6 +4354,17 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                     report_path("scanner-5m"), _render_scanner_report(session_date)
                 )
                 return 2
+            remaining = [
+                slot for slot in config.SIGNAL_TO_CONFIRMATION if slot not in processed
+            ]
+            _heartbeat(
+                "scanner-5m",
+                "WAITING",
+                phase="WAIT_NEXT_SLOT",
+                next_slot=remaining[0] if remaining else "",
+                last_completed_slot=max(processed) if processed else "",
+                processed_slots=len(processed),
+            )
             time.sleep(args.poll_sec)
     _publish(
         "scanner-5m",
@@ -2973,6 +4456,7 @@ def run_confirmation(args: argparse.Namespace, session_date: date) -> int:
                     slot=signal_end,
                 )
                 continue
+            stage_started = time.perf_counter()
             snapshot = process_confirmation_slot(
                 source, session_date, signal_end, None, args
             )
@@ -3026,6 +4510,30 @@ def run_confirmation(args: argparse.Namespace, session_date: date) -> int:
                 slot=signal_end,
                 selected_long=snapshot["selected_long"],
                 selected_short=snapshot["selected_short"],
+                stage_duration_sec=time.perf_counter() - stage_started,
+                deadline_lag_sec=(completed_at - due).total_seconds(),
+                signal_funnel=[
+                    {
+                        "event": "confirmation_gate",
+                        "outcome": "passed",
+                        "count": _safe_int(snapshot.get("directional_confirmed"), 0),
+                    },
+                    {
+                        "event": "confirmation_gate",
+                        "outcome": "rejected",
+                        "count": max(
+                            0,
+                            _safe_int(snapshot.get("candidate_count"), 0)
+                            - _safe_int(snapshot.get("directional_confirmed"), 0),
+                        ),
+                    },
+                    {
+                        "event": "selection",
+                        "outcome": "selected",
+                        "count": _safe_int(snapshot.get("selected_long"), 0)
+                        + _safe_int(snapshot.get("selected_short"), 0),
+                    },
+                ],
             )
             if args.once:
                 return 0 if snapshot["state"] == "SUCCESS" else 2
@@ -3042,6 +4550,17 @@ def run_confirmation(args: argparse.Namespace, session_date: date) -> int:
                     _render_confirmation_report(session_date),
                 )
                 return 2
+            remaining = [
+                slot for slot in config.SIGNAL_TO_CONFIRMATION if slot not in processed
+            ]
+            _heartbeat(
+                "confirmation-1m",
+                "WAITING",
+                phase="WAIT_NEXT_SLOT",
+                next_slot=remaining[0] if remaining else "",
+                last_completed_slot=max(processed) if processed else "",
+                processed_slots=len(processed),
+            )
             time.sleep(args.poll_sec)
     _publish(
         "confirmation-1m",
@@ -3080,6 +4599,8 @@ def run_worker(
                 mode,
                 live_quantity=live_quantity,
             )
+            state.setdefault("origin_run_id", state.get("run_id", ""))
+            state["last_managed_run_id"] = RUN_ID
             _validate_order_state(
                 state,
                 signal,
@@ -3111,15 +4632,48 @@ def run_worker(
         if active and pool is None:
             pool = KitePool(args.max_apps, args.timeout_sec)
         prices: dict[str, float] = {}
-        if active and mode == "PAPER" and pool is not None:
+        quote_app = ""
+        quote_failures: list[dict[str, str]] = []
+        iteration_errors: list[dict[str, str]] = []
+        quote_states = (
+            active
+            if mode == "PAPER"
+            else [
+                state
+                for state in active
+                if state.get("status") == "PENDING_ENTRY"
+                and not state.get("entry_order_id")
+            ]
+        )
+        if quote_states and pool is not None:
             try:
-                prices = _quote_prices(
-                    pool.primary,
-                    [str(state["tradingsymbol"]) for state in active],
+                prices, quote_app, quote_failures = pool.quote_prices(
+                    [str(state["tradingsymbol"]) for state in quote_states],
                 )
             except Exception as exc:
-                _heartbeat(role, "DEGRADED", phase="QUOTE_FAILED", error=f"{type(exc).__name__}: {exc}")
+                quote_phase = (
+                    "QUOTE_FAILED" if mode == "PAPER" else "ENTRY_QUOTE_FAILED"
+                )
+                iteration_errors.append(
+                    {
+                        "phase": quote_phase,
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+                _heartbeat(
+                    role,
+                    "DEGRADED",
+                    phase=quote_phase,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
         for state in states:
+            # Terminal evidence is immutable.  In particular, a coordinator
+            # restart with no active states must not replace the original
+            # cancellation/expiry reason with a generic client-unavailable
+            # error merely because no KitePool was constructed.
+            if mode == "LIVE" and state.get("status") in TERMINAL_STATES:
+                continue
             try:
                 if mode == "PAPER":
                     price = prices.get(str(state["tradingsymbol"]))
@@ -3130,29 +4684,90 @@ def run_worker(
                     elif price is not None:
                         state = advance_paper_order(state, price, now)
                 else:
-                    if pool is None:
+                    if pool is None and state.get("status") not in TERMINAL_STATES:
                         raise RuntimeError("Kite client unavailable for LIVE mode.")
-                    state = advance_live_order(state, pool.primary, now)
+                    runtime = _observability_runtime()
+                    if runtime is None:
+                        state = advance_live_order(
+                            state,
+                            pool,
+                            now,
+                            last_price=prices.get(str(state["tradingsymbol"])),
+                        )
+                    else:
+                        with runtime.bind(
+                            profile=getattr(
+                                config, "STRATEGY_PROFILE", "V13_V10_G"
+                            ),
+                            strategy_version=str(
+                                state.get("strategy_version", config.STRATEGY_VERSION)
+                            ),
+                            strategy_fingerprint=str(
+                                state.get(
+                                    "strategy_fingerprint",
+                                    config.strategy_fingerprint(),
+                                )
+                            ),
+                            mode="LIVE",
+                            asset="EQUITY",
+                            session_date=session_date.isoformat(),
+                            run_id=RUN_ID,
+                            signal_id=str(state.get("signal_id", "")),
+                            order_id=str(state.get("entry_order_id", "")),
+                        ):
+                            state = advance_live_order(
+                                state,
+                                pool,
+                                now,
+                                last_price=prices.get(str(state["tradingsymbol"])),
+                            )
             except Exception as exc:
-                state.update(
-                    status_reason=f"{type(exc).__name__}: {exc}",
-                    updated_at_ist=now.isoformat(timespec="seconds"),
+                _record_live_execution_error(state, exc, now)
+                iteration_errors.append(
+                    {
+                        "phase": "ORDER_ADVANCE_FAILED",
+                        "signal_id": str(state.get("signal_id", "")),
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
                 )
+                _write_order_state(state)
             if mode != "PAPER" or not is_g_config(config):
                 _write_order_state(state)
         common.atomic_write_text(report_path(role), _render_worker_report(session_date, side, mode))
         counts = {name: sum(state.get("status") == name for state in states) for name in (
             "PENDING_ENTRY", "OPEN", "CLOSED", "NO_FILL", "BLOCKED_SIZING"
         )}
+        publish_state = (
+            "DEGRADED"
+            if iteration_errors
+            else _continuous_state(now, session_date, args.once)
+        )
         _publish(
             role,
-            _continuous_state(now, session_date, args.once),
+            publish_state,
             execution_mode=mode,
             signals=len(signals),
+            error_count=len(iteration_errors),
+            errors=iteration_errors[:10],
+            quote_app=quote_app,
+            quote_failover_count=len(quote_failures),
+            quote_failures=quote_failures[:10],
+            broker_operation=pool.last_operation if pool is not None else "",
+            broker_app=pool.last_operation_app if pool is not None else "",
+            broker_failover_count=(
+                len(pool.last_operation_failures) if pool is not None else 0
+            ),
+            broker_failures=(
+                pool.last_operation_failures[:10] if pool is not None else []
+            ),
+            credential_reload_count=(
+                pool.credential_reload_count if pool is not None else 0
+            ),
             **{key.lower(): value for key, value in counts.items()},
         )
         if args.once or now.time() >= SESSION_END:
-            return 0
+            return 2 if iteration_errors else 0
         time.sleep(args.poll_sec)
 
 
@@ -3177,11 +4792,349 @@ def run_trade_logger(args: argparse.Namespace, session_date: date) -> int:
         time.sleep(args.reporting_poll_sec)
 
 
+def _publish_broker_position_reconciliation(
+    states: list[dict[str, Any]], client: Any, session_date: date
+) -> dict[str, Any]:
+    """Publish scoped position and active-order truth using broker reads only."""
+
+    positions_payload = _observe_broker_call("positions", client.positions)
+    if not isinstance(positions_payload, dict) or not isinstance(
+        positions_payload.get("net"), list
+    ):
+        raise RuntimeError("Broker positions response has no complete net-position list.")
+    broker_rows = positions_payload["net"]
+    if any(not isinstance(row, dict) for row in broker_rows):
+        raise RuntimeError("Broker net-position list contains a malformed row.")
+
+    order_rows = _observe_broker_call("list_orders", client.orders)
+    if not isinstance(order_rows, list):
+        raise RuntimeError("Broker orders response is not a complete order list.")
+    if any(not isinstance(row, dict) for row in order_rows):
+        raise RuntimeError("Broker order list contains a malformed row.")
+
+    tagged_order_rows = [
+        row
+        for row in order_rows
+        if str(row.get("tag", "")).startswith(ORDER_TAG_PREFIX)
+    ]
+    tagged_symbols = {
+        str(row.get("tradingsymbol", "")).strip().upper()
+        for row in tagged_order_rows
+        if str(row.get("tradingsymbol", "")).strip()
+    }
+    local_states = [
+        state
+        for state in states
+        if str(state.get("mode", "")).upper() == "LIVE"
+    ]
+    local_symbols = {
+        str(state.get("tradingsymbol", "")).strip().upper()
+        for state in local_states
+        if str(state.get("tradingsymbol", "")).strip()
+    }
+    attributed_symbols = local_symbols | tagged_symbols
+    expected: dict[str, int] = {symbol: 0 for symbol in attributed_symbols}
+    for state in local_states:
+        if str(state.get("status", "")).upper() not in {"OPEN", "SQUARE_OFF_PENDING"}:
+            continue
+        symbol = str(state.get("tradingsymbol", "")).strip().upper()
+        quantity = max(0, _safe_int(state.get("quantity"), 0))
+        expected[symbol] = expected.get(symbol, 0) + (
+            quantity if str(state.get("side", "")).upper() == "LONG" else -quantity
+        )
+
+    observed: dict[str, int] = {}
+    unscoped: list[dict[str, Any]] = []
+    for row in broker_rows:
+        if str(row.get("exchange", "")).upper() != "NSE" or str(
+            row.get("product", "")
+        ).upper() != "MIS":
+            continue
+        symbol = str(row.get("tradingsymbol", "")).strip().upper()
+        quantity = _safe_int(row.get("quantity"), 0)
+        if not symbol or quantity == 0:
+            continue
+        if symbol not in attributed_symbols:
+            unscoped.append({"tradingsymbol": symbol, "quantity": quantity})
+            continue
+        observed[symbol] = quantity
+
+    mismatches = [
+        {
+            "tradingsymbol": symbol,
+            "local_expected_quantity": expected.get(symbol, 0),
+            "broker_quantity": observed.get(symbol, 0),
+        }
+        for symbol in sorted(attributed_symbols)
+        if expected.get(symbol, 0) != observed.get(symbol, 0)
+    ]
+
+    active_order_mismatches: list[dict[str, Any]] = []
+    expected_active_orders: dict[str, dict[str, Any]] = {}
+    expected_roles: dict[str, tuple[str, ...]] = {
+        "OPEN": ("stop", "target"),
+        "SQUARE_OFF_PENDING": ("squareoff",),
+    }
+    role_fields = {
+        "entry": "entry_order_id",
+        "stop": "stop_order_id",
+        "target": "target_order_id",
+        "squareoff": "squareoff_order_id",
+    }
+    role_order_types = {
+        "entry": "SL-M",
+        "stop": "SL-M",
+        "target": "LIMIT",
+        "squareoff": "MARKET",
+    }
+    known_local_statuses = TERMINAL_STATES | {
+        "PENDING_ENTRY",
+        "OPEN",
+        "SQUARE_OFF_PENDING",
+    }
+    for state in local_states:
+        status = str(state.get("status", "")).strip().upper()
+        signal_id = str(state.get("signal_id", "")).strip()
+        symbol = str(state.get("tradingsymbol", "")).strip().upper()
+        side = str(state.get("side", "")).strip().upper()
+        if status not in known_local_statuses:
+            active_order_mismatches.append(
+                {
+                    "kind": "local_order_state_unclassified",
+                    "signal_id": signal_id,
+                    "tradingsymbol": symbol,
+                    "local_status": status,
+                }
+            )
+            continue
+
+        roles = expected_roles.get(status, ())
+        if status == "PENDING_ENTRY" and str(state.get("entry_order_id", "")).strip():
+            roles = ("entry",)
+        for role in roles:
+            order_id = str(state.get(role_fields[role], "")).strip()
+            if not order_id:
+                active_order_mismatches.append(
+                    {
+                        "kind": "local_expected_active_order_id_missing",
+                        "signal_id": signal_id,
+                        "tradingsymbol": symbol,
+                        "local_status": status,
+                        "order_role": role,
+                    }
+                )
+                continue
+            exit_transaction = "SELL" if side == "LONG" else "BUY"
+            expected_row = {
+                "order_id": order_id,
+                "signal_id": signal_id,
+                "tradingsymbol": symbol,
+                "local_status": status,
+                "order_role": role,
+                "tag": _live_order_tag(signal_id, role),
+                "legacy_tag": _live_tag(signal_id),
+                "exchange": str(state.get("exchange", "NSE")).strip().upper(),
+                "product": "MIS",
+                "transaction_type": (
+                    ("BUY" if side == "LONG" else "SELL")
+                    if role == "entry"
+                    else exit_transaction
+                ),
+                "order_type": role_order_types[role],
+                "quantity": max(0, _safe_int(state.get("quantity"), 0)),
+            }
+            previous = expected_active_orders.get(order_id)
+            if previous is not None:
+                active_order_mismatches.append(
+                    {
+                        "kind": "duplicate_local_active_order_reference",
+                        "order_id": order_id,
+                        "first_signal_id": previous["signal_id"],
+                        "second_signal_id": signal_id,
+                        "first_order_role": previous["order_role"],
+                        "second_order_role": role,
+                    }
+                )
+                continue
+            expected_active_orders[order_id] = expected_row
+
+    def broker_order_evidence(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "order_id": str(row.get("order_id", "")).strip(),
+            "tag": str(row.get("tag", "")).strip(),
+            "tradingsymbol": str(row.get("tradingsymbol", "")).strip().upper(),
+            "status": str(row.get("status", "")).strip().upper(),
+            "exchange": str(row.get("exchange", "")).strip().upper(),
+            "product": str(row.get("product", "")).strip().upper(),
+            "transaction_type": str(row.get("transaction_type", "")).strip().upper(),
+            "order_type": str(row.get("order_type", "")).strip().upper(),
+            "quantity": _safe_int(row.get("quantity"), -1),
+            "filled_quantity": _safe_int(row.get("filled_quantity"), 0),
+            "pending_quantity": _safe_int(row.get("pending_quantity"), 0),
+        }
+
+    all_orders_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in order_rows:
+        evidence = broker_order_evidence(row)
+        if evidence["order_id"]:
+            all_orders_by_id.setdefault(evidence["order_id"], []).append(evidence)
+
+    broker_active_orders: dict[str, dict[str, Any]] = {}
+    broker_active_tagged_order_count = 0
+    for row in tagged_order_rows:
+        evidence = broker_order_evidence(row)
+        status = evidence["status"]
+        if status in BROKER_TERMINAL_ORDER_STATUSES:
+            continue
+        broker_active_tagged_order_count += 1
+        if status not in BROKER_ACTIVE_ORDER_STATUSES:
+            active_order_mismatches.append(
+                {
+                    "kind": "broker_active_order_status_unknown",
+                    **evidence,
+                }
+            )
+        order_id = evidence["order_id"]
+        if not order_id:
+            active_order_mismatches.append(
+                {
+                    "kind": "broker_active_order_id_missing",
+                    **evidence,
+                }
+            )
+            continue
+        if order_id in broker_active_orders:
+            active_order_mismatches.append(
+                {
+                    "kind": "duplicate_broker_active_order_id",
+                    "order_id": order_id,
+                    "first": broker_active_orders[order_id],
+                    "second": evidence,
+                }
+            )
+            continue
+        broker_active_orders[order_id] = evidence
+
+    for order_id, expected_order in sorted(expected_active_orders.items()):
+        observed_order = broker_active_orders.get(order_id)
+        if observed_order is None:
+            historical = all_orders_by_id.get(order_id, [])
+            active_order_mismatches.append(
+                {
+                    "kind": "local_expected_active_order_missing_at_broker",
+                    **expected_order,
+                    "broker_observations": historical,
+                }
+            )
+            continue
+        compared_fields = (
+            "tag",
+            "tradingsymbol",
+            "exchange",
+            "product",
+            "transaction_type",
+            "order_type",
+            "quantity",
+        )
+        differences = {}
+        for field in compared_fields:
+            if field == "tag" and observed_order[field] in {
+                expected_order[field],
+                expected_order["legacy_tag"],
+            }:
+                continue
+            if field == "order_type" and _broker_order_type_matches(
+                expected_order[field],
+                observed_order[field],
+                protected=expected_order[field] in {"MARKET", "SL-M"},
+            ):
+                continue
+            if expected_order[field] != observed_order[field]:
+                differences[field] = {
+                    "local_expected": expected_order[field],
+                    "broker_observed": observed_order[field],
+                }
+        if differences:
+            active_order_mismatches.append(
+                {
+                    "kind": "active_order_identity_mismatch",
+                    "order_id": order_id,
+                    "signal_id": expected_order["signal_id"],
+                    "order_role": expected_order["order_role"],
+                    "differences": differences,
+                }
+            )
+
+    for order_id, observed_order in sorted(broker_active_orders.items()):
+        if order_id not in expected_active_orders:
+            active_order_mismatches.append(
+                {
+                    "kind": "unexpected_broker_active_tagged_order",
+                    **observed_order,
+                }
+            )
+
+    reconciliation = {
+        "broker_truth_available": True,
+        "scope": "nse_mis_strategy_tagged_symbols_and_active_orders",
+        "scope_complete": not unscoped,
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+        "unscoped_nonzero_positions": unscoped,
+        "local_state_count": len(local_states),
+        "tagged_symbol_count": len(tagged_symbols),
+        "tagged_order_count": len(tagged_order_rows),
+        "local_expected_active_order_count": len(expected_active_orders),
+        "local_expected_active_order_ids": sorted(expected_active_orders),
+        "broker_active_tagged_order_count": broker_active_tagged_order_count,
+        "broker_active_tagged_order_ids": sorted(broker_active_orders),
+        "active_order_parity_complete": not active_order_mismatches,
+        "active_order_mismatch_count": len(active_order_mismatches),
+        "active_order_mismatches": active_order_mismatches,
+    }
+    report = {
+        "schema_version": "v13_v10_g_broker_position_reconciliation_v2",
+        "session_date": session_date.isoformat(),
+        "generated_at_ist": _iso_now(),
+        "run_id": RUN_ID,
+        "position_reconciliation": reconciliation,
+    }
+    # The collector verifies this digest before a broker/local agreement can
+    # become a safety gauge.  It is an integrity check for the local artifact,
+    # not an authentication substitute for the broker API response itself.
+    report["report_sha256"] = common.canonical_json_sha256(report)
+    path = common.runtime_dir("observability", "reconciliation") / (
+        f"broker_positions_{session_date.isoformat()}.json"
+    )
+    common.atomic_write_json(path, report)
+    return reconciliation
+
+
 def run_net_result(args: argparse.Namespace, session_date: date) -> int:
+    broker_pool: KitePool | None = None
+    next_broker_reconciliation = 0.0
     while True:
         now = common.now_ist()
         states = load_order_states(session_date)
         summary = net_summary(states)
+        reconciliation: dict[str, Any] | None = None
+        if (
+            args.execution_mode.upper() == "LIVE"
+            and time.monotonic() >= next_broker_reconciliation
+        ):
+            next_broker_reconciliation = time.monotonic() + float(
+                getattr(args, "broker_reconcile_sec", 30.0)
+            )
+            try:
+                broker_pool = broker_pool or KitePool(args.max_apps, args.timeout_sec)
+                reconciliation = _publish_broker_position_reconciliation(
+                    states, broker_pool, session_date
+                )
+            except Exception as exc:
+                reconciliation = {
+                    "broker_truth_available": False,
+                    "error_type": type(exc).__name__,
+                }
         common.atomic_write_text(report_path("net-result"), render_net_result(session_date))
         issue = _blocking_pipeline_issue(session_date)
         if not states and issue:
@@ -3190,11 +5143,69 @@ def run_net_result(args: argparse.Namespace, session_date: date) -> int:
         _publish(
             "net-result",
             _continuous_state(now, session_date, args.once),
+            broker_position_reconciliation=reconciliation,
             **summary,
         )
         if args.once or now.time() >= SESSION_END:
             return 0
         time.sleep(args.reporting_poll_sec)
+
+
+def run_broker_reconciliation(args: argparse.Namespace, session_date: date) -> int:
+    """Publish read-only, digest-verified broker position and order truth.
+
+    This dedicated role intentionally has no dependency on scanner or
+    confirmation state: broker truth is still required when the strategy has
+    no local orders, or when the signal pipeline is blocked.  Its broker
+    surface is limited to ``positions`` and ``orders`` by
+    :func:`_publish_broker_position_reconciliation`.
+    """
+
+    if str(args.execution_mode).upper() != "LIVE":
+        raise ValueError("Broker reconciliation requires LIVE mode.")
+
+    broker_pool: KitePool | None = None
+    while True:
+        now = common.now_ist()
+        states = load_order_states(session_date, mode="LIVE")
+        try:
+            broker_pool = broker_pool or KitePool(args.max_apps, args.timeout_sec)
+            reconciliation = _publish_broker_position_reconciliation(
+                states, broker_pool, session_date
+            )
+            trusted = (
+                reconciliation.get("broker_truth_available") is True
+                and reconciliation.get("scope_complete") is True
+                and _safe_int(reconciliation.get("mismatch_count"), -1) == 0
+                and reconciliation.get("active_order_parity_complete") is True
+                and _safe_int(
+                    reconciliation.get("active_order_mismatch_count"), -1
+                )
+                == 0
+            )
+            publish_state = (
+                _continuous_state(now, session_date, args.once)
+                if trusted
+                else "DEGRADED"
+            )
+            exit_code = 0 if trusted else 2
+        except Exception as exc:
+            reconciliation = {
+                "broker_truth_available": False,
+                "error_type": type(exc).__name__,
+            }
+            publish_state = "DEGRADED"
+            exit_code = 2
+        _publish(
+            "broker-reconciliation",
+            publish_state,
+            execution_mode="LIVE",
+            session_date=session_date.isoformat(),
+            broker_position_reconciliation=reconciliation,
+        )
+        if args.once or now.date() != session_date or now.time() >= SESSION_END:
+            return exit_code
+        time.sleep(float(args.broker_reconcile_sec))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3224,6 +5235,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--poll-sec", type=float, default=1.0)
     parser.add_argument("--reporting-poll-sec", type=float, default=5.0)
+    parser.add_argument("--broker-reconcile-sec", type=float, default=30.0)
     parser.add_argument("--boundary-buffer-sec", type=float, default=3.0)
     parser.add_argument("--confirmation-max-wait-sec", type=float, default=90.0)
     parser.add_argument("--request-interval-sec", type=float, default=0.36)
@@ -3236,6 +5248,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> int:
     live_quantity = getattr(args, "live_quantity", None)
+    if float(getattr(args, "broker_reconcile_sec", 30.0)) < 10:
+        raise ValueError("--broker-reconcile-sec must be at least 10 seconds.")
     if live_quantity is not None:
         if str(args.execution_mode).upper() != "LIVE":
             raise ValueError("--live-quantity is valid only with LIVE execution mode.")
@@ -3415,7 +5429,9 @@ def run(args: argparse.Namespace) -> int:
         return run_worker(args, session_date, "SHORT")
     if role == "trade-logger":
         return run_trade_logger(args, session_date)
-    return run_net_result(args, session_date)
+    if role == "net-result":
+        return run_net_result(args, session_date)
+    return run_broker_reconciliation(args, session_date)
 
 
 def main(argv: list[str] | None = None) -> int:

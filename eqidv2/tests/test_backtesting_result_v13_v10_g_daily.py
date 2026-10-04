@@ -167,6 +167,72 @@ def test_successful_result_is_only_requested_day_g(harness, monkeypatch):
     assert final["result"]["data_verification"]["date"] == DAY.isoformat()
 
 
+class _TelemetryContext:
+    def __init__(self, kind, failure):
+        self.kind = kind
+        self.failure = failure
+
+    def __enter__(self):
+        if self.failure == f"{self.kind}_enter":
+            raise RuntimeError(f"TELEMETRY_{self.kind.upper()}_ENTER")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        del exc_type, exc_value, traceback
+        if self.failure == f"{self.kind}_exit":
+            raise RuntimeError(f"TELEMETRY_{self.kind.upper()}_EXIT")
+        return False
+
+
+class _FaultyObservability:
+    def __init__(self, failure):
+        self.failure = failure
+        self.standard_metrics = SimpleNamespace(
+            telemetry_dropped_total=SimpleNamespace(inc=lambda **kwargs: None)
+        )
+
+    def bind(self, **kwargs):
+        del kwargs
+        return _TelemetryContext("bind", self.failure)
+
+    def span(self, *args, **kwargs):
+        del args, kwargs
+        return _TelemetryContext("span", self.failure)
+
+
+@pytest.mark.parametrize(
+    "failure", ["bind_enter", "span_enter", "span_exit", "bind_exit"]
+)
+def test_telemetry_context_failure_preserves_exactly_once_success(
+        harness, monkeypatch, failure):
+    monkeypatch.setattr(
+        daily, "_observability_runtime", lambda: _FaultyObservability(failure)
+    )
+
+    def replay(day, output):
+        del output
+        harness.calls.append(("replay", day))
+        return successful_result(day)
+
+    monkeypatch.setattr(daily, "run_replay", replay)
+    assert daily.run(harness.args(wait=True)) == 0
+    assert harness.calls == [("wait", DAY), ("verify", DAY), ("replay", DAY)]
+    assert harness.publications[-1]["state"] == "SUCCESS"
+
+
+def test_telemetry_exit_failure_preserves_original_business_exception(
+        harness, monkeypatch):
+    monkeypatch.setattr(
+        daily,
+        "_observability_runtime",
+        lambda: _FaultyObservability("span_exit"),
+    )
+    assert daily.run(harness.args(wait=True)) == 2
+    assert harness.calls == [("wait", DAY), ("verify", DAY), ("replay", DAY)]
+    assert "ISOLATED_REPLAY_NOT_CONFIGURED" in harness.publications[-1]["reason"]
+    assert "TELEMETRY" not in harness.publications[-1]["reason"]
+
+
 @pytest.mark.parametrize("field,value", [
     ("strategy", "V6_CONTROL"),
     ("strategy_version", "FNO_V6_BEST_NET_CASH_EQUITY_20260811"),

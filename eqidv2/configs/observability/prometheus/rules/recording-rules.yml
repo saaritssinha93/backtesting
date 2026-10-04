@@ -1,0 +1,36 @@
+groups:
+  - name: trading-recording-rules
+    interval: 30s
+    rules:
+      - record: trading:slo:heartbeat_fresh:ratio_5m
+        expr: (avg_over_time(((trading_heartbeat_age_seconds{mode=~"live|paper",service=~".*(5min|5m).*"} <= bool 420) or (trading_heartbeat_age_seconds{mode=~"live|paper",service!~".*(5min|5m).*"} <= bool 120))[5m:]) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+
+      - record: trading:slo:pipeline_schedule_current:ratio_5m
+        expr: (avg_over_time((trading_pipeline_schedule_overdue{mode="live"} == bool 0)[5m:]) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+
+      - record: trading:slo:data_fresh:ratio_5m
+        expr: (avg_over_time(((trading_data_age_seconds{timeframe="5m"} <= bool 420) or (trading_data_age_seconds{timeframe!="5m",source!="equity_confirmation"} <= bool 90))[5m:]) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+
+      - record: trading:slo:slot_on_time:ratio_1h
+        expr: ((1 - (sum(increase(trading_slot_deadline_lag_seconds_count[1h])) - sum(increase(trading_slot_deadline_lag_seconds_bucket{le="30"}[1h]))) / clamp_min(sum(increase(trading_slot_deadline_lag_seconds_count[1h])), 1)) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+
+      - record: trading:broker:success_ratio_5m
+        expr: sum(rate(trading_broker_request_duration_seconds_count{outcome="success"}[5m])) / clamp_min(sum(rate(trading_broker_request_duration_seconds_count[5m])), 0.000001)
+
+      - record: trading:broker:latency_p95_seconds_5m
+        expr: histogram_quantile(0.95, sum by (le, operation) (rate(trading_broker_request_duration_seconds_bucket[5m])))
+
+      - record: trading:orders:fill_ratio_1h
+        expr: sum by (strategy, mode) (increase(trading_order_events_total{event="fill"}[1h])) / clamp_min(sum by (strategy, mode) (increase(trading_order_events_total{event="submit"}[1h])), 1)
+
+      - record: trading:data:min_coverage_ratio_5m
+        expr: min by (source) (min_over_time(trading_data_coverage_ratio[5m]))
+
+      - record: trading:telemetry:dropped_rate_5m
+        expr: sum by (component, reason) (rate(trading_telemetry_dropped_total[5m]))
+
+      - record: trading:api:error_ratio_5m
+        expr: sum(rate(trading_http_requests_total{status_code=~"5.."}[5m])) / clamp_min(sum(rate(trading_http_requests_total[5m])), 0.000001)
+
+      - record: trading:api:latency_p95_seconds_5m
+        expr: histogram_quantile(0.95, sum by (le, method, route) (rate(trading_http_request_duration_seconds_bucket[5m])))

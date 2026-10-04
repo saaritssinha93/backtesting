@@ -1,0 +1,29 @@
+{
+  "session": "backtesting_result_v13_v10_g",
+  "session_date": "2026-09-17",
+  "strategy": "V13-V10-G",
+  "strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+  "strategy_fingerprint": "fixture-fingerprint",
+  "status": "SUCCESS",
+  "reason": "Synthetic completed run",
+  "result": {
+    "schema_version": "fno_v13_v10_g_daily_replay_v1",
+    "strategy": "V13-V10-G",
+    "strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+    "session_date": "2026-09-17",
+    "complete": true,
+    "state": "SUCCESS",
+    "metrics": {
+      "trades": 1,
+      "net_profit_rupees": -125.5
+    },
+    "coverage": {
+      "universe_stocks": 2,
+      "included_stocks": 2,
+      "problems": []
+    },
+    "data_verification": {
+      "status": "PASS"
+    }
+  }
+}

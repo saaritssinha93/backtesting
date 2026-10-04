@@ -35,6 +35,7 @@ FEATURE_VALUE_SUFFIXES = (
     "vwap", "distance_vwap_pct", "session_range_pct", "gap_pct",
 )
 TABLE_NAMES = ("signals", "annotated", "all_5m_features", "setup_audit", "path_quality", "eligibility")
+DATASET_AUDIT_FILES = ("source_manifest.csv", "source_session_eligibility.csv")
 
 
 def sha256(path: Path) -> str:
@@ -43,6 +44,38 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def eligibility_through_day(
+    eligibility: pd.DataFrame, through_day: str | date
+) -> pd.DataFrame:
+    """Return eligibility audit rows inside the declared dataset window.
+
+    ``v5.load_market`` deliberately returns its full raw eligibility audit even
+    though signals are built only through ``through_day``. A dataset bundle
+    must not publish that wider audit as if it shared the dataset cutoff.
+    """
+    cutoff = date.fromisoformat(through_day) if isinstance(through_day, str) else through_day
+    if "day" not in eligibility:
+        raise ValueError("Eligibility audit is missing day")
+    result = eligibility.copy()
+    parsed = pd.to_datetime(result["day"], errors="coerce")
+    if parsed.isna().any():
+        raise ValueError("Eligibility audit contains an invalid day")
+    result["day"] = parsed.dt.date
+    result = result.loc[result["day"].le(cutoff)].copy()
+    return result.sort_values("day", kind="stable").reset_index(drop=True)
+
+
+def dataset_output_checksums(output_dir: Path | str) -> dict[str, str]:
+    """Hash every reusable dataset output, including its CSV audit ledgers."""
+    output_dir = Path(output_dir)
+    names = [
+        *(f"{name}.parquet" for name in TABLE_NAMES),
+        "paths.npz",
+        *DATASET_AUDIT_FILES,
+    ]
+    return {name: sha256(output_dir / name) for name in names}
 
 
 def causal_bar_features(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
@@ -325,6 +358,7 @@ def build_dataset(output_dir: Path | str, through_day: str | date = "2026-09-11"
         # Native V9-owned caches are reused only when their raw and original
         # code input hashes match. Historical V13 files are never rewritten.
         gated, _, _, calendar, cache_records, annotated, eligibility = v5.load_market(through_day, rebuild_cache=not native_unchanged, refresh_eligibility=True)
+        eligibility = eligibility_through_day(eligibility, through_day)
     finally:
         v5.CACHE_DIR = original_cache
         v5._load_verified_v5_cache = original_cache_loader
@@ -396,8 +430,7 @@ def build_dataset(output_dir: Path | str, through_day: str | date = "2026-09-11"
     np.savez_compressed(output_dir / "paths.npz", **flat)
     common.atomic_write_csv(pd.DataFrame(sources), output_dir / "source_manifest.csv")
     common.atomic_write_csv(eligibility, output_dir / "source_session_eligibility.csv")
-    manifest = {"schema": SCHEMA_VERSION, "through_day": str(through_day), "source_fingerprint": source_fingerprint, "sources": sources, "days": [str(day) for day in days], "calendar": {month: str(day) for month, day in calendar.items()}, "native_cache_records": cache_records, "rows": {name: len(frame) for name, frame in result.items()}, "feature_columns": feature_columns(all_five), "chronology": "5m features end <= signal_ts; exact next1m features end <= confirmation_ts; entry starts strictly after confirmation. Forward OHLC is a separate outcome-only artifact.", "selection_contract": "Exact original V13-v5 higher_frequency strict signal SID and 14 setup eligibility/ranking; V13-v6 portfolio acceptance applied downstream.", "all_5m_scope": "Every complete observed equity 5m bar 09:20-15:15 on source-eligible required-contract sessions. Missing equity bars are not imputed. Missing exact futures OI and 1m confirmation remain explicit NaNs/rejections.", "output_sha256": {f"{name}.parquet": sha256(output_dir / f"{name}.parquet") for name in TABLE_NAMES}}
-    manifest["output_sha256"]["paths.npz"] = sha256(output_dir / "paths.npz")
+    manifest = {"schema": SCHEMA_VERSION, "through_day": str(through_day), "source_fingerprint": source_fingerprint, "sources": sources, "days": [str(day) for day in days], "calendar": {month: str(day) for month, day in calendar.items()}, "native_cache_records": cache_records, "rows": {name: len(frame) for name, frame in result.items()}, "eligibility_scope": {"through_day": str(through_day), "rows": len(eligibility), "max_day": str(eligibility["day"].max()) if not eligibility.empty else None, "post_cutoff_rows": 0}, "feature_columns": feature_columns(all_five), "chronology": "5m features end <= signal_ts; exact next1m features end <= confirmation_ts; entry starts strictly after confirmation. Forward OHLC is a separate outcome-only artifact.", "selection_contract": "Exact original V13-v5 higher_frequency strict signal SID and 14 setup eligibility/ranking; V13-v6 portfolio acceptance applied downstream.", "all_5m_scope": "Every complete observed equity 5m bar 09:20-15:15 on source-eligible required-contract sessions. Missing equity bars are not imputed. Missing exact futures OI and 1m confirmation remain explicit NaNs/rejections.", "output_sha256": dataset_output_checksums(output_dir)}
     common.atomic_write_json(manifest_path, manifest)
     result.update(paths=paths, days=days, calendar=calendar, manifest=manifest, output_dir=output_dir)
     return result

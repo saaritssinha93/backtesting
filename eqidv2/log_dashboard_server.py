@@ -101,6 +101,52 @@ FNO_OI_ROOT = runtime_dir("fno_oi")
 FNO_OI_LATEST_DIR = FNO_OI_ROOT / "latest"
 FNO_G_BACKTEST_ROOT = runtime_dir("backtesting_result_v13_v10_g")
 FNO_G_BACKTEST_REPORT = FNO_G_BACKTEST_ROOT / "latest" / "latest_backtesting_result_v13_v10_g.md"
+V13_V10_G_STRATEGY_RESEARCH_ROOT = runtime_dir("v13_v10_g_strategy_research")
+V13_V10_G_STRATEGY_RESEARCH_LATEST_DIR = V13_V10_G_STRATEGY_RESEARCH_ROOT / "latest"
+# These are artifact views, not runnable sessions.  Keep the mapping ordered so
+# the dashboard, generated bundle and tests share one explicit presentation
+# contract without giving a report a restart/kill control.
+V13_V10_G_RESEARCH_CARD_REPORTS: Dict[str, str] = {
+    "fno_v13_v10_g_research_data_quality":
+        "latest_fno_v13_v10_g_research_data_quality.md",
+    "fno_v13_v10_g_research_dataset":
+        "latest_fno_v13_v10_g_research_dataset.md",
+    "fno_v13_v10_g_research_baseline":
+        "latest_fno_v13_v10_g_research_baseline.md",
+    "fno_v13_v10_g_research_attribution":
+        "latest_fno_v13_v10_g_research_attribution.md",
+    "fno_v13_v10_g_research_regimes":
+        "latest_fno_v13_v10_g_research_regimes.md",
+    "fno_v13_v10_g_research_predictions":
+        "latest_fno_v13_v10_g_research_predictions.md",
+    "fno_v13_v10_g_research_walkforward":
+        "latest_fno_v13_v10_g_research_walkforward.md",
+    "fno_v13_v10_g_research_shadow":
+        "latest_fno_v13_v10_g_research_shadow.md",
+}
+V13_V10_G_OBSERVABILITY_CARD_REPORTS: Dict[str, str] = {
+    "fno_v13_v10_g_observability_market_regime":
+        "latest_fno_v13_v10_g_observability_market_regime.md",
+    "fno_v13_v10_g_observability_selection_funnel":
+        "latest_fno_v13_v10_g_observability_selection_funnel.md",
+    "fno_v13_v10_g_observability_entry_execution":
+        "latest_fno_v13_v10_g_observability_entry_execution.md",
+    "fno_v13_v10_g_observability_live_finalized_drift":
+        "latest_fno_v13_v10_g_observability_live_finalized_drift.md",
+    "fno_v13_v10_g_observability_pnl_attribution":
+        "latest_fno_v13_v10_g_observability_pnl_attribution.md",
+    "fno_v13_v10_g_observability_regime_profitability":
+        "latest_fno_v13_v10_g_observability_regime_profitability.md",
+}
+V13_V10_G_IMPROVEMENT_CARD_REPORTS: Dict[str, str] = {
+    "fno_v13_v10_g_research_improvements":
+        "latest_fno_v13_v10_g_research_improvements.md",
+}
+V13_V10_G_ARTIFACT_CARD_REPORTS: Dict[str, str] = {
+    **V13_V10_G_RESEARCH_CARD_REPORTS,
+    **V13_V10_G_OBSERVABILITY_CARD_REPORTS,
+    **V13_V10_G_IMPROVEMENT_CARD_REPORTS,
+}
 # G owns canonical dashboard/task names and an isolated evidence directory.
 FNO_V13_V10_G_STRATEGY_VERSION = "FNO_V13_V10_G_RETAINED_20260914"
 FNO_V6_LIVE_KITE_ROOT = FNO_OI_ROOT / "v13_v10_g_live" / "live_kite"
@@ -449,7 +495,7 @@ LIVE_FETCH_CARD_TITLES: Dict[str, str] = {
     "eod_1min_data": "Live Data Fetch (1min)",
 }
 
-LOG_IDS = tuple(LOG_FILES.keys()) + (
+LOG_IDS = tuple(LOG_FILES.keys()) + tuple(V13_V10_G_ARTIFACT_CARD_REPORTS) + (
     "paper_trade_v5",
     "paper_trade_v7_sweep",
     "paper_trade_v15",
@@ -694,6 +740,7 @@ CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
 _TASK_SNAPSHOT_CACHE: Dict[str, Dict[str, str]] = {}
 _TASK_SNAPSHOT_CACHE_AT: Optional[dt.datetime] = None
 _TASK_SNAPSHOT_LOCK = threading.Lock()
+_TASK_SNAPSHOT_BOOTSTRAP_LOCK = threading.Lock()
 _TASK_SNAPSHOT_REFRESHING = False
 _TASK_SNAPSHOT_CACHE_TTL_SEC = 60.0
 
@@ -1262,6 +1309,12 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         return FNO_G_BACKTEST_REPORT, str(
             Path("backtesting_result_v13_v10_g") / "latest" / FNO_G_BACKTEST_REPORT.name
         )
+    if name in V13_V10_G_ARTIFACT_CARD_REPORTS:
+        report_name = V13_V10_G_ARTIFACT_CARD_REPORTS[name]
+        report_path = V13_V10_G_STRATEGY_RESEARCH_LATEST_DIR / report_name
+        return report_path, str(
+            Path("v13_v10_g_strategy_research") / "latest" / report_name
+        )
     if name in FNO_OI_CARD_REPORTS:
         report_name = FNO_OI_CARD_REPORTS[name]
         report_path = FNO_OI_LATEST_DIR / report_name
@@ -1610,6 +1663,24 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
     raise KeyError(name)
 
 
+def _research_artifact_status(path: Path) -> Dict[str, Any]:
+    """Status for an offline report view, with no scheduler/process semantics."""
+
+    exists = path.is_file()
+    return {
+        "status": "READY" if exists else "WAITING_OUTPUT",
+        "phase": "READ_ONLY_REPORT",
+        "view_scope": "ARTIFACT",
+        "execution_mode": "RESEARCH_ONLY",
+        "execution_authority": False,
+        "derived_status": (
+            "Published offline evidence; not consumed by live trading."
+            if exists
+            else "Run bat\\run_v13_strategy_research_refresh.bat after a complete historical bundle exists."
+        ),
+    }
+
+
 def parse_status_file(path: Path) -> Dict[str, str]:
     out: Dict[str, str] = {}
     if not path.exists():
@@ -1954,10 +2025,11 @@ def load_task_scheduler_snapshot(force: bool = False) -> Dict[str, Dict[str, str
     """Return task metadata without blocking dashboard HTTP refreshes.
 
     A full Windows ``schtasks /Query /V`` regularly takes 10-15 seconds on
-    this host.  Normal dashboard requests therefore use stale-while-refresh:
-    the last good snapshot is returned immediately and one daemon refreshes
-    it in the background.  ``force=True`` remains synchronous for diagnostics
-    and tests.
+    this host. The first request waits for one scheduler query so historical
+    failures from disabled tasks are not briefly presented as active failures.
+    Subsequent requests use stale-while-refresh: the last good snapshot is
+    returned immediately and one daemon refreshes it in the background.
+    ``force=True`` remains synchronous for diagnostics and tests.
     """
     global _TASK_SNAPSHOT_CACHE_AT, _TASK_SNAPSHOT_CACHE, _TASK_SNAPSHOT_REFRESHING
     if force:
@@ -1968,6 +2040,17 @@ def load_task_scheduler_snapshot(force: bool = False) -> Dict[str, Dict[str, str
                 _TASK_SNAPSHOT_CACHE = tasks
             _TASK_SNAPSHOT_CACHE_AT = observed
             return dict(_TASK_SNAPSHOT_CACHE)
+
+    with _TASK_SNAPSHOT_LOCK:
+        cold_start = _TASK_SNAPSHOT_CACHE_AT is None and not _TASK_SNAPSHOT_CACHE
+    if cold_start:
+        # Only one concurrent first request may query schtasks. A warm process
+        # never waits on this lock or on the scheduler subprocess.
+        with _TASK_SNAPSHOT_BOOTSTRAP_LOCK:
+            with _TASK_SNAPSHOT_LOCK:
+                cold_start = _TASK_SNAPSHOT_CACHE_AT is None and not _TASK_SNAPSHOT_CACHE
+            if cold_start:
+                return load_task_scheduler_snapshot(force=True)
 
     now_utc = dt.datetime.now(dt.timezone.utc)
     with _TASK_SNAPSHOT_LOCK:
@@ -2083,13 +2166,32 @@ def apply_scheduler_status(
         )
         if parsed is not None
     ]
+    current_time = now_ist or dt.datetime.now(IST)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=IST)
+    else:
+        current_time = current_time.astimezone(IST)
     if scheduler_status == "DISABLED":
         # A disabled Scheduled Task does not mean an independently started
         # worker is stopped.  Preserve fresh runtime evidence so manually
         # launched sessions remain in their normal dashboard section, while
         # retaining scheduler_state=DISABLED as a separate warning/future-run
         # fact.
-        if current in runtime_active_states:
+        # A PID can be reused long after the heartbeat writer has stopped.
+        # A disabled task is a manual run only with runtime evidence from this
+        # IST session; an old RUNNING status plus a live, unrelated PID is not
+        # proof that this worker is still running.
+        same_day_runtime_evidence = any(
+            parsed is not None and parsed.date() == current_time.date()
+            for parsed in (
+                _parse_status_datetime(merged.get(field, ""))
+                for field in (
+                    "heartbeat_ts", "heartbeat_ts_utc", "ts", "ts_ist",
+                    "updated_at_ist", "updated_at", "last_update_ist",
+                )
+            )
+        )
+        if current in runtime_active_states and same_day_runtime_evidence:
             if runtime_pids:
                 runtime_is_live = any(_pid_is_alive_fast(pid) for pid in runtime_pids)
             else:
@@ -2112,17 +2214,14 @@ def apply_scheduler_status(
             )
         else:
             merged["status"] = "DISABLED"
+            merged.pop("runtime_start_mode", None)
+            merged.pop("scheduler_attention", None)
     elif not current and scheduler_status:
         merged["status"] = scheduler_status
 
     # A terminal status file belongs to the run that wrote it. Before today's
     # scheduled run, retain that evidence as history instead of presenting it
     # as today's active state (for example, yesterday's EOD QC failure).
-    current_time = now_ist or dt.datetime.now(IST)
-    if current_time.tzinfo is None:
-        current_time = current_time.replace(tzinfo=IST)
-    else:
-        current_time = current_time.astimezone(IST)
     # Status writers are not fully uniform: the older supervisors use ``ts``
     # while newer research jobs (including the V11 shadow monitor) use
     # ``ts_ist`` or ``updated_at_ist``.  Read the first populated timestamp so
@@ -2189,22 +2288,32 @@ def reconcile_authentication_status(
         if current_ist.tzinfo is None:
             current_ist = current_ist.replace(tzinfo=IST)
         today = current_ist.astimezone(IST).date().isoformat()
-        if str(state.get("session_date_ist", "")).strip() != today:
-            return merged
-        if not AUTH_V2_ACCESS_TOKEN_FILE.read_text(
-            encoding="utf-8", errors="replace"
-        ).strip():
+        date_fields = ("session_date_ist",) + tuple(
+            f"session_date_ist_app{index}" for index in range(2, 9)
+        )
+        current_apps = sum(
+            1 for field in date_fields if str(state.get(field, "")).strip() == today
+        )
+        if current_apps != len(date_fields):
             return merged
 
+        token_paths = [AUTH_V2_ACCESS_TOKEN_FILE] + [
+            AUTH_V2_STATE_FILE.parent / f"access_token{index}.txt"
+            for index in range(2, 9)
+        ]
+        for token_path in token_paths:
+            if not token_path.read_text(encoding="utf-8", errors="replace").strip():
+                return merged
+
         failure_at = _parse_status_datetime(str(merged.get("ts", "")))
-        token_at = dt.datetime.fromtimestamp(
-            AUTH_V2_ACCESS_TOKEN_FILE.stat().st_mtime,
-            tz=IST,
-        )
+        token_times = [
+            dt.datetime.fromtimestamp(token_path.stat().st_mtime, tz=IST)
+            for token_path in token_paths
+        ]
         state_at = _parse_status_datetime(str(state.get("updated_at_ist", "")))
         recovery_at = max(
             candidate
-            for candidate in (token_at, state_at)
+            for candidate in (*token_times, state_at)
             if candidate is not None
         )
         if failure_at is not None and recovery_at <= failure_at:
@@ -2216,10 +2325,12 @@ def reconcile_authentication_status(
     merged["previous_status_ts"] = str(merged.get("ts", "")).strip()
     merged["status"] = "SUCCESS"
     merged["session_date_ist"] = today
+    merged["authenticated_apps"] = "8"
+    merged["configured_apps"] = "8"
     merged["recovered_at_ist"] = recovery_at.astimezone(IST).strftime(
         "%Y-%m-%d %H:%M:%S%z"
     )
-    merged["recovery_source"] = "newer_same_day_auth_state_and_access_token"
+    merged["recovery_source"] = "newer_same_day_complete_auth_roster"
     return merged
 
 
@@ -9250,6 +9361,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "kite_trade_id_5min_v7",
       "data_for_backtesting",
       "backtesting_result_v13_v10_g",
+      "fno_v13_v10_g_research_data_quality",
+      "fno_v13_v10_g_research_dataset",
+      "fno_v13_v10_g_research_baseline",
+      "fno_v13_v10_g_research_attribution",
+      "fno_v13_v10_g_research_regimes",
+      "fno_v13_v10_g_research_predictions",
+      "fno_v13_v10_g_research_walkforward",
+      "fno_v13_v10_g_research_shadow",
+      "fno_v13_v10_g_observability_market_regime",
+      "fno_v13_v10_g_observability_selection_funnel",
+      "fno_v13_v10_g_observability_entry_execution",
+      "fno_v13_v10_g_observability_live_finalized_drift",
+      "fno_v13_v10_g_observability_pnl_attribution",
+      "fno_v13_v10_g_observability_regime_profitability",
+      "fno_v13_v10_g_research_improvements",
       "signal_early_engine_v16_5min",
       "pending_signals_v16_5min",
       "pending_data_fetcher_v16_5min",
@@ -9354,6 +9480,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "data_for_backtesting": "Data for backtesting",
       "backtesting_result_v13_v10_g": "Backtesting result v13-v10-G",
       "v13_research_run_vintage": "V13 Research Run Vintage Gate",
+      "fno_v13_v10_g_research_data_quality": "V13-V10-G Research Data Quality",
+      "fno_v13_v10_g_research_dataset": "V13-V10-G Historical Research Dataset",
+      "fno_v13_v10_g_research_baseline": "V13-V10-G Frozen Baseline Replay",
+      "fno_v13_v10_g_research_attribution": "V13-V10-G Decision Attribution",
+      "fno_v13_v10_g_research_regimes": "V13-V10-G Market Regimes & Drift",
+      "fno_v13_v10_g_research_predictions": "V13-V10-G Prediction Quality & Calibration",
+      "fno_v13_v10_g_research_walkforward": "V13-V10-G Walk-Forward & Holdout Evaluation",
+      "fno_v13_v10_g_research_shadow": "V13-V10-G Prospective Shadow & Promotion Gate",
+      "fno_v13_v10_g_observability_market_regime": "V13-V10-G Market Regime",
+      "fno_v13_v10_g_observability_selection_funnel": "V13-V10-G Selection Funnel",
+      "fno_v13_v10_g_observability_entry_execution": "V13-V10-G Entry and Execution",
+      "fno_v13_v10_g_observability_live_finalized_drift": "V13-V10-G Live vs Finalized Drift",
+      "fno_v13_v10_g_observability_pnl_attribution": "V13-V10-G P&L Attribution",
+      "fno_v13_v10_g_observability_regime_profitability": "V13-V10-G Regime Profitability",
+      "fno_v13_v10_g_research_improvements": "V13 Evidence-Based Improvement Opportunities",
       "nifty_guard_fetch_v15": "NIFTY Fetch V15",
       "nifty_guard_fetch_v16_5min": "NIFTY Fetch 5min",
       "live_signals_csv_v15_new_short": "Live Entries CSV V15 Short New",
@@ -9495,7 +9636,60 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "v7_full_pipeline_entry_research",
           "v7_full_pipeline_entry_research_v2",
           "v7_shadow_candidate_monitor",
-          "v11_lab_shadow_monitor"
+          "v11_lab_shadow_monitor",
+          "fno_v13_v10_g_research_data_quality",
+          "fno_v13_v10_g_research_dataset",
+          "fno_v13_v10_g_research_baseline",
+          "fno_v13_v10_g_research_attribution",
+          "fno_v13_v10_g_research_regimes",
+          "fno_v13_v10_g_research_predictions",
+          "fno_v13_v10_g_research_walkforward",
+          "fno_v13_v10_g_research_shadow",
+          "fno_v13_v10_g_observability_market_regime",
+          "fno_v13_v10_g_observability_selection_funnel",
+          "fno_v13_v10_g_observability_entry_execution",
+          "fno_v13_v10_g_observability_live_finalized_drift",
+          "fno_v13_v10_g_observability_pnl_attribution",
+          "fno_v13_v10_g_observability_regime_profitability",
+          "fno_v13_v10_g_research_improvements"
+        ],
+        subgroups: [
+          {
+            key: "v13-v10-g-strategy-research-prediction",
+            title: "V13-V10-G Strategy Research & Prediction",
+            note: "8 read-only evidence views | frozen baseline unchanged | no trading controls",
+            ids: [
+              "fno_v13_v10_g_research_data_quality",
+              "fno_v13_v10_g_research_dataset",
+              "fno_v13_v10_g_research_baseline",
+              "fno_v13_v10_g_research_attribution",
+              "fno_v13_v10_g_research_regimes",
+              "fno_v13_v10_g_research_predictions",
+              "fno_v13_v10_g_research_walkforward",
+              "fno_v13_v10_g_research_shadow"
+            ]
+          },
+          {
+            key: "observability",
+            title: "Observability",
+            note: "6 read-only observability views | no trading controls",
+            ids: [
+              "fno_v13_v10_g_observability_market_regime",
+              "fno_v13_v10_g_observability_selection_funnel",
+              "fno_v13_v10_g_observability_entry_execution",
+              "fno_v13_v10_g_observability_live_finalized_drift",
+              "fno_v13_v10_g_observability_pnl_attribution",
+              "fno_v13_v10_g_observability_regime_profitability"
+            ]
+          },
+          {
+            key: "v13-improvement-opportunities",
+            title: "V13 Improvement Opportunities",
+            note: "Evidence, proposed experiments and validation requirements | read-only",
+            ids: [
+              "fno_v13_v10_g_research_improvements"
+            ]
+          }
         ]
       },
       {
@@ -9657,7 +9851,22 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "fno_v12_paper",
       "v7_live_5min_monitor",
       "v13_research_run_vintage",
-      "backtesting_result_v13_v10_g"
+      "backtesting_result_v13_v10_g",
+      "fno_v13_v10_g_research_data_quality",
+      "fno_v13_v10_g_research_dataset",
+      "fno_v13_v10_g_research_baseline",
+      "fno_v13_v10_g_research_attribution",
+      "fno_v13_v10_g_research_regimes",
+      "fno_v13_v10_g_research_predictions",
+      "fno_v13_v10_g_research_walkforward",
+      "fno_v13_v10_g_research_shadow",
+      "fno_v13_v10_g_observability_market_regime",
+      "fno_v13_v10_g_observability_selection_funnel",
+      "fno_v13_v10_g_observability_entry_execution",
+      "fno_v13_v10_g_observability_live_finalized_drift",
+      "fno_v13_v10_g_observability_pnl_attribution",
+      "fno_v13_v10_g_observability_regime_profitability",
+      "fno_v13_v10_g_research_improvements"
     ]);
     const FNO_MULTI_PAPER_CARDS = new Set([
       "fno_v10_v11_v12_paper",
@@ -9819,7 +10028,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     function isReadOnlyProfileView(item) {
-      return String(item && item.status && item.status.view_scope || "").toUpperCase() === "PROFILE";
+      const scope = String(item && item.status && item.status.view_scope || "").toUpperCase();
+      return scope === "PROFILE" || scope === "ARTIFACT";
     }
 
     function renderHealthSummary(items) {
@@ -10062,7 +10272,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (filter === "paper") return title.includes("paper");
       if (filter === "live") return title.includes("live") || title.includes("kite");
       if (filter === "research") {
-        return id === "v7_research_layer"
+        return id.startsWith("fno_v13_v10_g_research_")
+          || id.startsWith("fno_v13_v10_g_observability_")
+          || id === "v7_research_layer"
           || id === "daily_live_v7_research_session"
           || id === "v7_nse_id_cost"
           || id === "v7_walkforward_gate"
@@ -10462,13 +10674,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     function mdInline(text) {
       const s = String(text === null || text === undefined ? "" : text);
-      const re = /\\*\\*([^*]+)\\*\\*|`([^`]+)`/g;
+      const re = /\\*\\*([^*]+)\\*\\*|`([^`]+)`|\\[([^\\]\\n]+)\\]\\((#card-([A-Za-z0-9_-]+))\\)/g;
       let out = "";
       let last = 0;
       let m;
       while ((m = re.exec(s)) !== null) {
         out += esc(s.slice(last, m.index));
-        out += (m[1] !== undefined) ? `<strong>${esc(m[1])}</strong>` : `<code>${esc(m[2])}</code>`;
+        if (m[1] !== undefined) {
+          out += `<strong>${esc(m[1])}</strong>`;
+        } else if (m[2] !== undefined) {
+          out += `<code>${esc(m[2])}</code>`;
+        } else if (LOG_ORDER.includes(m[5])) {
+          out += `<a href="${esc(m[4])}">${esc(m[3])}</a>`;
+        } else {
+          out += esc(m[0]);
+        }
         last = m.index + m[0].length;
       }
       return out + esc(s.slice(last));
@@ -11176,7 +11396,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const emptyLabel = it.exists ? "No rows yet" : "Log file not found";
           const emptyHint = it.exists ? "Waiting for the next write" : "Waiting for this session to create output";
           return `
-            <div class="${cardCls}${isFs}${disabledCompact}${logHiddenClass}${expandedClass}" data-id="${esc(id)}" style="animation-delay:${Math.min(idx * 0.05, 0.55)}s">
+            <div class="${cardCls}${isFs}${disabledCompact}${logHiddenClass}${expandedClass}" id="card-${esc(id)}" data-id="${esc(id)}" style="animation-delay:${Math.min(idx * 0.05, 0.55)}s">
               <div class="card-head">
                 <div class="card-head-left">
                   <div class="name">${esc(nameOverride || displayName(it.id))}</div>
@@ -11224,8 +11444,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           }
           const otherActive = visibleActiveOrdered.filter((id) => !used.has(id));
           if (otherActive.length) {
-            navItems.push({ key: "other", label: "Options V13 Strategy", count: otherActive.length });
-            sections.push(renderSectionBanner("Options V13 Strategy", `${otherActive.length} cards`, false, "other", "other"));
+            navItems.push({ key: "other", label: "Other Active", count: otherActive.length });
+            sections.push(renderSectionBanner("Other Active", `${otherActive.length} cards`, false, "other", "other"));
             sections.push(otherActive.map((id) => renderCard(
               id,
               renderIdx++,
@@ -11328,7 +11548,9 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
         today_ist = dt.datetime.now(IST).date().isoformat()
         for key in LOG_IDS:
             path, file_name = resolve_log_target(key)
-            if key in FNO_MULTI_PAPER_CARD_PROFILES:
+            if key in V13_V10_G_ARTIFACT_CARD_REPORTS:
+                status = _research_artifact_status(path)
+            elif key in FNO_MULTI_PAPER_CARD_PROFILES:
                 status = _load_fno_multi_paper_runtime_status(key)
             else:
                 status_path = _runtime_status_path_for_card(key)
@@ -11343,10 +11565,11 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                     except OSError:
                         pass
                     status = merge_runtime_status(status, heartbeat)
-            status = infer_scanner_runtime_status(key, path, status)
-            status = reconcile_fno_worker_recovery(key, status)
-            status = apply_scheduler_status(key, status, task_snapshot)
-            status = infer_pid_session_provenance(key, status)
+            if key not in V13_V10_G_ARTIFACT_CARD_REPORTS:
+                status = infer_scanner_runtime_status(key, path, status)
+                status = reconcile_fno_worker_recovery(key, status)
+                status = apply_scheduler_status(key, status, task_snapshot)
+                status = infer_pid_session_provenance(key, status)
             if key == "authentication_v2":
                 status = reconcile_authentication_status(status)
             try:
@@ -11442,6 +11665,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
                 tail = projected if projected else tail_text(path, lines=lines)
             elif key in ("signal_early_engine_v16_5min", "pending_data_fetcher_v16_5min", "detection_engine_v16_5min"):
                 tail = _shift_bar_slots_in_text(tail_text(path, lines=lines))
+            elif key in V13_V10_G_ARTIFACT_CARD_REPORTS:
+                tail = report_text(path, lines=lines)
             elif key in FNO_OI_CARD_REPORTS and path.suffix.lower() == ".md":
                 tail = report_text(path, lines=lines)
             else:

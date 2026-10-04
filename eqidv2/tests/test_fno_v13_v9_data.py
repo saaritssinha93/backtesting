@@ -132,3 +132,48 @@ def test_failed_native_build_does_not_commit_cache_verification_or_mutate_native
     assert data.v5.CACHE_DIR == original_cache
     assert data.v5._load_verified_v5_cache is original_loader
     assert data.v5._load_verified_v3_seed is original_seed_loader
+
+
+def test_eligibility_artifact_is_bounded_by_declared_through_day():
+    eligibility = pd.DataFrame(
+        {
+            "day": ["2026-09-22", "2026-09-23", "2026-09-24"],
+            "eligible": [True, False, True],
+            "coverage": [1.0, 0.5, 1.0],
+        }
+    )
+
+    bounded = data.eligibility_through_day(eligibility, "2026-09-23")
+
+    assert bounded["day"].tolist() == [date(2026, 9, 22), date(2026, 9, 23)]
+    assert bounded["eligible"].tolist() == [True, False]
+    assert eligibility["day"].tolist()[-1] == "2026-09-24"
+
+
+def test_eligibility_artifact_rejects_invalid_days():
+    with pytest.raises(ValueError, match="invalid day"):
+        data.eligibility_through_day(
+            pd.DataFrame({"day": ["not-a-day"], "eligible": [True]}),
+            "2026-09-23",
+        )
+
+
+def test_dataset_output_checksums_include_csv_audit_ledgers(tmp_path):
+    expected = [
+        *(f"{name}.parquet" for name in data.TABLE_NAMES),
+        "paths.npz",
+        "source_manifest.csv",
+        "source_session_eligibility.csv",
+    ]
+    for number, name in enumerate(expected):
+        (tmp_path / name).write_bytes(f"artifact-{number}".encode())
+
+    checksums = data.dataset_output_checksums(tmp_path)
+
+    assert list(checksums) == expected
+    assert checksums["source_manifest.csv"] == data.sha256(
+        tmp_path / "source_manifest.csv"
+    )
+    assert checksums["source_session_eligibility.csv"] == data.sha256(
+        tmp_path / "source_session_eligibility.csv"
+    )

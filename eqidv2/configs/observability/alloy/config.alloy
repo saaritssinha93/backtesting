@@ -1,0 +1,249 @@
+logging {
+	level  = "info"
+	format = "json"
+}
+
+prometheus.scrape "ai_platform" {
+	targets = [{
+		__address__      = "host.docker.internal:8788",
+		__metrics_path__ = "/api/v1/observability/metrics",
+		job              = "ai-platform",
+		// Keep the scrape target identity separate from the contract's per-series
+		// `service` label. Otherwise Prometheus renames worker service labels to
+		// `exported_service` under the default honor_labels=false behavior.
+		scrape_service = "ai-platform-api",
+	}]
+	scrape_interval = "15s"
+	scrape_timeout  = "5s"
+
+	authorization {
+		type             = "Bearer"
+		credentials_file = "/run/secrets/ai_platform_api_token"
+	}
+	forward_to = [prometheus.relabel.safety.receiver]
+}
+
+prometheus.relabel "safety" {
+	rule {
+		action = "labeldrop"
+		regex  = "signal_id|order_id|broker_order_id|trace_id|span_id|run_id|symbol|tradingsymbol"
+	}
+	forward_to = [prometheus.remote_write.local.receiver]
+}
+
+prometheus.remote_write "local" {
+	endpoint {
+		url = "http://prometheus:9090/api/v1/write"
+	}
+}
+
+local.file_match "trading_json_logs" {
+	path_targets = [{
+		__path__ = "/var/log/trading/**/*.jsonl",
+		job      = "trading-json",
+	}]
+	sync_period = "10s"
+}
+
+loki.source.file "trading_json_logs" {
+	targets       = local.file_match.trading_json_logs.targets
+	forward_to    = [loki.process.trading_json.receiver]
+	tail_from_end = true
+}
+
+loki.process "trading_json" {
+	stage.json {
+		expressions = {
+			level   = "severity",
+			service = "context.service",
+			mode    = "context.mode",
+			event   = "event",
+		}
+	}
+
+	stage.labels {
+		values = {
+			level   = "",
+			service = "",
+			mode    = "",
+		}
+	}
+
+	stage.label_drop {
+		values = ["filename"]
+	}
+	forward_to = [loki.write.local.receiver]
+}
+
+// The actively supervised workers predate the JSON logger. Ingest only recent
+// supervisor-managed files, start at EOF, redact credentials/PII before any
+// parsing or forwarding, and keep the resulting labels bounded.
+local.file_match "trading_supervisor_logs" {
+	path_targets = [
+		{
+			__path__ = "/var/log/trading/repository/*.log.supervisor.log",
+			job      = "trading-supervisor",
+		},
+		{
+			__path__         = "/var/log/trading/repository/*supervised*.log",
+			__path_exclude__ = "/var/log/trading/repository/*.log.supervisor.log",
+			job              = "trading-supervised-worker",
+		},
+	]
+	ignore_older_than = "48h"
+	sync_period       = "10s"
+}
+
+loki.source.file "trading_supervisor_logs" {
+	targets       = local.file_match.trading_supervisor_logs.targets
+	forward_to    = [loki.process.trading_supervisor_logs.receiver]
+	tail_from_end = true
+}
+
+loki.process "trading_supervisor_logs" {
+	stage.replace {
+		expression = "(?i)bearer\\s+(?P<bearer_secret>[^\\s,;&]+)"
+		replace    = "[REDACTED]"
+	}
+
+	stage.replace {
+		expression = "(?i)(?:authorization\\s*[:=]\\s*(?:bearer|basic)?\\s*)(?P<authorization_secret>[^\\s,;&]+)"
+		replace    = "[REDACTED]"
+	}
+
+	stage.replace {
+		expression = "(?i)(?:(?:api[_-]?key|access[_-]?token|request[_-]?token)\\s*[:=]\\s*)(?P<credential_secret>[^\\s,;&]+)"
+		replace    = "[REDACTED]"
+	}
+
+	stage.replace {
+		expression = "(?i)(?P<email>[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,})"
+		replace    = "[REDACTED_EMAIL]"
+	}
+
+	stage.regex {
+		expression = "^.*/(?P<service>[^/]+?)(?:_[0-9]{4}-[0-9]{2}-[0-9]{2})?\\.log(?:\\.supervisor\\.log)?$"
+		source     = "filename"
+	}
+
+	stage.regex {
+		expression = "^(?P<log_timestamp>[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(?:,[0-9]{3})?)\\s+\\|\\s+(?P<level>DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\\s+\\|\\s+(?P<message>.*)$"
+	}
+
+	stage.labels {
+		values = {
+			level   = "",
+			service = "",
+		}
+	}
+
+	stage.structured_metadata {
+		values = {
+			log_timestamp = "",
+			message       = "",
+		}
+	}
+
+	stage.label_drop {
+		values = ["filename"]
+	}
+
+	stage.match {
+		selector = `{job=~"trading-supervisor|trading-supervised-worker"} |~ "(?i)(incorrect.*api[_-]?key.*access[_-]?token|no valid kite sessions|kite.*unauthorized)"`
+
+		stage.static_labels {
+			values = {
+				event = "broker_authentication_failure",
+			}
+		}
+
+		stage.metrics {
+			metric.counter {
+				name              = "broker_authentication_failures_total"
+				description       = "Broker authentication failures in supervisor-managed worker logs."
+				prefix            = "trading_"
+				match_all         = true
+				action            = "inc"
+				max_idle_duration = "24h"
+			}
+		}
+	}
+
+	stage.match {
+		selector = `{job="trading-supervisor"} |~ "(?i)(alert.*auth_failed|token missing/invalid.*interactive auth disabled)"`
+
+		stage.static_labels {
+			values = {
+				event = "alert_delivery_authentication_failure",
+			}
+		}
+
+		stage.metrics {
+			metric.counter {
+				name              = "alert_delivery_authentication_failures_total"
+				description       = "External alert-delivery authentication failures in supervisor logs."
+				prefix            = "trading_"
+				match_all         = true
+				action            = "inc"
+				max_idle_duration = "24h"
+			}
+		}
+	}
+
+	forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+	external_labels = {
+		environment = "local",
+		platform    = "eqidv2",
+	}
+}
+
+otelcol.receiver.otlp "default" {
+	grpc {
+		endpoint = "0.0.0.0:4317"
+	}
+
+	http {
+		endpoint = "0.0.0.0:4318"
+	}
+
+	output {
+		metrics = [otelcol.processor.batch.default.input]
+		logs    = [otelcol.processor.batch.default.input]
+		traces  = [otelcol.processor.batch.default.input]
+	}
+}
+
+otelcol.processor.batch "default" {
+	timeout         = "2s"
+	send_batch_size = 1024
+
+	output {
+		metrics = [otelcol.exporter.prometheus.default.input]
+		logs    = [otelcol.exporter.loki.default.input]
+		traces  = [otelcol.exporter.otlp.tempo.input]
+	}
+}
+
+otelcol.exporter.prometheus "default" {
+	forward_to = [prometheus.relabel.safety.receiver]
+}
+
+otelcol.exporter.loki "default" {
+	forward_to = [loki.write.local.receiver]
+}
+
+otelcol.exporter.otlp "tempo" {
+	client {
+		endpoint = "tempo:4317"
+
+		tls {
+			insecure = true
+		}
+	}
+}

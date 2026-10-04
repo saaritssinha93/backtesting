@@ -1,0 +1,33 @@
+schema_version: eqidv2.observability.promotion_policy.v1
+principle: A successful backtest creates a research candidate, never a live edit.
+allowed_states:
+  - REGISTERED
+  - RESULT_RECORDED
+  - REJECTED
+  - INSUFFICIENT_EVIDENCE
+  - ELIGIBLE_FOR_SHADOW
+  - APPROVED_FOR_SHADOW
+  - CANDIDATE_FOR_MANUAL_LIVE_REVIEW
+  - RETIRED
+forbidden_automation:
+  - edit production strategy configuration
+  - change live launcher arguments
+  - arm broker execution
+  - promote a candidate to live
+  - tune against the final test window after viewing it
+  - discard failed variants from the experiment record
+positive_decision_requirements:
+  - point-in-time inputs
+  - reproduced baseline
+  - realistic fees, slippage and liquidity assumptions
+  - verified output hashes
+  - compliance with preregistered trial budget
+  - primary-metric improvement meets the preregistered minimum
+  - maximum-drawdown degradation stays within the preregistered limit
+  - shadow eligibility and approval use untouched holdout evidence
+  - independent reviewer for shadow approval
+manual_live_review_candidate_requires:
+  - completed prospective shadow result
+  - preregistered minimum shadow sessions
+  - independent reviewer
+  - no automatic production mutation

@@ -156,11 +156,14 @@ def _normalize_ticker_list(obj) -> list[str]:
 def include_dated_fno_equities(
     symbols: list[str], token_map: dict[str, int], logger: logging.Logger,
     *, session_date: date | None = None, runtime_root: Path = RUNTIME_ROOT,
+    fno_only: bool = False,
 ) -> tuple[list[str], dict[str, int]]:
-    """Keep MIS filters from excluding stocks required by the FnO replay."""
+    """Add, or exclusively select, the dated mapped FnO cash universe."""
     day = session_date or datetime.now(IST_TZ).date()
     path = runtime_root / "fno_oi" / "universe" / f"near_month_{day.isoformat()}.parquet"
     if not path.is_file():
+        if fno_only:
+            raise FileNotFoundError(f"Dated FnO universe unavailable: {path}")
         logger.warning("Dated FnO universe unavailable: %s", path)
         return symbols, token_map
     import fno_oi_hybrid_data as hybrid
@@ -168,6 +171,14 @@ def include_dated_fno_equities(
     tokens = dict(token_map)
     for row in mapped.to_dict("records"):
         tokens[str(row["equity_symbol"]).upper()] = int(row["equity_instrument_token"])
+    if fno_only:
+        selected = sorted(set(mapped["equity_symbol"].str.upper()))
+        selected_tokens = {symbol: tokens[symbol] for symbol in selected}
+        logger.info(
+            "Selected dated FnO cash universe only: %d symbols",
+            len(selected),
+        )
+        return selected, selected_tokens
     combined = sorted(set(symbols) | set(mapped["equity_symbol"].str.upper()))
     logger.info("Included dated FnO cash universe: %d required, %d added", len(mapped), len(set(combined) - set(symbols)))
     return combined, tokens
@@ -1679,7 +1690,8 @@ def run_mode(
     refresh_tokens: bool,
     report_dir: str,
     print_missing_rows: bool,
-    print_missing_rows_max: int
+    print_missing_rows_max: int,
+    universe_scope: str = "all",
 ):
     logger = logging.getLogger("stocks_fetcher")
     t_mode0 = _time.perf_counter()
@@ -1703,7 +1715,12 @@ def run_mode(
         return
 
     syms, pre_token_map = load_stocks_universe(logger)
-    syms, pre_token_map = include_dated_fno_equities(syms, pre_token_map, logger)
+    syms, pre_token_map = include_dated_fno_equities(
+        syms,
+        pre_token_map,
+        logger,
+        fno_only=universe_scope == "fno",
+    )
 
     missing_files: list[str] = []
     missing_rows: list[str] = []
@@ -1965,6 +1982,12 @@ def parse_args():
                    help="Optional NSE holidays file (CSV with 'date' or one date per line)")
     p.add_argument("--refresh-tokens", action="store_true",
                    help="Force refresh token cache (kite.instruments NSE)")
+    p.add_argument(
+        "--universe-scope",
+        choices=("all", "fno"),
+        default="all",
+        help="Fetch the broad cash universe or only today's dated mapped FnO equities",
+    )
 
     p.add_argument("--no-migrate-csv", action="store_true",
                    help="Do NOT read legacy CSV outputs (Parquet-only).")
@@ -2017,7 +2040,8 @@ def main():
                 refresh_tokens=args.refresh_tokens,
                 report_dir=args.report_dir,
                 print_missing_rows=args.print_missing_rows,
-                print_missing_rows_max=args.print_missing_rows_max
+                print_missing_rows_max=args.print_missing_rows_max,
+                universe_scope=args.universe_scope,
             )
     else:
         run_mode(
@@ -2029,7 +2053,8 @@ def main():
             refresh_tokens=args.refresh_tokens,
             report_dir=args.report_dir,
             print_missing_rows=args.print_missing_rows,
-            print_missing_rows_max=args.print_missing_rows_max
+            print_missing_rows_max=args.print_missing_rows_max,
+            universe_scope=args.universe_scope,
         )
 
 

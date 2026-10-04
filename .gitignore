@@ -226,6 +226,10 @@ eqidv2/**
 !eqidv2/**/
 !eqidv2/**/*.py
 !eqidv2/**/*.md
+!eqidv2/docs/ai_platform/*.json
+!eqidv2/tests/fixtures/ai_platform/*.json
+!eqidv2/ai_platform/requirements.txt
+!eqidv2/ai_platform/requirements.lock
 !eqidv2/configs/
 !eqidv2/configs/**
 
@@ -243,6 +247,9 @@ eqidv2/**
 
 !eqidv2/models/
 !eqidv2/models/**
+
+# Repository-local AI API environment is build output.
+eqidv2/.venv-ai-platform/
 
 # ----------------------------------
 # Explicitly ignore secret files

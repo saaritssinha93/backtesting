@@ -598,6 +598,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _next_due_slot(
+    session_date: date,
+    latest_slot: datetime,
+    current: datetime,
+    processed: set[str],
+    boundary_buffer_sec: float,
+) -> datetime | None:
+    """Prioritize the live slot, then repair the oldest missing completed slot."""
+    buffer = timedelta(seconds=max(0.0, float(boundary_buffer_sec)))
+    if (
+        latest_slot.strftime("%H%M") not in processed
+        and current >= latest_slot + buffer
+    ):
+        return latest_slot
+    candidate = datetime.combine(session_date, legacy.FIRST_SLOT, tzinfo=common.IST)
+    while candidate <= latest_slot:
+        if candidate.strftime("%H%M") not in processed and current >= candidate + buffer:
+            return candidate
+        candidate += timedelta(minutes=5)
+    return None
+
+
+def _session_slot_keys(session_date: date) -> set[str]:
+    first = datetime.combine(session_date, legacy.FIRST_SLOT, tzinfo=common.IST)
+    last = datetime.combine(session_date, legacy.LAST_SLOT, tzinfo=common.IST)
+    slots: set[str] = set()
+    while first <= last:
+        slots.add(first.strftime("%H%M"))
+        first += timedelta(minutes=5)
+    return slots
+
+
 def run_session(args: argparse.Namespace) -> int:
     holidays = common.load_holidays()
     current = common.now_ist()
@@ -653,13 +685,25 @@ def run_session(args: argparse.Namespace) -> int:
         auth_failures=len(auth_failures),
         engine=ENGINE_VERSION,
     )
-    if not args.no_bootstrap:
+    processed = legacy._today_processed_slots(session_date)
+    if not args.no_bootstrap and (args.once or not processed):
         legacy.run_bootstrap(
             universe,
             _bootstrap_runtimes(lanes),
             args,
             holidays,
             session=SESSION,
+        )
+    elif processed and not args.once:
+        # A restart already has today's attested final slots. Repeating a
+        # multi-day bootstrap would delay the live slot and can exhaust the
+        # freshness watchdog; exact missing slots are repaired below.
+        common.publish_heartbeat(
+            SESSION,
+            "RUNNING",
+            phase="RESUME_FROM_FINAL_SLOTS",
+            processed_slots=len(processed),
+            engine=ENGINE_VERSION,
         )
     archive_cache = CanonicalArchiveCache.preload(
         universe,
@@ -685,22 +729,23 @@ def run_session(args: argparse.Namespace) -> int:
         lane_session.invalidate_runtime_auth_failures()
         return 0 if bool(marker.get("complete")) else 2
 
-    processed = legacy._today_processed_slots(session_date)
     end_deadline = datetime.combine(
         session_date, legacy.LAST_SLOT, tzinfo=common.IST
     ) + timedelta(minutes=3)
     while True:
         current = common.now_ist()
         if current.date() != session_date or current >= end_deadline:
+            missing_slots = sorted(_session_slot_keys(session_date) - processed)
             common.publish_status(
                 SESSION,
-                "DONE",
-                phase="END_TIME",
+                "BLOCKED" if missing_slots else "DONE",
+                phase="MISSING_SLOTS_AT_END_TIME" if missing_slots else "END_TIME",
                 session_date_ist=session_date.isoformat(),
                 processed_slots=len(processed),
+                missing_slots=missing_slots,
                 engine=ENGINE_VERSION,
             )
-            return 0
+            return 2 if missing_slots else 0
         slot = legacy.latest_completed_slot(current, holidays)
         if slot is None or slot.date() != session_date or slot.time() < legacy.FIRST_SLOT:
             common.publish_heartbeat(
@@ -716,22 +761,40 @@ def run_session(args: argparse.Namespace) -> int:
             slot = datetime.combine(
                 session_date, legacy.LAST_SLOT, tzinfo=common.IST
             )
-        slot_key = slot.strftime("%H%M")
-        due_at = slot + timedelta(
-            seconds=max(0.0, float(args.boundary_buffer_sec))
+        latest_slot = slot
+        # Keep the current slot first so a restart cannot delay a live scanner.
+        # Then repair every missing completed slot, rather than jumping over
+        # the outage and leaving permanent holes in the durable archive.
+        slot = _next_due_slot(
+            session_date,
+            latest_slot,
+            current,
+            processed,
+            args.boundary_buffer_sec,
         )
-        if slot_key in processed or current < due_at:
+        if slot is None:
             common.publish_heartbeat(
                 SESSION,
                 "WAITING",
                 phase="WAIT_NEXT_SLOT",
-                slot=slot.isoformat(),
+                slot=latest_slot.isoformat(),
                 processed_slots=len(processed),
                 engine=ENGINE_VERSION,
             )
             time.sleep(max(0.2, min(float(args.poll_sec), 5.0)))
             continue
 
+        slot_key = slot.strftime("%H%M")
+        if slot != latest_slot:
+            common.publish_heartbeat(
+                SESSION,
+                "RUNNING",
+                phase="CATCH_UP_MISSING_SLOT",
+                slot=slot.isoformat(),
+                latest_completed_slot=latest_slot.isoformat(),
+                processed_slots=len(processed),
+                engine=ENGINE_VERSION,
+            )
         lanes, _, _ = lane_session.acquire(args)
         marker = run_fast_slot(
             slot, universe, lanes, args, archive_cache=archive_cache

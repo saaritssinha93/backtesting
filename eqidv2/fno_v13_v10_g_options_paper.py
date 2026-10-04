@@ -67,6 +67,7 @@ DEFAULT_MAX_ENTRY_LAG_SEC = 180.0
 DEFAULT_MAX_QUOTE_AGE_SEC = 30.0
 DEFAULT_MAX_SPREAD_PCT = 10.0
 TERMINAL_STATES = frozenset({"CLOSED", "SKIPPED", "BLOCKED", "UNRESOLVED"})
+SOURCE_READ_RETRY_DELAYS_SEC = (0.02, 0.05, 0.10)
 
 
 for _path in (OPTIONS_ROOT, ORDER_ROOT, CONSOLIDATED_ROOT, AUDIT_ROOT):
@@ -79,6 +80,48 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+class TransientSourceReadError(RuntimeError):
+    """A bounded set of Windows file-sharing retries was exhausted."""
+
+
+def _is_transient_source_read_error(exc: OSError) -> bool:
+    return isinstance(exc, (PermissionError, FileNotFoundError)) or getattr(
+        exc, "winerror", None
+    ) in {5, 32, 33}
+
+
+def _read_json_with_sha256(path: Path) -> tuple[dict[str, Any], str]:
+    """Parse and hash one immutable byte read, retrying transient sharing races.
+
+    Reading the JSON and then reopening its pathname for hashing can observe two
+    different atomic generations and, on Windows, can fail while the writer is
+    replacing the file.  This helper binds provenance to the exact parsed bytes.
+    """
+
+    raw: bytes | None = None
+    last_error: OSError | None = None
+    for attempt in range(len(SOURCE_READ_RETRY_DELAYS_SEC) + 1):
+        try:
+            raw = path.read_bytes()
+            break
+        except OSError as exc:
+            if not _is_transient_source_read_error(exc):
+                raise
+            last_error = exc
+            if attempt >= len(SOURCE_READ_RETRY_DELAYS_SEC):
+                break
+            time.sleep(SOURCE_READ_RETRY_DELAYS_SEC[attempt])
+    if raw is None:
+        detail = type(last_error).__name__ if last_error is not None else "unknown"
+        raise TransientSourceReadError(
+            f"source remained unavailable after bounded retries: {path} ({detail})"
+        ) from last_error
+    value = json.loads(raw.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("source JSON must contain one object")
+    return value, hashlib.sha256(raw).hexdigest()
 
 
 def _ist(value: Any) -> pd.Timestamp:
@@ -137,17 +180,44 @@ def _equity_roots(session_date: date, source: str) -> list[tuple[str, Path]]:
     return [(name, roots[name]) for name in (("LIVE", "PAPER") if source == "AUTO" else (source,))]
 
 
-def load_equity_entries(session_date: date, side: str = "", source: str = "AUTO") -> list[dict[str, Any]]:
+def load_equity_entries(
+    session_date: date,
+    side: str = "",
+    source: str = "AUTO",
+    *,
+    issues: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Return validated, actually filled equity states, with LIVE preferred per signal."""
     source = source.upper()
     if source not in {"AUTO", "PAPER", "LIVE"}:
         raise ValueError("equity source must be AUTO, PAPER, or LIVE")
     selected: dict[str, dict[str, Any]] = {}
+    quarantined_signal_ids: set[str] = set()
     for source_mode, root in _equity_roots(session_date, source):
         if not root.exists():
             continue
         for path in sorted(root.glob("*.json")):
-            row = _read_json(path)
+            signal_hint = path.stem
+            if source == "AUTO" and source_mode == "PAPER" and signal_hint in quarantined_signal_ids:
+                continue
+            try:
+                row, source_digest = _read_json_with_sha256(path)
+            except (TransientSourceReadError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                if issues is not None:
+                    issues.append(
+                        {
+                            "reason": "SOURCE_EQUITY_UNREADABLE",
+                            "error_type": type(exc).__name__,
+                            "source_mode": source_mode,
+                            "signal_id_hint": signal_hint,
+                            "path": str(path),
+                        }
+                    )
+                if source == "AUTO" and source_mode == "LIVE":
+                    # Never silently substitute PAPER evidence for a preferred
+                    # LIVE signal whose current generation could not be read.
+                    quarantined_signal_ids.add(signal_hint)
+                continue
             signal_id = str(row.get("signal_id", "")).strip()
             row_side = str(row.get("side", "")).upper()
             if not signal_id or signal_id in selected or row_side not in {"LONG", "SHORT"}:
@@ -177,7 +247,7 @@ def load_equity_entries(session_date: date, side: str = "", source: str = "AUTO"
             row.update(
                 source_equity_mode=source_mode,
                 source_equity_path=str(path),
-                source_equity_sha256=_sha256(path),
+                source_equity_sha256=source_digest,
                 _equity_entry_price=entry_price,
                 _equity_entry_ts=entry_at,
                 _equity_symbol=symbol,
@@ -629,7 +699,14 @@ def _publish(role: str, state: str, **extra: Any) -> None:
 
 def run_replay(args: argparse.Namespace, session_date: date, side: str) -> int:
     master, master_path, master_sha = load_exact_options_master(session_date)
-    entries = load_equity_entries(session_date, side, args.equity_source)
+    source_issues: list[dict[str, Any]] = []
+    entries = load_equity_entries(
+        session_date, side, args.equity_source, issues=source_issues
+    )
+    if source_issues:
+        raise RuntimeError(
+            f"Equity source evidence is unreadable: {len(source_issues)} file(s)"
+        )
     audits: list[dict[str, Any]] = []
     for equity in entries:
         state, audit = replay_state(equity, master, master_path, master_sha, args.data_root)
@@ -652,7 +729,10 @@ def run_entry(args: argparse.Namespace, session_date: date, side: str) -> int:
     quote_pool: KiteQuotePool | None = None
     while True:
         now = common.now_ist()
-        entries = load_equity_entries(session_date, side, args.equity_source)
+        source_issues: list[dict[str, Any]] = []
+        entries = load_equity_entries(
+            session_date, side, args.equity_source, issues=source_issues
+        )
         master_info: tuple[pd.DataFrame, Path, str] | None = None
         master_error = ""
         if entries:
@@ -707,11 +787,14 @@ def run_entry(args: argparse.Namespace, session_date: date, side: str) -> int:
                 master_error = f"{type(exc).__name__}: {exc}"
         common.atomic_write_text(report_path(role), render_report(role, session_date))
         counts = net_summary(load_states(session_date, side))
-        state_name = "DONE" if args.once or now.date() != session_date or now.time() >= SESSION_END else "RUNNING"
+        finished = args.once or now.date() != session_date or now.time() >= SESSION_END
+        state_name = "DEGRADED" if source_issues else ("DONE" if finished else "RUNNING")
         _publish(role, state_name, session_date_ist=session_date, equity_entries=len(entries), apps_configured=args.max_apps,
-                 apps_available=apps_available, apps_used=apps_used, reason=master_error, **counts)
-        if state_name == "DONE":
-            return 0
+                 apps_available=apps_available, apps_used=apps_used,
+                 source_issue_count=len(source_issues), source_issues=source_issues[:10],
+                 reason=(master_error or ("SOURCE_EQUITY_UNREADABLE" if source_issues else "")), **counts)
+        if finished:
+            return 2 if source_issues else 0
         time.sleep(args.poll_sec)
 
 

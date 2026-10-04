@@ -23,7 +23,10 @@ if errorlevel 1 (
   endlocal & exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_NAME%"
+rem A complete browser-auth pass can take several minutes.  Two bounded
+rem task-level retries cover transient Kite/TOTP redirect failures without
+rem overlapping runs (the hardener keeps MultipleInstances=IgnoreNew).
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TASK_HARDENER%" -TaskName "%TASK_NAME%" -RestartCount 2 -RestartInterval PT10M
 if errorlevel 1 (
   echo [ERROR] Failed to harden %TASK_NAME%
   endlocal & exit /b 1

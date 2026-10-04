@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import fno_oi_common as common
+from fno_v13_v10_g_identity import canonical_signal_id
 import fno_v13_v10_g_live_config as config
 import fno_v6_live_kite_session as coordinator
 
@@ -30,6 +31,9 @@ class FakeBroker:
 
     def orders(self):
         return deepcopy(self.rows)
+
+    def ltp(self, keys):
+        return {key: {"last_price": 99.95} for key in keys}
 
     def place_order(self, **kwargs):
         order_id = f"FAKE{len(self.rows) + 1}"
@@ -51,6 +55,66 @@ class FakeBroker:
         for row in self.rows:
             if row["order_id"] == order_id:
                 row.update(status="COMPLETE", average_price=price, filled_quantity=row["quantity"])
+
+
+class TokenException(Exception):
+    """Test double matching the explicit Kite authentication exception name."""
+
+
+class InputException(Exception):
+    """Test double for a deterministic broker-side HTTP 400 rejection."""
+
+    def __init__(self, message, code=400):
+        super().__init__(message)
+        self.code = code
+
+
+class ScriptedBroker(FakeBroker):
+    """Broker lane with deterministic quotes and placement outcomes."""
+
+    def __init__(self, *, quotes=(), placement_errors=(), rows=()):
+        super().__init__()
+        self.rows = [deepcopy(row) for row in rows]
+        self.quotes = list(quotes)
+        self.placement_errors = list(placement_errors)
+        self.place_attempts = []
+        self.ltp_calls = 0
+        self.orders_calls = 0
+
+    def orders(self):
+        self.orders_calls += 1
+        return super().orders()
+
+    def ltp(self, keys):
+        self.ltp_calls += 1
+        if not self.quotes:
+            raise AssertionError("No scripted LTP remains.")
+        price = self.quotes.pop(0) if len(self.quotes) > 1 else self.quotes[0]
+        return {key: {"last_price": price} for key in keys}
+
+    def place_order(self, **kwargs):
+        self.place_attempts.append(deepcopy(kwargs))
+        if self.placement_errors:
+            raise self.placement_errors.pop(0)
+        return super().place_order(**kwargs)
+
+
+def credential(app_name, access_token):
+    return SimpleNamespace(
+        app_name=app_name,
+        api_key=f"key-{app_name}",
+        access_token=access_token,
+    )
+
+
+def kite_pool(runtime, **lanes):
+    credentials = [credential(app_name, f"token-{app_name}") for app_name in lanes]
+    return runtime.KitePool(
+        len(credentials),
+        1,
+        credential_loader=lambda **_kwargs: credentials,
+        client_factory=lambda item, **_kwargs: lanes[item.app_name],
+    )
 
 
 @pytest.fixture
@@ -76,6 +140,7 @@ def isolated_coordinator(tmp_path, monkeypatch):
     controls = tmp_path / "fno_oi" / "v6_live"
     export = runtime_root / "live_kite"
     monkeypatch.setattr(coordinator, "config", config)
+    monkeypatch.setattr(common, "RUNTIME_STATUS_DIR", tmp_path / "runtime_status")
     for name, value in {
         "SESSION_ID": "fno_v13_v10_g_live_kite_qty1",
         "LIVE_ROOT": runtime_root,
@@ -89,6 +154,78 @@ def isolated_coordinator(tmp_path, monkeypatch):
     }.items():
         monkeypatch.setattr(coordinator, name, value)
     return runtime_root
+
+
+def test_coordinator_surfaces_same_run_reconciliation_degradation(
+    isolated_coordinator,
+) -> None:
+    class Process:
+        pid = 123
+
+        @staticmethod
+        def poll():
+            return None
+
+    session_id = coordinator.worker_session_id("BROKER_RECONCILIATION")
+    common.atomic_write_kv(
+        common.session_status_path(session_id),
+        {
+            "status": "DEGRADED",
+            "session": session_id,
+            "ts": f"{DAY.isoformat()}T09:20:00+05:30",
+            "run_id": coordinator.RUN_ID,
+            "broker_position_reconciliation": {
+                "broker_truth_available": False,
+                "error_type": "TokenException",
+            },
+        },
+    )
+
+    status = coordinator._child_process_status("BROKER_RECONCILIATION", Process())
+
+    assert status["state"] == "DEGRADED"
+    assert status["broker_truth_available"] is False
+    assert status["scope_complete"] is False
+    assert status["active_order_parity_complete"] is False
+    assert status["error_type"] == "TokenException"
+
+
+def test_coordinator_surfaces_active_order_reconciliation_mismatch(
+    isolated_coordinator,
+) -> None:
+    class Process:
+        pid = 124
+
+        @staticmethod
+        def poll():
+            return None
+
+    session_id = coordinator.worker_session_id("BROKER_RECONCILIATION")
+    common.atomic_write_kv(
+        common.session_status_path(session_id),
+        {
+            "status": "DEGRADED",
+            "session": session_id,
+            "ts": f"{DAY.isoformat()}T09:21:00+05:30",
+            "run_id": coordinator.RUN_ID,
+            "broker_position_reconciliation": {
+                "broker_truth_available": True,
+                "scope_complete": True,
+                "mismatch_count": 0,
+                "active_order_parity_complete": False,
+                "active_order_mismatch_count": 1,
+            },
+        },
+    )
+
+    status = coordinator._child_process_status("BROKER_RECONCILIATION", Process())
+
+    assert status["state"] == "DEGRADED"
+    assert status["broker_truth_available"] is True
+    assert status["scope_complete"] is True
+    assert status["mismatch_count"] == 0
+    assert status["active_order_parity_complete"] is False
+    assert status["active_order_mismatch_count"] == 1
 
 
 def signal_for(runtime, setup):
@@ -130,6 +267,26 @@ def signal_for(runtime, setup):
         "target_price": target,
         "round_trip_cost_bps": config.ROUND_TRIP_COST_BPS,
     }
+
+
+def test_live_signal_id_delegates_to_canonical_legacy_identity(runtime):
+    session_date = date(2026, 9, 25)
+    setup = next(
+        setup
+        for setup in config.ACTIVE_SETUPS
+        if setup.confirmation_end == "09:31" and setup.side == "SHORT"
+    )
+
+    expected = "20260925_0931_SHORT_OFSS_6ac0b887eee8"
+    assert runtime._signal_id(session_date, setup, "OFSS") == expected
+    assert canonical_signal_id(
+        config.STRATEGY_VERSION,
+        session_date,
+        setup.signal_end,
+        setup.confirmation_end,
+        setup.side,
+        "OFSS",
+    ) == expected
 
 
 def write_authority(signal):
@@ -208,6 +365,14 @@ def test_g_live_qty_one_recovers_without_duplicate_orders_and_exits_full_positio
     assert state["status"] == "OPEN"
     assert len(broker.placed) == 3
     assert {row["quantity"] for row in broker.placed} == {1}
+    assert {row["tag"] for row in broker.placed} == {
+        runtime._live_order_tag(signal["signal_id"], "entry"),
+        runtime._live_order_tag(signal["signal_id"], "stop"),
+        runtime._live_order_tag(signal["signal_id"], "target"),
+    }
+    assert broker.placed[0]["market_protection"] == -1
+    assert broker.placed[1]["market_protection"] == -1
+    assert "market_protection" not in broker.placed[2]
     assert (state["stop_price"], state["target_price"]) == config.bracket_levels(
         fill, side, setup.stop_pct, setup.target_pct, .05
     )
@@ -220,6 +385,438 @@ def test_g_live_qty_one_recovers_without_duplicate_orders_and_exits_full_positio
     assert state["quantity"] == 1
     assert state["stop_order_id"] in broker.cancelled
     assert state["net_pnl_rs"] > 0
+
+
+@pytest.mark.parametrize(
+    ("side", "last_price"),
+    (("LONG", 100.05), ("SHORT", 99.95)),
+)
+def test_crossed_live_entry_uses_protected_market(runtime, side, last_price):
+    setup = config.setup_for("09:25", side)
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    lane = ScriptedBroker(quotes=(last_price,))
+    pool = kite_pool(runtime, app1=lane)
+    at = config.slot_datetime(DAY, setup.confirmation_end) + timedelta(seconds=15)
+
+    state = runtime.advance_live_order(state, pool, at)
+
+    assert state["entry_order_id"]
+    assert len(lane.place_attempts) == 1
+    submitted = lane.place_attempts[0]
+    assert submitted["order_type"] == "MARKET"
+    assert submitted["market_protection"] == runtime.AUTO_MARKET_PROTECTION
+    assert "trigger_price" not in submitted
+    assert submitted["tag"] == runtime._live_order_tag(state["signal_id"], "entry")
+
+
+@pytest.mark.parametrize(
+    ("side", "last_price"),
+    (("LONG", 99.95), ("SHORT", 100.05)),
+)
+def test_uncrossed_live_entry_uses_protected_stop_market(runtime, side, last_price):
+    setup = config.setup_for("09:25", side)
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    lane = ScriptedBroker(quotes=(last_price,))
+    pool = kite_pool(runtime, app1=lane)
+    at = config.slot_datetime(DAY, setup.confirmation_end) + timedelta(seconds=15)
+
+    state = runtime.advance_live_order(state, pool, at)
+
+    assert state["entry_order_id"]
+    assert len(lane.place_attempts) == 1
+    submitted = lane.place_attempts[0]
+    assert submitted["order_type"] == "SL-M"
+    assert submitted["trigger_price"] == state["trigger_price"]
+    assert submitted["market_protection"] == runtime.AUTO_MARKET_PROTECTION
+
+
+def test_live_pool_does_not_wrap_or_fail_over_deterministic_input_rejection(runtime):
+    rejection = InputException("trigger price has already crossed the LTP")
+    primary = ScriptedBroker(placement_errors=(rejection,))
+    secondary = ScriptedBroker()
+    pool = kite_pool(runtime, app1=primary, app2=secondary)
+
+    with pytest.raises(InputException, match="already crossed") as observed:
+        pool.place_order(
+            variety="regular",
+            exchange="NSE",
+            tradingsymbol="EXAMPLE",
+            transaction_type="BUY",
+            quantity=1,
+            product="MIS",
+            order_type="SL-M",
+            trigger_price=100.0,
+            validity="DAY",
+            tag="deterministic-E",
+        )
+
+    assert observed.value is rejection
+    assert len(primary.place_attempts) == 1
+    assert secondary.place_attempts == []
+    assert pool.last_operation == "place_order"
+    assert pool.last_operation_app == "app1"
+    assert pool.last_operation_failures[0]["error_type"] == "InputException"
+
+
+def test_non_cross_deterministic_entry_rejection_is_terminal(runtime):
+    setup = config.setup_for("09:25", "LONG")
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    lane = ScriptedBroker(
+        quotes=(99.95,),
+        placement_errors=(InputException("invalid order parameter"),),
+    )
+    pool = kite_pool(runtime, app1=lane)
+    at = config.slot_datetime(DAY, setup.confirmation_end) + timedelta(seconds=15)
+
+    state = runtime.advance_live_order(state, pool, at)
+
+    assert state["status"] == "ENTRY_REJECTED"
+    assert "invalid order parameter" in state["status_reason"]
+    assert len(lane.place_attempts) == 1
+
+    state = runtime.advance_live_order(state, pool, at + timedelta(seconds=1))
+    assert state["status"] == "ENTRY_REJECTED"
+    assert len(lane.place_attempts) == 1
+
+
+def test_stop_entry_cross_race_requotes_and_uses_protected_market(runtime):
+    setup = config.setup_for("09:25", "LONG")
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    lane = ScriptedBroker(
+        quotes=(99.95, 100.05),
+        placement_errors=(
+            InputException(
+                "Trigger price for stoploss buy orders should be higher than "
+                "the last traded price."
+            ),
+        ),
+    )
+    pool = kite_pool(runtime, app1=lane)
+    at = config.slot_datetime(DAY, setup.confirmation_end) + timedelta(seconds=15)
+
+    state = runtime.advance_live_order(state, pool, at)
+
+    assert state["entry_order_id"]
+    assert lane.ltp_calls == 2
+    assert [row["order_type"] for row in lane.place_attempts] == ["SL-M", "MARKET"]
+    assert lane.place_attempts[1]["market_protection"] == runtime.AUTO_MARKET_PROTECTION
+    assert "trigger_price" not in lane.place_attempts[1]
+    assert {
+        row["tag"] for row in lane.place_attempts
+    } == {runtime._live_order_tag(state["signal_id"], "entry")}
+
+
+def test_ambiguous_entry_submission_latches_reconciliation_without_retry(runtime):
+    setup = config.setup_for("09:25", "LONG")
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    lane = ScriptedBroker(
+        quotes=(99.95,),
+        placement_errors=(TimeoutError("response lost after submission"),),
+    )
+    pool = kite_pool(runtime, app1=lane)
+    at = config.slot_datetime(DAY, setup.confirmation_end) + timedelta(seconds=15)
+
+    for observed_at in (at, at + timedelta(seconds=1)):
+        try:
+            state = runtime.advance_live_order(state, pool, observed_at)
+        except runtime.BrokerMutationUncertain:
+            pass
+
+    assert state["status"] == "PENDING_ENTRY"
+    assert len(lane.place_attempts) == 1
+    assert lane.orders_calls >= 2
+
+
+@pytest.mark.parametrize("broker_order_type", ("MARKET", "LIMIT"))
+def test_live_entry_recovers_market_or_protected_limit_by_role_tag(
+    runtime, broker_order_type
+):
+    setup = config.setup_for("09:25", "LONG")
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    order_id = f"RECOVERED-{broker_order_type}"
+    lane = ScriptedBroker(
+        quotes=(100.05,),
+        rows=(
+            {
+                "order_id": order_id,
+                "tag": runtime._live_order_tag(state["signal_id"], "entry"),
+                "tradingsymbol": state["tradingsymbol"],
+                "transaction_type": "BUY",
+                "order_type": broker_order_type,
+                "quantity": 1,
+                "status": "OPEN",
+            },
+        ),
+    )
+    pool = kite_pool(runtime, app1=lane)
+    at = config.slot_datetime(DAY, setup.confirmation_end) + timedelta(seconds=15)
+
+    state = runtime.advance_live_order(state, pool, at)
+
+    assert state["entry_order_id"] == order_id
+    assert state["status_reason"] == (
+        "LIVE_MARKET_ENTRY_WORKING"
+        if broker_order_type == "MARKET"
+        else "LIVE_STOP_ENTRY_WORKING"
+    )
+    assert lane.place_attempts == []
+
+
+def test_live_pool_fails_over_reads_and_explicit_auth_rejected_submission(runtime):
+    calls = []
+
+    class Lane:
+        def __init__(self, app_name, reject_auth=False):
+            self.app_name = app_name
+            self.reject_auth = reject_auth
+
+        def orders(self):
+            calls.append((self.app_name, "orders"))
+            if self.app_name == "app1":
+                raise RuntimeError("temporary read failure")
+            return [{"order_id": "READ-OK"}]
+
+        def place_order(self, **kwargs):
+            calls.append((self.app_name, "place_order"))
+            if self.reject_auth:
+                raise TokenException("Incorrect `api_key` or `access_token`.")
+            return "PLACED-ON-APP2"
+
+    lanes = {
+        "app1": Lane("app1", reject_auth=True),
+        "app2": Lane("app2"),
+    }
+    pool = runtime.KitePool(
+        2,
+        1,
+        credential_loader=lambda **_kwargs: [
+            credential("app1", "old"),
+            credential("app2", "valid"),
+        ],
+        client_factory=lambda item, **_kwargs: lanes[item.app_name],
+    )
+
+    assert pool.orders() == [{"order_id": "READ-OK"}]
+    assert pool.last_operation_app == "app2"
+    assert pool.place_order(
+        tag="safe-tag",
+        tradingsymbol="OFSS",
+        transaction_type="SELL",
+        order_type="SL-M",
+        quantity=1,
+    ) == "PLACED-ON-APP2"
+    assert pool.last_operation_app == "app2"
+    assert ("app1", "place_order") in calls
+    assert ("app2", "place_order") in calls
+
+
+def test_live_pool_reconciles_ambiguous_submission_without_duplicate(runtime):
+    broker_rows = []
+    secondary_place_calls = []
+
+    class AmbiguousLane:
+        def orders(self):
+            return list(broker_rows)
+
+        def place_order(self, **kwargs):
+            broker_rows.append({**kwargs, "order_id": "RECOVERED-1"})
+            raise TimeoutError("response lost after broker acceptance")
+
+    class SecondaryLane:
+        def orders(self):
+            return list(broker_rows)
+
+        def place_order(self, **kwargs):
+            secondary_place_calls.append(kwargs)
+            return "DUPLICATE"
+
+    lanes = {"app1": AmbiguousLane(), "app2": SecondaryLane()}
+    pool = runtime.KitePool(
+        2,
+        1,
+        credential_loader=lambda **_kwargs: [
+            credential("app1", "valid-1"),
+            credential("app2", "valid-2"),
+        ],
+        client_factory=lambda item, **_kwargs: lanes[item.app_name],
+    )
+    payload = dict(
+        tag="safe-tag",
+        tradingsymbol="FORTIS",
+        transaction_type="SELL",
+        order_type="SL-M",
+        quantity=1,
+    )
+
+    assert pool.place_order(**payload) == "RECOVERED-1"
+    assert pool.last_operation == "place_order_reconciled"
+    assert secondary_place_calls == []
+
+
+def test_live_pool_posts_required_market_protection_through_old_sdk(runtime):
+    post_calls = []
+
+    class OldSdkLane:
+        def _post(self, route, *, url_args, params):
+            post_calls.append((route, deepcopy(url_args), deepcopy(params)))
+            return {"order_id": "PROTECTED-1"}
+
+    pool = runtime.KitePool(
+        1,
+        1,
+        credential_loader=lambda **_kwargs: [credential("app1", "valid")],
+        client_factory=lambda _item, **_kwargs: OldSdkLane(),
+    )
+
+    order_id = runtime._broker_place(
+        pool,
+        variety="regular",
+        exchange="NSE",
+        tradingsymbol="FORTIS",
+        transaction_type="SELL",
+        quantity=1,
+        product="MIS",
+        order_type="SL-M",
+        trigger_price=100.0,
+        validity="DAY",
+        tag="safe-tag-E",
+    )
+
+    assert order_id == "PROTECTED-1"
+    assert post_calls == [
+        (
+            "order.place",
+            {"variety": "regular"},
+            {
+                "variety": "regular",
+                "exchange": "NSE",
+                "tradingsymbol": "FORTIS",
+                "transaction_type": "SELL",
+                "quantity": 1,
+                "product": "MIS",
+                "order_type": "SL-M",
+                "trigger_price": 100.0,
+                "validity": "DAY",
+                "tag": "safe-tag-E",
+                "market_protection": -1,
+            },
+        )
+    ]
+
+
+def test_live_pool_recovers_protected_market_normalized_to_limit(runtime):
+    broker_rows = []
+
+    class ResponseLostLane:
+        def _post(self, _route, *, url_args, params):
+            assert url_args == {"variety": "regular"}
+            broker_rows.append(
+                {
+                    **params,
+                    "order_type": "LIMIT",
+                    "order_id": "RECOVERED-PROTECTED-1",
+                    "status": "COMPLETE",
+                }
+            )
+            raise TimeoutError("response lost after protected order acceptance")
+
+        def orders(self):
+            return deepcopy(broker_rows)
+
+    pool = runtime.KitePool(
+        1,
+        1,
+        credential_loader=lambda **_kwargs: [credential("app1", "valid")],
+        client_factory=lambda _item, **_kwargs: ResponseLostLane(),
+    )
+
+    assert pool.place_order(
+        variety="regular",
+        exchange="NSE",
+        tradingsymbol="FORTIS",
+        transaction_type="SELL",
+        quantity=1,
+        product="MIS",
+        order_type="MARKET",
+        validity="DAY",
+        tag="safe-tag-X",
+        market_protection=-1,
+    ) == "RECOVERED-PROTECTED-1"
+    assert pool.last_operation == "place_order_reconciled"
+
+
+def test_live_pool_never_retries_ambiguous_submission_without_broker_evidence(runtime):
+    secondary_place_calls = []
+
+    class AmbiguousLane:
+        def orders(self):
+            return []
+
+        def place_order(self, **_kwargs):
+            raise TimeoutError("unknown submission outcome")
+
+    class SecondaryLane:
+        def place_order(self, **kwargs):
+            secondary_place_calls.append(kwargs)
+            return "UNSAFE-DUPLICATE"
+
+    lanes = {"app1": AmbiguousLane(), "app2": SecondaryLane()}
+    pool = runtime.KitePool(
+        2,
+        1,
+        credential_loader=lambda **_kwargs: [
+            credential("app1", "valid-1"),
+            credential("app2", "valid-2"),
+        ],
+        client_factory=lambda item, **_kwargs: lanes[item.app_name],
+    )
+
+    with pytest.raises(runtime.BrokerMutationUncertain):
+        pool.place_order(
+            tag="safe-tag",
+            tradingsymbol="FORTIS",
+            transaction_type="SELL",
+            order_type="SL-M",
+            quantity=1,
+        )
+    assert secondary_place_calls == []
+
+
+def test_live_pool_hot_reloads_changed_access_token(runtime):
+    tokens = {"app1": "old-token"}
+
+    class Lane:
+        def __init__(self, token):
+            self.token = token
+
+        def orders(self):
+            return [{"token": self.token}]
+
+    def load_credentials(**_kwargs):
+        return [credential("app1", tokens["app1"])]
+
+    pool = runtime.KitePool(
+        1,
+        1,
+        credential_loader=load_credentials,
+        client_factory=lambda item, **_kwargs: Lane(item.access_token),
+    )
+    assert pool.orders() == [{"token": "old-token"}]
+    tokens["app1"] = "new-token"
+    assert pool.orders() == [{"token": "new-token"}]
+    assert pool.credential_reload_count == 1
 
 
 def test_g_live_disarmed_does_not_place_and_working_entry_expires(runtime, monkeypatch):
@@ -241,6 +838,92 @@ def test_g_live_disarmed_does_not_place_and_working_entry_expires(runtime, monke
     assert entry_id in broker.cancelled
     assert state["status"] == "CANCELLED"
     assert state["entry_price"] == 0
+
+
+def test_in_window_live_execution_error_survives_deadline(runtime):
+    setup = config.setup_for("09:25", "LONG")
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    observed = config.slot_datetime(DAY, setup.confirmation_end) + timedelta(seconds=15)
+    state["created_at_ist"] = observed.isoformat(timespec="seconds")
+
+    runtime._record_live_execution_error(
+        state,
+        TokenException("Incorrect api_key or access_token."),
+        observed,
+    )
+    state = runtime.advance_live_order(
+        state,
+        FakeBroker(),
+        config.activation_deadline(DAY, setup.confirmation_end)
+        + timedelta(seconds=1),
+    )
+
+    assert state["status"] == "CANCELLED"
+    assert state["status_reason"] == "ENTRY_ACTIVATION_DEADLINE_EXPIRED"
+    assert state["entry_terminal_cause"] == "EXECUTION_ERROR:TokenException"
+    assert state["execution_error_count"] == 1
+    assert state["first_execution_error_type"] == "TokenException"
+    assert state["last_execution_error_type"] == "TokenException"
+    assert state["first_execution_error_at_ist"] == observed.isoformat(
+        timespec="seconds"
+    )
+    assert state["entry_order_id"] == ""
+
+
+def test_in_window_disarm_reason_survives_deadline(runtime, monkeypatch):
+    setup = config.setup_for("09:25", "LONG")
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    observed = config.slot_datetime(DAY, setup.confirmation_end) + timedelta(seconds=15)
+    state["created_at_ist"] = observed.isoformat(timespec="seconds")
+    broker = FakeBroker()
+    monkeypatch.setattr(
+        runtime,
+        "_live_arm_state",
+        lambda _day: (False, "LIVE_ARM_FILE_DISABLED"),
+    )
+
+    state = runtime.advance_live_order(state, broker, observed)
+    state = runtime.advance_live_order(
+        state,
+        broker,
+        config.activation_deadline(DAY, setup.confirmation_end)
+        + timedelta(seconds=1),
+    )
+
+    assert state["status"] == "CANCELLED"
+    assert state["status_reason"] == "ENTRY_ACTIVATION_DEADLINE_EXPIRED"
+    assert state["entry_terminal_cause"] == (
+        "ENTRY_BLOCKER:LIVE_ARM_FILE_DISABLED"
+    )
+    assert state["first_entry_blocker_reason"] == "LIVE_ARM_FILE_DISABLED"
+    assert state["last_entry_blocker_reason"] == "LIVE_ARM_FILE_DISABLED"
+    assert broker.placed == []
+
+
+def test_terminal_live_state_does_not_require_broker_client(runtime):
+    setup = config.setup_for("09:25", "LONG")
+    state = runtime.create_order_state(
+        signal_for(runtime, setup), "LIVE", live_quantity=1
+    )
+    state.update(
+        status="CANCELLED",
+        status_reason="ENTRY_ACTIVATION_DEADLINE_EXPIRED",
+        entry_terminal_cause="EXECUTION_ERROR:TokenException",
+    )
+    before = deepcopy(state)
+
+    result = runtime.advance_live_order(
+        state,
+        None,
+        config.activation_deadline(DAY, setup.confirmation_end)
+        + timedelta(minutes=30),
+    )
+
+    assert result == before
 
 
 def test_g_paper_squareoff_is_1515(runtime):
@@ -394,15 +1077,31 @@ def test_g_auto_arm_writes_current_date_and_strategy_identity(isolated_coordinat
 def test_g_workers_keep_one_share_and_do_not_supply_acknowledgement(isolated_coordinator, monkeypatch):
     monkeypatch.delenv(config.LIVE_ACK_ENV, raising=False)
     monkeypatch.setenv("FNO_V6_STRATEGY_PROFILE", "stale")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", raising=False)
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
     environment = coordinator.worker_environment()
     assert environment["FNO_V6_STRATEGY_PROFILE"] == "V13_V10_G"
     assert environment["FNO_V6_EXECUTION_SESSION_NAMESPACE"] == "live_kite_qty1"
+    assert environment["EQIDV2_OBSERVABILITY_ENABLED"] == "1"
+    assert environment["EQIDV2_OBS_RUN_ID"] == coordinator.RUN_ID
+    assert "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" not in environment
+    assert "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL" not in environment
+    assert "OTEL_SDK_DISABLED" not in environment
     assert config.LIVE_ACK_ENV not in environment
     for side in ("LONG", "SHORT"):
         command = coordinator.worker_command(DAY, side)
         assert Path(command[2]).name == "fno_v13_v10_g_live.py"
         assert command[command.index("--live-quantity") + 1] == "1"
         assert coordinator.worker_session_id(side) == f"fno_v13_v10_g_live_kite_qty1_{side.lower()}"
+    reconciliation = coordinator.broker_reconciliation_command(DAY)
+    assert Path(reconciliation[2]).name == "fno_v13_v10_g_live.py"
+    assert reconciliation[reconciliation.index("--role") + 1] == "broker-reconciliation"
+    assert "--live-quantity" not in reconciliation
+    assert (
+        coordinator.worker_session_id("BROKER_RECONCILIATION")
+        == "fno_v13_v10_g_live_kite_qty1_broker_reconciliation"
+    )
 
 
 def test_g_exports_use_renamed_session_and_csvs(isolated_coordinator):
@@ -475,7 +1174,7 @@ def test_g_readiness_only_prepares_outputs_without_worker_or_control_changes(
     assert pd.read_csv(coordinator.trades_csv_path(DAY)).empty
 
 
-@pytest.mark.parametrize("failure", ["export", "long_worker"])
+@pytest.mark.parametrize("failure", ["export", "long_worker", "reconciliation"])
 def test_reporting_or_other_side_failure_keeps_healthy_live_manager_alive(
     isolated_coordinator, monkeypatch, failure
 ):
@@ -487,6 +1186,7 @@ def test_reporting_or_other_side_failure_keeps_healthy_live_manager_alive(
         def __init__(self, command, **kwargs):
             self.pid = 100 + len(processes)
             self.return_code = 2 if failure == "long_worker" and not processes else None
+            self.command = command
             processes.append(self)
 
         def poll(self):
@@ -510,13 +1210,30 @@ def test_reporting_or_other_side_failure_keeps_healthy_live_manager_alive(
 
     monkeypatch.setattr(coordinator.subprocess, "Popen", FakeProcess)
     monkeypatch.setattr(coordinator, "export_snapshot", snapshot)
+    monkeypatch.setattr(
+        coordinator,
+        "_child_process_status",
+        lambda role, process: {
+            "session_id": coordinator.worker_session_id(role),
+            "pid": process.pid,
+            "return_code": process.poll(),
+            **(
+                {"state": "DEGRADED", "broker_truth_available": False}
+                if failure == "reconciliation"
+                and role == "BROKER_RECONCILIATION"
+                else {}
+            ),
+        },
+    )
     monkeypatch.setattr(coordinator.time, "sleep", sleep)
     monkeypatch.setattr(config, "validate_strategy", lambda: None)
     monkeypatch.setattr(config, "attest_selected_backtest", lambda: None)
     args = SimpleNamespace(session_date=DAY.isoformat(), allow_non_trading_day=True, once=False, poll_sec=.01)
     assert coordinator.run(args) == (2 if failure == "long_worker" else 0)
     assert sleeps == [.01]
-    if failure == "long_worker":
+    assert len(processes) == 3
+    assert processes[2].command[processes[2].command.index("--role") + 1] == "broker-reconciliation"
+    if failure in {"long_worker", "reconciliation"}:
         assert snapshots[0]["state"] == "DEGRADED"
     else:
         saved = common.read_json(coordinator.STATUS_PATH)

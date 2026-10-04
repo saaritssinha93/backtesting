@@ -1,0 +1,128 @@
+name: eqidv2-observability
+
+# Local-only observability stack for V13-V10-G. Ports bind to loopback so the
+# stack is not exposed to the LAN. Application telemetry is accepted by Alloy
+# on OTLP/gRPC 4317, OTLP/HTTP 4318, and Prometheus scrape target 8788.
+services:
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-90d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-20GB}
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - 127.0.0.1:9090:9090
+    restart: unless-stopped
+    logging: &bounded-logging
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=${ALERT_RETENTION:-120h}
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - 127.0.0.1:9093:9093
+    restart: unless-stopped
+    logging: *bounded-logging
+
+  loki:
+    image: grafana/loki:3.4.2
+    command: [-config.file=/etc/loki/config.yml]
+    volumes:
+      - ./loki/config.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+    ports:
+      - 127.0.0.1:3100:3100
+    restart: unless-stopped
+    logging: *bounded-logging
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    command: [-config.file=/etc/tempo/config.yml]
+    volumes:
+      - ./tempo/config.yml:/etc/tempo/config.yml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - 127.0.0.1:3200:3200
+    restart: unless-stopped
+    logging: *bounded-logging
+
+  alloy:
+    image: grafana/alloy:v1.7.5
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ../../logs:/var/log/trading/repository:ro
+      - "${EQIDV2_RUNTIME_ROOT:-C:/TradingData/eqidv2}/observability/logs:/var/log/trading/runtime:ro"
+      - alloy-data:/var/lib/alloy
+    secrets:
+      - ai_platform_api_token
+    ports:
+      - 127.0.0.1:12345:12345
+      - 127.0.0.1:4317:4317
+      - 127.0.0.1:4318:4318
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    restart: unless-stopped
+    logging: *bounded-logging
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-eqidv2}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_HTTP_ADDR: 0.0.0.0
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_LOG_LEVEL: warn
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - 127.0.0.1:3000:3000
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    restart: unless-stopped
+    logging: *bounded-logging
+
+secrets:
+  grafana_admin_password:
+    file: ./runtime/secrets/grafana_admin_password.txt
+  ai_platform_api_token:
+    file: ./runtime/secrets/ai_platform_api_token.txt
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  loki-data:
+  tempo-data:
+  alloy-data:
+  grafana-data:

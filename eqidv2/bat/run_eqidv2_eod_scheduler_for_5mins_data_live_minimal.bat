@@ -67,10 +67,11 @@ REM ~24-26s clean slots.
 REM 2026-06-11: 384/48 created 384 Python workers on a 16-logical-CPU host,
 REM producing 150s partition timeouts under parquet/Kite contention. That result
 REM motivates the bounded ceiling below; adaptive throttle may step down further.
-REM 2026-07-31: persistent app processes allow a bounded concurrency ceiling.
-REM Cap each app at 20 ticker workers (160 total) to limit parquet/Kite contention.
-set "MAX_WORKERS=160"
-set "MAX_WORKERS_PER_APP=20"
+REM 2026-09-29: 160/20 hit the 150s partition timeout across multiple apps on
+REM Sep 25 and Sep 29 under shared load. Cap future launches at 128/16; retain
+REM the exact same data, verification, deadline, and fail-closed marker rules.
+set "MAX_WORKERS=128"
+set "MAX_WORKERS_PER_APP=16"
 set "BUFFER_SEC=%EQIDV2_5M_BUFFER_SEC%"
 if "%BUFFER_SEC%"=="" set "BUFFER_SEC=2"
 set "QUARTER_HOUR_BUFFER_SEC=%EQIDV2_5M_QUARTER_HOUR_BUFFER_SEC%"

@@ -1,0 +1,13 @@
+{
+  "schema_version": "fno_live_evidence_v1",
+  "artifact_kind": "confirmation_snapshot",
+  "generation": "v6",
+  "session_date": "2026-09-17",
+  "slot": "1120",
+  "observed_at_ist": "2026-09-17T11:21:05.000000+05:30",
+  "payload_sha256": "ca163576d1e4f0bdf6d23841e6240ce1d674a2c64f69d43fefe5d8941bf0cf23",
+  "payload": {
+    "decision": "REJECT",
+    "symbol": "DEMO"
+  }
+}

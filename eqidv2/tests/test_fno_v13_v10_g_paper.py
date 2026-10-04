@@ -101,6 +101,61 @@ def test_worker_expires_existing_pending_before_broker_pool_creation(g_runtime, 
     assert stored["status"] == "CANCELLED"
 
 
+def test_paper_quotes_fail_over_from_primary_to_next_healthy_app(g_runtime):
+    calls = []
+
+    class Client:
+        def __init__(self, app_name, error=None):
+            self.app_name = app_name
+            self.error = error
+
+        def ltp(self, keys):
+            calls.append((self.app_name, keys))
+            if self.error is not None:
+                raise self.error
+            return {"NSE:OFSS": {"last_price": 10570.0}}
+
+    prices, quote_app, failures = g_runtime._quote_prices_with_failover(
+        [
+            ("app1", Client("app1", RuntimeError("expired token"))),
+            ("app2", Client("app2")),
+            ("app3", Client("app3")),
+        ],
+        ["OFSS"],
+    )
+
+    assert prices == {"OFSS": 10570.0}
+    assert quote_app == "app2"
+    assert failures == [
+        {"app": "app1", "error_type": "RuntimeError", "message": "expired token"}
+    ]
+    assert calls == [
+        ("app1", ["NSE:OFSS"]),
+        ("app2", ["NSE:OFSS"]),
+    ]
+
+
+def test_paper_quote_failover_reports_all_failed_apps(g_runtime):
+    class FailedClient:
+        def __init__(self, message):
+            self.message = message
+
+        def ltp(self, _keys):
+            raise RuntimeError(self.message)
+
+    with pytest.raises(RuntimeError, match="All configured Kite quote apps failed") as exc:
+        g_runtime._quote_prices_with_failover(
+            [
+                ("app1", FailedClient("expired token")),
+                ("app2", FailedClient("network timeout")),
+            ],
+            ["OFSS"],
+        )
+
+    assert "app1=RuntimeError: expired token" in str(exc.value)
+    assert "app2=RuntimeError: network timeout" in str(exc.value)
+
+
 def test_runtime_nifty_context_uses_dated_future_exact_end_label(g_runtime, monkeypatch):
     import pandas as pd
     day = datetime.fromisoformat("2026-09-11T09:25:00+05:30").date()

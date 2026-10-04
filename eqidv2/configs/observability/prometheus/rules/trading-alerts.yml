@@ -1,0 +1,369 @@
+groups:
+  - name: trading-safety-p0
+    interval: 15s
+    rules:
+      - alert: TradingUnprotectedOpenPosition
+        expr: max by (mode, asset) (trading_unprotected_position_seconds{mode="live"}) > 10
+        for: 5s
+        labels:
+          severity: P0
+          owner: trading-operations
+        annotations:
+          summary: Live position is not protected
+          description: "{{ $labels.asset }} has had an unprotected live position for {{ $value }} seconds. Inspect broker state immediately."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p0-live-safety-alerts
+
+      - alert: TradingPositionReconciliationMismatch
+        expr: max by (mode, asset) (trading_position_reconciliation_mismatch{mode="live"}) > 0
+        for: 15s
+        labels:
+          severity: P0
+          owner: trading-operations
+        annotations:
+          summary: Broker and local positions disagree
+          description: "A live position or quantity mismatch is present for {{ $labels.asset }}."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p0-live-safety-alerts
+
+      - alert: TradingActiveOrderReconciliationMismatch
+        expr: max by (mode, asset) (trading_active_order_reconciliation_mismatch{mode="live"}) > 0
+        for: 15s
+        labels:
+          severity: P0
+          owner: trading-operations
+        annotations:
+          summary: Broker and local active orders disagree
+          description: "An unexpected, missing, malformed, or identity-mismatched active broker order is present for {{ $labels.asset }}."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p0-live-safety-alerts
+
+      - alert: TradingBrokerReconciliationMissing
+        expr: (absent(trading_position_reconciliation_mismatch{mode="live",asset="equity"}) or absent(trading_active_order_reconciliation_mismatch{mode="live",asset="equity"})) and on() (max(trading_market_open) == 1) and on() (count(trading_heartbeat_age_seconds{mode="live",service=~"fno_v13_v10_g.*"}) > 0)
+        for: 2m
+        labels:
+          severity: P0
+          owner: trading-operations
+        annotations:
+          summary: Fresh broker reconciliation is missing
+          description: A live worker is present during market hours, but complete current-session position and active-order reconciliation is unavailable.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p0-live-safety-alerts
+
+      - alert: TradingDuplicateOrderDetected
+        expr: sum by (mode, asset) (increase(trading_duplicate_order_total{mode="live"}[5m])) > 0
+        labels:
+          severity: P0
+          owner: trading-operations
+        annotations:
+          summary: Duplicate live order detected
+          description: "Duplicate-order protection fired for {{ $labels.asset }}. Stop new entries and reconcile broker orders."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p0-live-safety-alerts
+
+      - alert: TradingStrategyFingerprintMismatch
+        expr: max by (service, strategy, mode) (trading_strategy_fingerprint_mismatch{mode="live"}) > 0
+        for: 15s
+        labels:
+          severity: P0
+          owner: trading-operations
+        annotations:
+          summary: Live strategy/config fingerprint mismatch
+          description: "Loaded configuration is not the approved fingerprint for {{ $labels.strategy }}."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p0-live-safety-alerts
+
+      - alert: TradingStrategyFingerprintEvidenceMissing
+        expr: absent(trading_strategy_fingerprint_mismatch{mode="live"}) and on() (max(trading_market_open) == 1) and on() (count(trading_heartbeat_age_seconds{mode="live",service=~"fno_v13_v10_g.*"}) > 0)
+        for: 2m
+        labels:
+          severity: P0
+          owner: trading-operations
+        annotations:
+          summary: Fresh strategy fingerprint evidence is missing
+          description: A live worker is present during market hours, but no fresh approved-fingerprint comparison is available.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p0-live-safety-alerts
+
+  - name: trading-availability-p1
+    interval: 30s
+    rules:
+      - alert: TradingLiveHeartbeatStale
+        expr: ((max by (service, mode) ((trading_heartbeat_age_seconds{mode=~"live|paper",service=~".*(5min|5m).*"} > 420) or (trading_heartbeat_age_seconds{mode=~"live|paper",service!~".*(5min|5m).*"} > 120))) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 2m
+        labels:
+          severity: P1
+          owner: trading-operations
+        annotations:
+          summary: Trading heartbeat is stale during market hours
+          description: "{{ $labels.service }} heartbeat is {{ $value }} seconds old (limit: 420s for 5m/5min slot services, 120s otherwise)."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingHeartbeatMissing
+        expr: (absent(trading_heartbeat_age_seconds{mode=~"live|paper",service=~"fno_v13_v10_g.*"}) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 3m
+        labels:
+          severity: P1
+          owner: trading-operations
+        annotations:
+          summary: No live or paper heartbeat is being exported
+          description: The heartbeat series is absent while the exchange calendar reports an open market.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingPipelineScheduleOverdue
+        expr: (max by (pipeline, mode) (trading_pipeline_schedule_overdue{mode="live"}) > 0 and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 15s
+        labels:
+          severity: P1
+          owner: trading-operations
+        annotations:
+          summary: Frozen strategy slot is overdue
+          description: "{{ $labels.pipeline }} has no valid completion proof for its latest due slot after the configured grace period."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingCriticalDataStale
+        expr: ((max by (source, timeframe) ((trading_data_age_seconds{timeframe="5m"} > 420) or (trading_data_age_seconds{timeframe!="5m",source!="equity_confirmation"} > 90))) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 1m
+        labels:
+          severity: P1
+          owner: market-data
+        annotations:
+          summary: Critical strategy input is stale
+          description: "{{ $labels.source }} {{ $labels.timeframe }} data age is {{ $value }} seconds (limit: 420s for 5m bars, 90s for continuous faster inputs; scheduled confirmation is monitored by heartbeat/slot checks)."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingFuturesOiMetricsMissing
+        expr: (absent(trading_data_age_seconds{source="futures_oi",timeframe="5m"}) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 10m
+        labels:
+          severity: P1
+          owner: market-data
+        annotations:
+          summary: Futures OI freshness metric is absent
+          description: No futures OI 5-minute readiness marker is being exported during market hours.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingFuturesOiCoverageMissing
+        expr: (absent(trading_data_coverage_ratio{source="futures_oi",timeframe="5m"}) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 10m
+        labels:
+          severity: P1
+          owner: market-data
+        annotations:
+          summary: Futures OI coverage metric is absent
+          description: The futures readiness marker is not publishing a usable 5-minute coverage ratio.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingEquityMetricsMissing
+        expr: (absent(trading_data_age_seconds{source="equity",timeframe="5m"}) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 10m
+        labels:
+          severity: P1
+          owner: market-data
+        annotations:
+          summary: Equity freshness metric is absent
+          description: No equity 5-minute readiness marker is being exported during market hours.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingEquityCoverageMissing
+        expr: (absent(trading_data_coverage_ratio{source="equity",timeframe="5m"}) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 10m
+        labels:
+          severity: P1
+          owner: market-data
+        annotations:
+          summary: Equity coverage metric is absent
+          description: The equity readiness marker is not publishing a usable 5-minute coverage ratio.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingMarketCalendarMetricMissing
+        expr: absent(trading_market_open) and on() (max(up{job="ai-platform"}) == 1)
+        for: 2m
+        labels:
+          severity: P1
+          owner: observability
+        annotations:
+          summary: Market-open control metric is absent
+          description: The API target is reachable but the market-hours control metric is missing.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#telemetry-outage
+
+      - alert: TradingCriticalDataCoverageLow
+        expr: ((min by (source) (trading_data_coverage_ratio) < 0.99) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 2m
+        labels:
+          severity: P1
+          owner: market-data
+        annotations:
+          summary: Critical market-data coverage is below policy
+          description: "{{ $labels.source }} coverage is {{ $value | humanizePercentage }}."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingEquityFinalSlotIncomplete
+        # The latest finalized marker is emitted with a bounded HH:MM label.
+        # Keep a single failed slot visible after the following good slot, but
+        # never infer failure from the intentionally partial 09:15 snapshot.
+        expr: (max_over_time(trading_data_slot_incomplete{source="equity",timeframe="5m"}[10m]) > 0) unless on() (max(trading_maintenance_window) == 1)
+        for: 0s
+        labels:
+          severity: P1
+          owner: market-data
+        annotations:
+          summary: Final equity 5-minute slot is incomplete
+          description: "The {{ $labels.slot }} cash slot finalized incomplete. Inspect its authoritative slot_ready_5m marker and partition logs; do not treat a sampled watcher marker as complete."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingSlotDeadlineMissed
+        expr: ((histogram_quantile(0.99, sum by (le, pipeline, mode) (rate(trading_slot_deadline_lag_seconds_bucket[5m]))) > 30) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        for: 30s
+        labels:
+          severity: P1
+          owner: trading-operations
+        annotations:
+          summary: Strategy slot completed after its deadline
+          description: "{{ $labels.pipeline }} p99 slot lag is {{ $value }} seconds."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingBrokerErrorRateHigh
+        expr: trading:broker:success_ratio_5m < 0.95 and sum(increase(trading_broker_request_duration_seconds_count[5m])) >= 5
+        for: 2m
+        labels:
+          severity: P1
+          owner: broker-integration
+        annotations:
+          summary: Broker request success rate is low
+          description: "Five-minute broker success ratio is {{ $value | humanizePercentage }}."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingRestartStorm
+        expr: sum by (service, strategy, mode) (increase(trading_process_restarts_total[15m])) >= 3
+        labels:
+          severity: P1
+          owner: trading-operations
+        annotations:
+          summary: Trading process restart storm
+          description: "{{ $labels.service }} restarted {{ $value }} times in 15 minutes."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingBrokerAuthenticationFailure
+        expr: ((sum by (service) (increase(trading_broker_authentication_failures_total[5m])) > 0) and on() (max(trading_market_open) == 1)) unless on() (max(trading_maintenance_window) == 1)
+        labels:
+          severity: P1
+          owner: broker-integration
+        annotations:
+          summary: A supervisor-managed worker reported broker authentication failure
+          description: "{{ $labels.service }} logged {{ $value }} broker authentication failures in five minutes. Refresh credentials using the approved login flow and verify data readiness before new entries."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingClockDriftHigh
+        expr: abs(max by (service) (trading_clock_offset_seconds)) > 2
+        for: 2m
+        labels:
+          severity: P1
+          owner: host-operations
+        annotations:
+          summary: Host clock drift exceeds two seconds
+          description: "Clock offset is {{ $value }} seconds and can invalidate decision cutoffs."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingEodReplayFailedOrLate
+        expr: max(trading_replay_due) == 1
+        for: 15m
+        labels:
+          severity: P1
+          owner: research-operations
+        annotations:
+          summary: Required EOD replay has not completed
+          description: No successful required replay has been recorded in the permitted window.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#p1-pipeline-alerts
+
+      - alert: TradingTelemetryTargetDown
+        expr: up{job=~"alloy|ai-platform"} == 0
+        for: 2m
+        labels:
+          severity: P1
+          owner: observability
+          dependency: telemetry
+        annotations:
+          summary: Telemetry target is unavailable
+          description: "Prometheus cannot reach {{ $labels.job }} / {{ $labels.instance }}. Trading must continue independently."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#telemetry-outage
+
+      - alert: TradingAiPlatformTargetMissing
+        expr: absent(up{job="ai-platform"})
+        for: 2m
+        labels:
+          severity: P1
+          owner: observability
+          dependency: telemetry
+        annotations:
+          summary: AI platform scrape target is absent
+          description: Prometheus has no ai-platform target series; inspect Alloy target discovery and remote-write configuration.
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#telemetry-outage
+
+  - name: trading-quality-p2
+    interval: 1m
+    rules:
+      - alert: TradingLiveEodParityMismatch
+        expr: sum by (stage, mismatch_type) (increase(trading_live_eod_mismatch_total{mismatch_type!="expected_data_revision"}[30m])) > 0
+        labels:
+          severity: P2
+          owner: strategy-reliability
+        annotations:
+          summary: Live and EOD replay diverged
+          description: "First divergence is {{ $labels.stage }} ({{ $labels.mismatch_type }})."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#parity-alerts
+
+      - alert: TradingFeatureParityMismatch
+        expr: sum by (strategy, feature) (increase(trading_feature_parity_mismatch_total[30m])) > 0
+        labels:
+          severity: P2
+          owner: strategy-reliability
+        annotations:
+          summary: Live and replay indicator values differ
+          description: "Feature {{ $labels.feature }} exceeded its declared parity tolerance."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#parity-alerts
+
+      - alert: TradingRawDataAnomalyBurst
+        expr: sum by (source, anomaly_type) (increase(trading_raw_data_anomaly_total[10m])) >= 3
+        labels:
+          severity: P2
+          owner: market-data
+        annotations:
+          summary: Repeated raw-data anomalies detected
+          description: "{{ $labels.source }} produced {{ $value }} {{ $labels.anomaly_type }} anomalies in 10 minutes."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#data-quality-alerts
+
+      - alert: TradingTelemetryDrops
+        expr: sum by (component, reason) (increase(trading_telemetry_dropped_total[10m])) > 0
+        labels:
+          severity: P2
+          owner: observability
+        annotations:
+          summary: Telemetry was dropped
+          description: "{{ $labels.component }} dropped {{ $value }} telemetry items ({{ $labels.reason }}). Trading execution should remain unaffected."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#telemetry-outage
+
+      - alert: TradingDiskSpaceLow
+        expr: min by (service, volume) (trading_disk_free_bytes) < 10737418240
+        for: 10m
+        labels:
+          severity: P2
+          owner: host-operations
+        annotations:
+          summary: Trading storage has less than 10 GiB free
+          description: "{{ $labels.volume }} has {{ $value | humanize1024 }}B free. Preserve immutable evidence before cleanup."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#retention-and-disk-pressure
+
+      - alert: TradingApiErrorRatioHigh
+        expr: trading:api:error_ratio_5m > 0.05 and sum(increase(trading_http_requests_total[5m])) >= 20
+        for: 5m
+        labels:
+          severity: P2
+          owner: ai-platform
+        annotations:
+          summary: AI platform API error ratio exceeds five percent
+          description: "API five-minute error ratio is {{ $value | humanizePercentage }}."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#api-alerts
+
+      - alert: TradingAlertDeliveryAuthenticationFailure
+        expr: sum by (service) (increase(trading_alert_delivery_authentication_failures_total[15m])) > 0
+        labels:
+          severity: P2
+          owner: observability
+        annotations:
+          summary: Supervisor alert delivery authentication failed
+          description: "{{ $labels.service }} could not authenticate its external alert-delivery channel. Local alerts remain available, but external notification delivery is impaired."
+          runbook: docs/OBSERVABILITY_OPERATIONS.md#telemetry-outage

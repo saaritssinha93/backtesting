@@ -5,11 +5,11 @@ $batDir = Join-Path $baseDir "bat"
 $hardener = Join-Path $batDir "harden_scheduled_task.ps1"
 $tasks = @(
     @{ Name = "EQIDV2_fno_oi_universe_0850"; Time = "08:50"; Runner = "run_fno_oi_universe.bat" }
-    @{ Name = "EQIDV2_fno_oi_fetch_5min_fast_production_0905"; Time = "09:05"; Runner = "run_fno_oi_fetch_5min_fast_production.bat" }
+    @{ Name = "EQIDV2_fno_oi_fetch_5min_fast_production_0905"; Time = "09:05"; Runner = "run_fno_oi_fetch_5min_fast_production.bat"; RepeatMinutes = 5; RepeatDuration = "06:30"; RestartCount = 3 }
     @{ Name = "EQIDV2_fno_oi_feature_ranker_0915"; Time = "09:15"; Runner = "run_fno_oi_feature_ranker.bat" }
-    @{ Name = "EQIDV2_fno_v13_v10_g_scanner_5min_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_scanner_5min.bat" }
-    @{ Name = "EQIDV2_fno_v13_v10_g_equity_1min_feed_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_equity_1min_feed.bat" }
-    @{ Name = "EQIDV2_fno_v13_v10_g_confirmation_1min_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_confirmation_1min.bat" }
+    @{ Name = "EQIDV2_fno_v13_v10_g_scanner_5min_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_scanner_5min.bat"; RepeatMinutes = 5; RepeatDuration = "02:10" }
+    @{ Name = "EQIDV2_fno_v13_v10_g_equity_1min_feed_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_equity_1min_feed.bat"; RepeatMinutes = 5; RepeatDuration = "02:10" }
+    @{ Name = "EQIDV2_fno_v13_v10_g_confirmation_1min_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_confirmation_1min.bat"; RepeatMinutes = 5; RepeatDuration = "02:10" }
     @{ Name = "EQIDV2_fno_v13_v10_g_live_long_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_live_long.bat" }
     @{ Name = "EQIDV2_fno_v13_v10_g_live_short_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_live_short.bat" }
     @{ Name = "EQIDV2_fno_v13_v10_g_trade_logger_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_trade_logger.bat" }
@@ -53,12 +53,22 @@ try {
             throw "Missing runner: $runner"
         }
         Write-Output "[INFO] Creating $($task.Name) at $($task.Time) ..."
-        & schtasks.exe /Create /F /TN $task.Name /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST $task.Time /TR $runner
+        if ($task.RepeatMinutes) {
+            & schtasks.exe /Create /F /TN $task.Name /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST $task.Time /RI $task.RepeatMinutes /DU $task.RepeatDuration /TR $runner
+        }
+        else {
+            & schtasks.exe /Create /F /TN $task.Name /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST $task.Time /TR $runner
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "schtasks failed for $($task.Name) with exit code $LASTEXITCODE"
         }
         if (Test-Path -LiteralPath $hardener -PathType Leaf) {
-            & $hardener -TaskName $task.Name
+            if ($task.RestartCount) {
+                & $hardener -TaskName $task.Name -RestartCount $task.RestartCount -RestartInterval "PT1M"
+            }
+            else {
+                & $hardener -TaskName $task.Name
+            }
         }
     }
     Write-Output "[SUCCESS] FnO weekday tasks created and hardened."

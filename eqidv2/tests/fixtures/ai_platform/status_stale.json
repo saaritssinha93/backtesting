@@ -1,0 +1,8 @@
+{
+  "schema_version": "fixture_status_v1",
+  "session_date": "2026-09-17",
+  "strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+  "strategy_fingerprint": "fixture-fingerprint",
+  "state": "READY",
+  "updated_at_ist": "2026-09-17T09:20:00+05:30"
+}

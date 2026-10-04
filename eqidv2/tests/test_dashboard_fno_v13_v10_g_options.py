@@ -158,9 +158,10 @@ def test_options_cards_reject_an_old_strategy_identity() -> None:
     assert result["strategy_identity_state"] == "MISMATCH"
 
 
-def test_other_active_section_is_named_options_v13_and_formats_session_names() -> None:
+def test_options_and_observability_have_named_sections_and_other_cards_are_formatted() -> None:
     source = Path(dashboard.__file__).read_text(encoding="utf-8")
-    assert 'renderSectionBanner("Options V13 Strategy"' in source
-    assert 'label: "Options V13 Strategy"' in source
+    assert 'title: "Options V13-V10-G Paper Trading"' in source
+    assert 'title: "Observability"' in source
+    assert 'renderSectionBanner(group.title' in source
     assert 'displayName(id).replaceAll("_", " ").toUpperCase()' in source
     assert "Other Active / Scheduled" not in source

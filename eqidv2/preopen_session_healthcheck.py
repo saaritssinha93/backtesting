@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -53,9 +55,10 @@ FNO_V8_COMBINED_PAPER_HEARTBEAT = (
 )
 FNO_V8_STARTUP_GRACE_END = dt.time(9, 17)
 FNO_V6_SCANNER_TASK = "EQIDV2_fno_v13_v10_g_scanner_5min_0915"
+FNO_V6_CONFIRMATION_TASK = "EQIDV2_fno_v13_v10_g_confirmation_1min_0915"
 FNO_V6_CUTOVER_DOWNSTREAM_TASKS = (
     FNO_V6_EQUITY_1MIN_FEED_TASK,
-    "EQIDV2_fno_v13_v10_g_confirmation_1min_0915",
+    FNO_V6_CONFIRMATION_TASK,
     "EQIDV2_fno_v13_v10_g_live_long_0915",
     "EQIDV2_fno_v13_v10_g_live_short_0915",
     "EQIDV2_fno_v13_v10_g_trade_logger_0915",
@@ -409,6 +412,57 @@ def check_status_file_today(
     return CheckResult(label, "PASS", f"status={status} today @ {ts.strftime('%H:%M:%S')} | {path.name}")
 
 
+def check_authentication_ready(
+    status_path: Path,
+    *,
+    state_path: Path | None = None,
+    token_dir: Path | None = None,
+) -> CheckResult:
+    """Require both a successful runner and a complete current-day 8-app roster."""
+    label = "authentication_v2"
+    runner = check_status_file_today(
+        status_path,
+        label=label,
+        allowed_statuses={"SUCCESS"},
+    )
+    if runner.status != "PASS":
+        return runner
+
+    state_file = state_path or (BASE_DIR / "auth_v2_state.json")
+    tokens_root = token_dir or BASE_DIR
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8", errors="replace"))
+        if not isinstance(state, dict):
+            raise ValueError("state is not an object")
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return CheckResult(label, "FAIL", f"invalid auth state: {type(exc).__name__}")
+
+    today = now_ist().date().isoformat()
+    date_fields = ("session_date_ist",) + tuple(
+        f"session_date_ist_app{index}" for index in range(2, 9)
+    )
+    current_apps = sum(
+        1 for field in date_fields if str(state.get(field, "")).strip() == today
+    )
+    token_count = 0
+    for index in range(1, 9):
+        suffix = "" if index == 1 else str(index)
+        token_path = tokens_root / f"access_token{suffix}.txt"
+        try:
+            if token_path.read_text(encoding="utf-8", errors="replace").strip():
+                token_count += 1
+        except OSError:
+            pass
+
+    if current_apps != 8 or token_count != 8:
+        return CheckResult(
+            label,
+            "FAIL",
+            f"incomplete auth roster: current_apps={current_apps}/8 token_files={token_count}/8",
+        )
+    return CheckResult(label, "PASS", f"complete auth roster: 8/8 | {status_path.name}")
+
+
 def check_supervised_runtime_if_enabled(
     log_path: Path,
     status_path: Path,
@@ -520,6 +574,146 @@ def _run_schtasks_query(task_name: str) -> Optional[str]:
         if proc.returncode == 0:
             return proc.stdout or ""
     return None
+
+
+def _run_schtasks_xml_query(task_name: str) -> Optional[str]:
+    """Read the installed task definition; never alter or launch the task."""
+    try:
+        proc = subprocess.run(
+            ["schtasks", "/Query", "/TN", task_name, "/XML"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _task_duration_seconds(value: str) -> Optional[int]:
+    """Parse the day/hour/minute/second subset used by Task Scheduler XML."""
+    match = re.fullmatch(r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value)
+    if not match or not any(part is not None for part in match.groups()):
+        return None
+    days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def check_recovery_schedule_contract(
+    task_name: str,
+    *,
+    start_time: dt.time,
+    duration_minutes: int,
+    require_restart: bool = False,
+    task_xml: str | None = None,
+) -> CheckResult:
+    """Verify installed recovery scheduling without touching trading behavior.
+
+    This intentionally uses a non-``task_`` label so preopen autofix cannot
+    turn a configuration mismatch into an ad-hoc session start.
+    """
+    label = f"recovery_schedule_{task_name}"
+    xml_text = task_xml if task_xml is not None else _run_schtasks_xml_query(task_name)
+    if not xml_text:
+        return CheckResult(label, "FAIL", "installed task XML missing/unreadable")
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return CheckResult(label, "FAIL", "installed task XML invalid")
+
+    policy = root.findtext("./{*}Settings/{*}MultipleInstancesPolicy", default="")
+    if policy != "IgnoreNew":
+        return CheckResult(label, "FAIL", f"multiple-instances policy={policy or 'MISSING'}; expected IgnoreNew")
+
+    expected_duration = duration_minutes * 60
+    weekday_names = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday"}
+    trigger_issues: list[str] = []
+    for trigger in root.findall("./{*}Triggers/{*}CalendarTrigger"):
+        boundary = trigger.findtext("./{*}StartBoundary", default="")
+        try:
+            actual_start = dt.datetime.fromisoformat(boundary).time().replace(tzinfo=None)
+        except ValueError:
+            actual_start = None
+        repetition = trigger.find("./{*}Repetition")
+        interval = _task_duration_seconds(
+            repetition.findtext("./{*}Interval", default="") if repetition is not None else ""
+        )
+        duration = _task_duration_seconds(
+            repetition.findtext("./{*}Duration", default="") if repetition is not None else ""
+        )
+        days_node = trigger.find("./{*}ScheduleByWeek/{*}DaysOfWeek")
+        weekdays = (
+            {child.tag.rsplit("}", 1)[-1] for child in days_node}
+            if days_node is not None else set()
+        )
+        if (
+            actual_start == start_time
+            and interval == 300
+            and duration is not None
+            and duration >= expected_duration
+            and weekdays == weekday_names
+        ):
+            break
+        trigger_issues.append(
+            f"start={actual_start or 'MISSING'} interval_s={interval} "
+            f"duration_s={duration} weekdays={','.join(sorted(weekdays)) or 'MISSING'}"
+        )
+    else:
+        detail = trigger_issues[0] if trigger_issues else "no calendar trigger"
+        return CheckResult(
+            label, "FAIL",
+            f"repetition contract invalid: {detail}; expected {start_time.strftime('%H:%M')} "
+            f"every 5m through {(dt.datetime.combine(dt.date(2000, 1, 1), start_time) + dt.timedelta(minutes=duration_minutes)).strftime('%H:%M')} Mon-Fri",
+        )
+
+    if require_restart:
+        restart = root.find("./{*}Settings/{*}RestartOnFailure")
+        try:
+            count = int(restart.findtext("./{*}Count", default="")) if restart is not None else 0
+        except ValueError:
+            count = 0
+        restart_interval = _task_duration_seconds(
+            restart.findtext("./{*}Interval", default="") if restart is not None else ""
+        )
+        if count < 3 or restart_interval is None or not 0 < restart_interval <= 60:
+            return CheckResult(
+                label, "FAIL",
+                f"restart policy invalid: count={count} interval_s={restart_interval}; expected >=3 retries <=60s",
+            )
+    return CheckResult(
+        label, "PASS",
+        f"IgnoreNew; {start_time.strftime('%H:%M')} every 5m for >= {duration_minutes}m Mon-Fri"
+        + ("; restart >=3 within 60s" if require_restart else ""),
+    )
+
+
+def check_recovery_schedule_contracts(*, v8_positively_disabled: bool) -> List[CheckResult]:
+    """Check the producer always, and G consumers only in confirmed G mode."""
+    checks = [
+        check_recovery_schedule_contract(
+            FNO_FAST_PRODUCTION_TASK,
+            start_time=dt.time(9, 5),
+            duration_minutes=390,
+            require_restart=True,
+        )
+    ]
+    if v8_positively_disabled:
+        checks.extend(
+            check_recovery_schedule_contract(
+                task_name,
+                start_time=dt.time(9, 15),
+                duration_minutes=130,
+            )
+            for task_name in (
+                FNO_V6_SCANNER_TASK,
+                FNO_V6_EQUITY_1MIN_FEED_TASK,
+                FNO_V6_CONFIRMATION_TASK,
+            )
+        )
+    return checks
 
 
 def _task_exists(task_name: str) -> bool:
@@ -977,6 +1171,13 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
             )
         )
 
+    # Read-only installed-task contract; never route a mismatch to autofix.
+    checks.extend(
+        check_recovery_schedule_contracts(
+            v8_positively_disabled=v8_positively_disabled,
+        )
+    )
+
     checks.append(check_fast_production_runtime(now_local))
     checks.append(check_fast_production_first_slot(now_local))
     checks.append(
@@ -1006,11 +1207,7 @@ def build_checks(max_age_min: int, include_optional_csv: bool, warn_optional_csv
 
     # Dashboard sessions mapped 1:1 to live cards.
     checks.append(
-        check_status_file_today(
-            LOG_DIR / "authentication_v2_runner.status",
-            label="authentication_v2",
-            allowed_statuses={"SUCCESS"},
-        )
+        check_authentication_ready(LOG_DIR / "authentication_v2_runner.status")
     )
     checks.append(
         check_file_recent_if_enabled(

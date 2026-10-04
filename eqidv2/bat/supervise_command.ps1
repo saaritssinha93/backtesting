@@ -25,6 +25,9 @@ param(
     [string]$SpawnRecordFile = "",
     [string]$WorkerStatusFile = "",
     [string]$WorkerHeartbeatFile = "",
+    # Strict run correlation is opt-in because legacy workers may publish
+    # otherwise valid liveness artifacts without a run_id field.
+    [switch]$RequireWorkerRunIdMatch,
     [int]$WorkerStaleTimeoutSec = 0,
     [int]$WorkerStartGraceSec = 120,
     [int]$WorkerDiscoveryTimeoutSec = 30,
@@ -78,6 +81,32 @@ function Ensure-ParentDir {
     }
 }
 
+function Write-SupervisorDiagnosticLine {
+    param([Parameter(Mandatory = $true)][string]$Line)
+
+    if ([string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
+        return
+    }
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            Add-Content -LiteralPath $script:SupervisorLogFile -Value $Line -Encoding UTF8 -ErrorAction Stop
+            return
+        } catch {
+            $lastError = $_.Exception.Message
+            if ($attempt -lt 4) {
+                Start-Sleep -Milliseconds (50 * $attempt)
+            }
+        }
+    }
+
+    # Diagnostic logging must never stop supervision or orphan a live worker.
+    try {
+        Write-Warning "Supervisor diagnostic log write dropped after 4 attempts: $lastError"
+    } catch { }
+}
+
 function Write-KeyFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -125,36 +154,63 @@ function Write-KeyFile {
     # supervising and retry on the next heartbeat instead of orphaning the worker.
     $warning = "Could not update key file '$Path' after 4 attempts: $lastError"
     Write-Warning $warning
-    if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
-        try {
-            Add-Content -Path $script:SupervisorLogFile -Value (
-                "{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $warning
-            ) -Encoding UTF8
-        } catch { }
-    }
+    Write-SupervisorDiagnosticLine -Line (
+        "{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $warning
+    )
 }
 
 function Read-KeyFile {
     param([string]$Path)
-    $result = @{}
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
-        return $result
+        return $null
     }
-    foreach ($line in (Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)) {
-        if ([string]::IsNullOrWhiteSpace($line)) {
-            continue
-        }
-        $idx = $line.IndexOf("=")
-        if ($idx -lt 1) {
-            continue
-        }
-        $key = $line.Substring(0, $idx).Trim()
-        $value = $line.Substring($idx + 1)
-        if (-not [string]::IsNullOrWhiteSpace($key)) {
-            $result[$key] = $value
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        try {
+            $result = @{}
+            $lines = @(Get-Content -LiteralPath $Path -ErrorAction Stop)
+            $raw = ($lines -join [Environment]::NewLine).Trim()
+            if ([string]::IsNullOrWhiteSpace($raw)) {
+                throw "Liveness artifact is empty."
+            }
+            # Trading workers publish JSON status/heartbeat artifacts while
+            # the supervisor's own files use key=value. Support both.
+            if ($raw.StartsWith("{")) {
+                $payload = $raw | ConvertFrom-Json -ErrorAction Stop
+                if ($payload -isnot [pscustomobject]) {
+                    throw "Liveness JSON must contain one object."
+                }
+                foreach ($property in $payload.PSObject.Properties) {
+                    if ($null -ne $property.Value) {
+                        $result[$property.Name] = [string]$property.Value
+                    }
+                }
+            } else {
+                foreach ($line in $lines) {
+                    if ([string]::IsNullOrWhiteSpace($line)) {
+                        continue
+                    }
+                    $idx = $line.IndexOf("=")
+                    if ($idx -lt 1) {
+                        continue
+                    }
+                    $key = $line.Substring(0, $idx).Trim()
+                    $value = $line.Substring($idx + 1)
+                    if (-not [string]::IsNullOrWhiteSpace($key)) {
+                        $result[$key] = $value
+                    }
+                }
+            }
+            if ($result.Count -eq 0) {
+                throw "Liveness artifact has no parseable fields."
+            }
+            return $result
+        } catch {
+            if ($attempt -lt 2) {
+                Start-Sleep -Milliseconds (25 * ($attempt + 1))
+            }
         }
     }
-    return $result
+    return $null
 }
 
 function Write-LogLine {
@@ -165,9 +221,7 @@ function Write-LogLine {
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "{0} | {1} | {2}" -f $ts, $Level.ToUpperInvariant(), $Message
     Write-Host $line
-    if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
-        Add-Content -Path $script:SupervisorLogFile -Value $line -Encoding UTF8
-    }
+    Write-SupervisorDiagnosticLine -Line $line
 }
 
 function Is-AfterCutoff {
@@ -559,8 +613,15 @@ function Get-KeyFileSnapshot {
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
         return $null
     }
-    $item = Get-Item -LiteralPath $Path
+    try {
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+    } catch {
+        return $null
+    }
     $data = Read-KeyFile -Path $Path
+    if ($null -eq $data) {
+        return $null
+    }
     $pidValue = $null
     if ($data.ContainsKey("pid")) {
         $pidValue = Convert-NullablePid -Raw ([string]$data["pid"])
@@ -737,25 +798,19 @@ function Acquire-SingletonLock {
         if ($null -eq $takeoverReason) {
             $msg = "Another supervisor instance appears to be active for $Name (lock=$Path, pid=$priorPid, spawn_age=${spawnAgeSec}s)."
             Write-Host $msg
-            if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
-                Add-Content -Path $script:SupervisorLogFile -Value ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg) -Encoding UTF8
-            }
+            Write-SupervisorDiagnosticLine -Line ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
             return $false
         }
 
         $msg = "Taking over orphaned/stale supervisor lock for $Name ($takeoverReason; lock=$Path)."
         Write-Host $msg
-        if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
-            Add-Content -Path $script:SupervisorLogFile -Value ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg) -Encoding UTF8
-        }
+        Write-SupervisorDiagnosticLine -Line ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
         try {
             Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
         } catch {
             $err = "Failed to remove stale lock for $Name (lock=$Path): $($_.Exception.Message)"
             Write-Host $err
-            if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
-                Add-Content -Path $script:SupervisorLogFile -Value ("{0} | ERROR | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $err) -Encoding UTF8
-            }
+            Write-SupervisorDiagnosticLine -Line ("{0} | ERROR | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $err)
             return $false
         }
         try {
@@ -768,9 +823,7 @@ function Acquire-SingletonLock {
         } catch {
             $err = "Retry after stale-lock takeover failed for $Name (lock=$Path): $($_.Exception.Message)"
             Write-Host $err
-            if (-not [string]::IsNullOrWhiteSpace($script:SupervisorLogFile)) {
-                Add-Content -Path $script:SupervisorLogFile -Value ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $err) -Encoding UTF8
-            }
+            Write-SupervisorDiagnosticLine -Line ("{0} | WARN | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $err)
             return $false
         }
     }
@@ -1142,6 +1195,11 @@ while ($true) {
     $script:CurrentWorkerPid = $null
     $script:CurrentWorkerStartUtc = $null
 
+    # Start-Process inherits this environment.  Every Python worker can now
+    # correlate logs, evidence, metrics and traces with the supervisor run.
+    $env:EQIDV2_OBS_RUN_ID = $script:CurrentRunId
+    $env:EQIDV2_OBS_SERVICE = $Name
+
     $exe = Quote-CmdArg -Value $FilePath
     $argParts = @()
     foreach ($arg in $normalizedArgumentList) {
@@ -1183,6 +1241,7 @@ while ($true) {
     $forcedExitReason = ""
     $runStartUtc = [DateTime]::UtcNow
     $lastActivityUtc = $runStartUtc
+    $lastValidWorkerSignalUtc = $runStartUtc
     $alertSent = $false
 
     while (-not $process.HasExited) {
@@ -1264,20 +1323,58 @@ while ($true) {
 
         if ($workerStaleTimeoutSec -gt 0 -or -not [string]::IsNullOrWhiteSpace($WorkerStatusFile) -or -not [string]::IsNullOrWhiteSpace($WorkerHeartbeatFile)) {
             $workerSignal = Get-WorkerSignalSnapshot
+            if ($null -ne $workerSignal) {
+                $lastValidWorkerSignalUtc = [DateTime]::UtcNow
+            }
             if ($runAgeSec -ge $workerStartGraceSec) {
                 if ($null -eq $workerSignal) {
-                    $forcedHungKill = $true
-                    $forcedExitReason = "worker_heartbeat_missing"
-                    if (-not $alertSent) {
-                        Send-AlertEmail -Reason $forcedExitReason -Message "Neither worker status nor worker heartbeat file was updated within the configured grace window."
-                        $alertSent = $true
+                    $unavailableLimitSec = [Math]::Max(
+                        15,
+                        [Math]::Max($workerStaleTimeoutSec, 3 * $monitorIntervalSec)
+                    )
+                    $unavailableAgeSec = (
+                        [DateTime]::UtcNow - $lastValidWorkerSignalUtc
+                    ).TotalSeconds
+                    if ($unavailableAgeSec -ge $unavailableLimitSec) {
+                        $forcedHungKill = $true
+                        $forcedExitReason = "worker_heartbeat_missing"
+                        if (-not $alertSent) {
+                            Send-AlertEmail -Reason $forcedExitReason -Message "Neither worker status nor worker heartbeat produced a valid parse for $([math]::Round($unavailableAgeSec, 1))s."
+                            $alertSent = $true
+                        }
+                        Stop-ProcessTree -TargetProcessId $process.Id -Reason $forcedExitReason
+                        Start-Sleep -Seconds 1
+                        break
                     }
-                    Stop-ProcessTree -TargetProcessId $process.Id -Reason $forcedExitReason
-                    Start-Sleep -Seconds 1
-                    break
                 }
 
-                if ($null -ne $workerSignal.Pid -and $null -ne $script:CurrentWorkerPid) {
+                if ($RequireWorkerRunIdMatch) {
+                    if ($null -ne $workerSignal) {
+                        $signalRunId = ""
+                        if ($workerSignal.Data.ContainsKey("run_id")) {
+                            $signalRunId = ([string]$workerSignal.Data["run_id"]).Trim()
+                        }
+                        if ([string]::IsNullOrWhiteSpace($signalRunId)) {
+                            $forcedHungKill = $true
+                            $forcedExitReason = "worker_run_id_missing"
+                        } elseif ($signalRunId -cne $script:CurrentRunId) {
+                            $forcedHungKill = $true
+                            $forcedExitReason = "worker_run_id_mismatch"
+                        }
+                        if ($forcedHungKill) {
+                            if (-not $alertSent) {
+                                $msg = "Worker liveness file '$($workerSignal.Path)' belongs to run_id='$signalRunId'; expected '$($script:CurrentRunId)'."
+                                Send-AlertEmail -Reason $forcedExitReason -Message $msg
+                                $alertSent = $true
+                            }
+                            Stop-ProcessTree -TargetProcessId $process.Id -Reason $forcedExitReason
+                            Start-Sleep -Seconds 1
+                            break
+                        }
+                    }
+                }
+
+                if ($null -ne $workerSignal -and $null -ne $workerSignal.Pid -and $null -ne $script:CurrentWorkerPid) {
                     $signalPid = [int]$workerSignal.Pid
                     if ($signalPid -ne [int]$script:CurrentWorkerPid) {
                         $unexpected = Get-ManagedProcessDetails -ProcessId $signalPid
@@ -1297,7 +1394,7 @@ while ($true) {
                     }
                 }
 
-                if ($workerStaleTimeoutSec -gt 0 -and $workerSignal.AgeSec -ge $workerStaleTimeoutSec) {
+                if ($null -ne $workerSignal -and $workerStaleTimeoutSec -gt 0 -and $workerSignal.AgeSec -ge $workerStaleTimeoutSec) {
                     $forcedHungKill = $true
                     $forcedExitReason = "worker_heartbeat_stale"
                     if (-not $alertSent) {

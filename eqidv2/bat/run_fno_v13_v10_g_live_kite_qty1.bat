@@ -13,6 +13,7 @@ set "RUNTIME_STATUS_DIR=%EQIDV2_RUNTIME_ROOT%\runtime_status"
 set "LOG_DIR=%BASE_DIR%\logs"
 set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
+set "EQIDV2_OBSERVABILITY_ENABLED=1"
 set "FNO_V6_EXECUTION_MODE=LIVE"
 set "FNO_V6_LIVE_ACK=I_UNDERSTAND_REAL_FNO_V6_EQUITY_ORDERS"
 
@@ -24,6 +25,8 @@ set "HEARTBEAT_FILE=%RUNTIME_STATUS_DIR%\%SESSION_ID%.heartbeat"
 set "LOCK_FILE=%RUNTIME_STATUS_DIR%\%SESSION_ID%.supervisor.lock"
 set "SPAWN_RECORD_FILE=%RUNTIME_STATUS_DIR%\%SESSION_ID%.supervisor.spawn"
 set "OPEN_POSITIONS_PATTERN=%EQIDV2_RUNTIME_ROOT%\fno_oi\v13_v10_g_live\live_kite\open_positions_{date}.json"
+set "WORKER_STATUS_FILE=%EQIDV2_RUNTIME_ROOT%\fno_oi\v13_v10_g_live\live_kite\status.json"
+set "WORKER_HEARTBEAT_FILE=%EQIDV2_RUNTIME_ROOT%\fno_oi\v13_v10_g_live\live_kite\heartbeat.json"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 if not exist "%RUNTIME_STATUS_DIR%" mkdir "%RUNTIME_STATUS_DIR%" >nul 2>&1
@@ -53,6 +56,23 @@ if not exist "%SUPERVISOR_PS1%" (
   endlocal & exit /b 2
 )
 
+rem Keep file-backed observability active even when the optional local OTLP
+rem collector is down. Avoid an exporter retry storm in the trading log by
+rem enabling the default exporter only when the loopback listener is reachable.
+rem Explicit operator-provided endpoints remain authoritative.
+if defined AI_PLATFORM_OTLP_TRACES_ENDPOINT goto OTLP_CONFIGURED
+if defined OTEL_EXPORTER_OTLP_TRACES_ENDPOINT goto OTLP_CONFIGURED
+if defined OTEL_EXPORTER_OTLP_ENDPOINT goto OTLP_CONFIGURED
+powershell -NoProfile -Command "$client = [System.Net.Sockets.TcpClient]::new(); try { $pending = $client.ConnectAsync('127.0.0.1', 4318); if (-not $pending.Wait(750) -or -not $client.Connected) { exit 1 }; exit 0 } catch { exit 1 } finally { $client.Dispose() }" >nul 2>&1
+if errorlevel 1 (
+  set "OTEL_SDK_DISABLED=true"
+  >>"%LOG_FILE%" echo [%DATE% %TIME%] [WARN] OTLP collector unavailable at 127.0.0.1:4318; remote trace export disabled for this run; local observability remains enabled.
+) else (
+  if not defined OTEL_EXPORTER_OTLP_TRACES_ENDPOINT set "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces"
+  if not defined OTEL_EXPORTER_OTLP_TRACES_PROTOCOL set "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf"
+)
+:OTLP_CONFIGURED
+
 cd /d "%BASE_DIR%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
   -Name "%SESSION_ID%" ^
@@ -64,6 +84,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%SUPERVISOR_PS1%" ^
   -HeartbeatFile "%HEARTBEAT_FILE%" ^
   -LockFile "%LOCK_FILE%" ^
   -SpawnRecordFile "%SPAWN_RECORD_FILE%" ^
+  -WorkerStatusFile "%WORKER_STATUS_FILE%" ^
+  -WorkerHeartbeatFile "%WORKER_HEARTBEAT_FILE%" ^
+  -RequireWorkerRunIdMatch ^
+  -WorkerStaleTimeoutSec 180 ^
+  -WorkerStartGraceSec 180 ^
   -MaxRestarts 20 ^
   -RestartDelaySec 15 ^
   -MonitorIntervalSec 5 ^

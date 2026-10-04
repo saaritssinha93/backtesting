@@ -750,8 +750,11 @@ class LauncherFastPathConfigTests(unittest.TestCase):
         total = self._batch_value(text, "MAX_WORKERS")
         self.assertIsNotNone(per_app)
         self.assertIsNotNone(total)
-        self.assertLessEqual(int(per_app), 20)
-        self.assertLessEqual(int(total), 8 * int(per_app))
+        self.assertEqual(int(per_app), 16)
+        self.assertEqual(int(total), 128)
+        self.assertEqual(int(total), 8 * int(per_app))
+        self.assertIn('"--max-workers","%MAX_WORKERS%"', text)
+        self.assertIn('"--max-workers-per-app","%MAX_WORKERS_PER_APP%"', text)
 
     def test_scanner_launcher_starts_immediately_and_uses_small_chunks(self) -> None:
         text = (

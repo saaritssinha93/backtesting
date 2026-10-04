@@ -1,0 +1,69 @@
+{
+  "schema_version": "v13_v10_g_ai_profile_registry_v1",
+  "profiles": {
+    "V13_V10_G": {
+      "label": "V13-V10-G",
+      "strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+      "strategy_fingerprint": "a41f11737885e13c3cbe5c3310eed59d17bfab0da70784752fdee41e56c67f8f",
+      "live_generation": "v6",
+      "frozen_config_path": "C:/TradingData/eqidv2/fno_oi/strategy_research/v13_corrected_v10_g/run_20260914_opportunity_expansion/frozen_config.json",
+      "frozen_config_sha256": "d8bcae37d7725279f8ac6e5c4c96a44e8a43f41b5e42d413b167fd806b52a127",
+      "confirmation_policy": {
+        "live_required_prior_observations": 20,
+        "research_min_periods": 5,
+        "difference": "Live fails closed until 20 prior completed one-minute candles exist; historical research accepts a minimum of five."
+      },
+      "execution_profiles": [
+        "V13_V10_G_EQUITY_LIVE_QTY1",
+        "V13_V10_G_EQUITY_PAPER_EXPOSURE",
+        "V13_V10_G_OPTIONS_ONE_LOT_ATM_SL30_T40P4",
+        "V13_V10_G_OPTIONS_HISTORICAL_3LOTS_SL30_T40P4"
+      ],
+      "evidence_class": "EXPLORATORY_REUSED_HISTORY_NO_UNTOUCHED_TEST"
+    },
+    "V13_V10_G_EQUITY_LIVE_QTY1": {
+      "asset": "EQUITY",
+      "mode": "LIVE",
+      "quantity_policy": "FIXED_ONE_SHARE",
+      "strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+      "strategy_fingerprint": "a41f11737885e13c3cbe5c3310eed59d17bfab0da70784752fdee41e56c67f8f",
+      "source_id": "equity_live_orders"
+    },
+    "V13_V10_G_EQUITY_PAPER_EXPOSURE": {
+      "asset": "EQUITY",
+      "mode": "PAPER",
+      "quantity_policy": "STRATEGY_SIZED",
+      "capital_per_entry_rs": 100000.0,
+      "leverage": 5.0,
+      "strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+      "strategy_fingerprint": "a41f11737885e13c3cbe5c3310eed59d17bfab0da70784752fdee41e56c67f8f",
+      "source_id": "equity_paper_orders"
+    },
+    "V13_V10_G_OPTIONS_ONE_LOT_ATM_SL30_T40P4": {
+      "label": "V13-V10-G options: one lot ATM, 30% stop, 40.4% target",
+      "strategy_version": "FNO_V13_V10_G_OPTIONS_ONE_LOT_ATM_SL30_T40P4_20260915",
+      "equity_strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+      "strategy_fingerprint": "a41f11737885e13c3cbe5c3310eed59d17bfab0da70784752fdee41e56c67f8f",
+      "mode": "PAPER",
+      "lots": 1,
+      "execution_sources": [
+        "LIVE_GUARDED_NFO_QUOTE",
+        "HISTORICAL_EXACT_5M_REPLAY"
+      ],
+      "source_id": "option_paper_orders"
+    },
+    "V13_V10_G_OPTIONS_HISTORICAL_3LOTS_SL30_T40P4": {
+      "label": "V13-V10-G historical options: three lots ATM, 30% stop, 40.4% target",
+      "asset": "OPTIONS",
+      "mode": "HISTORICAL_REPLAY",
+      "lots": 3,
+      "closed_trades": 20,
+      "sample_start": "2026-08-26",
+      "sample_end": "2026-09-11",
+      "data_interval": "5m",
+      "result_source_id": "options_three_lot_historical_result",
+      "validation_source_id": "options_three_lot_historical_validation",
+      "evidence_class": "REUSED_HISTORY_HISTORICAL_REFERENCE_NOT_UNTOUCHED"
+    }
+  }
+}

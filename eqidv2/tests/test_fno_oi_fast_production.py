@@ -4,6 +4,7 @@ import argparse
 import threading
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest import mock
 
 import pandas as pd
@@ -46,6 +47,76 @@ def _slot_frame(contract: dict[str, object], slot: datetime) -> pd.DataFrame:
 
 
 class FastProductionTests(unittest.TestCase):
+    def test_restart_prioritizes_current_slot_then_repairs_oldest_gap(self) -> None:
+        day = datetime(2026, 9, 29).date()
+        latest = datetime(2026, 9, 29, 10, 10, tzinfo=common.IST)
+        now = latest + timedelta(seconds=5)
+        processed = {"0920", "0925", "0930", "0935", "0940", "0945", "0950", "0955"}
+
+        self.assertEqual(
+            producer._next_due_slot(day, latest, now, processed, 3.0), latest
+        )
+        processed.add("1010")
+        self.assertEqual(
+            producer._next_due_slot(day, latest, now, processed, 3.0),
+            datetime(2026, 9, 29, 10, 0, tzinfo=common.IST),
+        )
+        processed.update({"1000", "1005"})
+        self.assertIsNone(
+            producer._next_due_slot(day, latest, now, processed, 3.0)
+        )
+
+    def test_completed_boundary_is_not_fetched_early(self) -> None:
+        day = datetime(2026, 9, 29).date()
+        latest = datetime(2026, 9, 29, 9, 20, tzinfo=common.IST)
+        self.assertIsNone(
+            producer._next_due_slot(
+                day, latest, latest + timedelta(seconds=2), set(), 3.0
+            )
+        )
+
+    def test_session_slot_keys_include_open_and_close(self) -> None:
+        keys = producer._session_slot_keys(datetime(2026, 9, 29).date())
+        self.assertEqual(len(keys), 75)
+        self.assertIn("0920", keys)
+        self.assertIn("1530", keys)
+
+    def test_restart_skips_bootstrap_and_reports_remaining_gaps(self) -> None:
+        day = datetime(2026, 9, 29).date()
+        after_close = datetime(2026, 9, 29, 15, 34, tzinfo=common.IST)
+        args = SimpleNamespace(
+            session_date=day.isoformat(),
+            allow_non_trading_day=True,
+            min_coverage=common.MIN_STOCK_FUTURES_COVERAGE,
+            slot_retry_attempts=common.MIN_NO_CANDLE_FETCH_ATTEMPTS - 1,
+            workers_per_app=2,
+            writer_workers=8,
+            no_bootstrap=False,
+            once=False,
+        )
+        with (
+            mock.patch.object(common, "load_holidays", return_value=set()),
+            mock.patch.object(common, "now_ist", return_value=after_close),
+            mock.patch.object(producer.legacy, "ensure_universe", return_value=pd.DataFrame()),
+            mock.patch.object(
+                producer.fast_core.AppLaneSession,
+                "acquire",
+                return_value=([], [], None),
+            ),
+            mock.patch.object(producer.legacy, "_today_processed_slots", return_value={"0920"}),
+            mock.patch.object(producer.legacy, "run_bootstrap") as bootstrap,
+            mock.patch.object(producer.CanonicalArchiveCache, "preload"),
+            mock.patch.object(common, "publish_heartbeat"),
+            mock.patch.object(common, "publish_status") as status,
+        ):
+            result = producer.run_session(args)
+
+        self.assertEqual(result, 2)
+        bootstrap.assert_not_called()
+        self.assertEqual(status.call_args.args[1], "BLOCKED")
+        self.assertEqual(status.call_args.kwargs["phase"], "MISSING_SLOTS_AT_END_TIME")
+        self.assertIn("1000", status.call_args.kwargs["missing_slots"])
+
     def test_legacy_old_report_is_not_overwritten_by_fast_session(self) -> None:
         with mock.patch.object(common, "atomic_write_text") as write:
             producer.legacy._publish_fetch_report(

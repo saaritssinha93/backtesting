@@ -2,7 +2,12 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$TaskName,
 
-    [switch]$WakeToRun
+    [switch]$WakeToRun,
+
+    [ValidateRange(0, 99)]
+    [int]$RestartCount = 0,
+
+    [string]$RestartInterval = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +62,18 @@ try {
     $definition.Settings.MultipleInstances = 2
     $definition.Settings.IdleSettings.StopOnIdleEnd = $false
     $definition.Settings.IdleSettings.RestartOnIdle = $false
+    if ($PSBoundParameters.ContainsKey("RestartCount")) {
+        if ($RestartCount -gt 0 -and [string]::IsNullOrWhiteSpace($RestartInterval)) {
+            throw "RestartInterval is required when RestartCount is positive."
+        }
+        $definition.Settings.RestartCount = $RestartCount
+        $definition.Settings.RestartInterval = if ($RestartCount -gt 0) {
+            $RestartInterval
+        }
+        else {
+            ""
+        }
+    }
 
     $userId = $definition.Principal.UserId
     $logonType = [int]$definition.Principal.LogonType
@@ -72,6 +89,8 @@ try {
         "start_when_available=$($updated.Settings.StartWhenAvailable)"
         "wake_to_run=$($updated.Settings.WakeToRun)"
         "multiple_instances=$($updated.Settings.MultipleInstances)"
+        "restart_count=$($updated.Settings.RestartCount)"
+        "restart_interval=$($updated.Settings.RestartInterval)"
     ) -join " | "
 
     Write-Output "[INFO] Hardened scheduled task: $summary"

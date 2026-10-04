@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import time as time_module
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
@@ -21,6 +22,7 @@ from eqidv2_runtime_paths import RUNTIME_STATUS_DIR, runtime_dir
 
 
 IST = ZoneInfo("Asia/Kolkata")
+PROCESS_RUN_ID = os.getenv("EQIDV2_OBS_RUN_ID", "").strip() or f"process_{uuid.uuid4().hex}"
 SCRIPT_DIR = Path(__file__).resolve().parent
 FNO_ROOT = runtime_dir("fno_oi")
 MASTER_DIR = FNO_ROOT / "instrument_master"
@@ -220,6 +222,47 @@ def atomic_write_csv(frame: pd.DataFrame, path: Path) -> None:
     _atomic_replace_bytes(path, _write)
 
 
+def append_observation(
+    kind: str,
+    payload: Mapping[str, Any],
+    *,
+    identity: Mapping[str, Any] | None = None,
+    observed_at: datetime | None = None,
+    root: Path | None = None,
+) -> Path | None:
+    """Best-effort immutable raw/replay evidence, isolated from trading logic.
+
+    Observability must never make a market-data fetch, decision, or protective
+    order fail.  Callers therefore get the created evidence path on success and
+    ``None`` on any telemetry failure; the failure is still visible on stderr.
+    Imports are lazy so processes that do not use the ledger pay no startup
+    cost and the API's dependency-light environment remains unaffected.
+    """
+
+    try:
+        from ai_platform.observability.data_quality import AppendOnlyObservationLedger
+
+        ledger_root = root or runtime_dir("observability", "raw_observations")
+        record_identity = {
+            "run_id": PROCESS_RUN_ID,
+            **dict(identity or {}),
+        }
+        return AppendOnlyObservationLedger(ledger_root).append(
+            kind,
+            payload,
+            observed_at=observed_at or datetime.now(tz=IST),
+            identity=record_identity,
+        )
+    except Exception as exc:
+        print(
+            f"[OBSERVABILITY][WARN] immutable observation dropped "
+            f"kind={kind}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+
+
 def _status_value(value: Any) -> str:
     if isinstance(value, (dict, list, tuple, set)):
         return json.dumps(value, ensure_ascii=True, default=str, separators=(",", ":"))
@@ -270,6 +313,7 @@ def publish_status(
         "status": status,
         "session": session,
         "ts": stamp,
+        "run_id": PROCESS_RUN_ID,
         **extra,
     }
     atomic_write_kv(session_status_path(session), payload)
@@ -277,6 +321,7 @@ def publish_status(
         "state": heartbeat_state or status,
         "session": session,
         "ts": stamp,
+        "run_id": PROCESS_RUN_ID,
         **extra,
     }
     atomic_write_kv(session_heartbeat_path(session), heartbeat)
@@ -289,6 +334,7 @@ def publish_heartbeat(session: str, state: str, **extra: Any) -> None:
             "state": state,
             "session": session,
             "ts": now_ist().isoformat(timespec="seconds"),
+            "run_id": PROCESS_RUN_ID,
             **extra,
         },
     )

@@ -13,6 +13,35 @@ import log_dashboard_server as dashboard
 
 
 class DashboardV7ControlsTests(unittest.TestCase):
+    def test_cold_dashboard_waits_for_task_state_before_classifying_disabled_cards(self) -> None:
+        previous_cache = dashboard._TASK_SNAPSHOT_CACHE
+        previous_cache_at = dashboard._TASK_SNAPSHOT_CACHE_AT
+        previous_refreshing = dashboard._TASK_SNAPSHOT_REFRESHING
+        task_name = "\\EQIDV2_fno_v10_v11_v12_paper_0915"
+        disabled = {task_name: {"Scheduled Task State": "Disabled", "Status": "Disabled"}}
+        try:
+            dashboard._TASK_SNAPSHOT_CACHE = {}
+            dashboard._TASK_SNAPSHOT_CACHE_AT = None
+            dashboard._TASK_SNAPSHOT_REFRESHING = False
+            with patch.object(dashboard, "_query_task_scheduler_snapshot", return_value=disabled) as query:
+                with patch.object(dashboard.threading, "Thread") as thread_factory:
+                    observed = dashboard.load_task_scheduler_snapshot()
+            query.assert_called_once_with()
+            thread_factory.assert_not_called()
+            for card_id in dashboard.FNO_MULTI_PAPER_CARD_IDS:
+                status = dashboard.apply_scheduler_status(
+                    card_id,
+                    {"status": "BLOCKED", "ts": "2026-09-15T16:48:54+05:30"},
+                    observed,
+                    now_ist=datetime(2026, 9, 29, 12, 30, tzinfo=dashboard.IST),
+                )
+                self.assertEqual(status["status"], "DISABLED")
+                self.assertEqual(status["scheduler_state"], "DISABLED")
+        finally:
+            dashboard._TASK_SNAPSHOT_CACHE = previous_cache
+            dashboard._TASK_SNAPSHOT_CACHE_AT = previous_cache_at
+            dashboard._TASK_SNAPSHOT_REFRESHING = previous_refreshing
+
     def test_legacy_one_line_status_is_parsed_into_individual_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "legacy.status"
@@ -252,14 +281,22 @@ class DashboardV7ControlsTests(unittest.TestCase):
                 json.dumps(
                     {
                         "session_date_ist": "2026-07-27",
+                        **{
+                            f"session_date_ist_app{index}": "2026-07-27"
+                            for index in range(2, 9)
+                        },
                         "updated_at_ist": "2026-07-27 11:07:01+0530",
                     }
                 ),
                 encoding="utf-8",
             )
-            token_path.write_text("non-empty-token", encoding="utf-8")
             recovered_ts = datetime(2026, 7, 27, 11, 7).timestamp()
-            os.utime(token_path, (recovered_ts, recovered_ts))
+            for index in range(1, 9):
+                candidate = root / (
+                    "access_token.txt" if index == 1 else f"access_token{index}.txt"
+                )
+                candidate.write_text("non-empty-token", encoding="utf-8")
+                os.utime(candidate, (recovered_ts, recovered_ts))
 
             with (
                 patch.object(dashboard, "AUTH_V2_STATE_FILE", state_path),
@@ -278,8 +315,41 @@ class DashboardV7ControlsTests(unittest.TestCase):
         self.assertEqual(status["previous_status"], "FAILED")
         self.assertEqual(
             status["recovery_source"],
-            "newer_same_day_auth_state_and_access_token",
+            "newer_same_day_complete_auth_roster",
         )
+
+    def test_partial_auth_roster_does_not_clear_runner_failure(self) -> None:
+        now = datetime(2026, 7, 27, 11, 30, tzinfo=dashboard.IST)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            state_path = root / "auth_v2_state.json"
+            token_path = root / "access_token.txt"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "session_date_ist": "2026-07-27",
+                        "session_date_ist_app2": "2026-07-27",
+                        "updated_at_ist": "2026-07-27 11:07:01+0530",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            token_path.write_text("non-empty-token", encoding="utf-8")
+
+            with (
+                patch.object(dashboard, "AUTH_V2_STATE_FILE", state_path),
+                patch.object(dashboard, "AUTH_V2_ACCESS_TOKEN_FILE", token_path),
+            ):
+                status = dashboard.reconcile_authentication_status(
+                    {
+                        "status": "FAILED",
+                        "ts": "2026-07-27_09:05:57",
+                        "exit_code": "1",
+                    },
+                    now_ist=now,
+                )
+
+        self.assertEqual(status["status"], "FAILED")
 
     def test_newer_fno_worker_success_preserves_supervisor_failure_as_recovered(self) -> None:
         now = datetime(2026, 8, 12, 18, 0, tzinfo=dashboard.IST)
@@ -413,6 +483,7 @@ class DashboardV7ControlsTests(unittest.TestCase):
                 {
                     "status": "RUNNING",
                     "heartbeat_state": "RUNNING",
+                    "heartbeat_ts": "2026-08-31T15:10:00+05:30",
                     "worker_pid": "39528",
                 },
                 {
@@ -431,6 +502,33 @@ class DashboardV7ControlsTests(unittest.TestCase):
         self.assertEqual(status["runtime_start_mode"], "MANUAL")
         self.assertEqual(status["scheduler_attention"], "DISABLED_WHILE_RUNNING")
         self.assertIn("automatic scheduled start is disabled", status["derived_status"])
+
+    def test_disabled_task_does_not_trust_reused_pid_with_old_heartbeat(self) -> None:
+        old_heartbeat = "2026-08-31 13:04:34+05:30"
+        with patch.object(dashboard, "_pid_is_alive_fast", return_value=True) as pid_alive:
+            status = dashboard.apply_scheduler_status(
+                "daily_live_v7_research_session",
+                {
+                    "status": "STALE_HB_RUNNING",
+                    "heartbeat_state": "RUNNING",
+                    "heartbeat_ts": old_heartbeat,
+                    "updated_at_ist": old_heartbeat,
+                    "pid": "33812",
+                },
+                {
+                    "\\EQIDV2_daily_live_v7_research_0917": {
+                        "Scheduled Task State": "Disabled",
+                        "Status": "Disabled",
+                    }
+                },
+                now_ist=datetime(2026, 9, 29, 12, 55, tzinfo=dashboard.IST),
+            )
+
+        pid_alive.assert_not_called()
+        self.assertEqual(status["status"], "DISABLED")
+        self.assertEqual(status["scheduler_state"], "DISABLED")
+        self.assertNotIn("runtime_start_mode", status)
+        self.assertNotIn("scheduler_attention", status)
 
     def test_disabled_task_with_dead_worker_is_disabled_but_section_locked(self) -> None:
         with patch.object(dashboard, "_pid_is_alive_fast", return_value=False):

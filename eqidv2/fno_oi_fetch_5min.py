@@ -698,6 +698,7 @@ def run_slot(
     _, cash_state = _cash_marker_state(slot_end)
     marker: dict[str, Any] = {
         "schema_version": common.FNO_FETCH_SLOT_SCHEMA_VERSION,
+        "producer_run_id": common.PROCESS_RUN_ID,
         "source": "final",
         "state": state,
         "complete": complete,
@@ -769,7 +770,25 @@ def run_slot(
             if item["state"] in {"FAILED", "INVALID_DATA"}
         ][:20],
     }
-    common.atomic_write_json(common.fetch_slot_path(slot_end), marker)
+    marker_path = common.fetch_slot_path(slot_end)
+    common.atomic_write_json(marker_path, marker)
+    try:
+        observed_at = datetime.fromisoformat(str(marker.get("published_at_ist", "")))
+    except (TypeError, ValueError):
+        # Evidence timestamp parsing is not part of producer correctness.
+        observed_at = None
+    common.append_observation(
+        "raw_futures_oi_slot",
+        marker,
+        observed_at=observed_at,
+        identity={
+            "session_date": slot_end.date().isoformat(),
+            "slot": slot_end.isoformat(),
+            "producer_run_id": common.PROCESS_RUN_ID,
+            "universe_sha256": marker.get("universe_sha256"),
+            "marker_path": str(marker_path),
+        },
+    )
     report = _render_fetch_report(marker, outcomes)
     _publish_fetch_report(report, session=session)
     common.publish_status(
@@ -787,7 +806,7 @@ def run_slot(
         stock_coverage_ratio=f"{stock_coverage:.4f}",
         stock_verified_no_candle_count=len(stock_verified_no_candle_symbols),
         failed_count=failed,
-        output=common.fetch_slot_path(slot_end),
+        output=marker_path,
     )
     print(
         f"[SLOT][{state}] {slot_end.strftime('%H:%M')} written={written}/{expected} "

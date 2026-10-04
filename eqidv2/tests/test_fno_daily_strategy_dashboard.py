@@ -82,6 +82,6 @@ def test_scheduled_runner_cannot_call_equity_avwap_pipeline() -> None:
         encoding="utf-8"
     )
 
-    assert "tools\\fno_daily_strategy_dashboard.py" in runner
+    assert 'call "%~dp0run_backtesting_result_v13_v10_g_1620.bat" %*' in runner
     assert "backtesting_result_v11_daily.py" not in runner
     assert "avwap_5min" not in runner.lower()

@@ -1,0 +1,48 @@
+schema_version: eqidv2.observability.failure_drills.v1
+execution_policy:
+  permitted_window: paper_or_maintenance_only
+  unattended_live_session: forbidden
+  dry_run_default: true
+  preserve_evidence: true
+drills:
+  - id: collector-outage
+    stage: OBS-12
+    expected_behavior:
+      - trading application health remains available
+      - trading decision path does not wait for telemetry
+      - Alloy restarts and resumes ingestion
+      - telemetry gap is explicit
+  - id: prometheus-restart
+    stage: OBS-12
+    expected_behavior:
+      - trading application remains healthy
+      - Prometheus resumes with its named volume intact
+  - id: loki-restart
+    stage: OBS-12
+    expected_behavior:
+      - trading application remains healthy
+      - Alloy buffers only within its configured bound and reports drops
+  - id: tempo-restart
+    stage: OBS-12
+    expected_behavior:
+      - trading application remains healthy
+      - trace exporter failure does not block a slot or order
+manual_drills_not_automated:
+  - broker timeout and rate limiting using a fake broker only
+  - corrupt or stale market data using fixtures only
+  - disk pressure using a disposable test volume only
+  - worker termination during a paper session
+acceptance_record_fields:
+  - date
+  - operator
+  - commit_sha
+  - mode
+  - drill
+  - start_and_end_time
+  - application_health_before_during_after
+  - missed_slots
+  - duplicate_orders
+  - evidence_loss
+  - alert_fired_and_resolved
+  - result
+

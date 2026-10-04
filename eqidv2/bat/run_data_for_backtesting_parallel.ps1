@@ -19,11 +19,13 @@ $tasks = @(
         Name = "moving_files.py"
         Script = Join-Path $BaseDir "moving_files.py"
         Log = Join-Path $logDir "moving_files_$TodayIst.log"
+        Arguments = @()
     },
     @{
         Name = "trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_1min.py"
         Script = Join-Path $BaseDir "trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_1min.py"
         Log = Join-Path $logDir "stocksonly_1min_$TodayIst.log"
+        Arguments = @("--universe-scope", "fno")
     }
 )
 
@@ -34,10 +36,11 @@ foreach ($task in $tasks) {
     $log = [string]$task.Log
     $stdout = "$log.stdout.tmp"
     $stderr = "$log.stderr.tmp"
+    $arguments = @("-u", $script) + @($task.Arguments)
     Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
     Add-Content -LiteralPath $log -Encoding UTF8 -Value "[$(Get-Date -Format 'dd-MM-yyyy HH:mm:ss.ff')] START $name"
     $process = Start-Process -FilePath $PythonExe `
-        -ArgumentList @("-u", $script) `
+        -ArgumentList $arguments `
         -WorkingDirectory $BaseDir `
         -RedirectStandardOutput $stdout `
         -RedirectStandardError $stderr `

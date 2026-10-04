@@ -1,0 +1,51 @@
+{
+  "schema_version": "v13_v10_g_ai_fixture_manifest_v1",
+  "policy": {
+    "synthetic_only": true,
+    "credentials_allowed": false,
+    "broker_account_ids_allowed": false,
+    "real_instrument_tokens_allowed": false
+  },
+  "fixtures": [
+    {
+      "name": "daily_running.json",
+      "proves": "Incomplete status does not expose metrics"
+    },
+    {
+      "name": "daily_success.json",
+      "proves": "A complete result exposes verified metrics"
+    },
+    {
+      "name": "equity_paper_closed.json",
+      "proves": "A filled PAPER order is eligible"
+    },
+    {
+      "name": "equity_live_cancelled.json",
+      "proves": "A cancelled LIVE order cannot replace a PAPER fill"
+    },
+    {
+      "name": "option_open.json",
+      "proves": "Open mark P&L is not realized"
+    },
+    {
+      "name": "option_closed.json",
+      "proves": "Closed P&L is realized and execution source is retained"
+    },
+    {
+      "name": "option_unresolved.json",
+      "proves": "An unresolved exit is not assigned realized P&L"
+    },
+    {
+      "name": "status_stale.json",
+      "proves": "Freshness expiry remains an explicit STALE state"
+    },
+    {
+      "name": "evidence_observed.json",
+      "proves": "Envelope hash and as-of selection"
+    },
+    {
+      "name": "malformed and conflicting-generation cases",
+      "proves": "Generated in temporary test roots; malformed schemas and incoherent snapshots fail explicitly"
+    }
+  ]
+}

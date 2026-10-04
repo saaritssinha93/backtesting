@@ -30,6 +30,80 @@ def _task_query(
     )
 
 
+def _recovery_task_xml(
+    *,
+    start: str = "09:05:00",
+    interval: str = "PT5M",
+    duration: str = "PT6H30M",
+    policy: str = "IgnoreNew",
+    restart: bool = True,
+    weekdays: str = "<Monday/><Tuesday/><Wednesday/><Thursday/><Friday/>",
+) -> str:
+    restart_xml = (
+        "<RestartOnFailure><Count>3</Count><Interval>PT1M</Interval></RestartOnFailure>"
+        if restart else ""
+    )
+    return (
+        '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+        f"<Settings><MultipleInstancesPolicy>{policy}</MultipleInstancesPolicy>{restart_xml}</Settings>"
+        "<Triggers><CalendarTrigger>"
+        f"<StartBoundary>2026-09-29T{start}</StartBoundary>"
+        f"<Repetition><Interval>{interval}</Interval><Duration>{duration}</Duration></Repetition>"
+        f"<ScheduleByWeek><DaysOfWeek>{weekdays}</DaysOfWeek></ScheduleByWeek>"
+        "</CalendarTrigger></Triggers></Task>"
+    )
+
+
+def test_recovery_schedule_contract_accepts_installed_producer_and_g_pattern() -> None:
+    producer = preopen.check_recovery_schedule_contract(
+        preopen.FNO_FAST_PRODUCTION_TASK,
+        start_time=dt.time(9, 5),
+        duration_minutes=390,
+        require_restart=True,
+        task_xml=_recovery_task_xml(),
+    )
+    g_consumer = preopen.check_recovery_schedule_contract(
+        preopen.FNO_V6_SCANNER_TASK,
+        start_time=dt.time(9, 15),
+        duration_minutes=130,
+        task_xml=_recovery_task_xml(start="09:15:00", duration="PT130M", restart=False),
+    )
+    assert producer.status == "PASS"
+    assert g_consumer.status == "PASS"
+    assert list(autofix._iter_actions_for_fail(producer.name)) == []
+
+
+def test_recovery_schedule_contract_fails_closed_on_drift() -> None:
+    base = dict(
+        task_name=preopen.FNO_FAST_PRODUCTION_TASK,
+        start_time=dt.time(9, 5),
+        duration_minutes=390,
+        require_restart=True,
+    )
+    for xml in (
+        "",
+        "<not-xml",
+        _recovery_task_xml(policy="Parallel"),
+        _recovery_task_xml(interval="PT10M"),
+        _recovery_task_xml(duration="PT6H"),
+        _recovery_task_xml(start="09:10:00"),
+        _recovery_task_xml(restart=False),
+        _recovery_task_xml(weekdays="<Monday/><Tuesday/><Wednesday/><Thursday/>"),
+    ):
+        result = preopen.check_recovery_schedule_contract(**base, task_xml=xml)
+        assert result.status == "FAIL"
+        assert not result.name.startswith("task_")
+        assert list(autofix._iter_actions_for_fail(result.name)) == []
+
+
+def test_recovery_schedule_checks_skip_g_when_v8_mode_not_positively_disabled() -> None:
+    with patch.object(preopen, "_run_schtasks_xml_query", return_value=_recovery_task_xml()) as query:
+        checks = preopen.check_recovery_schedule_contracts(v8_positively_disabled=False)
+    assert len(checks) == 1
+    assert checks[0].status == "PASS"
+    query.assert_called_once_with(preopen.FNO_FAST_PRODUCTION_TASK)
+
+
 def test_fast_canonical_producer_is_always_required() -> None:
     with patch.object(
         preopen,

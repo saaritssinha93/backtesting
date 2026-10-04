@@ -72,6 +72,37 @@ def _reasons(result):
     return {row["reason"] for row in result["coverage"]["problems"]}
 
 
+def _assert_same_authoritative_outcome(baseline, observed):
+    assert observed["state"] == baseline["state"] == "SUCCESS"
+    assert observed["complete"] is baseline["complete"] is True
+    assert observed["metrics"] == baseline["metrics"]
+    assert observed["coverage"] == baseline["coverage"]
+    assert observed["partial_diagnostics"] == baseline["partial_diagnostics"]
+    left = pd.read_csv(baseline["artifacts"]["portfolio_trades"])
+    right = pd.read_csv(observed["artifacts"]["portfolio_trades"])
+    authoritative = [
+        column for column in left.columns
+        if column in right and not column.endswith("_sha256")
+        and column not in {"run_id", "replay_id"}
+    ]
+    pd.testing.assert_frame_equal(
+        left[authoritative], right[authoritative], check_dtype=False
+    )
+
+
+def _assert_telemetry_error(result, *, component, phase):
+    evidence = result["observability"]
+    assert evidence["state"] == "DEGRADED"
+    assert evidence["error_count"] == len(evidence["errors"])
+    assert any(
+        row["status"] == "TELEMETRY_ERROR"
+        and row["component"] == component
+        and row["phase"] == phase
+        and row["error_type"] == "RuntimeError"
+        for row in evidence["errors"]
+    )
+
+
 def test_new_unfrozen_date_replays_only_g_with_complete_dated_artifacts(raw, tmp_path):
     roots, _, _ = raw
     result = replay.replay_day(DAY, tmp_path / "run", roots=roots)
@@ -100,6 +131,172 @@ def test_new_unfrozen_date_replays_only_g_with_complete_dated_artifacts(raw, tmp
     assert all(len(row["sha256"]) == 64 for row in manifest["sources"])
     roles = {row["role"] for row in manifest["sources"]}
     assert {"DATED_UNIVERSE", "NIFTY_FUTURES_CONTEXT", "EQUITY_ONE_MINUTE", "STOCK_FUTURES_OI"} <= roles
+    snapshot_manifest = json.loads(
+        Path(result["artifacts"]["input_snapshot_manifest"]).read_text()
+    )
+    assert snapshot_manifest["complete"] is True
+    assert snapshot_manifest["snapshot_fingerprint"] == manifest["input_snapshot"]["snapshot_fingerprint"]
+    assert all(row["captured"] for row in snapshot_manifest["sources"])
+
+
+def test_replay_isolated_from_live_source_change_after_snapshot(
+        raw, tmp_path, monkeypatch):
+    roots, equity, _ = raw
+    baseline = replay.replay_day(DAY, tmp_path / "snapshot_baseline", roots=roots)
+    original_build = replay.build_day_dataset
+    changed = False
+
+    def change_live_source_then_build(day, *, roots=None):
+        nonlocal changed
+        if not changed:
+            frame = pd.read_parquet(equity)
+            target = frame.date.eq(pd.Timestamp(f"{DAY} 10:00", tz="Asia/Kolkata"))
+            frame.loc[target, ["open", "high", "low", "close"]] += 50
+            frame.to_parquet(equity, index=False)
+            changed = True
+        return original_build(day, roots=roots)
+
+    monkeypatch.setattr(replay, "build_day_dataset", change_live_source_then_build)
+    observed = replay.replay_day(DAY, tmp_path / "snapshot_observed", roots=roots)
+
+    assert changed is True
+    _assert_same_authoritative_outcome(baseline, observed)
+    assert observed["source_fingerprint"] == baseline["source_fingerprint"]
+    assert "SOURCE_CHANGED_DURING_REPLAY" not in _reasons(observed)
+    source_manifest = json.loads(Path(observed["artifacts"]["source_manifest"]).read_text())
+    equity_source = next(
+        row for row in source_manifest["sources"] if row["role"] == "EQUITY_ONE_MINUTE"
+    )
+    assert Path(equity_source["path"]) != equity.resolve()
+    assert Path(equity_source["original_path"]) == equity.resolve()
+    assert replay._sha(Path(equity_source["path"])) == equity_source["sha256"]
+    assert replay._sha(equity) != equity_source["sha256"]
+
+
+def test_unstable_source_during_snapshot_blocks_without_live_fallback(
+        raw, tmp_path, monkeypatch):
+    roots, equity, _ = raw
+    copyfile = replay.shutil.copyfile
+    mutations = 0
+
+    def copy_then_change_source(source, destination, *args, **kwargs):
+        nonlocal mutations
+        result = copyfile(source, destination, *args, **kwargs)
+        if Path(source).resolve() == equity.resolve():
+            frame = pd.read_parquet(equity)
+            frame.loc[frame.index[0], "volume"] += 1
+            frame.to_parquet(equity, index=False)
+            mutations += 1
+        return result
+
+    monkeypatch.setattr(replay.shutil, "copyfile", copy_then_change_source)
+    result = replay.replay_day(DAY, tmp_path / "unstable_snapshot", roots=roots)
+
+    assert mutations == replay.SNAPSHOT_COPY_ATTEMPTS
+    assert result["state"] == "BLOCKED_INCOMPLETE_DATA"
+    assert result["complete"] is False
+    assert result["metrics"] is None
+    assert "SOURCE_SNAPSHOT_UNSTABLE" in _reasons(result)
+    snapshot_manifest = json.loads(
+        Path(result["artifacts"]["input_snapshot_manifest"]).read_text()
+    )
+    assert snapshot_manifest["complete"] is False
+    equity_capture = next(
+        row for row in snapshot_manifest["sources"] if row["role"] == "EQUITY_ONE_MINUTE"
+    )
+    assert equity_capture["captured"] is False
+    source_manifest = json.loads(Path(result["artifacts"]["source_manifest"]).read_text())
+    replay_equity = next(
+        row for row in source_manifest["sources"] if row["role"] == "EQUITY_ONE_MINUTE"
+    )
+    assert replay_equity["exists"] is False
+    assert Path(replay_equity["path"]) != equity.resolve()
+
+
+def test_content_addressed_snapshot_is_reused_and_tampering_is_rejected(raw, tmp_path):
+    roots, _, _ = raw
+    store = tmp_path / "shared_snapshots"
+    first = replay.create_input_snapshot(DAY, store, roots=roots)
+    second = replay.create_input_snapshot(DAY, store, roots=roots)
+
+    assert second.fingerprint == first.fingerprint
+    assert second.root == first.root
+    assert second.manifest_path == first.manifest_path
+    assert [path for path in store.iterdir() if not path.name.startswith(".staging-")] == [
+        first.root
+    ]
+
+    member = next(
+        row for row in first.sources if row["role"] == "EQUITY_ONE_MINUTE"
+    )
+    captured_path = first.root / member["snapshot_relative_path"]
+    captured_path.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="failed verification"):
+        replay.create_input_snapshot(DAY, store, roots=roots)
+
+
+@pytest.mark.parametrize(("attribute", "component", "phase"), [
+    ("evaluate_ohlcv", "data_quality", "evaluate_source"),
+    ("canonical_frame_sha256", "input_slice_hash", "hash_effective_history"),
+    ("build_v13_v10_g_feature_ledger", "feature_ledger", "build_symbol_ledger"),
+    ("canonical_row_sha256", "feature_ledger", "finalize_selection_ledger"),
+])
+def test_observability_computation_failures_do_not_change_replay_truth(
+        raw, tmp_path, monkeypatch, attribute, component, phase):
+    roots, _, _ = raw
+    baseline = replay.replay_day(DAY, tmp_path / f"baseline_{attribute}", roots=roots)
+
+    def fail_observer(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError(f"injected {attribute} failure")
+
+    monkeypatch.setattr(replay, attribute, fail_observer)
+    observed = replay.replay_day(DAY, tmp_path / f"fault_{attribute}", roots=roots)
+
+    _assert_same_authoritative_outcome(baseline, observed)
+    _assert_telemetry_error(observed, component=component, phase=phase)
+    assert "STOCK_SOURCE_BUILD_FAILED" not in _reasons(observed)
+    manifest = json.loads(Path(observed["artifacts"]["source_manifest"]).read_text())
+    assert manifest["observability"] == observed["observability"]
+
+
+def test_data_quality_artifact_failure_is_fail_open(raw, tmp_path, monkeypatch):
+    roots, _, _ = raw
+    baseline = replay.replay_day(DAY, tmp_path / "baseline_quality_write", roots=roots)
+    atomic_write_csv = replay.common.atomic_write_csv
+
+    def fail_quality_write(frame, path, *args, **kwargs):
+        if Path(path).name == "data_quality.csv":
+            raise RuntimeError("injected data-quality persistence failure")
+        return atomic_write_csv(frame, path, *args, **kwargs)
+
+    monkeypatch.setattr(replay.common, "atomic_write_csv", fail_quality_write)
+    observed = replay.replay_day(DAY, tmp_path / "fault_quality_write", roots=roots)
+
+    _assert_same_authoritative_outcome(baseline, observed)
+    _assert_telemetry_error(
+        observed, component="data_quality", phase="persist_artifact"
+    )
+    assert "data_quality" not in observed["artifacts"]
+
+
+def test_feature_ledger_artifact_failure_is_fail_open(raw, tmp_path, monkeypatch):
+    roots, _, _ = raw
+    baseline = replay.replay_day(DAY, tmp_path / "baseline_ledger_write", roots=roots)
+
+    def fail_feature_write(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("injected feature-ledger persistence failure")
+
+    monkeypatch.setattr(replay, "write_feature_ledger", fail_feature_write)
+    observed = replay.replay_day(DAY, tmp_path / "fault_ledger_write", roots=roots)
+
+    _assert_same_authoritative_outcome(baseline, observed)
+    _assert_telemetry_error(
+        observed, component="feature_ledger", phase="persist_artifact"
+    )
+    assert "feature_ledger" not in observed["artifacts"]
+    assert "feature_ledger_manifest" not in observed["artifacts"]
 
 
 def test_missing_date_never_uses_previous_or_frozen_session(raw, tmp_path):

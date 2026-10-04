@@ -32,6 +32,14 @@ if /I "%FORCE_FAIL%"=="1" (
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)>>"%LOG_FILE%"
 
+rem Exit 75 means another guarded auth run owns the process lock.  Treat this
+rem wrapper as a no-op without overwriting the real run's status or alerting.
+if "%EXIT_CODE%"=="75" (
+  echo [INFO] Duplicate authentication invocation skipped; active run retained.
+  echo [INFO] Duplicate authentication invocation skipped; active run retained.>>"%LOG_FILE%"
+  endlocal & exit /b 0
+)
+
 for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm:ss"') do set "RUN_TS=%%a"
 if "%EXIT_CODE%"=="0" (
   >"%STATUS_FILE%" echo status=SUCCESS

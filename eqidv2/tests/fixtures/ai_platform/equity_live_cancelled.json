@@ -1,0 +1,15 @@
+{
+  "schema_version": "fno_v6_equity_order_state_v2",
+  "strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+  "strategy_fingerprint": "fixture-fingerprint",
+  "signal_id": "20260917_0951_SHORT_DEMO_fixture",
+  "session_date": "2026-09-17",
+  "side": "SHORT",
+  "tradingsymbol": "DEMO",
+  "mode": "LIVE",
+  "status": "CANCELLED",
+  "quantity": 1,
+  "entry_price": 0.0,
+  "exit_price": 0.0,
+  "net_pnl_rs": 0.0
+}

@@ -37,6 +37,9 @@ MIN_NO_CANDLE_OBSERVATIONS = 3
 MIN_NO_CANDLE_VERIFICATION_AGE_SEC = 15
 DEFAULT_NO_CANDLE_OBSERVATION_SPACING_SEC = 2.0
 DEFAULT_GENERATION = os.getenv("FNO_LIVE_GENERATION", "v6").strip().lower()
+RUN_ID = os.getenv("EQIDV2_OBS_RUN_ID", "").strip() or (
+    f"fno-equity-1m_{common.now_ist().strftime('%Y%m%dT%H%M%S')}_{os.getpid()}"
+)
 
 
 def _status_identity(session: str) -> dict[str, str]:
@@ -49,11 +52,15 @@ def _status_identity(session: str) -> dict[str, str]:
 
 
 def _publish_status(session: str, state: str, **extra: Any) -> None:
-    common.publish_status(session, state, **{**_status_identity(session), **extra})
+    common.publish_status(
+        session, state, **{**_status_identity(session), "run_id": RUN_ID, **extra}
+    )
 
 
 def _publish_heartbeat(session: str, state: str, **extra: Any) -> None:
-    common.publish_heartbeat(session, state, **{**_status_identity(session), **extra})
+    common.publish_heartbeat(
+        session, state, **{**_status_identity(session), "run_id": RUN_ID, **extra}
+    )
 
 
 @dataclass
@@ -484,6 +491,25 @@ def _publish_final_marker_once(
                     f"Immutable confirmation marker collision: {path}"
                 )
             return existing
+        try:
+            observed_at = datetime.fromisoformat(str(marker.get("published_at_ist", "")))
+        except (TypeError, ValueError):
+            # Timestamp normalization is telemetry-only; a malformed optional
+            # observation timestamp must not invalidate the immutable marker.
+            observed_at = None
+        common.append_observation(
+            "raw_equity_1m_confirmation_slot",
+            marker,
+            observed_at=observed_at,
+            identity={
+                "session_date": marker.get("session_date"),
+                "slot": marker.get("slot_ist"),
+                "signal_end": marker.get("signal_end"),
+                "producer_run_id": marker.get("producer_run_id", RUN_ID),
+                "scanner_snapshot_sha256": marker.get("scanner_snapshot_sha256"),
+                "marker_path": str(path),
+            },
+        )
         return marker
     finally:
         try:
@@ -935,6 +961,7 @@ def produce_slot(
     source = "final" if complete or finalize_incomplete else "provisional"
     marker = {
         "schema_version": common.EQUITY_1M_SLOT_SCHEMA_VERSION,
+        "producer_run_id": RUN_ID,
         "feed_policy": FEED_POLICY_VERSION,
         "source": source,
         "state": state,
@@ -1293,6 +1320,31 @@ def run(args: argparse.Namespace) -> int:
         if not made_progress:
             if now.date() != session_date or now.time() >= datetime.strptime(
                 getattr(config, "PIPELINE_DEADLINE", "09:50"), "%H:%M").time():
+                missing_slots = sorted(set(selected_slots) - processed)
+                missing_scanner_slots = [
+                    slot for slot in missing_slots
+                    if not _load_scanner(generation, session_date, slot)
+                ]
+                phase = (
+                    "UPSTREAM_SCANNER_MISSING_BY_DEADLINE"
+                    if missing_scanner_slots
+                    else "INCOMPLETE_BY_DEADLINE"
+                )
+                _publish_status(
+                    session,
+                    "BLOCKED",
+                    heartbeat_state="BLOCKED",
+                    phase=phase,
+                    processed_slots=len(processed),
+                    missing_slots=missing_slots,
+                    missing_scanner_slots=missing_scanner_slots,
+                )
+                common.atomic_write_text(
+                    report_path,
+                    _render_report(generation, session_date, config)
+                    + f"\nPipeline state: BLOCKED ({phase})\n"
+                    + f"Missing slots: {', '.join(missing_slots)}\n",
+                )
                 return 2
             time.sleep(max(0.2, float(args.poll_sec)))
     _publish_status(session, "DONE", processed_slots=len(processed))

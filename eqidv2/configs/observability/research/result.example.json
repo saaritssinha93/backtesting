@@ -1,0 +1,31 @@
+{
+  "schema_version": "eqidv2.observability.experiment_result.v1",
+  "experiment_id": "replace-with-registered-id",
+  "completed_at": "2026-09-24T12:00:00Z",
+  "status": "INDETERMINATE",
+  "evidence_quality": "REUSED_DEVELOPMENT",
+  "trials_attempted": 1,
+  "checks": {
+    "point_in_time": true,
+    "costs_included": true,
+    "outputs_hash_verified": true,
+    "baseline_reproduced": false
+  },
+  "metrics": {
+    "baseline": {
+      "net_profit_rupees_after_costs": null,
+      "maximum_drawdown_rs": null
+    },
+    "challenger": {
+      "net_profit_rupees_after_costs": null,
+      "maximum_drawdown_rs": null
+    },
+    "difference": {
+      "net_profit_rupees_after_costs": null
+    }
+  },
+  "forward_shadow_sessions": 0,
+  "limitations": [
+    "Example only. Replace with measured results; never infer missing outcomes as zero."
+  ]
+}

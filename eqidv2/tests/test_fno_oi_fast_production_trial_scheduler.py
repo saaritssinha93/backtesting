@@ -75,6 +75,9 @@ class FnoOiFastProductionTrialSchedulerTests(unittest.TestCase):
             r'Name\s*=\s*"EQIDV2_fno_oi_fetch_5min_fast_production_0905";\s*Time\s*=\s*"09:05"',
         )
         self.assertIn("/SC WEEKLY /D MON,TUE,WED,THU,FRI", content)
+        self.assertIn('RepeatMinutes = 5; RepeatDuration = "06:30"; RestartCount = 3', content)
+        self.assertIn('RepeatMinutes = 5; RepeatDuration = "02:10"', content)
+        self.assertIn('/RI $task.RepeatMinutes /DU $task.RepeatDuration', content)
 
 
 if __name__ == "__main__":

@@ -39,14 +39,16 @@ Files used:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import subprocess
 import time
+from contextlib import contextmanager
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Dict, Iterable, Iterator, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import pytz
@@ -97,6 +99,7 @@ REQUEST_TOKEN8_FILE = ROOT / "request_token8.txt"
 ACCESS_TOKEN8_FILE = ROOT / "access_token8.txt"
 REFRESH_TOKEN_FILE = ROOT / "refresh_token.txt"
 STATE_FILE = ROOT / "auth_v2_state.json"
+INSTANCE_LOCK_FILE = ROOT / "logs" / "authentication_v2.lock"
 
 SECONDARY_API_KEY_FILES = {
     2: API_KEY2_FILE,
@@ -136,6 +139,12 @@ SLOT_GRACE_SEC = 75
 # "timed out before request_token was available".  When fewer than this many
 # seconds remain, wait for the next window instead of using a doomed code.
 TOTP_MIN_REMAINING_SEC = 10
+TOTP_MIN_ELAPSED_SEC = 5
+
+# Reusing the same TOTP for multiple app logins is unreliable, especially
+# while Kite is busy around market open.  Key by a digest so the secret itself
+# is never retained in diagnostics or tracebacks.
+_LAST_TOTP_COUNTER_BY_SECRET: Dict[str, int] = {}
 
 # A secondary-app login that fails for a transient reason (expired TOTP
 # window, a slow page, a dropped connection) almost always succeeds on a
@@ -143,6 +152,8 @@ TOTP_MIN_REMAINING_SEC = 10
 # for the whole trading day.
 SECONDARY_LOGIN_ATTEMPTS = 2
 SECONDARY_RETRY_DELAY_SEC = 5.0
+AUTO_SUBMIT_GRACE_SEC = 8.0
+POST_SUBMIT_TIMEOUT_SEC = 35.0
 
 
 def now_ist() -> datetime:
@@ -158,6 +169,47 @@ def _extract_otp(text: str) -> Optional[str]:
         return None
     m = OTP_RE.search(text)
     return m.group(1) if m else None
+
+
+def _wait_for_unused_totp_window(secret: str, interval: int) -> int:
+    """Return a safe, unused TOTP counter for this process.
+
+    Waiting a few seconds into a window protects against the workstation's
+    clock being slightly ahead of Kite.  Remembering counters prevents two
+    app logins that share one account from submitting the same OTP.
+    """
+    interval = max(1, int(interval or 30))
+    secret_key = hashlib.sha256(secret.encode("utf-8", errors="ignore")).hexdigest()
+
+    while True:
+        now = float(time.time())
+        counter = int(now // interval)
+        elapsed = now - (counter * interval)
+        remaining = interval - elapsed
+        previous = _LAST_TOTP_COUNTER_BY_SECRET.get(secret_key)
+
+        wait_seconds = 0.0
+        reason = ""
+        if previous == counter:
+            wait_seconds = remaining + TOTP_MIN_ELAPSED_SEC + 0.5
+            reason = "current code was already used"
+        elif elapsed < TOTP_MIN_ELAPSED_SEC:
+            wait_seconds = TOTP_MIN_ELAPSED_SEC - elapsed + 0.5
+            reason = "clock-skew safety"
+        elif remaining < TOTP_MIN_REMAINING_SEC:
+            wait_seconds = remaining + TOTP_MIN_ELAPSED_SEC + 0.5
+            reason = "current code is near expiry"
+
+        if wait_seconds <= 0:
+            _LAST_TOTP_COUNTER_BY_SECRET[secret_key] = counter
+            return counter
+
+        print(
+            f"[AUTH] Waiting {wait_seconds:.1f}s for a fresh TOTP window "
+            f"({reason}).",
+            flush=True,
+        )
+        time.sleep(wait_seconds)
 
 
 def _read_key_secret(path: Path = API_KEY_FILE) -> list[str]:
@@ -224,16 +276,7 @@ def _resolve_totp(secret: str) -> Tuple[str, str]:
     try:
         totp = TOTP(secret)
         interval = int(getattr(totp, "interval", 30) or 30)
-        remaining = interval - (int(time.time()) % interval)
-        if remaining < TOTP_MIN_REMAINING_SEC:
-            # Using this code would race the window rollover; wait it out so
-            # the browser gets a code with a full interval ahead of it.
-            print(
-                f"[AUTH] TOTP window has {remaining}s left "
-                f"(< {TOTP_MIN_REMAINING_SEC}s); waiting for the next code.",
-                flush=True,
-            )
-            time.sleep(remaining + 0.5)
+        _wait_for_unused_totp_window(secret, interval)
         otp = totp.now()
         otp = _extract_otp(otp)
         if otp:
@@ -349,49 +392,119 @@ def _click_with_retry(
     driver.execute_script("arguments[0].click();", element)
 
 
-def _fill_totp(wait: WebDriverWait, otp: str) -> None:
-    single_locators = [
-        (By.XPATH, "/html/body/div[1]/div/div[2]/div[1]/div[2]/div/div[2]/form/div[1]/input"),
-        (By.ID, "totp"),
-        (By.NAME, "totp"),
-        (By.CSS_SELECTOR, "input[autocomplete='one-time-code']"),
-        (By.XPATH, "//form//input[@type='text' or @type='tel' or @type='number']"),
-    ]
+def _visible_totp_fields(driver: webdriver.Chrome) -> Tuple[str, list]:
+    """Return (single|boxes, elements) without mistaking box 1 for a field."""
     try:
-        _type_with_retry(wait, single_locators, otp, retries=3)
-        return
-    except Exception:
-        pass
-
-    driver = wait._driver
-    try:
-        elems = driver.find_elements(By.XPATH, "//input[not(@disabled)]")
+        elems = driver.find_elements(By.XPATH, "//form//input[not(@disabled)]")
     except InvalidSessionIdException as exc:
         raise TimeoutException("Browser session closed before TOTP field could be located.") from exc
 
-    boxes = []
-    for e in elems:
+    visible = []
+    for element in elems:
         try:
-            if not e.is_displayed():
-                continue
-            mx = (e.get_attribute("maxlength") or "").strip()
-            typ = (e.get_attribute("type") or "").lower()
-            if mx == "1" and typ in ("text", "tel", "number", ""):
-                boxes.append(e)
+            if element.is_displayed():
+                visible.append(element)
         except Exception:
             continue
 
+    boxes = []
+    singles = []
+    for element in visible:
+        try:
+            maxlength = (element.get_attribute("maxlength") or "").strip()
+            input_type = (element.get_attribute("type") or "").lower()
+            element_id = (element.get_attribute("id") or "").lower()
+            name = (element.get_attribute("name") or "").lower()
+            autocomplete = (element.get_attribute("autocomplete") or "").lower()
+        except Exception:
+            continue
+        if maxlength == "1" and input_type in ("text", "tel", "number", ""):
+            boxes.append(element)
+        elif (
+            maxlength == "6"
+            or element_id in {"totp", "otp"}
+            or name in {"totp", "otp"}
+            or autocomplete == "one-time-code"
+        ) and input_type in ("text", "tel", "number", "password", ""):
+            singles.append(element)
+
     if len(boxes) >= 6:
-        for i, ch in enumerate(otp[:6]):
-            boxes[i].clear()
-            boxes[i].send_keys(ch)
+        return "boxes", boxes[:6]
+    if singles:
+        return "single", [singles[0]]
+    return "", []
+
+
+def _fill_totp(wait: WebDriverWait, otp: str) -> None:
+    if not re.fullmatch(r"\d{6}", str(otp or "")):
+        raise RuntimeError("TOTP must contain exactly six digits.")
+
+    driver = wait._driver
+
+    def located_fields(current):
+        result = _visible_totp_fields(current)
+        return result if result[1] else False
+
+    kind, fields = wait.until(located_fields)
+    if not fields:
+        raise TimeoutException("Could not locate TOTP input field(s).")
+
+    if kind == "single":
+        field = fields[0]
+        field.clear()
+        field.send_keys(otp[:5])
+        if (field.get_attribute("value") or "") != otp[:5]:
+            raise TimeoutException("TOTP input rejected the first five digits.")
+        # The final digit may auto-submit and immediately stale the element.
+        field.send_keys(otp[5])
         return
 
-    raise TimeoutException("Could not locate TOTP input field(s).")
+    for index, digit in enumerate(otp[:5]):
+        fields[index].clear()
+        fields[index].send_keys(digit)
+        if (fields[index].get_attribute("value") or "") != digit:
+            raise TimeoutException(f"TOTP box {index + 1} did not retain its digit.")
+    fields[5].clear()
+    fields[5].send_keys(otp[5])
+
+
+def _totp_form_state(driver: webdriver.Chrome) -> str:
+    """Return absent, empty, partial, filled, or unknown for the live TOTP UI."""
+    try:
+        kind, fields = _visible_totp_fields(driver)
+        if not fields:
+            return "absent"
+        values = [(field.get_attribute("value") or "") for field in fields]
+        digit_count = sum(len(value) for value in values)
+        if digit_count == 0:
+            return "empty"
+        if digit_count >= 6:
+            return "filled"
+        return "partial"
+    except Exception:
+        return "unknown"
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    )
+    try:
+        with temp_path.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _write_text(path: Path, value: str) -> None:
-    path.write_text(value.strip() + "\n", encoding="utf-8")
+    _atomic_write_text(path, value.strip() + "\n")
 
 
 def _read_first_line(path: Path) -> str:
@@ -413,7 +526,51 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict) -> None:
-    STATE_FILE.write_text(json.dumps(state, ensure_ascii=True, indent=2), encoding="utf-8")
+    _atomic_write_text(
+        STATE_FILE,
+        json.dumps(state, ensure_ascii=True, indent=2) + "\n",
+    )
+
+
+@contextmanager
+def _single_instance_lock() -> Iterator[bool]:
+    """Prevent Scheduler, dashboard, and autofix from running auth together."""
+    INSTANCE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    handle = INSTANCE_LOCK_FILE.open("a+b")
+    try:
+        if handle.seek(0, os.SEEK_END) == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        yield False
+        return
+
+    try:
+        yield True
+    finally:
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        handle.close()
 
 
 def _update_state(refresh_token: str, request_token: Optional[str] = None, slot: Optional[str] = None) -> None:
@@ -449,6 +606,46 @@ def _redact_url_for_log(url: str) -> str:
         return "unavailable"
 
 
+def _sanitize_login_diagnostic(text: str) -> str:
+    safe = re.sub(
+        r"(?i)\b(password|passwd|api_key|access_token|request_token|refresh_token)\s*[=:]\s*\S+",
+        lambda match: f"{match.group(1)}=<redacted>",
+        str(text or ""),
+    )
+    safe = re.sub(r"\b\d{6}\b", "<redacted-6d>", safe)
+    safe = re.sub(r"https?://\S+", "<redacted-url>", safe)
+    return re.sub(r"\s+", " ", safe).strip()[:500]
+
+
+def _visible_login_error(driver: webdriver.Chrome) -> str:
+    """Return a sanitized visible Kite error without logging the whole page."""
+    selectors = (
+        ".error",
+        ".errors",
+        ".alert",
+        ".message.error",
+        "[class*='error']",
+        "[role='alert']",
+    )
+    messages = []
+    for selector in selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements:
+            try:
+                if not element.is_displayed():
+                    continue
+                raw = element.text or element.get_attribute("innerText") or ""
+            except Exception:
+                continue
+            clean = _sanitize_login_diagnostic(raw)
+            if clean and clean not in messages:
+                messages.append(clean)
+    return " | ".join(messages[:3])
+
+
 def _wait_for_request_token_in_url(
     driver: webdriver.Chrome,
     timeout_seconds: float,
@@ -471,30 +668,43 @@ def _request_token_after_totp(
     wait: WebDriverWait,
     submit_btn_locators: Iterable[Tuple[str, str]],
 ) -> str:
-    # Kite's TOTP form can auto-submit.  Give that redirect a brief chance to
-    # complete before looking for a submit button that may already be gone.
+    # Kite's TOTP form normally auto-submits after digit six.  Give the
+    # redirect enough time to finish at the busy market-open boundary before
+    # considering one explicit click; a blind early click can double-submit.
     request_token = _wait_for_request_token_in_url(
         driver,
-        timeout_seconds=2.0,
+        timeout_seconds=AUTO_SUBMIT_GRACE_SEC,
         poll_seconds=0.1,
     )
     if request_token:
         return request_token
 
-    try:
-        _click_with_retry(driver, wait, submit_btn_locators, retries=3)
-    except Exception:
-        # Preserve the existing optional-click behavior: the redirect may
-        # still complete even when no explicit submit control is available.
-        pass
+    diagnostic = _visible_login_error(driver)
+    form_state = _totp_form_state(driver)
+    if diagnostic:
+        raise TimeoutException(f"request_token not found; Kite reported: {diagnostic}")
+    if form_state == "empty":
+        raise TimeoutException(
+            "request_token not found; Kite reset the TOTP field after submission"
+        )
+
+    # Some Kite variants retain all six digits and require Continue.  Click
+    # only in that unambiguous state; otherwise keep waiting for navigation.
+    if form_state in {"filled", "unknown"}:
+        try:
+            _click_with_retry(driver, wait, submit_btn_locators, retries=1)
+        except Exception:
+            pass
 
     request_token = _wait_for_request_token_in_url(
         driver,
-        timeout_seconds=45.0,
+        timeout_seconds=POST_SUBMIT_TIMEOUT_SEC,
         poll_seconds=0.5,
     )
     if not request_token:
-        raise TimeoutException("request_token not found in URL")
+        diagnostic = _visible_login_error(driver)
+        suffix = f"; Kite reported: {diagnostic}" if diagnostic else ""
+        raise TimeoutException(f"request_token not found in URL{suffix}")
     return request_token
 
 
@@ -528,6 +738,11 @@ def _do_browser_login_for_request_token(kite: KiteConnect, user_id: str, passwor
         ]
         submit_btn_locators = [
             (By.XPATH, "/html/body/div[1]/div/div[2]/div[1]/div[2]/div/div[2]/form/div[2]/button"),
+            (
+                By.XPATH,
+                "//form//button[@type='submit' and "
+                "(normalize-space()='Continue' or normalize-space()='Submit')]",
+            ),
             (By.CSS_SELECTOR, "button[type='submit']"),
             (By.XPATH, "//button[@type='submit']"),
         ]
@@ -542,9 +757,11 @@ def _do_browser_login_for_request_token(kite: KiteConnect, user_id: str, passwor
 
         return _request_token_after_totp(driver, wait, submit_btn_locators)
     except TimeoutException as exc:
+        diagnostic = _visible_login_error(driver)
+        suffix = f" Kite reported: {diagnostic}." if diagnostic else ""
         raise RuntimeError(
             "Login flow timed out before request_token was available. "
-            f"Last URL: {_redact_url_for_log(driver.current_url)}"
+            f"Last URL: {_redact_url_for_log(driver.current_url)}.{suffix}"
         ) from exc
     finally:
         driver.quit()
@@ -622,11 +839,9 @@ def _seed_additional_session_for_today(primary_parts: list[str], force_login: bo
     try:
         parts2 = _read_secondary_key_secret_with_fallback(primary_parts, app_idx)
     except Exception as e:
-        print(f"[WARN] [{tag}] Invalid api_key{app_idx} configuration: {e}. Skipping app{app_idx}.", flush=True)
-        return
+        raise RuntimeError(f"Invalid api_key{app_idx} configuration: {e}") from e
     if not parts2:
-        print(f"[{tag}] api_key{app_idx}.txt not found; skipping app{app_idx} token generation.", flush=True)
-        return
+        raise RuntimeError(f"api_key{app_idx}.txt not found")
 
     api_key_n, api_secret_n, user_id_n, password_n, totp_secret_n = parts2[:5]
     kite_n = KiteConnect(api_key=api_key_n)
@@ -808,7 +1023,19 @@ def main() -> None:
 
     if primary_error is not None:
         raise primary_error
+    if failed_apps:
+        detail = ", ".join(f"app{i}" for i in failed_apps)
+        raise RuntimeError(f"Authentication incomplete; unavailable apps: {detail}")
 
 
 if __name__ == "__main__":
-    main()
+    with _single_instance_lock() as acquired:
+        if not acquired:
+            print(
+                "[AUTH] Another authentication_v2 instance is already running; "
+                "duplicate invocation skipped.",
+                flush=True,
+            )
+            raise SystemExit(75)
+        else:
+            main()

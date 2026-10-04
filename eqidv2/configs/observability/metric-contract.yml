@@ -1,0 +1,195 @@
+schema_version: eqidv2.observability.metrics.v1
+prefix: trading_
+label_policy:
+  allowed_bounded_labels:
+    - service
+    - strategy
+    - mode
+    - stage
+    - source
+    - timeframe
+    - operation
+    - outcome
+    - event
+    - side
+    - setup
+    - slot
+    - reason_class
+    - status_code
+    - route
+    - critical
+    - kind
+    - asset
+    - pipeline
+    - profile
+    - replay_kind
+    - mismatch_type
+    - component
+    - method
+    - status_class
+    - anomaly_type
+    - feature
+    - volume
+    - reason
+    - job
+    - level
+  prohibited_labels:
+    - symbol
+    - tradingsymbol
+    - signal_id
+    - order_id
+    - broker_order_id
+    - run_id
+    - trace_id
+    - span_id
+  cardinal_identifiers_belong_in: [structured_logs, traces, immutable_evidence]
+
+required_metrics:
+  - {name: trading_market_open, type: gauge, unit: boolean, stage: OBS-9}
+  - {name: trading_maintenance_window, type: gauge, unit: boolean, stage: OBS-9}
+  - {name: trading_heartbeat_age_seconds, type: gauge, unit: seconds, stage: OBS-7}
+  - {name: trading_pipeline_schedule_overdue, type: gauge, unit: boolean, stage: OBS-7}
+  - {name: trading_data_age_seconds, type: gauge, unit: seconds, stage: OBS-4}
+  - {name: trading_data_coverage_ratio, type: gauge, unit: ratio, stage: OBS-4}
+  - {name: trading_data_slot_incomplete, type: gauge, unit: boolean, stage: OBS-4}
+  - {name: trading_raw_data_anomaly_total, type: counter, unit: anomalies, stage: OBS-4}
+  - {name: trading_slot_deadline_lag_seconds, type: histogram, unit: seconds, stage: OBS-7}
+  - {name: trading_stage_duration_seconds, type: histogram, unit: seconds, stage: OBS-7}
+  - {name: trading_signal_events_total, type: counter, unit: events, stage: OBS-7}
+  - {name: trading_order_events_total, type: counter, unit: events, stage: OBS-7}
+  - {name: trading_broker_requests_total, type: counter, unit: requests, stage: OBS-7}
+  - {name: trading_broker_request_duration_seconds, type: histogram, unit: seconds, stage: OBS-7}
+  - {name: trading_unprotected_position_seconds, type: gauge, unit: seconds, stage: OBS-7}
+  - {name: trading_position_reconciliation_mismatch, type: gauge, unit: mismatches, stage: OBS-7}
+  - {name: trading_active_order_reconciliation_mismatch, type: gauge, unit: mismatches, stage: OBS-7}
+  - {name: trading_duplicate_order_total, type: counter, unit: orders, stage: OBS-7}
+  - {name: trading_strategy_fingerprint_mismatch, type: gauge, unit: boolean, stage: OBS-1}
+  - {name: trading_process_restarts_total, type: counter, unit: restarts, stage: OBS-3}
+  - {name: trading_clock_offset_seconds, type: gauge, unit: seconds, stage: OBS-7}
+  - {name: trading_replay_due, type: gauge, unit: boolean, stage: OBS-8}
+  - {name: trading_replay_success_timestamp_seconds, type: gauge, unit: unix_seconds, stage: OBS-8}
+  - {name: trading_live_eod_mismatch_total, type: counter, unit: mismatches, stage: OBS-8}
+  - {name: trading_feature_parity_mismatch_total, type: counter, unit: mismatches, stage: OBS-6}
+  - {name: trading_telemetry_dropped_total, type: counter, unit: items, stage: OBS-2}
+  - {name: trading_disk_free_bytes, type: gauge, unit: bytes, stage: OBS-12}
+  - {name: trading_http_requests_total, type: counter, unit: requests, stage: OBS-7}
+  - {name: trading_http_request_duration_seconds, type: histogram, unit: seconds, stage: OBS-7}
+
+implementation_status:
+  catalog_registered:
+    scope: all required_metrics above
+    meaning: HELP/TYPE metadata and bounded label schemas exist in register_standard_metrics
+
+  runtime_collector:
+    description: Read-only projection from existing status, heartbeat, replay, reconciliation, calendar and filesystem evidence.
+    metrics:
+      - trading_market_open
+      - trading_maintenance_window
+      - trading_heartbeat_age_seconds
+      - trading_pipeline_schedule_overdue
+      - trading_data_age_seconds
+      - trading_data_coverage_ratio
+      - trading_data_slot_incomplete
+      - trading_unprotected_position_seconds
+      - trading_position_reconciliation_mismatch
+      - trading_active_order_reconciliation_mismatch
+      - trading_strategy_fingerprint_mismatch
+      - trading_process_restarts_total
+      - trading_clock_offset_seconds
+      - trading_replay_due
+      - trading_replay_success_timestamp_seconds
+      - trading_live_eod_mismatch_total
+      - trading_feature_parity_mismatch_total
+      - trading_disk_free_bytes
+
+  textfile_projection:
+    description: Fresh per-process Prometheus snapshots accepted only through exact metric and label schemas.
+    limits:
+      series_per_metric: 1000
+      series_total: 4096
+    merge_semantics:
+      - Each fresh PID textfile is one independent cumulative producer snapshot; duplicate labelsets inside one file are ignored.
+      - Counters and histogram bucket/count/sum parts are added across distinct fresh process snapshots and the API registry per scrape.
+      - Gauges use metric-specific newest or conservative merge semantics.
+      - Snapshots older than the configured maximum age disappear.
+      - Producer and API restarts can reset the aggregate; Prometheus range queries must account for counter resets.
+      - Durable journals and immutable evidence, not textfiles, are the audit authority.
+
+  live_runtime:
+    activation: EQIDV2_OBSERVABILITY_ENABLED=1 or a supervised EQIDV2_OBS_RUN_ID
+    metrics:
+      - trading_heartbeat_age_seconds
+      - trading_raw_data_anomaly_total
+      - trading_slot_deadline_lag_seconds
+      - trading_stage_duration_seconds
+      - trading_signal_events_total
+      - trading_order_events_total
+      - trading_broker_requests_total
+      - trading_broker_request_duration_seconds
+      - trading_duplicate_order_total
+      - trading_telemetry_dropped_total
+
+  live_broker_reconciliation:
+    producer: Dedicated read-only LIVE child publishes explicit broker truth for NSE MIS strategy-attributed positions and all active strategy-tagged orders.
+    collector_metrics:
+      - trading_position_reconciliation_mismatch
+      - trading_active_order_reconciliation_mismatch
+    integrity: The producer adds canonical report_sha256 and the collector rejects missing or mismatched digests.
+    healthy_zero_requires:
+      - broker_truth_available is true
+      - scope_complete is true
+      - active_order_parity_complete is true
+      - active_order_mismatch_count is zero
+    nonzero_semantics: A scoped mismatch remains actionable and is exported even if unrelated broker positions make scope incomplete.
+    active_order_semantics: Every non-terminal tagged broker order must match the locally expected active order ID, tag, symbol, transaction side, order type, quantity, exchange, and product. Unknown broker statuses, missing local protective/square-off IDs, unexpected active tagged orders, and expected active orders absent at the broker are mismatches.
+    absence_semantics: Broker error, missing evidence, a position-incomplete zero, or an active-order-incomplete zero produces no samples.
+    freshness: The report must declare today's IST session and a semantic observation timestamp no more than 120 seconds old; missing, stale, and future timestamps are rejected.
+    absence_alert: TradingBrokerReconciliationMissing fires during market hours when a live heartbeat exists but fresh reconciliation evidence is absent.
+
+  live_pipeline_schedule:
+    collector_metric: trading_pipeline_schedule_overdue
+    pipeline: v13_v10_g_scanner
+    frozen_slots_ist: ["09:25", "09:30", "09:35", "09:40", "09:45", "09:50", "09:55", "10:00", "11:20"]
+    completion_grace_seconds: 180
+    semantics: Zero means the latest due slot is complete or still inside grace; one means current-session completion proof is missing after grace, including when the scanner heartbeat itself is absent.
+    alert: TradingPipelineScheduleOverdue fires only during market hours and outside declared maintenance.
+
+  live_fingerprint_comparison:
+    collector_metric: trading_strategy_fingerprint_mismatch
+    producer_evidence: Current-day nonterminal LIVE status or heartbeat plus the approved profile and strategy manifest.
+    freshness: Active semantic evidence must be no more than 120 seconds old; missing, stale, future, failed, and blocked evidence produces no sample.
+    absence_alert: TradingStrategyFingerprintEvidenceMissing fires during market hours when a live heartbeat exists but fresh comparison evidence is absent.
+
+  replay_runtime:
+    activation: EQIDV2_OBSERVABILITY_ENABLED=1 or EQIDV2_OBS_RUN_ID
+    metrics:
+      - trading_replay_due
+      - trading_replay_success_timestamp_seconds
+      - trading_telemetry_dropped_total
+
+  api_runtime:
+    metrics:
+      - trading_http_requests_total
+      - trading_http_request_duration_seconds
+      - trading_telemetry_dropped_total
+
+  alloy_log_pipeline:
+    description: Redacted counters derived from bounded supervisor-managed plaintext streams; counters reset when Alloy reloads.
+    metrics:
+      - trading_broker_authentication_failures_total
+      - trading_alert_delivery_authentication_failures_total
+    bounded_labels: [job, service, level, event]
+
+  conditional_upstream_seed:
+    trading_clock_offset_seconds: The collector projects an explicit clock_offset_seconds or NTP-offset field, but the checked-in supervisor does not itself measure host clock offset.
+
+absence_semantics:
+  - A registered metric can have HELP/TYPE metadata without a sample until its first observation.
+  - trading_position_reconciliation_mismatch is deliberately absent without explicit broker-truth evidence satisfying the rules above; absence is not zero.
+  - trading_active_order_reconciliation_mismatch is deliberately absent without explicit broker-truth evidence satisfying the rules above; absence is not zero.
+  - trading_strategy_fingerprint_mismatch is deliberately absent without fresh current-session active evidence; absence is not zero and is alertable during live market operation.
+  - reconciliation and feature-parity counters appear only after a digest-verified reconciliation report is published; they are process-local nondecreasing projections deduplicated by verified report digest, not bounded-window counts, and are reconstructed from the newest 400 retained reports on API restart.
+  - data freshness and coverage series appear only when a supported source marker exists.
+  - trading_clock_offset_seconds is absent until a trusted upstream status source supplies an explicit offset; absence does not prove clock synchronization.
+  - live anomaly, signal, order, broker and duplicate counters appear only after an event; histogram series appear only after an observation.
+  - zero-valued healthy counters are not synthesized when no authoritative observation has occurred.

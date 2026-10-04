@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import tempfile
 import threading
 import time
@@ -21,6 +22,111 @@ SESSION = "backtesting_result_v13_v10_g"
 TITLE = "Backtesting result v13-v10-G"
 STRATEGY = "V13-V10-G"
 DEFAULT_OUTPUT_ROOT = runtime_dir(SESSION)
+_OBSERVABILITY_RUNTIME: Any | None = None
+_OBSERVABILITY_INITIALIZED = False
+
+
+def _observability_runtime() -> Any | None:
+    global _OBSERVABILITY_RUNTIME, _OBSERVABILITY_INITIALIZED
+    configured = os.getenv("EQIDV2_OBSERVABILITY_ENABLED", "").strip().lower()
+    enabled = (
+        configured in {"1", "true", "yes", "on"}
+        if configured
+        else bool(os.getenv("EQIDV2_OBS_RUN_ID", "").strip())
+    )
+    if not enabled or _OBSERVABILITY_INITIALIZED:
+        return _OBSERVABILITY_RUNTIME
+    _OBSERVABILITY_INITIALIZED = True
+    try:
+        from ai_platform.observability.runtime import create_observability
+
+        root = runtime_dir("observability")
+        _OBSERVABILITY_RUNTIME = create_observability(
+            "v13-v10-g-daily-replay",
+            log_path=root / "logs" / "v13-v10-g-daily-replay.jsonl",
+            journal_path=root / "journals" / "v13-v10-g-daily-replay-events.jsonl",
+        )
+    except Exception:
+        _OBSERVABILITY_RUNTIME = None
+    return _OBSERVABILITY_RUNTIME
+
+
+def _flush_observability_metrics(runtime: Any | None = None) -> None:
+    observed = runtime or _observability_runtime()
+    if observed is None:
+        return
+    try:
+        path = runtime_dir("observability", "metrics") / f"{SESSION}_{os.getpid()}.prom"
+        common.atomic_write_text(path, observed.metrics.render_prometheus())
+    except Exception:
+        try:
+            observed.standard_metrics.telemetry_dropped_total.inc(
+                component="textfile", reason="write_failure"
+            )
+        except Exception:
+            pass
+
+
+def _observed_call(
+    runtime: Any | None,
+    span_name: str,
+    day: date,
+    operation: Any,
+) -> Any:
+    """Run one authoritative operation exactly once despite telemetry faults."""
+
+    if runtime is None:
+        return operation()
+    started = False
+    completed = False
+    value: Any = None
+    business_error: Exception | None = None
+    business_traceback = None
+    try:
+        with runtime.bind(
+            profile="V13_V10_G",
+            strategy_version=config.STRATEGY_VERSION,
+            strategy_fingerprint=config.strategy_fingerprint(),
+            mode="replay",
+            session_date=day.isoformat(),
+            run_id=common.PROCESS_RUN_ID,
+            replay_id=common.PROCESS_RUN_ID,
+        ):
+            with runtime.span(
+                span_name,
+                attributes={"session_date": day.isoformat(), "strategy": STRATEGY},
+            ):
+                started = True
+                try:
+                    value = operation()
+                except Exception as exc:
+                    business_error = exc
+                    business_traceback = exc.__traceback__
+                    raise
+                else:
+                    completed = True
+    except Exception as telemetry_or_business_error:
+        if business_error is not None:
+            raise business_error.with_traceback(business_traceback)
+        try:
+            runtime.standard_metrics.telemetry_dropped_total.inc(
+                component="daily_replay_span",
+                reason=type(telemetry_or_business_error).__name__,
+            )
+        except Exception:
+            pass
+        if completed:
+            # An __exit__ failure happened after authoritative work completed.
+            return value
+        if not started:
+            # Instrumentation failed before entering the business operation.
+            return operation()
+        raise
+    if business_error is not None:
+        # Preserve a business exception even if a defective telemetry context
+        # manager incorrectly suppresses it from the with statement.
+        raise business_error.with_traceback(business_traceback)
+    return value
 
 
 @contextmanager
@@ -47,6 +153,7 @@ def _running_heartbeat(day: date, interval: float = 30.):
 
 def _publish(day: date, root: Path, state: str, reason: str = "", result: dict | None = None) -> dict:
     payload = dict(session=SESSION, session_date=day.isoformat(), strategy=STRATEGY,
+                   run_id=common.PROCESS_RUN_ID, replay_id=common.PROCESS_RUN_ID,
                    strategy_version=config.STRATEGY_VERSION, strategy_fingerprint=config.strategy_fingerprint(),
                    status=state, phase=state, updated_at_ist=common.now_ist().isoformat(), reason=reason)
     if result is not None:
@@ -74,6 +181,43 @@ def _publish(day: date, root: Path, state: str, reason: str = "", result: dict |
         report += "\n" + "\n".join(f"- {name}: `{path}`" for name, path in result.get("artifacts", {}).items()) + "\n"
     common.atomic_write_text(root / "latest" / "latest_backtesting_result_v13_v10_g.md", report)
     common.atomic_write_text(root / "reports" / day.isoformat() / "backtesting_result_v13_v10_g.md", report)
+    try:
+        runtime = _observability_runtime()
+        if runtime is not None:
+            with runtime.bind(
+                profile="V13_V10_G",
+                strategy_version=config.STRATEGY_VERSION,
+                strategy_fingerprint=config.strategy_fingerprint(),
+                mode="replay",
+                session_date=day.isoformat(),
+                run_id=common.PROCESS_RUN_ID,
+                replay_id=common.PROCESS_RUN_ID,
+            ):
+                runtime.event(
+                    "replay.status",
+                    severity=(
+                        "ERROR"
+                        if state.startswith(("BLOCKED", "FAILED"))
+                        else "INFO"
+                    ),
+                    state=state,
+                    reason=reason,
+                    metrics=(result or {}).get("metrics") or {},
+                )
+                runtime.standard_metrics.replay_due.set(
+                    0 if state == "SUCCESS" else 1,
+                    profile="v13-v10-g",
+                    replay_kind="finalized",
+                )
+                if state == "SUCCESS":
+                    runtime.standard_metrics.replay_success_timestamp_seconds.set(
+                        time.time(),
+                        profile="v13-v10-g",
+                        replay_kind="finalized",
+                    )
+            _flush_observability_metrics(runtime)
+    except Exception:
+        pass
     print(f"[{SESSION}] {day} {state}: {reason}", flush=True)
     return payload
 
@@ -202,15 +346,26 @@ def run(args: argparse.Namespace) -> int:
         _publish(day, root, "WAITING_FOR_SESSION_CLOSE", "A complete daily backtest requires the session to close.")
         return 2
     try:
+        observability = _observability_runtime()
         config.validate_strategy()
         config.attest_selected_backtest()
         if args.wait_for_data and day == now.date() and not wait_for_data(day, args):
             return 2
         _publish(day, root, "RUNNING", "Verifying this session's FnO data before the G-only replay.")
         with _running_heartbeat(day):
-            proof = verify_data(day, root)
+            proof = _observed_call(
+                observability,
+                "replay.verify_data",
+                day,
+                lambda: verify_data(day, root),
+            )
             output = root / "runs" / day.isoformat() / common.now_ist().strftime("%Y%m%dT%H%M%S%f")
-            result = run_replay(day, output)
+            result = _observed_call(
+                observability,
+                "replay.execute",
+                day,
+                lambda: run_replay(day, output),
+            )
         validate_result(result, day)
         result["data_verification"] = dict(date=proof["date"], scope=proof["scope"], status=proof["overall_status"])
         if result.get("state") != "SUCCESS":

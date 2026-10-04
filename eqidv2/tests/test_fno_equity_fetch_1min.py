@@ -739,6 +739,39 @@ class DurableEquityOneMinuteFeedTests(unittest.TestCase):
         build_runtimes.assert_not_called()
         produce.assert_not_called()
 
+    def test_missing_upstream_scanner_is_blocked_at_deadline(self) -> None:
+        args = SimpleNamespace(
+            generation="v5",
+            session_date=SESSION.isoformat(),
+            allow_non_trading_day=True,
+            slot=SIGNAL_END,
+            once=False,
+            boundary_buffer_sec=3.0,
+            timeout_sec=1.0,
+            poll_sec=0.1,
+        )
+        at_deadline = config.slot_datetime(SESSION, "12:00")
+        with (
+            patch.object(common, "now_ist", return_value=at_deadline),
+            patch.object(feed, "_load_scanner", return_value={}),
+            patch.object(feed, "_render_report", return_value="report\n"),
+            patch.object(common, "publish_status") as publish_status,
+            patch.object(common, "publish_heartbeat"),
+            patch.object(common, "atomic_write_text") as write_report,
+        ):
+            result = feed.run(args)
+
+        self.assertEqual(result, 2)
+        self.assertEqual(publish_status.call_args.args[1], "BLOCKED")
+        self.assertEqual(
+            publish_status.call_args.kwargs["phase"],
+            "UPSTREAM_SCANNER_MISSING_BY_DEADLINE",
+        )
+        self.assertEqual(
+            publish_status.call_args.kwargs["missing_scanner_slots"], [SIGNAL_END]
+        )
+        self.assertIn("Pipeline state: BLOCKED", write_report.call_args.args[1])
+
     def test_v6_rejects_completed_boundary_buffer_drift_before_io(self) -> None:
         args = SimpleNamespace(generation="v6", boundary_buffer_sec=2.0)
         with (
@@ -860,6 +893,23 @@ class DurableEquityOneMinuteFeedTests(unittest.TestCase):
                 for call in publish_status.call_args_list
             )
         )
+
+    def test_observation_timestamp_parse_failure_does_not_block_marker(self) -> None:
+        marker = {
+            "published_at_ist": "not-an-iso-timestamp",
+            "session_date": SESSION.isoformat(),
+            "slot_ist": SIGNAL_END,
+            "signal_end": SIGNAL_END,
+        }
+        with tempfile.TemporaryDirectory() as raw_temp:
+            path = Path(raw_temp) / "confirmation.json"
+            with patch.object(common, "append_observation") as append_observation:
+                observed = feed._publish_final_marker_once(path, marker)
+
+            self.assertEqual(observed, marker)
+            self.assertTrue(path.is_file())
+            append_observation.assert_called_once()
+            self.assertIsNone(append_observation.call_args.kwargs["observed_at"])
 
 
 if __name__ == "__main__":

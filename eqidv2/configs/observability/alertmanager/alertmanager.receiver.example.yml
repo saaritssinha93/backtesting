@@ -1,0 +1,18 @@
+# Merge one of these configs into alertmanager.yml and restart Alertmanager.
+# Keep credentials in a runtime-only file or protected environment. This file
+# intentionally contains no working destination or secret.
+receivers:
+  - name: operations-webhook
+    webhook_configs:
+      - url: https://REPLACE_WITH_PRIVATE_ALERT_ENDPOINT.example/alerts
+        send_resolved: true
+
+  - name: operations-email
+    email_configs:
+      - to: REPLACE@example.com
+        from: REPLACE@example.com
+        smarthost: smtp.example.com:587
+        auth_username: REPLACE@example.com
+        auth_password_file: /run/secrets/smtp_password
+        send_resolved: true
+

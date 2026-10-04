@@ -4,6 +4,7 @@ $baseDir = "C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtest
 $runner = Join-Path $baseDir "bat\run_fno_v13_v10_g_live_kite_qty1.bat"
 $sessionScript = Join-Path $baseDir "fno_v13_v10_g_live_kite_session.py"
 $hardener = Join-Path $baseDir "bat\harden_scheduled_task.ps1"
+$supervisor = Join-Path $baseDir "bat\supervise_command.ps1"
 $taskLeaf = "EQIDV2_fno_v13_v10_g_live_kite_qty1_0915"
 $taskName = "\$taskLeaf"
 $sessionId = "fno_v13_v10_g_live_kite_qty1"
@@ -35,14 +36,24 @@ if (-not (Test-Path -LiteralPath $sessionScript -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $hardener -PathType Leaf)) {
     throw "Missing scheduled-task hardener: $hardener"
 }
+if (-not (Test-Path -LiteralPath $supervisor -PathType Leaf)) {
+    throw "Missing scheduled-task supervisor: $supervisor"
+}
 
 $runnerSource = Get-Content -LiteralPath $runner -Raw
 if ($runnerSource -notmatch 'SESSION_ID=fno_v13_v10_g_live_kite_qty1' -or
     $runnerSource -notmatch 'FNO_V6_EXECUTION_MODE=LIVE' -or
     $runnerSource -notmatch 'FNO_V6_LIVE_ACK=I_UNDERSTAND_REAL_FNO_V6_EQUITY_ORDERS' -or
+    $runnerSource -notmatch 'EQIDV2_OBSERVABILITY_ENABLED=1' -or
+    $runnerSource -notmatch 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127\.0\.0\.1:4318/v1/traces' -or
+    $runnerSource -notmatch 'OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf' -or
     $runnerSource -notmatch 'fno_v13_v10_g_live_kite_session\.py' -or
     $runnerSource -notmatch 'supervise_command\.ps1') {
     throw "Runner does not match the frozen FnO V13-V10-G LIVE quantity-one session contract."
+}
+$supervisorSource = Get-Content -LiteralPath $supervisor -Raw
+if ($supervisorSource -notmatch '\$env:EQIDV2_OBS_RUN_ID\s*=\s*\$script:CurrentRunId') {
+    throw "Supervisor does not propagate a per-run observability correlation ID."
 }
 if ($runnerSource -match '(?i)live_arm|kill_switch') {
     throw "Runner must not create or alter live-arm or kill-switch state."
@@ -119,4 +130,3 @@ if ([string]::Equals(
 
 Write-Output "[SUCCESS] Scheduled $taskName ($sessionId) for Monday-Friday at $startTime."
 Write-Output "[INFO] The installer did not request a task run or touch live-arm/kill-switch state."
-

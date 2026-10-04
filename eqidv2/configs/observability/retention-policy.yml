@@ -1,0 +1,33 @@
+schema_version: eqidv2.observability.retention.v1
+policy_owner: trading-operations
+tiers:
+  prometheus_metrics:
+    retention: 90d
+    size_cap: 20GB
+    implementation: Docker Compose command flags
+  loki_structured_logs:
+    retention: 90d
+    implementation: Loki compactor
+  tempo_traces:
+    retention: 30d
+    implementation: Tempo compactor
+  alert_state:
+    retention: 120h
+    implementation: Alertmanager flag
+  local_telemetry_files:
+    retention: 90d
+    implementation: bat/observability/Invoke-LogRetention.ps1
+    allowed_root: ${EQIDV2_RUNTIME_ROOT:-C:/TradingData/eqidv2}/observability/logs
+  immutable_trading_evidence:
+    retention: preserve
+    automatic_deletion: forbidden
+  raw_point_in_time_snapshots:
+    retention: preserve
+    automatic_deletion: forbidden
+  experiment_specs_results_decisions:
+    retention: preserve
+    automatic_deletion: forbidden
+disk_controls:
+  warn_free_bytes: 10737418240
+  cleanup_requires_dry_run_review: true
+  evidence_deleted_before_telemetry: false

@@ -13,6 +13,7 @@ file, kill switch, and the signal activation deadline enforced by
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import re
@@ -35,6 +36,9 @@ config = config_for_generation("v6")
 SCRIPT_DIR = Path(__file__).resolve().parent
 SESSION_ID = (
     "fno_v13_v10_g_live_kite_qty1" if is_g_config(config) else "fno_v6_live_kite_qty1"
+)
+RUN_ID = os.getenv("EQIDV2_OBS_RUN_ID", "").strip() or (
+    f"{SESSION_ID}_{common.now_ist().strftime('%Y%m%dT%H%M%S')}_{os.getpid()}"
 )
 EXECUTION_PROFILE = "live_kite_qty1"
 EXECUTION_MODE = "LIVE"
@@ -519,6 +523,7 @@ def export_snapshot(
     payload: dict[str, Any] = {
         "schema_version": "fno_v6_live_kite_qty1_status_v1",
         "session_id": SESSION_ID,
+        "run_id": RUN_ID,
         "session_date": session_date.isoformat(),
         "strategy_version": config.STRATEGY_VERSION,
         "strategy_fingerprint": config.strategy_fingerprint(),
@@ -543,6 +548,7 @@ def export_snapshot(
         {
             "schema_version": "fno_v6_live_kite_qty1_heartbeat_v1",
             "session_id": SESSION_ID,
+            "run_id": RUN_ID,
             "session_date": session_date.isoformat(),
             "strategy_version": config.STRATEGY_VERSION,
             "strategy_fingerprint": config.strategy_fingerprint(),
@@ -579,6 +585,15 @@ def worker_environment() -> dict[str, str]:
     env["FNO_LIVE_GENERATION"] = "v6"
     env["FNO_V6_EXECUTION_MODE"] = EXECUTION_MODE
     env["FNO_V6_EXECUTION_SESSION_NAMESPACE"] = EXECUTION_PROFILE
+    # Propagate one correlation identity through the coordinator and all three
+    # children even when an operator invokes the coordinator directly rather
+    # than through the scheduled-task supervisor.  Telemetry remains fail-open
+    # inside the workers and cannot gate broker position management.
+    env["EQIDV2_OBSERVABILITY_ENABLED"] = "1"
+    env["EQIDV2_OBS_RUN_ID"] = RUN_ID
+    # Preserve explicitly inherited OpenTelemetry settings verbatim. Direct
+    # coordinator starts without exporter settings remain local-only instead of
+    # assuming that a loopback collector is available.
     # Pin the same profile for both child workers even if the parent environment
     # was changed after its configuration was loaded.
     if _is_g_profile():
@@ -590,7 +605,75 @@ def worker_environment() -> dict[str, str]:
 
 def worker_session_id(side: str) -> str:
     prefix = "fno_v13_v10_g" if _is_g_profile() else "fno_v6"
+    if side.upper() == "BROKER_RECONCILIATION":
+        return f"{prefix}_{EXECUTION_PROFILE}_broker_reconciliation"
     return f"{prefix}_{EXECUTION_PROFILE}_{side.lower()}"
+
+
+def broker_reconciliation_command(session_date: date) -> list[str]:
+    """Build the dedicated read-only broker reconciliation child command."""
+
+    script = "fno_v13_v10_g_live.py" if _is_g_profile() else "fno_v6_live.py"
+    return [
+        sys.executable,
+        "-u",
+        str(SCRIPT_DIR / script),
+        "--role",
+        "broker-reconciliation",
+        "--session-date",
+        session_date.isoformat(),
+        "--execution-mode",
+        EXECUTION_MODE,
+    ]
+
+
+def _child_process_status(role: str, process: Any) -> dict[str, Any]:
+    """Return process and same-run semantic status without blocking workers."""
+
+    session_id = worker_session_id(role)
+    info: dict[str, Any] = {
+        "session_id": session_id,
+        "pid": process.pid,
+        "return_code": process.poll(),
+    }
+    try:
+        values: dict[str, str] = {}
+        path = common.session_status_path(session_id)
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip().lstrip("\ufeff")] = value.strip()
+        # A stale status from a prior coordinator must never taint this run.
+        if values.get("run_id") != RUN_ID:
+            return info
+        if values.get("status"):
+            info["state"] = values["status"].upper()
+        if values.get("ts"):
+            info["updated_at_ist"] = values["ts"]
+        if role.upper() == "BROKER_RECONCILIATION":
+            raw = values.get("broker_position_reconciliation", "")
+            reconciliation = json.loads(raw) if raw else {}
+            if isinstance(reconciliation, dict):
+                info["broker_truth_available"] = (
+                    reconciliation.get("broker_truth_available") is True
+                )
+                info["scope_complete"] = reconciliation.get("scope_complete") is True
+                if "mismatch_count" in reconciliation:
+                    info["mismatch_count"] = int(reconciliation["mismatch_count"])
+                info["active_order_parity_complete"] = (
+                    reconciliation.get("active_order_parity_complete") is True
+                )
+                if "active_order_mismatch_count" in reconciliation:
+                    info["active_order_mismatch_count"] = int(
+                        reconciliation["active_order_mismatch_count"]
+                    )
+                if reconciliation.get("error_type"):
+                    info["error_type"] = str(reconciliation["error_type"])
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        # Child status is diagnostic. Process supervision remains authoritative.
+        pass
+    return info
 
 
 def _publish_export_failure(
@@ -601,6 +684,7 @@ def _publish_export_failure(
     payload = {
         "schema_version": "fno_v6_live_kite_qty1_status_v1",
         "session_id": SESSION_ID,
+        "run_id": RUN_ID,
         "session_date": session_date.isoformat(),
         "strategy_version": config.STRATEGY_VERSION,
         "strategy_fingerprint": config.strategy_fingerprint(),
@@ -701,20 +785,32 @@ def run(args: argparse.Namespace) -> int:
                 f"profile={EXECUTION_PROFILE} quantity={EXECUTION_QUANTITY}"
             )
 
+        reconciliation_role = "BROKER_RECONCILIATION"
+        children[reconciliation_role] = subprocess.Popen(
+            broker_reconciliation_command(session_date),
+            cwd=SCRIPT_DIR,
+            env=env,
+        )
+        print(
+            f"[{SESSION_ID}] started read-only broker reconciliation "
+            f"pid={children[reconciliation_role].pid}"
+        )
+
         last_log = 0.0
         while True:
             child_status = {
-                side.lower(): {
-                    "session_id": worker_session_id(side),
-                    "pid": process.pid,
-                    "return_code": process.poll(),
-                }
+                side.lower(): _child_process_status(side, process)
                 for side, process in children.items()
             }
             failures = {
-                side: info["return_code"]
+                side: (
+                    info["return_code"]
+                    if info["return_code"] not in (None, 0)
+                    else info.get("state")
+                )
                 for side, info in child_status.items()
                 if info["return_code"] not in (None, 0)
+                or info.get("state") in {"BLOCKED", "CRASHED", "DEGRADED", "FAILED"}
             }
             try:
                 payload = export_snapshot(
@@ -757,11 +853,7 @@ def run(args: argparse.Namespace) -> int:
                 session_date,
                 state=final_state,
                 child_status={
-                    side.lower(): {
-                        "session_id": worker_session_id(side),
-                        "pid": process.pid,
-                        "return_code": process.poll(),
-                    }
+                    side.lower(): _child_process_status(side, process)
                     for side, process in children.items()
                 },
             )
@@ -802,6 +894,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "schema_version": "fno_v6_live_kite_qty1_status_v1",
                 "session_id": SESSION_ID,
+                "run_id": RUN_ID,
                 "state": "FAILED",
                 "execution_mode": EXECUTION_MODE,
                 "execution_profile": EXECUTION_PROFILE,

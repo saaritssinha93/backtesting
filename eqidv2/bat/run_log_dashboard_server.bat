@@ -18,16 +18,17 @@ set /a RESTART_COUNT=0
 if "%LOG_DASH_REQUIRE_BASIC%"=="" set "LOG_DASH_REQUIRE_BASIC=1"
 
 rem Resolve credentials. Override any of these by setting the env var before starting.
+rem They are inherited by Python; never put secrets in process command-line args.
 if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
 rem Default dedicated dashboard password. Change this after first login.
 if "%LOG_DASH_PASS%"=="" set "LOG_DASH_PASS=algoeqidv2"
 rem Derive token from dedicated dashboard password when not explicitly provided.
 if "%LOG_DASH_TOKEN%"=="" set "LOG_DASH_TOKEN=%LOG_DASH_PASS%"
 
-set "AUTH_ARGS=--api-token \"%LOG_DASH_TOKEN%\""
-if "%LOG_DASH_REQUIRE_BASIC%"=="1" (
-  set "AUTH_ARGS=--username \"%LOG_DASH_USER%\" --password \"%LOG_DASH_PASS%\" --api-token \"%LOG_DASH_TOKEN%\""
-)
+rem In token-only mode, clear the inherited Basic-auth pair after deriving the
+rem token. argparse reads the remaining LOG_DASH_* values directly.
+if not "%LOG_DASH_REQUIRE_BASIC%"=="1" set "LOG_DASH_USER="
+if not "%LOG_DASH_REQUIRE_BASIC%"=="1" set "LOG_DASH_PASS="
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
@@ -50,7 +51,7 @@ if "%LOG_DASH_REQUIRE_BASIC%"=="1" (
 )
 
 :RUN_LOOP
-"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --host "%HOST%" --port %PORT% !AUTH_ARGS! >>"%RUN_LOG%" 2>&1
+"%PYTHON_EXE%" -u "%BASE_DIR%\%SCRIPT_NAME%" --host "%HOST%" --port %PORT% >>"%RUN_LOG%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo [%DATE% %TIME%] END %SCRIPT_NAME% ^(exit=%EXIT_CODE%^)

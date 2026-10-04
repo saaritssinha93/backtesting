@@ -1,0 +1,68 @@
+schema_version: eqidv2.observability.slo.v1
+timezone: Asia/Kolkata
+calendar_source: exchange_calendar
+measurement_policy:
+  live_slos_apply_only_when: trading_market_open == 1
+  maintenance_is_excluded_when: trading_maintenance_window == 1
+  missing_telemetry_is_not_success: true
+
+objectives:
+  - id: live_heartbeat_freshness
+    stage: OBS-9
+    objective: 0.999
+    window: 30d
+    sli: trading:slo:heartbeat_fresh:ratio_5m
+    target: heartbeat age <= 420 seconds for 5m/5min slot services and <= 120 seconds for continuous or 1-minute services during an open market
+    severity_on_breach: P1
+
+  - id: live_pipeline_schedule
+    stage: OBS-7
+    objective: 0.999
+    window: 30d
+    sli: trading:slo:pipeline_schedule_current:ratio_5m
+    target: every latest-due frozen V13-V10-G scanner slot has current-session completion proof within 180 seconds, including explicit failure when scanner evidence is absent
+    severity_on_breach: P1
+
+  - id: critical_data_freshness
+    stage: OBS-4
+    objective: 0.995
+    window: 30d
+    sli: trading:slo:data_fresh:ratio_5m
+    target: critical input age <= 420 seconds for 5-minute bars and <= 90 seconds for continuous faster inputs during an open market; scheduled confirmation is evaluated by heartbeat and slot deadline
+    severity_on_breach: P1
+
+  - id: slot_deadline
+    stage: OBS-7
+    objective: 0.995
+    window: 30d
+    sli: trading:slo:slot_on_time:ratio_1h
+    target: slot completion no more than 30 seconds after the configured deadline
+    severity_on_breach: P1
+
+  - id: order_traceability
+    stage: OBS-7
+    objective: 1.0
+    window: 30d
+    target: every selected signal and broker order has run_id, trace_id, signal_id, strategy fingerprint and immutable evidence link
+    severity_on_breach: P1
+
+  - id: live_position_protection
+    stage: OBS-7
+    objective: 1.0
+    window: 30d
+    target: no live open position remains unprotected for more than 10 seconds
+    severity_on_breach: P0
+
+  - id: eod_parity_report
+    stage: OBS-8
+    objective: 1.0
+    window: 30d
+    target: every completed live session has observed and finalized replay results or an explicit INDETERMINATE result
+    severity_on_breach: P1
+
+  - id: telemetry_isolation
+    stage: OBS-12
+    objective: 1.0
+    window: 30d
+    target: telemetry outage never blocks or changes a trading decision
+    severity_on_breach: P0

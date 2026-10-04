@@ -1,0 +1,18 @@
+{
+  "schema_version": "fno_v13_v10_g_options_paper_state_v1",
+  "strategy_version": "FNO_V13_V10_G_OPTIONS_ONE_LOT_ATM_SL30_T40P4_20260915",
+  "equity_strategy_version": "FNO_V13_V10_G_RETAINED_20260914",
+  "strategy_fingerprint": "fixture-fingerprint",
+  "trade_id": "OPT_DEMO_OPEN",
+  "signal_id": "DEMO_OPEN",
+  "session_date": "2026-09-17",
+  "source_equity_mode": "PAPER",
+  "option_symbol": "DEMO26SEP100PE",
+  "mode": "PAPER",
+  "execution_source": "LIVE_GUARDED_NFO_QUOTE",
+  "status": "OPEN",
+  "quantity": 10,
+  "entry_price": 10.0,
+  "exit_price": 0.0,
+  "net_pnl_rs": -12.5
+}

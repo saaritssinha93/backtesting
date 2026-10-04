@@ -184,10 +184,21 @@ def test_frozen_constants_worker_commands_and_environment(
         "--live-quantity",
         "1",
     ]
+    assert live_session.broker_reconciliation_command(DAY) == command_prefix + [
+        "--role",
+        "broker-reconciliation",
+        "--session-date",
+        DAY.isoformat(),
+        "--execution-mode",
+        "LIVE",
+    ]
 
     monkeypatch.setenv("FNO_LIVE_GENERATION", "wrong")
     monkeypatch.setenv("FNO_V6_EXECUTION_MODE", "PAPER")
     monkeypatch.setenv("FNO_V6_EXECUTION_SESSION_NAMESPACE", "wrong")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", raising=False)
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
     monkeypatch.setenv(
         live_session.config.LIVE_ACK_ENV,
         live_session.config.LIVE_ACK,
@@ -196,7 +207,32 @@ def test_frozen_constants_worker_commands_and_environment(
     assert env["FNO_LIVE_GENERATION"] == "v6"
     assert env["FNO_V6_EXECUTION_MODE"] == "LIVE"
     assert env["FNO_V6_EXECUTION_SESSION_NAMESPACE"] == "live_kite_qty1"
+    assert env["EQIDV2_OBSERVABILITY_ENABLED"] == "1"
+    assert env["EQIDV2_OBS_RUN_ID"] == live_session.RUN_ID
+    assert "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" not in env
+    assert "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL" not in env
+    assert "OTEL_SDK_DISABLED" not in env
     assert env[live_session.config.LIVE_ACK_ENV] == live_session.config.LIVE_ACK
+
+
+def test_worker_environment_preserves_explicit_otel_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "http://collector.example.test:4318/v1/traces",
+    )
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
+
+    env = live_session.worker_environment()
+
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+        == "http://collector.example.test:4318/v1/traces"
+    )
+    assert env["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] == "http/protobuf"
+    assert env["OTEL_SDK_DISABLED"] == "false"
 
 
 def test_confirmation_snapshot_path_matches_confirmation_worker_contract(

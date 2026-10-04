@@ -23,7 +23,8 @@ HEALTHCHECK_JSON = LOG_DIR / "preopen_session_healthcheck_latest.json"
 TASK_TO_BAT: Dict[str, Path] = {
     "EQIDV2_log_dashboard_start_0855": BAT_DIR / "run_log_dashboard_public_link_scheduled.bat",
     "EQIDV2_eod_15mins_data_0900": BAT_DIR / "run_eqidv2_eod_scheduler_for_15mins_data_live_minimal.bat",
-    "EQIDV2_authentication_v2_0900": BAT_DIR / "run_authentication_v2.bat",
+    # Authentication is intentionally scheduler-only.  A detached BAT would
+    # bypass Task Scheduler's IgnoreNew policy and overlap Selenium sessions.
     "EQIDV2_live_combined_csv_v15_new_0900": BAT_DIR / "run_eqidv2_live_combined_analyser_csv_v15_new_persistent.bat",
     "EQIDV2_avwap_paper_trade_v15_0900": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_TRUE_v15.bat",
     "EQIDV2_avwap_live_trade_v15_0905": BAT_DIR / "run_avwap_trade_execution_PAPER_TRADE_FALSE_v15.bat",
@@ -245,11 +246,16 @@ def main() -> int:
             return 0
 
         applied_any = False
+        cycle_action_ids = set()
         for fail in fails:
             name = str(fail.get("name", "")).strip()
             detail = str(fail.get("detail", "")).strip()
             print(f"[AUTOFIX] fail={name} | detail={detail}", flush=True)
             for kind, action_id, payload in _iter_actions_for_fail(name):
+                if action_id in cycle_action_ids:
+                    print(f"[AUTOFIX] skip duplicate action={action_id} in this cycle", flush=True)
+                    continue
+                cycle_action_ids.add(action_id)
                 n = attempts.get(action_id, 0)
                 if n >= int(args.max_action_attempts):
                     print(f"[AUTOFIX] skip action={action_id} attempts={n} (limit reached)", flush=True)

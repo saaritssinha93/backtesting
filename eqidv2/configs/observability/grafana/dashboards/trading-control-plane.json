@@ -1,0 +1,108 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {"title": "Prometheus alerts", "type": "link", "url": "http://127.0.0.1:9090/alerts", "targetBlank": true},
+    {"title": "Alertmanager", "type": "link", "url": "http://127.0.0.1:9093", "targetBlank": true}
+  ],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "CLOSED"}, "1": {"color": "green", "text": "OPEN"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0}, "id": 1,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "max(trading_market_open)", "refId": "A"}], "title": "Market state", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.75}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0}, "id": 2,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "max((trading_heartbeat_age_seconds{mode=~\"$mode\",service=~\"$service\",service=~\".*(5min|5m).*\"} / 420) or (trading_heartbeat_age_seconds{mode=~\"$mode\",service=~\"$service\",service!~\".*(5min|5m).*\"} / 120))", "refId": "A"}], "title": "Worst heartbeat age / cadence limit", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.75}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0}, "id": 3,
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "max((trading_data_age_seconds{timeframe=\"5m\"} / 420) or (trading_data_age_seconds{timeframe!=\"5m\",source!=\"equity_confirmation\"} / 90))", "refId": "A"}], "title": "Worst continuous input age / cadence limit", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "green", "text": "ON SCHEDULE"}, "1": {"color": "red", "text": "OVERDUE"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0}, "id": 12,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "max(trading_pipeline_schedule_overdue{mode=\"live\"})", "refId": "A"}], "title": "Frozen scanner schedule", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0}, "id": 4,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "sum(trading_position_reconciliation_mismatch{mode=\"live\"}) + sum(trading_active_order_reconciliation_mismatch{mode=\"live\"})", "refId": "A"}], "title": "Broker reconciliation mismatches", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 10}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0}, "id": 5,
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [{"expr": "max(trading_unprotected_position_seconds{mode=\"live\"})", "refId": "A"}], "title": "Unprotected position age", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}, "id": 6,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "trading_data_age_seconds", "legendFormat": "{{source}} {{timeframe}}", "refId": "A"}], "title": "Strategy input freshness", "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}, "id": 7,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "asc"}},
+      "targets": [{"expr": "trading_data_coverage_ratio", "legendFormat": "{{source}}", "refId": "A"}], "title": "Source coverage (active after data instrumentation)", "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 12}, "id": 8,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "sum by (event) (increase(trading_signal_events_total{mode=~\"$mode\"}[$__range]))", "legendFormat": "{{event}}", "refId": "A"}], "title": "Signal funnel (active after strategy instrumentation)", "type": "barchart"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 12}, "id": 9,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "sum by (asset, event, outcome) (increase(trading_order_events_total{mode=~\"$mode\"}[$__range]))", "legendFormat": "{{asset}} / {{event}} / {{outcome}}", "refId": "A"}], "title": "Order lifecycle", "type": "barchart"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 12}, "id": 10,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "trading:broker:latency_p95_seconds_5m", "legendFormat": "{{operation}}", "refId": "A"}], "title": "Broker request p95", "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 20}, "id": 11,
+      "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": true, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [{"expr": "{job=~\"trading-json|trading-supervisor|trading-supervised-worker\",level=~\"ERROR|CRITICAL|WARNING|WARN\"}", "refId": "A"}], "title": "Correlated warning/error events", "type": "logs"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 40,
+  "tags": ["trading", "operations", "v13-v10-g"],
+  "templating": {"list": [
+    {"current": {"selected": true, "text": ["live", "paper"], "value": ["live", "paper"]}, "hide": 0, "includeAll": true, "label": "Mode", "multi": true, "name": "mode", "options": [], "query": "label_values(trading_heartbeat_age_seconds, mode)", "refresh": 1, "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}},
+    {"current": {"selected": true, "text": "All", "value": "$__all"}, "hide": 0, "includeAll": true, "label": "Service", "multi": true, "name": "service", "options": [], "query": "label_values(trading_heartbeat_age_seconds, service)", "refresh": 1, "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}}
+  ]},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "V13-V10-G / Trading Control Plane",
+  "uid": "eqidv2-control-plane",
+  "version": 1
+}

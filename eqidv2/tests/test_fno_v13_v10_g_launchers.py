@@ -63,11 +63,66 @@ def test_live_launcher_preserves_ack_quantity_supervision_and_auto_arms_each_ses
     assert "LIVE quantity 1" in source
     assert "fno_v13_v10_g_live_kite_session.py" in source
     assert "supervise_command.ps1" in source
+    assert 'set "EQIDV2_OBSERVABILITY_ENABLED=1"' in source
+    probe = "$client.ConnectAsync('127.0.0.1', 4318)"
+    disable = 'set "OTEL_SDK_DISABLED=true"'
+    warning = "OTLP collector unavailable at 127.0.0.1:4318"
+    assert probe in source
+    assert disable in source
+    assert source.count(warning) == 1
+    assert "local observability remains enabled" in source
+    assert "if defined AI_PLATFORM_OTLP_TRACES_ENDPOINT goto OTLP_CONFIGURED" in source
+    assert "if defined OTEL_EXPORTER_OTLP_TRACES_ENDPOINT goto OTLP_CONFIGURED" in source
+    assert "if defined OTEL_EXPORTER_OTLP_ENDPOINT goto OTLP_CONFIGURED" in source
+    assert "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces" in source
+    assert "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf" in source
+    assert source.index(probe) < source.index(disable)
+    assert source.index(disable) < source.index(
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces"
+    )
     assert "v13_v10_g_live\\live_kite\\open_positions_{date}.json" in source
     assert "-StopRestartsAfterCutoff" in source
     assert "-OpenPositionsStateFilePattern" in source
+    assert "-RequireWorkerRunIdMatch" in source
     assert '"--auto-arm"' in source
     assert not re.search(r"kill_switch", source, re.I)
+
+
+def test_daily_backtest_refreshes_observability_only_after_success():
+    source = (BAT / "run_backtesting_result_v13_v10_g_1620.bat").read_text(
+        encoding="utf-8"
+    )
+    replay = '"%PYTHON_EXE%" -u "%SCRIPT_PATH%" --date "%TARGET_DAY%" --wait-for-data'
+    shadow = (
+        '"%PYTHON_EXE%" -u "%SHADOW_FINALIZER%" '
+        '--session-date "%TARGET_DAY%" finalize'
+    )
+    refresh = 'call "%RESEARCH_RUNNER%"'
+    assert replay in source
+    assert shadow in source
+    assert refresh in source
+    assert source.index(replay) < source.index('if not "%EXIT_CODE%"=="0" goto FINALIZE')
+    assert source.index('if not "%EXIT_CODE%"=="0" goto FINALIZE') < source.index(shadow)
+    assert source.index(shadow) < source.index(refresh)
+    assert source.index(refresh) < source.index(":FINALIZE")
+    assert "run_v13_strategy_research_refresh.bat" in source
+    assert "v13_shadow_automation.py" in source
+    assert "schtasks /Run" not in source
+    assert "Start-ScheduledTask" not in source
+
+
+def test_research_refresh_builds_execution_evidence_before_dashboard_reports():
+    source = (BAT / "run_v13_strategy_research_refresh.bat").read_text(
+        encoding="utf-8"
+    )
+    execution = "py -3.12 tools\\v13_execution_research.py"
+    reports = "py -3.12 tools\\v13_strategy_research.py %*"
+    assert execution in source
+    assert reports in source
+    assert source.index(execution) < source.index(reports)
+    assert 'if not "%EXIT_CODE%"=="0"' in source
+    assert "schtasks /Run" not in source
+    assert "Start-ScheduledTask" not in source
 
 
 def test_generic_scheduler_has_only_seven_canonical_g_entries_at_0915():
@@ -95,6 +150,11 @@ def test_live_scheduler_installs_only_canonical_task_and_retires_old_alias():
     assert '$taskLeaf = "EQIDV2_fno_v13_v10_g_live_kite_qty1_0915"' in source
     assert '$startTime = "09:15"' in source
     assert "run_fno_v13_v10_g_live_kite_qty1.bat" in source
+    assert "EQIDV2_OBSERVABILITY_ENABLED=1" in source
+    assert "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127\\.0\\.0\\.1:4318/v1/traces" in source
+    assert "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf" in source
+    assert "EQIDV2_OBS_RUN_ID" in source
+    assert "CurrentRunId" in source
     assert 'Get-TaskIfPresent -Leaf $legacyLeaf' in source
     assert 'Disable-ScheduledTask -TaskName $legacyLeaf' in source
     assert 'Legacy V6 live task is running; migration was refused.' in source
@@ -111,7 +171,8 @@ def test_live_scheduler_installs_only_canonical_task_and_retires_old_alias():
 def test_scheduler_scripts_parse_without_execution():
     files = [BAT / name for name in ("schedule_fno_oi_weekday.ps1",
                                      "schedule_fno_v13_v10_g_live_kite_qty1_weekday.ps1",
-                                     "schedule_fno_v6_live_kite_qty1_weekday.ps1")]
+                                     "schedule_fno_v6_live_kite_qty1_weekday.ps1",
+                                     "supervise_command.ps1")]
     command = ("$files = @(" + ",".join("'" + str(path).replace("'", "''") + "'" for path in files) + "); "
                "foreach ($path in $files) { $tokens = $null; $parseErrors = $null; "
                "[System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null; "
