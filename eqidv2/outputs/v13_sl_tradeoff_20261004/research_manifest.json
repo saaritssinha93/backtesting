@@ -1,0 +1,11 @@
+{
+  "static_analysis.json": "76d51f846bf74b883cb353ba1ac62095e36a48f0a6e343412045bb3da5061181",
+  "timing_analysis.json": "4703d099a219b04346479f0a0c49e118a5f94aaae4b4d37fe7d210b8a8f202bd",
+  "pullback_analysis.json": "ef60f19a286a6e48d900bb550d2087512a1d6d6724f03d4ab0b733fb89ca6dd3",
+  "cost_stress_analysis.json": "76ec0dfaed6d21acb5bfbf4fbea75bba40b991d87051c2865ff6304dc2f44c32",
+  "staged_block_bootstrap.json": "0139d8bcc5bc51fbe58b344d8defaab9e420851a34fd653f3f7b7b8da2aa2c51",
+  ".codex_tmp/sl_tradeoff_static.py": "c62d7254c6c8bbbb65ad34133b797388f8f830f69f1dd495a654543bb01dc077",
+  ".codex_tmp/sl_tradeoff_pullbacks.py": "ae203eca186e1819fb16ff31b93605f84232213830558505135aea7b00b72c8f",
+  ".codex_tmp/sl_tradeoff_timing.py": "f00690a36c0cebda8834dad240a3e5ccd4ef339f586988f0c61e37796ff8501b",
+  ".codex_tmp/build_sl_tradeoff_report.py": "7bfb3d7c20bbe5f7ce94d8e4f6ce7f24f1a24ac0ba1257b811ccaac7002e4c45"
+}

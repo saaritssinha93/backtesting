@@ -1,0 +1,10 @@
+{
+  "status": "EXPLORATORY_REUSED_HISTORY_NOT_UNTOUCHED_VALIDATION",
+  "method": "30000 paired circular 5-session block resamples; 43 sessions; seed20261004",
+  "staged_minus_1pct_net_rupees": 9258.033569938036,
+  "net_delta_95pct_percentile_interval": [
+    -8749.99999999987,
+    31492.60355029587
+  ],
+  "caution": "Unadjusted for parameter search. Not a probability of future superiority."
+}

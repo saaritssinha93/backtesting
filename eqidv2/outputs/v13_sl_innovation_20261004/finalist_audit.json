@@ -1,0 +1,1554 @@
+{
+  "status": "INDEPENDENT_ACCOUNTING_AUDIT_REUSED_HISTORY_NOT_OUT_OF_SAMPLE",
+  "source": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\v13_sl_innovation_20261004\\progress_analysis.json",
+  "source_sha256": "03dff5b90d04acb4fc7586eb523a2a9c11936e43cdc6019627289c4b32e30689",
+  "source_mtime_ns": 1791137030458779000,
+  "rule": {
+    "name": "TRAIL_A1.25_KEEP0.25_STAGED",
+    "family": "PROGRESS",
+    "mode": "FRACTION",
+    "hard_stop": 1.25,
+    "tighten_minutes": 120,
+    "arm_pct": 1.25,
+    "retain_fraction": 0.25
+  },
+  "window": [
+    "2026-07-29",
+    "2026-09-30"
+  ],
+  "sessions": 43,
+  "candidate": {
+    "trades": 85,
+    "wins": 60,
+    "losses": 25,
+    "net_profit_rupees": 231123.3123777702,
+    "same_bar_ambiguous_count": 0,
+    "exit_gap_through_count": 0,
+    "ambiguous_trades": [],
+    "gap_trades": [],
+    "exit_counts": {
+      "TIME_EXIT_1515": 33,
+      "TARGET": 32,
+      "TIGHTENED_STOP": 12,
+      "STOP": 8
+    },
+    "cost_stress": [
+      {
+        "total_cost_bps": 5,
+        "net": 231123.31237777046,
+        "wins": 60,
+        "win_rate_pct": 70.58823529411765,
+        "profit_factor": 3.124891641951158
+      },
+      {
+        "total_cost_bps": 10,
+        "net": 209873.3123777705,
+        "wins": 58,
+        "win_rate_pct": 68.23529411764706,
+        "profit_factor": 2.8229733105304184
+      },
+      {
+        "total_cost_bps": 15,
+        "net": 188623.3123777705,
+        "wins": 56,
+        "win_rate_pct": 65.88235294117646,
+        "profit_factor": 2.544758605522257
+      }
+    ],
+    "slices": {
+      "jul_aug": {
+        "trades": 53,
+        "wins": 39,
+        "net": 146777.09460391218
+      },
+      "september": {
+        "trades": 32,
+        "wins": 21,
+        "net": 84346.21777385825
+      },
+      "late_september": {
+        "trades": 17,
+        "wins": 10,
+        "net": 45840.2761739056
+      }
+    },
+    "minute_close_drawdown_rupees": 21804.80820347386,
+    "daily_close_drawdown_rupees": 14142.13607078424,
+    "average_loss_magnitude_rupees": 4350.778323275705,
+    "worst_loss_rupees": 6500.000000000034,
+    "positive_sessions": 25
+  },
+  "controls": {
+    "TIGHTEN_1.25_TO_1.00_AFTER_120M": {
+      "trades": 85,
+      "wins": 59,
+      "losses": 26,
+      "net_profit_rupees": 229917.0395538967,
+      "same_bar_ambiguous_count": 0,
+      "exit_gap_through_count": 0,
+      "ambiguous_trades": [],
+      "gap_trades": [],
+      "exit_counts": {
+        "TIME_EXIT_1515": 37,
+        "TARGET": 32,
+        "TIGHTENED_STOP": 8,
+        "STOP": 8
+      },
+      "cost_stress": [
+        {
+          "total_cost_bps": 5,
+          "net": 229917.0395538971,
+          "wins": 59,
+          "win_rate_pct": 69.41176470588235,
+          "profit_factor": 3.0164719550654495
+        },
+        {
+          "total_cost_bps": 10,
+          "net": 208667.0395538971,
+          "wins": 57,
+          "win_rate_pct": 67.05882352941175,
+          "profit_factor": 2.729854581092677
+        },
+        {
+          "total_cost_bps": 15,
+          "net": 187417.0395538971,
+          "wins": 55,
+          "win_rate_pct": 64.70588235294117,
+          "profit_factor": 2.4658519843099778
+        }
+      ],
+      "slices": {
+        "jul_aug": {
+          "trades": 53,
+          "wins": 38,
+          "net": 144838.7856338544
+        },
+        "september": {
+          "trades": 32,
+          "wins": 21,
+          "net": 85078.25392004271
+        },
+        "late_september": {
+          "trades": 17,
+          "wins": 10,
+          "net": 45840.2761739056
+        }
+      },
+      "minute_close_drawdown_rupees": 21804.80820347386,
+      "daily_close_drawdown_rupees": 14142.13607078424,
+      "average_loss_magnitude_rupees": 4385.363772380485,
+      "worst_loss_rupees": 6500.000000000034,
+      "positive_sessions": 25
+    },
+    "STATIC_1.00": {
+      "trades": 85,
+      "wins": 57,
+      "losses": 28,
+      "net_profit_rupees": 220659.0059839587,
+      "same_bar_ambiguous_count": 0,
+      "exit_gap_through_count": 1,
+      "ambiguous_trades": [],
+      "gap_trades": [
+        {
+          "segment": "2026-09-28",
+          "day": "2026-09-28",
+          "sid": 37,
+          "setup_id": "0926_SHORT",
+          "tradingsymbol": "VEDL",
+          "side": "SHORT",
+          "entry_ts": "2026-09-28T03:57:00.000Z",
+          "entry_price": 258.5,
+          "exit_execution_ts": "2026-09-28 09:54:00+05:30",
+          "exit_bar_end_ts": "2026-09-28 09:55:00+05:30",
+          "exit_event": "OPEN",
+          "exit_reason": "STOP",
+          "exit_price": 261.1000061035,
+          "active_stop_pct_at_exit": 1.0,
+          "portfolio_net_profit_rupees": -5279.0253452914
+        }
+      ],
+      "exit_counts": {
+        "TIME_EXIT_1515": 35,
+        "TARGET": 31,
+        "STOP": 19
+      },
+      "cost_stress": [
+        {
+          "total_cost_bps": 5,
+          "net": 220659.00598395907,
+          "wins": 57,
+          "win_rate_pct": 67.05882352941175,
+          "profit_factor": 2.8761400612564905
+        },
+        {
+          "total_cost_bps": 10,
+          "net": 199409.00598395907,
+          "wins": 55,
+          "win_rate_pct": 64.70588235294117,
+          "profit_factor": 2.598843764895363
+        },
+        {
+          "total_cost_bps": 15,
+          "net": 178159.00598395907,
+          "wins": 53,
+          "win_rate_pct": 62.35294117647059,
+          "profit_factor": 2.345112015462012
+        }
+      ],
+      "slices": {
+        "jul_aug": {
+          "trades": 53,
+          "wins": 37,
+          "net": 138523.97859263976
+        },
+        "september": {
+          "trades": 32,
+          "wins": 20,
+          "net": 82135.02739131928
+        },
+        "late_september": {
+          "trades": 17,
+          "wins": 10,
+          "net": 49561.25082861415
+        }
+      },
+      "minute_close_drawdown_rupees": 21937.835606291253,
+      "daily_close_drawdown_rupees": 11671.161416075658,
+      "average_loss_magnitude_rupees": 4200.4746595856695,
+      "worst_loss_rupees": 5279.025345291371,
+      "positive_sessions": 23
+    }
+  },
+  "comparisons": [
+    {
+      "reference": "TIGHTEN_1.25_TO_1.00_AFTER_120M",
+      "same_85_entries_verified": true,
+      "net_delta_rupees": 1206.2728238733607,
+      "wins_delta": 1,
+      "positive_day_delta": 0,
+      "average_loss_delta_rupees": -34.58544910478031,
+      "worst_loss_delta_rupees": 0.0,
+      "minute_close_drawdown_delta_rupees": 0.0,
+      "daily_close_drawdown_delta_rupees": 0.0,
+      "improved_trades": 2,
+      "worsened_trades": 3,
+      "unchanged_trades": 80,
+      "rescued_winners": 1,
+      "lost_winners": 0,
+      "gross_positive_changes_rupees": 8701.737451737501,
+      "gross_negative_changes_rupees": -7495.464627863999,
+      "largest_positive_trade_delta_rupees": 7857.1428571429005,
+      "largest_positive_trade_share_of_gross_improvements_pct": 90.29395452024403,
+      "net_delta_without_best_improved_trade_rupees": -6650.87003326954,
+      "net_delta_without_best_day_rupees": -6650.870033269534,
+      "all_leave_one_day_out_delta_range_rupees": [
+        -6650.870033269534,
+        7375.409755941363
+      ],
+      "changed_trades": [
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-03",
+          "sid": 2000,
+          "setup_id": "0941_LONG",
+          "tradingsymbol": "PAYTM",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-03T04:12:00.000Z",
+          "entry_price_candidate": 1400.0,
+          "exit_execution_ts_candidate": "2026-08-03 14:53:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 1408.0,
+          "portfolio_net_profit_rupees_candidate": 2607.1428571429,
+          "entry_ts_reference": "2026-08-03T04:12:00.000Z",
+          "entry_price_reference": 1400.0,
+          "exit_execution_ts_reference": "2026-08-03 14:54:00+05:30",
+          "exit_reason_reference": "TIGHTENED_STOP",
+          "exit_price_reference": 1386.0,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": 7857.1428571429005
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-19",
+          "sid": 2449,
+          "setup_id": "0926_SHORT",
+          "tradingsymbol": "SOLARINDS",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-08-19T03:57:00.000Z",
+          "entry_price_candidate": 19832.0,
+          "exit_execution_ts_candidate": "2026-08-19 15:12:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 19766.5,
+          "portfolio_net_profit_rupees_candidate": 1401.3715207745,
+          "entry_ts_reference": "2026-08-19T03:57:00.000Z",
+          "entry_price_reference": 19832.0,
+          "exit_execution_ts_reference": "2026-08-19 15:15:00+05:30",
+          "exit_reason_reference": "TIME_EXIT_1515",
+          "exit_price_reference": 19800.0,
+          "portfolio_net_profit_rupees_reference": 556.7769261799,
+          "delta_rupees": 844.5945945945999
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-12",
+          "sid": 2119,
+          "setup_id": "0941_LONG",
+          "tradingsymbol": "PNB",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-12T04:12:00.000Z",
+          "entry_price_candidate": 117.7900009155,
+          "exit_execution_ts_candidate": "2026-08-12 11:51:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 118.1599998474,
+          "portfolio_net_profit_rupees_candidate": 1320.5871848584,
+          "entry_ts_reference": "2026-08-12T04:12:00.000Z",
+          "entry_price_reference": 117.7900009155,
+          "exit_execution_ts_reference": "2026-08-12 15:15:00+05:30",
+          "exit_reason_reference": "TIME_EXIT_1515",
+          "exit_price_reference": 118.3000030518,
+          "portfolio_net_profit_rupees_reference": 1914.87873447,
+          "delta_rupees": -594.2915496116
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-09-07",
+          "sid": 4782,
+          "setup_id": "0926_SHORT",
+          "tradingsymbol": "MPHASIS",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-09-07T03:57:00.000Z",
+          "entry_price_candidate": 2373.5,
+          "exit_execution_ts_candidate": "2026-09-07 15:13:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 2365.4749755859,
+          "portfolio_net_profit_rupees_candidate": 1440.5465376159,
+          "entry_ts_reference": "2026-09-07T03:57:00.000Z",
+          "entry_price_reference": 2373.5,
+          "exit_execution_ts_reference": "2026-09-07 15:15:00+05:30",
+          "exit_reason_reference": "TIME_EXIT_1515",
+          "exit_price_reference": 2362.0,
+          "portfolio_net_profit_rupees_reference": 2172.5826838003,
+          "delta_rupees": -732.0361461844
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-28",
+          "sid": 5344,
+          "setup_id": "1001_LONG",
+          "tradingsymbol": "SAGILITY",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-28T04:32:00.000Z",
+          "entry_price_candidate": 45.5900001526,
+          "exit_execution_ts_candidate": "2026-08-28 12:15:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 45.7674999237,
+          "portfolio_net_profit_rupees_candidate": 1696.6963207291,
+          "entry_ts_reference": "2026-08-28T04:32:00.000Z",
+          "entry_price_reference": 45.5900001526,
+          "exit_execution_ts_reference": "2026-08-28 15:15:00+05:30",
+          "exit_reason_reference": "TIME_EXIT_1515",
+          "exit_price_reference": 46.3300018311,
+          "portfolio_net_profit_rupees_reference": 7865.8332527971,
+          "delta_rupees": -6169.136932068
+        }
+      ],
+      "daily_deltas": [
+        {
+          "day": "2026-07-29",
+          "candidate_net": 16093.152341298435,
+          "reference_net": 16093.152341298435,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-07-30",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-07-31",
+          "candidate_net": 10149.999999999936,
+          "reference_net": 10149.999999999936,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-03",
+          "candidate_net": 14257.142857142911,
+          "reference_net": 6400.000000000016,
+          "delta_rupees": 7857.142857142895
+        },
+        {
+          "day": "2026-08-04",
+          "candidate_net": 9208.272090766885,
+          "reference_net": 9208.272090766885,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-05",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-06",
+          "candidate_net": 12530.605528740718,
+          "reference_net": 12530.605528740718,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-07",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-10",
+          "candidate_net": 20749.999999999967,
+          "reference_net": 20749.999999999967,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-11",
+          "candidate_net": 4164.807041214664,
+          "reference_net": 4164.807041214664,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-12",
+          "candidate_net": 2069.0737637568136,
+          "reference_net": 2663.365313368472,
+          "delta_rupees": -594.2915496116584
+        },
+        {
+          "day": "2026-08-13",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-14",
+          "candidate_net": 8567.696195863395,
+          "reference_net": 8567.696195863395,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-17",
+          "candidate_net": -10500.00000000001,
+          "reference_net": -10500.00000000001,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-18",
+          "candidate_net": 15142.53265438595,
+          "reference_net": 15142.53265438595,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-19",
+          "candidate_net": 5613.114448437318,
+          "reference_net": 4768.519853842746,
+          "delta_rupees": 844.5945945945723
+        },
+        {
+          "day": "2026-08-20",
+          "candidate_net": -6063.063312773398,
+          "reference_net": -6063.063312773398,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-21",
+          "candidate_net": -4141.057129288167,
+          "reference_net": -4141.057129288167,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-26",
+          "candidate_net": 11618.234780604475,
+          "reference_net": 11618.234780604475,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-27",
+          "candidate_net": 2674.668556421456,
+          "reference_net": 2674.668556421456,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-28",
+          "candidate_net": 26791.91478734086,
+          "reference_net": 32961.05171940886,
+          "delta_rupees": -6169.136932068002
+        },
+        {
+          "day": "2026-08-31",
+          "candidate_net": 7849.99999999997,
+          "reference_net": 7849.99999999997,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-01",
+          "candidate_net": 4600.000000000021,
+          "reference_net": 4600.000000000021,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-02",
+          "candidate_net": 11899.999999999996,
+          "reference_net": 11899.999999999996,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-03",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-04",
+          "candidate_net": 4600.000000000021,
+          "reference_net": 4600.000000000021,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-07",
+          "candidate_net": -4235.332078903586,
+          "reference_net": -3503.29593271914,
+          "delta_rupees": -732.0361461844459
+        },
+        {
+          "day": "2026-09-08",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-09",
+          "candidate_net": 2033.738049675632,
+          "reference_net": 2033.738049675632,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-10",
+          "candidate_net": 3870.6480165811854,
+          "reference_net": 3870.6480165811854,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-11",
+          "candidate_net": 15736.887612599396,
+          "reference_net": 15736.887612599396,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-15",
+          "candidate_net": 26763.167035282313,
+          "reference_net": 26763.167035282313,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-16",
+          "candidate_net": -1776.3063386604658,
+          "reference_net": -1776.3063386604658,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-17",
+          "candidate_net": -6499.999999999978,
+          "reference_net": -6499.999999999978,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-18",
+          "candidate_net": -1718.6052183028878,
+          "reference_net": -1718.6052183028878,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-21",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-22",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-23",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-24",
+          "candidate_net": 7414.156766370888,
+          "reference_net": 7414.156766370888,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-25",
+          "candidate_net": 14149.999999999996,
+          "reference_net": 14149.999999999996,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-28",
+          "candidate_net": -12999.999999999956,
+          "reference_net": -12999.999999999956,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-29",
+          "candidate_net": -1142.1360707843107,
+          "reference_net": -1142.1360707843107,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-30",
+          "candidate_net": 21650.000000000007,
+          "reference_net": 21650.000000000007,
+          "delta_rupees": 0.0
+        }
+      ],
+      "changed_days": 5,
+      "month_deltas_rupees": {
+        "2026-08": 1938.3089700579012,
+        "2026-09": -732.0361461844
+      },
+      "chronological_diagnostics": {
+        "jul_aug": {
+          "candidate": {
+            "trades": 53,
+            "wins": 39,
+            "net": 146777.09460391218
+          },
+          "reference": {
+            "trades": 53,
+            "wins": 38,
+            "net": 144838.7856338544
+          },
+          "net_delta_rupees": 1938.3089700577839,
+          "wins_delta": 1
+        },
+        "september": {
+          "candidate": {
+            "trades": 32,
+            "wins": 21,
+            "net": 84346.21777385825
+          },
+          "reference": {
+            "trades": 32,
+            "wins": 21,
+            "net": 85078.25392004271
+          },
+          "net_delta_rupees": -732.0361461844586,
+          "wins_delta": 0
+        },
+        "late_september": {
+          "candidate": {
+            "trades": 17,
+            "wins": 10,
+            "net": 45840.2761739056
+          },
+          "reference": {
+            "trades": 17,
+            "wins": 10,
+            "net": 45840.2761739056
+          },
+          "net_delta_rupees": 0.0,
+          "wins_delta": 0
+        }
+      },
+      "cost_stress": [
+        {
+          "total_cost_bps": 5,
+          "candidate": {
+            "total_cost_bps": 5,
+            "net": 231123.31237777046,
+            "wins": 60,
+            "win_rate_pct": 70.58823529411765,
+            "profit_factor": 3.124891641951158
+          },
+          "reference": {
+            "total_cost_bps": 5,
+            "net": 229917.0395538971,
+            "wins": 59,
+            "win_rate_pct": 69.41176470588235,
+            "profit_factor": 3.0164719550654495
+          },
+          "net_delta_rupees": 1206.2728238733544,
+          "wins_delta": 1
+        },
+        {
+          "total_cost_bps": 10,
+          "candidate": {
+            "total_cost_bps": 10,
+            "net": 209873.3123777705,
+            "wins": 58,
+            "win_rate_pct": 68.23529411764706,
+            "profit_factor": 2.8229733105304184
+          },
+          "reference": {
+            "total_cost_bps": 10,
+            "net": 208667.0395538971,
+            "wins": 57,
+            "win_rate_pct": 67.05882352941175,
+            "profit_factor": 2.729854581092677
+          },
+          "net_delta_rupees": 1206.2728238733835,
+          "wins_delta": 1
+        },
+        {
+          "total_cost_bps": 15,
+          "candidate": {
+            "total_cost_bps": 15,
+            "net": 188623.3123777705,
+            "wins": 56,
+            "win_rate_pct": 65.88235294117646,
+            "profit_factor": 2.544758605522257
+          },
+          "reference": {
+            "total_cost_bps": 15,
+            "net": 187417.0395538971,
+            "wins": 55,
+            "win_rate_pct": 64.70588235294117,
+            "profit_factor": 2.4658519843099778
+          },
+          "net_delta_rupees": 1206.2728238733835,
+          "wins_delta": 1
+        }
+      ],
+      "changed_exit_relative_slippage_sensitivity": {
+        "note": "Illustrative relative additional cost charged only to this candidate's P&L-changed exits versus the reference, at fixedRs500000exposure each. Not a forecast, and not an assertion that reference exits have zero slippage.",
+        "rows": [
+          {
+            "extra_adverse_bps_per_changed_exit": 1,
+            "changed_exit_count": 5,
+            "assumed_exposure_per_trade_rupees": 500000.0,
+            "additional_cost_rupees": 250.0,
+            "revised_net_delta_rupees": 956.2728238733607
+          },
+          {
+            "extra_adverse_bps_per_changed_exit": 2,
+            "changed_exit_count": 5,
+            "assumed_exposure_per_trade_rupees": 500000.0,
+            "additional_cost_rupees": 500.0,
+            "revised_net_delta_rupees": 706.2728238733607
+          },
+          {
+            "extra_adverse_bps_per_changed_exit": 5,
+            "changed_exit_count": 5,
+            "assumed_exposure_per_trade_rupees": 500000.0,
+            "additional_cost_rupees": 1250.0,
+            "revised_net_delta_rupees": -43.72717612663928
+          }
+        ],
+        "extra_bps_per_changed_exit_erasing_net_advantage": 4.825091295493443
+      },
+      "paired_circular_5session_block_bootstrap": {
+        "replicates": 30000,
+        "seed": 20261004,
+        "sessions": 43,
+        "block_length": 5,
+        "observed_net_delta_rupees": 1206.2728238733607,
+        "percentile_95_interval_rupees": [
+          -18257.107751221094,
+          22951.950873654365
+        ],
+        "median_delta_rupees": 955.9697788904468,
+        "fraction_resamples_positive": 0.5509333333333334,
+        "fraction_resamples_nonpositive": 0.44906666666666667,
+        "note": "Paired circular moving blocks of five recorded sessions; nine blocks sampled then truncated to43. Conditional on the already-selected candidate. Does not adjust for the68-rule search, earlier sweeps, or repeated inspection; not future-profit probability."
+      }
+    },
+    {
+      "reference": "STATIC_1.00",
+      "same_85_entries_verified": true,
+      "net_delta_rupees": 10464.306393811396,
+      "wins_delta": 3,
+      "positive_day_delta": 2,
+      "average_loss_delta_rupees": 150.30366369003514,
+      "worst_loss_delta_rupees": 1220.9746547086625,
+      "minute_close_drawdown_delta_rupees": -133.0274028173917,
+      "daily_close_drawdown_delta_rupees": 2470.9746547085815,
+      "improved_trades": 5,
+      "worsened_trades": 11,
+      "unchanged_trades": 69,
+      "rescued_winners": 3,
+      "lost_winners": 0,
+      "gross_positive_changes_rupees": 27930.745676384002,
+      "gross_negative_changes_rupees": -17466.439282572497,
+      "largest_positive_trade_delta_rupees": 9499.9999999999,
+      "largest_positive_trade_share_of_gross_improvements_pct": 34.012697369667215,
+      "net_delta_without_best_improved_trade_rupees": 964.3063938114956,
+      "net_delta_without_best_day_rupees": 2214.3063938114174,
+      "all_leave_one_day_out_delta_range_rupees": [
+        2214.3063938114174,
+        16633.443325879398
+      ],
+      "changed_trades": [
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-27",
+          "sid": 4295,
+          "setup_id": "0956_LONG",
+          "tradingsymbol": "KALYANKJIL",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-27T04:27:00.000Z",
+          "entry_price_candidate": 622.0,
+          "exit_execution_ts_candidate": "2026-08-27 13:23:00+05:30",
+          "exit_reason_candidate": "TARGET",
+          "exit_price_candidate": 627.598,
+          "portfolio_net_profit_rupees_candidate": 4249.9999999999,
+          "entry_ts_reference": "2026-08-27T04:27:00.000Z",
+          "entry_price_reference": 622.0,
+          "exit_execution_ts_reference": "2026-08-27 10:07:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 615.78,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": 9499.9999999999
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-03",
+          "sid": 2000,
+          "setup_id": "0941_LONG",
+          "tradingsymbol": "PAYTM",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-03T04:12:00.000Z",
+          "entry_price_candidate": 1400.0,
+          "exit_execution_ts_candidate": "2026-08-03 14:53:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 1408.0,
+          "portfolio_net_profit_rupees_candidate": 2607.1428571429,
+          "entry_ts_reference": "2026-08-03T04:12:00.000Z",
+          "entry_price_reference": 1400.0,
+          "exit_execution_ts_reference": "2026-08-03 14:54:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 1386.0,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": 7857.1428571429005
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-09-09",
+          "sid": 5030,
+          "setup_id": "0931_SHORT",
+          "tradingsymbol": "PERSISTENT",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-09-09T04:02:00.000Z",
+          "entry_price_candidate": 5408.0,
+          "exit_execution_ts_candidate": "2026-09-09 15:15:00+05:30",
+          "exit_reason_candidate": "TIME_EXIT_1515",
+          "exit_price_candidate": 5390.0,
+          "portfolio_net_profit_rupees_candidate": 1414.201183432,
+          "entry_ts_reference": "2026-09-09T04:02:00.000Z",
+          "entry_price_reference": 5408.0,
+          "exit_execution_ts_reference": "2026-09-09 10:57:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 5462.08,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": 6664.201183432
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-11",
+          "sid": 2500,
+          "setup_id": "0951_SHORT",
+          "tradingsymbol": "SUPREMEIND",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-08-11T04:22:00.000Z",
+          "entry_price_candidate": 3410.5,
+          "exit_execution_ts_candidate": "2026-08-11 15:15:00+05:30",
+          "exit_reason_candidate": "TIME_EXIT_1515",
+          "exit_price_candidate": 3423.6999511719,
+          "portfolio_net_profit_rupees_candidate": -2185.1929587854,
+          "entry_ts_reference": "2026-08-11T04:22:00.000Z",
+          "entry_price_reference": 3410.5,
+          "exit_execution_ts_reference": "2026-08-11 10:27:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 3444.605,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": 3064.8070412146
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-19",
+          "sid": 2449,
+          "setup_id": "0926_SHORT",
+          "tradingsymbol": "SOLARINDS",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-08-19T03:57:00.000Z",
+          "entry_price_candidate": 19832.0,
+          "exit_execution_ts_candidate": "2026-08-19 15:12:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 19766.5,
+          "portfolio_net_profit_rupees_candidate": 1401.3715207745,
+          "entry_ts_reference": "2026-08-19T03:57:00.000Z",
+          "entry_price_reference": 19832.0,
+          "exit_execution_ts_reference": "2026-08-19 15:15:00+05:30",
+          "exit_reason_reference": "TIME_EXIT_1515",
+          "exit_price_reference": 19800.0,
+          "portfolio_net_profit_rupees_reference": 556.7769261799,
+          "delta_rupees": 844.5945945945999
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-12",
+          "sid": 2119,
+          "setup_id": "0941_LONG",
+          "tradingsymbol": "PNB",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-12T04:12:00.000Z",
+          "entry_price_candidate": 117.7900009155,
+          "exit_execution_ts_candidate": "2026-08-12 11:51:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 118.1599998474,
+          "portfolio_net_profit_rupees_candidate": 1320.5871848584,
+          "entry_ts_reference": "2026-08-12T04:12:00.000Z",
+          "entry_price_reference": 117.7900009155,
+          "exit_execution_ts_reference": "2026-08-12 15:15:00+05:30",
+          "exit_reason_reference": "TIME_EXIT_1515",
+          "exit_price_reference": 118.3000030518,
+          "portfolio_net_profit_rupees_reference": 1914.87873447,
+          "delta_rupees": -594.2915496116
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-09-07",
+          "sid": 4782,
+          "setup_id": "0926_SHORT",
+          "tradingsymbol": "MPHASIS",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-09-07T03:57:00.000Z",
+          "entry_price_candidate": 2373.5,
+          "exit_execution_ts_candidate": "2026-09-07 15:13:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 2365.4749755859,
+          "portfolio_net_profit_rupees_candidate": 1440.5465376159,
+          "entry_ts_reference": "2026-09-07T03:57:00.000Z",
+          "entry_price_reference": 2373.5,
+          "exit_execution_ts_reference": "2026-09-07 15:15:00+05:30",
+          "exit_reason_reference": "TIME_EXIT_1515",
+          "exit_price_reference": 2362.0,
+          "portfolio_net_profit_rupees_reference": 2172.5826838003,
+          "delta_rupees": -732.0361461844
+        },
+        {
+          "segment": "2026-09-28",
+          "day": "2026-09-28",
+          "sid": 37,
+          "setup_id": "0926_SHORT",
+          "tradingsymbol": "VEDL",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-09-28T03:57:00.000Z",
+          "entry_price_candidate": 258.5,
+          "exit_execution_ts_candidate": "2026-09-28 10:56:00+05:30",
+          "exit_reason_candidate": "STOP",
+          "exit_price_candidate": 261.73125,
+          "portfolio_net_profit_rupees_candidate": -6500.0,
+          "entry_ts_reference": "2026-09-28T03:57:00.000Z",
+          "entry_price_reference": 258.5,
+          "exit_execution_ts_reference": "2026-09-28 09:54:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 261.1000061035,
+          "portfolio_net_profit_rupees_reference": -5279.0253452914,
+          "delta_rupees": -1220.9746547085997
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-03",
+          "sid": 919,
+          "setup_id": "1001_LONG",
+          "tradingsymbol": "GODFRYPHLP",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-03T04:33:00.000Z",
+          "entry_price_candidate": 2269.5,
+          "exit_execution_ts_candidate": "2026-08-03 10:09:00+05:30",
+          "exit_reason_candidate": "STOP",
+          "exit_price_candidate": 2241.13125,
+          "portfolio_net_profit_rupees_candidate": -6500.0,
+          "entry_ts_reference": "2026-08-03T04:33:00.000Z",
+          "entry_price_reference": 2269.5,
+          "exit_execution_ts_reference": "2026-08-03 10:08:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 2246.805,
+          "portfolio_net_profit_rupees_reference": -5250.0000000001,
+          "delta_rupees": -1249.9999999999
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-20",
+          "sid": 2154,
+          "setup_id": "0931_LONG",
+          "tradingsymbol": "PNBHOUSING",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-20T04:02:00.000Z",
+          "entry_price_candidate": 1202.9000244141,
+          "exit_execution_ts_candidate": "2026-08-20 10:26:00+05:30",
+          "exit_reason_candidate": "STOP",
+          "exit_price_candidate": 1187.8637741089,
+          "portfolio_net_profit_rupees_candidate": -6500.0,
+          "entry_ts_reference": "2026-08-20T04:02:00.000Z",
+          "entry_price_reference": 1202.9000244141,
+          "exit_execution_ts_reference": "2026-08-20 09:39:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 1190.8710241699,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": -1250.0
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-11",
+          "sid": 2442,
+          "setup_id": "0941_SHORT",
+          "tradingsymbol": "SOLARINDS",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-08-11T04:12:00.000Z",
+          "entry_price_candidate": 18453.0,
+          "exit_execution_ts_candidate": "2026-08-11 10:54:00+05:30",
+          "exit_reason_candidate": "STOP",
+          "exit_price_candidate": 18683.6625,
+          "portfolio_net_profit_rupees_candidate": -6500.0,
+          "entry_ts_reference": "2026-08-11T04:12:00.000Z",
+          "entry_price_reference": 18453.0,
+          "exit_execution_ts_reference": "2026-08-11 10:44:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 18637.53,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": -1250.0
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-11",
+          "sid": 866,
+          "setup_id": "0946_SHORT",
+          "tradingsymbol": "FORTIS",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-08-11T04:17:00.000Z",
+          "entry_price_candidate": 927.5,
+          "exit_execution_ts_candidate": "2026-08-11 09:57:00+05:30",
+          "exit_reason_candidate": "STOP",
+          "exit_price_candidate": 939.09375,
+          "portfolio_net_profit_rupees_candidate": -6500.0,
+          "entry_ts_reference": "2026-08-11T04:17:00.000Z",
+          "entry_price_reference": 927.5,
+          "exit_execution_ts_reference": "2026-08-11 09:57:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 936.775,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": -1250.0
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-09-17",
+          "sid": 3098,
+          "setup_id": "0951_SHORT",
+          "tradingsymbol": "ATHERENERG",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-09-17T04:22:00.000Z",
+          "entry_price_candidate": 1531.0,
+          "exit_execution_ts_candidate": "2026-09-17 10:33:00+05:30",
+          "exit_reason_candidate": "STOP",
+          "exit_price_candidate": 1550.1375,
+          "portfolio_net_profit_rupees_candidate": -6500.0,
+          "entry_ts_reference": "2026-09-17T04:22:00.000Z",
+          "entry_price_reference": 1531.0,
+          "exit_execution_ts_reference": "2026-09-17 10:14:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 1546.31,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": -1250.0
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-27",
+          "sid": 2935,
+          "setup_id": "0941_LONG",
+          "tradingsymbol": "AMBER",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-27T04:13:00.000Z",
+          "entry_price_candidate": 7760.0,
+          "exit_execution_ts_candidate": "2026-08-27 10:37:00+05:30",
+          "exit_reason_candidate": "STOP",
+          "exit_price_candidate": 7663.0,
+          "portfolio_net_profit_rupees_candidate": -6500.0,
+          "entry_ts_reference": "2026-08-27T04:13:00.000Z",
+          "entry_price_reference": 7760.0,
+          "exit_execution_ts_reference": "2026-08-27 09:46:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 7682.4,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": -1250.0
+        },
+        {
+          "segment": "2026-09-28",
+          "day": "2026-09-28",
+          "sid": 26,
+          "setup_id": "0926_SHORT",
+          "tradingsymbol": "NATIONALUM",
+          "side": "SHORT",
+          "entry_ts_candidate": "2026-09-28T03:57:00.000Z",
+          "entry_price_candidate": 344.8999938965,
+          "exit_execution_ts_candidate": "2026-09-28 09:44:00+05:30",
+          "exit_reason_candidate": "STOP",
+          "exit_price_candidate": 349.2112438202,
+          "portfolio_net_profit_rupees_candidate": -6500.0,
+          "entry_ts_reference": "2026-09-28T03:57:00.000Z",
+          "entry_price_reference": 344.8999938965,
+          "exit_execution_ts_reference": "2026-09-28 09:35:00+05:30",
+          "exit_reason_reference": "STOP",
+          "exit_price_reference": 348.3489938354,
+          "portfolio_net_profit_rupees_reference": -5250.0,
+          "delta_rupees": -1250.0
+        },
+        {
+          "segment": "BASE_TO_2026-09-23",
+          "day": "2026-08-28",
+          "sid": 5344,
+          "setup_id": "1001_LONG",
+          "tradingsymbol": "SAGILITY",
+          "side": "LONG",
+          "entry_ts_candidate": "2026-08-28T04:32:00.000Z",
+          "entry_price_candidate": 45.5900001526,
+          "exit_execution_ts_candidate": "2026-08-28 12:15:00+05:30",
+          "exit_reason_candidate": "TIGHTENED_STOP",
+          "exit_price_candidate": 45.7674999237,
+          "portfolio_net_profit_rupees_candidate": 1696.6963207291,
+          "entry_ts_reference": "2026-08-28T04:32:00.000Z",
+          "entry_price_reference": 45.5900001526,
+          "exit_execution_ts_reference": "2026-08-28 15:15:00+05:30",
+          "exit_reason_reference": "TIME_EXIT_1515",
+          "exit_price_reference": 46.3300018311,
+          "portfolio_net_profit_rupees_reference": 7865.8332527971,
+          "delta_rupees": -6169.136932068
+        }
+      ],
+      "daily_deltas": [
+        {
+          "day": "2026-07-29",
+          "candidate_net": 16093.152341298435,
+          "reference_net": 16093.152341298435,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-07-30",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-07-31",
+          "candidate_net": 10149.999999999936,
+          "reference_net": 10149.999999999936,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-03",
+          "candidate_net": 14257.142857142911,
+          "reference_net": 7649.99999999999,
+          "delta_rupees": 6607.1428571429215
+        },
+        {
+          "day": "2026-08-04",
+          "candidate_net": 9208.272090766885,
+          "reference_net": 9208.272090766885,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-05",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-06",
+          "candidate_net": 12530.605528740718,
+          "reference_net": 12530.605528740718,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-07",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-10",
+          "candidate_net": 20749.999999999967,
+          "reference_net": 20749.999999999967,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-11",
+          "candidate_net": 4164.807041214664,
+          "reference_net": 3600.000000000022,
+          "delta_rupees": 564.8070412146426
+        },
+        {
+          "day": "2026-08-12",
+          "candidate_net": 2069.0737637568136,
+          "reference_net": 2663.365313368472,
+          "delta_rupees": -594.2915496116584
+        },
+        {
+          "day": "2026-08-13",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-14",
+          "candidate_net": 8567.696195863395,
+          "reference_net": 8567.696195863395,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-17",
+          "candidate_net": -10500.00000000001,
+          "reference_net": -10500.00000000001,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-18",
+          "candidate_net": 15142.53265438595,
+          "reference_net": 15142.53265438595,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-19",
+          "candidate_net": 5613.114448437318,
+          "reference_net": 4768.519853842746,
+          "delta_rupees": 844.5945945945723
+        },
+        {
+          "day": "2026-08-20",
+          "candidate_net": -6063.063312773398,
+          "reference_net": -4813.063312773369,
+          "delta_rupees": -1250.000000000029
+        },
+        {
+          "day": "2026-08-21",
+          "candidate_net": -4141.057129288167,
+          "reference_net": -4141.057129288167,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-26",
+          "candidate_net": 11618.234780604475,
+          "reference_net": 11618.234780604475,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-08-27",
+          "candidate_net": 2674.668556421456,
+          "reference_net": -5575.331443578523,
+          "delta_rupees": 8249.999999999978
+        },
+        {
+          "day": "2026-08-28",
+          "candidate_net": 26791.91478734086,
+          "reference_net": 32961.05171940886,
+          "delta_rupees": -6169.136932068002
+        },
+        {
+          "day": "2026-08-31",
+          "candidate_net": 7849.99999999997,
+          "reference_net": 7849.99999999997,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-01",
+          "candidate_net": 4600.000000000021,
+          "reference_net": 4600.000000000021,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-02",
+          "candidate_net": 11899.999999999996,
+          "reference_net": 11899.999999999996,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-03",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-04",
+          "candidate_net": 4600.000000000021,
+          "reference_net": 4600.000000000021,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-07",
+          "candidate_net": -4235.332078903586,
+          "reference_net": -3503.29593271914,
+          "delta_rupees": -732.0361461844459
+        },
+        {
+          "day": "2026-09-08",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-09",
+          "candidate_net": 2033.738049675632,
+          "reference_net": -4630.4631337563405,
+          "delta_rupees": 6664.201183431973
+        },
+        {
+          "day": "2026-09-10",
+          "candidate_net": 3870.6480165811854,
+          "reference_net": 3870.6480165811854,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-11",
+          "candidate_net": 15736.887612599396,
+          "reference_net": 15736.887612599396,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-15",
+          "candidate_net": 26763.167035282313,
+          "reference_net": 26763.167035282313,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-16",
+          "candidate_net": -1776.3063386604658,
+          "reference_net": -1776.3063386604658,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-17",
+          "candidate_net": -6499.999999999978,
+          "reference_net": -5250.000000000005,
+          "delta_rupees": -1249.9999999999736
+        },
+        {
+          "day": "2026-09-18",
+          "candidate_net": -1718.6052183028878,
+          "reference_net": -1718.6052183028878,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-21",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-22",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-23",
+          "candidate_net": 0.0,
+          "reference_net": 0.0,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-24",
+          "candidate_net": 7414.156766370888,
+          "reference_net": 7414.156766370888,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-25",
+          "candidate_net": 14149.999999999996,
+          "reference_net": 14149.999999999996,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-28",
+          "candidate_net": -12999.999999999956,
+          "reference_net": -10529.025345291375,
+          "delta_rupees": -2470.9746547085815
+        },
+        {
+          "day": "2026-09-29",
+          "candidate_net": -1142.1360707843107,
+          "reference_net": -1142.1360707843107,
+          "delta_rupees": 0.0
+        },
+        {
+          "day": "2026-09-30",
+          "candidate_net": 21650.000000000007,
+          "reference_net": 21650.000000000007,
+          "delta_rupees": 0.0
+        }
+      ],
+      "changed_days": 11,
+      "month_deltas_rupees": {
+        "2026-08": 8253.116011272501,
+        "2026-09": 2211.1903825390004
+      },
+      "chronological_diagnostics": {
+        "jul_aug": {
+          "candidate": {
+            "trades": 53,
+            "wins": 39,
+            "net": 146777.09460391218
+          },
+          "reference": {
+            "trades": 53,
+            "wins": 37,
+            "net": 138523.97859263976
+          },
+          "net_delta_rupees": 8253.116011272417,
+          "wins_delta": 2
+        },
+        "september": {
+          "candidate": {
+            "trades": 32,
+            "wins": 21,
+            "net": 84346.21777385825
+          },
+          "reference": {
+            "trades": 32,
+            "wins": 20,
+            "net": 82135.02739131928
+          },
+          "net_delta_rupees": 2211.1903825389745,
+          "wins_delta": 1
+        },
+        "late_september": {
+          "candidate": {
+            "trades": 17,
+            "wins": 10,
+            "net": 45840.2761739056
+          },
+          "reference": {
+            "trades": 17,
+            "wins": 10,
+            "net": 49561.25082861415
+          },
+          "net_delta_rupees": -3720.9746547085524,
+          "wins_delta": 0
+        }
+      },
+      "cost_stress": [
+        {
+          "total_cost_bps": 5,
+          "candidate": {
+            "total_cost_bps": 5,
+            "net": 231123.31237777046,
+            "wins": 60,
+            "win_rate_pct": 70.58823529411765,
+            "profit_factor": 3.124891641951158
+          },
+          "reference": {
+            "total_cost_bps": 5,
+            "net": 220659.00598395907,
+            "wins": 57,
+            "win_rate_pct": 67.05882352941175,
+            "profit_factor": 2.8761400612564905
+          },
+          "net_delta_rupees": 10464.306393811392,
+          "wins_delta": 3
+        },
+        {
+          "total_cost_bps": 10,
+          "candidate": {
+            "total_cost_bps": 10,
+            "net": 209873.3123777705,
+            "wins": 58,
+            "win_rate_pct": 68.23529411764706,
+            "profit_factor": 2.8229733105304184
+          },
+          "reference": {
+            "total_cost_bps": 10,
+            "net": 199409.00598395907,
+            "wins": 55,
+            "win_rate_pct": 64.70588235294117,
+            "profit_factor": 2.598843764895363
+          },
+          "net_delta_rupees": 10464.306393811421,
+          "wins_delta": 3
+        },
+        {
+          "total_cost_bps": 15,
+          "candidate": {
+            "total_cost_bps": 15,
+            "net": 188623.3123777705,
+            "wins": 56,
+            "win_rate_pct": 65.88235294117646,
+            "profit_factor": 2.544758605522257
+          },
+          "reference": {
+            "total_cost_bps": 15,
+            "net": 178159.00598395907,
+            "wins": 53,
+            "win_rate_pct": 62.35294117647059,
+            "profit_factor": 2.345112015462012
+          },
+          "net_delta_rupees": 10464.306393811421,
+          "wins_delta": 3
+        }
+      ],
+      "changed_exit_relative_slippage_sensitivity": {
+        "note": "Illustrative relative additional cost charged only to this candidate's P&L-changed exits versus the reference, at fixedRs500000exposure each. Not a forecast, and not an assertion that reference exits have zero slippage.",
+        "rows": [
+          {
+            "extra_adverse_bps_per_changed_exit": 1,
+            "changed_exit_count": 16,
+            "assumed_exposure_per_trade_rupees": 500000.0,
+            "additional_cost_rupees": 800.0,
+            "revised_net_delta_rupees": 9664.306393811396
+          },
+          {
+            "extra_adverse_bps_per_changed_exit": 2,
+            "changed_exit_count": 16,
+            "assumed_exposure_per_trade_rupees": 500000.0,
+            "additional_cost_rupees": 1600.0,
+            "revised_net_delta_rupees": 8864.306393811396
+          },
+          {
+            "extra_adverse_bps_per_changed_exit": 5,
+            "changed_exit_count": 16,
+            "assumed_exposure_per_trade_rupees": 500000.0,
+            "additional_cost_rupees": 4000.0,
+            "revised_net_delta_rupees": 6464.3063938113955
+          }
+        ],
+        "extra_bps_per_changed_exit_erasing_net_advantage": 13.080382992264246
+      },
+      "paired_circular_5session_block_bootstrap": {
+        "replicates": 30000,
+        "seed": 20261004,
+        "sessions": 43,
+        "block_length": 5,
+        "observed_net_delta_rupees": 10464.306393811396,
+        "percentile_95_interval_rupees": [
+          -8203.97699229692,
+          31250.868732121344
+        ],
+        "median_delta_rupees": 10116.418477800642,
+        "fraction_resamples_positive": 0.8484666666666667,
+        "fraction_resamples_nonpositive": 0.15153333333333333,
+        "note": "Paired circular moving blocks of five recorded sessions; nine blocks sampled then truncated to43. Conditional on the already-selected candidate. Does not adjust for the68-rule search, earlier sweeps, or repeated inspection; not future-profit probability."
+      }
+    }
+  ],
+  "limitations": [
+    "No market simulation is rerun here; this independently reconciles existing trade and daily ledgers and performs paired accounting/resampling.",
+    "Minute candles cannot reveal exact intrabar chronology. Recorded stop-target ties and gap flags are reported; zero flags do not prove tick-exact execution.",
+    "Five-session blocks preserve some short-range dependence but the sample is only43sessions. Confidence intervals condition on a winner selected after68new rules plus prior sweeps.",
+    "Incremental cost stress applies the same assumed exposure and trade count to both strategies; it cannot establish equal real slippage across different exits.",
+    "October1 remains excluded; chronology slices and this bootstrap reuse already inspected history."
+  ],
+  "checks": [
+    "85unique trades, sums, wins and daily reconciliation for candidate and both controls",
+    "identical85entry timestamps and prices",
+    "daily and trade delta totals match",
+    "paired calendar matches43sessions"
+  ]
+}

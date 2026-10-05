@@ -1,0 +1,26 @@
+{
+  "status": "RESEARCH_GRID_DECLARED_BEFORE_NEW_RESULTS",
+  "history": "85 executed trades, 43 sessions Jul29-Sep30 2026; repeatedly inspected, no untouched holdout",
+  "invariants": [
+    "same selected orders",
+    "same targets",
+    "same exposure",
+    "same costs",
+    "same capital constraints",
+    "no reentry",
+    "hard stop at most 1.25% adverse",
+    "no future-bar activation"
+  ],
+  "progress_family": {
+    "base": "1.25% initially, 1% after120minutes",
+    "single_step": "completed5minute close gain reaches0.50/0.75/1.00/1.25%; lock0/0.10/0.25% gross from original entry;12rules",
+    "fraction_trail": "arm at0.75/1.00/1.25% completed5minute close gain; retain25/50/75% of greatest completed5minute close gain;9rules",
+    "recovered_pullback": "observe completed5minute close adverse0.50/0.75/1.00%, then completed5minute close gain at least0.10%; tighten adverse stop to0/0.25/0.50%;9rules",
+    "one_percent_controls": "hard1% with single step activation0.50/0.75/1.00%, lock0.10/0.25%;6rules"
+  },
+  "confirmation_family": "hard1.25%; soft0.75/1.00% adverse for1/2/3 completed5minute closes;plussoft1% for3/5 completed1minute closes;8rules",
+  "volatility_family": "hard1.25%; activation after15/30min andclosegain0.50/0.75%; rollingpostentry1minATR14/28 andmultiplier3/4/5;24rules",
+  "selection": "First seek candidate with improved trade win rate OR positive-active-day rate and neither worsened versus staged baseline, no higher1.25% initial hard risk, and improved net without worse average loss or minute-close drawdown. Consider all results/Pareto; prefer simple and stable neighbors. If none qualify, report failure of this improvement test rather than retrofit score. Show best-net/most-wins separately if different.",
+  "diagnostics": "month splits andpaired5dayblockbootstrap are reused-history diagnostics;10/15bpscosts;concentration in trades anddays;neighbor behavior;equalinitialrisk sizing",
+  "deployment": "No live or original strategy configuration changes"
+}
