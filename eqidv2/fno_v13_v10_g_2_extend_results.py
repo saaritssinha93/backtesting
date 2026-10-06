@@ -118,7 +118,10 @@ def _load_base(base_g2: Path) -> dict[str, Any]:
     provenance = _verify_output(base_g2)
     source_g = _read_json(g2.DEFAULT_G_CONFIG)
     g2.g.checked_settings(source_g)
-    settings = g2.checked_settings(_read_json(base_g2 / "frozen_config.json"), source_g)
+    # This extension remains the historical fixed-1% study, not the current staged strategy.
+    settings = _read_json(base_g2 / "frozen_config.json")
+    if settings != g2.config(source_g, legacy_fixed=True):
+        raise ValueError("Historical extension requires the frozen fixed-1% configuration")
     run_metadata = _read_json(source / "g_backtest/run_metadata.json")
     if g2.sha256(g2.DEFAULT_G_CONFIG) != run_metadata.get("frozen_g_config_sha256"):
         raise RuntimeError("Sealed base G configuration hash mismatch")
@@ -300,7 +303,7 @@ def _assert_daily_parity(observed: pd.DataFrame, official: pd.DataFrame, day: da
         raise RuntimeError(f"Daily G replay P&L mismatch for {day}")
 
 
-def _load_daily_extensions(dataset: dict[str, Any], daily_root: Path) -> dict[str, Any]:
+def _load_daily_extensions(dataset: dict[str, Any], daily_root: Path, *, staged: bool = False) -> dict[str, Any]:
     g_frames: list[pd.DataFrame] = []
     g2_frames: list[pd.DataFrame] = []
     evidence = []
@@ -326,7 +329,14 @@ def _load_daily_extensions(dataset: dict[str, Any], daily_root: Path) -> dict[st
         g_trades, g_ledger, _ = _simulate(orders, paths, dataset["base"], stop_pct=None)
         official = pd.read_csv(run / "portfolio_trades.csv")
         _assert_daily_parity(g_ledger, official, day)
-        g2_trades, _, _ = _simulate(orders, paths, dataset["base"], stop_pct=g2.STOP_PCT)
+        if staged:
+            g2_trades, _, _ = g2.evaluate(
+                dict(source_g=dataset["source_g"], orders=orders, paths=paths,
+                     v9_config=dataset["base"]),
+                g2.config(dataset["source_g"]),
+            )
+        else:
+            g2_trades, _, _ = _simulate(orders, paths, dataset["base"], stop_pct=g2.STOP_PCT)
         for frame in (g_trades, g2_trades):
             frame["selection_evidence"] = "COMPLETE_OFFICIAL_DAILY_G_REPLAY"
             frame["execution_path_evidence"] = "HASH_VERIFIED_DAILY_INPUT_SNAPSHOT"

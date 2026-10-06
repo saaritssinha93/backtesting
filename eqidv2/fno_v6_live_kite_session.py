@@ -172,7 +172,10 @@ def _display_label() -> str:
 
 def _validate_g_contract(row: dict[str, Any], session_date: date) -> None:
     """Refuse stale V6 rows or G rows whose frozen execution terms changed."""
-    setup = config.setup_for(str(row.get("signal_end", "")), str(row.get("side", "")))
+    setup = config.setup_for(
+        str(row.get("signal_end", "")), str(row.get("side", "")),
+        session_date=session_date,
+    )
     if setup is None:
         raise RuntimeError("V13-V10-G row is not an active setup.")
     expected = {
@@ -242,7 +245,8 @@ def load_authoritative_signals(session_date: date) -> list[dict[str, Any]]:
             )
         side = str(signal.get("side", "")).upper()
         signal_end = str(signal.get("signal_end", ""))
-        setup = config.setup_for(signal_end, side)
+        setup = (config.setup_for(signal_end, side, session_date=session_date)
+                 if _is_g_profile() else config.setup_for(signal_end, side))
         if (
             signal.get("signal_id") != signal_id
             or signal.get("strategy_version") != config.STRATEGY_VERSION

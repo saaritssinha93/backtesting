@@ -282,7 +282,7 @@ def run(output=g.THRESHOLD_OUTPUT, *, plan_only=False):
         'This is exploratory historical fitting. July, August and September have all been repeatedly reviewed, and the inherited exits were fitted on this history. Month tables and cost stress do not constitute an untouched test. No future win rate or PF is established.',
         'The source contains only 31 available sessions (July 29–31, 19 August sessions, 9 September sessions through September 11), not three complete months. Daily-close drawdown is realized P&L, not intraday mark-to-market. Replay inherits stop-first ambiguous OHLC handling, adverse stop gaps, and same-timestamp release of portfolio capital. Stops are configured distances; realized gap losses can exceed them.',
         'All frozen dataset artifacts and raw sources were hashed. Two explicitly pinned metadata changes are recorded in source_verification.json: refreshed contract registry and common calendar code. Frozen signals and 1m paths were not rebuilt. Corrected F parity is required before the new candidate loop continues.',
-        '`python -B fno_v13_v10_g_research.py` reproduces the fixed study. `python -B fno_v13_v10_g_backtest.py` replays the chosen frozen configuration.',
+        '`python -B fno_v13_v10_g_research.py` reproduces the fixed study. `python -B fno_v13_v10_g_backtest.py --frozen-research` replays the chosen frozen configuration.',
     ])
     (output / 'V13_V10_G_DETAILED_RESULTS.md').write_text(report, encoding='utf-8')
     finish_manifest(output)

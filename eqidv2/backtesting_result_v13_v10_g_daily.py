@@ -292,9 +292,16 @@ def _display(value: Any) -> str:
 
 
 def render_report(result: dict) -> str:
+    from fno_v13_v10_g_policy import policy_for_day
+    policy = policy_for_day(date.fromisoformat(result["session_date"]))
+    selection = ("09:25 LONG: OI <=1.20%, 5m volume >=1.75x, confirmation body >=54%, EMA bypass; "
+                 "original G selections retain priority. All other setups and targets are unchanged."
+                 if policy["relaxed_0925_long"] else "Original retained G selection and exits for this historical session.")
+    stops = ("Stop starts at 1.25% and tightens once to 1.00% after 120 minutes from entry."
+             if policy["staged_stop"] else "Original per-setup fixed stops apply.")
     lines = [f"# {TITLE}", "", f"Session date: **{result['session_date']} (IST)**", "",
              f"Strategy: **{STRATEGY} only**", "", "Status: **SUCCESS**", "",
-             "Fixed retained G selection and exits; no parameter search or other-strategy comparison.",
+             selection, stops,
              "Allocation: Rs 1,00,000 per trade; modeled exposure: 5x; portfolio capital: Rs 10,00,000.",
              "Full exits, no partial exit or break-even rule; pending entry expiry: 10 minutes; square-off: 15:15 IST.",
              f"Modeled round-trip trading cost: {config.ROUND_TRIP_COST_BPS:g} bps.",
@@ -320,6 +327,7 @@ def render_report(result: dict) -> str:
             requested = ["tradingsymbol", "side", "setup_id", "confirmation_ts", "entry_time", "exit_time",
                          "entry_ts", "exit_ts", "entry_price", "exit_price", "v10_g_stop_pct", "v10_g_target_pct",
                          "native_stop_pct", "native_target_pct",
+                         "initial_stop_pct", "active_stop_pct_at_exit", "relaxed_0925_added",
                          "portfolio_status", "status", "exit_reason", "portfolio_net_profit_rupees"]
             fields = [field for field in requested if field in (reader.fieldnames or [])]
         if fields:

@@ -54,13 +54,15 @@ def runtime(tmp_path, monkeypatch):
     return module
 
 
-def scanner_snapshot(runtime, monkeypatch, signal_end, side, *, nifty_return=-.2):
+def scanner_snapshot(runtime, monkeypatch, signal_end, side, *, nifty_return=-.2, feature_overrides=None):
     stamp = config.slot_datetime(DAY, signal_end)
     direction = 1 if side == "LONG" else -1
     featured = pd.DataFrame([dict(ts=pd.Timestamp(stamp), close=100.,
         price_change_pct=.8 * direction, oi_change_pct=.5, oi=100500, prev_oi=100000,
         volume_ratio=10., traded_value=50_000_000.,
         ema9=100 + direction, ema20=100., ema50=100 - direction)])
+    for key, value in (feature_overrides or {}).items():
+        featured[key] = value
     mapped = pd.DataFrame([dict(underlying="EXAMPLE", futures_tradingsymbol="EXAMPLE26SEPFUT",
         equity_symbol="EXAMPLE", futures_instrument_token=222,
         equity_instrument_token=111, equity_tick_size=.05)])
@@ -162,6 +164,33 @@ def test_g_scanner_through_immutable_feed_to_paper_state(runtime, monkeypatch, s
     assert state["target_pct"] == config.setup_for(signal_end, side).target_pct
     assert state["quantity"] > 1
     assert state["strategy_fingerprint"] == config.strategy_fingerprint()
+
+
+@pytest.mark.parametrize("day,expected", [(date(2026, 10, 5), 0), (date(2026, 10, 6), 1)])
+def test_dated_relaxed_candidate_reaches_confirmation_and_execution_state(runtime, monkeypatch, day, expected):
+    import sys
+    monkeypatch.setattr(sys.modules[__name__], "DAY", day)
+    snapshot = scanner_snapshot(runtime, monkeypatch, "09:25", "LONG", feature_overrides=dict(
+        price_change_pct=.30, oi_change_pct=1.20, oi=101200., prev_oi=100000.,
+        volume_ratio=1.75, ema9=99., ema20=100., ema50=101.))
+    assert len(snapshot["candidates"]) == expected
+    if not expected:
+        return
+    marker, _ = produce(runtime, monkeypatch, snapshot, "09:25", "LONG")
+    assert marker["state"] == "SUCCESS"
+    result = confirm(runtime, snapshot, "09:25")
+    assert result["state"] == "SUCCESS", result.get("errors")
+    signal, = result["_selected_signals"]
+    runtime._validate_signal(signal, day)
+    assert signal["relaxed_0925_added"] is True
+    assert signal["stop_pct"] == 1.25
+    assert signal["target_pct"] == config.setup_for("09:25", "LONG").target_pct
+    for mode in ("PAPER", "LIVE"):
+        state = runtime.create_order_state(signal, mode)
+        runtime._validate_order_state(state, signal, mode)
+        assert state["stop_pct"] == 1.25
+        assert state["tightened_stop_pct"] == 1.0
+        assert state["tighten_after_minutes"] == 120
 
 
 @pytest.mark.parametrize("volume,prior_count,selected", [(120., 20, 1), (119., 20, 0), (200., 4, 0)])

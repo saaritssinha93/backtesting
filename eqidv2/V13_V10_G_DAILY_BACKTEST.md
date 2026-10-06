@@ -2,7 +2,20 @@
 
 The dashboard session is **Backtesting result v13-v10-G**, with ID `backtesting_result_v13_v10_g`. Its launcher is `bat/run_backtesting_result_v13_v10_g_1620.bat`, which calls `backtesting_result_v13_v10_g_daily.py`. The dated reconstruction and execution implementation is `fno_v13_v10_g_daily_replay.py`.
 
-The session runs only the retained V13-V10-G strategy for one explicit IST date. The default is today's date, including on holidays and weekends: there is no fallback to Friday or to a previously completed backtest. The old runner and scheduler installer are compatibility forwarders to G. Historical multi-strategy research files remain available separately.
+The session runs only the session-effective V13-V10-G strategy for one explicit IST date. The default is today's date, including on holidays and weekends: there is no fallback to Friday or to a previously completed backtest. The old runner and scheduler installer are compatibility forwarders to G. Historical multi-strategy research files remain available separately.
+
+From **2026-10-06**, the daily replay automatically enables the promoted 09:25 LONG rules: OI maximum 1.20%, five-minute volume minimum 1.75x, confirmation body minimum 54%, and bypassed EMA alignment. Existing G selections have priority within the unchanged setup quota. All equity setups start with a 1.25% stop, tightened to 1.00% after 120 minutes; targets remain unchanged. Minute replay measures the delay from the entry-bar end and activates at the first bar open at/after that time. Earlier session dates retain the original entry and fixed-stop rules. `fno_v13_v10_g_policy.py` records the effective date and the report records the applied policy.
+
+The main standalone file now uses the same dated production replay by default:
+`python fno_v13_v10_g_backtest.py` runs today's IST session after its close.
+Use `--session-date YYYY-MM-DD` (or `--date`) for a specific session. Each run
+defaults to a new dated folder under
+`C:/TradingData/eqidv2/fno_oi/strategy_research/v13_corrected_v10_g/production_replays/`.
+An explicit production `--output-dir` must be new or empty. This standalone
+command writes its own replay artifacts and does not publish dashboard status.
+To reproduce the older sealed research, use
+`python fno_v13_v10_g_backtest.py --frozen-research`; `--source-dir` and
+`--config-json` are restricted to that explicit research mode.
 
 ## Schedule and data flow
 
@@ -10,7 +23,7 @@ The session runs only the retained V13-V10-G strategy for one explicit IST date.
 
 The reconstruction uses the requested day's persisted equity-to-futures universe, local equity one-minute history, exact futures OI bars, and the dated near-month NIFTY context. Earlier history only warms up causal features. Candidates, selections, execution paths and performance statistics belong to the requested day. Frozen historical signal caches and multi-session optimization are not daily inputs.
 
-The retained G configuration is pinned by the existing strategy configuration and fingerprint. Selection thresholds, setup ranking, volume confirmation, stop/target table, ten-minute pending entry expiry, 15:15 square-off, full exits and modeled costs remain the G rules. The backtest uses Rs 1,00,000 allocation per trade, modeled 5x exposure and a Rs 10,00,000 portfolio capital book. This session publishes historical simulations and does not submit paper or broker orders.
+The retained G baseline and dated promotion are pinned by the strategy fingerprint. Setup ranking, volume confirmation, targets, ten-minute pending entry expiry, 15:15 square-off, full exits and modeled costs remain the G rules. The backtest uses Rs 1,00,000 allocation per trade, modeled 5x exposure and a Rs 10,00,000 portfolio capital book. This session publishes historical simulations and does not submit paper or broker orders.
 
 During verification and replay, a 30-second heartbeat keeps the dashboard current. The heartbeat stops before the terminal result is published, so a late progress update cannot replace SUCCESS or a blocked status. G reconstruction may take several minutes for the full stock universe; its progress is available in the dated running log.
 

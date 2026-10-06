@@ -1,8 +1,9 @@
 """Pinned active V13-v10-G selection contract for the V6 transport sessions.
 
-The retained G is the 14-slot F-core-first strategy. Rejected extra-morning and
-two-bar experiments are never enabled by this adapter. All market-data helpers
-are pure: they cannot fetch prices or submit orders.
+The frozen baseline is the 14-slot F-core-first strategy. From session
+2026-10-06 the dated policy adds the 09:25 LONG relaxation and staged stops.
+Rejected extra-morning and two-bar experiments remain disabled. Market-data
+helpers cannot fetch prices or submit orders.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import pandas as pd
 
 import fno_oi_common as common
 import fno_oi_hybrid_data as hybrid
+import fno_v13_v10_g_policy as policy
 from fno_v5_live_config import PositionSize, SetupSpec
 
 
@@ -130,10 +132,32 @@ ACTIVE_SETUPS = tuple(replace(s, price_change_pct=max(BASE_PRICE_CHANGE_PCT,
                      for s in CORE_SETUPS)
 SIGNAL_TO_CONFIRMATION = dict(sorted({s.signal_end: s.confirmation_end for s in ACTIVE_SETUPS}.items()))
 _CORE_BY_ID = {s.setup_id: s for s in CORE_SETUPS}
+_ACTIVE_BY_ID = {s.setup_id: s for s in ACTIVE_SETUPS}
 
 
-def setup_for(signal_end: str, side: str) -> SetupSpec | None:
-    return next((s for s in ACTIVE_SETUPS if s.signal_end == signal_end and s.side == side.upper()), None)
+def setup_for(signal_end: str, side: str, *, session_date: date | None = None) -> SetupSpec | None:
+    setup = next((s for s in ACTIVE_SETUPS if s.signal_end == signal_end and s.side == side.upper()), None)
+    if setup is None or not policy.enabled_for_session(session_date):
+        return setup
+    setup = replace(setup, stop_pct=policy.INITIAL_STOP_PCT)
+    if setup.setup_id == "0926_LONG":
+        setup = replace(setup, volume_ratio=policy.RELAXED_0925_LONG["minimum_volume_ratio"],
+                        body_ratio=policy.RELAXED_0925_LONG["minimum_body_ratio"])
+    return setup
+
+
+def _candidate_day(row: Any, session_date: date | None = None) -> date | None:
+    for key in ("signal_timestamp", "signal_ts", "timestamp", "ts"):
+        value = row.get(key)
+        if value is not None:
+            try:
+                observed = _stamp(value).date()
+            except (TypeError, ValueError):
+                return None
+            if session_date is not None and observed != session_date:
+                return None
+            return observed
+    return session_date
 
 
 def slot_datetime(session_date: date, hhmm: str) -> datetime:
@@ -168,10 +192,22 @@ def _stamp(value: Any) -> pd.Timestamp:
     return stamp.tz_localize(common.IST) if stamp.tzinfo is None else stamp.tz_convert(common.IST)
 
 
-def base_signal_side(row: Any, signal_end: str = "", nifty_first_bar_return_pct: float | None = None) -> str | None:
-    """Exact raw strict-signal gates, before setup thresholds or ranking."""
+def base_signal_side(row: Any, signal_end: str = "", nifty_first_bar_return_pct: float | None = None,
+                     *, session_date: date | None = None, original_only: bool = False) -> str | None:
+    """Dated raw gates; the promotion only widens the 09:25 LONG candidate pool."""
     vals = {k: _number(row.get(k)) for k in ("ema9", "ema20", "ema50", "price_change_pct",
              "oi_change_pct", "volume_ratio", "oi", "prev_oi")}
+    day = _candidate_day(row, session_date)
+    if session_date is not None and day != session_date:
+        return None
+    if not original_only and signal_end == "09:25" and policy.enabled_for_session(day):
+        required = ("price_change_pct", "oi_change_pct", "volume_ratio", "oi", "prev_oi")
+        if (all(math.isfinite(vals[k]) for k in required)
+                and vals["prev_oi"] > 0 and vals["oi"] > vals["prev_oi"]
+                and .10 <= vals["oi_change_pct"] <= policy.RELAXED_0925_LONG["oi_max_pct"]
+                and vals["price_change_pct"] >= .30
+                and vals["volume_ratio"] >= policy.RELAXED_0925_LONG["minimum_volume_ratio"]):
+            return "LONG"
     if not all(math.isfinite(v) for v in vals.values()):
         return None
     if (vals["prev_oi"] <= 0 or vals["oi"] <= vals["prev_oi"] or
@@ -278,14 +314,18 @@ def confirmation_metrics(candidate: dict[str, Any], bar: dict[str, Any], minute_
     return result
 
 
-def passes_selected_filters(candidate: dict[str, Any], setup: SetupSpec) -> bool:
+def passes_selected_filters(candidate: dict[str, Any], setup: SetupSpec, *,
+                            session_date: date | None = None, original_only: bool = False) -> bool:
     if str(candidate.get("side", "")).upper() != setup.side:
         return False
     try:
         signal_ts = _stamp(candidate.get("signal_timestamp", candidate.get("signal_ts")))
         conf_ts = _stamp(candidate.get("confirmation_timestamp", candidate.get("confirmation_ts")))
         feature_ts = _stamp(candidate.get("v9_1m_feature_ts"))
+        if session_date is not None and signal_ts.date() != session_date:
+            return False
         if (signal_ts.strftime("%H:%M") != setup.signal_end or conf_ts.strftime("%H:%M") != setup.confirmation_end
+                or signal_ts != signal_ts.floor("min")
                 or conf_ts != signal_ts + timedelta(minutes=1) or feature_ts != conf_ts):
             return False
     except (TypeError, ValueError):
@@ -294,8 +334,11 @@ def passes_selected_filters(candidate: dict[str, Any], setup: SetupSpec) -> bool
         return False
     if candidate.get("confirmed", True) is False:
         return False
-    if base_signal_side(candidate, setup.signal_end) != setup.side:
+    if base_signal_side(candidate, setup.signal_end, session_date=session_date,
+                        original_only=original_only) != setup.side:
         return False
+    if not original_only:
+        setup = setup_for(setup.signal_end, setup.side, session_date=signal_ts.date())
     vals = {k: _number(candidate.get(k)) for k in ("price_change_pct", "oi_change_pct", "volume_ratio",
             "body_ratio", "wick_ratio", "traded_value", "v9_1m_volume_ratio")}
     if not all(math.isfinite(v) for v in vals.values()):
@@ -316,15 +359,23 @@ def picker_value(candidate: dict[str, Any], picker: str) -> float:
     return abs(value) if picker == "max_move" else value
 
 
-def rank_candidates(candidates: list[dict[str, Any]], setup: SetupSpec) -> list[dict[str, Any]]:
-    eligible = [row for row in candidates if passes_selected_filters(row, setup)]
+def rank_candidates(candidates: list[dict[str, Any]], setup: SetupSpec, *,
+                    session_date: date | None = None) -> list[dict[str, Any]]:
+    eligible = [row for row in candidates if passes_selected_filters(row, setup, session_date=session_date)]
     ranked = sorted(eligible, key=lambda row: (-picker_value(row, setup.picker),
                     -float(row["traded_value"]), str(row["tradingsymbol"])))
     core_setup = _CORE_BY_ID[setup.setup_id]
-    core = [row for row in ranked if passes_selected_filters(row, core_setup)][:core_setup.max_entries]
+    core = [row for row in ranked if passes_selected_filters(row, core_setup, session_date=session_date,
+                                                            original_only=True)][:core_setup.max_entries]
     core_symbols = {str(row["tradingsymbol"]) for row in core}
     extras = [row for row in ranked if str(row["tradingsymbol"]) not in core_symbols][:setup.max_entries - len(core)]
-    return [{**row, "v10_g_f_core": str(row["tradingsymbol"]) in core_symbols} for row in core + extras]
+    return [{**row, "v10_g_f_core": str(row["tradingsymbol"]) in core_symbols,
+             "relaxed_0925_added": setup.setup_id == "0926_LONG"
+                 and policy.enabled_for_session(_candidate_day(row, session_date))
+                 and not passes_selected_filters(row, _ACTIVE_BY_ID[setup.setup_id],
+                                                 session_date=session_date, original_only=True),
+             "strategy_policy": policy.policy_for_day(_candidate_day(row, session_date))}
+            for row in core + extras]
 
 
 def round_to_tick(value: float, tick_size: float) -> float:
@@ -394,6 +445,14 @@ def strategy_payload() -> dict[str, Any]:
                 confirmation_no_candle_observations=CONFIRMATION_NO_CANDLE_OBSERVATIONS,
                 confirmation_no_candle_min_age_sec=CONFIRMATION_NO_CANDLE_MIN_AGE_SEC,
                 confirmation_no_candle_spacing_sec=CONFIRMATION_NO_CANDLE_OBSERVATION_SPACING_SEC,
+                scheduled_promotion=dict(
+                    **policy.policy_for_day(policy.EFFECTIVE_DATE),
+                    relaxed_0925_thresholds=dict(policy.RELAXED_0925_LONG),
+                    selection_priority="ORIGINAL_G_CHOICES_FIRST_WITHIN_EXISTING_QUOTA",
+                    target_policy="UNCHANGED_FROM_RETAINED_G",
+                    timing_reference="ACTUAL_ENTRY; BAR_REPLAY_USES_ENTRY_BAR_END",
+                    active_setups=[asdict(setup_for(s.signal_end, s.side, session_date=policy.EFFECTIVE_DATE))
+                                   for s in ACTIVE_SETUPS]),
                 expected_backtest=EXPECTED_BACKTEST)
 
 
@@ -412,10 +471,15 @@ def validate_strategy() -> None:
     if any(s.stop_pct < .6 or s.stop_pct > 1.5 or s.target_pct > 3. or
            s.target_pct / s.stop_pct < 1.5 - 1e-12 for s in ACTIVE_SETUPS):
         raise AssertionError("Pinned B exit constraints violated")
+    for original in ACTIVE_SETUPS:
+        promoted = setup_for(original.signal_end, original.side, session_date=policy.EFFECTIVE_DATE)
+        if (promoted.stop_pct != policy.INITIAL_STOP_PCT or promoted.target_pct != original.target_pct
+                or promoted.max_entries != original.max_entries):
+            raise AssertionError("Promoted G stop, target or setup quota drift")
 
 
 def attest_selected_backtest(path: Path | str = SELECTED_LEDGER_PATH, *, require_provenance: bool = True) -> dict[str, Any]:
-    """Attest the retained G ledger, without requiring mutable live source files."""
+    """Attest baseline provenance; this is not validation of the promoted rules."""
     validate_strategy()
     selected = Path(path)
     if selected.resolve() != SELECTED_LEDGER_PATH.resolve():
@@ -424,6 +488,9 @@ def attest_selected_backtest(path: Path | str = SELECTED_LEDGER_PATH, *, require
         raise AssertionError("Retained G selected ledger changed")
     return {**EXPECTED_BACKTEST, "selected_ledger_sha256": SELECTED_LEDGER_SHA256,
             "frozen_config_sha256": CONFIG_SHA256,
+            "attestation_scope": "FROZEN_RETAINED_G_BASELINE_ONLY",
+            "scheduled_promotion": policy.policy_for_day(policy.EFFECTIVE_DATE),
+            "promoted_rules_independently_validated": False,
             "evidence": "EXPLORATORY_REUSED_HISTORY_NO_UNTOUCHED_TEST"}
 
 

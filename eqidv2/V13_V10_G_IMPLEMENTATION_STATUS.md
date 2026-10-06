@@ -1,5 +1,58 @@
 # V13-v10-G: active configuration and completed expansion study
 
+## Production policy from October 6, 2026
+
+The user-approved G-2 policy is promoted into the dated V13-v10-G equity
+scanner, confirmation, paper execution, quantity-one live session, and daily
+backtest. `fno_v13_v10_g_policy.py` pins activation to the **session date
+2026-10-06**. Replays through October 5 retain the original G rules; frozen
+research files and the original G-2 research options remain reproducible.
+
+Only the 09:25 LONG entry setup gains OI maximum 1.20%, five-minute volume
+minimum 1.75x, confirmation body minimum 54%, and bypassed EMA alignment.
+Original G choices take priority, with new candidates filling only its existing
+one-order quota. All equity setups use the requested G-2 stop: initially 1.25%,
+tightened once to 1.00% after 120 minutes. Targets, sizing, entry expiry,
+confirmation-volume and wick gates, other entry setups, and costs are retained.
+Live and quote-paper timing starts at actual entry; minute replay uses entry-bar
+end and applies tightening at the first subsequent bar open at/after the delay.
+
+The policy is included in the strategy fingerprint. The pinned 31-session ledger
+attests only baseline provenance, not independent validation of the new rules.
+The 44-session comparison supplied with the promotion request remains exploratory.
+Previously saved live snapshots retain their prior fingerprint and are not
+migrated into the new execution contract; reloading them with current live
+validators fails the identity check. Historical raw-data backtests still apply
+their original session-date rules. No old trading worker was running at rollout.
+Options paper workers inherit the equity selections but retain their separate
+option-premium exit model.
+
+All existing G tasks already point to this workspace: scanner/feed/confirmation,
+paper and live sessions next start **2026-10-06 09:15 IST**, and the daily backtest
+at **16:20 IST**. The existing live quantity remains one. No manual relaxed flag
+is needed in the scheduled launchers. Implementation checks use synthetic prices
+and fake brokers; deployment does not start a trading session or place orders.
+
+The main `fno_v13_v10_g_backtest.py` command also defaults to the dated
+production replay for today's IST session, with `--session-date` / `--date`
+for an explicit session. It applies the October 6 promotion automatically for
+qualifying session dates. `--frozen-research` is required to replay the sealed
+baseline; its `--source-dir` and `--config-json` options remain available there.
+Production output defaults to a unique dated `production_replays` directory;
+existing nonempty output folders are refused. No historical result CSV is
+rewritten as part of this entry-point change.
+
+Final rollout verification: **698 G regression tests passed** (2026-10-05),
+including dated raw replay, scanner-to-confirmation-to-order-state propagation,
+original-first selection, historical parity, staged live/paper exits, broker
+timeout/cancel/fill races, options consumers, reports, and launchers. Additional
+V5/V6 runtime and coordinator regression checks passed. The G CLI help and
+configuration validation passed, and `git diff --check` found no whitespace
+errors. The zero-trade portfolio schema now also passes the shadow finalizer's
+identity check; prior recorded daily results were not rewritten.
+
+The following sections record the earlier retained-G research baseline.
+
 The morning-slot and two-candle extensions are implemented as explicit G configuration flags and tested. **Neither extension passed the fixed quality requirements, so the active G retains its previous rules and 66-trade result.** The default replay now reads the active configuration in `run_20260914_opportunity_expansion/frozen_config.json`; both extension flags are disabled there. Each tested configuration is retained in its own `cases` folder.
 
 | Four fixed cases, all 31 available sessions | Trades | Trades/day | Win rate | PF | Modeled net | Daily-close drawdown |
@@ -21,7 +74,7 @@ Latest validation: **183 tests passed**, independent ledger/path/source audit, e
 
 [Latest report with monthly and daily comparisons](C:/TradingData/eqidv2/fno_oi/strategy_research/v13_corrected_v10_g/run_20260914_opportunity_expansion/V13_V10_G_EXPANSION_RESULTS.md).
 
-Run the four-case study with `python -B fno_v13_v10_g_expansion_research.py`. Run active G with `python -B fno_v13_v10_g_backtest.py`. The original 74-case study below remains reproducible separately with `python -B fno_v13_v10_g_research.py`.
+Run the four-case study with `python -B fno_v13_v10_g_expansion_research.py`. Reproduce this frozen baseline with `python -B fno_v13_v10_g_backtest.py --frozen-research`. The original 74-case study below remains reproducible separately with `python -B fno_v13_v10_g_research.py`.
 
 ## Previous threshold study
 
@@ -56,6 +109,6 @@ Results: [Detailed report and daily comparison](C:/TradingData/eqidv2/fno_oi/str
 
 Reproduce the study: `python -B fno_v13_v10_g_research.py`
 
-Replay the frozen candidate: `python -B fno_v13_v10_g_backtest.py`
+Replay the frozen candidate: `python -B fno_v13_v10_g_backtest.py --frozen-research`
 
 Validation: independent causal-selection/configuration/source-integrity review; 113 relevant tests passed; original F artifact hashes and corrected F order/fill/exit/portfolio-PnL parity; standalone G CLI replay; 1x/5x scaling and larger-capital invariance. Frozen dataset artifact checks pass. Two pinned, previously understood metadata changes (contract registry refresh and common calendar code) are recorded explicitly and do not rebuild frozen signals or prices.

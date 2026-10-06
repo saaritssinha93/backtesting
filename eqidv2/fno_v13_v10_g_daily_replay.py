@@ -30,6 +30,9 @@ import fno_oi_hybrid_data as hybrid
 import fno_v13_v10_g_backtest as g
 from fno_v13_v10_g_identity import SIGNAL_ID_SCHEMA_VERSION, canonical_signal_id
 import fno_v13_v10_g_live_config as config
+import fno_v13_v10_g_policy as policy
+import fno_v13_v10_g_selection as promoted_selection
+import fno_v13_v10_g_staged_replay as staged_replay
 import fno_v13_v9_data as features
 from ai_platform.observability.data_quality import (
     canonical_frame_sha256,
@@ -759,18 +762,71 @@ def _assert_day(frame: pd.DataFrame, day: date) -> None:
         raise ValueError("Replay frame contains dates outside the requested session")
 
 
+def select_day_orders(signals: pd.DataFrame, observed: pd.DataFrame, base, settings: dict, day: date):
+    """Original selection has priority; the dated exception only fills its vacancy."""
+    audit = g.selection_audit(signals, base, g.SelectionChange(**settings["selection_change"]),
+                             core_first=True, morning_slots=False, two_bar_continuation=False)
+    orders = audit.loc[audit.v9_selected.eq(True)].copy()
+    combined, relaxed_audit = promoted_selection.apply_relaxed_0925_long(
+        orders, observed, session_date=day)
+    if not policy.enabled_for_session(day):
+        return signals, audit, orders, relaxed_audit
+    additions = (combined.loc[combined.relaxed_0925_added.eq(True)].copy()
+                 if "relaxed_0925_added" in combined else combined.iloc[:0].copy())
+    if not additions.empty:
+        # Reserve IDs for every original candidate, including ranked-out rows.
+        start = int(signals.sid.max()) + 1 if len(signals) else 0
+        additions["signal_id"] = [canonical_signal_id(
+            config.STRATEGY_VERSION, day, "0925", "09:26", "LONG", str(symbol))
+            for symbol in additions.tradingsymbol]
+        old_ids = dict(zip(signals.signal_id, signals.sid))
+        additions["sid"] = [int(old_ids.get(signal_id, start + index))
+                            for index, signal_id in enumerate(additions.signal_id)]
+        additions["v9_selected"] = True
+        additions["v9_decision"] = "SELECTED_RELAXED_0925_LONG"
+        additions["v9_filter_pass"] = True
+        additions["v9_rank_in_setup_day"] = additions.relaxed_0925_rank
+        additions["v10_g_f_core"] = False
+        additions["v10_g_morning_slot"] = False
+        additions["configured_confirmation_end"] = "09:26"
+        additions["picker"] = "max_liquidity"
+        additions["max_entries"] = 1
+        additions["native_stop_pct"] = policy.INITIAL_STOP_PCT
+        additions["native_target_pct"] = settings["exit"]["setups"]["0926_LONG"]["target_pct"]
+        retained = signals.loc[~signals.signal_id.isin(additions.signal_id)]
+        signals = pd.concat([retained, additions], ignore_index=True, sort=False) if len(retained) else additions.copy()
+        if "signal_id" in audit:
+            audit = audit.loc[~audit.signal_id.isin(additions.signal_id)]
+        audit = pd.concat([audit, additions], ignore_index=True, sort=False) if len(audit) else additions.copy()
+        orders = pd.concat([orders, additions], ignore_index=True, sort=False) if len(orders) else additions.copy()
+        for frame in (signals, orders):
+            if frame.signal_id.duplicated().any() or frame.sid.duplicated().any():
+                raise ValueError("Duplicate promoted replay candidate identity")
+    # Persist executable exits in the order snapshot, not merely in the later
+    # portfolio simulation; the frozen table remains the target source.
+    for frame in (audit, orders):
+        frame["native_stop_pct"] = policy.INITIAL_STOP_PCT
+        frame["initial_stop_pct"] = policy.INITIAL_STOP_PCT
+        frame["tightened_stop_pct"] = policy.TIGHTENED_STOP_PCT
+        frame["tighten_after_minutes"] = policy.TIGHTEN_AFTER_MINUTES
+        frame["strategy_policy_revision"] = policy.REVISION
+    return signals, audit, orders, relaxed_audit
+
+
 def build_day_dataset(day: date, *, roots: DataRoots | None = None) -> dict:
     if type(day) is not date:
         raise TypeError("An explicit datetime.date session is required")
     roots = roots or DataRoots()
     config.validate_strategy()
     strategy_fingerprint = config.strategy_fingerprint()
+    observed_pools = []
     sources, problems, coverage, pools, feature_ledgers, data_quality_rows, observability_errors, minutes = [], [], [], [], [], [], [], {}
     universe_path = roots.universe / f"near_month_{day.isoformat()}.parquet"
     _record_source(universe_path, "DATED_UNIVERSE", sources)
     for path in (Path(__file__), Path(config.__file__), Path(g.__file__), Path(features.__file__),
                  Path(hybrid.__file__), Path(g.v9.__file__), Path(g.v9.v5.__file__), Path(g.v9.v6.__file__),
-                 Path(provenance.__file__), Path(common.__file__), config.CONFIG_PATH):
+                 Path(provenance.__file__), Path(common.__file__), Path(policy.__file__),
+                 Path(promoted_selection.__file__), Path(staged_replay.__file__), config.CONFIG_PATH):
         _record_source(path, "CODE_OR_PINNED_CONFIGURATION", sources)
     result = dict(day=day, days=[day], sources=sources, problems=problems, coverage_rows=coverage,
                   excluded_stocks=[],
@@ -779,7 +835,8 @@ def build_day_dataset(day: date, *, roots: DataRoots | None = None) -> dict:
                   feature_ledger=pd.DataFrame(),
                   data_quality_rows=data_quality_rows,
                   observability_errors=observability_errors,
-                  paths={}, universe_count=0, mapped_universe=pd.DataFrame())
+                  paths={}, universe_count=0, mapped_universe=pd.DataFrame(),
+                  strategy_policy=policy.policy_for_day(day), relaxed_0925_audit=pd.DataFrame())
     try:
         full = pd.read_parquet(universe_path)
         stocks = full.loc[~full.is_index_future.fillna(False).astype(bool)]
@@ -872,6 +929,7 @@ def build_day_dataset(day: date, *, roots: DataRoots | None = None) -> dict:
             pool["instrument_token"] = int(contract["equity_instrument_token"])
             pool["futures_instrument_token"] = int(contract["futures_instrument_token"])
             pool["exchange"] = "NSE"
+            observed_pools.append(pool)
             pools.append(_strict_signals(pool, nifty_return))
             try:
                 feature_ledgers.append(build_v13_v10_g_feature_ledger(
@@ -921,9 +979,9 @@ def build_day_dataset(day: date, *, roots: DataRoots | None = None) -> dict:
                         capital_per_entry_rupees=config.CAPITAL_PER_ENTRY_RS, leverage_factor=config.LEVERAGE,
                         max_positions=None, cost_bps=config.ROUND_TRIP_COST_BPS)
     settings = config.load_frozen_config()
-    audit = g.selection_audit(result["signals"], base, g.SelectionChange(**settings["selection_change"]),
-                             core_first=True, morning_slots=False, two_bar_continuation=False)
-    orders = audit.loc[audit.v9_selected.eq(True)].copy()
+    observed = pd.concat(observed_pools, ignore_index=True) if observed_pools else pd.DataFrame()
+    result["signals"], audit, orders, result["relaxed_0925_audit"] = select_day_orders(
+        result["signals"], observed, base, settings, day)
     if feature_ledgers:
         try:
             ledger = pd.concat(feature_ledgers, ignore_index=True)
@@ -1001,7 +1059,7 @@ def build_day_dataset(day: date, *, roots: DataRoots | None = None) -> dict:
 
 
 def simulate_day(dataset: dict) -> tuple[pd.DataFrame, dict]:
-    """Fixed G exits and capital, reusable for explicitly partial diagnostic parity."""
+    """Session-effective G exits and fixed capital, also used for diagnostic parity."""
     day, base = dataset["day"], dataset["v9_config"]
     orders = dataset["orders"].copy()
     _assert_day(orders, day)
@@ -1009,13 +1067,21 @@ def simulate_day(dataset: dict) -> tuple[pd.DataFrame, dict]:
     orders["native_stop_pct"] = orders.setup_id.map({key: value["stop_pct"] for key, value in exits.items()})
     orders["native_target_pct"] = orders.setup_id.map({key: value["target_pct"] for key, value in exits.items()})
     g.v9.validate_paths(orders, dataset["paths"])
-    trades = g.v9.v5.simulate_native(orders, dataset["paths"], cost_bps=base.cost_bps, max_entry_delay_minutes=10)
+    simulator = staged_replay.simulate_staged if policy.enabled_for_session(day) else g.v9.v5.simulate_native
+    trades = simulator(orders, dataset["paths"], cost_bps=base.cost_bps, max_entry_delay_minutes=10)
     for column, default in (("filled", False), ("entry_ts", pd.NaT), ("exit_ts", pd.NaT),
                             ("net_return_pct", np.nan), ("gross_return_pct", np.nan), ("cost_pct", np.nan)):
         if column not in trades:
             trades[column] = default
     trades = g.v9.v5.apply_fixed_capital_model(trades, base.capital_per_entry_rupees, base.leverage_factor)
     ledger, _ = g.v9.v6.apply_portfolio_constraints(trades, base.portfolio_config())
+    if ledger.empty:
+        # The after-close shadow finalizer still validates the CSV identity
+        # schema on a valid zero-order session.
+        for column in ("sid", "signal_id", "day", "hhmm", "side", "tradingsymbol",
+                       "setup_id", "configured_confirmation_end"):
+            if column not in ledger:
+                ledger[column] = pd.Series(index=ledger.index, dtype=object)
     _assert_day(ledger, day)
     for field_name in ("entry_ts", "exit_ts"):
         stamps = pd.to_datetime(ledger[field_name], utc=True, errors="coerce").dt.tz_convert(common.IST)
@@ -1051,9 +1117,12 @@ def replay_day(
     observability_errors = dataset.setdefault("observability_errors", [])
     for name, frame in (("candidate_signals", dataset["signals"]),
                         ("selection_audit", dataset.get("selection_audit", pd.DataFrame())),
+                        ("relaxed_0925_audit", dataset.get("relaxed_0925_audit", pd.DataFrame())),
                         ("selected_orders", dataset.get("orders", pd.DataFrame())),
                         ("coverage", pd.DataFrame(dataset["coverage_rows"]) if dataset["coverage_rows"] else
                          pd.DataFrame(columns=["symbol", "missing_equity_minutes", "missing_futures_bars"]))):
+        if len(frame.columns) == 0:
+            continue
         _assert_day(frame, day)
         path = output / f"{name}.csv"
         common.atomic_write_csv(frame, path)
@@ -1140,7 +1209,8 @@ def replay_day(
                                      "confirmation_warmup": "Prior 20 observed regular-session minutes required; no within-session gaps",
                                      "volume_calculation": "Unchanged native rolling20/min5; completeness guard requires20",
                                      "indicators": "Native full causal history; no truncated EMA approximation"},
-                    selection="Pinned retained G only; no optimization or alternative strategies",
+                    selection="Session-effective G policy; original selections retain priority; no optimization",
+                    strategy_policy=policy.policy_for_day(day),
                      complete=complete, coverage_problems=blocking_problems,
                      ignored_coverage_problems=ignored_problems,
                      excluded_stocks=dataset.get("excluded_stocks", []),
@@ -1148,6 +1218,7 @@ def replay_day(
     common.atomic_write_json(manifest_path, _json_ready(manifest))
     artifacts["source_manifest"] = str(manifest_path)
     result = dict(schema_version=SCHEMA_VERSION, strategy=STRATEGY, strategy_version=config.STRATEGY_VERSION,
+                  strategy_policy=policy.policy_for_day(day),
                   signal_identity_schema=SIGNAL_ID_SCHEMA_VERSION,
                   run_id=common.PROCESS_RUN_ID, replay_id=common.PROCESS_RUN_ID,
                   session_date=day.isoformat(), days=[day.isoformat()], complete=complete,

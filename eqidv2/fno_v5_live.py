@@ -54,6 +54,7 @@ import fno_oi_ema_confirm_backtest as backtest
 import fno_oi_hybrid_data as hybrid
 from fno_live_profile import config_for_generation, is_g_config
 from fno_v13_v10_g_identity import canonical_signal_id
+import fno_v13_v10_g_policy as g_policy
 LIVE_GENERATION = os.getenv("FNO_LIVE_GENERATION", "v5").strip().lower()
 if LIVE_GENERATION not in {"v5", "v6"}:
     raise RuntimeError(f"Unsupported FnO live generation: {LIVE_GENERATION}")
@@ -909,7 +910,7 @@ def scan_five_minute_slot(
                     "error_type": type(exc).__name__,
                 })
         side = (
-            config.base_signal_side(row, signal_end=signal_end,
+            config.base_signal_side(row, signal_end=signal_end, session_date=session_date,
                                     nifty_first_bar_return_pct=nifty_context.get("nifty_first_bar_return_pct"))
             if is_g_config(config) else _base_signal_side(row)
         )
@@ -1083,10 +1084,12 @@ def select_entry_signals(
     selected_signals: list[dict[str, Any]] = []
     directional = [row for row in confirmed if bool(row.get("confirmed"))]
     for side in ("LONG", "SHORT"):
-        setup = config.setup_for(signal_end, side)
+        setup = (config.setup_for(signal_end, side, session_date=session_date)
+                 if is_g_config(config) else config.setup_for(signal_end, side))
         if setup is None:
             continue
-        ranked = config.rank_candidates(directional, setup)
+        ranked = (config.rank_candidates(directional, setup, session_date=session_date)
+                  if is_g_config(config) else config.rank_candidates(directional, setup))
         for rank, candidate in enumerate(ranked, start=1):
             trigger = config.round_to_tick(
                 float(candidate["trigger"]), float(candidate.get("tick_size", 0.05))
@@ -1138,6 +1141,7 @@ def select_entry_signals(
                     "entry_order_type": "STOP_MARKET",
                     "trigger_price": trigger,
                     "stop_pct": setup.stop_pct,
+                    **_g_stop_policy_metadata(session_date),
                     "target_pct": setup.target_pct,
                     "stop_price": stop_price,
                     "target_price": target_price,
@@ -1230,6 +1234,16 @@ def _kite_place_order_compat(client: Any, payload: dict[str, Any]) -> Any:
     if isinstance(response, dict) and response.get("order_id"):
         return str(response["order_id"])
     return response
+
+
+def _kite_modify_order_compat(client: Any, payload: dict[str, Any]) -> Any:
+    """Preserve market protection on SDKs predating that modify parameter."""
+    put = getattr(client, "_put", None)
+    if payload.get("market_protection") is None or not callable(put):
+        return client.modify_order(**payload)
+    response = put("order.modify", url_args={"variety": payload["variety"],
+                   "order_id": payload["order_id"]}, params=dict(payload))
+    return str(response["order_id"]) if isinstance(response, dict) else response
 
 
 class KitePool:
@@ -1490,6 +1504,12 @@ class KitePool:
     def cancel_order(self, **kwargs: Any) -> Any:
         return self._call_mutation(
             "cancel_order", lambda client: client.cancel_order(**kwargs), dict(kwargs)
+        )
+
+    def modify_order(self, **kwargs: Any) -> Any:
+        payload = dict(kwargs)
+        return self._call_mutation(
+            "modify_order", lambda client: _kite_modify_order_compat(client, payload), payload
         )
 
 
@@ -1876,7 +1896,8 @@ def _authoritative_signal_ids(session_date: date) -> set[str]:
 def _validate_signal(signal: dict[str, Any], session_date: date) -> None:
     side = str(signal.get("side", "")).upper()
     signal_end = str(signal.get("signal_end", ""))
-    setup = config.setup_for(signal_end, side)
+    setup = (config.setup_for(signal_end, side, session_date=session_date)
+             if is_g_config(config) else config.setup_for(signal_end, side))
     if signal.get("strategy_version") != config.STRATEGY_VERSION:
         raise RuntimeError(f"Signal {signal.get('signal_id')} has a stale strategy version.")
     if signal.get("strategy_fingerprint") != config.strategy_fingerprint():
@@ -1901,6 +1922,7 @@ def _validate_signal(signal: dict[str, Any], session_date: date) -> None:
         "picker": setup.picker,
         "max_entries": setup.max_entries,
         "stop_pct": setup.stop_pct,
+        **_g_stop_policy_metadata(session_date),
         "target_pct": setup.target_pct,
         "capital_rs": config.CAPITAL_PER_ENTRY_RS,
         "leverage": config.LEVERAGE,
@@ -2532,6 +2554,7 @@ def create_order_state(
         "target_exposure_rs": float(signal["target_exposure_rs"]),
         "trigger_price": float(signal["trigger_price"]),
         "stop_pct": float(signal["stop_pct"]),
+        **_g_stop_policy_metadata(signal["session_date"]),
         "target_pct": float(signal["target_pct"]),
         "stop_price": float(signal["stop_price"]),
         "target_price": float(signal["target_price"]),
@@ -2608,6 +2631,7 @@ def _validate_order_state(
         "target_exposure_rs": config.TARGET_EXPOSURE_RS,
         "trigger_price": signal["trigger_price"],
         "stop_pct": signal["stop_pct"],
+        **_g_stop_policy_metadata(signal["session_date"]),
         "target_pct": signal["target_pct"],
         "round_trip_cost_bps": config.ROUND_TRIP_COST_BPS,
     }
@@ -2670,6 +2694,10 @@ def _close_state(
 ) -> dict[str, Any]:
     entry = float(state["entry_price"])
     quantity = int(state["quantity"])
+    partial_quantity = _safe_int(state.get("staged_partial_exit_quantity"), 0)
+    if partial_quantity:
+        exit_price = (float(state["staged_partial_exit_notional"])
+                      + float(exit_price) * (quantity - partial_quantity)) / quantity
     long_side = state["side"] == "LONG"
     gross = (
         (float(exit_price) - entry) * quantity
@@ -2702,6 +2730,45 @@ def _close_state(
         }
     )
     return state
+
+
+def _g_stop_policy_metadata(session_date: Any) -> dict[str, Any]:
+    if not is_g_config(config) or not g_policy.enabled_for_session(session_date):
+        return {}
+    return {
+        "stop_policy": "STAGED_125_TO_100_120M",
+        "initial_stop_pct": g_policy.INITIAL_STOP_PCT,
+        "tightened_stop_pct": g_policy.TIGHTENED_STOP_PCT,
+        "tighten_after_minutes": g_policy.TIGHTEN_AFTER_MINUTES,
+    }
+
+
+def _staged_stop_target(state: dict[str, Any], now: datetime) -> float | None:
+    """Compute a due stop from the actual fill, never from the signal clock."""
+    policy = _g_stop_policy_metadata(state.get("session_date"))
+    if not policy or not state.get("entry_at_ist"):
+        return None
+    entered = datetime.fromisoformat(str(state["entry_at_ist"]))
+    if entered.tzinfo is None:
+        entered = entered.replace(tzinfo=common.IST)
+    due = entered + timedelta(minutes=policy["tighten_after_minutes"])
+    state["stop_tighten_due_at_ist"] = due.isoformat(timespec="seconds")
+    if now < due:
+        return None
+    stop, _ = config.bracket_levels(
+        float(state["entry_price"]), str(state["side"]),
+        policy["tightened_stop_pct"], float(state["target_pct"]),
+        float(state["tick_size"]),
+    )
+    return stop
+
+
+def _confirm_staged_stop(state: dict[str, Any], stop: float, now: datetime) -> None:
+    # Keep stop_pct immutable: it identifies the initial signal contract.
+    state.update(stop_price=stop, active_stop_pct=g_policy.TIGHTENED_STOP_PCT,
+                 stop_tightened=True, stop_modification_uncertain=False,
+                 stop_tighten_status="CONFIRMED")
+    state.setdefault("stop_tightened_at_ist", now.isoformat(timespec="seconds"))
 
 
 def advance_paper_order(
@@ -2764,6 +2831,9 @@ def advance_paper_order(
             )
         return state
     if status == "OPEN":
+        tightened_stop = _staged_stop_target(state, now)
+        if tightened_stop is not None:
+            _confirm_staged_stop(state, tightened_stop, now)
         stop_hit = price <= float(state["stop_price"]) if long_side else price >= float(state["stop_price"])
         target_hit = price >= float(state["target_price"]) if long_side else price <= float(state["target_price"])
         if stop_hit:
@@ -2817,6 +2887,13 @@ def _broker_place(client: Any, **kwargs: Any) -> str:
     return str(
         _observe_broker_call("place_order", lambda: client.place_order(**payload))
     )
+
+
+def _broker_modify(client: Any, **kwargs: Any) -> str:
+    payload = dict(kwargs)
+    if str(payload.get("order_type", "")).upper() in {"MARKET", "SL-M"}:
+        payload.setdefault("market_protection", AUTO_MARKET_PROTECTION)
+    return str(_observe_broker_call("modify_order", lambda: client.modify_order(**payload)))
 
 
 def _broker_cancel(client: Any, order_id: str) -> None:
@@ -3063,12 +3140,25 @@ def _apply_live_entry_fill(
         float(state["target_pct"]),
         float(state["tick_size"]),
     )
+    entered = now
+    if _g_stop_policy_metadata(state.get("session_date")):
+        try:
+            actual_fill = pd.Timestamp(entry_order.get("exchange_update_timestamp"))
+            if not pd.isna(actual_fill):
+                actual_fill = (actual_fill.tz_localize(common.IST) if actual_fill.tzinfo is None
+                               else actual_fill.tz_convert(common.IST))
+                if actual_fill.date() == now.date() and actual_fill <= pd.Timestamp(now):
+                    entered = actual_fill.to_pydatetime()
+                    state["entry_time_source"] = "BROKER_EXCHANGE_UPDATE_TIMESTAMP"
+        except (TypeError, ValueError):
+            pass
+        state.setdefault("entry_time_source", "FILL_OBSERVATION_CLOCK")
     state.update(
         status="OPEN",
         status_reason="LIVE_ENTRY_FILLED",
         entry_price=fill_price,
         quantity=filled_quantity,
-        entry_at_ist=now.isoformat(timespec="seconds"),
+        entry_at_ist=entered.isoformat(timespec="seconds"),
         stop_price=stop,
         target_price=target,
         updated_at_ist=now.isoformat(timespec="seconds"),
@@ -3231,6 +3321,9 @@ def _begin_live_squareoff(
             order_type="MARKET",
         )
         if recovered:
+            _validate_recovered_order_quantity(
+                {**state, "quantity": int(state["quantity"])
+                 - _safe_int(state.get("staged_partial_exit_quantity"), 0)}, recovered)
             state["squareoff_order_id"] = str(recovered.get("order_id", ""))
     if not state.get("squareoff_order_id"):
         state["squareoff_order_id"] = _broker_place(
@@ -3239,7 +3332,7 @@ def _begin_live_squareoff(
             exchange=str(state["exchange"]),
             tradingsymbol=state["tradingsymbol"],
             transaction_type=exit_transaction,
-            quantity=int(state["quantity"]),
+            quantity=int(state["quantity"]) - _safe_int(state.get("staged_partial_exit_quantity"), 0),
             product="MIS",
             order_type="MARKET",
             validity="DAY",
@@ -3250,6 +3343,116 @@ def _begin_live_squareoff(
         status_reason=reason,
         updated_at_ist=now.isoformat(timespec="seconds"),
     )
+
+
+def _advance_live_staged_stop(
+    state: dict[str, Any], client: Any, now: datetime,
+    stop_order: dict[str, Any], target_order: dict[str, Any],
+    last_price: float | None,
+) -> None:
+    desired = _staged_stop_target(state, now)
+    if desired is None:
+        return
+    stop_status = str(stop_order.get("status", "")).upper()
+    if stop_status not in {"OPEN", "TRIGGER PENDING"}:
+        state["stop_tighten_status"] = "WAITING_FOR_STABLE_BROKER_STOP"
+        return
+    if (_safe_int(stop_order.get("filled_quantity"), 0) > 0
+            or (stop_status == "OPEN" and not state.get("stop_exit_market_submitted"))):
+        # OPEN (rather than TRIGGER PENDING) means the protective stop has
+        # triggered. Allow that existing exit to settle, including partial fills.
+        state["stop_tighten_status"] = "TRIGGERED_STOP_AWAITING_FILL"
+        return
+    observed = _safe_float(stop_order.get("trigger_price"))
+    if not state.get("stop_tighten_exit_requested"):
+        already_tighter = (observed >= desired if state["side"] == "LONG"
+                           else 0 < observed <= desired)
+        if already_tighter:
+            _confirm_staged_stop(state, observed, now)
+            return
+        price = _valid_live_price(last_price)
+        crossed = price is not None and (price <= desired if state["side"] == "LONG"
+                                         else price >= desired)
+        if not crossed:
+            try:
+                _broker_modify(client, variety="regular", order_id=str(state["stop_order_id"]),
+                               trigger_price=desired)
+            except Exception as exc:
+                if not _is_stop_trigger_relation_rejection(exc):
+                    state.update(stop_modification_uncertain=not _is_explicit_broker_rejection(exc),
+                                 stop_tighten_status="MODIFICATION_NOT_CONFIRMED")
+                    raise
+                crossed = True
+            else:
+                refreshed = _broker_order(client, str(state["stop_order_id"]))
+                broker_stop = _safe_float(refreshed.get("trigger_price"))
+                confirmed = (broker_stop >= desired if state["side"] == "LONG"
+                             else 0 < broker_stop <= desired)
+                if (str(refreshed.get("status", "")).upper() in {"OPEN", "TRIGGER PENDING"}
+                        and confirmed):
+                    _confirm_staged_stop(state, broker_stop, now)
+                else:
+                    state["stop_tighten_status"] = "AWAITING_BROKER_CONFIRMATION"
+                return
+        if crossed:
+            # Persist the exit intent before cancelling anything. Restarts resume
+            # this same protective order; they must never submit a second exit.
+            state.update(stop_tighten_exit_requested=True,
+                         stop_tighten_status="THRESHOLD_CROSSED_EXIT_REQUESTED")
+            _write_order_state(state)
+
+    if state.get("stop_tighten_exit_requested"):
+        target_id = str(state.get("target_order_id", ""))
+        if str(target_order.get("status", "")).upper() not in {"CANCELLED", "REJECTED"}:
+            _broker_cancel(client, target_id)
+            target_order = _broker_order(client, target_id)
+        target_status = str(target_order.get("status", "")).upper()
+        if target_status == "COMPLETE":
+            _broker_cancel(client, str(state["stop_order_id"]))
+            _close_state(state, _safe_float(target_order.get("average_price"),
+                                           float(state["target_price"])), "TARGET", now)
+            return
+        if target_status not in {"CANCELLED", "REJECTED"}:
+            state["stop_tighten_status"] = "WAITING_FOR_TARGET_CANCEL_ACK"
+            return
+        # The target must be gone before converting the existing protective
+        # stop. This retains broker identity and avoids a competing market exit.
+        target_filled = _safe_int(target_order.get("filled_quantity"), 0)
+        if target_filled:
+            target_average = _safe_float(target_order.get("average_price"))
+            if target_average <= 0 or not 0 < target_filled <= int(state["quantity"]):
+                raise RuntimeError("Invalid partial target fill during staged-stop exit")
+            state.update(staged_partial_exit_quantity=target_filled,
+                         staged_partial_exit_notional=target_filled * target_average,
+                         staged_target_exit_quantity=target_filled,
+                         staged_target_exit_notional=target_filled * target_average)
+            if target_filled == int(state["quantity"]):
+                _broker_cancel(client, str(state["stop_order_id"]))
+                _close_state(state, target_average, "TARGET", now)
+                return
+        stop_order = _broker_order(client, str(state["stop_order_id"]))
+        stop_status = str(stop_order.get("status", "")).upper()
+        if stop_status == "COMPLETE":
+            _close_state(state, _safe_float(stop_order.get("average_price"),
+                                           float(state["stop_price"])), "STOP", now)
+            return
+        if stop_status not in {"OPEN", "TRIGGER PENDING"}:
+            state["stop_tighten_status"] = "WAITING_FOR_STABLE_BROKER_STOP"
+            return
+        if (_safe_int(stop_order.get("filled_quantity"), 0) > 0
+                or (stop_status == "OPEN" and not state.get("stop_exit_market_submitted"))):
+            state["stop_tighten_status"] = "TRIGGERED_STOP_AWAITING_FILL"
+            return
+        converted = (str(stop_order.get("order_type", "")).upper() == "MARKET"
+                     or (state.get("stop_exit_market_submitted")
+                         and _safe_float(stop_order.get("trigger_price")) == 0))
+        if not converted:
+            state["stop_exit_market_submitted"] = True
+            _write_order_state(state)
+            _broker_modify(client, variety="regular", order_id=str(state["stop_order_id"]),
+                           order_type="MARKET", trigger_price=0,
+                           quantity=int(state["quantity"]) - target_filled)
+        state["stop_tighten_status"] = "PROTECTIVE_STOP_MARKET_EXIT_PENDING"
 
 
 def advance_live_order(
@@ -3503,10 +3706,13 @@ def advance_live_order(
                 role="stop",
                 tradingsymbol=str(state["tradingsymbol"]),
                 transaction_type=exit_transaction,
-                order_type="SL-M",
+                order_type=(("SL-M", "MARKET") if _g_stop_policy_metadata(state.get("session_date"))
+                            else "SL-M"),
             )
             if recovered_stop:
-                _validate_recovered_order_quantity(state, recovered_stop)
+                _validate_recovered_order_quantity(
+                    {**state, "quantity": int(state["quantity"])
+                     - _safe_int(state.get("staged_partial_exit_quantity"), 0)}, recovered_stop)
                 state["stop_order_id"] = str(recovered_stop.get("order_id", ""))
         if state["status"] == "OPEN" and not state.get("stop_order_id"):
             try:
@@ -3589,7 +3795,27 @@ def advance_live_order(
                 "TARGET",
                 now,
             )
+        if (stop_status not in {"REJECTED", "CANCELLED"}
+                and (state.get("stop_tighten_exit_requested")
+                     or (not kill_enabled and now < square_off))
+                and _staged_stop_target(state, now) is not None):
+            _advance_live_staged_stop(state, client, now, stop_order, target_order, last_price)
+            if state.get("stop_tighten_exit_requested"):
+                state["updated_at_ist"] = now.isoformat(timespec="seconds")
+                return state
         if stop_status in {"REJECTED", "CANCELLED"}:
+            if state.get("stop_exit_market_submitted"):
+                stop_filled = _safe_int(stop_order.get("filled_quantity"), 0)
+                if stop_filled:
+                    stop_average = _safe_float(stop_order.get("average_price"))
+                    partial_quantity = stop_filled + _safe_int(state.get("staged_target_exit_quantity"), 0)
+                    if stop_average <= 0 or not 0 < partial_quantity <= int(state["quantity"]):
+                        raise RuntimeError("Invalid partial protective exit during staged-stop recovery")
+                    state.update(staged_partial_exit_quantity=partial_quantity,
+                                 staged_partial_exit_notional=stop_filled * stop_average
+                                 + _safe_float(state.get("staged_target_exit_notional")))
+                    if partial_quantity == int(state["quantity"]):
+                        return _close_state(state, stop_average, "STOP", now)
             _begin_live_squareoff(
                 state,
                 client,
@@ -3724,6 +3950,9 @@ def _write_order_state(state: dict[str, Any]) -> None:
         "target_order_id",
         "squareoff_order_id",
         "entry_price",
+        "stop_price",
+        "active_stop_pct",
+        "stop_tighten_status",
         "exit_price",
         "quantity",
         "gross_pnl_rs",
@@ -4838,7 +5067,8 @@ def _publish_broker_position_reconciliation(
         if str(state.get("status", "")).upper() not in {"OPEN", "SQUARE_OFF_PENDING"}:
             continue
         symbol = str(state.get("tradingsymbol", "")).strip().upper()
-        quantity = max(0, _safe_int(state.get("quantity"), 0))
+        quantity = max(0, _safe_int(state.get("quantity"), 0)
+                       - _safe_int(state.get("staged_partial_exit_quantity"), 0))
         expected[symbol] = expected.get(symbol, 0) + (
             quantity if str(state.get("side", "")).upper() == "LONG" else -quantity
         )
@@ -4909,6 +5139,8 @@ def _publish_broker_position_reconciliation(
             continue
 
         roles = expected_roles.get(status, ())
+        if status == "OPEN" and state.get("stop_exit_market_submitted"):
+            roles = ("stop",)
         if status == "PENDING_ENTRY" and str(state.get("entry_order_id", "")).strip():
             roles = ("entry",)
         for role in roles:
@@ -4940,8 +5172,11 @@ def _publish_broker_position_reconciliation(
                     if role == "entry"
                     else exit_transaction
                 ),
-                "order_type": role_order_types[role],
-                "quantity": max(0, _safe_int(state.get("quantity"), 0)),
+                "order_type": ("MARKET" if role == "stop" and state.get("stop_exit_market_submitted")
+                               else role_order_types[role]),
+                "quantity": max(0, _safe_int(state.get("quantity"), 0)
+                                - (_safe_int(state.get("staged_partial_exit_quantity"), 0)
+                                   if role in {"stop", "squareoff"} else 0)),
             }
             previous = expected_active_orders.get(order_id)
             if previous is not None:

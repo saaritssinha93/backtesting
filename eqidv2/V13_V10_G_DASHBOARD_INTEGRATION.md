@@ -1,5 +1,13 @@
 # V13-V10-G dashboard, paper trading and live execution
 
+**Policy update effective 2026-10-06:** All dated equity scanner, confirmation,
+paper and quantity-one live sessions adopt the G-2 09:25 LONG relaxation and
+1.25% to 1.00% stop tightening after 120 minutes. See
+[the promotion record](V13_V10_G_IMPLEMENTATION_STATUS.md). The tables below
+describe the original baseline; their targets remain active, but their fixed
+equity stops are superseded for sessions on/after October 6. Scheduled launchers
+already reference the updated workspace and require no additional flag.
+
 Updated: 2026-09-14. The current dashboard sessions, launchers, logs and scheduled-task names use V13-V10-G. Existing V6 launcher filenames are compatibility forwarders to the canonical G launchers. Internal V6 feed-generation and acknowledgement names remain compatibility contracts; strategy evidence and reports use G's isolated location. The separate V10/V11/V12 shared paper session is unchanged.
 
 ## Active strategy and source

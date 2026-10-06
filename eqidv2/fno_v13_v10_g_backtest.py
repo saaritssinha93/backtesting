@@ -1,16 +1,25 @@
-"""New V10-G: causal, core-first threshold expansion from corrected V10-F."""
+"""V13-v10-G session-effective backtest; frozen research is explicitly opt-in.
+
+The default command replays today's IST session from recorded raw data. From
+2026-10-06 this includes relaxed 09:25 LONG selection and the 1.25% -> 1.00%
+stop after 120 minutes. Earlier dates retain their original G rules. Imported
+research helpers remain frozen-compatible; use --frozen-research to replay the
+sealed historical research bundle.
+"""
 from __future__ import annotations
 
 import argparse
 import copy
 import json
 from dataclasses import asdict, dataclass, replace
+from datetime import date, time
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 import fno_v13_v10_f_backtest as f
+import fno_v13_v10_g_policy as policy
 
 v9, r = f.v9, f.r
 DEFAULT_SOURCE = f.DEFAULT_SOURCE
@@ -18,6 +27,7 @@ THRESHOLD_OUTPUT = f.DEFAULT_OUTPUT.parent.parent / 'v13_corrected_v10_g/run_202
 EXPANSION_OUTPUT = THRESHOLD_OUTPUT.parent / 'run_20260914_opportunity_expansion'
 MORNING_OUTPUT = EXPANSION_OUTPUT
 DEFAULT_OUTPUT = EXPANSION_OUTPUT
+DEFAULT_PRODUCTION_OUTPUT = v9.v5.common.FNO_ROOT / 'strategy_research/v13_corrected_v10_g/production_replays'
 F_CORRECTED = f.DEFAULT_OUTPUT.parent / 'run_20260914_portfolio10l/CAPACITY_CORRECTED_5X'
 EVIDENCE = 'EXPLORATORY_REUSED_HISTORY_NO_UNTOUCHED_TEST'
 MORNING_DONORS = {
@@ -291,15 +301,24 @@ def evaluate(dataset, settings):
     return result
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source-dir', type=Path, default=DEFAULT_SOURCE)
-    parser.add_argument('--config-json', type=Path, default=DEFAULT_OUTPUT / 'frozen_config.json')
-    parser.add_argument('--output-dir', type=Path, default=DEFAULT_OUTPUT / 'cli_replay')
-    args = parser.parse_args()
-    settings = json.loads(args.config_json.read_text(encoding='utf-8'))
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--session-date', '--date', type=date.fromisoformat,
+                      help='One recorded IST session; defaults to today, using that date\'s production rules')
+    mode.add_argument('--frozen-research', action='store_true',
+                      help='Explicitly reproduce the original frozen G research bundle and fixed exits')
+    parser.add_argument('--source-dir', type=Path, help='Frozen research source; requires --frozen-research')
+    parser.add_argument('--config-json', type=Path, help='Frozen research configuration; requires --frozen-research')
+    parser.add_argument('--output-dir', type=Path,
+                        help='Production: new/empty directory, default a unique dated production_replays run; frozen: default cli_replay')
+    return parser
+
+
+def _run_frozen_research(source_dir, config_path, output_dir):
+    settings = json.loads(config_path.read_text(encoding='utf-8'))
     checked_settings(settings)
-    source = load_source(args.source_dir, two_bar_continuation=settings.get('two_bar_continuation', False))
+    source = load_source(source_dir, two_bar_continuation=settings.get('two_bar_continuation', False))
     orders = select_orders(source['signals'], source['v9_config'], SelectionChange(**settings['selection_change']),
                            core_first=settings['core_first'], morning_slots=settings.get('morning_slots', False),
                            two_bar_continuation=settings.get('two_bar_continuation', False))
@@ -307,12 +326,51 @@ def main():
         import fno_v13_v10_g_two_bar as two_bar
         dataset = {**source, 'orders': orders, 'paths': two_bar.load_paths(source, orders)}
     else:
-        with np.load(args.source_dir / 'dataset/paths.npz', allow_pickle=False) as archive:
+        with np.load(source_dir / 'dataset/paths.npz', allow_pickle=False) as archive:
             dataset = f.orders_dataset(source, source['signals'], archive, orders)
     result = evaluate(dataset, settings)
-    r.save(args.output_dir, *result)
+    r.save(output_dir, *result)
     print(json.dumps(r.metric(result[1], source['days']), indent=2))
+    return 0
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.frozen_research:
+        return _run_frozen_research(
+            args.source_dir or DEFAULT_SOURCE,
+            args.config_json or DEFAULT_OUTPUT / 'frozen_config.json',
+            args.output_dir or DEFAULT_OUTPUT / 'cli_replay',
+        )
+    if args.source_dir is not None or args.config_json is not None:
+        parser.error('--source-dir and --config-json require --frozen-research')
+
+    common = v9.v5.common
+    now = common.now_ist()
+    day = args.session_date or now.date()
+    status = None
+    exit_code = 2
+    if day > now.date():
+        status = 'BLOCKED_FUTURE_DATE'
+    elif not common.is_trading_day(day, common.load_holidays()):
+        status, exit_code = 'SKIPPED_NON_TRADING_DAY', 0
+    elif day == now.date() and now.time().replace(tzinfo=None) < time(15, 30):
+        status = 'WAITING_FOR_SESSION_CLOSE'
+    if status:
+        print(json.dumps(dict(strategy='V13-V10-G', session_date=day.isoformat(),
+                              state=status, complete=False,
+                              strategy_policy=policy.policy_for_day(day)), indent=2))
+        return exit_code
+
+    output = args.output_dir or DEFAULT_PRODUCTION_OUTPUT / day.isoformat() / now.strftime('%Y%m%dT%H%M%S%f')
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
+        parser.error('Production --output-dir must be new or empty; use a new directory for each replay')
+    from fno_v13_v10_g_daily_replay import replay_day
+    result = replay_day(day, output)
+    print(json.dumps(result, indent=2))
+    return 0 if result['complete'] else 2
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

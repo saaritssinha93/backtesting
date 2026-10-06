@@ -118,7 +118,7 @@ def test_new_unfrozen_date_replays_only_g_with_complete_dated_artifacts(raw, tmp
     assert ledger.tradingsymbol.tolist() == ["EXAMPLE"]
     assert ledger.setup_id.tolist() == ["1001_LONG"]
     exits = replay.config.load_frozen_config()["exit"]["setups"]["1001_LONG"]
-    assert ledger.native_stop_pct.tolist() == [exits["stop_pct"]]
+    assert ledger.native_stop_pct.tolist() == [replay.policy.INITIAL_STOP_PCT]
     assert ledger.native_target_pct.tolist() == [exits["target_pct"]]
     for artifact in result["artifacts"].values():
         assert Path(artifact).is_relative_to(tmp_path / "run")
@@ -435,6 +435,9 @@ def test_complete_zero_trade_session_is_valid_not_missing_data(raw, tmp_path):
     assert result["metrics"]["sessions"] == 1
     assert result["metrics"]["orders"] == result["metrics"]["fills"] == 0
     assert pd.read_csv(result["artifacts"]["portfolio_trades"]).empty
+    from ai_platform.observability.shadow_automation import _replay_rows
+    rows, evidence = _replay_rows(tmp_path / "quiet", result, DAY)
+    assert rows == {} and evidence["bytes"] > 0
 
 
 def test_requires_explicit_date():

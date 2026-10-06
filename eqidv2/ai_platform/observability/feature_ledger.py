@@ -129,6 +129,7 @@ def evaluate_v13_v10_g_base_row(
     """
 
     import fno_v13_v10_g_live_config as config
+    import fno_v13_v10_g_policy as policy
 
     values = {name: _value(row, name) for name in _FEATURE_FIELDS}
     values["confirmation_open"] = _value(row, "confirmation_open", "confirm_open")
@@ -152,19 +153,51 @@ def evaluate_v13_v10_g_base_row(
     symbol = str(_value(row, "tradingsymbol", "symbol") or "").strip().upper()
     futures_symbol = str(_value(row, "futures_tradingsymbol") or "").strip().upper()
 
+    day_value = _value(row, "day", "session_date")
+    try:
+        signal_stamp = pd.Timestamp(signal_ts)
+        if pd.isna(signal_stamp):
+            raise ValueError("Missing signal timestamp")
+        signal_stamp = (signal_stamp.tz_localize(config.common.IST) if signal_stamp.tzinfo is None
+                        else signal_stamp.tz_convert(config.common.IST))
+        session_date = pd.Timestamp(day_value).date() if day_value is not None else signal_stamp.date()
+        session_date_valid = session_date == signal_stamp.date()
+    except (TypeError, ValueError):
+        session_date = None
+        session_date_valid = False
+    base_row = {**dict(row), "signal_timestamp": _timestamp_text(signal_ts),
+                "nifty_first_bar_return_pct": numeric["nifty_first_bar_return_pct"]}
+    base_side = (config.base_signal_side(base_row, signal_end,
+                                        session_date=session_date) or "") if session_date_valid else ""
+    original_side = (config.base_signal_side(base_row, signal_end, session_date=session_date,
+                                            original_only=True) or "") if session_date_valid else ""
+    # Explain the applicable branch without rejecting a promoted LONG because
+    # it lacks the EMA alignment or OI ceiling required by the original branch.
+    relaxed_long = bool(
+        session_date_valid and policy.enabled_for_session(session_date)
+        and signal_end == "09:25" and original_side != "LONG"
+        and math.isfinite(numeric["price_change_pct"]) and numeric["price_change_pct"] >= 0
+    )
+
     base_names = (
         "ema9", "ema20", "ema50", "price_change_pct", "oi_change_pct",
         "volume_ratio", "oi", "prev_oi",
     )
-    finite = all(math.isfinite(numeric[name]) for name in base_names)
+    required_base_names = tuple(name for name in base_names if not relaxed_long or not name.startswith("ema"))
+    finite = all(math.isfinite(numeric[name]) for name in required_base_names)
     oi_pair_positive = finite and numeric["prev_oi"] > 0 and numeric["oi"] > 0
     oi_increasing = oi_pair_positive and numeric["oi"] > numeric["prev_oi"]
-    oi_min = finite and numeric["oi_change_pct"] >= config.BASE_OI_CHANGE_PCT
-    oi_max = finite and numeric["oi_change_pct"] <= config.MAX_OI_CHANGE_PCT
-    volume_base = finite and numeric["volume_ratio"] >= config.BASE_VOLUME_RATIO
-    ema_long = finite and numeric["ema9"] > numeric["ema20"] > numeric["ema50"]
+    minimum_oi = .10 if relaxed_long else config.BASE_OI_CHANGE_PCT
+    maximum_oi = policy.RELAXED_0925_LONG["oi_max_pct"] if relaxed_long else config.MAX_OI_CHANGE_PCT
+    minimum_volume = policy.RELAXED_0925_LONG["minimum_volume_ratio"] if relaxed_long else config.BASE_VOLUME_RATIO
+    minimum_price = .30 if relaxed_long else config.BASE_PRICE_CHANGE_PCT
+    oi_min = finite and numeric["oi_change_pct"] >= minimum_oi
+    oi_max = finite and numeric["oi_change_pct"] <= maximum_oi
+    volume_base = finite and numeric["volume_ratio"] >= minimum_volume
+    ema_long_aligned = finite and numeric["ema9"] > numeric["ema20"] > numeric["ema50"]
+    ema_long = relaxed_long or ema_long_aligned
     ema_short = finite and numeric["ema9"] < numeric["ema20"] < numeric["ema50"]
-    price_long = finite and numeric["price_change_pct"] >= config.BASE_PRICE_CHANGE_PCT
+    price_long = finite and numeric["price_change_pct"] >= minimum_price
     price_short = finite and numeric["price_change_pct"] <= -config.BASE_PRICE_CHANGE_PCT
     nifty_context = numeric["nifty_first_bar_return_pct"]
     nifty_short = (
@@ -174,10 +207,8 @@ def evaluate_v13_v10_g_base_row(
             and nifty_context <= config.NIFTY_FIRST_BAR_MAX_RETURN_PCT
         )
     )
-    common_base = finite and oi_pair_positive and oi_increasing and oi_min and oi_max and volume_base
-    base_long = common_base and ema_long and price_long
-    base_short = common_base and ema_short and price_short and nifty_short
-    base_side = "LONG" if base_long else "SHORT" if base_short else ""
+    base_long = base_side == "LONG"
+    base_short = base_side == "SHORT"
 
     confirmation_present = bool(
         _optional_bool(_value(row, "v9_exact_confirmation_present"))
@@ -223,7 +254,7 @@ def evaluate_v13_v10_g_base_row(
             lower_wick = (min(o, close) - low) / (high - low)
     wick_ratio = upper_wick if base_side == "LONG" else lower_wick if base_side == "SHORT" else math.nan
 
-    setup = config.setup_for(signal_end, base_side) if base_side else None
+    setup = config.setup_for(signal_end, base_side, session_date=session_date) if base_side else None
     signed_move = numeric["price_change_pct"] * (1 if base_side == "LONG" else -1)
     setup_gates: dict[str, bool] = {
         "gate_setup_exists": setup is not None,
@@ -253,10 +284,12 @@ def evaluate_v13_v10_g_base_row(
         "nifty_first_bar_return_pct": nifty_context,
     }
     setup_filter_pass = bool(
-        strict_signal and setup is not None and config.passes_selected_filters(candidate, setup)
+        strict_signal and setup is not None
+        and config.passes_selected_filters(candidate, setup, session_date=session_date)
     )
 
     gates = {
+        "gate_session_date": session_date_valid,
         "gate_values_finite": finite,
         "gate_oi_pair_positive": oi_pair_positive,
         "gate_oi_increasing": oi_increasing,
@@ -274,7 +307,7 @@ def evaluate_v13_v10_g_base_row(
         **setup_gates,
     }
     applicable_gate_order = [
-        "gate_values_finite", "gate_oi_pair_positive", "gate_oi_increasing",
+        "gate_session_date", "gate_values_finite", "gate_oi_pair_positive", "gate_oi_increasing",
         "gate_base_oi_min", "gate_base_oi_max", "gate_base_volume",
     ]
     if base_side == "LONG" or (ema_long or price_long):
@@ -321,6 +354,10 @@ def evaluate_v13_v10_g_base_row(
         "tradingsymbol": symbol,
         "futures_tradingsymbol": futures_symbol,
         "base_side": base_side,
+        "relaxed_0925_long_base_branch": relaxed_long,
+        "ema_alignment_bypassed": relaxed_long,
+        "ema_long_aligned": bool(ema_long_aligned),
+        "maximum_base_oi_change_pct": maximum_oi,
         "base_long_pass": _gate_result(base_long),
         "base_short_pass": _gate_result(base_short),
         "strict_signal_pass": _gate_result(strict_signal),
