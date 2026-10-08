@@ -6,6 +6,7 @@ are fixed donor copies, evaluated chronologically. Nothing is promoted.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 from dataclasses import asdict, replace
 from datetime import date, datetime
@@ -68,6 +69,7 @@ def protocol(source):
         baseline=str(BASELINE), first_signal='10:05', last_signal='14:00',
         confirmation='exact next completed minute; entry only after confirmation',
         donor_long='1001_LONG', donor_short='1121_SHORT',
+        donor_priority='Current G core-first priority retained: SHORT price move>=0.20% candidates precede expanded0.13% candidates; native liquidity ranking inside each tier.',
         setups=[asdict(s) | {'setup_id': s.setup_id} for s in donor_setups(source)],
         extra_policies='First qualifying top-liquidity selection per side/day in each of five fixed bands; plus whole-window BOTH capped at two orders/day',
         bands=BANDS, total_policies=106,
@@ -129,8 +131,14 @@ def select_addons(signals, source):
     parts = []
     volume = pd.to_numeric(signals.v9_1m_volume_ratio, errors='coerce')
     good = signals.loc[np.isfinite(volume) & volume.ge(1.2)].copy()
+    originals={s.setup_id:s for s in g2.g.v9.v5.profile_setups(g2.g.v9.v5.PROFILES['higher_frequency'])}
     for spec in donor_setups(source):
-        rows = g2.g.v9.v5.replay.select_setup_rows(good, spec)
+        donor_id='1001_LONG' if spec.side=='LONG' else '1121_SHORT'
+        core,_=g2.g.setup_pair(originals[donor_id],g2.g.SelectionChange(**source['selection_change']))
+        core=replace(core,signal_end=spec.signal_end,confirmation_end=spec.confirmation_end,max_entries=1)
+        primary=g2.g.v9.v5.replay.select_setup_rows(good,core)
+        expanded=g2.g.v9.v5.replay.select_setup_rows(good,spec)
+        rows=pd.concat([primary,expanded.loc[~expanded.day.isin(primary.day)]],ignore_index=False)
         if rows.empty:
             continue
         confirm = pd.to_datetime(rows.confirmation_ts, utc=True)
@@ -227,6 +235,61 @@ def policies(simulated, source):
     result['FIRST_1005_1400_BOTH'] = pd.concat([result['FIRST_1005_1400_LONG'],result['FIRST_1005_1400_SHORT']],ignore_index=True)
     assert len(result) == 106
     return result
+
+
+def write_review(output, outcome, table, daily):
+    """Human-readable research report; never an activation or config artifact."""
+    def show(frame):
+        return frame.to_html(index=False,border=0,float_format=lambda v:f'{v:,.2f}',escape=True)
+    top=table.sort_values('addon_net',ascending=False).head(12)
+    columns=['case','addon_trades','addon_win_rate_pct','addon_net','addon_costs','addon_pf',
+             'train_net','validation_net','audit_net','screen_pass']
+    proposal=outcome['proposal_selected_without_audit']
+    proposal_text=(f'Preselected research proposal: {proposal}. Later-period review passed: '
+                   f'{outcome["proposal_passed_final_review"]}.' if proposal else
+                   'No policy passed the predeclared training and validation screen. No new window is proposed for adoption.')
+    folds=[]
+    if proposal:
+        row=table.set_index('case').loc[proposal]
+        for fold in ('train','validation','audit'):
+            folds.append(dict(period=fold,trades=row[fold+'_trades'],win_rate_pct=row[fold+'_win_rate_pct'],
+                              net_rupees=row[fold+'_net'],net_at_10bps=row[fold+'_net_10bps'],
+                              profit_factor=row[fold+'_pf']))
+    baseline=outcome['baseline']
+    comparison=[dict(case='CURRENT_G2',trades=baseline['trades'],win_rate_pct=baseline['win_rate_pct'],
+        net_rupees=baseline['net'],cost_rupees=baseline['costs'],profit_factor=baseline['pf'],daily_drawdown_rupees=baseline['daily_dd'])]
+    for case in outcome['review_cases']:
+        row=table.set_index('case').loc[case]
+        comparison.append(dict(case=case,trades=row.combined_trades,win_rate_pct=row.combined_win_rate_pct,
+            net_rupees=row.combined_net,cost_rupees=row.combined_costs,profit_factor=row.combined_pf,daily_drawdown_rupees=row.combined_daily_dd))
+    day_columns=['baseline_net_pnl_rupees']+[c+'_addon_net' for c in outcome['review_cases']]
+    day_view=daily[day_columns+['addon_coverage_complete']].reset_index()
+    notes=[
+        '106 fixed policies: 95 unused side/time cells, ten first-entry band/side policies, and one first-entry both-side policy.',
+        'Five-minute signals 10:05 through 14:00; confirmation at the next completed minute 10:06 through 14:01. Existing 11:20 SHORT remains reserved.',
+        'LONG donor 10:00: price change >=0.40%, OI increase 0.05% to 1.00%, target 3.00%. SHORT donor 11:20: price change <=-0.13%, OI increase 0.05% to 1.00%, target 2.00%.',
+        'Both sides retain directional five-minute EMA9/20/50, five-minute volume >=1x, next-minute volume >=1.2x, directional confirmation, body >=40%, adverse wick <=60%. Current core-first priority is retained: SHORT moves >=0.20% precede the relaxed 0.13% tier, ranked by traded value within each tier; top 1 per setup/day.',
+        'Stops 1.25% from actual entry, tightened to 1.00% after 120 minutes. Ten-minute entry expiry, stop-first ambiguous minute bars, 15:15 squareoff.',
+        'Capital 1,000,000 rupees, 100,000 per entry, 5x exposure. Flat 5 bps round-trip cost =250 rupees per fill. 10/15 bps stress is reported. No separate market-impact or integer-share fill model.',
+        'All 100 original selected orders and 91 executed trades retained identically in every case; existing source files verified unchanged.',
+        'Baseline 44 recorded sessions through 2026-10-05. Addons evaluated only on '+str(len(outcome['addon_eligible_sessions']))+' fully covered sessions. Missing addon coverage dates: '+', '.join(outcome['excluded_addon_sessions'])+'. Existing trades on these dates retained.',
+        'Combined totals retain all 44 baseline sessions and assume zero additional contribution on the three unavailable research dates. This is incomplete addon coverage, not proof that an addon strategy would have taken no trades on those dates. Same-session baseline metrics are also recorded in summary.json.',
+        'Train through Aug 31, validation Sep 1–18, later audit Sep 21–Oct 5. The proposal uses only train and validation results. No replacement is chosen after viewing audit failure.',
+        'This history was previously examined. The chronological audit is retrospective, not untouched out-of-sample evidence. Best full-history rankings are diagnostics affected by 106 comparisons.',
+        'Training and validation require at least 5 and 3 fills, respectively, PF >=1.20 and positive net after 10 bps. Later review requires at least 3 fills, PF >=1.20, positive net after 10 bps and combined daily drawdown <=120% of baseline.',
+        'No changes are approved, promoted, scheduled or connected to broker orders. User approval is required before integration.'
+    ]
+    body=f'''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>G-2 unused-window research</title><style>body{{font:15px system-ui,sans-serif;margin:32px;color:#17212b;background:#f6f8fa}}main{{max-width:1500px;margin:auto}}h1{{font-size:26px}}h2{{font-size:20px;margin-top:30px}}p,li{{line-height:1.55}}table{{border-collapse:collapse;background:white;font-size:13px;width:100%}}th,td{{padding:9px 12px;text-align:right;border-bottom:1px solid #dce3e8;white-space:nowrap}}th:first-child,td:first-child{{text-align:left}}th{{background:#e5edf4}}section{{overflow:auto}}a{{color:#174d78}}.status{{background:#fff3cd;padding:16px;border-left:4px solid #a77916}}</style><main>
+<h1>V13-v10-G-2 unused-window research</h1><p class="status">Research only. Awaiting user approval. {html.escape(proposal_text)}</p>
+<p>Current G-2 net profit: {baseline['net']:,.2f} rupees from {baseline['trades']} trades. Every original entry and exit is preserved.</p>
+<h2>Combined comparison</h2><section>{show(pd.DataFrame(comparison))}</section>
+<h2>Chronological results for the preselected proposal</h2><section>{show(pd.DataFrame(folds)) if folds else '<p>No proposal passed the screen.</p>'}</section>
+<h2>Highest full-history incremental profits — diagnostic ranking</h2><p>These rows are not approved strategies. Compare their earlier and later results before interpreting the totals.</p><section>{show(top[columns])}</section>
+<h2>Daywise comparison</h2><p>Addon columns show only the additional net contribution. False coverage means research was unavailable for that day, not an observed no-trade outcome.</p><section>{show(day_view)}</section>
+<h2>Rules and evidence</h2><ul>{''.join('<li>'+html.escape(n)+'</li>' for n in notes)}</ul>
+<p><a href="all_106_policy_results.csv">All 106 policy results</a> · <a href="all_106_daywise_results.csv">All 106 daywise results</a> · <a href="daywise_comparison.csv">Shortlist daywise comparison</a> · <a href="summary.json">Full research evidence</a></p></main></html>'''
+    (output/'research_report.html').write_text(body,encoding='utf-8')
 
 
 def run(output, baseline_root=BASELINE):
@@ -326,6 +389,7 @@ def run(output, baseline_root=BASELINE):
                       and table.set_index('case').loc[proposal,'combined_daily_dd']<=1.2*control['daily_dd'])
     table.sort_values(['addon_net','case'],ascending=[False,True]).to_csv(output/'all_106_policy_results.csv',index=False)
     pd.concat(all_daily,ignore_index=True).to_csv(output/'all_106_daywise_results.csv',index=False)
+    pd.concat([frame.assign(policy_case=case) for case,frame in addon_ledgers.items()],ignore_index=True,sort=False).to_csv(output/'all_106_addon_trades.csv',index=False)
     pd.DataFrame(rejected_rows,columns=['case','case_order_key','reason','reserved_slots']).to_csv(output/'capacity_rejections.csv',index=False)
     best_full = str(table.sort_values(['addon_net','case'],ascending=[False,True]).iloc[0]['case'])
     review_cases = list(dict.fromkeys([c for c in [proposal,best_full,'FIRST_1005_1400_LONG','FIRST_1005_1400_SHORT','FIRST_1005_1400_BOTH'] if c]))
@@ -344,7 +408,9 @@ def run(output, baseline_root=BASELINE):
     after = {path:g2.sha256(Path(path)) for path in before}
     if before != after:
         raise AssertionError('Pre-existing file changed during research')
-    outcome = dict(protocol=plan,baseline=control,sessions=[str(d) for d in days],
+    outcome = dict(protocol=plan,baseline=control,
+        common_session_baseline=metric(baseline.loc[baseline.day.isin(eligible_days)],eligible_days),
+        sessions=[str(d) for d in days],
         addon_eligible_sessions=[str(d) for d in eligible_days],excluded_addon_sessions=[str(d) for d in excluded],
         folds={k:[str(d) for d in ds] for k,ds in folds.items()},
         policies_tested=len(table),screen_passes=int(table.screen_pass.sum()),
@@ -356,6 +422,10 @@ def run(output, baseline_root=BASELINE):
         approval_status='AWAITING_USER_APPROVAL_NO_PROMOTION',data_evidence=evidence,
         protected_sha256=before,code_sha256={p.name:g2.sha256(p) for p in Path('.').glob('fno_v13_v10_g_2_unused_slots*.py')})
     g2.dump_json(output/'summary.json',ext._finite_json(outcome))
+    write_review(output,outcome,table,daily)
+    g2.dump_json(output/'research_manifest.json',dict(complete=True,
+        artifacts={str(p.relative_to(output)):g2.sha256(p) for p in output.rglob('*') if p.is_file() and p.name!='research_manifest.json'},
+        code_sha256=outcome['code_sha256'],protected_files_unchanged=True,execution_authority=False))
     print(json.dumps(ext._finite_json({k:outcome[k] for k in ('baseline','policies_tested','screen_passes','proposal_selected_without_audit','proposal_passed_final_review','full_history_best_diagnostic_only','excluded_addon_sessions','proposal_metrics')}),indent=2),flush=True)
     print('RESULTS: '+str(output),flush=True)
     return outcome

@@ -142,3 +142,55 @@ def test_new_setups_exclude_occupied_cell_and_inherit_explicit_donor_targets():
         expected_confirmation = (pd.Timestamp("2000-01-01 " + setup.signal_end)
                                  + pd.Timedelta(minutes=1)).strftime("%H:%M")
         assert setup.confirmation_end == expected_confirmation
+
+
+def short_signal(symbol, move, liquidity, *, day="2026-10-05", minute_volume=2.0):
+    return {
+        "day": pd.Timestamp(day).date(),
+        "tradingsymbol": symbol,
+        "side": "SHORT",
+        "hhmm_int": 1005,
+        "signal_ts": stamp("10:05", day),
+        "confirmation_ts": stamp("10:06", day),
+        "v9_1m_feature_ts": stamp("10:06", day),
+        "v9_1m_volume_ratio": minute_volume,
+        "price_change_pct": -move,
+        "oi_change_pct": 0.10,
+        "volume_ratio": 2.0,
+        "body_ratio": 0.60,
+        "wick_ratio": 0.20,
+        "traded_value": liquidity,
+    }
+
+
+def test_more_liquid_relaxed_short_cannot_displace_passing_donor_core():
+    source = research.g2.read_json(research.g2.DEFAULT_G_CONFIG)
+    signals = pd.DataFrame([
+        short_signal("CORE", 0.22, 100),
+        short_signal("RELAXED_MORE_LIQUID", 0.14, 900),
+    ])
+    chosen = research.select_addons(signals, source)
+    assert chosen.tradingsymbol.tolist() == ["CORE"]
+    assert chosen.research_case.tolist() == ["1005_SHORT"]
+
+
+def test_relaxed_short_fills_only_days_without_passing_donor_core():
+    source = research.g2.read_json(research.g2.DEFAULT_G_CONFIG)
+    signals = pd.DataFrame([
+        short_signal("CORE_DAY1", 0.22, 100),
+        short_signal("RELAXED_DAY1", 0.14, 900),
+        short_signal("RELAXED_DAY2", 0.14, 900, day="2026-10-06"),
+        short_signal("LESS_LIQUID_DAY2", 0.15, 100, day="2026-10-06"),
+    ])
+    chosen = research.select_addons(signals, source).sort_values("day")
+    assert chosen.tradingsymbol.tolist() == ["CORE_DAY1", "RELAXED_DAY2"]
+
+
+def test_core_with_failed_confirmation_volume_does_not_block_valid_relaxation():
+    source = research.g2.read_json(research.g2.DEFAULT_G_CONFIG)
+    signals = pd.DataFrame([
+        short_signal("CORE_BAD_CONFIRMATION", 0.22, 100, minute_volume=1.19),
+        short_signal("RELAXED", 0.14, 900),
+    ])
+    chosen = research.select_addons(signals, source)
+    assert chosen.tradingsymbol.tolist() == ["RELAXED"]

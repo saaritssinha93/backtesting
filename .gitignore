@@ -223,6 +223,8 @@ __pycache__
 # Include backtesting directory but only CSV and py files inside it
 !eqidv2/
 eqidv2/**
+!eqidv2/dashboard_fno_monitor.js
+!eqidv2/dashboard_fno_monitor.css
 !eqidv2/**/
 !eqidv2/**/*.py
 !eqidv2/**/*.md

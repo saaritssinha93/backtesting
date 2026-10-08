@@ -213,6 +213,35 @@ FNO_MULTI_PAPER_CARD_PROFILES: Dict[str, str] = {
 }
 FNO_MULTI_PAPER_CARD_IDS: Tuple[str, ...] = tuple(FNO_MULTI_PAPER_CARD_PROFILES)
 FNO_EQ_ID_MONITOR_CARD_ID = "v7_live_5min_monitor"
+_FNO_MONITOR_DETAIL_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+_FNO_MONITOR_DETAIL_LOCK = threading.RLock()
+
+
+def _build_fno_eq_id_stock_detail(root: Path, session_date: str, *, now_ist=None) -> dict:
+    # Lazy import keeps other dashboard cards available if this optional
+    # read-only detail reader cannot be loaded. No trading engine is invoked.
+    from fno_eq_id_monitor_detail import build_monitor_detail
+    return build_monitor_detail(root, session_date, now_ist=now_ist)
+
+
+def _fno_eq_id_stock_detail(session_date: str, *, now_ist=None) -> dict:
+    if not isinstance(session_date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session_date):
+        raise ValueError("Use a session date in YYYY-MM-DD format")
+    dt.date.fromisoformat(session_date)
+    key = (str(FNO_OI_ROOT.resolve()), session_date)
+    with _FNO_MONITOR_DETAIL_LOCK:
+        cached = _FNO_MONITOR_DETAIL_CACHE.get(key)
+        if cached is not None and time.monotonic() - cached[0] < 5.0:
+            return cached[1]
+        payload = _build_fno_eq_id_stock_detail(
+            FNO_OI_ROOT, session_date, now_ist=now_ist or dt.datetime.now(IST))
+        _FNO_MONITOR_DETAIL_CACHE[key] = (time.monotonic(), payload)
+        while len(_FNO_MONITOR_DETAIL_CACHE) > 4:
+            oldest = min(_FNO_MONITOR_DETAIL_CACHE, key=lambda item: _FNO_MONITOR_DETAIL_CACHE[item][0])
+            del _FNO_MONITOR_DETAIL_CACHE[oldest]
+        return payload
+
+
 # The card keeps its historical ID so saved dashboard pins/full-screen state do
 # not break, but its scope is now the complete FnO operational chain requested
 # by the operator.  The grouping mirrors the visible dashboard headings.
@@ -7106,6 +7135,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             payload = self._snapshot(lines=lines)
             self._send_json(payload)
             return
+        if parsed.path == "/api/fno-monitor":
+            dates = params.get("date") or [dt.datetime.now(IST).date().isoformat()]
+            if len(dates) != 1:
+                self._send_json({"error": "Specify one session date in YYYY-MM-DD format."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                payload = _fno_eq_id_stock_detail(dates[0])
+            except ValueError:
+                self._send_json({"error": "Use a valid session date in YYYY-MM-DD format."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error": "Stock monitoring evidence is temporarily unavailable."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload)
+            return
         if parsed.path == "/api/log":
             name = (params.get("name") or [""])[0]
             if name not in LOG_IDS:
@@ -9297,6 +9341,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <div class="snapshot-grid" id="opsSnapshot"></div>
   <div class="wrap" id="cards"></div>
 
+  <style>__FNO_MONITOR_CSS__</style>
+  <script>__FNO_MONITOR_JS__</script>
   <script>
     const LOG_ORDER = [
       "nifty_guard_fetch_v16_5min",
@@ -11412,6 +11458,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 </div>
               </div>
               ${killControls}
+              ${id === "v7_live_5min_monitor" ? '<section id="fno-stock-monitor" class="fno-detail-panel" data-read-only="true" aria-label="Stock-level 5-minute and 1-minute monitoring"></section>' : ""}
               ${isEmptyLog ? `<div class="empty-state"><div><strong>${esc(emptyLabel)}</strong><span>${esc(emptyHint)}</span></div></div>` : `<pre>${esc(logText)}</pre>`}
             </div>
           `;
@@ -11492,6 +11539,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         wireSectionNav();
 
         const cards = document.getElementById('cards');
+        if (window.FnoMonitor) window.FnoMonitor.beforeRefresh();
         cards.innerHTML = html;
         wireCardControls();
         wirePinControls();
@@ -11501,6 +11549,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         wireRestartControls();
         wireKillSwitchControls();
         enhanceSortableTables();
+        if (window.FnoMonitor) window.FnoMonitor.mount(document.getElementById("fno-stock-monitor"), API_TOKEN);
         applyFullscreenState();
         cards.querySelectorAll('pre').forEach((preEl) => {
           preEl.scrollTop = preEl.scrollHeight;
@@ -11534,6 +11583,8 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
 </body>
 </html>"""
         html = html.replace("__API_TOKEN_JSON__", api_token_json)
+        html = html.replace("__FNO_MONITOR_CSS__", (BASE_DIR / "dashboard_fno_monitor.css").read_text(encoding="utf-8"))
+        html = html.replace("__FNO_MONITOR_JS__", (BASE_DIR / "dashboard_fno_monitor.js").read_text(encoding="utf-8"))
         body = html.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")

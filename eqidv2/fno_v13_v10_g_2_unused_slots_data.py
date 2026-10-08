@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import argparse
+import inspect
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date
@@ -24,6 +25,13 @@ import fno_v13_v10_g_daily_replay as replay
 
 
 SCHEMA = "g2_unused_slots_extension_inputs_v1"
+PRIOR_PARITY_READER_SHA256 = "80d90440e904b500e0c7e70c15a08720dc7d52a8be8adfde0c678fff9013bb08"
+UNCHANGED_MATH_SHA256 = {
+    "_flagged": "75446e84cf517ca6b39f7c587a0a0943eacf61d83e4d612d6b106970228cfbd7",
+    "_pool": "e1fb507ba77ffdbdade7801477a51e99d8bcaef002dde37915dcd242ed0ae094",
+    "_coverage": "062964119ede9416d14b9f38e8684419d5a5ddf7a99b0a3b9a24cba2f1863f57",
+    "_build_day": "3c9ee4a92b19ea9e793e0e4f67388765bd4d141895c0a820b3fc301af1a27491",
+}
 SLOT_CLOCKS = tuple(pd.date_range("2000-01-01 10:05", "2000-01-01 14:00", freq="5min").strftime("%H:%M"))
 PARITY_FIELDS = (
     "open", "high", "low", "close", "volume", "source_1m_count",
@@ -110,6 +118,15 @@ def _parity(raw, official, day, symbol):
     for field in PARITY_FIELDS:
         if field not in old or field not in raw:
             continue
+        if raw[field].dtype == np.dtype("float32"):
+            # pandas CSV writes a float32's shortest round-trip decimal, e.g.
+            # 1269.300048828125 becomes 1269.3. Restore the original dtype and
+            # require bit-exact parity rather than treating that as new data.
+            old_native = check[field + "_old"].to_numpy(dtype=np.float32)
+            new_native = check[field + "_new"].to_numpy(dtype=np.float32)
+            if not np.array_equal(old_native.view(np.uint32), new_native.view(np.uint32)):
+                raise ValueError(f"Original float32 bit parity failed: {day} {symbol} {field}")
+            continue
         if not np.allclose(check[field + "_old"], check[field + "_new"], atol=1e-8, rtol=0, equal_nan=True):
             error = (check[field + "_old"] - check[field + "_new"]).abs().max()
             raise ValueError(f"Original feature parity failed: {day} {symbol} {field} max_delta={error}")
@@ -149,11 +166,27 @@ def _coverage(raw, minute, day, symbol):
         research_eligible=eligible)
 
 
+def _compatible_identity(previous, current):
+    if previous == current:
+        return True
+    prior = json.loads(json.dumps(previous))
+    old_source = prior.get("parent", prior)
+    new_source = current.get("parent", current)
+    if old_source.get("helper_sha256") != PRIOR_PARITY_READER_SHA256:
+        return False
+    for name, expected in UNCHANGED_MATH_SHA256.items():
+        observed = hashlib.sha256(inspect.getsource(globals()[name]).encode()).hexdigest()
+        if observed != expected:
+            raise ValueError(f"Old cache cannot be reused after mathematical code change: {name}")
+    old_source["helper_sha256"] = new_source.get("helper_sha256")
+    return prior == current
+
+
 def _read_cache(output, identity):
     manifest_path = output / "manifest.json"
     if manifest_path.is_file():
         manifest = g2.read_json(manifest_path)
-        if manifest.get("identity") != identity or manifest.get("complete") is not True:
+        if not _compatible_identity(manifest.get("identity", {}), identity) or manifest.get("complete") is not True:
             raise ValueError("Existing extension cache identity differs")
         for name, checksum in manifest["artifacts"].items():
             if g2.sha256(output / name) != checksum:
@@ -167,7 +200,16 @@ def _read_cache(output, identity):
         coverage = pd.read_csv(output / "coverage.csv")
         if len(signals):
             g2.g.v9.validate_paths(signals, paths)
-        return signals, paths, coverage, manifest["evidence"]
+        evidence = dict(manifest["evidence"])
+        if manifest["identity"] != identity:
+            evidence["cache_parity_reader_migration"] = dict(
+                original_reader_sha256=PRIOR_PARITY_READER_SHA256,
+                new_helper_sha256=g2.sha256(Path(__file__)),
+                original_cache_manifest_sha256=g2.sha256(manifest_path),
+                unchanged_mathematical_functions=UNCHANGED_MATH_SHA256,
+                all_original_cached_artifact_hashes_verified=True,
+                reason="Only CSV float32 parity reading corrected; generated features, coverage and paths unchanged.")
+        return signals, paths, coverage, evidence
     return None
 
 
@@ -274,7 +316,7 @@ def build_extension_data(baseline_summary: dict, output: Path):
         return cached
     identity_path = output / "build_identity.json"
     if output.exists():
-        if not identity_path.is_file() or g2.read_json(identity_path) != identity:
+        if not identity_path.is_file() or not _compatible_identity(g2.read_json(identity_path), identity):
             raise FileExistsError(f"Unrecognized existing extension cache: {output}")
     else:
         output.mkdir(parents=True)
@@ -314,6 +356,12 @@ def build_extension_data(baseline_summary: dict, output: Path):
     evidence = dict(schema=SCHEMA, full_native_history_ema=True, original_feature_parity_atol=1e-8,
         original_feature_parity_rtol=0, sources=[item[3] for item in ordered], strict_candidates=len(signals),
         path_count=len(paths), research_slots=list(SLOT_CLOCKS), selection_authority=False,
+        original_float32_feature_parity="CSV restored to native float32, then exact uint32 bit equality",
+        parity_reader_correction=dict(original_reader_sha256=PRIOR_PARITY_READER_SHA256,
+            new_helper_sha256=g2.sha256(Path(__file__)), unchanged_mathematical_functions=UNCHANGED_MATH_SHA256,
+            observed_example=dict(day="2026-09-30", symbol="ADANIGREEN", field="prev_close",
+                csv_decimal=1269.3, native_float32_as_float64=1269.300048828125,
+                restored_float32_bit_equality=True)),
         excluded_research_days=sorted(coverage.loc[~coverage.research_eligible, "day"].unique().tolist()))
     _write_cache(output, identity, signals, paths, coverage, evidence)
     return signals, paths, coverage, evidence
