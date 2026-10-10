@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import io
 import json
 import re
@@ -110,6 +111,22 @@ def test_monitor_endpoint_returns_requested_day_and_uncached_http_response(monke
     assert handler.json_body() == expected
     assert handler.response_headers["Cache-Control"] == "no-store"
     assert handler.response_headers["Content-Type"].startswith("application/json")
+
+
+@pytest.mark.parametrize("accept, compressed", [("gzip, deflate, br", True),
+    ("gzip;q=0.5", True), ("gzip;q=0", False), ("br", False), ("gzip;q=bad", False)])
+def test_large_monitor_response_compression_preserves_evidence_and_auth(monkeypatch, accept, compressed):
+    expected = {**_payload(), "rows_5m": [{"evidence": "observed >= required " * 100}] * 10}
+    monkeypatch.setattr(dashboard, "_fno_eq_id_stock_detail", lambda *args, **kwargs: expected)
+    handler = _MemoryHandler(f"/api/fno-monitor?date={DAY}")
+    handler.headers["Accept-Encoding"] = accept
+    handler.do_GET()
+    raw = handler.wfile.getvalue()
+    assert (handler.response_headers.get("Content-Encoding") == "gzip") is compressed
+    assert int(handler.response_headers["Content-Length"]) == len(raw)
+    assert handler.response_headers["Cache-Control"] == "no-store"
+    assert handler.response_headers["Vary"] == "Accept-Encoding"
+    assert json.loads(gzip.decompress(raw) if compressed else raw) == expected
 
 
 def test_monitor_endpoint_default_day_is_today_ist(monkeypatch):
@@ -496,3 +513,105 @@ def test_gate_filter_keeps_confirmation_stage_and_final_selection_separate():
     assert result["oneFail"].count("data-row-index=") == 1
     assert "ONE_FAIL" in result["oneFail"]
     assert "ONE_PASS" not in result["oneFail"]
+
+
+def test_failed_checks_show_values_thresholds_gaps_and_missing_checks_together():
+    result = _run_monitor_browser_scenario("""
+      const row = {id: 'volume-fail', symbol: 'TEST', signal_time: '09:25', minute: '09:26',
+        side: 'LONG', stage: '1m', setup_id: '0926_LONG', decision: 'CONFIRMATION_OR_SETUP_REJECTED',
+        indicators: {}, checks: [
+          {name: 'gate_confirmation_volume', label: '1m volume ratio', status: 'FAIL',
+            actual: 0.7, rule: '>= 1.20x', margin: -0.5, actual_text: '0.70x',
+            required_text: '>= 1.20x', margin_text: 'Shortfall: 0.50x',
+            threshold_source: 'Pinned G source', margin_source: 'Recorded ledger margin'},
+          {name: 'gate_setup_oi', label: 'Setup OI change', status: 'UNKNOWN',
+            actual: null, actual_text: 'Not recorded', required_text: '>= 0.10%',
+            reason: 'OI observation unavailable'},
+          {name: 'gate_exact_confirmation_clock', status: 'NOT_EVALUATED',
+            reason: 'Stage has not run'},
+          {name: 'final_selection', status: 'FAIL', reason: 'No selection recorded'}
+        ]};
+      global.fetch = async url => ({ok: true, json: async () => ({session_date: url.searchParams.get('date'),
+        rows_5m: [row], rows_1m: [], warnings: [], coverage: []})});
+      const host = fakeHost(); window.FnoMonitor.mount(host, ''); await flush(); await flush();
+      const rendered = host.zones.rows.innerHTML;
+      click(host, {rowIndex: '0'});
+      process.stdout.write(JSON.stringify({rendered, details: host.zones.detail.innerHTML}));
+    """)
+    rendered = result["rendered"]
+    assert "Failed (1)" in rendered  # Selection is not an indicator failure.
+    assert "1m volume ratio</span>: 0.70x" in rendered
+    assert "Required: &gt;= 1.20x" in rendered
+    assert "Shortfall: 0.50x" in rendered
+    assert "Missing / unverified evidence (1)" in rendered
+    assert "Setup OI change</span>: Not recorded" in rendered
+    assert "OI observation unavailable" in rendered
+    assert "Not evaluated (1)" in rendered
+    assert "Not selected (separate from filter checks)" in rendered
+    assert "Shortfall / margin" in result["details"]
+    assert "Threshold source: Pinned G source" in result["details"]
+    assert "Margin source: Recorded ledger margin" in result["details"]
+
+
+def test_formatted_check_fields_remain_escaped_and_preserve_exact_operator():
+    result = _run_monitor_browser_scenario("""
+      const row = {id: 'escape', symbol: 'TEST', signal_time: '09:25', side: 'LONG',
+        stage: '5m', indicators: {}, checks: [{name: 'gate_ema_long', status: 'FAIL',
+          label: '<img src=x onerror=bad()>', actual_text: 'EMA9 100; EMA20 100; EMA50 99',
+          required_text: 'EMA9 > EMA20 > EMA50', margin_text: 'Equal to strict boundary',
+          evidence_note: '<script>bad()</script>', threshold_source: '<svg onload=bad()>'}]};
+      global.fetch = async url => ({ok: true, json: async () => ({session_date: url.searchParams.get('date'),
+        rows_5m: [row], rows_1m: []})});
+      const host = fakeHost(); window.FnoMonitor.mount(host, ''); await flush(); await flush();
+      click(host, {rowIndex: '0'});
+      process.stdout.write(JSON.stringify({rendered: host.zones.rows.innerHTML, details: host.zones.detail.innerHTML}));
+    """)
+    for text in result.values():
+        assert "<img" not in text and "<script>" not in text and "<svg" not in text
+        assert "EMA9 &gt; EMA20 &gt; EMA50" in text
+        assert "Equal to strict boundary" in text
+        assert "&lt;script&gt;bad()&lt;/script&gt;" in text
+    assert "&gt;=" not in result["rendered"]
+
+
+def test_legacy_and_absent_check_data_do_not_invent_numeric_thresholds():
+    result = _run_monitor_browser_scenario("""
+      const rows = [
+        {id: 'legacy', symbol: 'LEGACY', checks: [{name: 'legacy_check', status: 'FAIL',
+          actual: 0, rule: 'Recorded rule', margin: 0}]},
+        {id: 'absent', symbol: 'ABSENT', checks: [{name: 'missing_check', status: 'UNKNOWN'}]},
+        {id: 'none', symbol: 'NONE', checks: []}
+      ];
+      global.fetch = async url => ({ok: true, json: async () => ({session_date: url.searchParams.get('date'),
+        rows_5m: rows, rows_1m: []})});
+      const host = fakeHost(); window.FnoMonitor.mount(host, ''); await flush(); await flush();
+      process.stdout.write(JSON.stringify({rendered: host.zones.rows.innerHTML}));
+    """)
+    assert "legacy check</span>: 0" in result["rendered"]
+    assert "Recorded margin: 0" in result["rendered"]
+    assert "missing check</span>: Not recorded" in result["rendered"]
+    assert "Required: Not recorded" in result["rendered"]
+    assert "No per-check evidence recorded." in result["rendered"]
+
+
+def test_monitor_renders_actual_backend_comparison_payload():
+    from fno_eq_id_monitor_detail import _gate
+
+    evidence = _gate({"base_side": "LONG", "gate_setup_volume": False,
+        "volume_ratio": .70, "required_volume_ratio": 1.20, "margin_volume_ratio": -.50},
+        "gate_setup_volume", "1m")
+    scenario = """
+      const row = {id: 'backend', symbol: 'TEST', signal_time: '09:25', side: 'LONG',
+        stage: '1m', checks: [__CHECK__]};
+      global.fetch = async url => ({ok: true, json: async () => ({session_date: url.searchParams.get('date'),
+        rows_5m: [row], rows_1m: []})});
+      const host = fakeHost(); window.FnoMonitor.mount(host, ''); await flush(); await flush();
+      click(host, {rowIndex: '0'});
+      process.stdout.write(JSON.stringify({rendered: host.zones.rows.innerHTML, details: host.zones.detail.innerHTML}));
+    """.replace("__CHECK__", json.dumps(evidence))
+    result = _run_monitor_browser_scenario(scenario)
+    for rendered in result.values():
+        assert "0.70×" in rendered
+        assert "&gt;= 1.20×" in rendered
+        assert "0.50×" in rendered
+        assert "shortfall" in rendered.lower()

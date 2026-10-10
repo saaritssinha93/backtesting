@@ -19,6 +19,13 @@
 .fno-detail-grid thead th{position:sticky;top:0;z-index:1}.fno-detail-grid td,.fno-detail-expanded td{padding:7px 8px;border-top:1px solid var(--line);vertical-align:top}
 .fno-detail-grid td{white-space:nowrap}.fno-detail-grid tr:nth-child(even){background:var(--bg-soft)}
 .fno-detail-grid .fno-reasons{white-space:normal;min-width:170px;max-width:300px;line-height:1.4}
+.fno-detail-grid .fno-check-issues{min-width:320px;max-width:460px;overflow-wrap:anywhere}
+.fno-check-group>strong{font-size:10px}.fno-check-group.fail>strong{color:var(--bad)}.fno-check-group.unknown>strong{color:var(--warn)}
+.fno-check-group+.fno-check-group{border-top:1px solid var(--line);margin-top:8px;padding-top:6px}
+.fno-check-group ul{list-style:none;padding:0;margin:3px 0}.fno-check-group li+li{margin-top:7px}
+.fno-check-name{font-weight:600}.fno-check-required,.fno-check-margin,.fno-check-note{display:block}
+.fno-check-required{color:var(--text)}.fno-check-margin{font-variant-numeric:tabular-nums}
+.fno-check-note,.fno-check-stage{color:var(--muted-strong);font-size:10px}.fno-check-stage{border-top:1px solid var(--line);margin-top:7px;padding-top:6px}
 .fno-detail-pager{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--muted-strong)}
 .fno-detail-expanded{border:1px solid var(--line-strong);padding:12px;border-radius:7px;margin-top:12px;max-height:450px;overflow:auto;overflow-wrap:anywhere}
 .fno-detail-expanded h4{margin:0 0 8px;font-size:14px}.fno-detail-expanded table{margin:10px 0;min-width:550px}

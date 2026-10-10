@@ -316,3 +316,120 @@ def test_invalid_feature_row_cannot_borrow_valid_feed_pass(tmp_path):
 def test_blocked_slot_completeness_guard_is_visible(tmp_path):
     write_phase(tmp_path, payload(state="BLOCKED_INCOMPLETE_DATA"))
     assert check(build(tmp_path)["rows_5m"][0], "slot_complete")["status"] == "FAIL"
+
+
+def pinned_feature(**changes):
+    values = dict(strategy_fingerprint=detail.PINNED_RULE_FINGERPRINT,
+                  relaxed_0925_long_base_branch=False)
+    values.update(changes)
+    return feature(**values)
+
+
+def test_exact_confirmation_volume_has_operator_shortfall_and_source():
+    gate = detail._gate(pinned_feature(gate_confirmation_volume=False,
+                                      v9_1m_volume_ratio=.24085), "gate_confirmation_volume", "1m")
+    assert gate["status"] == gate["recorded_status"] == "FAIL"
+    assert gate["actual_text"] == "0.24×"
+    assert gate["required_text"].startswith(">= 1.20×")
+    assert "shortfall" in gate["margin_text"]
+    assert gate["comparisons"][0]["margin"] == pytest.approx(-.95915)
+    assert "PINNED" in gate["threshold_source"]
+    assert len(gate["threshold_source"]) < 220
+
+
+def test_unpinned_source_cannot_lend_numeric_confirmation_requirement():
+    gate = detail._gate(feature(v9_1m_volume_ratio=.25), "gate_confirmation_volume", "1m")
+    assert gate["required_text"].startswith("Unavailable")
+    assert gate["margin_text"] == "Unavailable"
+    assert gate["comparisons"][0]["required"] is None
+    assert gate["status"] == "PASS"  # The recorded flag is not recomputed.
+
+
+def test_missing_actual_is_not_coerced_to_zero():
+    gate = detail._gate(pinned_feature(v9_1m_volume_ratio=None, gate_confirmation_volume=False),
+                        "gate_confirmation_volume", "1m")
+    assert gate["actual_text"] == "Unavailable"
+    assert gate["margin_text"] == "Unavailable"
+    assert gate["comparisons"][0]["actual"] is None
+    assert gate["status"] == "FAIL"
+
+
+def test_missing_setup_threshold_does_not_borrow_current_setup_defaults():
+    gate = detail._gate(pinned_feature(required_volume_ratio=None), "gate_setup_volume", "1m")
+    assert "Unavailable" in gate["required_text"]
+    assert gate["comparisons"][0]["required"] is None
+    assert gate["margin_text"] == "Unavailable"
+
+
+def test_short_setup_price_uses_signed_requirement_and_correct_margin():
+    gate = detail._gate(pinned_feature(base_side="SHORT", gate_setup_price=False,
+                        price_change_pct=-.13, required_price_change_pct=.195), "gate_setup_price", "1m")
+    assert gate["required_text"].startswith("<= -0.1950%")
+    assert gate["actual_text"] == "-0.1300%"
+    assert gate["comparisons"][0]["margin"] == pytest.approx(-.065)
+    assert "pp" in gate["margin_text"]
+
+
+def test_narrow_percent_failure_is_not_hidden_by_rounding():
+    gate = detail._gate(pinned_feature(relaxed_0925_long_base_branch=True,
+                        gate_base_oi_min=False, oi_change_pct=.09999), "gate_base_oi_min", "5m")
+    assert "0.09999%" in gate["actual_text"]
+    assert "0.1%" in gate["actual_text"]  # The precise requirement accompanies boundary detail.
+    assert "1e-05" in gate["margin_text"] or "0.00001" in gate["margin_text"]
+    assert gate["status"] == "FAIL"
+
+
+def test_ema_shows_all_values_and_strict_equality_failure():
+    gate = detail._gate(pinned_feature(ema9=100., ema20=100., ema50=99., gate_ema_long=False),
+                        "gate_ema_long", "5m")
+    assert "EMA9=₹100.00" in gate["actual_text"]
+    assert "EMA20=₹100.00" in gate["actual_text"]
+    assert "EMA50=₹99.00" in gate["actual_text"]
+    assert "equality fails" in gate["margin_text"]
+    assert len(gate["comparisons"]) == 2
+
+
+@pytest.mark.parametrize("side, close, operator", [("LONG",101.,">"),("SHORT",99.,"<")])
+def test_confirmation_direction_shows_both_price_comparisons(side, close, operator):
+    gate = detail._gate(pinned_feature(base_side=side, confirmation_close=close,
+                        confirmation_open=100., signal_close=100.5), "gate_confirmation_direction", "1m")
+    assert "1m close" in gate["actual_text"] and "1m open" in gate["actual_text"] and "5m signal close" in gate["actual_text"]
+    assert len(gate["comparisons"]) == 2
+    assert all(item["operator"] == operator for item in gate["comparisons"])
+
+
+def test_body_is_percent_of_range_with_upper_bound_and_percentage_point_margin():
+    gate = detail._gate(pinned_feature(body_ratio=1.05, required_body_ratio=.54,
+                        margin_body_ratio=.51, gate_setup_body=False), "gate_setup_body", "1m")
+    assert gate["actual_text"] == "105.00%"
+    assert gate["required_text"] == ">= 54.00% and <= 100.00%"
+    assert "upper bound: −5.00 pp (shortfall)" in gate["margin_text"]
+    assert gate["margin"] == .51  # Preserve the original lower-bound-only margin.
+
+
+def test_recorded_flag_and_recorded_margin_contradictions_remain_visible():
+    gate = detail._gate(pinned_feature(volume_ratio=2., required_volume_ratio=1.,
+                        margin_volume_ratio=-.5, gate_setup_volume=False), "gate_setup_volume", "1m")
+    assert gate["status"] == "FAIL"
+    assert gate["margin"] == -.5
+    assert "recorded margin_volume_ratio" in gate["margin_text"]
+    assert "margin disagrees" in gate["evidence_note"]
+    assert "status differs" in gate["evidence_note"]
+
+
+def test_invalid_evidence_suppresses_derived_shortfall(tmp_path):
+    raw = pinned_feature(volume_ratio=.2, required_volume_ratio=1.75,
+                         margin_volume_ratio=-1.55, gate_setup_volume=False)
+    write_phase(tmp_path, payload([raw], strategy_fingerprint=detail.PINNED_RULE_FINGERPRINT,
+                                 feature_evaluations_sha256="incorrect"), "1m")
+    gate = check(build(tmp_path)["rows_1m"][0], "gate_setup_volume")
+    assert gate["status"] == "UNKNOWN"
+    assert gate["margin_text"] == "Unavailable (invalid evidence)"
+    assert gate["comparisons"] == []
+
+
+def test_pin_hash_change_disables_numeric_defaults(monkeypatch):
+    monkeypatch.setitem(detail.PINNED_RULE_SOURCES, "fno_v13_v10_g_live_config.py", "wrong")
+    gate = detail._gate(pinned_feature(v9_1m_volume_ratio=.5), "gate_confirmation_volume", "1m")
+    assert "Unavailable" in gate["required_text"]
+    assert gate["margin_text"] == "Unavailable"

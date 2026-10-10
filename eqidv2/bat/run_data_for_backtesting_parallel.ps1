@@ -48,6 +48,8 @@ foreach ($task in $tasks) {
         -PassThru
     $running += [pscustomobject]@{
         Name = $name
+        Script = $script
+        Arguments = @($task.Arguments)
         Log = $log
         Stdout = $stdout
         Stderr = $stderr
@@ -58,6 +60,13 @@ foreach ($task in $tasks) {
 $exitCode = 0
 foreach ($item in $running) {
     $item.Process.WaitForExit()
+    $code = [int]$item.Process.ExitCode
+    # Some scheduled launches have reported exit=0 despite a Python traceback.
+    # Preserve the failure even when the process handle reports success.
+    if ($code -eq 0 -and (Test-Path -LiteralPath $item.Stderr) -and
+        (Select-String -LiteralPath $item.Stderr -Pattern '^Traceback \(most recent call last\):' -Quiet)) {
+        $code = 1
+    }
     if (Test-Path $item.Stdout) {
         Get-Content -LiteralPath $item.Stdout -Raw -ErrorAction SilentlyContinue |
             Add-Content -LiteralPath $item.Log -Encoding UTF8
@@ -67,8 +76,37 @@ foreach ($item in $running) {
             Add-Content -LiteralPath $item.Log -Encoding UTF8
     }
     Remove-Item -LiteralPath $item.Stdout, $item.Stderr -Force -ErrorAction SilentlyContinue
-    $code = [int]$item.Process.ExitCode
     Add-Content -LiteralPath $item.Log -Encoding UTF8 -Value "[$(Get-Date -Format 'dd-MM-yyyy HH:mm:ss.ff')] END $($item.Name) (exit=$code)"
+    if ($code -ne 0 -and $item.Name -eq 'trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_1min.py') {
+        for ($attempt = 2; $attempt -le 3; $attempt++) {
+            Add-Content -LiteralPath $item.Log -Encoding UTF8 -Value "[$(Get-Date -Format 'dd-MM-yyyy HH:mm:ss.ff')] RETRY $($item.Name) attempt=$attempt after 30 seconds"
+            Start-Sleep -Seconds 30
+            $retryProcess = Start-Process -FilePath $PythonExe `
+                -ArgumentList (@('-u', $item.Script) + @($item.Arguments)) `
+                -WorkingDirectory $BaseDir `
+                -RedirectStandardOutput $item.Stdout `
+                -RedirectStandardError $item.Stderr `
+                -WindowStyle Hidden `
+                -PassThru
+            $retryProcess.WaitForExit()
+            $code = [int]$retryProcess.ExitCode
+            if ($code -eq 0 -and (Test-Path -LiteralPath $item.Stderr) -and
+                (Select-String -LiteralPath $item.Stderr -Pattern '^Traceback \(most recent call last\):' -Quiet)) {
+                $code = 1
+            }
+            if (Test-Path -LiteralPath $item.Stdout) {
+                Get-Content -LiteralPath $item.Stdout -Raw -ErrorAction SilentlyContinue |
+                    Add-Content -LiteralPath $item.Log -Encoding UTF8
+            }
+            if (Test-Path -LiteralPath $item.Stderr) {
+                Get-Content -LiteralPath $item.Stderr -Raw -ErrorAction SilentlyContinue |
+                    Add-Content -LiteralPath $item.Log -Encoding UTF8
+            }
+            Remove-Item -LiteralPath $item.Stdout, $item.Stderr -Force -ErrorAction SilentlyContinue
+            Add-Content -LiteralPath $item.Log -Encoding UTF8 -Value "[$(Get-Date -Format 'dd-MM-yyyy HH:mm:ss.ff')] END $($item.Name) attempt=$attempt (exit=$code)"
+            if ($code -eq 0) { break }
+        }
+    }
     if ($code -ne 0 -and $exitCode -eq 0) {
         $exitCode = $code
     }
@@ -83,10 +121,9 @@ if (Test-Path $oneMinLog) {
     foreach ($line in $lines) {
         if ($line -match '\[1MIN\]\[VERIFY\].*Failed=(\d+)') {
             $n = [int]$Matches[1]
-            if ($n -gt 0) {
-                $verifyFailCount += $n
-                $verifyFailLines += $line
-            }
+            # A recovered retry supersedes earlier failed attempts.
+            $verifyFailCount = $n
+            $verifyFailLines = if ($n -gt 0) { @($line) } else { @() }
         }
     }
 }
@@ -99,6 +136,7 @@ if (Test-Path $verifyScript) {
     Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value "[$(Get-Date -Format 'dd-MM-yyyy HH:mm:ss.ff')] START data_for_backtesting_verify.py"
     $verifyOut = "$verifyLog.stdout.tmp"
     $verifyErr = "$verifyLog.stderr.tmp"
+    $verifyStartedUtc = [DateTime]::UtcNow
     $vProc = Start-Process -FilePath $PythonExe `
         -ArgumentList @("-u", $verifyScript, "--date", $TodayIst, "--scope", "fno") `
         -WorkingDirectory $BaseDir `
@@ -108,6 +146,24 @@ if (Test-Path $verifyScript) {
         -PassThru
     $vProc.WaitForExit()
     $verifyExit = [int]$vProc.ExitCode
+    # The dated verifier payload is the authoritative result. A stale PASS or
+    # an incorrect process exit code must never release the scheduled backtest.
+    $runtimeRoot = if ($env:EQIDV2_RUNTIME_ROOT) { $env:EQIDV2_RUNTIME_ROOT } else { 'C:\TradingData\eqidv2' }
+    $verifyPayloadPath = Join-Path $runtimeRoot "backtesting_result_v11\latest\data_verify_$TodayIst.json"
+    try {
+        $verifyPayloadFile = Get-Item -LiteralPath $verifyPayloadPath -ErrorAction Stop
+        if ($verifyPayloadFile.LastWriteTimeUtc -lt $verifyStartedUtc.AddSeconds(-5)) {
+            throw 'Dated verifier payload was not refreshed by this run.'
+        }
+        $verifyPayload = Get-Content -LiteralPath $verifyPayloadPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($verifyPayload.date -ne $TodayIst -or $verifyPayload.scope -ne 'fno' -or
+            $verifyPayload.overall_status -ne 'PASS' -or [int]$verifyPayload.overall_exit_code -ne 0) {
+            $verifyExit = [Math]::Max($verifyExit, 2)
+        }
+    } catch {
+        $verifyExit = [Math]::Max($verifyExit, 2)
+        Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value "[ERROR] Dated FnO verifier payload unavailable or stale: $($_.Exception.Message)"
+    }
     if (Test-Path $verifyOut) {
         Get-Content -LiteralPath $verifyOut -Raw -ErrorAction SilentlyContinue |
             Add-Content -LiteralPath $verifyLog -Encoding UTF8

@@ -7,6 +7,7 @@ import argparse
 import base64
 import csv
 import datetime as dt
+import gzip
 import hashlib
 import json
 import math
@@ -7130,6 +7131,22 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self._send_html()
             return
+        if parsed.path in ("/dashboard-flow", "/dashboard-flow/"):
+            self._send_flow_html()
+            return
+        if parsed.path == "/api/dashboard-flow":
+            from dashboard_flow import load_flow_data
+
+            try:
+                payload = load_flow_data((params.get("run") or [None])[0])
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except (OSError, csv.Error):
+                self._send_json({"error": "Backtest files are temporarily unavailable. Please refresh."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
+            return
         if parsed.path == "/api/snapshot":
             lines = self._int_param(params, "lines", 80, 20, 400)
             payload = self._snapshot(lines=lines)
@@ -7148,7 +7165,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             except Exception:
                 self._send_json({"error": "Stock monitoring evidence is temporarily unavailable."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                 return
-            self._send_json(payload)
+            self._send_json(payload, compress=True)
             return
         if parsed.path == "/api/log":
             name = (params.get("name") or [""])[0]
@@ -7390,6 +7407,23 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 "target_tickers": target_tickers,
             }
         )
+
+    def _send_flow_html(self) -> None:
+        html = (BASE_DIR / "dashboard_flow.html").read_text(encoding="utf-8-sig")
+        html = html.replace("__FLOW_CSS__", (BASE_DIR / "dashboard_flow.css").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_JS__", (BASE_DIR / "dashboard_flow.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_CHART_JS__", (BASE_DIR / "dashboard_flow_chart.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_CORE_JS__", (BASE_DIR / "dashboard_flow_core.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_COMPARE_JS__", (BASE_DIR / "dashboard_flow_compare.js").read_text(encoding="utf-8-sig"))
+        token_json = json.dumps(getattr(self.server, "api_token", "") or "").replace("<", "\\u003c")
+        html = html.replace("__API_TOKEN_JSON__", token_json)
+        body = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_html(self) -> None:
         api_token_json = json.dumps(getattr(self.server, "api_token", "") or "")
@@ -7669,6 +7703,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       flex-wrap: wrap;
       min-width: 0;
     }
+
+    .refresh-notice {
+      margin: 12px 24px;
+      padding: 12px 16px;
+      border: 1px solid var(--warn);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+    }
+    .refresh-notice[hidden] { display: none; }
+    #autoRefreshBtn[aria-pressed="true"] { border-color: var(--warn); color: var(--text); }
 
     .health-strip {
       display: flex;
@@ -8008,7 +8054,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       color: var(--bad);
     }
 
-    button {
+    button,
+    .dashboard-flow-link {
       border: 1px solid rgba(37, 99, 235, 0.32);
       color: #ffffff;
       font-weight: 700;
@@ -8023,12 +8070,23 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       box-shadow: var(--shadow-soft);
     }
 
-    button:hover {
+    .dashboard-flow-link {
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
+      white-space: nowrap;
+      background: #11754f;
+      border-color: #11754f;
+    }
+
+    button:hover,
+    .dashboard-flow-link:hover {
       transform: translateY(-1px);
       box-shadow: var(--shadow);
     }
 
     button:focus-visible,
+    .dashboard-flow-link:focus-visible,
     .search-input:focus-visible,
     select:focus-visible,
     input:focus-visible {
@@ -9154,6 +9212,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       }
 
       .top-actions > button,
+      .top-actions > .dashboard-flow-link,
       .top-actions .theme-toggle,
       .top-actions .filter-chip {
         width: 100%;
@@ -9173,6 +9232,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         grid-template-columns: repeat(3, minmax(0, 1fr));
         overflow: visible;
         gap: 6px;
+      }
+
+      .top-actions > .dashboard-flow-link {
+        grid-column: 1 / -1;
       }
 
       .restart-all-btn {
@@ -9312,7 +9375,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         <div class="sub" id="info">loading...</div>
       </div>
       <div class="top-actions">
+        <a class="dashboard-flow-link" id="dashboardFlowLink" href="/dashboard-flow" target="_blank" rel="noopener noreferrer" title="Open Dashboard Flow in a new tab">Dashboard Flow &#8599;</a>
         <button id="refreshBtn" onclick="loadNow()" title="Refresh dashboard now">Refresh</button>
+        <button type="button" id="autoRefreshBtn" title="Pause automatic refresh while reading" aria-pressed="false">Pause updates</button>
         <button type="button" class="theme-toggle" id="themeToggle" title="Switch dashboard theme">Theme</button>
         <button type="button" class="theme-toggle" id="timelineToggle" title="Show or hide timeline">Timeline</button>
         <button type="button" class="theme-toggle" id="densityToggle" title="Switch dashboard density">Comfort</button>
@@ -9331,18 +9396,18 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         <div class="filter-bar" id="statusFilters"></div>
       </div>
       <div class="toolbar-controls">
-        <div class="toolbar-note">Auto refresh 15s | 5-min monitor</div>
+        <div class="toolbar-note" id="refreshStatus">Updates every 15s</div>
       </div>
     </div>
     <div class="section-nav" id="sectionNav"></div>
     <div class="timeline-panel" id="todayTimeline"></div>
   </header>
-  <div class="mini-status-bar" id="miniStatusBar"></div>
-  <div class="snapshot-grid" id="opsSnapshot"></div>
+  <div class="refresh-notice" id="refreshNotice" role="status" hidden></div>
   <div class="wrap" id="cards"></div>
 
   <style>__FNO_MONITOR_CSS__</style>
   <script>__FNO_MONITOR_JS__</script>
+  <script>__OPS_STATE_JS__</script>
   <script>
     const LOG_ORDER = [
       "nifty_guard_fetch_v16_5min",
@@ -9846,6 +9911,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     let DASHBOARD_THEME = localStorage.getItem("eqidv2_dashboard_theme") || "light";
     let TIMELINE_COLLAPSED = localStorage.getItem("eqidv2_timeline_collapsed") === "1";
     let DASHBOARD_DENSITY = localStorage.getItem("eqidv2_dashboard_density") || "comfort";
+    let AUTO_REFRESH_PAUSED = sessionStorage.getItem("eqidv2_dashboard_paused") === "1";
+    let ACTIVE_SECTION = "";
+    let LAST_SUCCESSFUL_REFRESH = "";
     function readJsonLocalStorage(key, fallback) {
       try {
         const raw = localStorage.getItem(key);
@@ -10013,6 +10081,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return `${path}${sep}token=${encodeURIComponent(API_TOKEN)}`;
     }
 
+    document.getElementById("dashboardFlowLink").href = apiUrl("/dashboard-flow");
+
     function displayName(id) {
       return LOG_TITLES[id] || id;
     }
@@ -10075,112 +10145,41 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     function isReadOnlyProfileView(item) {
       const scope = String(item && item.status && item.status.view_scope || "").toUpperCase();
-      return scope === "PROFILE" || scope === "ARTIFACT";
+      return item.card_kind === "view" || scope === "PROFILE" || scope === "ARTIFACT";
     }
 
     function renderHealthSummary(items) {
       const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
+      let views = 0, fresh = 0, monitored = 0, liveRows = 0, paperRows = 0;
       for (const item of (items || [])) {
-        if (isReadOnlyProfileView(item)) continue;
-        const bucket = statusBucket(
-          item && item.status ? item.status.status : "",
-          item && item.status ? item.status.phase : ""
-        );
-        counts[bucket] = (counts[bucket] || 0) + 1;
-      }
-      const total = Object.values(counts).reduce((acc, n) => acc + n, 0);
-      const pill = (cls, label, value) => (
-        `<span class="health-pill ${cls}"><strong>${esc(String(value))}</strong>${esc(label)}</span>`
-      );
-      const html = [
-        pill("neutral", "Total", total),
-        pill("ok", "Healthy", counts.ok),
-        pill("neutral", "Scheduled", counts.scheduled),
-        pill("warn", "Watch", counts.warn),
-        pill("bad", "Problem", counts.bad),
-        pill("neutral", "Disabled", counts.disabled)
-      ].join("");
-      const el = document.getElementById("healthSummary");
-      if (el) el.innerHTML = html;
-    }
-
-    function renderMiniStatus(items, serverTime) {
-      const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
-      let candidates = 0;
-      let liveRows = 0;
-      let paperRows = 0;
-      for (const item of (items || [])) {
-        if (isReadOnlyProfileView(item)) continue;
-        const id = String((item && item.id) || "");
-        const bucket = statusBucket(
-          item && item.status ? item.status.status : "",
-          item && item.status ? item.status.phase : ""
-        );
-        counts[bucket] = (counts[bucket] || 0) + 1;
-        if (id === "candidate_tickers_v7_5min_id" && item.status) {
-          candidates = Number(item.status.total_candidates || 0) || rowsShownFromTail(item.tail);
-        }
+        const id = String(item.id || "");
         if (id.includes("papertrade") || id.includes("paper_trade")) paperRows += rowsShownFromTail(item.tail);
         if (id.includes("kite_trades") || id.includes("live_kite") || id.includes("live_signals")) liveRows += rowsShownFromTail(item.tail);
-      }
-      const item = (label, value) => `<span class="mini-status-item"><strong>${esc(String(value))}</strong>${esc(label)}</span>`;
-      const time = String(serverTime || "").split(" ").slice(-1)[0] || "-";
-      const html = [
-        item("Problems", counts.bad),
-        item("Watch", counts.warn),
-        item("Candidates", candidates),
-        item("Live Rows", liveRows),
-        item("Paper Rows", paperRows),
-        item("Refresh", time)
-      ].join("");
-      const el = document.getElementById("miniStatusBar");
-      if (el) el.innerHTML = html;
-    }
-
-    function renderOpsSnapshot(items) {
-      const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
-      let fresh = 0;
-      let stale = 0;
-      let candidates = 0;
-      let paperRows = 0;
-      let liveRows = 0;
-      for (const item of (items || [])) {
-        if (isReadOnlyProfileView(item)) continue;
-        const id = String((item && item.id) || "");
-        const bucket = statusBucket(
-          item && item.status ? item.status.status : "",
-          item && item.status ? item.status.phase : ""
-        );
+        if (isReadOnlyProfileView(item)) { views += 1; continue; }
+        const status = item.status || {};
+        const bucket = statusBucket(status.status, status.phase);
         counts[bucket] = (counts[bucket] || 0) + 1;
-        const age = formatAge(item && item.mtime ? item.mtime : "");
-        if (age.cls === "ok") fresh += 1;
-        if (age.cls === "bad" || age.cls === "warn") stale += 1;
-        if (id === "candidate_tickers_v7_5min_id" && item.status) {
-          candidates = Number(item.status.total_candidates || 0) || rowsShownFromTail(item.tail);
-        }
-        if (id.includes("papertrade") || id.includes("paper_trade")) {
-          paperRows += rowsShownFromTail(item.tail);
-        }
-        if (id.includes("kite_trades") || id.includes("live_kite") || id.includes("live_signals")) {
-          liveRows += rowsShownFromTail(item.tail);
-        }
+        const age = outputFreshness(item, item.mtime);
+        if (age.monitored) { monitored += 1; if (age.cls === "ok") fresh += 1; }
       }
-      const tile = (cls, label, value, note) => `
-        <div class="snapshot-tile ${cls}">
-          <div class="snapshot-label">${esc(label)}</div>
-          <div class="snapshot-value">${esc(String(value))}</div>
-          <div class="snapshot-note">${esc(note || "")}</div>
-        </div>
-      `;
+      const total = Object.values(counts).reduce((acc, n) => acc + n, 0);
+      const pill = (cls, label, value, title = "") => (
+        `<span class="health-pill ${cls}" title="${esc(title)}"><strong>${esc(String(value))}</strong>${esc(label)}</span>`
+      );
       const html = [
-        tile(counts.bad ? "is-bad" : "is-ok", "Problems", counts.bad, counts.bad ? "Needs action" : "No hard failures"),
-        tile(counts.warn ? "is-warn" : "is-ok", "Watch", counts.warn, "Stale, waiting, cooldown"),
-        tile("is-info", "Candidates", candidates, "Signal discovery output"),
-        tile("is-info", "Live Rows", liveRows, "Signals and Kite CSV rows"),
-        tile("is-info", "Paper Rows", paperRows, "Papertrade result rows"),
-        tile(stale > fresh ? "is-warn" : "is-ok", "Fresh Outputs", fresh, `${stale} older/missing`)
+        pill("neutral", "Processes", total, "Managed processes; report and data views are counted separately"),
+        pill("neutral", "Views", views, "Read-only report, profile and data views; excluded from process health"),
+        pill("ok", "Healthy", counts.ok),
+        pill("neutral", "Scheduled / idle", counts.scheduled),
+        pill("warn", "Watch", counts.warn),
+        pill("bad", "Problem", counts.bad),
+        pill("neutral", "Disabled", counts.disabled),
+        ...(counts.unknown ? [pill("neutral", "Unknown", counts.unknown)] : []),
+        pill(fresh < monitored ? "warn" : "neutral", "Current outputs", `${fresh}/${monitored}`, "Output age for processes currently expected to update. Disabled, scheduled, completed and closed sessions are excluded."),
+        pill("neutral", "Live snippet rows", liveRows, "Rows shown in dashboard previews, including signals; these are not executed-trade counts and may overlap"),
+        pill("neutral", "Paper snippet rows", paperRows, "Rows shown in dashboard previews; these are not executed-trade counts and may overlap")
       ].join("");
-      const el = document.getElementById("opsSnapshot");
+      const el = document.getElementById("healthSummary");
       if (el) el.innerHTML = html;
     }
 
@@ -10270,8 +10269,9 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         el.innerHTML = "";
         return;
       }
+      if (!visible.some(it => sectionDomId(it.key) === ACTIVE_SECTION)) ACTIVE_SECTION = sectionDomId(visible[0].key);
       el.innerHTML = visible.map((it, idx) => `
-        <button type="button" class="section-jump${idx === 0 ? " is-active" : ""}" data-section-target="${esc(sectionDomId(it.key))}">
+        <button type="button" class="section-jump${sectionDomId(it.key) === ACTIVE_SECTION ? " is-active" : ""}" data-section-target="${esc(sectionDomId(it.key))}" aria-pressed="${sectionDomId(it.key) === ACTIVE_SECTION}">
           ${esc(it.label)} <strong>${esc(String(it.count))}</strong>
         </button>
       `).join("");
@@ -10284,8 +10284,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           const id = btn.getAttribute("data-section-target") || "";
           const target = id ? document.getElementById(id) : null;
           if (!target) return;
-          buttons.forEach((b) => b.classList.remove("is-active"));
+          ACTIVE_SECTION = id;
+          buttons.forEach((b) => { b.classList.remove("is-active"); b.setAttribute("aria-pressed", "false"); });
           btn.classList.add("is-active");
+          btn.setAttribute("aria-pressed", "true");
           target.scrollIntoView({ behavior: "smooth", block: "start" });
         });
       });
@@ -10401,6 +10403,33 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       });
     }
 
+    window.addEventListener("storage", (event) => {
+      if (event.key === "eqidv2_dashboard_theme") {
+        DASHBOARD_THEME = event.newValue === "dark" ? "dark" : "light";
+        applyTheme();
+      }
+    });
+
+    function refreshStatusText() {
+      const text = AUTO_REFRESH_PAUSED ? "Automatic updates paused" : "Updates every 15s";
+      document.getElementById("refreshStatus").textContent = text;
+      document.getElementById("info").textContent = LAST_SUCCESSFUL_REFRESH ? `Last updated ${LAST_SUCCESSFUL_REFRESH} | ${text.toLowerCase()}` : "Loading dashboard…";
+      const button = document.getElementById("autoRefreshBtn");
+      button.textContent = AUTO_REFRESH_PAUSED ? "Resume updates" : "Pause updates";
+      button.setAttribute("aria-pressed", String(AUTO_REFRESH_PAUSED));
+      button.title = AUTO_REFRESH_PAUSED ? "Resume automatic refresh every 15 seconds" : "Pause automatic refresh while reading";
+    }
+
+    function wireAutoRefreshControl() {
+      refreshStatusText();
+      document.getElementById("autoRefreshBtn").addEventListener("click", () => {
+        AUTO_REFRESH_PAUSED = !AUTO_REFRESH_PAUSED;
+        sessionStorage.setItem("eqidv2_dashboard_paused", AUTO_REFRESH_PAUSED ? "1" : "0");
+        refreshStatusText();
+        if (!AUTO_REFRESH_PAUSED) loadNow();
+      });
+    }
+
     function wireTimelineControl() {
       const btn = document.getElementById('timelineToggle');
       if (!btn) return;
@@ -10449,6 +10478,20 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       return { label: `output: ${ageDay}d`, cls: "bad" };
     }
 
+    function outputFreshness(item, rawMtime) {
+      const status = item.status || {};
+      const state = String(status.status || "").toUpperCase();
+      const phase = String(status.phase || "").toUpperCase();
+      const scheduler = String(status.scheduler_state || "").toUpperCase();
+      const age = formatAge(rawMtime);
+      const active = ["RUNNING", "STALE_HB_RUNNING", "RESTARTING", "RECOVERED", "PARTIAL", "WAITING_OUTPUT", "EMPTY_OUTPUT", "STALE_OUTPUT", "MISSING_OUTPUT"].includes(state);
+      const closed = /(?:MARKET_CLOSED|NON_TRADING_DAY|AFTER_CUTOFF|END_TIME|SESSION_CLOSED|SESSION_COMPLETED|SESSION_DONE)/.test(phase);
+      const monitored = !isReadOnlyProfileView(item) && scheduler !== "DISABLED" && state !== "DISABLED" && active && !closed;
+      if (monitored) return { ...age, monitored: true };
+      const reason = isReadOnlyProfileView(item) ? "view" : (state === "DISABLED" || scheduler === "DISABLED" ? "disabled" : (closed ? "session closed" : "not running"));
+      return { label: `${age.label} · ${reason}`, cls: "", monitored: false };
+    }
+
     function compactNextRun(rawNextRun) {
       const text = String(rawNextRun || "").trim();
       if (!text) return "";
@@ -10465,8 +10508,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     }
 
     function renderMiniBadges(item, mtime, size) {
-      const age = formatAge(mtime);
-      const badges = [`<span class="mini-badge ${age.cls}">${esc(age.label)}</span>`];
+      const age = outputFreshness(item, mtime);
+      const badges = [`<span class="mini-badge">${isReadOnlyProfileView(item) ? "View" : "Process"}</span>`, `<span class="mini-badge ${age.cls}">${esc(age.label)}</span>`];
       badges.push(`<span class="mini-badge">size: ${esc(String(size || 0))}b</span>`);
       if (
         FNO_MULTI_PAPER_CARDS.has(String(item && item.id || ""))
@@ -11319,15 +11362,17 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       if (SNAPSHOT_LOAD_IN_FLIGHT) return;
       SNAPSHOT_LOAD_IN_FLIGHT = true;
       try {
-        const prevY = window.scrollY;
         const res = await fetch(apiUrl('/api/snapshot?lines=80'), { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        document.getElementById('info').textContent = `server ${data.server_time} | auto refresh every 15s`;
+        if (!Array.isArray(data.items)) throw new Error("Invalid dashboard response");
+        const prevY = window.scrollY;
+        const readingState = DashboardOps.capture(document.getElementById("cards"), document);
+        const headerFocus = document.activeElement;
+        const focusedFilter = headerFocus && headerFocus.getAttribute("data-filter-id");
+        const focusedSection = headerFocus && headerFocus.getAttribute("data-section-target");
         const dashboardItems = (data.items || []).filter((item) => !DASHBOARD_HIDDEN_IDS.has(item.id));
         renderHealthSummary(dashboardItems);
-        renderMiniStatus(dashboardItems, data.server_time);
-        renderOpsSnapshot(dashboardItems);
 
         const byId = {};
         for (const item of dashboardItems) byId[item.id] = item;
@@ -11346,26 +11391,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         const orderedBase = LOG_ORDER
           .concat(Object.keys(byId).filter((id) => !LOG_ORDER.includes(id)))
           .filter((id) => !DASHBOARD_HIDDEN_IDS.has(id));
-        const ordered = orderedBase
-          .map((id, idx) => {
-            const it = byId[id] || { status: {} };
-            const status = String((it.status && it.status.status) || "").toUpperCase();
-            const disabled = status === "DISABLED";
-            const bucket = statusBucket(status, it.status && it.status.phase);
-            return { id, idx, disabled, bucket, pinned: isPinned(id) };
-          })
-          .sort((a, b) => {
-            if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-            if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
-            if (PROBLEMS_FIRST) {
-              const rank = { bad: 0, warn: 1, unknown: 2, scheduled: 3, ok: 4, disabled: 5 };
-              const ar = rank[a.bucket] ?? 9;
-              const br = rank[b.bucket] ?? 9;
-              if (ar !== br) return ar - br;
-            }
-            return a.idx - b.idx;
-          })
-          .map((x) => x.id);
+        const ordered = DashboardOps.orderIds(orderedBase, byId, PINNED_CARDS, PROBLEMS_FIRST, statusBucket);
 
         const activeOrdered = ordered.filter((id) => {
           const it = byId[id] || { status: {} };
@@ -11470,11 +11496,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         if (visibleActiveOrdered.length) {
           const used = new Set();
           for (const group of ACTIVE_GROUPS) {
-            const groupIds = group.ids.filter((id) => visibleActiveOrdered.includes(id));
+            const groupIds = DashboardOps.inOrder(visibleActiveOrdered, group.ids);
             if (!groupIds.length) continue;
             groupIds.forEach((id) => used.add(id));
             navItems.push({ key: group.key, label: group.nav || group.title, count: groupIds.length });
-            sections.push(renderSectionBanner(group.title, `${groupIds.length} active/scheduled`, false, group.accent, group.key));
+            const viewCount = groupIds.filter(id => isReadOnlyProfileView(byId[id] || {})).length;
+            sections.push(renderSectionBanner(group.title, `${groupIds.length - viewCount} processes / ${viewCount} views`, false, group.accent, group.key));
             const subgroups = Array.isArray(group.subgroups) ? group.subgroups : [];
             const nestedIds = new Set(subgroups.flatMap((subgroup) => subgroup.ids || []));
             const directIds = groupIds.filter((id) => !nestedIds.has(id));
@@ -11482,7 +11509,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
               sections.push(directIds.map((id) => renderCard(id, renderIdx++)).join(''));
             }
             for (const subgroup of subgroups) {
-              const subgroupIds = (subgroup.ids || []).filter((id) => groupIds.includes(id));
+              const subgroupIds = DashboardOps.inOrder(groupIds, subgroup.ids || []);
               if (!subgroupIds.length) continue;
               const subgroupNote = subgroup.note || `${subgroupIds.length} view(s)`;
               sections.push(renderSubBanner(subgroup.title, subgroupNote, group.accent, subgroup.key, false));
@@ -11510,7 +11537,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           if (forceShowDisabled || !DISABLED_SECTION_MINIMIZED) {
             const usedDisabled = new Set();
             for (const group of ACTIVE_GROUPS) {
-              const groupIds = group.ids.filter((id) => visibleDisabledOrdered.includes(id));
+              const groupIds = DashboardOps.inOrder(visibleDisabledOrdered, group.ids);
               if (!groupIds.length) continue;
               groupIds.forEach((id) => usedDisabled.add(id));
               sections.push(renderDisabledSubBanner(group.title, groupIds.length, group.accent, group.key));
@@ -11551,19 +11578,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         enhanceSortableTables();
         if (window.FnoMonitor) window.FnoMonitor.mount(document.getElementById("fno-stock-monitor"), API_TOKEN);
         applyFullscreenState();
-        cards.querySelectorAll('pre').forEach((preEl) => {
-          preEl.scrollTop = preEl.scrollHeight;
-        });
+        DashboardOps.restore(cards, readingState, document);
+        const replacementFocus = focusedFilter ? document.querySelector(`[data-filter-id="${CSS.escape(focusedFilter)}"]`) : (focusedSection ? document.querySelector(`[data-section-target="${CSS.escape(focusedSection)}"]`) : null);
+        if (replacementFocus) replacementFocus.focus({ preventScroll: true });
         if (!FULLSCREEN_ID) window.scrollTo(0, prevY);
+        LAST_SUCCESSFUL_REFRESH = String(data.server_time || new Date().toLocaleTimeString());
+        refreshStatusText();
+        document.getElementById("refreshNotice").hidden = true;
       } catch (err) {
         const msg = (err && err.message) ? err.message : String(err);
-        document.getElementById('info').textContent = `load failed: ${msg}`;
-        document.getElementById('cards').innerHTML = `
-          <div class="card">
-            <pre>Unable to load logs now. Tap Refresh Now.
-If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/Chrome.</pre>
-          </div>
-        `;
+        const notice = document.getElementById("refreshNotice");
+        notice.textContent = LAST_SUCCESSFUL_REFRESH
+          ? `Updates unavailable (${msg}). Showing the last successful snapshot from ${LAST_SUCCESSFUL_REFRESH}. Use Refresh to retry.`
+          : `Dashboard unavailable (${msg}). Use Refresh to retry.`;
+        notice.hidden = false;
+        if (!LAST_SUCCESSFUL_REFRESH) document.getElementById("info").textContent = "Waiting for the first dashboard snapshot";
       } finally {
         SNAPSHOT_LOAD_IN_FLIGHT = false;
       }
@@ -11577,14 +11606,16 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
     wireSearchControl();
     wireProblemsFirstControl();
     wireRestartAllControl();
+    wireAutoRefreshControl();
     loadNow();
-    setInterval(loadNow, 15000);
+    setInterval(() => { if (!AUTO_REFRESH_PAUSED) loadNow(); }, 15000);
   </script>
 </body>
 </html>"""
         html = html.replace("__API_TOKEN_JSON__", api_token_json)
         html = html.replace("__FNO_MONITOR_CSS__", (BASE_DIR / "dashboard_fno_monitor.css").read_text(encoding="utf-8"))
         html = html.replace("__FNO_MONITOR_JS__", (BASE_DIR / "dashboard_fno_monitor.js").read_text(encoding="utf-8"))
+        html = html.replace("__OPS_STATE_JS__", (BASE_DIR / "dashboard_ops_state.js").read_text(encoding="utf-8"))
         body = html.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -12809,6 +12840,16 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             item["status"] = apply_scheduler_status(str(item.get("id", "")), item.get("status", {}), task_snapshot)
             item["status"] = _apply_fno_v13_v10_g_identity(str(item.get("id", "")), item["status"])
             item["status"] = _apply_fno_market_calendar(str(item.get("id", "")), item["status"])
+            card_id = str(item.get("id", ""))
+            scope = str(item["status"].get("view_scope", "")).upper()
+            # A report/profile may share a scheduler with its producer. Count
+            # the producer once; viewing its CSV does not create a process.
+            is_process = (
+                scope not in {"PROFILE", "ARTIFACT"}
+                and "csv" not in card_id
+                and (card_id in STATUS_FILES or card_id in RESTARTABLE_CARDS or scope == "SESSION")
+            )
+            item["card_kind"] = "process" if is_process else "view"
 
         items = [item for item in items if str(item.get("id", "")) not in HIDDEN_CARD_IDS]
 
@@ -12819,11 +12860,29 @@ If opened inside WhatsApp/Telegram in-app browser, open the same link in Safari/
             "kill_switch": kill_switch,
         }
 
-    def _send_json(self, payload: Dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    def _send_json(self, payload: Dict[str, object], status: HTTPStatus = HTTPStatus.OK, *, compress: bool = False) -> None:
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":") if compress else None).encode("utf-8")
+        use_gzip = False
+        if compress and len(data) >= 1024:
+            for encoding in self.headers.get("Accept-Encoding", "").split(","):
+                parts = [part.strip().lower() for part in encoding.split(";")]
+                if parts[0] != "gzip":
+                    continue
+                try:
+                    quality = next((float(part[2:]) for part in parts[1:] if part.startswith("q=")), 1.0)
+                except ValueError:
+                    quality = 0.0
+                use_gzip = 0 < quality <= 1
+                break
+        if use_gzip:
+            data = gzip.compress(data, compresslevel=1, mtime=0)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        if compress:
+            self.send_header("Vary", "Accept-Encoding")
+        if use_gzip:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)

@@ -249,10 +249,21 @@ def verify_data(day: date, root: Path) -> dict:
         code = verifier.run_verify(day.isoformat(), scope="fno")
     finally:
         verifier.VERIFY_DIR = original
-    payload = json.loads((directory / f"data_verify_{day}.json").read_text(encoding="utf-8"))
+    proof_path = directory / f"data_verify_{day}.json"
+    payload = json.loads(proof_path.read_text(encoding="utf-8"))
     if (code != 0 or payload.get("overall_exit_code") != 0 or payload.get("overall_status") != "PASS"
             or payload.get("date") != day.isoformat() or payload.get("scope") != "fno"):
-        raise ValueError("Fresh dated FnO data verification did not pass for the requested session")
+        coverage = []
+        for interval in ("5min", "1min"):
+            group = payload.get(interval) or {}
+            coverage.append(
+                f"{interval}={group.get('overall', 'UNKNOWN')} "
+                f"({group.get('ok', '?')}/{group.get('total_tickers', '?')} symbols OK)"
+            )
+        raise ValueError(
+            "Fresh dated FnO data verification did not pass for the requested session: "
+            f"{', '.join(coverage)}; proof={proof_path}"
+        )
     return payload
 
 

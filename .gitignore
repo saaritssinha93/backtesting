@@ -225,6 +225,15 @@ __pycache__
 eqidv2/**
 !eqidv2/dashboard_fno_monitor.js
 !eqidv2/dashboard_fno_monitor.css
+!eqidv2/dashboard_flow.html
+!eqidv2/dashboard_flow.css
+!eqidv2/dashboard_flow.js
+!eqidv2/dashboard_flow_chart.js
+!eqidv2/dashboard_flow_core.js
+!eqidv2/dashboard_flow_compare.js
+!eqidv2/dashboard_ops_state.js
+!eqidv2/tests/dashboard_flow_core.test.cjs
+!eqidv2/tests/test_dashboard_flow_compare.cjs
 !eqidv2/**/
 !eqidv2/**/*.py
 !eqidv2/**/*.md

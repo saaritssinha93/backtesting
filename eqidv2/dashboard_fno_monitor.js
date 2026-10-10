@@ -20,11 +20,46 @@
     return `<span class="fno-detail-pill ${cls}">${esc(name)}</span>`;
   }
   function checks(row) { return Array.isArray(row.checks) ? row.checks : []; }
+  const stageChecks = ["confirmation_stage", "final_selection"];
+  const checkStatus = (check) => String(check.status || "UNKNOWN").toUpperCase();
+  const checkLabel = (check) => check.label || label(check.name || "Check");
+  function checkText(check, formatted, raw) {
+    return check[formatted] !== undefined && check[formatted] !== null && check[formatted] !== "" ?
+      String(check[formatted]) : valueText(check[raw]);
+  }
+  function checkMargin(check) {
+    if (check.margin_text) return String(check.margin_text);
+    return check.margin !== undefined && check.margin !== null ? `Recorded margin: ${valueText(check.margin)}` : "";
+  }
+  function renderCheckIssues(row) {
+    const relevant = checks(row).filter((check) => !stageChecks.includes(check.name));
+    const groups = [["FAIL", "Failed", "fail"], ["UNKNOWN", "Missing / unverified evidence", "unknown"],
+      ["NOT_EVALUATED", "Not evaluated", "unknown"]];
+    const sections = groups.map(([status, heading, style]) => {
+      const items = relevant.filter((check) => checkStatus(check) === status);
+      if (!items.length) return "";
+      return `<div class="fno-check-group ${style}"><strong>${heading} (${items.length})</strong><ul>${items.map((check) => {
+        const margin = checkMargin(check);
+        const note = [status !== "FAIL" ? check.reason : "", check.evidence_note].filter(Boolean).join(" ");
+        return `<li><span class="fno-check-name">${esc(checkLabel(check))}</span>: ${esc(checkText(check, "actual_text", "actual"))}
+          <span class="fno-check-required">Required: ${esc(checkText(check, "required_text", "rule"))}</span>
+          ${margin ? `<span class="fno-check-margin">${esc(margin)}</span>` : ""}
+          ${note ? `<span class="fno-check-note">${esc(note)}</span>` : ""}</li>`;
+      }).join("")}</ul></div>`;
+    }).filter(Boolean);
+    if (!sections.length) sections.push(`<span class="fno-check-note">${relevant.length ?
+      "No recorded filter failures or missing checks." : "No per-check evidence recorded."}</span>`);
+    const later = checks(row).filter((check) => stageChecks.includes(check.name) &&
+      !["PASS", "NOT_APPLICABLE"].includes(checkStatus(check)));
+    if (later.length) sections.push(`<div class="fno-check-stage">${later.map((check) =>
+      `<div>${esc(checkLabel(check))}: ${esc(check.name === "final_selection" && checkStatus(check) === "FAIL" ?
+        "Not selected (separate from filter checks)" : label(checkStatus(check)))}${check.reason ? ` — ${esc(check.reason)}` : ""}</div>`).join("")}</div>`);
+    return sections.join("");
+  }
   function outcome(row) {
     // A later confirmation and ranking/selection are separate stages, not
     // failed indicator filters. Their recorded outcomes remain in details.
-    const statuses = checks(row).filter((check) => !["confirmation_stage", "final_selection"].includes(check.name))
-      .map((check) => String(check.status || "UNKNOWN").toUpperCase());
+    const statuses = checks(row).filter((check) => !stageChecks.includes(check.name)).map(checkStatus);
     if (statuses.includes("FAIL")) return "FAIL";
     if (!statuses.length || statuses.includes("UNKNOWN")) return "UNKNOWN";
     if (statuses.includes("NOT_EVALUATED")) return "NOT_EVALUATED";
@@ -77,13 +112,18 @@
     host.hidden = false;
     const indicatorRows = Object.entries(row.indicators || {}).map(([key, value]) =>
       `<div class="fno-detail-indicator"><span>${esc(label(key))}</span>${esc(valueText(value))}</div>`).join("");
-    const checkRows = checks(row).map((check) => `<tr><td>${esc(label(check.name || "Check"))}</td><td>${pill(check.status)}</td>
-      <td>${esc(valueText(check.actual))}</td><td>${esc(valueText(check.rule))}</td><td>${esc(valueText(check.margin))}</td><td>${esc(check.reason || "")}</td></tr>`).join("");
+    const checkRows = checks(row).map((check) => {
+      const provenance = [check.reason, check.threshold_source ? `Threshold source: ${check.threshold_source}` : "",
+        check.margin_source ? `Margin source: ${check.margin_source}` : "", check.evidence_note].filter(Boolean);
+      return `<tr><td>${esc(checkLabel(check))}</td><td>${pill(check.status)}</td>
+        <td>${esc(checkText(check, "actual_text", "actual"))}</td><td>${esc(checkText(check, "required_text", "rule"))}</td>
+        <td>${esc(checkMargin(check) || "Not recorded / not applicable")}</td><td>${provenance.map((text) => `<div>${esc(text)}</div>`).join("")}</td></tr>`;
+    }).join("");
     host.innerHTML = `<div class="fno-detail-heading"><h4>${esc(row.symbol)} · ${esc(row.side)} · ${esc(row.setup_id)} · ${esc(row.minute || row.signal_time)} IST</h4>
       <button type="button" data-action="close">Close details</button></div>
       <p class="fno-detail-note">${esc(row.stage)} · Decision: ${esc(row.decision)} · Evidence: ${esc(valueText(row.evidence_state))}<br>Source: ${esc(valueText(row.source))}</p>
       <div class="fno-detail-indicators">${indicatorRows || "No indicator values recorded for this event."}</div>
-      <table><thead><tr><th>Indicator / guard / filter</th><th>Recorded result</th><th>Actual value</th><th>Required rule</th><th>Recorded margin</th><th>Reason / provenance</th></tr></thead>
+      <table><thead><tr><th>Indicator / guard / filter</th><th>Recorded result</th><th>Observed value</th><th>Required rule</th><th>Shortfall / margin</th><th>Reason / provenance</th></tr></thead>
       <tbody>${checkRows || '<tr><td colspan="6">No per-check evidence was recorded. This does not mean the guards passed.</td></tr>'}</tbody></table>`;
   }
   function renderRows() {
@@ -100,14 +140,12 @@
     const mode = state.stage === "5m";
     const headers = mode ? ["Price Δ %", "OI Δ %", "5m volume ratio"] : ["1m volume ratio", "Body ratio", "Wick ratio"];
     const body = visible.map((row, idx) => {
-      const failed = checks(row).filter((check) => check.status === "FAIL").map((check) => label(check.name));
-      const unknown = checks(row).filter((check) => check.status === "UNKNOWN").map((check) => label(check.name));
       const metrics = mode ? [metric(row, ["price_change_pct", "price change pct", "price change %"]), metric(row, ["oi_change_pct", "oi change pct", "oi change %"]), metric(row, ["volume_ratio", "5m_volume_ratio", "5m volume ratio"])] :
         [metric(row, ["v9_1m_volume_ratio", "one_minute_volume_ratio", "confirmation_volume_ratio", "1m volume ratio"]), metric(row, ["body_ratio", "v9_1m_body_ratio", "body ratio"]), metric(row, ["wick_ratio", "v9_1m_upper_wick_ratio", "v9_1m_lower_wick_ratio", "wick ratio"])];
       return `<tr><td><button type="button" data-row-index="${start + idx}" aria-label="Inspect ${esc(row.symbol)} ${esc(row.side)} ${esc(row.minute || row.signal_time)}">${esc(row.symbol || "Unknown")}</button></td>
         <td>${esc(row.minute || row.signal_time)}</td><td>${esc(row.side || "Unassigned")}</td><td>${esc(row.setup_id || "Not assigned")}</td><td>${esc(row.stage)}</td>
         <td>${pill(outcome(row))}</td><td class="fno-reasons">${esc(row.decision)}</td>${metrics.map((value) => `<td>${esc(value)}</td>`).join("")}
-        <td class="fno-reasons">${esc(failed.length ? failed.join(", ") : unknown.length ? "Unknown: " + unknown.join(", ") : "Open stock details for all checks")}</td></tr>`;
+        <td class="fno-reasons fno-check-issues">${renderCheckIssues(row)}</td></tr>`;
     }).join("");
     state.host.querySelector("[data-zone=rows]").innerHTML = selected.length ?
       `<table><thead><tr>${["Stock / details", "Minute IST", "Side", "Setup", "Stage", "Gate result", "Recorded decision", ...headers, "Failed / missing checks"].map((name) => `<th>${esc(name)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>` :

@@ -10,12 +10,21 @@ import hashlib
 import json
 import math
 import re
+from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 IST = timezone(timedelta(hours=5, minutes=30))
 STRATEGY_VERSION = "FNO_V13_V10_G_RETAINED_20260914"
+# Read-only display reference, attested against the canonical strategy manifest
+# on 2026-10-08. A different fingerprint must not borrow these numeric defaults.
+PINNED_RULE_FINGERPRINT = "123bcb8f46dac66b519db20b014f0c1b5e99683bd4011f0b62462de449b18893"
+PINNED_RULE_SOURCES = {
+    "fno_v13_v10_g_live_config.py": "0e836a406e1ef4b2ddbc29ce724dddfd87b7d0f21d9ac4beac3f9ea06c0f37a0",
+    "fno_v13_v10_g_policy.py": "56e0a320f62109ff7d475978961ce778d0ee306f7d7875a83f70266c106005f7",
+    "ai_platform/observability/feature_ledger.py": "65ca62f12faeb28fa314bcbc56c75de747bcda55bd5751cf0f979206b39ab720",
+}
 SLOTS = ("09:25", "09:30", "09:35", "09:40", "09:45", "09:50", "09:55", "10:00", "11:20")
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_FEATURE_ROWS = 2000
@@ -41,7 +50,133 @@ FEATURES = (
     "required_price_change_pct", "required_oi_change_pct", "required_volume_ratio",
     "required_body_ratio", "maximum_wick_ratio", "minimum_traded_value",
     "ema_alignment_bypassed", "relaxed_0925_long_base_branch",
+    "maximum_base_oi_change_pct", "v9_1m_upper_wick_ratio", "v9_1m_lower_wick_ratio",
 )
+
+GATE_LABELS = {
+    "gate_session_date": "Signal session date", "gate_values_finite": "Required indicator data",
+    "gate_oi_pair_positive": "Current and previous OI", "gate_oi_increasing": "Increasing OI",
+    "gate_base_oi_min": "Base OI minimum", "gate_base_oi_max": "Base OI maximum",
+    "gate_base_volume": "Base 5m volume", "gate_ema_long": "LONG EMA alignment",
+    "gate_ema_short": "SHORT EMA alignment", "gate_price_long": "LONG 5m price change",
+    "gate_price_short": "SHORT 5m price change", "gate_nifty_0925_short": "09:25 SHORT NIFTY guard",
+    "gate_confirmation_present": "Exact 1m candle available", "gate_confirmation_range": "1m OHLC validity",
+    "gate_confirmation_direction": "1m directional confirmation", "gate_confirmation_volume": "1m confirmation volume",
+    "gate_setup_exists": "Configured setup", "gate_exact_confirmation_clock": "Exact confirmation clock",
+    "gate_setup_price": "Setup 5m price change", "gate_setup_oi": "Setup OI change",
+    "gate_setup_volume": "Setup 5m volume", "gate_setup_body": "1m candle body / range",
+    "gate_setup_wick": "1m adverse wick / range", "gate_setup_liquidity": "Setup traded value",
+}
+
+
+def _number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _display(value: Any, unit: str = "", *, exact=False) -> str:
+    number = _number(value)
+    if number is None:
+        return "Unavailable" if value is None or unit else _text(value, 500) or "Unavailable"
+    if unit == "ratio_pct":
+        number *= 100.
+    precision = 4 if unit == "pct" else 2 if unit in {"ratio_pct", "x", "rs"} else 0 if unit == "oi" else 4
+    rendered = format(number, ".15g") if exact else format(number, f".{precision}f")
+    if not exact and number and float(rendered) == 0:
+        rendered = format(number, ".8g")
+    return {"pct": f"{rendered}%", "ratio_pct": f"{rendered}%", "x": f"{rendered}×",
+            "rs": f"₹{rendered}", "oi": rendered, "seconds": f"{rendered} seconds"}.get(unit, rendered)
+
+
+@lru_cache(maxsize=16)
+def _verified_source(path_text: str, size: int, modified_ns: int, expected: str) -> bool:
+    # Cache is keyed by filesystem identity; changed source does not retain a pin.
+    try:
+        return hashlib.sha256(Path(path_text).read_bytes()).hexdigest() == expected
+    except OSError:
+        return False
+
+
+def _pinned_sources_available(row: dict) -> bool:
+    if row.get("strategy_version") != STRATEGY_VERSION or row.get("strategy_fingerprint") != PINNED_RULE_FINGERPRINT:
+        return False
+    for relative, expected in PINNED_RULE_SOURCES.items():
+        path = Path(__file__).resolve().parent / relative
+        try:
+            stat = path.stat()
+        except OSError:
+            return False
+        if not _verified_source(str(path), stat.st_size, stat.st_mtime_ns, expected):
+            return False
+    return True
+
+
+def _source_reference(symbol: str) -> str:
+    return f"PINNED_G_SOURCE: {symbol}"
+
+
+def _comparison(label: str, actual: Any, operator: str, required: Any, unit="") -> dict:
+    actual, required = _number(actual), _number(required)
+    margin = None if actual is None or required is None else (required-actual if operator in ("<", "<=") else actual-required)
+    return dict(label=label, actual=actual, operator=operator, required=required,
+                unit=unit, margin=margin, strict=operator in ("<", ">"))
+
+
+def _margin_text(value: Any, unit: str, strict=False) -> str:
+    number = _number(value)
+    if number is None:
+        return "Unavailable"
+    scaled = number * 100 if unit == "ratio_pct" else number
+    suffix = " pp" if unit in ("pct", "ratio_pct") else "×" if unit == "x" else " price units" if unit == "rs" else ""
+    sign = "+" if scaled > 0 else "−" if scaled < 0 else ""
+    precision = 4 if unit == "pct" else 2
+    rendered = format(abs(scaled), f".{precision}f")
+    if scaled and float(rendered) == 0:
+        rendered = format(abs(scaled), ".8g")
+    text = f"{sign}{rendered}{suffix}"
+    return text + (" (shortfall)" if number < 0 else " (strict inequality: equality fails)" if strict and number == 0 else "")
+
+
+def _display_check(check: dict, *, actual_text: str, required_text: str, source: str,
+                   comparisons: list[dict] | None = None, recorded_margin: Any = None,
+                   recorded_margin_field: str = "") -> dict:
+    """Explain arithmetic without changing any recorded decision flag."""
+    checks = comparisons or []
+    notes = []
+    boundary_details = [f"{item['label']}: {_display(item['actual'], item['unit'], exact=True)} {item['operator']} {_display(item['required'], item['unit'], exact=True)}"
+                        for item in checks if item["actual"] is not None and item["required"] is not None
+                        and item["actual"] != item["required"]
+                        and _display(item["actual"], item["unit"]) == _display(item["required"], item["unit"])]
+    if boundary_details:
+        actual_text += "; boundary detail: " + "; ".join(boundary_details)
+    calculated = [item["margin"] for item in checks]
+    fully_known = bool(checks) and all(value is not None for value in calculated)
+    check.update(actual_text=actual_text, required_text=required_text, threshold_source=source,
+                 comparisons=checks, margin_text="Unavailable", margin_source="UNAVAILABLE")
+    if checks:
+        texts = [_margin_text(item["margin"], item["unit"], item["strict"]) for item in checks]
+        check["margin_text"] = "; ".join(f"{item['label']}: {text}" for item, text in zip(checks, texts)) if len(checks) > 1 else texts[0]
+        if any(value is not None for value in calculated):
+            check["margin_source"] = "DISPLAY_ARITHMETIC"
+        observed_margin = _number(recorded_margin)
+        if observed_margin is not None and checks[0]["margin"] is not None:
+            check["margin_source"] = f"RECORDED: {recorded_margin_field}"
+            if not math.isclose(observed_margin, checks[0]["margin"], abs_tol=1e-10, rel_tol=1e-10):
+                notes.append("Recorded margin disagrees with displayed values; neither the margin nor the recorded decision was overwritten.")
+                check["margin_text"] += f"; recorded {recorded_margin_field}: {_margin_text(observed_margin, checks[0]['unit'])}"
+    elif _number(recorded_margin) is not None:
+        notes.append("Recorded margin exists, but its actual value or requirement is unavailable; no shortfall is reconstructed.")
+    if fully_known and check["status"] in ("PASS", "FAIL"):
+        satisfied = all(value > 0 if item["strict"] else value >= 0 for item, value in zip(checks, calculated))
+        if satisfied != (check["status"] == "PASS"):
+            notes.append("Recorded status differs from the displayed numeric comparison. Upstream prerequisites or inconsistent evidence may explain this; recorded status is retained.")
+    check["evidence_note"] = " ".join(notes)
+    return check
 
 
 def _scalar(value: Any) -> Any:
@@ -159,10 +294,147 @@ def _failed(row: dict) -> list[str]:
 
 
 def _check(name: str, status: str, actual: Any = None, rule: str = "", margin: Any = None, reason: str = "") -> dict:
-    return dict(name=name, status=status, actual=_scalar(actual), rule=rule, margin=_scalar(margin), reason=reason)
+    return dict(name=name, status=status, actual=_scalar(actual), rule=rule, margin=_scalar(margin), reason=reason,
+                recorded_status=status, label=GATE_LABELS.get(name, name.replace("_", " ").capitalize()),
+                actual_text=_display(_scalar(actual)), required_text=rule or "Unavailable",
+                margin_text="Unavailable", threshold_source="RECORDED_EVIDENCE_DESCRIPTION",
+                margin_source="UNAVAILABLE", evidence_note="", comparisons=[])
 
 
-def _gate(row: dict, name: str, phase: str) -> dict:
+def _enhance_gate(check: dict, row: dict, pinned: bool) -> dict:
+    name, side = check["name"], _text(row.get("base_side")).upper()
+    relaxed_flag = _flag(row.get("relaxed_0925_long_base_branch"))
+    relaxed = relaxed_flag is True
+    branch_known = relaxed_flag is not None
+    source = _source_reference(name) if pinned else "UNAVAILABLE: strategy fingerprint/source bundle is not pinned for numeric defaults"
+    required = "Unavailable (numeric requirement not recorded or source reference unverified)"
+    actual, comparisons = _display(check["actual"]), []
+    margin_field = ""
+    recorded_margin = None
+
+    def scalar_gate(field, threshold, operator, unit, threshold_field=""):
+        nonlocal actual, required, source, comparisons
+        value = _number(row.get(field))
+        actual = _display(value, unit)
+        threshold = _number(threshold)
+        if threshold_field:
+            source = f"RECORDED: {threshold_field}" if threshold is not None else f"UNAVAILABLE: {threshold_field}"
+        required = f"{operator} {_display(threshold, unit)}" if threshold is not None else "Unavailable (numeric threshold not recorded/verified)"
+        comparisons = [_comparison(field, value, operator, threshold, unit)]
+
+    base_specs = {
+        "gate_base_oi_min": ("oi_change_pct", (.10 if relaxed else .05) if pinned and branch_known else None, ">=", "pct"),
+        "gate_base_volume": ("volume_ratio", (1.75 if relaxed else .8) if pinned and branch_known else None, ">=", "x"),
+        "gate_price_long": ("price_change_pct", (.30 if relaxed else .10) if pinned and branch_known else None, ">=", "pct"),
+        "gate_price_short": ("price_change_pct", -.10 if pinned else None, "<=", "pct"),
+        "gate_nifty_0925_short": ("nifty_first_bar_return_pct", -.05 if pinned else None, "<=", "pct"),
+        "gate_confirmation_volume": ("v9_1m_volume_ratio", 1.20 if pinned else None, ">=", "x"),
+    }
+    setup_specs = {
+        "gate_setup_price": ("price_change_pct", "required_price_change_pct", "margin_price_change_pct", "pct"),
+        "gate_setup_oi": ("oi_change_pct", "required_oi_change_pct", "margin_oi_change_pct", "pct"),
+        "gate_setup_volume": ("volume_ratio", "required_volume_ratio", "margin_volume_ratio", "x"),
+        "gate_setup_body": ("body_ratio", "required_body_ratio", "margin_body_ratio", "ratio_pct"),
+        "gate_setup_wick": ("wick_ratio", "maximum_wick_ratio", "margin_wick_ratio", "ratio_pct"),
+        "gate_setup_liquidity": ("traded_value", "minimum_traded_value", "margin_traded_value", "rs"),
+    }
+    if name in base_specs:
+        scalar_gate(*base_specs[name])
+        if name == "gate_confirmation_volume":
+            margin_field = "margin_confirmation_volume_ratio"
+            if pinned:
+                required += " (current volume / mean of preceding 20 completed minutes; current excluded)"
+    elif name == "gate_base_oi_max":
+        threshold = _number(row.get("maximum_base_oi_change_pct"))
+        if threshold is not None:
+            scalar_gate("oi_change_pct", threshold, "<=", "pct", "maximum_base_oi_change_pct")
+        else:
+            scalar_gate("oi_change_pct", (1.2 if relaxed else 1.) if pinned and branch_known else None, "<=", "pct")
+    elif name in setup_specs:
+        field, threshold_field, margin_field, unit = setup_specs[name]
+        threshold = _number(row.get(threshold_field))
+        operator = "<=" if name == "gate_setup_wick" or (name == "gate_setup_price" and side == "SHORT") else ">="
+        if name == "gate_setup_price":
+            threshold = -threshold if threshold is not None and side == "SHORT" else threshold
+            if side not in {"LONG", "SHORT"}:
+                threshold = None
+        scalar_gate(field, threshold, operator, unit, threshold_field)
+        if name == "gate_setup_price" and side in {"LONG", "SHORT"}:
+            required += f" ({side}, raw signed 5m return)"
+        if name in {"gate_setup_body", "gate_setup_wick"} and pinned:
+            boundary, boundary_operator = (1., "<=") if name == "gate_setup_body" else (0., ">=")
+            comparisons.append(_comparison("upper bound" if name == "gate_setup_body" else "lower bound", row.get(field), boundary_operator, boundary, unit))
+            required += f" and {boundary_operator} {_display(boundary, unit)}"
+            source += "; " + _source_reference("passes_selected_filters: bounded body/wick")
+        if name == "gate_setup_wick":
+            actual += " (upper wick for LONG)" if side == "LONG" else " (lower wick for SHORT)" if side == "SHORT" else " (side unavailable)"
+    elif name in {"gate_ema_long", "gate_ema_short"}:
+        actual = "; ".join(f"EMA{period}={_display(_number(row.get(f'ema{period}')), 'rs')}" for period in (9,20,50))
+        if pinned:
+            operator = ">" if name == "gate_ema_long" else "<"
+            required = f"EMA9 {operator} EMA20 {operator} EMA50 (strict; equality fails)"
+            comparisons = [_comparison("EMA9 vs EMA20", row.get("ema9"), operator, row.get("ema20"), "rs"),
+                           _comparison("EMA20 vs EMA50", row.get("ema20"), operator, row.get("ema50"), "rs")]
+    elif name in {"gate_oi_pair_positive", "gate_oi_increasing"}:
+        actual = f"Current OI={_display(_number(row.get('oi')), 'oi')}; previous OI={_display(_number(row.get('prev_oi')), 'oi')}"
+        if pinned:
+            if name == "gate_oi_pair_positive":
+                required = "Current OI > 0 and previous OI > 0"
+                comparisons = [_comparison(key, row.get(key), ">", 0., "oi") for key in ("oi", "prev_oi")]
+            else:
+                required = "Current OI > previous OI (strict; equality fails)"
+                comparisons = [_comparison("Current vs previous OI", row.get("oi"), ">", row.get("prev_oi"), "oi")]
+    elif name == "gate_confirmation_direction":
+        actual = "; ".join(f"{label}={_display(_number(row.get(key)), 'rs')}" for label, key in
+                           (("1m close", "confirmation_close"), ("1m open", "confirmation_open"), ("5m signal close", "signal_close")))
+        if pinned and side in {"LONG", "SHORT"}:
+            operator = ">" if side == "LONG" else "<"
+            required = f"{side}: 1m close {operator} 1m open AND 1m close {operator} 5m signal close (strict)"
+            comparisons = [_comparison(label, row.get("confirmation_close"), operator, row.get(key), "rs") for label, key in
+                           (("Close vs open", "confirmation_open"), ("Close vs signal", "signal_close"))]
+        elif pinned:
+            required = "LONG: close > open AND signal close; SHORT: close < both (candidate side unavailable)"
+    elif name == "gate_confirmation_range":
+        actual = "; ".join(f"{label}={_display(_number(row.get('confirmation_'+key)), 'rs')}" for label,key in
+                           (("O","open"),("H","high"),("L","low"),("C","close")))
+        if pinned:
+            required = "O,H,L,C > 0; H > L; H >= O and C; L <= O and C; candle present"
+            comparisons = [_comparison(label, row.get("confirmation_"+key), ">", 0., "rs") for label,key in
+                           (("O > 0","open"),("H > 0","high"),("L > 0","low"),("C > 0","close"))]
+            comparisons += [_comparison("H vs L", row.get("confirmation_high"), ">", row.get("confirmation_low"), "rs")]
+            for key in ("open", "close"):
+                comparisons.extend([_comparison("H vs "+key, row.get("confirmation_high"), ">=", row.get("confirmation_"+key), "rs"),
+                                    _comparison("L vs "+key, row.get("confirmation_low"), "<=", row.get("confirmation_"+key), "rs")])
+    elif name == "gate_values_finite":
+        fields = ("ema9", "ema20", "ema50", "price_change_pct", "oi_change_pct", "volume_ratio", "oi", "prev_oi")
+        needed = tuple(field for field in fields if not relaxed or not field.startswith("ema"))
+        actual = "; ".join(f"{field}={_display(_number(row.get(field)))}" for field in needed)
+        if pinned and branch_known:
+            required = "Finite recorded values: " + ", ".join(needed)
+    elif name == "gate_session_date":
+        actual = f"Session={_text(row.get('session_date')) or 'Unavailable'}; signal={_text(row.get('signal_ts')) or 'Unavailable'}"
+        if pinned:
+            required = "Signal timestamp's IST calendar date equals recorded session date"
+    elif name in {"gate_confirmation_present", "gate_exact_confirmation_clock"}:
+        actual = f"Signal={_text(row.get('signal_ts')) or 'Unavailable'}; confirmation={_text(row.get('confirmation_ts')) or 'Unavailable'}"
+        if name == "gate_confirmation_present":
+            actual += "; OHLC=" + ", ".join(_display(_number(row.get('confirmation_'+key)), 'rs') for key in ("open","high","low","close"))
+        stamp = _stamp(row.get("signal_ts"))
+        if pinned and stamp is not None:
+            required = (stamp + timedelta(minutes=1)).isoformat() + (" exact completed candle with finite OHLC" if name == "gate_confirmation_present" else " exact configured confirmation timestamp")
+    elif name == "gate_setup_exists":
+        actual = _text(row.get("setup_id")) or "Unavailable (no setup ID recorded)"
+        if pinned:
+            required = f"Configured setup for {side or 'unavailable side'} at {_text(row.get('signal_end')) or 'unavailable clock'}"
+    if margin_field:
+        recorded_margin = row.get(margin_field)
+    check = _display_check(check, actual_text=actual, required_text=required, source=source,
+                           comparisons=comparisons, recorded_margin=recorded_margin, recorded_margin_field=margin_field)
+    check["rule"] = required
+    return check
+
+
+def _gate(row: dict, name: str, phase: str, *, pinned: bool | None = None) -> dict:
     side = _text(row.get("base_side")).upper()
     relaxed = _flag(row.get("relaxed_0925_long_base_branch")) is True
     status = _status(row.get(name))
@@ -209,7 +481,15 @@ def _gate(row: dict, name: str, phase: str) -> dict:
         actual, threshold, margin, label = setups[name]
         rules[name] = (row.get(actual), f"{label} {_scalar(row.get(threshold))}" if row.get(threshold) is not None else "Numeric threshold not recorded", row.get(margin))
     actual, rule, margin = rules.get(name, (None, "Recorded gate", None))
-    return _check(name, status, actual, rule, margin, reason)
+    check = _check(name, status, actual, rule, margin, reason)
+    check["recorded_status"] = _status(row.get(name))
+    return _enhance_gate(check, row, _pinned_sources_available(row) if pinned is None else pinned)
+
+
+def _invalidate_check(check: dict, reason: str) -> dict:
+    return {**check, "status": "UNKNOWN", "reason": reason,
+            "margin_text": "Unavailable (invalid evidence)", "margin_source": "UNAVAILABLE",
+            "comparisons": [], "evidence_note": "Evidence validation failed; numeric observations are unverified and no shortfall is asserted."}
 
 
 def _feature_row(raw: dict, parent: dict, day: str, slot: str, phase: str, source: str, parent_state: str, index: int) -> dict:
@@ -222,9 +502,10 @@ def _feature_row(raw: dict, parent: dict, day: str, slot: str, phase: str, sourc
     side = _text(raw.get("base_side"))
     symbol = _text(raw.get("tradingsymbol"), 100)
     minute = slot if phase == "5m" else (_at(day, slot) + timedelta(minutes=1)).strftime("%H:%M")
-    checks = [_gate(raw, gate, phase) for gate in (BASE_GATES if phase == "5m" else CONFIRMATION_GATES)]
+    pinned = _pinned_sources_available(raw)
+    checks = [_gate(raw, gate, phase, pinned=pinned) for gate in (BASE_GATES if phase == "5m" else CONFIRMATION_GATES)]
     if not usable:
-        checks = [{**check, "status": "UNKNOWN", "reason": f"Evidence validation: {state}"} for check in checks]
+        checks = [_invalidate_check(check, f"Evidence validation: {state}") for check in checks]
     checks.append(_check("slot_complete", "FAIL" if usable and parent_state == "BLOCKED" else "PASS" if usable else "UNKNOWN", parent.get("state"), "Recorded slot state must be SUCCESS; valid individual filters do not override an incomplete slot"))
     decision = "UNKNOWN"
     if usable and phase == "5m":
@@ -251,6 +532,12 @@ def _feature_row(raw: dict, parent: dict, day: str, slot: str, phase: str, sourc
         elif setup_pass is False:
             decision = "CONFIRMATION_OR_SETUP_REJECTED"
         checks.append(_check("final_selection", "PASS" if selected and parent_state == "RECORDED" else "NOT_EVALUATED" if parent_state == "BLOCKED" else "FAIL" if isinstance(ids, list) else "UNKNOWN", actual=selected if isinstance(ids, list) else None, rule="Recorded selected_signal_ids, not inferred from indicator gates", reason="Filter pass alone does not guarantee ranking/quota selection; exact exclusion reason is not recorded." if decision == "FILTER_PASS_NOT_SELECTED" else ""))
+    # The frontend uses the compact display fields. Exact feature values already
+    # live in indicators; do not resend the internal compound-comparison tree
+    # for every one of tens of thousands of checks on each dashboard refresh.
+    for check in checks:
+        if check.get("comparisons"):
+            check.pop("comparisons")
     return dict(id=f"g:{phase}:{slot}:{index}:{symbol}", strategy="V13-V10-G", session_date=day,
                 symbol=symbol, side=side, setup_id=_text(raw.get("setup_id")), signal_time=slot,
                 minute=minute, stage="5M_BASE_FILTERS" if phase == "5m" else "1M_CONFIRMATION_SETUP",
@@ -358,7 +645,7 @@ def _feed_evidence(fno_root: Path, day: str, slot: str, scan: dict, confirmation
     for row in rows:
         if row.get("stage") != "1M_CONFIRMATION_SETUP":
             continue
-        row["checks"].extend(checks if row["evidence_state"] in {"RECORDED", "BLOCKED"} else [{**check, "status": "UNKNOWN", "reason": "Feature row evidence is invalid"} for check in checks])
+        row["checks"].extend(checks if row["evidence_state"] in {"RECORDED", "BLOCKED"} else [_invalidate_check(check, "Feature row evidence is invalid") for check in checks])
         row["indicators"]["durable_feed_state"] = state
         row["indicators"]["durable_feed_published_at"] = _scalar(marker.get("published_at_ist"))
         history = observations.get(row["symbol"], []) if isinstance(observations, dict) else []
@@ -454,16 +741,17 @@ def build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetime
             conf_coverage["state"] = "INVALID_STRATEGY"
             for row in confirmation:
                 row.update(evidence_state="INVALID_STRATEGY", decision="UNKNOWN")
-                row["checks"] = [{**check, "status": "UNKNOWN", "reason": "Scanner/confirmation strategy identity mismatch"} for check in row["checks"]]
+                row["checks"] = [_invalidate_check(check, "Scanner/confirmation strategy identity mismatch") for check in row["checks"]]
         rows_5m.extend(scanner)
         rows_1m.extend(confirmation)
         coverage.append(dict(slot=slot, scanner_state=scan_coverage["state"], confirmation_state=conf_coverage["state"], scanner_rows=scan_coverage["rows"], confirmation_rows=conf_coverage["rows"], scanner=scan_coverage, confirmation=conf_coverage))
     rows_1m.extend(_event_rows(root, session_date, now, warnings))
     rows_1m.extend(_order_rows(root, session_date, now, warnings))
     warnings.append("Order evidence is recorded transitions/latest snapshots, not a complete tick-by-tick or per-minute guard history. Missing checks remain UNKNOWN.")
-    warnings.append("Numeric setup thresholds/margins are recorded evidence. Base-rule descriptions are pinned V13-V10-G references; recorded flags, not reconstructed logic, determine PASS/FAIL.")
+    warnings.append("Recorded flags determine PASS/FAIL. Recorded setup thresholds take priority; numeric base defaults require matching strategy/source SHA256 pins. Display arithmetic explains margins, never re-executes or changes trading decisions. Positive displayed margin may not clear an upstream prerequisite.")
     due_states = [item[key] for item in coverage for key in ("scanner_state", "confirmation_state") if item[key] != "NOT_DUE"]
     state = "RECORDED" if due_states and all(item == "RECORDED" for item in due_states) else "PARTIAL" if rows_5m or rows_1m else "NO_EVIDENCE"
     return dict(schema_version="fno_eq_id_monitor_detail_v1", session_date=session_date, generated_at_ist=now.isoformat(), state=state,
+                rule_reference_provenance={"strategy_fingerprint": PINNED_RULE_FINGERPRINT, "source_sha256": PINNED_RULE_SOURCES},
                 warnings=list(dict.fromkeys(warnings))[:100], coverage=coverage, rows_5m=rows_5m,
                 rows_1m=sorted(rows_1m, key=lambda row: (row["minute"], row["stage"], row["symbol"], row["id"])))
