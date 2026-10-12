@@ -1,4 +1,4 @@
-"""Fail-closed, read-only trust checks for the V13-V10-G LIVE session.
+"""Fail-closed, read-only trust checks for the selected G/G3 LIVE session.
 
 This module never talks to the broker, starts a process, or changes a safety
 control.  It verifies the coordinator's current-session status and the
@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, time as day_time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from fno_strategy_registry import PROFILES, active_profile_name
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -62,11 +64,13 @@ class LiveTrustReport:
     reconciliation_path: str
     run_id: str | None
     checks: tuple[TrustCheck, ...]
+    strategy_profile: str = "V13_V10_G"
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": REPORT_SCHEMA_VERSION,
+            "schema_version": PROFILES[self.strategy_profile].slug + "_live_trust_v2",
             **asdict(self),
+            "execution_authority": False,
             "checks": [asdict(check) for check in self.checks],
             "summary": {
                 "passed": sum(check.state == "PASS" for check in self.checks),
@@ -305,6 +309,7 @@ def evaluate_live_trust(
     expected_session_date: date,
     expected_strategy_version: str,
     expected_strategy_fingerprint: str,
+    expected_strategy_profile: str = "V13_V10_G",
     observed_at: datetime | None = None,
     status_max_age_seconds: float = 30.0,
     reconciliation_max_age_seconds: float = 120.0,
@@ -312,6 +317,11 @@ def evaluate_live_trust(
     market_data_max_age_seconds: float = 420.0,
 ) -> LiveTrustReport:
     """Evaluate current LIVE evidence without changing any runtime state."""
+
+    if expected_strategy_profile not in PROFILES:
+        raise ValueError("Unsupported strategy profile")
+    profile = PROFILES[expected_strategy_profile]
+    session_prefix = "fno_" + profile.slug
 
     if any(
         value <= 0
@@ -356,16 +366,30 @@ def evaluate_live_trust(
     profile_matches = (
         status.get("execution_mode") == "LIVE"
         and status.get("execution_profile") == EXPECTED_EXECUTION_PROFILE
-        and status.get("quantity") == 1
-        and status.get("quantity_policy") == EXPECTED_QUANTITY_POLICY
     )
+    if expected_strategy_profile == "V13_V10_G_3":
+        # The decision fingerprint still identifies the accepted backtest.
+        # Runtime allocation has its own identity and must be verified too.
+        from fno_v13_v10_g_3_live_execution_policy import validate_execution_metadata
+        try:
+            validate_execution_metadata(status)
+            policy_detail = "G3 LIVE execution policy matches"
+        except (TypeError, ValueError) as exc:
+            profile_matches = False
+            policy_detail = str(exc)
+        profile_check_name = "live_execution_sizing_policy"
+    else:
+        profile_matches = (profile_matches and status.get("quantity") == 1
+                           and status.get("quantity_policy") == EXPECTED_QUANTITY_POLICY)
+        policy_detail = f"quantity={status.get('quantity')!r} policy={status.get('quantity_policy')!r}"
+        profile_check_name = "live_quantity_one_profile"
     record(
-        "live_quantity_one_profile",
+        profile_check_name,
         profile_matches,
         (
             f"mode={status.get('execution_mode')!r} "
             f"profile={status.get('execution_profile')!r} "
-            f"quantity={status.get('quantity')!r} policy={status.get('quantity_policy')!r}"
+            f"{policy_detail}"
         ),
     )
     record(
@@ -382,6 +406,8 @@ def evaluate_live_trust(
         and status.get("arm_strategy_matches") is True
         and status.get("kill_switch_enabled") is False
     )
+    if expected_strategy_profile == "V13_V10_G_3":
+        safety_controls_ok = safety_controls_ok and status.get("arm_execution_policy_matches") is True
     record(
         "live_safety_controls",
         safety_controls_ok,
@@ -412,7 +438,7 @@ def evaluate_live_trust(
     for side in ("long", "short"):
         child = children.get(side)
         child = child if isinstance(child, dict) else {}
-        expected_child_session = f"fno_v13_v10_g_live_kite_qty1_{side}"
+        expected_child_session = f"{session_prefix}_live_kite_qty1_{side}"
         child_fresh, child_fresh_detail = _freshness_detail(
             _parse_aware_datetime(child.get("updated_at_ist")),
             now=now,
@@ -441,7 +467,7 @@ def evaluate_live_trust(
     broker_child = broker_child if isinstance(broker_child, dict) else {}
     broker_child_ok = (
         broker_child.get("session_id")
-        == "fno_v13_v10_g_live_kite_qty1_broker_reconciliation"
+        == f"{session_prefix}_live_kite_qty1_broker_reconciliation"
         and type(broker_child.get("pid")) is int
         and broker_child.get("pid", 0) > 0
         and broker_child.get("return_code") is None
@@ -479,9 +505,9 @@ def evaluate_live_trust(
     )
 
     pipeline_roles = (
-        ("scanner", "fno_v13_v10_g_scanner_5min", "scanner-5m"),
-        ("confirmation", "fno_v13_v10_g_confirmation_1min", "confirmation-1m"),
-        ("equity_1m_feed", "fno_v13_v10_g_equity_1min_feed", None),
+        ("scanner", f"{session_prefix}_scanner_5min", "scanner-5m"),
+        ("confirmation", f"{session_prefix}_confirmation_1min", "confirmation-1m"),
+        ("equity_1m_feed", f"{session_prefix}_equity_1min_feed", None),
     )
     runtime_status_root = runtime_root / "runtime_status"
     for label, session_name, role in pipeline_roles:
@@ -640,9 +666,17 @@ def evaluate_live_trust(
     )
     record(
         "broker_reconciliation_contract",
-        reconciliation.get("schema_version") == RECONCILIATION_SCHEMA_VERSION,
+        reconciliation.get("schema_version") == profile.slug + "_broker_position_reconciliation_v2",
         f"schema={reconciliation.get('schema_version')!r}",
     )
+    if expected_strategy_profile == "V13_V10_G_3":
+        record(
+            "broker_reconciliation_strategy_identity",
+            reconciliation.get("strategy_profile") == expected_strategy_profile
+            and reconciliation.get("strategy_version") == expected_strategy_version
+            and reconciliation.get("strategy_fingerprint") == expected_strategy_fingerprint,
+            "G3 broker evidence must bind the selected profile, version and fingerprint",
+        )
     record(
         "broker_reconciliation_session",
         reconciliation.get("session_date") == day_text,
@@ -765,6 +799,7 @@ def evaluate_live_trust(
         reconciliation_path=str(reconciliation_path),
         run_id=status_run_id if valid_status_run_id else None,
         checks=tuple(checks),
+        strategy_profile=expected_strategy_profile,
     )
 
 
@@ -776,6 +811,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2")),
     )
     parser.add_argument("--session-date", type=date.fromisoformat)
+    parser.add_argument("--profile", choices=tuple(PROFILES), default=None)
     parser.add_argument("--status-max-age-seconds", type=float, default=30.0)
     parser.add_argument("--reconciliation-max-age-seconds", type=float, default=120.0)
     parser.add_argument("--pipeline-max-age-seconds", type=float, default=120.0)
@@ -783,34 +819,54 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _profile_identity(profile_name: str, runtime_root: Path) -> tuple[str, str]:
+    """Read pinned metadata without importing runtime engines or creating paths."""
+    workspace = Path(__file__).resolve().parents[2]
+    registry = json.loads((workspace / "docs/ai_platform/profile_registry.json").read_text(encoding="utf-8"))
+    record = registry["profiles"][profile_name]
+    version, fingerprint = record["strategy_version"], record["strategy_fingerprint"]
+    if version != PROFILES[profile_name].version or SHA256_PATTERN.fullmatch(fingerprint) is None:
+        raise ValueError("Invalid registered strategy identity")
+    if profile_name == "V13_V10_G_3":
+        from fno_v13_v10_g_3_contract import config_fingerprint, load_contract
+        load_contract(workspace / "configs/strategies/v13_v10_g_3_production_v1.json")
+        if fingerprint != config_fingerprint():
+            raise ValueError("G3 registered strategy fingerprint differs from the production contract")
+    else:
+        sources = json.loads((workspace / "docs/ai_platform/source_registry.json").read_text(encoding="utf-8"))
+        relative = sources["sources"]["frozen_strategy_config"]["relative_path"]
+        frozen = (runtime_root / relative).resolve()
+        frozen.relative_to(runtime_root.resolve())
+        if hashlib.sha256(frozen.read_bytes()).hexdigest() != record["frozen_config_sha256"]:
+            raise ValueError("Historical G frozen config checksum differs")
+    return version, fingerprint
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    from fno_v13_v10_g_live_config import (
-        STRATEGY_VERSION,
-        strategy_fingerprint,
-        validate_strategy,
-    )
-
-    validate_strategy()
+    profile = PROFILES[args.profile or active_profile_name()]
     observed_at = datetime.now(IST)
     session_date = args.session_date or observed_at.date()
     runtime_root = args.runtime_root.resolve()
+    strategy_version, fingerprint = _profile_identity(profile.name, runtime_root)
     status_path = (
-        runtime_root / "fno_oi" / "v13_v10_g_live" / "live_kite" / "status.json"
+        runtime_root / "fno_oi" / profile.live_dir / "live_kite" / "status.json"
     )
+    broker_prefix = "broker_positions_" + (profile.slug + "_" if profile.name == "V13_V10_G_3" else "")
     reconciliation_path = (
         runtime_root
         / "observability"
         / "reconciliation"
-        / f"broker_positions_{session_date.isoformat()}.json"
+        / f"{broker_prefix}{session_date.isoformat()}.json"
     )
     report = evaluate_live_trust(
         runtime_root=runtime_root,
         status_path=status_path,
         reconciliation_path=reconciliation_path,
         expected_session_date=session_date,
-        expected_strategy_version=STRATEGY_VERSION,
-        expected_strategy_fingerprint=strategy_fingerprint(),
+        expected_strategy_version=strategy_version,
+        expected_strategy_fingerprint=fingerprint,
+        expected_strategy_profile=profile.name,
         observed_at=observed_at,
         status_max_age_seconds=args.status_max_age_seconds,
         reconciliation_max_age_seconds=args.reconciliation_max_age_seconds,

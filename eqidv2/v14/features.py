@@ -3,7 +3,8 @@
 Input timestamps label completed minute ends in Asia/Kolkata. Existing G-3
 EMAs and rolling volume ratios deliberately retain their cross-session native
 arithmetic. New pressure features reset each session; same-clock references
-exclude the current session and use twenty prior observed valid sessions.
+exclude the current session and use the prior twenty recorded same-clock rows,
+requiring all twenty source values to be valid. Missing rows are not fabricated.
 """
 from __future__ import annotations
 
@@ -116,6 +117,7 @@ def aggregate_five(minute: pd.DataFrame) -> pd.DataFrame:
 
 
 def _relative_at_clock(frame: pd.DataFrame, source: str, window: int) -> tuple[pd.Series, pd.Series]:
+    """Prior recorded clock rows; invalid values consume slots and fail closed."""
     clock = frame.ts.dt.strftime("%H:%M")
     denominator = frame.groupby(clock, sort=False)[source].transform(
         lambda x: x.shift(1).rolling(window, min_periods=window).median())
@@ -146,7 +148,8 @@ def add_participation(five: pd.DataFrame, minute: pd.DataFrame,
     m["clv_volume"] = clv * m.volume
     m["typical"] = (m.high + m.low + m.close) / 3.
     move = m.groupby(day).close.diff()
-    m["signed_volume"] = np.sign(move) * m.volume
+    preceding_minute = m.ts.sub(m.groupby(day).ts.shift(1)).eq(pd.Timedelta(minutes=1))
+    m["signed_volume"] = (np.sign(move) * m.volume).where(preceding_minute)
     typical_move = m.groupby(day).typical.diff()
     raw_money = m.typical * m.volume
     m["positive_money"] = raw_money.where(typical_move.gt(0), 0.).where(typical_move.notna())
@@ -154,8 +157,9 @@ def add_participation(five: pd.DataFrame, minute: pd.DataFrame,
     group = m.groupby(day, sort=False)
     volume10 = group.volume.transform(lambda x: x.rolling(10, min_periods=10).sum())
     cmf_num = group.clv_volume.transform(lambda x: x.rolling(10, min_periods=10).sum())
-    # First bar direction is its own open-to-close, without yesterday's close.
-    first = group.cumcount().eq(0)
+    # Only the actual opening bar uses its own open-to-close direction. A later
+    # first observed bar cannot substitute for a missing preceding minute.
+    first = m.ts.eq(m.ts.dt.normalize() + pd.Timedelta(hours=9, minutes=16))
     m.loc[first, "signed_volume"] = np.sign(m.loc[first, "close"] - m.loc[first, "open"]) * m.loc[first, "volume"]
     signed_num = m.groupby(day).signed_volume.transform(lambda x: x.rolling(10, min_periods=10).sum())
     continuous10 = m.ts.sub(m.groupby(day).ts.shift(9)).eq(pd.Timedelta(minutes=9))
@@ -190,6 +194,7 @@ def build_features(frame: pd.DataFrame, symbol: str, *, history_sessions: int = 
     five["v9_5m_feature_ts"] = five.signal_ts
     denominator = minute.volume.shift(1).rolling(20, min_periods=5).mean()
     confirmation = minute[["ts", "open", "high", "low", "close", "volume"]].copy()
+    confirmation[["open", "high", "low", "close"]] = confirmation[["open", "high", "low", "close"]].astype(float)
     confirmation["v9_1m_volume_ratio"] = minute.volume / denominator.where(denominator.gt(0))
     confirmation["v9_1m_feature_ts"] = confirmation.ts
     span = (confirmation.high - confirmation.low).where(confirmation.high.gt(confirmation.low))

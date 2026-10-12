@@ -40,7 +40,17 @@ def _read_order(
         "strategy_fingerprint",
         source,
     )
+    g3_live = expected_mode == "LIVE" and row.get("strategy_version") == "V13-V10-G-3-PRODUCTION-V1"
+    if g3_live:
+        from fno_v13_v10_g_3_live_execution_policy import validate_order_sizing
+        try:
+            validate_order_sizing(row)
+        except (TypeError, ValueError) as exc:
+            raise ArtifactError(f"G3 LIVE execution sizing is invalid in {source}: {exc}") from exc
     status = str(row.get("status", "UNKNOWN")).upper()
+    quantity = int(decimal_or_none(row["quantity"])) if g3_live else int(row.get("quantity", 0) or 0)
+    if g3_live and status in {"OPEN", "CLOSED"} and quantity <= 0:
+        raise ArtifactError(f"Filled G3 LIVE state has no positive quantity: {source}")
     entry = decimal_or_none(row.get("entry_price"))
     exit_price = decimal_or_none(row.get("exit_price"))
     if status in {"OPEN", "CLOSED"} and (entry is None or entry <= 0):
@@ -62,7 +72,7 @@ def _read_order(
         strategy_fingerprint=str(row.get("strategy_fingerprint", "")),
         symbol=str(row.get("tradingsymbol", "")),
         side=str(row.get("side", "")).upper(),
-        quantity=int(row.get("quantity", 0) or 0),
+        quantity=quantity,
         entry_price=entry,
         exit_price=exit_price,
         reported_net_pnl_rs=reported,

@@ -1,0 +1,13 @@
+{
+  "schema_version": "nse_equity_regular_session_calendar_v1",
+  "year": 2026,
+  "checked_on": "2026-10-12",
+  "source": "https://www.nseindia.com/resources/exchange-communication-holidays?apiversion=v2",
+  "baseline_circular": "https://nsearchives.nseindia.com/content/circulars/CMTR71775.pdf",
+  "timings_source": "https://www.nseindia.com/static/market-data/market-timings",
+  "regular_open_ist": "09:15",
+  "regular_close_ist": "15:30",
+  "holidays": ["2026-01-15", "2026-01-26", "2026-03-03", "2026-03-26", "2026-03-31", "2026-04-03", "2026-04-14", "2026-05-01", "2026-05-28", "2026-06-26", "2026-09-14", "2026-10-02", "2026-10-20", "2026-11-10", "2026-11-24", "2026-12-25"],
+  "special_sessions_unverified": ["2026-11-08"],
+  "scope": "Published regular-session schedule, not real-time exchange status. Special-session hours and later circular changes require re-verification."
+}

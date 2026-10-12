@@ -14,16 +14,22 @@ from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from fno_strategy_registry import active_profile, expected_fingerprint
+from fno_v13_v10_g_3_live_execution_policy import (
+    validate_order_sizing as validate_g3_order_sizing,
+    validate_execution_metadata as validate_g3_execution_metadata,
+)
 
 IST = timezone(timedelta(hours=5, minutes=30))
-STRATEGY_VERSION = "FNO_V13_V10_G_RETAINED_20260914"
+ACTIVE_PROFILE = active_profile()
+STRATEGY_VERSION = ACTIVE_PROFILE.version
 # Read-only display reference, attested against the canonical strategy manifest
 # on 2026-10-08. A different fingerprint must not borrow these numeric defaults.
 PINNED_RULE_FINGERPRINT = "123bcb8f46dac66b519db20b014f0c1b5e99683bd4011f0b62462de449b18893"
 PINNED_RULE_SOURCES = {
     "fno_v13_v10_g_live_config.py": "0e836a406e1ef4b2ddbc29ce724dddfd87b7d0f21d9ac4beac3f9ea06c0f37a0",
     "fno_v13_v10_g_policy.py": "56e0a320f62109ff7d475978961ce778d0ee306f7d7875a83f70266c106005f7",
-    "ai_platform/observability/feature_ledger.py": "65ca62f12faeb28fa314bcbc56c75de747bcda55bd5751cf0f979206b39ab720",
+    "ai_platform/observability/feature_ledger.py": "f3b9518bc4048218f0655280f2c73db5693a665360ff70361a9a11765ba8c266",
 }
 SLOTS = ("09:25", "09:30", "09:35", "09:40", "09:45", "09:50", "09:55", "10:00", "11:20")
 MAX_FILE_BYTES = 16 * 1024 * 1024
@@ -103,6 +109,8 @@ def _verified_source(path_text: str, size: int, modified_ns: int, expected: str)
 
 
 def _pinned_sources_available(row: dict) -> bool:
+    if ACTIVE_PROFILE.name == "V13_V10_G_3":
+        return _valid_identity(row)
     if row.get("strategy_version") != STRATEGY_VERSION or row.get("strategy_fingerprint") != PINNED_RULE_FINGERPRINT:
         return False
     for relative, expected in PINNED_RULE_SOURCES.items():
@@ -116,8 +124,20 @@ def _pinned_sources_available(row: dict) -> bool:
     return True
 
 
+def _valid_identity(row: dict) -> bool:
+    if row.get("strategy_version") != STRATEGY_VERSION or not row.get("strategy_fingerprint"):
+        return False
+    expected = expected_fingerprint(ACTIVE_PROFILE.name)
+    return not expected or row.get("strategy_fingerprint") == expected
+
+
+def _confirmation_threshold(row: dict) -> float:
+    side = str(row.get("base_side") or row.get("side") or "").upper()
+    return 1.10 if ACTIVE_PROFILE.name == "V13_V10_G_3" and side == "LONG" else 1.20
+
+
 def _source_reference(symbol: str) -> str:
-    return f"PINNED_G_SOURCE: {symbol}"
+    return f"{'G3_SHARED_CONTRACT' if ACTIVE_PROFILE.name == 'V13_V10_G_3' else 'PINNED_G_SOURCE'}: {symbol}"
 
 
 def _comparison(label: str, actual: Any, operator: str, required: Any, unit="") -> dict:
@@ -247,7 +267,7 @@ def _parent_state(payload: dict, day: str, slot: str, phase: str, now: datetime)
         return "NOT_DUE" if now < due else "MISSING"
     if payload.get("session_date") != day:
         return "STALE_SESSION"
-    if payload.get("strategy_version") != STRATEGY_VERSION or not payload.get("strategy_fingerprint"):
+    if not _valid_identity(payload):
         return "INVALID_STRATEGY"
     confirmation = (_at(day, slot) + timedelta(minutes=1)).strftime("%H:%M")
     if payload.get("signal_end") != slot or payload.get("confirmation_end") != confirmation:
@@ -270,6 +290,11 @@ def _row_state(row: dict, parent: dict, day: str, slot: str, phase: str) -> str:
         return "STALE_SESSION"
     if row.get("strategy_version") != parent.get("strategy_version") or row.get("strategy_fingerprint") != parent.get("strategy_fingerprint"):
         return "INVALID_STRATEGY"
+    if ACTIVE_PROFILE.name == "V13_V10_G_3" and any(
+        row.get(name) is not None and _flag(row[name]) is not False
+        for name in ("ema_alignment_bypassed", "relaxed_0925_long_base_branch")
+    ):
+        return "INVALID_STRATEGY_POLICY"
     signal = _stamp(row.get("signal_ts"))
     confirmation = _stamp(row.get("confirmation_ts"))
     if signal != _at(day, slot) or confirmation != signal + timedelta(minutes=1):
@@ -328,7 +353,7 @@ def _enhance_gate(check: dict, row: dict, pinned: bool) -> dict:
         "gate_price_long": ("price_change_pct", (.30 if relaxed else .10) if pinned and branch_known else None, ">=", "pct"),
         "gate_price_short": ("price_change_pct", -.10 if pinned else None, "<=", "pct"),
         "gate_nifty_0925_short": ("nifty_first_bar_return_pct", -.05 if pinned else None, "<=", "pct"),
-        "gate_confirmation_volume": ("v9_1m_volume_ratio", 1.20 if pinned else None, ">=", "x"),
+        "gate_confirmation_volume": ("v9_1m_volume_ratio", _confirmation_threshold(row) if pinned else None, ">=", "x"),
     }
     setup_specs = {
         "gate_setup_price": ("price_change_pct", "required_price_change_pct", "margin_price_change_pct", "pct"),
@@ -465,7 +490,7 @@ def _gate(row: dict, name: str, phase: str, *, pinned: bool | None = None) -> di
         "gate_confirmation_present": (row.get("confirmation_ts"), "Exact completed signal + 1 minute candle exists", None),
         "gate_confirmation_range": (None, "Valid positive OHLC; high > low; open/close within range", None),
         "gate_confirmation_direction": (row.get("confirmation_close"), "LONG: close > open and 5m close; SHORT: close < both", None),
-        "gate_confirmation_volume": (row.get("v9_1m_volume_ratio"), ">= 1.20x prior completed-minute volume (current excluded)", row.get("margin_confirmation_volume_ratio")),
+        "gate_confirmation_volume": (row.get("v9_1m_volume_ratio"), f">= {_confirmation_threshold(row):.2f}x prior completed-minute volume (current excluded)", row.get("margin_confirmation_volume_ratio")),
         "gate_setup_exists": (row.get("setup_id"), "Configured dated setup exists for side and signal slot", None),
         "gate_exact_confirmation_clock": (row.get("confirmation_ts"), "Exact configured completed confirmation clock", None),
     }
@@ -538,7 +563,7 @@ def _feature_row(raw: dict, parent: dict, day: str, slot: str, phase: str, sourc
     for check in checks:
         if check.get("comparisons"):
             check.pop("comparisons")
-    return dict(id=f"g:{phase}:{slot}:{index}:{symbol}", strategy="V13-V10-G", session_date=day,
+    return dict(id=f"g:{phase}:{slot}:{index}:{symbol}", strategy=ACTIVE_PROFILE.label, session_date=day,
                 symbol=symbol, side=side, setup_id=_text(raw.get("setup_id")), signal_time=slot,
                 minute=minute, stage="5M_BASE_FILTERS" if phase == "5m" else "1M_CONFIRMATION_SETUP",
                 decision=decision, evidence_state=parent_state if usable and parent_state == "BLOCKED" else state,
@@ -603,7 +628,7 @@ def _read_phase(root: Path, day: str, slot: str, phase: str, now: datetime, warn
     omitted = payload.get("ineligible_no_candle_symbols" if phase == "1m" else "unexpected_missing_symbols", [])
     if isinstance(omitted, list) and state in {"RECORDED", "BLOCKED"}:
         for i, symbol in enumerate(omitted[:MAX_FEATURE_ROWS]):
-            rows.append(dict(id=f"g:{phase}:{slot}:missing:{i}", strategy="V13-V10-G", session_date=day,
+            rows.append(dict(id=f"g:{phase}:{slot}:missing:{i}", strategy=ACTIVE_PROFILE.label, session_date=day,
                              symbol=_text(symbol, 100), side="", setup_id="", signal_time=slot, minute=clock,
                              stage="DATA_COVERAGE", decision="NO_CANDLE" if phase == "1m" else "MISSING_SOURCE_DATA",
                              evidence_state="UNAVAILABLE", source=str(path.relative_to(root)), indicators={},
@@ -613,7 +638,7 @@ def _read_phase(root: Path, day: str, slot: str, phase: str, now: datetime, warn
         for i, item in enumerate(skipped[:MAX_FEATURE_ROWS]):
             if not isinstance(item, dict):
                 continue
-            rows.append(dict(id=f"g:5m:{slot}:no-candle:{i}", strategy="V13-V10-G", session_date=day,
+            rows.append(dict(id=f"g:5m:{slot}:no-candle:{i}", strategy=ACTIVE_PROFILE.label, session_date=day,
                              symbol=_text(item.get("equity_symbol") or item.get("underlying"), 100), side="", setup_id="", signal_time=slot, minute=clock,
                              stage="DATA_COVERAGE", decision="VERIFIED_NO_FUTURES_CANDLE", evidence_state="UNAVAILABLE", source=str(path.relative_to(root)),
                              indicators={"futures_tradingsymbol": _scalar(item.get("futures_tradingsymbol"))},
@@ -662,17 +687,29 @@ def _order_rows(root: Path, day: str, now: datetime, warnings: list[str]) -> lis
     for mode in ("PAPER", "LIVE"):
         directory = root / "orders" / mode / day
         paths = sorted(directory.glob("*.json")) if directory.is_dir() else []
+        if mode == "LIVE":
+            paths += sorted((root / "orders" / mode / "live_kite_qty1" / day).glob("*.json"))
         if len(paths) > MAX_ORDER_FILES:
             warnings.append(f"{mode}: order snapshots truncated at {MAX_ORDER_FILES}")
         for path in paths[:MAX_ORDER_FILES]:
             row = _read(path, warnings)
             stamp = _stamp(row.get("updated_at_ist"))
-            if not row or row.get("session_date") != day or stamp is None or stamp.date().isoformat() != day:
+            if not row or row.get("session_date") != day or row.get("mode", mode) != mode or stamp is None or stamp.date().isoformat() != day:
                 warnings.append(f"{path.name}: wrong-session or missing order timestamp; not displayed")
                 continue
-            if row.get("strategy_version") != STRATEGY_VERSION or not row.get("strategy_fingerprint") or stamp > now + timedelta(seconds=5):
+            if not _valid_identity(row) or stamp > now + timedelta(seconds=5):
                 warnings.append(f"{path.name}: invalid order identity/future timestamp; not displayed")
                 continue
+            if mode == "LIVE" and ACTIVE_PROFILE.name == "V13_V10_G_3":
+                try:
+                    validate_g3_order_sizing(row)
+                    quantity = _number(row.get("quantity"))
+                    if (row.get("status") in {"OPEN", "CLOSED", "SQUARE_OFF_PENDING"}
+                            and (quantity is None or quantity <= 0 or not quantity.is_integer())):
+                        raise ValueError("Filled G3 LIVE order must have a positive whole-share quantity")
+                except (ValueError, TypeError):
+                    warnings.append(f"{path.name}: G3 LIVE execution policy or sizing mismatch; not displayed")
+                    continue
             checks = []
             admission = row.get("paper_portfolio_admission")
             if isinstance(admission, dict):
@@ -681,7 +718,7 @@ def _order_rows(root: Path, day: str, now: datetime, warnings: list[str]) -> lis
             checks.append(_check("recorded_entry_blocker", "FAIL" if blocker else "UNKNOWN", blocker or None, "Recorded entry blocker, not a complete guard audit", reason=blocker or "No blocker field does not prove every entry guard passed."))
             checks.append(_check("entry_deadline", "UNKNOWN", row.get("entry_activation_deadline_ist"), "Recorded absolute deadline; not recomputed against current time", reason="Snapshot is latest known order state, not a minute-by-minute guard decision."))
             indicators = {name: _scalar(row.get(name)) for name in ("trigger_price", "last_price", "entry_price", "entry_at_ist", "stop_price", "target_price", "stop_pct", "active_stop_pct", "target_pct", "quantity", "net_pnl_rs", "entry_activation_deadline_ist", "entry_order_activated_at_ist", "status", "status_reason", "exit_reason", "exit_price", "exit_at_ist", "first_entry_blocker_reason", "last_entry_blocker_reason", "entry_terminal_cause", "execution_error_count", "stop_policy", "stop_tighten_due_at_ist") if name in row}
-            result.append(dict(id=f"g:order:{mode}:{path.stem}", strategy="V13-V10-G", session_date=day, symbol=_text(row.get("tradingsymbol"), 100), side=_text(row.get("side")), setup_id=_text(row.get("setup_id")), signal_time=_text(row.get("signal_end")), minute=stamp.strftime("%H:%M"), stage=f"{mode}_ORDER_SNAPSHOT", decision=_text(row.get("status_reason") or row.get("status")), evidence_state="RECORDED_SNAPSHOT", source=str(path.relative_to(root)), indicators=indicators, checks=checks, published_at_ist=stamp.isoformat()))
+            result.append(dict(id=f"g:order:{mode}:{path.stem}", strategy=ACTIVE_PROFILE.label, session_date=day, symbol=_text(row.get("tradingsymbol"), 100), side=_text(row.get("side")), setup_id=_text(row.get("setup_id")), signal_time=_text(row.get("signal_end")), minute=stamp.strftime("%H:%M"), stage=f"{mode}_ORDER_SNAPSHOT", decision=_text(row.get("status_reason") or row.get("status")), evidence_state="RECORDED_SNAPSHOT", source=str(path.relative_to(root)), indicators=indicators, checks=checks, published_at_ist=stamp.isoformat()))
     return result
 
 
@@ -706,13 +743,19 @@ def _event_rows(root: Path, day: str, now: datetime, warnings: list[str]) -> lis
                         stamp = _stamp(event.get("timestamp_utc"))
                         if not isinstance(context, dict) or not isinstance(data, dict) or context.get("session_date") != day or stamp is None or stamp.date().isoformat() != day:
                             raise ValueError("event identity")
-                        if context.get("strategy_version") != STRATEGY_VERSION or not context.get("strategy_fingerprint") or stamp > now + timedelta(seconds=5):
+                        if not _valid_identity(context) or stamp > now + timedelta(seconds=5):
                             raise ValueError("event strategy/time")
+                        if mode == "LIVE" and ACTIVE_PROFILE.name == "V13_V10_G_3":
+                            try:
+                                validate_g3_execution_metadata(data)
+                            except (ValueError, TypeError):
+                                warnings.append(f"LIVE event {index + 1}: unverified G3 execution policy; omitted")
+                                continue
                         symbol = _text(data.get("tradingsymbol"), 100)
                         if not symbol:
                             continue
                         reason = _text(data.get("reason"))
-                        result.append(dict(id=f"g:event:{mode}:{index}", strategy="V13-V10-G", session_date=day, symbol=symbol, side=_text(data.get("side")), setup_id="", signal_time="", minute=stamp.strftime("%H:%M"), stage=f"{mode}_ORDER_EVENT", decision=reason or _text(event.get("event_type")), evidence_state="RECORDED_EVENT", source=str(path.relative_to(root)), indicators={name: _scalar(data.get(name)) for name in ("state_before", "state_after", "entry_price", "exit_price", "net_pnl_rs", "quantity", "entry_terminal_cause", "execution_error_count") if name in data}, checks=[_check("entry_guard_audit", "UNKNOWN", reason, "Recorded state transition only", reason="This event does not contain a full per-guard evaluation; no guard pass is inferred from a fill.")], published_at_ist=stamp.isoformat()))
+                        result.append(dict(id=f"g:event:{mode}:{index}", strategy=ACTIVE_PROFILE.label, session_date=day, symbol=symbol, side=_text(data.get("side")), setup_id="", signal_time="", minute=stamp.strftime("%H:%M"), stage=f"{mode}_ORDER_EVENT", decision=reason or _text(event.get("event_type")), evidence_state="RECORDED_EVENT", source=str(path.relative_to(root)), indicators={name: _scalar(data.get(name)) for name in ("state_before", "state_after", "entry_price", "exit_price", "net_pnl_rs", "quantity", "entry_terminal_cause", "execution_error_count") if name in data}, checks=[_check("entry_guard_audit", "UNKNOWN", reason, "Recorded state transition only", reason="This event does not contain a full per-guard evaluation; no guard pass is inferred from a fill.")], published_at_ist=stamp.isoformat()))
                     except (ValueError, TypeError, AttributeError, RecursionError):
                         warnings.append(f"{mode} events: invalid record {index + 1}; not displayed")
         except (OSError, UnicodeError):
@@ -729,7 +772,7 @@ def build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetime
     if now.tzinfo is None:
         raise ValueError("now_ist must be timezone-aware")
     now = now.astimezone(IST)
-    root = Path(fno_root) / "v13_v10_g_live"
+    root = Path(fno_root) / ACTIVE_PROFILE.live_dir
     warnings: list[str] = []
     coverage, rows_5m, rows_1m = [], [], []
     for slot in SLOTS:

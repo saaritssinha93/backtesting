@@ -10,6 +10,7 @@ import pytest
 
 from v14 import features
 from v14.index_data import load_nifty_context
+from v14.research import COMMON_FEATURES, choose_variant, daily_metrics, metric, path_is_complete, split_for_day
 
 
 def _minutes(days=3, minutes=31):
@@ -96,6 +97,63 @@ def test_pressure_resets_each_session_and_zero_range_is_neutral():
     assert current.loc["09:25", "mfi5"] == 100
 
 
+def _previous_signed_volume10(minute):
+    """Independent pre-continuity-fix arithmetic for regression comparison."""
+    m = features.clean_minutes(minute)
+    day = m.ts.dt.date
+    signed = np.sign(m.groupby(day).close.diff()) * m.volume
+    first = m.groupby(day).cumcount().eq(0)
+    signed.loc[first] = np.sign(m.loc[first, "close"] - m.loc[first, "open"]) * m.loc[first, "volume"]
+    numerator = signed.groupby(day).transform(lambda x: x.rolling(10, min_periods=10).sum())
+    denominator = m.groupby(day).volume.transform(lambda x: x.rolling(10, min_periods=10).sum())
+    contiguous = m.ts.sub(m.groupby(day).ts.shift(9)).eq(pd.Timedelta(minutes=9))
+    return pd.Series((numerator / denominator.where(denominator.gt(0))).where(contiguous).to_numpy(), index=m.ts)
+
+
+@pytest.mark.parametrize("missing_minutes,clock", [([25], "09:35"), (list(range(16, 21)), "09:30")])
+def test_signed_volume_rejects_missing_window_predecessor_and_late_first_bar(missing_minutes, clock):
+    minute = _minutes(days=21)
+    last = minute.ts.dt.date.max()
+    minute = minute.loc[~(minute.ts.dt.date.eq(last) & minute.ts.dt.minute.isin(missing_minutes))]
+    timestamp = pd.Timestamp(f"{last} {clock}", tz=features.IST)
+    assert _previous_signed_volume10(minute).loc[timestamp] == 1.
+    row = _participation(minute, history=20).set_index("ts").loc[timestamp]
+    assert pd.isna(row.signed_volume10)
+    assert pd.notna(row.cmf10)  # Ten actual bars exist; only their predecessor is missing.
+    assert pd.isna(row.cumulative_rvol)
+
+
+def test_signed_volume_complete_history_preserves_previous_values_exactly():
+    minute = _minutes(days=21)
+    offset = minute.groupby(minute.ts.dt.date).cumcount()
+    minute["close"] += np.where(offset.mod(3).eq(0), .3, -.2)
+    minute["open"] = minute.close + np.where(offset.mod(2).eq(0), .05, -.05)
+    minute["high"] = minute[["open", "close"]].max(axis=1) + .1
+    minute["low"] = minute[["open", "close"]].min(axis=1) - .1
+    minute["volume"] *= 1 + offset.mod(7)
+    actual = _participation(minute, history=20).set_index("ts").signed_volume10
+    expected = _previous_signed_volume10(minute).reindex(actual.index).rename(actual.name)
+    pd.testing.assert_series_equal(actual, expected, check_exact=True)
+
+
+def test_signed_volume_fix_preserves_common_candidates_with_twenty_session_warmup():
+    minute = _minutes(days=22)
+    last = minute.ts.dt.date.max()
+    minute = minute.loc[~(minute.ts.dt.date.eq(last) & minute.ts.dt.minute.eq(25))]
+    current = features.build_features(minute, "TEST")
+    current["nifty_first_bar_return_pct"] = -.1
+    previous = current.copy()
+    previous["signed_volume10"] = previous.signal_ts.map(_previous_signed_volume10(minute))
+    # The regression fixture genuinely exercises a changed pressure value.
+    assert (previous.signed_volume10.notna() & current.signed_volume10.isna()).any()
+    current = features.strict_signals(current)
+    previous = features.strict_signals(previous)
+    current = current.loc[np.isfinite(current[COMMON_FEATURES]).all(axis=1)].reset_index(drop=True)
+    previous = previous.loc[np.isfinite(previous[COMMON_FEATURES]).all(axis=1)].reset_index(drop=True)
+    assert not current.empty
+    pd.testing.assert_frame_equal(current, previous, check_exact=True)
+
+
 def test_missing_exact_confirmation_does_not_use_the_following_minute():
     minute = _minutes()
     day = minute.ts.dt.date.max()
@@ -123,6 +181,34 @@ def test_grid_is_bounded_with_unique_names_and_no_oi_feature_dependencies():
     assert len({v.name for v in variants}) == len(variants)
     pool = features.build_features(_minutes(), "TEST", history_sessions=2)
     assert not {"oi", "prev_oi", "oi_change_pct"}.intersection(pool.columns)
+
+
+def test_confirmation_geometry_preserves_native_float64_arithmetic():
+    minute = _minutes()
+    minute["open"] = minute.close - .01723
+    minute["high"] = minute.close + .12874
+    minute["low"] = minute.close - .06219
+    for column in ("open", "high", "low", "close"):
+        minute[column] = minute[column].astype("float32")
+    out = features.build_features(minute, "TEST", history_sessions=2)
+    row = out.iloc[-1]
+    candle = minute.loc[minute.ts.eq(row.confirmation_ts)].iloc[0]
+    o, h, l, c = [float(candle[column]) for column in ("open", "high", "low", "close")]
+    assert float(row.body_ratio) == abs(c - o) / (h - l)
+    assert float(row.v9_1m_upper_wick_ratio) == (h - max(o, c)) / (h - l)
+    assert float(row.v9_1m_lower_wick_ratio) == (min(o, c) - l) / (h - l)
+
+
+def test_nifty_gate_applies_only_to_short_0925_and_threshold_is_inclusive():
+    pool = pd.DataFrame(dict(v9_5m_ema_bull=[False] * 4, v9_5m_ema_bear=[True] * 4,
+                             price_change_pct=[-.3] * 4, volume_ratio=[2.] * 4,
+                             v9_exact_confirmation_present=[True] * 4,
+                             confirmation_high=[100.] * 4, confirmation_low=[98.] * 4,
+                             confirmation_close=[98.5] * 4, confirmation_open=[99.] * 4,
+                             signal_close=[99.5] * 4, hhmm_int=[925, 930, 925, 925],
+                             nifty_first_bar_return_pct=[np.nan, np.nan, -.049, -.05],
+                             v9_1m_upper_wick_ratio=[.1] * 4, v9_1m_lower_wick_ratio=[.1] * 4))
+    assert features.strict_signals(pool).index.tolist() == [1, 3]
 
 
 def _write_index(tmp_path, bars=None, *, duplicate_mapping=False):
@@ -191,3 +277,86 @@ def test_index_frozen_fallback_checks_hash_and_records_its_source(tmp_path):
         stream.write("\n")
     with pytest.raises(ValueError, match="hash mismatch"):
         load_nifty_context(["2026-08-03"], fno_root=root, frozen_dir=folder)
+
+
+def _selection_metrics():
+    rows = []
+    for name, validation in (("no_oi_control", 500.), ("interval_rvol_1", 700.)):
+        for split, trades, net in (("TRAIN", 20, 1000.), ("VALIDATION", 10, validation),
+                                   ("TEST", 30, -1e9), ("ALL", 60, -2e9)):
+            rows.append(dict(variant=name, split=split, trades=trades, net_pnl=net,
+                             max_drawdown=100., additional_bps=0.))
+    return pd.DataFrame(rows)
+
+
+def test_winner_is_invariant_to_holdout_all_date_and_stress_outcomes():
+    metrics = _selection_metrics()
+    expected = choose_variant(metrics)
+    assert expected["name"] == "interval_rvol_1"
+    assert expected["qualified"] and not expected["selection_used_test"]
+    altered = metrics.copy()
+    irrelevant = altered.split.isin(["TEST", "ALL"])
+    altered.loc[irrelevant, ["net_pnl", "max_drawdown", "trades"]] = [1e15, 0, 100000]
+    stress = metrics.copy()
+    stress["additional_bps"] = 20.
+    stress["net_pnl"] = 1e15
+    stress["variant"] = "no_oi_control"
+    pd.testing.assert_series_equal(pd.Series(choose_variant(pd.concat([altered, stress]))), pd.Series(expected))
+
+
+def test_validation_profit_cannot_override_training_or_trade_count_screens():
+    metrics = _selection_metrics()
+    metrics.loc[metrics.variant.eq("interval_rvol_1") & metrics.split.eq("TRAIN"), "trades"] = 19
+    chosen = choose_variant(metrics)
+    assert chosen["name"] == "no_oi_control"
+    assert chosen["qualified"]
+    metrics.loc[metrics.split.eq("TRAIN"), "net_pnl"] = -1
+    failed = choose_variant(metrics)
+    assert failed["name"] == "interval_rvol_1"
+    assert not failed["qualified"]
+    assert failed["reason"] == "NO_CANDIDATE_PASSED_SCREEN_RESEARCH_ONLY"
+
+
+def test_selection_ties_use_lower_validation_drawdown_then_fixed_grid_order():
+    metrics = _selection_metrics()
+    metrics.loc[metrics.split.eq("VALIDATION"), "net_pnl"] = 500.
+    assert choose_variant(metrics)["name"] == "no_oi_control"
+    metrics.loc[metrics.variant.eq("interval_rvol_1") & metrics.split.eq("VALIDATION"), "max_drawdown"] = 99.
+    assert choose_variant(metrics)["name"] == "interval_rvol_1"
+    with pytest.raises(ValueError, match="Duplicate candidate split"):
+        choose_variant(pd.concat([metrics, metrics.iloc[:1]]))
+
+
+def test_metric_counts_explicit_zero_trade_days_and_initial_loss_drawdown():
+    ledger = pd.DataFrame(dict(sid=[1, 2, 3], day=["2026-08-03", "2026-08-04", "2026-08-04"],
+                              portfolio_executed=[True, True, False],
+                              portfolio_gross_profit_rupees=[-100., 500., 1e8],
+                              portfolio_cost_rupees=[250., 250., 0.],
+                              portfolio_net_profit_rupees=[-350., 250., 1e8]))
+    days = ["2026-08-03", "2026-08-04", "2026-08-05"]
+    daily = daily_metrics(ledger, days)
+    assert daily.day.tolist() == days
+    assert daily.net_pnl.tolist() == [-350., 250., 0.]
+    assert daily.drawdown.max() == 350.
+    summary = metric(ledger, days, additional_bps=5.)
+    assert summary["net_pnl"] == -600.
+    assert summary["cost"] == 1000.
+    assert summary["max_drawdown"] == 600.
+    assert summary["trades"] == 2 and summary["sessions"] == 3
+    # Excluded research dates are omitted, rather than republished as flat days.
+    assert daily_metrics(ledger, [days[0]]).day.tolist() == [days[0]]
+
+
+def test_path_completeness_detects_a_middle_gap_without_outcome_based_refill():
+    confirmation = pd.Timestamp("2026-08-03 09:26", tz=features.IST)
+    timestamps = pd.date_range(confirmation + pd.Timedelta(minutes=1),
+                               confirmation.normalize() + pd.Timedelta(hours=15, minutes=15), freq="min")
+    path = dict(timestamp_ns=timestamps.asi8,
+                **{name: np.full(len(timestamps), 100.) for name in ("open", "high", "low", "close")})
+    assert path_is_complete(path, confirmation)
+    incomplete = {key: np.delete(value, 10) for key, value in path.items()}
+    assert not path_is_complete(incomplete, confirmation)
+    assert split_for_day("2026-08-27") == "TRAIN"
+    assert split_for_day("2026-08-28") == "VALIDATION"
+    assert split_for_day("2026-09-10") == "VALIDATION"
+    assert split_for_day("2026-09-11") == "TEST"

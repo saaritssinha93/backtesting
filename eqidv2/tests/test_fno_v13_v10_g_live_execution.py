@@ -21,6 +21,15 @@ DAY = date(2026, 9, 15)
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def isolated_legacy_entry_authority(monkeypatch):
+    # Legacy behavior fixtures must not read this PC's current deployment.
+    # The production guard still reads the persisted profile, independently of
+    # the environment variable selecting a test's runtime implementation.
+    import fno_live_entry_guard as guard
+    monkeypatch.setattr(guard, "deployment_state", lambda: {"profile": "V13_V10_G"})
+
+
 class FakeBroker:
     """In-memory broker: these tests cannot connect or submit real orders."""
 

@@ -1,5 +1,7 @@
 # V13-V10-G observability operations and usage guide
 
+> Active profile update, 12 October 2026: `tools/v13_strategy_research.py` and `tools/v13_execution_research.py` now resolve the persisted G3 profile and write isolated G3 artifacts from verified G3 production history. The old G model/shadow instructions below remain historical. G3 predictions, prospective model enrollment and PAPER execution calibration are explicitly pending; they do not inherit G readiness or execution authority. See the [implementation record](V13_V10_G3_MIGRATION_PLAN_2026-10-11.md#implementation-record--12-october-2026).
+
 This is the operating guide for OBS-0 through OBS-12 across the live strategy,
 daily replay, market data, indicators, read-only API, telemetry stack and
 research workflow.

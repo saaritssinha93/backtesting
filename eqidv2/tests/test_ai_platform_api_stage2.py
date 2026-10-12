@@ -22,6 +22,13 @@ DAY = "2026-09-17"
 SIGNAL_ID = "20260917_0951_SHORT_DEMO_fixture"
 
 
+@pytest.fixture(autouse=True)
+def historical_g_fixture_profile(monkeypatch):
+    # This module's saved artifacts are explicitly historical G. Individual
+    # profile-switch tests override the environment inside their own request.
+    monkeypatch.setenv("FNO_ACTIVE_STRATEGY_PROFILE", "V13_V10_G")
+
+
 def _copy(name: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(FIXTURES / name, destination)
@@ -381,6 +388,24 @@ def test_deterministic_assistant_session_lifecycle(api) -> None:
         f"/api/v1/assistant/sessions/{record['session_id']}", headers=AUTH
     )
     assert fetched.status_code == 200
+
+
+def test_assistant_session_uses_current_profile_and_preserves_explicit_history(api, monkeypatch) -> None:
+    client, _, _, _ = api
+    for active in ("V13_V10_G_3", "V13_V10_G"):
+        monkeypatch.setenv("FNO_ACTIVE_STRATEGY_PROFILE", active)
+        created = client.post("/api/v1/assistant/sessions", json={}, headers=AUTH)
+        assert created.status_code == 201
+        record = created.json()["data"]
+        assert record["context"]["profile"] == active
+        stored = client.get(f"/api/v1/assistant/sessions/{record['session_id']}", headers=AUTH)
+        assert stored.json()["data"]["context"]["profile"] == active
+        for explicit in ("V13_V10_G", "V13_V10_G_3"):
+            result = client.post("/api/v1/assistant/sessions", json={"profile": explicit}, headers=AUTH)
+            assert result.status_code == 201
+            assert result.json()["data"]["context"]["profile"] == explicit
+    invalid = client.post("/api/v1/assistant/sessions", json={"profile": "V13_V10_G_2"}, headers=AUTH)
+    assert invalid.status_code == 422
 
 
 def test_registry_rejects_paths_outside_runtime_root(tmp_path: Path) -> None:

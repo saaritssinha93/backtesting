@@ -21,6 +21,7 @@ IST = "Asia/Kolkata"
 DEFAULT_FNO_ROOT = Path(os.environ.get("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2")) / "fno_oi"
 FROZEN_RELATIVE = Path("strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1")
 CONTEXT_COLUMNS = ["day", "contract_month", "nifty_first_bar_return_pct"]
+CACHE_SCHEMA = "V14_NIFTY_OPENING_1M_V1"
 
 
 def _sha256(path: Path) -> str:
@@ -142,9 +143,86 @@ def _bar_context(frame: pd.DataFrame, day: str, contract: str) -> tuple[float, s
     return float((prices[1] / prices[0] - 1) * 100), "PASS"
 
 
+def _cached_context(root: Path | None, day: str) -> dict | None:
+    if root is None:
+        return None
+    source = root / "data/index1m" / f"{day}.parquet"
+    metadata = source.with_suffix(".json")
+    if not source.exists() and not metadata.exists():
+        return None
+    record = dict(source_path=str(source), source_sha256="", contract="", mapping_source="",
+                  nifty_first_bar_return_pct=np.nan, quality_status="UNAVAILABLE", reason="INCOMPLETE_V14_INDEX_CACHE")
+    if not source.is_file() or not metadata.is_file():
+        return record
+    try:
+        meta = json.loads(metadata.read_text(encoding="utf-8"))
+        if meta.get("schema_version") != CACHE_SCHEMA or meta.get("day") != day or meta.get("status") != "VALID":
+            return {**record, "reason": "INVALID_V14_INDEX_CACHE_METADATA"}
+        contract = _contract(meta.get("contract", ""))
+        if not contract or not isinstance(meta.get("instrument_token"), int) or meta["instrument_token"] <= 0:
+            return {**record, "reason": "INVALID_V14_INDEX_CACHE_IDENTITY"}
+        source_hash = _verified(source, meta["sha256"])
+        mapping = Path(meta["mapping_source"])
+        mapping_hash = _verified(mapping, meta["mapping_sha256"])
+        mapped = pd.read_parquet(mapping)
+        _verified(mapping, mapping_hash)
+        name = "underlying" if "underlying" in mapped else "name" if "name" in mapped else None
+        if name is None:
+            return {**record, "reason": "INVALID_V14_INDEX_MAPPING_SNAPSHOT"}
+        mapped = mapped.loc[mapped[name].astype(str).str.upper().eq("NIFTY")].copy()
+        expiry = pd.to_datetime(mapped.get("expiry", pd.Series(index=mapped.index, dtype=str)), errors="coerce")
+        mapped = mapped.loc[expiry.notna() & expiry.dt.date.ge(pd.Timestamp(day).date())].copy()
+        if meta.get("mapping_kind") == "EXACT_DATED_MASTER_NEAREST_VALID_EXPIRY":
+            for column, value in (("instrument_type", "FUT"), ("segment", "NFO-FUT")):
+                if column in mapped:
+                    mapped = mapped.loc[mapped[column].astype(str).str.upper().eq(value)]
+            if not mapped.empty:
+                expiry = pd.to_datetime(mapped.expiry, errors="coerce")
+                mapped = mapped.loc[expiry.eq(expiry.min())]
+        elif meta.get("mapping_kind") != "EXACT_DATED_NEAR_MONTH_MAPPING":
+            return {**record, "reason": "UNKNOWN_V14_INDEX_MAPPING_SNAPSHOT_KIND"}
+        if len(mapped) != 1:
+            return {**record, "reason": "AMBIGUOUS_V14_INDEX_MAPPING_SNAPSHOT"}
+        identity = mapped.iloc[0]
+        token = next((identity.get(key) for key in ("instrument_token", "futures_instrument_token")
+                      if pd.notna(identity.get(key))), None)
+        expiry = pd.Timestamp(identity.expiry)
+        if (_contract(identity.get("tradingsymbol", "")) != contract
+                or contract != f"NIFTY{expiry:%y%b}FUT".upper()
+                or token != meta["instrument_token"] or meta.get("expiry") != expiry.date().isoformat()):
+            return {**record, "reason": "V14_INDEX_MAPPING_SNAPSHOT_IDENTITY_MISMATCH"}
+        if (meta.get("timestamp_label") != "end" or meta.get("synthetic_bars") is not False
+                or meta.get("continuous") is not False or meta.get("oi") is not False):
+            return {**record, "reason": "INVALID_V14_INDEX_CACHE_PROVENANCE"}
+        frame = pd.read_parquet(source)
+        _verified(source, source_hash)
+        required = {"ts", "open", "high", "low", "close", "volume", "contract", "instrument_token"}
+        if required.difference(frame) or len(frame) != 5:
+            return {**record, "reason": "INCOMPLETE_V14_INDEX_OPENING_MINUTES"}
+        stamps = pd.to_datetime(frame.ts, errors="coerce", utc=True).dt.tz_convert(IST).dt.as_unit("ns")
+        expected = pd.date_range(day + " 09:16", day + " 09:20", freq="min", tz=IST)
+        if not np.array_equal(stamps.array.asi8, expected.asi8):
+            return {**record, "reason": "INVALID_V14_INDEX_OPENING_CLOCK"}
+        if not frame.contract.eq(contract).all() or not frame.instrument_token.eq(meta["instrument_token"]).all():
+            return {**record, "reason": "V14_INDEX_CACHE_IDENTITY_MISMATCH"}
+        values = frame[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+        o, h, low, c, volume = values.T
+        if (not np.isfinite(values).all() or (values[:, :4] <= 0).any() or (volume < 0).any()
+                or (h < np.maximum(o, c)).any() or (low > np.minimum(o, c)).any() or (h < low).any()):
+            return {**record, "reason": "INVALID_V14_INDEX_OPENING_OHLCV"}
+        return dict(source_path=str(source), source_sha256=source_hash, contract=contract,
+            mapping_source=str(mapping), mapping_sha256=mapping_hash,
+            cache_metadata_sha256=_sha256(metadata), instrument_token=meta["instrument_token"],
+            nifty_first_bar_return_pct=float((c[-1] / o[0] - 1.) * 100.),
+            quality_status="PASS_V14_OPENING_CACHE", reason="VERIFIED_FIVE_REAL_OPENING_MINUTES")
+    except (OSError, KeyError, ValueError, TypeError):
+        return {**record, "reason": "INVALID_OR_CHANGED_V14_INDEX_CACHE"}
+
+
 def load_nifty_context(days: Iterable[object], *, fno_root: Path | str = DEFAULT_FNO_ROOT,
                        frozen_dir: Path | str | None = None,
-                       use_frozen_fallback: bool = True) -> pd.DataFrame:
+                       use_frozen_fallback: bool = True,
+                       root: Path | str | None = None) -> pd.DataFrame:
     """Return audited, causal opening returns; failed days carry NaN.
 
     The fallback verifies frozen artifact hashes and reads only already-built
@@ -152,8 +230,9 @@ def load_nifty_context(days: Iterable[object], *, fno_root: Path | str = DEFAULT
     closed instead of switching contracts.  Invalid/duplicate bars likewise
     cannot be bypassed via ledger fallback; missing raw bars can.
     """
-    root = Path(fno_root)
-    folder = Path(frozen_dir) if frozen_dir is not None else root / FROZEN_RELATIVE
+    cache_root = Path(root) if root is not None else None
+    fno_root = Path(fno_root)
+    folder = Path(frozen_dir) if frozen_dir is not None else fno_root / FROZEN_RELATIVE
     fallback = _frozen_context(folder) if use_frozen_fallback else {}
     bar_cache: dict[str, tuple[pd.DataFrame, str]] = {}
     records = []
@@ -161,7 +240,7 @@ def load_nifty_context(days: Iterable[object], *, fno_root: Path | str = DEFAULT
         record = dict(day=day, nifty_first_bar_return_pct=np.nan, contract="", mapping_source="",
                       source_path="", source_sha256="", quality_status="UNAVAILABLE", reason="MISSING_DATED_MAPPING")
         frozen = fallback.get(day)
-        mapping = root / "universe" / f"near_month_{day}.parquet"
+        mapping = fno_root / "universe" / f"near_month_{day}.parquet"
         if mapping.is_file():
             universe = pd.read_parquet(mapping)
             rows = universe.loc[universe.get("underlying", pd.Series(index=universe.index, dtype=str)).astype(str).str.upper().eq("NIFTY")]
@@ -182,8 +261,23 @@ def load_nifty_context(days: Iterable[object], *, fno_root: Path | str = DEFAULT
                 continue
         elif frozen:
             record.update(contract=frozen["contract"], mapping_source="VERIFIED_FROZEN_LEDGER")
+        cached = _cached_context(cache_root, day)
+        if cached is not None:
+            if cached["quality_status"] == "UNAVAILABLE":
+                record.update(cached)
+                records.append(record)
+                continue
+            if record["contract"] and record["contract"] != cached["contract"]:
+                record["reason"] = "V14_CACHE_CONFLICTS_WITH_DATED_CONTRACT"
+                records.append(record)
+                continue
+            if frozen and not np.isclose(cached["nifty_first_bar_return_pct"], frozen["value"], rtol=0, atol=1e-10):
+                record["reason"] = "V14_CACHE_CONFLICTS_WITH_FROZEN_CONTEXT"
+                records.append(record)
+                continue
+            record["contract"] = cached["contract"]
         contract = record["contract"]
-        path = root / "raw_contracts_5m" / f"{contract}_5minute.parquet" if contract else None
+        path = fno_root / "raw_contracts_5m" / f"{contract}_5minute.parquet" if contract else None
         if path is not None and path.is_file():
             if contract not in bar_cache:
                 digest = _sha256(path)
@@ -195,6 +289,10 @@ def load_nifty_context(days: Iterable[object], *, fno_root: Path | str = DEFAULT
             value, reason = _bar_context(bars, day, contract)
             record.update(source_path=str(path), source_sha256=digest, reason=reason)
             if np.isfinite(value):
+                if cached and not np.isclose(cached["nifty_first_bar_return_pct"], value, rtol=0, atol=1e-10):
+                    record["reason"] = "V14_CACHE_CONFLICTS_WITH_RAW_CONTEXT"
+                    records.append(record)
+                    continue
                 if frozen and not np.isclose(frozen["value"], value, rtol=0, atol=1e-10):
                     record["reason"] = "RAW_CONTEXT_CONFLICTS_WITH_FROZEN"
                 else:
@@ -204,6 +302,10 @@ def load_nifty_context(days: Iterable[object], *, fno_root: Path | str = DEFAULT
                 continue
         elif contract:
             record["reason"] = "MISSING_RAW_CONTRACT_FILE"
+        if cached is not None:
+            record.update(cached)
+            records.append(record)
+            continue
         if (record["quality_status"] == "UNAVAILABLE" and frozen
                 and record["reason"] in {"MISSING_DATED_MAPPING", "MISSING_RAW_CONTRACT_FILE", "MISSING_EXACT_0920_BAR"}):
             record.update(nifty_first_bar_return_pct=frozen["value"], source_path=frozen["source_path"],

@@ -1,5 +1,11 @@
 @echo off
 setlocal EnableExtensions
+set "ACTIVE_STRATEGY_RECORD=%~dp0..\configs\strategies\active_profile.json"
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; if (Test-Path -LiteralPath $env:ACTIVE_STRATEGY_RECORD) { $deployment = Get-Content -LiteralPath $env:ACTIVE_STRATEGY_RECORD -Raw | ConvertFrom-Json; if ($deployment.profile -eq 'V13_V10_G_3') { Write-Error 'G task installation is blocked while persisted profile is G3. Use bat/migrate_fno_v13_v10_g_to_g3.ps1 after reviewing its dry-run plan.'; exit 2 } }"
+if errorlevel 1 (
+    endlocal & exit /b 2
+)
+rem End deployment guard: no scheduled-task command may precede this point.
 set "BAT_DIR=%~dp0"
 set "TASK_BACKTEST=EQIDV2_backtesting_result_v13_v10_g_1620"
 set "BAT_BACKTEST=%BAT_DIR%run_backtesting_result_v13_v10_g_1620.bat"

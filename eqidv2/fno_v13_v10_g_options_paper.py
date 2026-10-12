@@ -23,7 +23,6 @@ import pandas as pd
 
 import fno_oi_common as common
 import fno_options_atm_fetch_5min as atm_fetch
-import fno_v13_v10_g_live_config as equity_config
 import fno_v13_v10_g_options_data as option_data
 from fno_v13_v10_g_options_one_lot_execution import (
     _tick,
@@ -31,6 +30,16 @@ from fno_v13_v10_g_options_one_lot_execution import (
     simulate_one_lot_trade,
 )
 from fno_v13_v10_g_paper import paper_portfolio_lock
+
+# Explicit source selection keeps direct historical G invocations unchanged.
+_equity_profile = os.getenv("FNO_OPTIONS_EQUITY_PROFILE", "V13_V10_G")
+if _equity_profile == "V13_V10_G_3":
+    import fno_v13_v10_g_3_live_config as equity_config
+elif _equity_profile == "V13_V10_G":
+    import fno_v13_v10_g_live_config as equity_config
+else:
+    raise ValueError("Unsupported options equity source profile")
+EQUITY_SLUG = "v13_v10_g_3" if _equity_profile == "V13_V10_G_3" else "v13_v10_g"
 
 
 SCHEMA_VERSION = "fno_v13_v10_g_options_paper_state_v1"
@@ -54,6 +63,13 @@ ROLE_TITLES = {
     "net-result": "Options V13-V10-G Paper Net Result",
 }
 OPTIONS_ROOT = common.FNO_ROOT / "v13_v10_g_options_paper"
+if _equity_profile == "V13_V10_G_3":
+    SCHEMA_VERSION = "fno_v13_v10_g_3_options_paper_state_v1"
+    OPTIONS_STRATEGY_VERSION = f"FNO_V13_V10_G_3_OPTIONS_ONE_LOT_ATM_{PROFILE_LABEL}_20261011"
+    ROLE_SESSIONS = {role: name.replace("v13_v10_g", EQUITY_SLUG) for role, name in ROLE_SESSIONS.items()}
+    ROLE_REPORTS = {role: f"latest_{session}.md" for role, session in ROLE_SESSIONS.items()}
+    ROLE_TITLES = {role: title.replace("V13-V10-G", "V13-V10-G-3") for role, title in ROLE_TITLES.items()}
+    OPTIONS_ROOT = common.FNO_ROOT / "v13_v10_g_3_options_paper"
 ORDER_ROOT = OPTIONS_ROOT / "orders"
 CONSOLIDATED_ROOT = OPTIONS_ROOT / "consolidated"
 AUDIT_ROOT = OPTIONS_ROOT / "bar_audit"
@@ -160,7 +176,7 @@ def report_path(role: str) -> Path:
 
 
 def consolidated_csv_path(session_date: date) -> Path:
-    return CONSOLIDATED_ROOT / f"options_v13_v10_g_trades_{session_date.isoformat()}.csv"
+    return CONSOLIDATED_ROOT / f"options_{EQUITY_SLUG}_trades_{session_date.isoformat()}.csv"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -219,6 +235,8 @@ def load_equity_entries(
                     quarantined_signal_ids.add(signal_hint)
                 continue
             signal_id = str(row.get("signal_id", "")).strip()
+            if source == "AUTO" and source_mode == "PAPER" and signal_id in quarantined_signal_ids:
+                continue
             row_side = str(row.get("side", "")).upper()
             if not signal_id or signal_id in selected or row_side not in {"LONG", "SHORT"}:
                 continue
@@ -232,6 +250,21 @@ def load_equity_entries(
                 continue
             if str(row.get("mode", "")).upper() != source_mode:
                 continue
+            if source_mode == "LIVE" and equity_config.STRATEGY_PROFILE == "V13_V10_G_3":
+                from fno_v13_v10_g_3_live_execution_policy import validate_order_sizing
+                try:
+                    validate_order_sizing(row)
+                    if (str(row.get("status", "")).upper() in {"OPEN", "CLOSED"}
+                            and float(row["quantity"]) <= 0):
+                        raise ValueError("Filled G3 LIVE equity source has no positive quantity")
+                except (TypeError, ValueError) as exc:
+                    if issues is not None:
+                        issues.append({"reason": "SOURCE_EQUITY_G3_LIVE_SIZING_INVALID",
+                            "error_type": type(exc).__name__, "source_mode": source_mode,
+                            "signal_id_hint": signal_id, "path": str(path)})
+                    if source == "AUTO":
+                        quarantined_signal_ids.update((signal_hint, signal_id))
+                    continue
             if str(row.get("status", "")).upper() not in {"OPEN", "CLOSED"}:
                 continue
             try:
@@ -690,6 +723,7 @@ def _publish(role: str, state: str, **extra: Any) -> None:
     common.publish_status(
         ROLE_SESSIONS[role], state, role=role, execution_mode="PAPER",
         strategy_version=equity_config.STRATEGY_VERSION,
+        strategy_fingerprint=equity_config.strategy_fingerprint(),
         options_strategy_version=OPTIONS_STRATEGY_VERSION,
         stop_pct=round(STOP_PCT * 100, 4),
         target_pct=round(TARGET_PCT * 100, 4),
@@ -713,7 +747,7 @@ def run_replay(args: argparse.Namespace, session_date: date, side: str) -> int:
         common.atomic_write_json(order_path(session_date, str(equity["signal_id"])), state)
         audits.extend(audit)
     if audits:
-        common.atomic_write_parquet(pd.DataFrame(audits), AUDIT_ROOT / f"options_v13_v10_g_bars_{session_date.isoformat()}.parquet")
+        common.atomic_write_parquet(pd.DataFrame(audits), AUDIT_ROOT / f"options_{EQUITY_SLUG}_bars_{session_date.isoformat()}.parquet")
     publish_consolidated(session_date)
     role = "long-entry" if side == "LONG" else "short-entry"
     common.atomic_write_text(report_path(role), render_report(role, session_date))

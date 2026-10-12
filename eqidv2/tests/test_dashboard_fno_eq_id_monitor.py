@@ -2,15 +2,38 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib.util
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import log_dashboard_server as dashboard
+import pytest
 
 
 DAY = "2026-09-01"
+
+
+@pytest.fixture(scope="module")
+def historical_g_dashboard():
+    # Profile-derived roots, labels and task maps are initialized at import.
+    # Load a private module for these saved G fixtures rather than reloading or
+    # modifying the shared module used by the production G3 dashboard tests.
+    source = Path(__file__).resolve().parents[1] / "log_dashboard_server.py"
+    spec = importlib.util.spec_from_file_location("_historical_g_monitor_dashboard", source)
+    module = importlib.util.module_from_spec(spec)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("FNO_ACTIVE_STRATEGY_PROFILE", "V13_V10_G")
+        spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(autouse=True)
+def explicit_historical_g_profile(monkeypatch, historical_g_dashboard):
+    monkeypatch.setenv("FNO_ACTIVE_STRATEGY_PROFILE", "V13_V10_G")
+    monkeypatch.setattr(sys.modules[__name__], "dashboard", historical_g_dashboard)
 
 
 def _timeline_roots(
@@ -304,8 +327,17 @@ def test_hard_failure_makes_aggregate_failed(monkeypatch) -> None:
         "reason": "worker exited",
     }
     monkeypatch.setattr(dashboard, "_fno_eq_id_monitor_detail_path", lambda _card_id: None)
+    # Isolate this one failed worker from the machine's current auth roster,
+    # runtime artifacts and wall clock (the supplied session is 2026-09-01).
+    monkeypatch.setattr(dashboard, "_build_fno_eq_id_strategy_timelines", _empty_timeline)
+    monkeypatch.setattr(
+        dashboard, "_fno_eq_id_monitor_safe_auth_status",
+        lambda _today: {"authenticated_apps": 8, "configured_apps": 8, "token_files_current": 8},
+    )
 
-    tail, status, *_ = dashboard._format_fno_eq_id_monitor(items)
+    tail, status, *_ = dashboard._format_fno_eq_id_monitor(
+        items, now_ist=datetime(2026, 9, 1, 10, 0, tzinfo=dashboard.IST),
+    )
 
     assert status["status"] == "FAILED"
     assert status["problem_sessions"] == "1"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pytest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -193,6 +194,115 @@ def _evaluate(tmp_path: Path, status: dict, reconciliation: dict):
         expected_strategy_fingerprint=FINGERPRINT,
         observed_at=NOW,
     )
+
+
+def _g3_evidence(tmp_path: Path):
+    from fno_v13_v10_g_3_live_execution_policy import execution_metadata
+    _runtime_evidence(tmp_path)
+    version = "V13-V10-G-3-PRODUCTION-V1"
+    for heartbeat in (tmp_path / "runtime_status").glob("*.heartbeat"):
+        content = heartbeat.read_text().replace("fno_v13_v10_g_", "fno_v13_v10_g_3_").replace(VERSION, version)
+        (heartbeat.parent / heartbeat.name.replace("fno_v13_v10_g_", "fno_v13_v10_g_3_")).write_text(content)
+    status = json.loads(json.dumps(_status()).replace("fno_v13_v10_g_", "fno_v13_v10_g_3_").replace(VERSION, version))
+    status.update(execution_metadata())
+    status["arm_execution_policy_matches"] = True
+    status.pop("quantity")
+    reconciliation = _reconciliation()
+    reconciliation.update(schema_version="v13_v10_g_3_broker_position_reconciliation_v2",
+        strategy_profile="V13_V10_G_3", strategy_version=version, strategy_fingerprint=FINGERPRINT)
+    return status, reconciliation, version
+
+
+def _evaluate_g3(tmp_path, status, reconciliation, version):
+    reconciliation["report_sha256"] = _digest({k:v for k,v in reconciliation.items() if k != "report_sha256"})
+    return evaluate_live_trust(runtime_root=tmp_path,
+        status_path=_write(tmp_path / "g3_status.json", status),
+        reconciliation_path=_write(tmp_path / "g3_broker.json", reconciliation),
+        expected_session_date=DAY, expected_strategy_version=version,
+        expected_strategy_fingerprint=FINGERPRINT, expected_strategy_profile="V13_V10_G_3",
+        observed_at=NOW)
+
+
+def test_g3_live_trust_requires_profile_bound_evidence(tmp_path):
+    status, broker, version = _g3_evidence(tmp_path)
+    report = _evaluate_g3(tmp_path, status, broker, version)
+    assert report.state == "PASS"
+    assert report.as_dict()["schema_version"] == "v13_v10_g_3_live_trust_v2"
+    assert report.as_dict()["strategy_profile"] == "V13_V10_G_3"
+    assert report.as_dict()["execution_authority"] is False
+
+
+@pytest.mark.parametrize("field,value", [
+    ("live_execution_policy_fingerprint", "a" * 64),
+    ("live_execution_policy_schema_version", "legacy"),
+    ("live_execution_profile", "LIVE_QTY1"),
+    ("quantity_policy", "FIXED_ONE_SHARE"),
+    ("capital_per_trade_rs", 100000),
+    ("leverage", 1),
+    ("target_exposure_rs", 500000),
+])
+def test_g3_live_trust_rejects_old_or_changed_sizing_even_with_same_strategy(tmp_path, field, value):
+    status, broker, version = _g3_evidence(tmp_path)
+    status[field] = value
+    report = _evaluate_g3(tmp_path, status, broker, version)
+    assert report.state == "FAIL"
+    assert {check.name: check.state for check in report.checks}["live_execution_sizing_policy"] == "FAIL"
+
+
+def test_g3_live_trust_requires_sizing_identity_and_legacy_g_stays_one_share(tmp_path):
+    status, broker, version = _g3_evidence(tmp_path / "g3")
+    del status["live_execution_policy_fingerprint"]
+    assert _evaluate_g3(tmp_path / "g3", status, broker, version).state == "FAIL"
+    legacy = _status()
+    legacy["quantity"] = 50
+    report = _evaluate(tmp_path / "g", legacy, _reconciliation())
+    assert report.state == "FAIL"
+    assert {check.name: check.state for check in report.checks}["live_quantity_one_profile"] == "FAIL"
+
+
+def test_g3_live_trust_rejects_arm_that_only_binds_the_decision_fingerprint(tmp_path):
+    status, broker, version = _g3_evidence(tmp_path)
+    status.pop("arm_execution_policy_matches")
+    report = _evaluate_g3(tmp_path, status, broker, version)
+    assert report.state == "FAIL"
+    assert {check.name: check.state for check in report.checks}["live_safety_controls"] == "FAIL"
+
+
+@pytest.mark.parametrize("field", ["strategy_profile", "strategy_version", "strategy_fingerprint", "schema_version"])
+def test_g3_live_trust_rejects_foreign_reconciliation_even_with_valid_digest(tmp_path, field):
+    status, broker, version = _g3_evidence(tmp_path)
+    broker[field] = "foreign-profile-evidence"
+    report = _evaluate_g3(tmp_path, status, broker, version)
+    assert report.state == "FAIL"
+    assert any(check.name.startswith("broker_reconciliation_") and check.state == "FAIL" for check in report.checks)
+
+
+def test_g3_live_trust_does_not_use_g_pipeline_or_child_identity(tmp_path):
+    status, broker, version = _g3_evidence(tmp_path)
+    status["children"]["long"]["session_id"] = "fno_v13_v10_g_live_kite_qty1_long"
+    (tmp_path / "runtime_status/fno_v13_v10_g_3_confirmation_1min.heartbeat").unlink()
+    report = _evaluate_g3(tmp_path, status, broker, version)
+    checks = {check.name:check.state for check in report.checks}
+    assert checks["order_manager_children"] == "FAIL"
+    assert checks["confirmation_heartbeat_artifact"] == "FAIL"
+
+
+def test_live_trust_cli_active_g3_defaults_and_explicit_g_are_read_only(tmp_path, monkeypatch, capsys):
+    from ai_platform.observability import live_trust
+    monkeypatch.setenv("FNO_ACTIVE_STRATEGY_PROFILE", "V13_V10_G_3")
+    assert live_trust.main(["--runtime-root", str(tmp_path), "--session-date", str(DAY)]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["strategy_profile"] == "V13_V10_G_3"
+    assert "v13_v10_g_3_live" in report["status_path"]
+    assert f"broker_positions_v13_v10_g_3_{DAY}.json" in report["reconciliation_path"]
+    assert list(tmp_path.rglob("*")) == []
+    monkeypatch.setattr(live_trust, "_profile_identity", lambda profile, root: (VERSION, FINGERPRINT))
+    assert live_trust.main(["--runtime-root", str(tmp_path), "--profile", "V13_V10_G", "--session-date", str(DAY)]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["strategy_profile"] == "V13_V10_G"
+    assert "v13_v10_g_live" in report["status_path"]
+    assert f"broker_positions_{DAY}.json" in report["reconciliation_path"]
+    assert list(tmp_path.rglob("*")) == []
 
 
 def test_live_trust_passes_only_for_fresh_correlated_broker_truth(tmp_path: Path) -> None:

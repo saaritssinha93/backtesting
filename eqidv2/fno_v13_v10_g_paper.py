@@ -17,7 +17,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-import fno_v13_v10_g_live_config as config
+def _default_config():
+    # G3 passes its profile explicitly; importing its lock must never require
+    # legacy frozen G files. Existing G callers retain the same lazy default.
+    import fno_v13_v10_g_live_config as config
+    return config
 
 
 TERMINAL_STATES = frozenset({"CLOSED", "NO_FILL", "ENTRY_REJECTED", "BLOCKED_SIZING",
@@ -81,12 +85,13 @@ def _positive_number(value: Any, field: str) -> float:
     return number
 
 
-def capacity_from_states(states: Iterable[dict[str, Any]], current: dict[str, Any]) -> dict[str, Any]:
+def capacity_from_states(states: Iterable[dict[str, Any]], current: dict[str, Any], *, strategy_config=None) -> dict[str, Any]:
     """Pure capital admission, counting only this day's filled OPEN positions.
 
     Pending orders do not consume capital. Other strategy OPEN states inside
     this isolated paper book block admission; they cannot be silently ignored.
     """
+    config = strategy_config or _default_config()
     if current.get("mode") != "PAPER" or current.get("strategy_version") != config.STRATEGY_VERSION:
         raise PortfolioStateError("G capacity admission requires a current G PAPER order")
     fingerprint = config.strategy_fingerprint()
@@ -154,7 +159,7 @@ def capacity_from_states(states: Iterable[dict[str, Any]], current: dict[str, An
                 available_capital_rs=available, required_capital_rs=required, open_positions=len(seen))
 
 
-def capacity_for_fill(current: dict[str, Any], day_root: Path | str) -> dict[str, Any]:
+def capacity_for_fill(current: dict[str, Any], day_root: Path | str, *, strategy_config=None) -> dict[str, Any]:
     """Read the locked day book strictly; malformed JSON is never an empty book."""
     states = []
     try:
@@ -162,11 +167,11 @@ def capacity_for_fill(current: dict[str, Any], day_root: Path | str) -> dict[str
             states.append(json.loads(path.read_text(encoding="utf-8-sig")))
     except (OSError, ValueError, TypeError) as exc:
         raise PortfolioStateError("Unreadable order state in G PAPER book") from exc
-    return capacity_from_states(states, current)
+    return capacity_from_states(states, current, strategy_config=strategy_config)
 
 
 def enforce_fill_capacity(previous: dict[str, Any], proposed: dict[str, Any],
-                          day_root: Path | str) -> dict[str, Any]:
+                          day_root: Path | str, *, strategy_config=None) -> dict[str, Any]:
     """Admit a new simulated fill or return its unfilled terminal rejection.
 
     This catches accounting/read failures before any proposed OPEN state can
@@ -175,7 +180,7 @@ def enforce_fill_capacity(previous: dict[str, Any], proposed: dict[str, Any],
     if previous.get("status") != "PENDING_ENTRY" or proposed.get("status") != "OPEN":
         return proposed
     try:
-        admission = capacity_for_fill(proposed, day_root)
+        admission = capacity_for_fill(proposed, day_root, strategy_config=strategy_config)
     except PortfolioStateError as exc:
         admission = dict(allowed=False, reason="PAPER_PORTFOLIO_STATE_INVALID", error=str(exc))
     if admission["allowed"]:
@@ -189,8 +194,9 @@ def enforce_fill_capacity(previous: dict[str, Any], proposed: dict[str, Any],
     return rejected
 
 
-def expire_pending(state: dict[str, Any], now: datetime) -> bool:
+def expire_pending(state: dict[str, Any], now: datetime, *, strategy_config=None) -> bool:
     """Expire untouched entries even if every quote request has failed."""
+    config = strategy_config or _default_config()
     if state.get("status") != "PENDING_ENTRY":
         return False
     if state.get("mode") != "PAPER" or state.get("strategy_version") != config.STRATEGY_VERSION:

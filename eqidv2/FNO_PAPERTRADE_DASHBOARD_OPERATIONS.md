@@ -1,5 +1,9 @@
 # FnO Papertrade Dashboard — Operations Reference
 
+**Current deployment (12 October 2026):** active G operations now use **V13-V10-G-3**, in PAPER validation with LIVE disabled. See the [migration implementation record](docs/V13_V10_G3_MIGRATION_PLAN_2026-10-11.md#implementation-record--12-october-2026) for current paths, tasks and commands. The dated G integration notes below are retained as historical context; V10/V11/V12 shared PAPER operations remain independent.
+
+**Current G3 LIVE sizing:** ₹10,000 capital × 5, with whole shares within ₹50,000 target exposure at the signal trigger price. See the [LIVE sizing update](docs/V13_V10_G3_LIVE_SIZING_2026-10-12.md). LIVE remains disabled pending the existing activation gates.
+
 **Server:** [log_dashboard_server.py](log_dashboard_server.py) · `ThreadingHTTPServer` · default port **8787**
 **Shared session:** [fno_multi_paper_session.py](fno_multi_paper_session.py) · session ID `fno_v10_v11_v12_paper`
 **Mode:** `PAPER` only — `PAPER_ONLY = True`, and the runtime **raises** if `FNO_MULTI_PAPER_EXECUTION_MODE` is anything but `PAPER`

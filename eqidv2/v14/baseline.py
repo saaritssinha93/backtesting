@@ -163,14 +163,15 @@ def native_paths(minute: pd.DataFrame, confirmation_ts, day=None) -> dict[str, n
     confirmation = execution._to_ist_timestamp(confirmation_ts)
     if day is not None and pd.Timestamp(day).date() != confirmation.date():
         raise ValueError("Execution day differs from confirmation day")
-    stamp = pd.to_datetime(minute.ts, utc=True).dt.tz_convert(IST)
+    stamp = pd.to_datetime(minute.ts, utc=True).dt.tz_convert(IST).dt.as_unit("ns")
     cutoff = confirmation.normalize() + pd.Timedelta(hours=15, minutes=15)
     use = minute.loc[stamp.gt(confirmation) & stamp.le(cutoff)]
     return {"timestamp_ns": stamp.loc[use.index].astype("int64").to_numpy(),
             **{field: use[field].to_numpy(float) for field in ("open", "high", "low", "close")}}
 
 
-def simulate(orders: pd.DataFrame, paths: dict[int, dict[str, np.ndarray]], *, cost_bps: float | None = None) -> pd.DataFrame:
+def simulate(orders: pd.DataFrame, paths: dict[int, dict[str, np.ndarray]], *,
+             cost_bps: float | None = None, allow_observed_prefix: bool = False) -> pd.DataFrame:
     """Return the full fill/portfolio audit with retained G-3 numerical behavior.
 
     An explicit cost override supports separately labelled execution-cost stress
@@ -184,7 +185,17 @@ def simulate(orders: pd.DataFrame, paths: dict[int, dict[str, np.ndarray]], *, c
                              portfolio_net_profit_rupees=pd.Series(dtype=float),
                              portfolio_gross_profit_rupees=pd.Series(dtype=float),
                              portfolio_cost_rupees=pd.Series(dtype=float)).copy()
-    execution.validate_paths(orders, paths)
+    if allow_observed_prefix:
+        from .path_evidence import assess
+        proven = {}
+        for row in orders.itertuples(index=False):
+            proof = assess(row, paths[int(row.sid)])
+            if not proof["resolved"]:
+                raise ValueError(f"Unresolved cash execution path: {row.sid}: {proof['reason']}")
+            proven[int(row.sid)] = proof["path"]
+        paths = proven
+    else:
+        execution.validate_paths(orders, paths)
     work = orders.copy()
     targets = {key: value["target_pct"] for key, value in config["exit"]["setups"].items()}
     work["native_target_pct"] = work.setup_id.map(targets).fillna(config["exit"]["default"]["target_pct"])

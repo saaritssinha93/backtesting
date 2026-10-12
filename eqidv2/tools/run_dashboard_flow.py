@@ -27,6 +27,7 @@ class FlowPreviewHandler(LogDashboardHandler):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Open Dashboard Flow on a separate local port")
     parser.add_argument("--port", type=int, default=8790, help="Loopback port (default: 8790)")
+    parser.add_argument("--no-browser", action="store_true", help="Run the local dashboard without opening a browser")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("Use a port from 1 to 65535.")
@@ -44,7 +45,7 @@ def main() -> int:
     print(f"Dashboard Flow is running on local port {args.port}.")
     print("Opening your browser. Keep this window open; press Ctrl+C to stop this session.")
     try:
-        if not webbrowser.open(url, new=2):
+        if not args.no_browser and not webbrowser.open(url, new=2):
             print("The browser did not open automatically. Set a default browser and run this launcher again.")
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

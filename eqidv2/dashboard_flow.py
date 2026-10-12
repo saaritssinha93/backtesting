@@ -12,8 +12,10 @@ import json
 import math
 from collections import defaultdict
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from fno_strategy_registry import active_profile_name, expected_fingerprint, PROFILES
 
 
 DATA_ROOT = Path(r"C:\TradingData\eqidv2")
@@ -23,6 +25,89 @@ _SOURCES = (
     ("g2", "V13-V10-G-2", "V13-V10-G-2 backtesting", "fno_oi/strategy_research/v13_corrected_v10_g_2", "run_*/daily_results.csv"),
     ("g3", "V13-V10-G-3", "V13-V10-G-3 backtesting", "backtesting_result_v13_v10_g_3", "runs/*/*/daily_results.csv"),
 )
+
+
+@lru_cache(maxsize=128)
+def _artifact_hash(path: str, size: int, modified_ns: int) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _checked_hash(path: Path, expected: str) -> bool:
+    if not expected or not path.is_file():
+        return False
+    stat = path.stat()
+    return _artifact_hash(str(path.resolve()), stat.st_size, stat.st_mtime_ns) == expected
+
+
+def _verified_g3_runs() -> list[tuple[dict, Path]]:
+    """Discover only promoted, hash-verified production/history packages."""
+    root = DATA_ROOT / "backtesting_result_v13_v10_g_3"
+    found = []
+    for filename, role in (("current_history.json", "cumulative_history"), ("current_run.json", "production_daily")):
+        pointer_path = root / "latest" / filename
+        try:
+            if not _inside(pointer_path, DATA_ROOT) or not pointer_path.is_file():
+                continue
+            pointer = json.loads(pointer_path.read_text(encoding="utf-8-sig"))
+            run = root / pointer["run_dir"]
+            if not _inside(run, root) or Path(pointer["run_dir"]).is_absolute():
+                continue
+            manifest_path = run / "run_manifest.json"
+            if not _checked_hash(manifest_path, pointer["manifest_sha256"]):
+                continue
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            expected_tree = "history" if role == "cumulative_history" else "production"
+            if (manifest.get("schema_version") != "fno_g3_production_run_v1"
+                    or manifest.get("execution_authority") is not False
+                    or pointer.get("session_date") != manifest.get("session_date")
+                    or run.relative_to(root).parts[:2] != (expected_tree, "runs")):
+                continue
+            version = PROFILES["V13_V10_G_3"].version
+            fingerprint = expected_fingerprint("V13_V10_G_3")
+            if (not fingerprint or manifest.get("complete") is not True
+                    or manifest.get("state", manifest.get("status")) not in {"SUCCESS", "SUCCESS_WITH_EXCLUDED_SESSIONS"}
+                    or manifest.get("role") != role or pointer.get("role") != role
+                    or any(record.get("strategy_version") != version
+                           or record.get("strategy_fingerprint") != fingerprint
+                           for record in (pointer, manifest))):
+                continue
+            coverage = manifest.get("coverage") or {}
+            if manifest.get("state") == "SUCCESS_WITH_EXCLUDED_SESSIONS" and not coverage.get("excluded_sessions"):
+                continue
+            artifacts = manifest["artifacts"]
+            paths = {}
+            for key in ("daily_results", "portfolio_trades"):
+                record = artifacts[key]
+                path = run / record["path"]
+                if Path(record["path"]).is_absolute() or not _inside(path, run) or not _checked_hash(path, record["sha256"]):
+                    raise ValueError("Invalid promoted artifact")
+                paths[key] = path
+            days = sorted({_day(_text(row, "day", "date")) for row in _rows(paths["daily_results"], [])} - {""})
+            if not days:
+                continue
+            identity = run.relative_to(root).as_posix()
+            found.append(({
+                "id": "g3p-" + hashlib.sha256(identity.encode()).hexdigest()[:16],
+                "label": "V13-V10-G-3 · " + run.name,
+                "strategy": "V13-V10-G-3", "run_name": run.name,
+                "source_label": "G-3 verified cumulative backtest" if role == "cumulative_history" else "G-3 production daily backtest",
+                "kind": "production_history" if role == "cumulative_history" else "production_daily",
+                "role": role, "verified": True,
+                "strategy_version": version, "strategy_fingerprint": fingerprint,
+                "period_start": days[0], "period_end": days[-1], "sessions": len(days),
+                "coverage": coverage,
+                "_run_dir": str(run),
+                "_ledger": str(paths["portfolio_trades"].relative_to(run)),
+            }, paths["daily_results"]))
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError):
+            # An invalid current pointer never inherits the appearance of success
+            # from another version or an unverified directory beside it.
+            continue
+    return found
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -108,7 +193,7 @@ def _full_sessions(run: Path, warnings: list[str]) -> list[str]:
 
 
 def _discover() -> list[tuple[dict, Path]]:
-    found = []
+    found = _verified_g3_runs()
     for prefix, strategy, source_label, relative, pattern in _SOURCES:
         root = DATA_ROOT / relative
         if not _inside(root, DATA_ROOT):
@@ -144,12 +229,14 @@ def _discover() -> list[tuple[dict, Path]]:
             found.append((meta, daily_path))
     # Newest strategy first, then newest run; retain full-history priority within G.
     family_order = {"V13-V10-G-3": 3, "V13-V10-G-2": 2, "V13-V10-G": 1}
-    found.sort(key=lambda entry: (family_order[entry[0]["strategy"]], entry[0]["kind"] == "full_history", entry[0]["run_name"]), reverse=True)
+    found.sort(key=lambda entry: (family_order[entry[0]["strategy"]],
+        2 if entry[0].get("role") == "cumulative_history" else 1 if entry[0].get("verified") else 0,
+        entry[0]["kind"] == "full_history", entry[0]["run_name"]), reverse=True)
     return found
 
 
-def _load_trades(run: Path, warnings: list[str]) -> list[dict]:
-    path = next((run / name for name in ("trades_with_pullbacks.csv", "portfolio_trades.csv") if (run / name).is_file()), None)
+def _load_trades(run: Path, warnings: list[str], ledger: str | None = None) -> list[dict]:
+    path = run / ledger if ledger else next((run / name for name in ("trades_with_pullbacks.csv", "portfolio_trades.csv") if (run / name).is_file()), None)
     if path is None or not _inside(path, run):
         return []
     trades = []
@@ -178,7 +265,7 @@ def _load_trades(run: Path, warnings: list[str]) -> list[dict]:
             "entry_price": _numeric(row, "entry_price", "filled_price"),
             "exit_price": _numeric(row, "exit_price"),
             "net_pnl": _numeric(row, "portfolio_net_profit_rupees", "net_pnl", "net_profit_rupees", "net_pnl_rupees"),
-            "gross_pnl": _numeric(row, "portfolio_gross_profit_rupees", "gross_pnl", "pre_cost_profit_rupees", "gross_pnl_rupees"),
+            "gross_pnl": _numeric(row, "portfolio_gross_profit_rupees", "gross_pnl", "gross_profit_rupees", "pre_cost_profit_rupees", "gross_pnl_rupees"),
             "cost": _numeric(row, "portfolio_cost_rupees", "cost", "cost_rupees"),
             "exit_reason": _text(row, "exit_reason", "trade_exit_outcome", "outcome"),
         })
@@ -225,7 +312,7 @@ def _normalize_daily(rows: list[dict], trades: list[dict], warnings: list[str]) 
             "wins": ("wins",),
             "losses": ("losses",),
             "net_pnl": ("net_pnl", "net_profit_rupees", "net_pnl_rupees"),
-            "gross_pnl": ("gross_pnl", "gross_pnl_rupees", "pre_cost_profit_rupees"),
+            "gross_pnl": ("gross_pnl", "gross_profit_rupees", "gross_pnl_rupees", "pre_cost_profit_rupees"),
             "cost": ("cost", "cost_rupees"),
         }.items():
             item[field] = _sum(_numeric(row, *aliases) for row in rows)
@@ -304,14 +391,30 @@ def _summary(daily: list[dict], trades: list[dict], warnings: list[str]) -> dict
 def load_flow_data(run_id: str | None = None) -> dict:
     """Return normalized historical evidence; reject IDs absent from discovery."""
     discovered = _discover()
-    runs = [metadata for metadata, _ in discovered]
+    runs = [{k: v for k, v in metadata.items() if not k.startswith("_")} for metadata, _ in discovered]
     selected = next((entry for entry in discovered if entry[0]["id"] == run_id), None) if run_id else (discovered[0] if discovered else None)
     if run_id and selected is None:
         raise ValueError("Unknown dashboard run.")
     warnings: list[str] = []
+    if not run_id and active_profile_name() == "V13_V10_G_3":
+        for name, label in (("status.json", "Daily backtest"), ("history_status.json", "History rebuild")):
+            status_path = DATA_ROOT / "backtesting_result_v13_v10_g_3" / name
+            try:
+                attempt = json.loads(status_path.read_text(encoding="utf-8-sig"))
+                state = str(attempt.get("state", attempt.get("status", "")))
+                if state and state not in {"SUCCESS", "SUCCESS_WITH_EXCLUDED_SESSIONS"}:
+                    warnings.append(f"{label} attempt for {attempt.get('session_date', 'the requested period')}: {state}. Only the last verified complete package can be displayed.")
+            except (OSError, ValueError, AttributeError):
+                pass
+    if not run_id and active_profile_name() == "V13_V10_G_3" and (selected is None or not selected[0].get("verified")):
+        selected = None
+        warnings.append("Active G-3 has no verified complete backtest. Historical runs remain available from the run selector.")
     if selected:
         metadata, path = selected
-        trades = _load_trades(path.parent, warnings)
+        trades = _load_trades(Path(metadata.get("_run_dir", path.parent)), warnings, metadata.get("_ledger"))
+        excluded_sessions = metadata.get("coverage", {}).get("excluded_sessions", [])
+        if excluded_sessions:
+            warnings.append(f"{len(excluded_sessions)} source sessions were excluded from this backtest. See the coverage report for dates and reasons; these are not zero-trade days.")
         daily = _load_full_daily(path.parent, trades, warnings) if metadata["kind"] == "full_history" else _load_daily(path, trades, warnings)
         # Keep the ledger in the same date scope as the daily summary.
         dates = {row["date"] for row in daily}
@@ -327,11 +430,11 @@ def load_flow_data(run_id: str | None = None) -> dict:
     return {
         "state": "ready" if daily else "empty",
         "runs": runs,
-        "selected_run": metadata,
+        "selected_run": {k: v for k, v in metadata.items() if not k.startswith("_")} if metadata else None,
         "daily": daily,
         "trades": trades,
         "summary": summary,
         "warnings": list(dict.fromkeys(warnings)),
         "currency": "INR",
-        "data_mode": "Historical backtest",
+        "data_mode": "Verified G-3 backtest" if metadata and metadata.get("verified") else "Historical backtest",
     }

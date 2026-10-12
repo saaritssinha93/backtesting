@@ -184,12 +184,12 @@ def test_strategy_contract_validates_frozen_config_hash(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    contract = read_strategy_contract(registry)
+    contract = read_strategy_contract(registry, profile="V13_V10_G")
     assert contract.strategy_version == EQUITY_VERSION
 
     config.write_text('{"morning_slots":true}', encoding="utf-8")
     with pytest.raises(ArtifactError, match="hash mismatch"):
-        read_strategy_contract(registry)
+        read_strategy_contract(registry, profile="V13_V10_G")
 
 
 def test_status_inspection_preserves_unavailable_stale_and_schema_error(tmp_path: Path) -> None:

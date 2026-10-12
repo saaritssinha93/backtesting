@@ -1,0 +1,27 @@
+{
+  "schema_version": "fno_active_strategy_deployment_v1",
+  "profile": "V13_V10_G_3",
+  "strategy_version": "V13-V10-G-3-PRODUCTION-V1",
+  "strategy_fingerprint": "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275",
+  "accepted_variant": "G3_W1_V1p1",
+  "deployment_stage": "PAPER_VALIDATION",
+  "live_activation_authorized": false,
+  "live_execution_policy": {
+    "live_execution_policy_schema_version": "g3_live_execution_policy_v1",
+    "live_execution_policy_fingerprint": "ec621fc330b7f31bb82964387987822ef44e2923a8b03deb24cad643fe23c702",
+    "live_execution_profile": "G3_LIVE_10K_5X",
+    "quantity_policy": "FLOOR_TARGET_EXPOSURE_EQUITY_SHARES",
+    "capital_per_trade_rs": 10000.0,
+    "leverage": 5.0,
+    "target_exposure_rs": 50000.0
+  },
+  "migration_date": "2026-10-12",
+  "migration_plan": "docs/V13_V10_G3_MIGRATION_PLAN_2026-10-11.md",
+  "historical_profiles_preserved": ["V13_V10_G", "V13_V10_G_2"],
+  "live_readiness_requires": [
+    "Three successful G3 PAPER sessions with reconciled decisions and fills",
+    "Broker position and open-order reconciliation",
+    "Separate explicit LIVE activation approval",
+    "Dated strategy- and execution-policy-bound G3 acknowledgement and arm record"
+  ]
+}

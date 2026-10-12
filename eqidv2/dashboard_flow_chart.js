@@ -170,5 +170,60 @@
     svg.appendChild(node('text', { x: left, y: height - 7, fill: MUTED, 'font-size': 10 }, 'REALIZED RESULTS · ' + plotted.length + ' SYMBOL' + (plotted.length === 1 ? '' : 'S')));
     if (!compact) svg.appendChild(node('text', { x: width - 10, y: height - 7, fill: MUTED, 'font-size': 10, 'text-anchor': 'end' }, 'Select a path or symbol to inspect'));
   }
-  window.FlowChart = { render };
+  // This chart follows the summary scope. Missing daily observations propagate
+  // through cumulative values; an incomplete ledger never becomes a zero result.
+  function sessionSeries({daily = [], trades = [], dates = [], scope = 'filtered', complete = false}) {
+    const known = value => typeof value === 'number' && Number.isFinite(value);
+    const calendar = scope === 'run' ? daily.map(row => row.date) : [...new Set(dates)].sort();
+    const byDate = new Map(calendar.map(date => [date, {date, net_pnl: complete ? 0 : null}]));
+    if (scope === 'run') daily.forEach(row => byDate.set(row.date, {date: row.date, net_pnl: known(row.net_pnl) ? row.net_pnl : null}));
+    else if (complete) trades.forEach(trade => {
+      const row = byDate.get(trade.date);
+      if (row) row.net_pnl = row.net_pnl != null && known(trade.net_pnl) ? row.net_pnl + trade.net_pnl : null;
+    });
+    let cumulative = 0, peak = 0;
+    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)).map(row => {
+      cumulative = cumulative != null && row.net_pnl != null ? cumulative + row.net_pnl : null;
+      if (cumulative != null) peak = Math.max(peak, cumulative);
+      return {...row, cumulative, drawdown: cumulative == null ? null : cumulative - peak};
+    });
+  }
+  function renderSessions(container, rows) {
+    const width = 800, height = 270, left = 80, right = 774;
+    const svg = node('svg', {viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': 'Cumulative net P&L and drawdown at session close. Exact values are in the session values table below.', preserveAspectRatio: 'xMidYMid meet'});
+    container.replaceChildren(svg);
+    const valid = rows.filter(row => row.cumulative != null);
+    if (!valid.length) {
+      svg.appendChild(node('text', {x: width / 2, y: height / 2, fill: MUTED, 'text-anchor': 'middle', 'font-size': 14}, rows.length ? 'Session curve unavailable: incomplete results' : 'No recorded sessions in this selection'));
+      return;
+    }
+    const x = index => left + (rows.length === 1 ? .5 : index / (rows.length - 1)) * (right - left);
+    const panels = [{key: 'cumulative', top: 27, bottom: 151, title: 'CUMULATIVE NET P&L', color: 'var(--chart-green)'}, {key: 'drawdown', top: 191, bottom: 237, title: 'DRAWDOWN FROM PEAK', color: 'var(--chart-rose)'}];
+    panels.forEach(panel => {
+      const values = valid.map(row => row[panel.key]);
+      const low = Math.min(0, ...values), high = Math.max(0, ...values), span = high - low || 1;
+      const y = value => panel.bottom - (value - low) / span * (panel.bottom - panel.top);
+      const zero = y(0);
+      svg.appendChild(node('text', {x: left, y: panel.top - 9, fill: MUTED, 'font-size': 10, 'letter-spacing': 1}, panel.title));
+      [...new Set([low, 0, high])].forEach(value => {
+        svg.appendChild(node('line', {x1: left, x2: right, y1: y(value), y2: y(value), stroke: 'var(--chart-grid)', 'stroke-dasharray': value === 0 ? '' : '3 5'}));
+        svg.appendChild(node('text', {x: left - 9, y: y(value) + 4, fill: MUTED, 'font-size': 11, 'text-anchor': 'end'}, money(value)));
+      });
+      let line = '', area = '', segment = [];
+      const flush = () => {if (!segment.length) return;const path = segment.map((point, index) => (index ? 'L' : 'M') + point.join(',')).join(' ');line += path + ' ';area += path + ` L${segment.at(-1)[0]},${zero} L${segment[0][0]},${zero} Z `;segment = [];};
+      rows.forEach((row, index) => {if (row[panel.key] == null) flush();else segment.push([x(index), y(row[panel.key])]);});flush();
+      svg.appendChild(node('path', {d: area, fill: panel.color, opacity: .09}));
+      svg.appendChild(node('path', {d: line, fill: 'none', stroke: panel.color, 'stroke-width': 1.8, 'vector-effect': 'non-scaling-stroke', 'stroke-linejoin': 'round'}));
+      rows.forEach((row, index) => {
+        if (row[panel.key] == null) return;
+        const dot = node('circle', {cx: x(index), cy: y(row[panel.key]), r: rows.length === 1 ? 3.5 : 2.5, fill: panel.color, opacity: rows.length === 1 ? 1 : .05});
+        dot.appendChild(node('title', {}, `${row.date} · ${panel.title}: ${money(row[panel.key])} · Session net: ${money(row.net_pnl)}`));svg.appendChild(dot);
+      });
+    });
+    const ticks = [...new Set(Array.from({length: Math.min(5, rows.length)}, (_, index) => Math.round(index * (rows.length - 1) / Math.max(1, Math.min(5, rows.length) - 1))))];
+    ticks.forEach(index => svg.appendChild(node('text', {x: x(index), y: 259, fill: MUTED, 'font-size': 11, 'text-anchor': 'middle'}, shortDate(rows[index].date))));
+  }
+  const api = { render, sessionSeries, renderSessions };
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else window.FlowChart = api;
 }());

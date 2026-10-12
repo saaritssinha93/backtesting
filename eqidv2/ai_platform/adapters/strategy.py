@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .common import ArtifactError, file_sha256, read_json
+from fno_strategy_registry import active_profile_name
 
 
 @dataclass(frozen=True)
@@ -23,8 +24,9 @@ class StrategyContract:
 def read_strategy_contract(
     registry_path: Path | str,
     *,
-    profile: str = "V13_V10_G",
+    profile: str | None = None,
 ) -> StrategyContract:
+    profile = profile or active_profile_name()
     registry, source, _ = read_json(registry_path)
     profiles = registry.get("profiles")
     if not isinstance(profiles, dict) or profile not in profiles:
@@ -42,6 +44,14 @@ def read_strategy_contract(
     settings, _, _ = read_json(config_path)
     if settings.get("morning_slots", False) or settings.get("two_bar_continuation", False):
         raise ArtifactError("Rejected strategy expansions are enabled in frozen config")
+    if profile == "V13_V10_G_3":
+        from fno_v13_v10_g_3_contract import load_contract, config_fingerprint, verify_frozen_config
+        verify_frozen_config(config_path)
+        if record.get("strategy_fingerprint") != config_fingerprint():
+            raise ArtifactError("Registered G3 fingerprint differs from the production contract")
+        # The archive donor tables are evidence; display effective production
+        # thresholds/exits from the separately normalized accepted contract.
+        settings = load_contract()
     return StrategyContract(
         label=str(record["label"]),
         strategy_version=str(record["strategy_version"]),

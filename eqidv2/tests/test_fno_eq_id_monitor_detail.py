@@ -8,10 +8,19 @@ from datetime import datetime
 import pytest
 
 import fno_eq_id_monitor_detail as detail
+from fno_strategy_registry import PROFILES
 
 
 DAY = "2026-10-07"
 NOW = datetime.fromisoformat("2026-10-07T10:00:00+05:30")
+
+
+@pytest.fixture(autouse=True)
+def explicit_legacy_fixture_profile(monkeypatch):
+    # Saved feature fixtures and paths below describe historical G.
+    profile = PROFILES["V13_V10_G"]
+    monkeypatch.setattr(detail, "ACTIVE_PROFILE", profile)
+    monkeypatch.setattr(detail, "STRATEGY_VERSION", profile.version)
 
 
 def feature(**changes):

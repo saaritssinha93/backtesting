@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -13,12 +14,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ai_platform.observability.shadow_automation import (  # noqa: E402
-    automated_finalize,
-    automated_prepare,
-    automated_seal,
-)
-from eqidv2_runtime_paths import runtime_dir  # noqa: E402
+from fno_strategy_registry import PROFILES, active_profile_name  # noqa: E402
+
+
+def runtime_dir(*parts: str) -> Path:
+    return Path(os.getenv("EQIDV2_RUNTIME_ROOT", "C:/TradingData/eqidv2")).joinpath(*parts)
 
 
 DEFAULT_SOURCE_ROOT = runtime_dir(
@@ -31,8 +31,9 @@ DEFAULT_OUTPUT_ROOT = runtime_dir("v13_v10_g_strategy_research")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", choices=tuple(PROFILES), default=None)
     parser.add_argument("--session-date", type=date.fromisoformat)
-    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--output-root", type=Path)
     parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
     parser.add_argument("--live-root", type=Path, default=DEFAULT_LIVE_ROOT)
     parser.add_argument("--replay-root", type=Path, default=DEFAULT_REPLAY_ROOT)
@@ -51,6 +52,14 @@ def main(argv: list[str] | None = None) -> int:
 
         today_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
     session_date = args.session_date or today_ist
+    profile = args.profile or active_profile_name()
+    args.output_root = args.output_root or runtime_dir(PROFILES[profile].slug + "_strategy_research")
+    if profile == "V13_V10_G_3":
+        from ai_platform.observability.g3_shadow_gate import pending_g3_shadow
+        result = pending_g3_shadow(session_date=session_date, command=args.command, output_root=args.output_root)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 2
+    from ai_platform.observability.shadow_automation import automated_finalize, automated_prepare, automated_seal
     try:
         if args.command == "prepare":
             result = automated_prepare(

@@ -23,6 +23,7 @@ from eqidv2_runtime_paths import (
 
 from zoneinfo import ZoneInfo
 from nse_market_calendar import market_closed_reason
+from fno_strategy_registry import active_profile
 
 IST = ZoneInfo("Asia/Kolkata")
 BASE_DIR = Path(__file__).resolve().parent
@@ -108,6 +109,15 @@ DASHBOARD_SESSION_TASKS = (
     "EQIDV2_kite_export_start_0915",
     "EQIDV2_eod_1540_update_1540",
 )
+
+# Resolve operational task names only; compatibility check IDs stay stable.
+_strategy_profile = active_profile()
+FNO_V6_EQUITY_1MIN_FEED_TASK = _strategy_profile.reference(FNO_V6_EQUITY_1MIN_FEED_TASK)
+FNO_V6_LIVE_KITE_TASK = _strategy_profile.reference(FNO_V6_LIVE_KITE_TASK)
+FNO_V6_SCANNER_TASK = _strategy_profile.reference(FNO_V6_SCANNER_TASK)
+FNO_V6_CONFIRMATION_TASK = _strategy_profile.reference(FNO_V6_CONFIRMATION_TASK)
+FNO_V6_CUTOVER_DOWNSTREAM_TASKS = tuple(map(_strategy_profile.reference, FNO_V6_CUTOVER_DOWNSTREAM_TASKS))
+DASHBOARD_SESSION_TASKS = tuple(map(_strategy_profile.reference, DASHBOARD_SESSION_TASKS))
 
 # The confirmation consumer has no broker fallback.  Without this producer
 # task every V6 confirmation slot must fail closed, so a missing/disabled task

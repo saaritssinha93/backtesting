@@ -1,0 +1,58 @@
+/* Shared terminal palette. Every panel consumes recorded strategy evidence. */
+:root {
+  --terminal-bg:#f4f6fa; --terminal-panel:#fff; --terminal-ink:#17263d;
+  --terminal-muted:#5d6c82; --terminal-line:#dbe2ec; --terminal-teal:#0d8f83;
+  --terminal-indigo:#5c58bd; --terminal-rose:#bd5d74;
+  --terminal-mono:"Cascadia Code","Consolas",monospace;
+}
+body[data-theme="dark"] {
+  --terminal-bg:#101722; --terminal-panel:#172131; --terminal-ink:#e6edf7;
+  --terminal-muted:#a4b3c8; --terminal-line:#2b3b50; --terminal-teal:#57d5c0;
+  --terminal-indigo:#aaa7ff; --terminal-rose:#f19bac;
+}
+body.terminal-main { background:var(--terminal-bg); color:var(--terminal-ink); }
+body.terminal-main>header {
+  padding:18px 28px 0; background:var(--terminal-panel); backdrop-filter:none;
+  border-bottom:1px solid var(--terminal-line); box-shadow:none;
+}
+.terminal-main .title-block { display:flex; align-items:center; gap:13px; }
+.terminal-mark { display:grid; place-items:center; flex:0 0 39px; height:39px;
+  color:#fff; background:#5651b8; border-radius:6px; font-size:27px; }
+.terminal-main .title-block h1 { font-size:19px; font-weight:650; letter-spacing:-.4px; }
+.terminal-main .title-block .sub { font:10px var(--terminal-mono); color:var(--terminal-muted); }
+.terminal-main .top-actions { gap:7px; }
+.terminal-main .top-actions>button,.terminal-main .dashboard-flow-link {
+  min-height:33px; border-radius:5px; font-size:11px; box-shadow:none;
+}
+.terminal-nav { display:flex; align-items:center; gap:24px; margin-top:15px; }
+.terminal-nav button { padding:12px 0; background:none; border:0; border-bottom:2px solid transparent;
+  color:var(--terminal-muted); font-size:12px; border-radius:0; box-shadow:none; }
+.terminal-nav button[aria-pressed="true"] { color:var(--terminal-indigo); border-bottom-color:var(--terminal-indigo); }
+.terminal-nav .terminal-nav-note { margin-left:auto; color:var(--terminal-muted); font:10px var(--terminal-mono); letter-spacing:.5px; }
+.terminal-workspace { max-width:1900px; margin:auto; padding:22px 28px 28px; }
+.terminal-main [hidden] { display:none!important; }
+.terminal-main .operations-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; margin:4px 0 20px; }
+.terminal-main .operations-heading h2 { margin:0 0 6px; font-size:23px; letter-spacing:-.6px; }
+.terminal-main .operations-heading p { margin:0; color:var(--terminal-muted); font-size:12px; }
+.terminal-main .operations-tools { display:flex; flex-wrap:wrap; gap:8px; }
+.terminal-main #cards.wrap { padding:16px 0 0; max-width:none; }
+.terminal-main #terminalOperations .card { border-radius:7px; box-shadow:none; }
+.terminal-main #terminalOperations .section-banner { border-radius:5px; }
+.terminal-main .refresh-notice { margin:12px 28px 0; }
+.terminal-footer { max-width:1900px; margin:auto; padding:0 28px 18px; display:flex; justify-content:space-between; gap:16px;
+  color:var(--terminal-muted); font:10px var(--terminal-mono); }
+.terminal-footer a { color:var(--terminal-indigo); }
+.terminal-main button:focus-visible,.terminal-main a:focus-visible { outline:2px solid var(--terminal-indigo); outline-offset:3px; }
+@media(max-width:900px) {
+  body.terminal-main>header { padding:14px 16px 0; position:relative; }
+  .terminal-main .topbar { grid-template-columns:1fr; gap:14px; }
+  .terminal-main .top-actions { justify-content:flex-start; }
+  .terminal-workspace { padding:18px 16px; }
+  .terminal-nav { gap:22px; }
+  .terminal-nav .terminal-nav-note { display:none; }
+  .terminal-main .operations-heading { align-items:flex-start; flex-direction:column; }
+  .terminal-footer { padding:0 16px 18px; flex-wrap:wrap; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .terminal-main *, .terminal-main *::before, .terminal-main *::after { scroll-behavior:auto!important; animation:none!important; transition:none!important; }
+}

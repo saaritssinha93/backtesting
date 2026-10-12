@@ -28,7 +28,7 @@ import pandas as pd
 
 import fno_oi_common as common
 import fno_oi_hybrid_data as hybrid
-from fno_live_profile import config_for_generation, is_g_config
+from fno_live_profile import config_for_generation, is_modern_config
 
 
 FEED_POLICY_VERSION = "candidate_exact_completed_1m_verified_no_candle_v1"
@@ -265,8 +265,10 @@ def _persist_bar(
     return reloaded
 
 
-def _g_completed_volume_history(records: list[dict[str, Any]], expected_end: datetime) -> pd.DataFrame:
-    import fno_v13_v10_g_live_config as g_config
+def _g_completed_volume_history(records: list[dict[str, Any]], expected_end: datetime, strategy_config=None) -> pd.DataFrame:
+    if strategy_config is None:
+        import fno_v13_v10_g_live_config as strategy_config
+    g_config = strategy_config
     history = []
     for record in records:
         stamp = _to_ist(record["date"]) + timedelta(minutes=1)
@@ -313,11 +315,13 @@ def _fetch_one(
 ) -> dict[str, Any]:
     symbol = str(candidate["tradingsymbol"]).strip().upper()
     try:
-        g_profile = candidate.get("strategy_profile") == "V13_V10_G"
+        g_profile = candidate.get("strategy_profile") in {"V13_V10_G", "V13_V10_G_3"}
         # G's denominator spans sessions; a one-candle request cannot provide it.
         # Snapshot the history in the producer, before publishing immutable data.
         if g_profile:
-            import fno_v13_v10_g_live_config as g_config
+            from importlib import import_module
+            g_config = import_module({"V13_V10_G": "fno_v13_v10_g_live_config",
+                                      "V13_V10_G_3": "fno_v13_v10_g_3_live_config"}[candidate["strategy_profile"]])
         request_start = (slot_start - timedelta(days=g_config.LIVE_CONFIRMATION_HISTORY_DAYS)
                          if g_profile else slot_start)
         runtime.pace()
@@ -346,8 +350,10 @@ def _fetch_one(
                 "observed_at_ist": common.now_ist().isoformat(timespec="microseconds"),
             }
         if g_profile:
-            import fno_v13_v10_g_live_config as g_config
-            history = _g_completed_volume_history(records, expected_end)
+            from importlib import import_module
+            g_config = import_module({"V13_V10_G": "fno_v13_v10_g_live_config",
+                                      "V13_V10_G_3": "fno_v13_v10_g_3_live_config"}[candidate["strategy_profile"]])
+            history = _g_completed_volume_history(records, expected_end, g_config)
             if len(history) < g_config.LIVE_CONFIRMATION_VOLUME_REQUIRED_PRIOR:
                 # Suspended/new symbols must not use a truncated seven-day mean.
                 request_start = slot_start - timedelta(days=g_config.LIVE_CONFIRMATION_HISTORY_FALLBACK_DAYS)
@@ -355,7 +361,7 @@ def _fetch_one(
                 earlier = runtime.client.historical_data(
                     int(candidate["instrument_token"]), request_start, slot_start,
                     "minute", continuous=False, oi=False)
-                history = _g_completed_volume_history(list(earlier) + list(records), expected_end)
+                history = _g_completed_volume_history(list(earlier) + list(records), expected_end, g_config)
             bar = g_config.annotate_confirmation_volume(bar, history)
             bar["confirmation_history_complete"] = len(history) >= g_config.LIVE_CONFIRMATION_VOLUME_REQUIRED_PRIOR
             if not bar["confirmation_history_complete"]:
@@ -800,7 +806,7 @@ def produce_slot(
             )
         )
         is not None
-        and (not is_g_config(config) or _g_volume_snapshot_valid(bar, confirmation_end, config))
+        and (not is_modern_config(config) or _g_volume_snapshot_valid(bar, confirmation_end, config))
     }
     outcomes: dict[str, dict[str, Any]] = {
         symbol: {

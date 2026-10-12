@@ -15,7 +15,8 @@ from fastapi import Depends, FastAPI, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from fno_strategy_registry import active_profile_name
 
 from ai_platform.adapters.common import ArtifactError, IST, now_ist
 from ai_platform.observability.runtime import create_observability
@@ -39,7 +40,9 @@ class AssistantSessionRequest(BaseModel):
     session_date: date | None = None
     asset: Literal["EQUITY", "OPTIONS", "ALL"] = "ALL"
     mode: Literal["PAPER", "LIVE", "ALL"] = "ALL"
-    profile: Literal["V13_V10_G"] = "V13_V10_G"
+    profile: Literal["V13_V10_G", "V13_V10_G_3"] = Field(
+        default_factory=active_profile_name, validate_default=True
+    )
 
 
 def _error_response(request: Request, status: int, code: str, message: str) -> JSONResponse:

@@ -1,8 +1,8 @@
-"""Isolated quantity-one LIVE session for the selected FnO strategy profile.
+"""Isolated LIVE session for the selected FnO strategy profile.
 
 The selected scanner and 1-minute confirmation pipeline are the sole signal
 producers.  This coordinator starts one LIVE worker per side, pins every
-executable order state to one NSE equity share, and publishes dashboard CSVs
+executable order state to its selected execution policy, and publishes dashboard CSVs
 from authoritative signals and this profile's LIVE-only order directory.
 
 Real orders remain fail-closed behind the V6 acknowledgement, same-day arm
@@ -27,7 +27,7 @@ from typing import Any
 import pandas as pd
 
 import fno_oi_common as common
-from fno_live_profile import config_for_generation, is_g_config
+from fno_live_profile import config_for_generation, is_modern_config, is_g3_config
 
 
 config = config_for_generation("v6")
@@ -35,15 +35,19 @@ config = config_for_generation("v6")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SESSION_ID = (
-    "fno_v13_v10_g_live_kite_qty1" if is_g_config(config) else "fno_v6_live_kite_qty1"
+    f"{getattr(config, 'SESSION_PREFIX', 'fno_v6')}_live_kite_qty1"
 )
 RUN_ID = os.getenv("EQIDV2_OBS_RUN_ID", "").strip() or (
     f"{SESSION_ID}_{common.now_ist().strftime('%Y%m%dT%H%M%S')}_{os.getpid()}"
 )
 EXECUTION_PROFILE = "live_kite_qty1"
 EXECUTION_MODE = "LIVE"
-EXECUTION_QUANTITY = 1
-QUANTITY_POLICY = "FIXED_ONE_SHARE"
+EXECUTION_QUANTITY = None if is_g3_config(config) else 1
+QUANTITY_POLICY = (config.live_execution_policy.QUANTITY_POLICY if is_g3_config(config) else "FIXED_ONE_SHARE")
+
+
+def _execution_metadata() -> dict[str, Any]:
+    return config.live_execution_policy.execution_metadata() if is_g3_config(config) else {}
 
 LIVE_ROOT = common.FNO_ROOT / getattr(config, "LIVE_ROOT_NAME", "v6_live")
 # Keep the existing controls authoritative across the strategy migration.
@@ -124,16 +128,22 @@ TRADE_COLUMNS = [
     "strategy_fingerprint",
 ]
 
+if is_g3_config(config):
+    _policy_columns = list(_execution_metadata()) + ["capital_rs", "sizing_reference_price", "requested_quantity",
+        "remaining_quantity", "live_mtm_available", "live_mtm_unavailable_reason"]
+    ENTRY_COLUMNS += [key for key in _policy_columns if key not in ENTRY_COLUMNS]
+    TRADE_COLUMNS += [key for key in _policy_columns if key not in TRADE_COLUMNS]
+
 
 def entry_csv_path(session_date: date, side: str) -> Path:
-    strategy_id = "v13_v10_g" if _is_g_profile() else "v6"
+    strategy_id = getattr(config, "SESSION_PREFIX", "fno_v6").removeprefix("fno_")
     return EXPORT_ROOT / (
         f"signals_{session_date.isoformat()}_fno_id_{strategy_id}_{side.lower()}.csv"
     )
 
 
 def trades_csv_path(session_date: date) -> Path:
-    strategy_id = "v13_v10_g" if _is_g_profile() else "v6"
+    strategy_id = getattr(config, "SESSION_PREFIX", "fno_v6").removeprefix("fno_")
     return EXPORT_ROOT / f"live_trades_{session_date.isoformat()}_fno_id_{strategy_id}.csv"
 
 
@@ -163,11 +173,11 @@ def _confirmation_path(session_date: date, signal_end: str) -> Path:
 
 
 def _is_g_profile() -> bool:
-    return is_g_config(config)
+    return is_modern_config(config)
 
 
 def _display_label() -> str:
-    return "V13-V10-G" if _is_g_profile() else "V6"
+    return getattr(config, "DISPLAY_LABEL", "V6")
 
 
 def _validate_g_contract(row: dict[str, Any], session_date: date) -> None:
@@ -260,7 +270,9 @@ def load_authoritative_signals(session_date: date) -> list[dict[str, Any]]:
             raise RuntimeError(f"Authoritative {_display_label()} signal failed identity checks: {signal_id}")
         if _is_g_profile():
             _validate_g_contract(signal, session_date)
-        if int(dict(signal.get("live_sizing") or {}).get("quantity", 0)) < 1:
+        if is_g3_config(config):
+            config.live_execution_policy.validate_signal_sizing(signal)
+        if not is_g3_config(config) and int(dict(signal.get("live_sizing") or {}).get("quantity", 0)) < 1:
             raise RuntimeError(
                 f"Authoritative {_display_label()} signal cannot support one-share execution: {signal_id}"
             )
@@ -280,7 +292,7 @@ def load_profile_order_states(
     session_date: date,
     authoritative_ids: set[str],
 ) -> list[dict[str, Any]]:
-    """Load and validate only this profile's LIVE quantity-one states."""
+    """Load and validate only this profile's LIVE execution-policy states."""
 
     root = profile_order_day_dir(session_date)
     if not root.exists():
@@ -303,14 +315,25 @@ def load_profile_order_states(
             "execution_quantity_override": EXECUTION_QUANTITY,
             "quantity": EXECUTION_QUANTITY,
         }
+        if is_g3_config(config):
+            config.live_execution_policy.validate_order_sizing(state)
+            signal = _read_json(SIGNAL_ROOT / session_date.isoformat() / f"{signal_id}.json")
+            config.live_execution_policy.validate_signal_sizing(signal)
+            if state.get("sizing_reference_price") != signal.get("trigger_price") or state.get("lot_size") != signal.get("lot_size"):
+                raise ValueError("G3 LIVE state sizing basis differs from its authoritative signal")
+            # Overrides are reduction-only and validated in the immutable
+            # requested quantity. Filled quantity can be smaller after partials.
+            expected.pop("quantity")
+            expected.pop("execution_quantity_override")
         mismatches = {
             key: (state.get(key), value)
             for key, value in expected.items()
             if state.get(key) != value
         }
         if mismatches:
+            contract_label = "execution" if is_g3_config(config) else "quantity-one"
             raise RuntimeError(
-                f"{_display_label()} LIVE quantity-one state failed validation ({signal_id}): {mismatches}"
+                f"{_display_label()} LIVE {contract_label} state failed validation ({signal_id}): {mismatches}"
             )
         if _is_g_profile():
             _validate_g_contract(state, session_date)
@@ -339,7 +362,7 @@ def _entry_rows(
                 "entry_price": signal.get("trigger_price", ""),
                 "target_price": signal.get("target_price", ""),
                 "stop_price": signal.get("stop_price", ""),
-                "quantity": EXECUTION_QUANTITY,
+                "quantity": state.get("quantity", strategy_quantity) if is_g3_config(config) else EXECUTION_QUANTITY,
                 "strategy_sized_quantity": strategy_quantity,
                 "status": state.get("status", "WAITING_EXECUTION_STATE"),
                 "status_reason": state.get("status_reason", ""),
@@ -357,6 +380,10 @@ def _entry_rows(
                 "execution_mode": EXECUTION_MODE,
                 "execution_profile": EXECUTION_PROFILE,
                 "quantity_policy": QUANTITY_POLICY,
+                **_execution_metadata(),
+                **({"capital_rs": config.live_execution_policy.CAPITAL_PER_TRADE_RS,
+                    "sizing_reference_price": signal.get("trigger_price"),
+                    "requested_quantity": state.get("requested_quantity", strategy_quantity)} if is_g3_config(config) else {}),
                 "stop_pct": signal.get("stop_pct", ""),
                 "target_pct": signal.get("target_pct", ""),
             }
@@ -405,6 +432,9 @@ def _trade_rows(states: list[dict[str, Any]]) -> pd.DataFrame:
                 "target_price": state.get("target_price", ""),
                 "strategy_version": state.get("strategy_version", ""),
                 "strategy_fingerprint": state.get("strategy_fingerprint", ""),
+                **({key: state.get(key) for key in _policy_columns} if is_g3_config(config) else {}),
+                **({"pnl_rs": None, "gross_pnl_rs": None, "estimated_cost_rs": None}
+                   if is_g3_config(config) and state.get("live_mtm_available") is False and status != "CLOSED" else {}),
             }
         )
     return pd.DataFrame(rows, columns=TRADE_COLUMNS)
@@ -423,8 +453,17 @@ def _arm_status(session_date: date) -> dict[str, Any]:
         not _is_g_profile()
         or arm.get("strategy_fingerprint") == config.strategy_fingerprint()
     )
+    arm_execution_policy_matches = (not is_g3_config(config) or
+        arm.get("live_execution_policy_fingerprint") == config.live_execution_policy.policy_fingerprint())
     kill_enabled = bool(kill.get("enabled"))
-    if not acknowledgement_valid:
+    from fno_live_entry_guard import entry_authority
+    owner_allowed, owner_reason = entry_authority(getattr(config, "STRATEGY_PROFILE", ""))
+    if is_g3_config(config):
+        kill_enabled = kill_enabled or any(bool(_read_json(common.FNO_ROOT / root / "kill_switch.json").get("enabled"))
+            for root in ("v6_live", "v13_v10_g_live", "control"))
+    if not owner_allowed:
+        reason = owner_reason
+    elif not acknowledgement_valid:
         reason = "LIVE_ACK_MISSING"
     elif not arm_enabled:
         reason = "LIVE_ARM_FILE_DISABLED"
@@ -432,6 +471,8 @@ def _arm_status(session_date: date) -> dict[str, Any]:
         reason = "LIVE_ARM_DATE_MISMATCH"
     elif not arm_strategy_matches:
         reason = "LIVE_ARM_STRATEGY_MISMATCH"
+    elif not arm_execution_policy_matches:
+        reason = "LIVE_ARM_EXECUTION_POLICY_MISMATCH"
     elif kill_enabled:
         reason = "KILL_SWITCH_ENABLED"
     else:
@@ -443,12 +484,15 @@ def _arm_status(session_date: date) -> dict[str, Any]:
         "arm_enabled": arm_enabled,
         "arm_date_matches": arm_date_matches,
         "arm_strategy_matches": arm_strategy_matches,
+        "arm_execution_policy_matches": arm_execution_policy_matches,
         "kill_switch_enabled": kill_enabled,
     }
 
 
 def _auto_arm_session(session_date: date) -> Path:
-    """Persist explicit authorization for this strategy and session date."""
+    """Persist explicit authorization for the legacy strategy only."""
+    if is_g3_config(config):
+        raise ValueError("G3 auto-arm is disabled; separate dated activation approval is required")
     control_root = CONTROL_ROOT if CONTROL_ROOT is not None else LIVE_ROOT
     path = control_root / "live_arm.json"
     common.atomic_write_json(
@@ -498,12 +542,15 @@ def export_snapshot(
             "strategy_fingerprint": config.strategy_fingerprint(),
             "execution_profile": EXECUTION_PROFILE,
             "quantity_policy": QUANTITY_POLICY,
+            **_execution_metadata(),
             "open_trades": [
                 {
                     "signal_id": row.get("signal_id", ""),
                     "ticker": row.get("tradingsymbol", ""),
                     "side": row.get("side", ""),
                     "quantity": row.get("quantity", ""),
+                    **({"remaining_quantity": row.get("remaining_quantity", row.get("quantity")),
+                        "live_mtm_available": row.get("live_mtm_available", True)} if is_g3_config(config) else {}),
                     "status": row.get("status", ""),
                 }
                 for row in open_states
@@ -536,6 +583,7 @@ def export_snapshot(
         "execution_profile": EXECUTION_PROFILE,
         "quantity": EXECUTION_QUANTITY,
         "quantity_policy": QUANTITY_POLICY,
+        **_execution_metadata(),
         "updated_at_ist": observed.isoformat(timespec="seconds"),
         **_arm_status(session_date),
         **counts,
@@ -561,6 +609,8 @@ def export_snapshot(
             "signals": counts["signals"],
             "filled_trades": counts["filled_trades"],
             "arm_reason": payload["arm_reason"],
+            **({"execution_mode": EXECUTION_MODE, "execution_profile": EXECUTION_PROFILE,
+                **_execution_metadata(), **_arm_status(session_date)} if is_g3_config(config) else {}),
         },
     )
     return payload
@@ -568,8 +618,8 @@ def export_snapshot(
 
 def worker_command(session_date: date, side: str) -> list[str]:
     role = "long-entry" if side.upper() == "LONG" else "short-entry"
-    script = "fno_v13_v10_g_live.py" if _is_g_profile() else "fno_v6_live.py"
-    return [
+    script = f"{getattr(config, 'SESSION_PREFIX', 'fno_v6')}_live.py"
+    command = [
         sys.executable,
         "-u",
         str(SCRIPT_DIR / script),
@@ -579,9 +629,10 @@ def worker_command(session_date: date, side: str) -> list[str]:
         session_date.isoformat(),
         "--execution-mode",
         EXECUTION_MODE,
-        "--live-quantity",
-        str(EXECUTION_QUANTITY),
     ]
+    if not is_g3_config(config):
+        command += ["--live-quantity", str(EXECUTION_QUANTITY)]
+    return command
 
 
 def worker_environment() -> dict[str, str]:
@@ -601,14 +652,14 @@ def worker_environment() -> dict[str, str]:
     # Pin the same profile for both child workers even if the parent environment
     # was changed after its configuration was loaded.
     if _is_g_profile():
-        env["FNO_V6_STRATEGY_PROFILE"] = "V13_V10_G"
+        env["FNO_V6_STRATEGY_PROFILE"] = config.STRATEGY_PROFILE
     else:
         env.pop("FNO_V6_STRATEGY_PROFILE", None)
     return env
 
 
 def worker_session_id(side: str) -> str:
-    prefix = "fno_v13_v10_g" if _is_g_profile() else "fno_v6"
+    prefix = getattr(config, "SESSION_PREFIX", "fno_v6")
     if side.upper() == "BROKER_RECONCILIATION":
         return f"{prefix}_{EXECUTION_PROFILE}_broker_reconciliation"
     return f"{prefix}_{EXECUTION_PROFILE}_{side.lower()}"
@@ -617,7 +668,7 @@ def worker_session_id(side: str) -> str:
 def broker_reconciliation_command(session_date: date) -> list[str]:
     """Build the dedicated read-only broker reconciliation child command."""
 
-    script = "fno_v13_v10_g_live.py" if _is_g_profile() else "fno_v6_live.py"
+    script = f"{getattr(config, 'SESSION_PREFIX', 'fno_v6')}_live.py"
     return [
         sys.executable,
         "-u",
@@ -697,6 +748,7 @@ def _publish_export_failure(
         "execution_profile": EXECUTION_PROFILE,
         "quantity": EXECUTION_QUANTITY,
         "quantity_policy": QUANTITY_POLICY,
+        **_execution_metadata(),
         "updated_at_ist": observed,
         "export_unavailable": True,
         "error": f"{type(exc).__name__}: {exc}",
@@ -750,7 +802,7 @@ def run(args: argparse.Namespace) -> int:
         print(
             f"[{SESSION_ID}] {payload['state']} {session_date}: "
             f"strategy={config.STRATEGY_VERSION} signals={payload['signals']} "
-            f"arm={payload['arm_reason']} quantity={EXECUTION_QUANTITY}; "
+            f"arm={payload['arm_reason']} policy={QUANTITY_POLICY}; "
             "no LIVE workers or broker requests started."
         )
         return 0
@@ -765,10 +817,14 @@ def run(args: argparse.Namespace) -> int:
         print(
             f"[{SESSION_ID}] snapshot {session_date}: signals={payload['signals']} "
             f"orders={payload['order_states']} fills={payload['filled_trades']} "
-            f"arm={payload['arm_reason']} quantity={EXECUTION_QUANTITY}"
+            f"arm={payload['arm_reason']} policy={QUANTITY_POLICY}"
         )
         return 0
 
+    if is_g3_config(config):
+        from fno_strategy_registry import g3_live_activation_authorized
+        if not getattr(args, "activate_live", False) or not g3_live_activation_authorized():
+            raise ValueError("G3 LIVE workers require --activate-live and separate LIVE_APPROVED deployment authorization")
     if getattr(args, "auto_arm", False):
         arm_path = _auto_arm_session(session_date)
         print(f"[{SESSION_ID}] auto-armed LIVE quantity 1 for {session_date}: {arm_path}")
@@ -786,7 +842,7 @@ def run(args: argparse.Namespace) -> int:
             )
             print(
                 f"[{SESSION_ID}] started {side} LIVE worker pid={children[side].pid} "
-                f"profile={EXECUTION_PROFILE} quantity={EXECUTION_QUANTITY}"
+                f"profile={EXECUTION_PROFILE} policy={QUANTITY_POLICY}"
             )
 
         reconciliation_role = "BROKER_RECONCILIATION"
@@ -870,6 +926,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session-date", default="")
     parser.add_argument("--poll-sec", type=float, default=2.0)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--activate-live", action="store_true", help="Start G3 workers only after separate LIVE_APPROVED authorization; never arms.")
     parser.add_argument(
         "--auto-arm",
         action="store_true",
@@ -892,10 +949,12 @@ def main(argv: list[str] | None = None) -> int:
         return run(args)
     except Exception as exc:
         observed = common.now_ist()
+        try:
+            failed_day = date.fromisoformat(args.session_date) if args.session_date else observed.date()
+        except ValueError:
+            failed_day = observed.date()
         EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
-        common.atomic_write_json(
-            STATUS_PATH,
-            {
+        failure_payload = {
                 "schema_version": "fno_v6_live_kite_qty1_status_v1",
                 "session_id": SESSION_ID,
                 "run_id": RUN_ID,
@@ -904,10 +963,17 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_profile": EXECUTION_PROFILE,
                 "quantity": EXECUTION_QUANTITY,
                 "quantity_policy": QUANTITY_POLICY,
+                **_execution_metadata(),
+                "strategy_version": config.STRATEGY_VERSION,
+                "strategy_fingerprint": config.strategy_fingerprint(),
+                "session_date": args.session_date or observed.date().isoformat(),
+                **_arm_status(failed_day),
                 "error": f"{type(exc).__name__}: {exc}",
                 "updated_at_ist": observed.isoformat(timespec="seconds"),
-            },
-        )
+            }
+        common.atomic_write_json(STATUS_PATH, failure_payload)
+        if is_g3_config(config):
+            common.atomic_write_json(HEARTBEAT_PATH, {**failure_payload, "heartbeat_ist": observed.isoformat(timespec="seconds")})
         print(f"[{SESSION_ID}] FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 

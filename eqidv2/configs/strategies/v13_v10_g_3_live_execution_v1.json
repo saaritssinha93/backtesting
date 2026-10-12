@@ -1,0 +1,13 @@
+{
+  "allowed_lot_size": 1,
+  "capital_per_trade_rs": 10000.0,
+  "execution_authority": false,
+  "leverage": 5.0,
+  "live_execution_profile": "G3_LIVE_10K_5X",
+  "overrides": "REDUCE_ONLY",
+  "quantity_policy": "FLOOR_TARGET_EXPOSURE_EQUITY_SHARES",
+  "quantity_rounding": "FLOOR",
+  "schema_version": "g3_live_execution_policy_v1",
+  "sizing_reference": "SIGNAL_TRIGGER_PRICE",
+  "target_exposure_rs": 50000.0
+}

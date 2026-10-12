@@ -135,6 +135,8 @@ def test_failed_refresh_keeps_last_successful_cards_and_displays_age() -> None:
       let LAST_SUCCESSFUL_REFRESH = '2026-10-10 12:00:00';
       const apiUrl = path => path;
       const fetch = async () => { throw new Error('Network unavailable'); };
+      let cockpitRefreshes = 0;
+      const cockpit = { refresh: () => { cockpitRefreshes++; } };
     """ + refresh_source + """
       loadNow().then(() => {
         assert.equal(elements.cards.innerHTML, 'last good cards');
@@ -142,5 +144,6 @@ def test_failed_refresh_keeps_last_successful_cards_and_displays_age() -> None:
         assert.match(elements.refreshNotice.textContent, /2026-10-10 12:00:00/);
         assert.match(elements.refreshNotice.textContent, /last successful snapshot/);
         assert.equal(SNAPSHOT_LOAD_IN_FLIGHT, false);
+        assert.equal(cockpitRefreshes, 1);
       });
     """)

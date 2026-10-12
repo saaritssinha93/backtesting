@@ -24,6 +24,12 @@ from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 from nse_market_calendar import market_closed_reason
+from fno_strategy_registry import active_profile, expected_fingerprint, deployment_state
+from fno_v13_v10_g_3_live_execution_policy import execution_metadata as g3_execution_metadata
+from fno_v13_v10_g_3_live_execution_policy import validate_execution_metadata as validate_g3_execution_metadata
+from fno_v13_v10_g_3_live_execution_policy import size_position as size_g3_live_position
+from fno_v13_v10_g_options_config import PROFILE_LABEL as FNO_OPTIONS_PROFILE_LABEL
+from fno_v13_v10_g_options_config import STOP_PCT as FNO_OPTIONS_STOP_PCT, TARGET_PCT as FNO_OPTIONS_TARGET_PCT
 from eqidv2_runtime_paths import (
     LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
     RUNTIME_STATUS_DIR,
@@ -49,6 +55,7 @@ except Exception:  # pragma: no cover - dashboard remains usable without researc
     _render_v13_vintage_markdown = None
 
 BASE_DIR = Path(__file__).resolve().parent
+FNO_ACTIVE_PROFILE = active_profile()
 LOG_DIR = BASE_DIR / "logs"
 DASHBOARD_RUNTIME_IDENTITY_SCHEMA_VERSION = "eqidv2_log_dashboard_runtime_identity_v1"
 DASHBOARD_RUNTIME_IDENTITY_PATH = RUNTIME_STATUS_DIR / "log_dashboard_server.runtime.json"
@@ -100,9 +107,9 @@ COLLECT_FILTERED_STOCK_DATA_ROOT = runtime_dir("collect_filtered_stock_data")
 COLLECT_FILTERED_STOCK_DATA_LATEST_DIR = COLLECT_FILTERED_STOCK_DATA_ROOT / "latest"
 FNO_OI_ROOT = runtime_dir("fno_oi")
 FNO_OI_LATEST_DIR = FNO_OI_ROOT / "latest"
-FNO_G_BACKTEST_ROOT = runtime_dir("backtesting_result_v13_v10_g")
-FNO_G_BACKTEST_REPORT = FNO_G_BACKTEST_ROOT / "latest" / "latest_backtesting_result_v13_v10_g.md"
-V13_V10_G_STRATEGY_RESEARCH_ROOT = runtime_dir("v13_v10_g_strategy_research")
+FNO_G_BACKTEST_ROOT = runtime_dir(FNO_ACTIVE_PROFILE.backtest_dir)
+FNO_G_BACKTEST_REPORT = FNO_G_BACKTEST_ROOT / "latest" / ("latest_" + FNO_ACTIVE_PROFILE.backtest_dir + ".md")
+V13_V10_G_STRATEGY_RESEARCH_ROOT = runtime_dir(FNO_ACTIVE_PROFILE.slug + "_strategy_research")
 V13_V10_G_STRATEGY_RESEARCH_LATEST_DIR = V13_V10_G_STRATEGY_RESEARCH_ROOT / "latest"
 # These are artifact views, not runnable sessions.  Keep the mapping ordered so
 # the dashboard, generated bundle and tests share one explicit presentation
@@ -149,8 +156,8 @@ V13_V10_G_ARTIFACT_CARD_REPORTS: Dict[str, str] = {
     **V13_V10_G_IMPROVEMENT_CARD_REPORTS,
 }
 # G owns canonical dashboard/task names and an isolated evidence directory.
-FNO_V13_V10_G_STRATEGY_VERSION = "FNO_V13_V10_G_RETAINED_20260914"
-FNO_V6_LIVE_KITE_ROOT = FNO_OI_ROOT / "v13_v10_g_live" / "live_kite"
+FNO_V13_V10_G_STRATEGY_VERSION = FNO_ACTIVE_PROFILE.version
+FNO_V6_LIVE_KITE_ROOT = FNO_OI_ROOT / FNO_ACTIVE_PROFILE.live_dir / "live_kite"
 FNO_MULTI_PAPER_ROOT = FNO_OI_ROOT / "multi_strategy_paper_v1"
 FNO_MULTI_PAPER_STATUS_PATH = FNO_MULTI_PAPER_ROOT / "status.json"
 FNO_MULTI_PAPER_HEARTBEAT_PATH = FNO_MULTI_PAPER_ROOT / "heartbeat.json"
@@ -825,7 +832,50 @@ RESTARTABLE_CARDS: Dict[str, str] = {
 }
 
 
+def _active_strategy_display(text: str) -> str:
+    """Human labels follow active sizing; stable task/card/storage IDs stay intact."""
+    text = FNO_ACTIVE_PROFILE.display(text)
+    if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        for old, new in (
+            ("V13-V10-G-3 Live Kite - Quantity 1", "V13-V10-G-3 Live Kite - ₹10,000 × 5"),
+            ("V13-V10-G-3 Live Kite Qty 1", "V13-V10-G-3 Live Kite ₹10,000 × 5"),
+            ("V13-V10-G-3 qty-1", "V13-V10-G-3 capital-sized"),
+            ("one task | fixed quantity 1 | SHORT | LONG | trades | runner log",
+             "₹10,000 capital | 5× | ₹50,000 target exposure | SHORT | LONG | trades | runner log"),
+            ("G LIVE (Kite qty-1)", "G3 LIVE (₹10,000 × 5)"),
+            ("is the real-order execution path at fixed quantity 1. G PAPER uses its configured strategy sizing.",
+             "uses whole shares within ₹50,000 target exposure (₹10,000 capital × 5), subject to broker margin checks. G3 PAPER uses its configured strategy sizing."),
+        ):
+            text = text.replace(old, new)
+    return text
+
+
+def _route_active_fno_profile() -> None:
+    """Preserve saved card IDs while routing every active action to one profile."""
+    global FNO_EQ_ID_MONITOR_GROUPS
+    FNO_EQ_ID_MONITOR_GROUPS = tuple((_active_strategy_display(title), ids) for title, ids in FNO_EQ_ID_MONITOR_GROUPS)
+    for mapping in (LOG_FILES, STATUS_FILES, HEARTBEAT_FILES, RESTARTABLE_CARDS,
+                    FNO_OI_CARD_REPORTS, V13_V10_G_RESEARCH_CARD_REPORTS,
+                    V13_V10_G_OBSERVABILITY_CARD_REPORTS,
+                    V13_V10_G_IMPROVEMENT_CARD_REPORTS, V13_V10_G_ARTIFACT_CARD_REPORTS):
+        for key, value in list(mapping.items()):
+            if "v13_v10_g" in key:
+                mapping[key] = FNO_ACTIVE_PROFILE.reference(value)
+    for key, value in list(CARD_TASK_NAMES.items()):
+        if "v13_v10_g" in key:
+            CARD_TASK_NAMES[key] = tuple(FNO_ACTIVE_PROFILE.reference(v) for v in value)
+    for mapping in (FNO_EQ_ID_MONITOR_STAGE_LABELS, FNO_EQ_ID_MONITOR_SESSION_LABELS):
+        for key, value in list(mapping.items()):
+            if "v13_v10_g" in key:
+                mapping[key] = _active_strategy_display(value)
+
+
+_route_active_fno_profile()
+
+
 def _runtime_status_path_for_card(card_id: str) -> Optional[Path]:
+    if card_id == "backtesting_result_v13_v10_g" and FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        return FNO_G_BACKTEST_ROOT / "status.json"
     if card_id in FNO_MULTI_PAPER_CARD_PROFILES:
         return FNO_MULTI_PAPER_STATUS_PATH
     filename = STATUS_FILES.get(card_id)
@@ -833,6 +883,8 @@ def _runtime_status_path_for_card(card_id: str) -> Optional[Path]:
 
 
 def _runtime_heartbeat_path_for_card(card_id: str) -> Optional[Path]:
+    if card_id == "backtesting_result_v13_v10_g" and FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        return FNO_G_BACKTEST_ROOT / "status.json"
     if card_id in FNO_MULTI_PAPER_CARD_PROFILES:
         return FNO_MULTI_PAPER_HEARTBEAT_PATH
     filename = HEARTBEAT_FILES.get(card_id)
@@ -1337,13 +1389,13 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
     today_ist = dt.datetime.now(IST).date().isoformat()
     if name == "backtesting_result_v13_v10_g":
         return FNO_G_BACKTEST_REPORT, str(
-            Path("backtesting_result_v13_v10_g") / "latest" / FNO_G_BACKTEST_REPORT.name
+            Path(FNO_ACTIVE_PROFILE.backtest_dir) / "latest" / FNO_G_BACKTEST_REPORT.name
         )
     if name in V13_V10_G_ARTIFACT_CARD_REPORTS:
         report_name = V13_V10_G_ARTIFACT_CARD_REPORTS[name]
         report_path = V13_V10_G_STRATEGY_RESEARCH_LATEST_DIR / report_name
         return report_path, str(
-            Path("v13_v10_g_strategy_research") / "latest" / report_name
+            Path(FNO_ACTIVE_PROFILE.slug + "_strategy_research") / "latest" / report_name
         )
     if name in FNO_OI_CARD_REPORTS:
         report_name = FNO_OI_CARD_REPORTS[name]
@@ -1443,11 +1495,11 @@ def resolve_log_target(name: str) -> Tuple[Path, str]:
         return LOG_DIR / fallback_name, fallback_name
 
     if name == "kite_trade_fno_id_v13_v10_g":
-        today_name = f"fno_v13_v10_g_live_kite_qty1_{today_ist}.log"
+        today_name = f"fno_{FNO_ACTIVE_PROFILE.slug}_live_kite_qty1_{today_ist}.log"
         today_path = LOG_DIR / today_name
         if today_path.exists():
             return today_path, today_name
-        latest = _latest_matching_file(LOG_DIR, "fno_v13_v10_g_live_kite_qty1_*.log")
+        latest = _latest_matching_file(LOG_DIR, f"fno_{FNO_ACTIVE_PROFILE.slug}_live_kite_qty1_*.log")
         if latest is not None:
             return latest, latest.name
         return today_path, today_name
@@ -1697,7 +1749,7 @@ def _research_artifact_status(path: Path) -> Dict[str, Any]:
     """Status for an offline report view, with no scheduler/process semantics."""
 
     exists = path.is_file()
-    return {
+    result = {
         "status": "READY" if exists else "WAITING_OUTPUT",
         "phase": "READ_ONLY_REPORT",
         "view_scope": "ARTIFACT",
@@ -1709,6 +1761,25 @@ def _research_artifact_status(path: Path) -> Dict[str, Any]:
             else "Run bat\\run_v13_strategy_research_refresh.bat after a complete historical bundle exists."
         ),
     }
+    if exists and FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" and path.parent == V13_V10_G_STRATEGY_RESEARCH_LATEST_DIR:
+        try:
+            manifest = json.loads((path.parent / "analysis_manifest.json").read_text(encoding="utf-8-sig"))
+            pointer = json.loads((FNO_G_BACKTEST_ROOT / "latest/current_history.json").read_text(encoding="utf-8-sig"))
+            if (manifest.get("strategy_version") != FNO_ACTIVE_PROFILE.version
+                    or manifest.get("strategy_fingerprint") != expected_fingerprint()
+                    or manifest.get("execution_authority") is not False
+                    or manifest.get("reports", {}).get(path.name, {}).get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest()):
+                raise ValueError("report identity/hash mismatch")
+            if manifest.get("source_manifest_sha256") != pointer.get("manifest_sha256"):
+                result.update(status="STALE_SOURCE", derived_status="A newer G-3 history package exists; refresh the G-3 analysis reports.")
+            else:
+                match = re.search(r"^- State: \*\*([A-Z0-9_]+)\*\*", path.read_text(encoding="utf-8"), re.M)
+                if match:
+                    result["status"] = match.group(1)
+                result.update(strategy_version=FNO_ACTIVE_PROFILE.version, strategy_fingerprint=expected_fingerprint())
+        except (OSError, ValueError, TypeError, AttributeError):
+            result.update(status="INVALID_EVIDENCE", derived_status="G-3 report provenance is missing or inconsistent; regenerate analysis from the verified history package.")
+    return result
 
 
 def parse_status_file(path: Path) -> Dict[str, str]:
@@ -2457,7 +2528,7 @@ def _backtesting_v13_v10_g_view(
 ) -> Tuple[Path, str, str]:
     """Render only the dedicated G daily report or its current running log."""
     session_date = str(status.get("session_date") or status.get("session_date_ist") or today_ist)
-    display = str(Path("backtesting_result_v13_v10_g") / "latest" / FNO_G_BACKTEST_REPORT.name)
+    display = str(Path(FNO_ACTIVE_PROFILE.backtest_dir) / "latest" / FNO_G_BACKTEST_REPORT.name)
     try:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session_date):
             raise ValueError("Session date must use YYYY-MM-DD")
@@ -2469,7 +2540,7 @@ def _backtesting_v13_v10_g_view(
             "No dated log or previous report has been substituted.\n"
         )
     runtime = str(status.get("status", "") or "").strip().upper()
-    current_log = LOG_DIR / f"backtesting_result_v13_v10_g_{session_date}.log"
+    current_log = LOG_DIR / f"{FNO_ACTIVE_PROFILE.backtest_dir}_{session_date}.log"
     if runtime in {"RUNNING", "RESTARTING", "COOLDOWN"} and current_log.is_file():
         text = (
             "# Backtesting result v13-v10-G\n\n"
@@ -2477,6 +2548,32 @@ def _backtesting_v13_v10_g_view(
             + tail_text(current_log, lines=lines)
         )
         return current_log, current_log.name, text
+    if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        try:
+            from ai_platform.observability.g3_analysis import verified_package
+            run, manifest, _ = verified_package(FNO_G_BACKTEST_ROOT, history=False)
+            metric = manifest["metrics"]
+            coverage = manifest.get("coverage", {})
+            report_lines = ["# V13-V10-G-3 daily backtest", "",
+                f"Session date: {manifest['session_date']}", f"State: {manifest['state']}",
+                "Evidence: VERIFIED_PRODUCTION_DAILY", f"Strategy version: {manifest['strategy_version']}",
+                f"Strategy fingerprint: {manifest['strategy_fingerprint']}", "",
+                f"Selected orders: {metric.get('selected_orders')}", f"Executed trades: {metric.get('trades')}",
+                f"Net P&L (rupees): {metric.get('net_profit_rupees', metric.get('net_pnl_rupees'))}",
+                f"Wins / losses: {metric.get('wins', 0)} / {metric.get('losses', 0)}",
+                f"Daily-close maximum drawdown (rupees): {metric.get('daily_close_drawdown_rupees', 'unavailable')}",
+                f"Round-trip cost estimate (basis points): {metric.get('cost_bps', 'unavailable')}",
+                f"Included stocks: {coverage.get('included_stocks', 'recorded in source coverage')}",
+                f"Excluded stocks: {len(coverage.get('excluded_stocks', []))}", "",
+                f"Verified run: `{run}`", "Execution authority: false. Historical OHLC simulation, not broker fills."]
+            if runtime and runtime not in {"SUCCESS", "SUCCESS_WITH_EXCLUDED_SESSIONS"}:
+                report_lines += ["", f"Latest attempt: {session_date} / {runtime}. The verified prior result remains displayed."]
+            return FNO_G_BACKTEST_REPORT, display, "\n".join(report_lines) + "\n"
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return FNO_G_BACKTEST_REPORT, display, (
+                "# V13-V10-G-3 daily backtest\n\nState: AWAITING_VERIFIED_G3_REPORT\n\n"
+                "The current production manifest is missing, incomplete or inconsistent. No prior unverified report is substituted.\n"
+            )
     projected = report_text(FNO_G_BACKTEST_REPORT, lines=lines)
     if projected:
         return FNO_G_BACKTEST_REPORT, display, projected
@@ -2916,6 +3013,68 @@ def _json_status_scalars(payload: object) -> Dict[str, str]:
     return out
 
 
+def _g3_execution_scalar_evidence(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize CSV/.status scalars without treating missing values as zero."""
+    evidence = dict(record)
+    for key in ("capital_per_trade_rs", "leverage", "target_exposure_rs"):
+        if isinstance(evidence.get(key), str):
+            evidence[key] = float(evidence[key])
+    validate_g3_execution_metadata(evidence)
+    return evidence
+
+
+def _apply_g3_options_paper_identity(card_id: str, status: Dict[str, Any]) -> Dict[str, Any]:
+    """Read the options publisher's declared contract without importing its engine.
+
+    Older status files omit the equity fingerprint even though option order
+    states contain it. Keep that absence explicitly unverified, not mismatched.
+    """
+    result = dict(status)
+    version = FNO_V13_V10_G_STRATEGY_VERSION
+    option_version = f"FNO_V13_V10_G_3_OPTIONS_ONE_LOT_ATM_{FNO_OPTIONS_PROFILE_LABEL}_20261011"
+    role = dict(zip(FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS,
+                    ("long-entry", "short-entry", "trade-logger", "net-result")))[card_id]
+    fingerprint = expected_fingerprint(FNO_ACTIVE_PROFILE.name)
+    observed_fingerprint = str(status.get("strategy_fingerprint", "") or "").strip()
+    mismatches = [key for key, value in (
+        ("strategy_version", version), ("options_strategy_version", option_version),
+        ("execution_mode", "PAPER"), ("role", role),
+    ) if status.get(key) != value]
+    for key, expected in (("stop_pct", FNO_OPTIONS_STOP_PCT * 100),
+                          ("target_pct", FNO_OPTIONS_TARGET_PCT * 100)):
+        try:
+            matches = math.isclose(float(status[key]), expected, rel_tol=0, abs_tol=1e-9)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            matches = False
+        if not matches:
+            mismatches.append(key)
+    fingerprint_state = ("NOT_PUBLISHED" if not observed_fingerprint else
+                         "MATCH" if observed_fingerprint == fingerprint else "MISMATCH")
+    if fingerprint_state == "MISMATCH":
+        mismatches.append("strategy_fingerprint")
+    result.update(expected_strategy_version=version, expected_options_strategy_version=option_version,
+                  expected_strategy_fingerprint=fingerprint, active_strategy_profile=FNO_ACTIVE_PROFILE.name,
+                  fingerprint_evidence=fingerprint_state,
+                  strategy_identity_scope="OPTIONS_PAPER_STATUS_CONTRACT")
+    if not mismatches:
+        result["strategy_identity_state"] = "MATCH" if fingerprint_state == "MATCH" else "DECLARED_MATCH"
+        result["strategy_identity_detail"] = (
+            "G3 options PAPER versions, role and premium stop/target match. "
+            + ("Equity strategy fingerprint matches." if fingerprint_state == "MATCH" else
+               "This status publisher did not include a fingerprint; checksum identity is unverified."))
+        if fingerprint_state == "NOT_PUBLISHED":
+            previous = str(status.get("derived_status", "") or "").strip()
+            result["derived_status"] = result["strategy_identity_detail"] + (f" {previous}" if previous else "")
+        return result
+    result["strategy_identity_state"] = "MISMATCH" if status.get("strategy_version") else "AWAITING_G_RUNTIME"
+    result["strategy_identity_detail"] = "G3 options PAPER runtime contract differs or is missing: " + ", ".join(mismatches) + "."
+    previous_detail = str(status.get("derived_status", "") or "").strip()
+    result["derived_status"] = result["strategy_identity_detail"] + (f" Previous runtime: {previous_detail}" if previous_detail else "")
+    if str(status.get("status", "") or "").upper() in {"", "RUNNING", "SUCCESS", "COMPLETE", "COMPLETED", "READY", "IDLE", "DONE"}:
+        result["status"] = "PARTIAL" if status.get("strategy_version") else "WAITING"
+    return result
+
+
 def _apply_fno_v13_v10_g_identity(card_id: str, status: Dict[str, Any]) -> Dict[str, Any]:
     """Keep old task status from presenting a V6 process as a healthy G worker."""
     if card_id not in (
@@ -2923,11 +3082,28 @@ def _apply_fno_v13_v10_g_identity(card_id: str, status: Dict[str, Any]) -> Dict[
         *FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS,
     ):
         return status
+    if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" and card_id in FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS:
+        return _apply_g3_options_paper_identity(card_id, status)
     result = dict(status)
     observed = str(status.get("strategy_version", "") or "").strip()
     result["expected_strategy_version"] = FNO_V13_V10_G_STRATEGY_VERSION
-    if observed == FNO_V13_V10_G_STRATEGY_VERSION:
+    expected = expected_fingerprint(FNO_ACTIVE_PROFILE.name)
+    observed_fingerprint = str(status.get("strategy_fingerprint", "") or "")
+    result["expected_strategy_fingerprint"] = expected
+    result["active_strategy_profile"] = FNO_ACTIVE_PROFILE.name
+    if observed == FNO_V13_V10_G_STRATEGY_VERSION and (not expected or observed_fingerprint == expected):
         result["strategy_identity_state"] = "MATCH"
+        if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" and card_id in FNO_V13_V10_G_CARD_IDS[-4:]:
+            result["configured_live_execution_policy"] = g3_execution_metadata()
+            try:
+                _g3_execution_scalar_evidence(status)
+            except (ValueError, TypeError):
+                result["live_execution_policy_state"] = "MISMATCH" if status.get("live_execution_policy_fingerprint") else "AWAITING_RUNTIME"
+                result["derived_status"] = "Configured G3 LIVE: ₹10,000 capital × 5; awaiting runtime evidence with the matching execution policy. " + str(status.get("derived_status", ""))
+                if str(status.get("status", "")).upper() in {"", "RUNNING", "SUCCESS", "COMPLETE", "COMPLETED", "READY", "IDLE", "DONE", "READY_DISARMED"}:
+                    result["status"] = "PARTIAL"
+                return result
+            result["live_execution_policy_state"] = "MATCH"
         # A read-only G readiness export is distinct from an older supervisor
         # failure. Preserve that failure while showing what was checked now.
         if (card_id in FNO_V13_V10_G_CARD_IDS[-4:]
@@ -2953,8 +3129,8 @@ def _apply_fno_v13_v10_g_identity(card_id: str, status: Dict[str, Any]) -> Dict[
         return result
     result["strategy_identity_state"] = "MISMATCH" if observed else "AWAITING_G_RUNTIME"
     result["strategy_identity_detail"] = (
-        f"Expected V13-V10-G; observed {observed}. Awaiting the G runtime."
-        if observed else "Awaiting V13-V10-G runtime evidence in its isolated data directory."
+        f"Expected {FNO_ACTIVE_PROFILE.label} with its current configuration; observed {observed}. Awaiting matching runtime evidence."
+        if observed else f"Awaiting {FNO_ACTIVE_PROFILE.label} runtime evidence in its isolated data directory."
     )
     previous_detail = str(status.get("derived_status", "") or "").strip()
     result["derived_status"] = result["strategy_identity_detail"] + (
@@ -4030,6 +4206,8 @@ def _fno_eq_id_monitor_activity(
     if status.get("strategy_identity_state") in {"MISMATCH", "AWAITING_G_RUNTIME"}:
         return _fno_eq_id_monitor_clean(status.get("strategy_identity_detail", ""))
     parts: list[str] = []
+    if status.get("strategy_identity_state") == "DECLARED_MATCH":
+        parts.append("options contract declared; fingerprint not published (unverified)")
     for field, label in _FNO_EQ_ID_ACTIVITY_FIELDS.get(card_id, ()):
         value = _fno_eq_id_monitor_clean(status.get(field, ""), limit=64)
         if value:
@@ -4537,6 +4715,7 @@ def _fno_eq_id_timeline_v6_confirmation_valid(
     return bool(
         payload.get("session_date") == session_date
         and payload.get("strategy_version") == FNO_V13_V10_G_STRATEGY_VERSION
+        and (FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or payload.get("strategy_fingerprint") == expected_fingerprint())
         and payload.get("signal_end") == signal_slot
         and payload.get("confirmation_end") == confirmation_slot
         and str(payload.get("state", "") or "").strip().upper() in {"SUCCESS", "COMPLETE"}
@@ -4572,6 +4751,25 @@ def _fno_v13_v10_g_timeline_minutes(
     return tuple(sorted(minutes))
 
 
+def _g3_live_timeline_evidence_valid(record: Dict[str, Any], *, trade: bool = False) -> bool:
+    try:
+        _g3_execution_scalar_evidence(record)
+        if (record.get("strategy_version") != FNO_V13_V10_G_STRATEGY_VERSION
+                or record.get("strategy_fingerprint") != expected_fingerprint(FNO_ACTIVE_PROFILE.name)):
+            return False
+        if trade:
+            quantity = _fno_eq_id_timeline_number(record.get("quantity"))
+            requested = _fno_eq_id_timeline_number(record.get("requested_quantity"))
+            budget = size_g3_live_position(record.get("sizing_reference_price"))["quantity"]
+            if (record.get("execution_mode") != "LIVE" or quantity is None or requested is None
+                    or not quantity.is_integer() or not requested.is_integer()
+                    or not 0 < quantity <= requested <= budget):
+                return False
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def _build_fno_eq_id_strategy_timelines(
     items: Sequence[Dict[str, object]],
     *,
@@ -4594,9 +4792,9 @@ def _build_fno_eq_id_strategy_timelines(
     date_key = session_date.replace("-", "")
     by_id = {str(item.get("id", "")): item for item in items}
 
-    v6_root = FNO_OI_ROOT / "v13_v10_g_live"
+    v6_root = FNO_OI_ROOT / FNO_ACTIVE_PROFILE.live_dir
     v6_trade_path = (
-        v6_root / "consolidated" / f"fno_v13_v10_g_trades_{session_date}.csv"
+        v6_root / "consolidated" / f"fno_{FNO_ACTIVE_PROFILE.slug}_trades_{session_date}.csv"
     )
     v6_trade_file_exists = v6_trade_path.is_file()
     v6_trade_rows = _fno_eq_id_timeline_session_rows(
@@ -4604,13 +4802,13 @@ def _build_fno_eq_id_strategy_timelines(
         session_date,
     )
 
-    # G LIVE Kite qty-1 executor.  This is a separate execution path from the
-    # PAPER ledger above: same signals, real orders, fixed quantity 1.  Its
+    # G LIVE Kite executor. This separate execution path consumes the same
+    # signals with its active execution profile's sizing. Its
     # armed state matters as much as its fills - an unarmed session produces no
     # trades for a legitimate reason, which must not read as "nothing happened".
     v6_live_root = v6_root / "live_kite"
     v6_live_trade_path = (
-        v6_live_root / f"live_trades_{session_date}_fno_id_v13_v10_g.csv"
+        v6_live_root / f"live_trades_{session_date}_fno_id_{FNO_ACTIVE_PROFILE.slug}.csv"
     )
     v6_live_trade_file_exists = v6_live_trade_path.is_file()
     v6_live_trade_rows = _fno_eq_id_timeline_session_rows(
@@ -4620,6 +4818,13 @@ def _build_fno_eq_id_strategy_timelines(
     v6_live_status = _read_json_dict(v6_live_root / "status.json")
     if str(v6_live_status.get("session_date", "") or "").strip() != session_date:
         v6_live_status = {}
+    v6_live_policy_invalid = False
+    if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        v6_live_policy_invalid = bool(v6_live_status) and not _g3_live_timeline_evidence_valid(v6_live_status)
+        v6_live_policy_invalid |= any(not _g3_live_timeline_evidence_valid(row, trade=True) for row in v6_live_trade_rows)
+        if v6_live_policy_invalid:
+            # An invalid ledger must not become a believable zero-fill day.
+            v6_live_status, v6_live_trade_rows = {}, []
     v6_live_armed = bool(v6_live_status.get("armed"))
     v6_live_arm_reason = str(v6_live_status.get("arm_reason", "") or "").strip()
     v6_live_kill_switch = bool(v6_live_status.get("kill_switch_enabled"))
@@ -4787,6 +4992,7 @@ def _build_fno_eq_id_strategy_timelines(
                     str(scanner.get("session_date", "") or "") == session_date
                     and str(scanner.get("signal_end", "") or "") == slot
                     and scanner.get("strategy_version") == FNO_V13_V10_G_STRATEGY_VERSION
+                    and (FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or scanner.get("strategy_fingerprint") == expected_fingerprint())
                 )
                 if not valid_scanner:
                     v6_cell = "EVIDENCE MISMATCH"
@@ -4953,6 +5159,8 @@ def _build_fno_eq_id_strategy_timelines(
         )
         if slot not in FNO_V13_V10_G_SIGNAL_SLOTS:
             v6_live_cell = "OFF WINDOW"
+        elif v6_live_policy_invalid:
+            v6_live_cell = "LIVE EXECUTION POLICY MISMATCH; fills unavailable"
         elif v6_live_arm_state != "ARMED":
             # Still show the cohort so an unarmed day remains auditable.
             slot_live_rows = [
@@ -5219,7 +5427,9 @@ def _build_fno_eq_id_strategy_timelines(
             arm_reason=v6_live_arm_reason,
             kill_switch=v6_live_kill_switch,
         )
-        if v6_live_arm_state_1m == "DISABLED":
+        if v6_live_policy_invalid:
+            v6_live_cell_1m = "LIVE EXECUTION POLICY MISMATCH; fills unavailable"
+        elif v6_live_arm_state_1m == "DISABLED":
             v6_live_cell_1m = "DISABLED"
         else:
             live_parts: list[str] = []
@@ -5401,7 +5611,7 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         "- `G LIVE (Kite qty-1)` is the real-order execution path at fixed quantity 1. G PAPER uses its configured strategy sizing. Both consume the same G signals, while broker fills and costs remain separately recorded.",
         "- `NOT ARMED (...)`, `KILL SWITCH ON`, and `NO LIVE STATUS` are deliberate gates, not faults: LIVE needs an explicit same-day acknowledgement, so an unarmed session legitimately produces no fills. These states are excluded from the hard-issue count; `ARMED; MISSING LIVE LEDGER` is not.",
     ))
-    return lines
+    return [_active_strategy_display(line) for line in lines]
 
 
 def _format_fno_eq_id_monitor(
@@ -7134,6 +7344,24 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         if parsed.path in ("/dashboard-flow", "/dashboard-flow/"):
             self._send_flow_html()
             return
+        if parsed.path == "/api/dashboard-flow/live":
+            from dashboard_flow_live import load_live_flow
+            from dashboard_flow_live_cache import get_cached_live_flow
+
+            if len(params.get("date", [])) > 1:
+                self._send_json({"error": "Specify one session date."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                session_date = (params.get("date") or [dt.datetime.now(IST).date().isoformat()])[0]
+                payload = get_cached_live_flow(FNO_OI_ROOT.parent, session_date, load_live_flow)
+            except ValueError:
+                self._send_json({"error": "Use a session date in YYYY-MM-DD format, no later than today."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error": "Saved intraday data is temporarily unavailable. Refresh to retry."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
+            return
         if parsed.path == "/api/dashboard-flow":
             from dashboard_flow import load_flow_data
 
@@ -7151,6 +7379,27 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             lines = self._int_param(params, "lines", 80, 20, 400)
             payload = self._snapshot(lines=lines)
             self._send_json(payload)
+            return
+        if parsed.path == "/api/cockpit":
+            from dashboard_cockpit import load_cockpit_data
+
+            if any(len(params.get(key, [])) > 1 for key in ("date", "mode", "symbol")):
+                self._send_json({"error": "Specify one date, mode and symbol."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                payload = load_cockpit_data(
+                    FNO_OI_ROOT,
+                    (params.get("date") or [dt.datetime.now(IST).date().isoformat()])[0],
+                    (params.get("mode") or ["PAPER"])[0],
+                    (params.get("symbol") or [None])[0],
+                )
+            except ValueError:
+                self._send_json({"error": "Use a valid session date, PAPER or LIVE mode, and stock symbol."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error": "Trading evidence is temporarily unavailable. Refresh to retry."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
             return
         if parsed.path == "/api/fno-monitor":
             dates = params.get("date") or [dt.datetime.now(IST).date().isoformat()]
@@ -7410,11 +7659,14 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     def _send_flow_html(self) -> None:
         html = (BASE_DIR / "dashboard_flow.html").read_text(encoding="utf-8-sig")
+        html = html.replace("<style>__FLOW_CSS__</style>", "<style>" + (BASE_DIR / "dashboard_terminal.css").read_text(encoding="utf-8") + "</style><style>__FLOW_CSS__</style>")
         html = html.replace("__FLOW_CSS__", (BASE_DIR / "dashboard_flow.css").read_text(encoding="utf-8-sig"))
         html = html.replace("__FLOW_JS__", (BASE_DIR / "dashboard_flow.js").read_text(encoding="utf-8-sig"))
         html = html.replace("__FLOW_CHART_JS__", (BASE_DIR / "dashboard_flow_chart.js").read_text(encoding="utf-8-sig"))
         html = html.replace("__FLOW_CORE_JS__", (BASE_DIR / "dashboard_flow_core.js").read_text(encoding="utf-8-sig"))
         html = html.replace("__FLOW_COMPARE_JS__", (BASE_DIR / "dashboard_flow_compare.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_LIVE_JS__", (BASE_DIR / "dashboard_flow_live.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_LIVE_CSS__", (BASE_DIR / "dashboard_flow_live.css").read_text(encoding="utf-8-sig"))
         token_json = json.dumps(getattr(self.server, "api_token", "") or "").replace("<", "\\u003c")
         html = html.replace("__API_TOKEN_JSON__", token_json)
         body = html.encode("utf-8")
@@ -7426,13 +7678,14 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_html(self) -> None:
-        api_token_json = json.dumps(getattr(self.server, "api_token", "") or "")
+        api_token_json = json.dumps(getattr(self.server, "api_token", "") or "").replace("<", "\\u003c")
         html = """<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>EQIDV2 Live Logs</title>
+  <title>EQIDV2 | Trading Terminal</title>
+  <meta name="referrer" content="no-referrer" />
   <style>
     :root {
       --bg: #eef2f7;
@@ -9366,19 +9619,35 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       }
     }
   </style>
+  <style>__TERMINAL_CSS__</style>
+  <style>__COCKPIT_CSS__</style>
 </head>
-<body>
+<body class="terminal-main">
   <header>
     <div class="topbar">
       <div class="title-block">
-        <h1>EQIDV2 Live Operations</h1>
-        <div class="sub" id="info">loading...</div>
+        <span class="terminal-mark" aria-hidden="true">&#10035;</span>
+        <div><h1>EQIDV2 <span style="font-weight:400;color:var(--terminal-muted)">/ Trading Terminal</span></h1>
+        <div class="sub" id="info">Connecting to recorded strategy evidence...</div></div>
       </div>
       <div class="top-actions">
         <a class="dashboard-flow-link" id="dashboardFlowLink" href="/dashboard-flow" target="_blank" rel="noopener noreferrer" title="Open Dashboard Flow in a new tab">Dashboard Flow &#8599;</a>
         <button id="refreshBtn" onclick="loadNow()" title="Refresh dashboard now">Refresh</button>
         <button type="button" id="autoRefreshBtn" title="Pause automatic refresh while reading" aria-pressed="false">Pause updates</button>
         <button type="button" class="theme-toggle" id="themeToggle" title="Switch dashboard theme">Theme</button>
+      </div>
+    </div>
+    <nav class="terminal-nav" aria-label="Terminal workspace">
+      <button type="button" data-terminal-view="cockpit" aria-pressed="true" aria-controls="liveCockpit">Live &amp; Paper</button>
+      <button type="button" data-terminal-view="operations" aria-pressed="false" aria-controls="terminalOperations">Operations &amp; logs</button>
+      <span class="terminal-nav-note">V13-V10-G / RECORDED EVIDENCE / IST</span>
+    </nav>
+  </header>
+  <div class="refresh-notice" id="refreshNotice" role="status" hidden></div>
+  <main class="terminal-workspace">
+    <section id="liveCockpit" aria-label="V13-V10-G live and paper monitoring"><p>Loading trading evidence...</p></section>
+    <section id="terminalOperations" aria-label="Operations and logs" hidden>
+      <div class="operations-heading"><div><h2>Operations &amp; logs</h2><p>Worker health, data coverage and the existing session controls.</p></div><div class="operations-tools">
         <button type="button" class="theme-toggle" id="timelineToggle" title="Show or hide timeline">Timeline</button>
         <button type="button" class="theme-toggle" id="densityToggle" title="Switch dashboard density">Comfort</button>
         <button type="button" class="filter-chip" id="problemsFirstBtn" title="Keep pinned and problem cards at the top">Problems First</button>
@@ -9387,8 +9656,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           <span class="restart-icon" aria-hidden="true">&#x21BB;</span>
           <span class="restart-all-label">Restart All</span>
         </button>
-      </div>
-    </div>
+      </div></div>
     <div class="health-strip" id="healthSummary"></div>
     <div class="toolbar">
       <div class="toolbar-main">
@@ -9401,13 +9669,15 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     </div>
     <div class="section-nav" id="sectionNav"></div>
     <div class="timeline-panel" id="todayTimeline"></div>
-  </header>
-  <div class="refresh-notice" id="refreshNotice" role="status" hidden></div>
   <div class="wrap" id="cards"></div>
+    </section>
+  </main>
+  <footer class="terminal-footer"><span>EQIDV2 / Every observation has a source.</span><span>Session evidence &amp; order monitoring</span></footer>
 
   <style>__FNO_MONITOR_CSS__</style>
   <script>__FNO_MONITOR_JS__</script>
   <script>__OPS_STATE_JS__</script>
+  <script>__COCKPIT_JS__</script>
   <script>
     const LOG_ORDER = [
       "nifty_guard_fetch_v16_5min",
@@ -10083,6 +10353,21 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     document.getElementById("dashboardFlowLink").href = apiUrl("/dashboard-flow");
 
+    const cockpit = window.DashboardCockpit.mount({host: document.getElementById("liveCockpit"), apiUrl});
+    cockpit.setPaused(AUTO_REFRESH_PAUSED);
+    function setTerminalView(view) {
+      const operations = view === "operations";
+      document.getElementById("liveCockpit").hidden = operations;
+      document.getElementById("terminalOperations").hidden = !operations;
+      document.querySelectorAll("[data-terminal-view]").forEach(button => {
+        button.setAttribute("aria-pressed", String(button.dataset.terminalView === (operations ? "operations" : "cockpit")));
+      });
+      sessionStorage.setItem("eqidv2_terminal_view", operations ? "operations" : "cockpit");
+      window.dispatchEvent(new Event("resize"));
+    }
+    document.querySelectorAll("[data-terminal-view]").forEach(button => button.addEventListener("click", () => setTerminalView(button.dataset.terminalView)));
+    setTerminalView(sessionStorage.getItem("eqidv2_terminal_view") || "cockpit");
+
     function displayName(id) {
       return LOG_TITLES[id] || id;
     }
@@ -10424,6 +10709,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       refreshStatusText();
       document.getElementById("autoRefreshBtn").addEventListener("click", () => {
         AUTO_REFRESH_PAUSED = !AUTO_REFRESH_PAUSED;
+        cockpit.setPaused(AUTO_REFRESH_PAUSED);
         sessionStorage.setItem("eqidv2_dashboard_paused", AUTO_REFRESH_PAUSED ? "1" : "0");
         refreshStatusText();
         if (!AUTO_REFRESH_PAUSED) loadNow();
@@ -11358,9 +11644,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     });
 
     let SNAPSHOT_LOAD_IN_FLIGHT = false;
-    async function loadNow() {
+    async function loadNow(refreshCockpit = true) {
       if (SNAPSHOT_LOAD_IN_FLIGHT) return;
       SNAPSHOT_LOAD_IN_FLIGHT = true;
+      if (refreshCockpit) cockpit.refresh(true);
       try {
         const res = await fetch(apiUrl('/api/snapshot?lines=80'), { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -11607,8 +11894,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     wireProblemsFirstControl();
     wireRestartAllControl();
     wireAutoRefreshControl();
-    loadNow();
-    setInterval(() => { if (!AUTO_REFRESH_PAUSED) loadNow(); }, 15000);
+    loadNow(false);
+    setInterval(() => { if (!AUTO_REFRESH_PAUSED) { cockpit.refresh(); loadNow(false); } }, 15000);
   </script>
 </body>
 </html>"""
@@ -11616,6 +11903,10 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         html = html.replace("__FNO_MONITOR_CSS__", (BASE_DIR / "dashboard_fno_monitor.css").read_text(encoding="utf-8"))
         html = html.replace("__FNO_MONITOR_JS__", (BASE_DIR / "dashboard_fno_monitor.js").read_text(encoding="utf-8"))
         html = html.replace("__OPS_STATE_JS__", (BASE_DIR / "dashboard_ops_state.js").read_text(encoding="utf-8"))
+        html = html.replace("__TERMINAL_CSS__", (BASE_DIR / "dashboard_terminal.css").read_text(encoding="utf-8"))
+        html = html.replace("__COCKPIT_CSS__", (BASE_DIR / "dashboard_cockpit.css").read_text(encoding="utf-8"))
+        html = html.replace("__COCKPIT_JS__", (BASE_DIR / "dashboard_cockpit.js").read_text(encoding="utf-8"))
+        html = _active_strategy_display(html) if "terminal-main" in html or "EQIDV2 Live Logs" in html else html
         body = html.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -11898,7 +12189,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         fno_v13_v10_g_live_entry_cols = FNO_V13_V10_G_LIVE_ENTRY_COLUMNS
         for fno_v13_v10_g_side in ("short", "long"):
             fno_v13_v10_g_signal_name = (
-                f"signals_{today_ist}_fno_id_v13_v10_g_{fno_v13_v10_g_side}.csv"
+                f"signals_{today_ist}_fno_id_{FNO_ACTIVE_PROFILE.slug}_{fno_v13_v10_g_side}.csv"
             )
             fno_v13_v10_g_signal_path = FNO_V6_LIVE_KITE_ROOT / fno_v13_v10_g_signal_name
             try:
@@ -11914,7 +12205,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                     "id": f"live_signals_csv_fno_id_v13_v10_g_{fno_v13_v10_g_side}",
                     "file_name": str(
                         Path("fno_oi")
-                        / "v13_v10_g_live"
+                        / FNO_ACTIVE_PROFILE.live_dir
                         / "live_kite"
                         / fno_v13_v10_g_signal_name
                     ),
@@ -11931,7 +12222,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 }
             )
 
-        fno_v13_v10_g_live_trade_name = f"live_trades_{today_ist}_fno_id_v13_v10_g.csv"
+        fno_v13_v10_g_live_trade_name = f"live_trades_{today_ist}_fno_id_{FNO_ACTIVE_PROFILE.slug}.csv"
         fno_v13_v10_g_live_trade_path = FNO_V6_LIVE_KITE_ROOT / fno_v13_v10_g_live_trade_name
         try:
             fno_v13_v10_g_live_trade_size = (
@@ -11957,7 +12248,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 "id": "live_kite_trades_csv_fno_id_v13_v10_g",
                 "file_name": str(
                     Path("fno_oi")
-                    / "v13_v10_g_live"
+                    / FNO_ACTIVE_PROFILE.live_dir
                     / "live_kite"
                     / fno_v13_v10_g_live_trade_name
                 ),
@@ -12855,6 +13146,11 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
         return {
             "server_time": dt.datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "active_strategy": {"profile": FNO_ACTIVE_PROFILE.name, "label": FNO_ACTIVE_PROFILE.label,
+                                "version": FNO_ACTIVE_PROFILE.version, "fingerprint": expected_fingerprint(),
+                                "deployment_stage": deployment_state().get("deployment_stage"),
+                                "live_activation_authorized": deployment_state().get("live_activation_authorized") is True,
+                                "live_execution_policy": g3_execution_metadata() if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" else None},
             "log_dir": str(LOG_DIR),
             "items": items,
             "kill_switch": kill_switch,

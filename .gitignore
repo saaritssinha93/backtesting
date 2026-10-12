@@ -232,8 +232,15 @@ eqidv2/**
 !eqidv2/dashboard_flow_core.js
 !eqidv2/dashboard_flow_compare.js
 !eqidv2/dashboard_ops_state.js
+!eqidv2/dashboard_terminal.css
+!eqidv2/dashboard_cockpit.js
+!eqidv2/dashboard_cockpit.css
+!eqidv2/tests/test_dashboard_cockpit.cjs
+!eqidv2/tests/dashboard_flow_sessions.test.cjs
+!eqidv2/tests/dashboard_flow_dom.test.cjs
 !eqidv2/tests/dashboard_flow_core.test.cjs
 !eqidv2/tests/test_dashboard_flow_compare.cjs
+!eqidv2/tests/test_dashboard_public_link_helpers.ps1
 !eqidv2/**/
 !eqidv2/**/*.py
 !eqidv2/**/*.md

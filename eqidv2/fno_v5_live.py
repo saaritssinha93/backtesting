@@ -52,7 +52,7 @@ from ai_platform.observability.feature_ledger import (
 )
 import fno_oi_ema_confirm_backtest as backtest
 import fno_oi_hybrid_data as hybrid
-from fno_live_profile import config_for_generation, is_g_config
+from fno_live_profile import config_for_generation, is_modern_config, is_g3_config
 from fno_v13_v10_g_identity import canonical_signal_id
 import fno_v13_v10_g_policy as g_policy
 LIVE_GENERATION = os.getenv("FNO_LIVE_GENERATION", "v5").strip().lower()
@@ -64,6 +64,8 @@ DISPLAY_LABEL = getattr(config, "DISPLAY_LABEL", LIVE_LABEL)
 REPORT_PREFIX = getattr(config, "REPORT_PREFIX", f"fno_{LIVE_GENERATION}")
 SESSION_PREFIX = getattr(config, "SESSION_PREFIX", f"fno_{LIVE_GENERATION}")
 LIVE_SCHEMA_PREFIX = f"fno_{LIVE_GENERATION}"
+if is_g3_config(config):
+    FEATURE_LEDGER_SCHEMA = "v13_v10_g_3_feature_ledger_v1"
 EXECUTION_SESSION_NAMESPACE = os.getenv(
     f"FNO_{LIVE_LABEL}_EXECUTION_SESSION_NAMESPACE", ""
 ).strip().lower()
@@ -635,7 +637,7 @@ def _iso_now() -> str:
 
 
 def _signal_id(session_date: date, setup: config.SetupSpec, symbol: str) -> str:
-    return canonical_signal_id(
+    return getattr(config, "canonical_signal_id", canonical_signal_id)(
         config.STRATEGY_VERSION,
         session_date,
         setup.signal_end,
@@ -746,8 +748,8 @@ def scan_five_minute_slot(
     evaluated = 0
     invalid = 0
     nifty_context: dict[str, Any] = {}
-    g_strategy_fingerprint = config.strategy_fingerprint() if is_g_config(config) else ""
-    if is_g_config(config) and signal_end == "09:25":
+    g_strategy_fingerprint = config.strategy_fingerprint() if is_modern_config(config) else ""
+    if is_modern_config(config) and signal_end == "09:25":
         nifty_context = _g_nifty_first_bar_context(session_date)
     for contract in universe.to_dict("records"):
         futures_symbol = str(contract["futures_tradingsymbol"])
@@ -788,7 +790,7 @@ def scan_five_minute_slot(
             )
             continue
         effective_input: dict[str, Any] = {}
-        if is_g_config(config):
+        if is_modern_config(config):
             try:
                 equity_columns = [name for name in (
                     "ts", "open", "high", "low", "close", "volume"
@@ -803,7 +805,7 @@ def scan_five_minute_slot(
                     futures_frame["ts"].le(pd.Timestamp(slot)), futures_columns
                 ].tail(2) if "ts" in futures_frame else futures_frame.loc[:, futures_columns].tail(2)
                 effective_input = {
-                    "schema_version": "v13_v10_g_live_base_input_slice_v1",
+                    "schema_version": f"{config.STRATEGY_PROFILE.lower()}_live_base_input_slice_v1",
                     "equity_5m_history_sha256": canonical_frame_sha256(
                         equity_history, sort_by=["ts"] if "ts" in equity_history else None
                     ),
@@ -874,7 +876,7 @@ def scan_five_minute_slot(
             continue
         row = selected.iloc[-1]
         evaluated += 1
-        if is_g_config(config):
+        if is_modern_config(config):
             try:
                 feature_evaluations.append(evaluate_v13_v10_g_base_row(
                     {
@@ -897,6 +899,7 @@ def scan_five_minute_slot(
                     nifty_return=nifty_context.get("nifty_first_bar_return_pct"),
                     strategy_version=config.STRATEGY_VERSION,
                     strategy_fingerprint=g_strategy_fingerprint,
+                    strategy_config=config,
                 ))
             except Exception as exc:
                 feature_evaluations.append({
@@ -909,10 +912,13 @@ def scan_five_minute_slot(
                     "evaluation_state": "TELEMETRY_ERROR",
                     "error_type": type(exc).__name__,
                 })
+        # The joined market frame calls its exact completed-bar timestamp `ts`;
+        # the accepted G3 decision contract calls it `signal_timestamp`.
+        base_row = {**row.to_dict(), "signal_timestamp": row["ts"]} if is_g3_config(config) else row
         side = (
-            config.base_signal_side(row, signal_end=signal_end, session_date=session_date,
+            config.base_signal_side(base_row, signal_end=signal_end, session_date=session_date,
                                     nifty_first_bar_return_pct=nifty_context.get("nifty_first_bar_return_pct"))
-            if is_g_config(config) else _base_signal_side(row)
+            if is_modern_config(config) else _base_signal_side(row)
         )
         if side is None:
             continue
@@ -956,7 +962,7 @@ def scan_five_minute_slot(
             ),
             "input_slice_sha256": effective_input.get("input_slice_sha256", ""),
         }
-        if is_g_config(config):
+        if is_modern_config(config):
             values.update(nifty_context)
             values["strategy_profile"] = config.STRATEGY_PROFILE
             values["feature_available_at_ist"] = slot.isoformat()
@@ -1010,7 +1016,7 @@ def scan_five_minute_slot(
             else "PARTIAL"
         ),
     }
-    if is_g_config(config):
+    if is_modern_config(config):
         snapshot.update(
             feature_ledger_schema=FEATURE_LEDGER_SCHEMA,
             feature_evaluation_phase="SCANNER_BASE_GATES",
@@ -1085,11 +1091,11 @@ def select_entry_signals(
     directional = [row for row in confirmed if bool(row.get("confirmed"))]
     for side in ("LONG", "SHORT"):
         setup = (config.setup_for(signal_end, side, session_date=session_date)
-                 if is_g_config(config) else config.setup_for(signal_end, side))
+                 if is_modern_config(config) else config.setup_for(signal_end, side))
         if setup is None:
             continue
         ranked = (config.rank_candidates(directional, setup, session_date=session_date)
-                  if is_g_config(config) else config.rank_candidates(directional, setup))
+                  if is_modern_config(config) else config.rank_candidates(directional, setup))
         for rank, candidate in enumerate(ranked, start=1):
             trigger = config.round_to_tick(
                 float(candidate["trigger"]), float(candidate.get("tick_size", 0.05))
@@ -1127,6 +1133,7 @@ def select_entry_signals(
                     "strategy_fingerprint": config.strategy_fingerprint(),
                     "selected_objective": config.SELECTED_OBJECTIVE,
                     "signal_id": signal_id,
+                    "signal_id_schema_version": getattr(config, "SIGNAL_ID_SCHEMA_VERSION", "eqidv2.v13_v10_g.signal_id.v1"),
                     "session_date": session_date.isoformat(),
                     "confirmation_end": setup.confirmation_end,
                     "entry_activation_deadline_ist": config.activation_deadline(
@@ -1152,6 +1159,7 @@ def select_entry_signals(
                     "target_exposure_rs": float(capital_rs * leverage),
                     "paper_sizing": asdict(paper_size),
                     "live_sizing": asdict(live_size),
+                    **(config.live_execution_policy.signal_metadata() if is_g3_config(config) else {}),
                     "published_at_ist": _iso_now(),
                 }
             )
@@ -1897,7 +1905,7 @@ def _validate_signal(signal: dict[str, Any], session_date: date) -> None:
     side = str(signal.get("side", "")).upper()
     signal_end = str(signal.get("signal_end", ""))
     setup = (config.setup_for(signal_end, side, session_date=session_date)
-             if is_g_config(config) else config.setup_for(signal_end, side))
+             if is_modern_config(config) else config.setup_for(signal_end, side))
     if signal.get("strategy_version") != config.STRATEGY_VERSION:
         raise RuntimeError(f"Signal {signal.get('signal_id')} has a stale strategy version.")
     if signal.get("strategy_fingerprint") != config.strategy_fingerprint():
@@ -1958,7 +1966,9 @@ def _validate_signal(signal: dict[str, Any], session_date: date) -> None:
     expected_live = asdict(config.size_position(trigger, lot_size, live=True))
     if signal.get("paper_sizing") != expected_paper:
         raise RuntimeError(f"Signal {signal.get('signal_id')} has invalid PAPER sizing.")
-    if signal.get("live_sizing") != expected_live:
+    # Historical PAPER signals keep their original LIVE projection. The new
+    # execution policy is enforced only on a LIVE entry/state boundary.
+    if not is_g3_config(config) and signal.get("live_sizing") != expected_live:
         raise RuntimeError(f"Signal {signal.get('signal_id')} has invalid LIVE sizing.")
 
 
@@ -1976,7 +1986,7 @@ def _render_confirmation_report(session_date: date) -> str:
         f"Selected objective: {config.SELECTED_OBJECTIVE}",
         "Entry is a stop order at the confirmation candle extreme and may activate only afterward.",
         ("Confirmation publication deadline: 90 seconds; pending G entry trigger expires after 10 minutes."
-         if is_g_config(config) else
+         if is_modern_config(config) else
          f"A first-time entry must be armed within {config.ENTRY_ACTIVATION_GRACE_SEC}s of confirmation; stale starts are blocked."),
         f"Only active {DISPLAY_LABEL} setup legs can publish entry signals.",
         "",
@@ -2257,7 +2267,7 @@ def _load_completed_confirmation_feed(
         error = equity_feed._validate_bar(row, confirmation_end)
         if error:
             return {}, {"_feed": f"durable_confirmation_data_{error}"}, marker
-        if is_g_config(config) and not equity_feed._g_volume_snapshot_valid(row, confirmation_end, config):
+        if is_modern_config(config) and not equity_feed._g_volume_snapshot_valid(row, confirmation_end, config):
             return {}, {"_feed": "durable_confirmation_volume_snapshot_invalid"}, marker
         row["timestamp"] = confirmation_end.isoformat()
         bars[symbol] = row
@@ -2308,7 +2318,7 @@ def process_confirmation_slot(
         if str(candidate["tradingsymbol"]).strip().upper() in bars
     ]
     confirmation_feature_evaluations: list[dict[str, Any]] = []
-    if is_g_config(config):
+    if is_modern_config(config):
         for row in confirmed_rows:
             try:
                 confirmation_feature_evaluations.append(
@@ -2317,6 +2327,7 @@ def process_confirmation_slot(
                         nifty_return=row.get("nifty_first_bar_return_pct"),
                         strategy_version=config.STRATEGY_VERSION,
                         strategy_fingerprint=config.strategy_fingerprint(),
+                        strategy_config=config,
                     )
                 )
             except Exception as exc:
@@ -2376,7 +2387,7 @@ def process_confirmation_slot(
         "ineligible_no_candle_symbols": sorted(ineligible_no_candle),
         "candidate_rejections": {
             **({str(row["tradingsymbol"]): str(row.get("confirmation_reason", "CONFIRMATION_REJECTED"))
-                for row in confirmed_rows if not row.get("confirmed")} if is_g_config(config) else {}),
+                for row in confirmed_rows if not row.get("confirmed")} if is_modern_config(config) else {}),
             **{symbol: "INELIGIBLE_NO_CANDLE"
                for symbol in sorted(ineligible_no_candle)},
         },
@@ -2390,7 +2401,7 @@ def process_confirmation_slot(
         "state": "SUCCESS" if complete else "BLOCKED_INCOMPLETE_DATA",
         "_selected_signals": signals,
     }
-    if is_g_config(config):
+    if is_modern_config(config):
         result.update(
             feature_ledger_schema=FEATURE_LEDGER_SCHEMA,
             feature_evaluation_phase="CONFIRMATION_AND_SETUP_GATES",
@@ -2494,14 +2505,19 @@ def create_order_state(
     live_quantity: int | None = None,
 ) -> dict[str, Any]:
     execution_mode = mode.upper()
+    if execution_mode == "LIVE" and is_g3_config(config):
+        config.live_execution_policy.validate_signal_sizing(signal)
     sizing_key = "live_sizing" if execution_mode == "LIVE" else "paper_sizing"
     sizing = dict(signal[sizing_key])
     strategy_quantity = int(sizing["quantity"])
     execution_quantity = strategy_quantity
-    if execution_mode == "LIVE" and live_quantity is not None:
+    if execution_mode == "LIVE" and is_g3_config(config):
+        execution_quantity = config.live_execution_policy.requested_quantity(
+            signal["trigger_price"], signal["lot_size"], live_quantity)
+    elif execution_mode == "LIVE" and live_quantity is not None:
         if int(live_quantity) <= 0:
             raise ValueError("LIVE execution quantity must be positive.")
-        execution_quantity = min(strategy_quantity, int(live_quantity))
+        execution_quantity = min(execution_quantity, int(live_quantity))
     status = "PENDING_ENTRY" if execution_quantity > 0 else "BLOCKED_SIZING"
     created_at_ist = _iso_now()
     return {
@@ -2512,6 +2528,7 @@ def create_order_state(
         "strategy_version": signal["strategy_version"],
         "strategy_fingerprint": signal["strategy_fingerprint"],
         "signal_id": signal["signal_id"],
+        "signal_id_schema_version": signal.get("signal_id_schema_version", getattr(config, "SIGNAL_ID_SCHEMA_VERSION", "eqidv2.v13_v10_g.signal_id.v1")),
         "setup_id": signal.get("setup_id", ""),
         "picker": signal.get("picker", ""),
         "rank": signal.get("rank_within_scan", signal.get("rank", 0)),
@@ -2552,6 +2569,11 @@ def create_order_state(
         "capital_rs": float(signal["capital_rs"]),
         "leverage": float(signal["leverage"]),
         "target_exposure_rs": float(signal["target_exposure_rs"]),
+        **({**config.live_execution_policy.execution_metadata(),
+            "capital_rs": sizing["capital_rs"],
+            "sizing_reference_price": float(signal["trigger_price"]),
+            "requested_quantity": execution_quantity}
+           if execution_mode == "LIVE" and is_g3_config(config) else {}),
         "trigger_price": float(signal["trigger_price"]),
         "stop_pct": float(signal["stop_pct"]),
         **_g_stop_policy_metadata(signal["session_date"]),
@@ -2610,6 +2632,15 @@ def _validate_order_state(
     live_quantity: int | None = None,
 ) -> None:
     execution_mode = mode.upper()
+    g3_live = execution_mode == "LIVE" and is_g3_config(config)
+    legacy_protective = g3_live and _legacy_g3_protective_state(state)
+    if g3_live and not legacy_protective:
+        config.live_execution_policy.validate_signal_sizing(signal)
+        config.live_execution_policy.validate_order_sizing(state)
+        if state.get("execution_quantity_override") != live_quantity:
+            raise RuntimeError("G3 LIVE saved quantity override differs from this worker's override")
+        if state.get("execution_profile") != EXECUTION_SESSION_NAMESPACE:
+            raise RuntimeError("G3 LIVE saved execution namespace differs from this worker")
     expected_fields = {
         "strategy_version": config.STRATEGY_VERSION,
         "strategy_fingerprint": config.strategy_fingerprint(),
@@ -2635,6 +2666,10 @@ def _validate_order_state(
         "target_pct": signal["target_pct"],
         "round_trip_cost_bps": config.ROUND_TRIP_COST_BPS,
     }
+    if g3_live and not legacy_protective:
+        expected_fields.update(capital_rs=config.live_execution_policy.CAPITAL_PER_TRADE_RS,
+                               leverage=config.live_execution_policy.LEVERAGE,
+                               target_exposure_rs=config.live_execution_policy.TARGET_EXPOSURE_RS)
     for field, expected in expected_fields.items():
         observed = state.get(field)
         if isinstance(expected, float):
@@ -2648,7 +2683,12 @@ def _validate_order_state(
             )
     sizing_key = "live_sizing" if execution_mode == "LIVE" else "paper_sizing"
     expected_quantity = int(signal[sizing_key]["quantity"])
-    if execution_mode == "LIVE" and live_quantity is not None:
+    if g3_live:
+        expected_quantity = 1 if legacy_protective else config.live_execution_policy.requested_quantity(
+            signal["trigger_price"], signal["lot_size"], live_quantity)
+        if legacy_protective:
+            state["live_execution_policy_mismatch"] = "LEGACY_QUANTITY_ONE_PROTECTIVE_MANAGEMENT_ONLY"
+    elif execution_mode == "LIVE" and live_quantity is not None:
         if int(live_quantity) <= 0:
             raise ValueError("LIVE execution quantity must be positive.")
         expected_quantity = min(expected_quantity, int(live_quantity))
@@ -2684,6 +2724,25 @@ def _validate_order_state(
             f"Order state {state.get('signal_id')} has invalid quantity "
             f"{observed_quantity}; maximum is {expected_quantity}."
         )
+
+
+def _legacy_g3_protective_state(state: dict[str, Any]) -> bool:
+    """Recognize the previous exact qty-one state only to manage its broker order.
+
+    No policy metadata is invented for this state. New submissions still pass
+    the current policy validator, so recovery can reconcile/cancel/protect an
+    existing order but cannot turn an old approval into a new entry.
+    """
+    return (is_g3_config(config) and (bool(state.get("entry_order_id"))
+            or bool(state.get("entry_submission_uncertain"))
+            or _safe_int(state.get("entry_submission_attempt_count"), 0) > 0)
+            and not state.get("live_execution_policy_fingerprint")
+            and state.get("execution_profile") == "live_kite_qty1"
+            and state.get("quantity_policy") == "FIXED_ONE_SHARE"
+            and state.get("execution_quantity_override") == 1
+            and state.get("strategy_sized_quantity") == 1
+            and state.get("quantity") in (0, 1)
+            and state.get("lot_size") == 1)
 
 
 def _close_state(
@@ -2733,13 +2792,13 @@ def _close_state(
 
 
 def _g_stop_policy_metadata(session_date: Any) -> dict[str, Any]:
-    if not is_g_config(config) or not g_policy.enabled_for_session(session_date):
+    if not is_modern_config(config) or not getattr(config, "policy", g_policy).enabled_for_session(session_date):
         return {}
     return {
         "stop_policy": "STAGED_125_TO_100_120M",
-        "initial_stop_pct": g_policy.INITIAL_STOP_PCT,
-        "tightened_stop_pct": g_policy.TIGHTENED_STOP_PCT,
-        "tighten_after_minutes": g_policy.TIGHTEN_AFTER_MINUTES,
+        "initial_stop_pct": getattr(config, "policy", g_policy).INITIAL_STOP_PCT,
+        "tightened_stop_pct": getattr(config, "policy", g_policy).TIGHTENED_STOP_PCT,
+        "tighten_after_minutes": getattr(config, "policy", g_policy).TIGHTEN_AFTER_MINUTES,
     }
 
 
@@ -2765,7 +2824,7 @@ def _staged_stop_target(state: dict[str, Any], now: datetime) -> float | None:
 
 def _confirm_staged_stop(state: dict[str, Any], stop: float, now: datetime) -> None:
     # Keep stop_pct immutable: it identifies the initial signal contract.
-    state.update(stop_price=stop, active_stop_pct=g_policy.TIGHTENED_STOP_PCT,
+    state.update(stop_price=stop, active_stop_pct=getattr(config, "policy", g_policy).TIGHTENED_STOP_PCT,
                  stop_tightened=True, stop_modification_uncertain=False,
                  stop_tighten_status="CONFIRMED")
     state.setdefault("stop_tightened_at_ist", now.isoformat(timespec="seconds"))
@@ -2779,9 +2838,9 @@ def advance_paper_order(
     status = str(state["status"])
     if status in TERMINAL_STATES:
         return state
-    if is_g_config(config):
+    if is_modern_config(config):
         from fno_v13_v10_g_paper import expire_pending
-        if expire_pending(state, now):
+        if expire_pending(state, now, strategy_config=config):
             return state
         if last_price is None:
             state.update(status_reason="WAITING_FOR_VALID_QUOTE", updated_at_ist=now.isoformat(timespec="seconds"))
@@ -2855,7 +2914,21 @@ def advance_paper_order(
     return state
 
 
+def _kill_switch_enabled() -> bool:
+    if bool(_read_json(KILL_SWITCH_PATH).get("enabled")):
+        return True
+    return is_g3_config(config) and any(
+        bool(_read_json(common.FNO_ROOT / root / "kill_switch.json").get("enabled"))
+        for root in ("v6_live", "v13_v10_g_live", "control"))
+
+
 def _live_arm_state(session_date: date) -> tuple[bool, str]:
+    from fno_live_entry_guard import entry_authority
+    allowed, reason = entry_authority(getattr(config, "STRATEGY_PROFILE", ""))
+    if not allowed:
+        return False, reason
+    if _kill_switch_enabled():
+        return False, "KILL_SWITCH_ENABLED"
     if os.getenv(LIVE_ACK_ENV, "").strip() != LIVE_ACK:
         return False, "LIVE_ACK_MISSING"
     arm = _read_json(LIVE_ARM_PATH)
@@ -2863,11 +2936,10 @@ def _live_arm_state(session_date: date) -> tuple[bool, str]:
         return False, "LIVE_ARM_FILE_DISABLED"
     if str(arm.get("session_date", "")) != session_date.isoformat():
         return False, "LIVE_ARM_DATE_MISMATCH"
-    if is_g_config(config) and arm.get("strategy_fingerprint") != config.strategy_fingerprint():
+    if is_modern_config(config) and arm.get("strategy_fingerprint") != config.strategy_fingerprint():
         return False, "LIVE_ARM_STRATEGY_MISMATCH"
-    kill = _read_json(KILL_SWITCH_PATH)
-    if bool(kill.get("enabled")):
-        return False, "KILL_SWITCH_ENABLED"
+    if is_g3_config(config) and arm.get("live_execution_policy_fingerprint") != config.live_execution_policy.policy_fingerprint():
+        return False, "LIVE_ARM_EXECUTION_POLICY_MISMATCH"
     return True, "LIVE_ARMED"
 
 
@@ -3123,11 +3195,14 @@ def _apply_live_entry_fill(
     entry_order: dict[str, Any],
     now: datetime,
 ) -> bool:
+    if is_g3_config(config) and not _legacy_g3_protective_state(state):
+        config.live_execution_policy.validate_order_sizing(
+            {**state, "status": "OPEN", "quantity": entry_order.get("filled_quantity")})
     fill_price = _safe_float(entry_order.get("average_price"))
     filled_quantity = _safe_int(
         entry_order.get("filled_quantity"), int(state["quantity"])
     )
-    if fill_price <= 0 or filled_quantity <= 0:
+    if not math.isfinite(fill_price) or fill_price <= 0 or filled_quantity <= 0:
         state.update(
             status_reason="COMPLETE_ENTRY_MISSING_FILL",
             updated_at_ist=now.isoformat(timespec="seconds"),
@@ -3253,6 +3328,10 @@ def _place_live_entry_order(
     order_type: str,
     reason: str,
 ) -> str:
+    if is_g3_config(config):
+        if state.get("strategy_fingerprint") != config.strategy_fingerprint() or state.get("strategy_version") != config.STRATEGY_VERSION:
+            raise ValueError("G3 LIVE entry strategy identity does not match the accepted contract")
+        config.live_execution_policy.validate_order_sizing(state, require_pending_quantity=True)
     _record_entry_submission_attempt(
         state,
         order_type=order_type,
@@ -3273,6 +3352,11 @@ def _place_live_entry_order(
     if order_type == "SL-M":
         payload["trigger_price"] = float(state["trigger_price"])
     try:
+        if is_modern_config(config):
+            from fno_live_entry_guard import entry_owner_lock
+            with entry_owner_lock(common.FNO_ROOT / "control", config.STRATEGY_PROFILE):
+                # The lock protects the authority check and broker submission.
+                return _broker_place(client, **payload)
         return _broker_place(client, **payload)
     except BrokerMutationUncertain as exc:
         state.update(
@@ -3309,6 +3393,9 @@ def _begin_live_squareoff(
     tag: str,
     reason: str,
 ) -> None:
+    if is_g3_config(config):
+        _begin_g3_live_squareoff(state, client, now, exit_transaction, tag, reason)
+        return
     _broker_cancel(client, str(state.get("target_order_id", "")))
     _broker_cancel(client, str(state.get("stop_order_id", "")))
     if not state.get("squareoff_order_id"):
@@ -3343,6 +3430,94 @@ def _begin_live_squareoff(
         status_reason=reason,
         updated_at_ist=now.isoformat(timespec="seconds"),
     )
+
+
+def _g3_record_exit_fill(state: dict[str, Any], order_id: str, order: dict[str, Any]) -> None:
+    """Persist cumulative fills by broker identity, never by observation count."""
+    if not order_id:
+        return
+    filled = config.live_execution_policy._integer(order.get("filled_quantity", 0), "Broker exit filled quantity")
+    price = _safe_float(order.get("average_price"))
+    ledger = state.setdefault("g3_exit_fills_by_order", {})
+    previous = dict(ledger.get(order_id) or {})
+    if filled < int(previous.get("quantity", 0)):
+        raise RuntimeError("G3 broker exit fill quantity regressed; reconciliation required")
+    if filled and (not math.isfinite(price) or price <= 0):
+        raise RuntimeError("G3 broker exit fill is missing a finite positive average price")
+    ledger[order_id] = {"quantity": filled, "notional": filled * price if filled else 0.0}
+    if sum(int(row["quantity"]) for row in ledger.values()) > int(state["quantity"]):
+        raise RuntimeError("G3 aggregate broker exit fills exceed the acquired position; reconciliation required")
+    state.update(remaining_quantity=_g3_exit_residual(state), live_mtm_available=False,
+                 live_mtm_unavailable_reason="PARTIAL_EXIT_RECONCILIATION_PENDING")
+
+
+def _g3_exit_residual(state: dict[str, Any]) -> int:
+    return int(state["quantity"]) - sum(int(row["quantity"]) for row in state.get("g3_exit_fills_by_order", {}).values())
+
+
+def _g3_close_reconciled_exit(state: dict[str, Any], now: datetime) -> None:
+    ledger = state.get("g3_exit_fills_by_order", {})
+    if _g3_exit_residual(state) != 0:
+        raise RuntimeError("G3 position cannot close before every acquired share is reconciled")
+    average = sum(float(row["notional"]) for row in ledger.values()) / int(state["quantity"])
+    # The cumulative ledger already includes all fills. Avoid counting a prior
+    # staged-stop partial twice in the generic P&L calculation.
+    state.pop("staged_partial_exit_quantity", None)
+    state.pop("staged_partial_exit_notional", None)
+    _close_state(state, average, str(state.get("g3_exit_reason") or "SQUARE_OFF"), now)
+    state.update(remaining_quantity=0, live_mtm_available=True, live_mtm_unavailable_reason="")
+
+
+def _begin_g3_live_squareoff(state: dict[str, Any], client: Any, now: datetime,
+                           exit_transaction: str, tag: str, reason: str) -> None:
+    state.setdefault("g3_exit_reason", "SQUARE_OFF")
+    state.update(status="SQUARE_OFF_PENDING", status_reason=reason,
+                 updated_at_ist=now.isoformat(timespec="seconds"))
+    cancellations_confirmed = True
+    for key in ("target_order_id", "stop_order_id"):
+        order_id = str(state.get(key, ""))
+        if not order_id:
+            continue
+        order = _broker_order(client, order_id)
+        if str(order.get("status", "")).upper() not in {"COMPLETE", "CANCELLED", "REJECTED"}:
+            _broker_cancel(client, order_id)
+            order = _broker_order(client, order_id)
+        _g3_record_exit_fill(state, order_id, order)
+        if str(order.get("status", "")).upper() not in {"COMPLETE", "CANCELLED", "REJECTED"}:
+            cancellations_confirmed = False
+    _write_order_state(state)
+    if not cancellations_confirmed:
+        state["status_reason"] = "G3_EXIT_WAITING_FOR_CANCEL_ACK"
+        return
+    if _g3_exit_residual(state) == 0:
+        _g3_close_reconciled_exit(state, now)
+        return
+    attempt = int(state.get("g3_squareoff_attempt", 0))
+    if attempt >= 3:
+        state["status_reason"] = "G3_RESIDUAL_EXIT_RETRY_LIMIT_MANUAL_RECONCILIATION_REQUIRED"
+        return
+    if attempt:
+        tag = tag[:17] + "R" + str(attempt).zfill(2)
+    state["g3_squareoff_tag"] = tag
+    if not state.get("squareoff_order_id"):
+        recovered = _broker_find_tagged_order(client, tag=tag,
+            tradingsymbol=str(state["tradingsymbol"]), transaction_type=exit_transaction, order_type="MARKET")
+        if recovered:
+            _validate_recovered_order_quantity({**state, "quantity": _g3_exit_residual(state)}, recovered)
+            state["squareoff_order_id"] = str(recovered.get("order_id", ""))
+            state["g3_squareoff_submission_pending"] = False
+    if not state.get("squareoff_order_id"):
+        if state.get("g3_squareoff_submission_pending"):
+            state["status_reason"] = "G3_EXIT_SUBMISSION_UNCERTAIN_AWAITING_RECONCILIATION"
+            return
+        state["g3_squareoff_submission_pending"] = True
+        _write_order_state(state)  # Persist the deterministic retry tag before submission.
+        state["squareoff_order_id"] = _broker_place(client, variety="regular",
+            exchange=str(state["exchange"]), tradingsymbol=state["tradingsymbol"],
+            transaction_type=exit_transaction, quantity=_g3_exit_residual(state),
+            product="MIS", order_type="MARKET", validity="DAY", tag=tag)
+        state["g3_squareoff_submission_pending"] = False
+        _write_order_state(state)
 
 
 def _advance_live_staged_stop(
@@ -3402,6 +3577,12 @@ def _advance_live_staged_stop(
             _write_order_state(state)
 
     if state.get("stop_tighten_exit_requested"):
+        if is_g3_config(config):
+            state["g3_exit_reason"] = "STOP"
+            _begin_g3_live_squareoff(state, client, now,
+                "SELL" if state["side"] == "LONG" else "BUY",
+                _live_order_tag(str(state["signal_id"]), "squareoff"), "STAGED_STOP_THRESHOLD_CROSSED")
+            return
         target_id = str(state.get("target_order_id", ""))
         if str(target_order.get("status", "")).upper() not in {"CANCELLED", "REJECTED"}:
             _broker_cancel(client, target_id)
@@ -3466,7 +3647,7 @@ def advance_live_order(
     if status in TERMINAL_STATES:
         return state
     armed, arm_reason = _live_arm_state(now.date())
-    kill_enabled = bool(_read_json(KILL_SWITCH_PATH).get("enabled"))
+    kill_enabled = _kill_switch_enabled()
     if int(state["quantity"]) <= 0:
         state.update(status="BLOCKED_SIZING", status_reason="LIVE_QUANTITY_ZERO")
         return state
@@ -3513,8 +3694,24 @@ def advance_live_order(
         if state.get("entry_order_id"):
             entry_order = _broker_order(client, str(state["entry_order_id"]))
             broker_status = str(entry_order.get("status", "")).upper()
+            if is_g3_config(config) and broker_status != "COMPLETE" and _safe_int(entry_order.get("filled_quantity"), 0) > 0:
+                # Multi-share entries may fill while their remainder is being
+                # cancelled. Keep them active until the final acquired size is
+                # known, then protect that size in this same management pass.
+                if broker_status not in {"CANCELLED", "REJECTED"}:
+                    _broker_cancel(client, str(state["entry_order_id"]))
+                    entry_order = _broker_order(client, str(state["entry_order_id"]))
+                    broker_status = str(entry_order.get("status", "")).upper()
+                if broker_status not in {"COMPLETE", "CANCELLED", "REJECTED"}:
+                    state.update(status_reason="G3_PARTIAL_ENTRY_WAITING_FOR_CANCEL_ACK",
+                                 entry_partial_quantity_observed=_safe_int(entry_order.get("filled_quantity"), 0),
+                                 updated_at_ist=now.isoformat(timespec="seconds"))
+                    return state
+                state["entry_remainder_terminal_status"] = broker_status
+                broker_status = "COMPLETE"
             if broker_status == "COMPLETE":
-                _apply_live_entry_fill(state, entry_order, now)
+                if not _apply_live_entry_fill(state, entry_order, now):
+                    return state
             elif broker_status in {"REJECTED", "CANCELLED"}:
                 state.update(
                     status="ENTRY_REJECTED" if broker_status == "REJECTED" else "CANCELLED",
@@ -3526,8 +3723,11 @@ def advance_live_order(
                 _broker_cancel(client, str(state["entry_order_id"]))
                 refreshed = _broker_order(client, str(state["entry_order_id"]))
                 refreshed_status = str(refreshed.get("status", "")).upper()
-                if refreshed_status == "COMPLETE":
-                    _apply_live_entry_fill(state, refreshed, now)
+                if refreshed_status == "COMPLETE" or (is_g3_config(config)
+                        and refreshed_status in {"CANCELLED", "REJECTED"}
+                        and _safe_int(refreshed.get("filled_quantity"), 0) > 0):
+                    if not _apply_live_entry_fill(state, refreshed, now):
+                        return state
                 elif refreshed_status == "CANCELLED":
                     deadline_expired = now > activation_deadline
                     state.update(
@@ -3779,6 +3979,14 @@ def advance_live_order(
             stop_order_status_observed_at_ist=now.isoformat(timespec="seconds"),
             protection_confirmed=stop_status in {"OPEN", "TRIGGER PENDING"},
         )
+        if is_g3_config(config) and (_safe_int(stop_order.get("filled_quantity"), 0) > 0
+                                    or _safe_int(target_order.get("filled_quantity"), 0) > 0):
+            # Once an exit starts filling, reconcile both orders before closing
+            # the residual. Cancel races may add fills on either side.
+            state["g3_exit_reason"] = "STOP" if _safe_int(stop_order.get("filled_quantity"), 0) > 0 else "TARGET"
+            _begin_g3_live_squareoff(state, client, now, exit_transaction,
+                                    squareoff_tag, "G3_TRIGGERED_EXIT_RECONCILIATION")
+            return state
         if stop_status == "COMPLETE":
             _broker_cancel(client, str(state["target_order_id"]))
             return _close_state(
@@ -3861,6 +4069,23 @@ def advance_live_order(
                 squareoff_tag,
                 str(state.get("status_reason") or "SQUARE_OFF_RECOVERY"),
             )
+        if is_g3_config(config):
+            if state.get("status") == "CLOSED" or not state.get("squareoff_order_id"):
+                return state
+            order_id = str(state["squareoff_order_id"])
+            order = _broker_order(client, order_id)
+            _g3_record_exit_fill(state, order_id, order)
+            if _g3_exit_residual(state) == 0:
+                _g3_close_reconciled_exit(state, now)
+            elif str(order.get("status", "")).upper() in {"COMPLETE", "CANCELLED", "REJECTED"}:
+                state.setdefault("g3_previous_squareoff_order_ids", []).append(order_id)
+                state["g3_squareoff_attempt"] = int(state.get("g3_squareoff_attempt", 0)) + 1
+                state["g3_squareoff_submission_pending"] = False
+                state["squareoff_order_id"] = ""
+                _begin_g3_live_squareoff(state, client, now, exit_transaction,
+                                        squareoff_tag, "G3_TERMINAL_EXIT_RETRY_RESIDUAL")
+            state["updated_at_ist"] = now.isoformat(timespec="seconds")
+            return state
         order = _broker_order(client, str(state["squareoff_order_id"]))
         if str(order.get("status", "")).upper() == "COMPLETE":
             exit_price = _safe_float(order.get("average_price"))
@@ -4008,6 +4233,9 @@ def _write_order_state(state: dict[str, Any]) -> None:
                     "target_order_id": state.get("target_order_id", ""),
                     "squareoff_order_id": state.get("squareoff_order_id", ""),
                     "quantity": state.get("quantity", 0),
+                    **({key: state.get(key) for key in ("requested_quantity", "sizing_reference_price",
+                        "remaining_quantity", "live_mtm_available", "live_mtm_unavailable_reason")}
+                       if is_g3_config(config) and str(state.get("mode", "")).upper() == "LIVE" else {}),
                     "entry_price": state.get("entry_price", 0.0),
                     "exit_price": state.get("exit_price", 0.0),
                     "net_pnl_rs": state.get("net_pnl_rs", 0.0),
@@ -4027,6 +4255,8 @@ def _write_order_state(state: dict[str, Any]) -> None:
                     "entry_terminal_cause": state.get("entry_terminal_cause", ""),
                     "updated_at_ist": state.get("updated_at_ist", ""),
                     "origin_run_id": state.get("origin_run_id", state.get("run_id", "")),
+                    **({key: state.get(key) for key in config.live_execution_policy.execution_metadata()}
+                       if is_g3_config(config) and str(state.get("mode", "")).upper() == "LIVE" else {}),
                 },
                 severity=(
                     "ERROR"
@@ -4135,7 +4365,7 @@ def _advance_g_paper_state(state: dict[str, Any], price: float | None,
                 or previous.get("strategy_fingerprint") != config.strategy_fingerprint()):
             raise ValueError("G paper state identity changed while acquiring portfolio lock")
         proposed = advance_paper_order(dict(previous), price, now)
-        result = enforce_fill_capacity(previous, proposed, root)
+        result = enforce_fill_capacity(previous, proposed, root, strategy_config=config)
         _write_order_state(result)
         return result
 
@@ -4143,16 +4373,18 @@ def _advance_g_paper_state(state: dict[str, Any], price: float | None,
 def _render_worker_report(session_date: date, side: str, mode: str) -> str:
     states = load_order_states(session_date, mode=mode, side=side)
     notice, issue = _pipeline_notice_lines(session_date)
+    sizing_config = config.live_execution_policy if is_g3_config(config) and mode.upper() == "LIVE" else config
+    capital = getattr(sizing_config, "CAPITAL_PER_TRADE_RS", config.CAPITAL_PER_ENTRY_RS)
     lines = [
         f"# FnO {DISPLAY_LABEL} {side} Entry Session",
         "",
         f"Session: {session_date.isoformat()}",
         f"Execution mode: **{mode}**",
-        f"Capital per entry: Rs {config.CAPITAL_PER_ENTRY_RS:,.0f}",
-        f"Target leverage/exposure: {config.LEVERAGE:.1f}x / Rs {config.TARGET_EXPOSURE_RS:,.0f}",
+        f"Capital per entry: Rs {capital:,.0f}",
+        f"Target leverage/exposure: {sizing_config.LEVERAGE:.1f}x / Rs {sizing_config.TARGET_EXPOSURE_RS:,.0f}",
         "PAPER uses quote-observed fills. LIVE requires exact acknowledgement plus a same-day arm file.",
         ("G pending entries expire 10 minutes after confirmation; confirmation data must publish within 90 seconds."
-         if is_g_config(config) else
+         if is_modern_config(config) else
          f"First-time entries are blocked after the {config.ENTRY_ACTIVATION_GRACE_SEC}s activation deadline."),
         "",
         *notice,
@@ -4160,13 +4392,14 @@ def _render_worker_report(session_date: date, side: str, mode: str) -> str:
         "--- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---",
     ]
     for state in states:
+        pnl = "UNAVAILABLE (partial exit)" if state.get("live_mtm_available") is False else f"{float(state.get('net_pnl_rs', 0)):+.2f}"
         lines.append(
             f"{state['confirmation_end']} | {state['tradingsymbol']} | {state['status']} | "
             f"{state['quantity']} | {float(state['trigger_price']):.2f} | "
             f"{float(state.get('entry_price', 0)):.2f} | {float(state['stop_price']):.2f} | "
             f"{float(state['target_price']):.2f} | "
             f"{float(state.get('exit_price') or state.get('last_price') or 0):.2f} | "
-            f"{float(state.get('net_pnl_rs', 0)):+.2f} | {_md(state.get('status_reason', ''))}"
+            f"{pnl} | {_md(state.get('status_reason', ''))}"
         )
     if not states:
         label = "(no entries: upstream pipeline blocked)" if issue else "(waiting)"
@@ -4210,6 +4443,14 @@ def _state_rows(states: list[dict[str, Any]]) -> pd.DataFrame:
         "updated_at_ist",
     ]
     frame = pd.DataFrame(states)
+    if is_g3_config(config):
+        columns += [name for name in [*config.live_execution_policy.execution_metadata(),
+            "execution_profile", "requested_quantity", "sizing_reference_price", "remaining_quantity",
+            "live_mtm_available", "live_mtm_unavailable_reason"] if name not in columns]
+        if "live_mtm_available" in frame:
+            unavailable = frame.live_mtm_available.eq(False)
+            for name in ("gross_pnl_rs", "estimated_cost_rs", "net_pnl_rs", "net_return_exposure_pct", "return_on_capital_pct"):
+                frame.loc[unavailable, name] = None
     for column in columns:
         if column not in frame.columns:
             frame[column] = ""
@@ -4236,12 +4477,13 @@ def render_trade_log(session_date: date) -> str:
         "--- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---",
     ]
     for row in frame.to_dict("records"):
+        pnl = "UNAVAILABLE (partial exit)" if row.get("live_mtm_available") is False else f"{_safe_float(row['net_pnl_rs']):+.2f}"
         lines.append(
             f"{row['mode']} | {row['confirmation_end']} | {row['side']} | "
             f"{row['tradingsymbol']} | {row['status']} | {row['quantity']} | "
             f"{_safe_float(row['entry_price']):.2f} | "
             f"{_safe_float(row['exit_price'] or row['last_price']):.2f} | "
-            f"{_safe_float(row['net_pnl_rs']):+.2f} | {_md(row['updated_at_ist'])}"
+            f"{pnl} | {_md(row['updated_at_ist'])}"
         )
     if frame.empty:
         label = "(no trades: upstream pipeline blocked)" if issue else "(waiting)"
@@ -4262,6 +4504,8 @@ def net_summary(states: list[dict[str, Any]]) -> dict[str, Any]:
         if state.get("status") == "OPEN"
     )
     capital = sum(float(state.get("capital_rs", 0)) for state in filled)
+    partial_exit_count = sum(state.get("live_mtm_available") is False for state in filled
+                             if state.get("status") != "CLOSED")
     return {
         "signals": len(states),
         "pending": sum(state.get("status") == "PENDING_ENTRY" for state in states),
@@ -4277,6 +4521,8 @@ def net_summary(states: list[dict[str, Any]]) -> dict[str, Any]:
         "return_on_capital_pct": (
             (realized + unrealized) / capital * 100.0 if capital else 0.0
         ),
+        **({"unrealized_complete": partial_exit_count == 0,
+            "partial_exit_pnl_unavailable_count": partial_exit_count} if is_g3_config(config) else {}),
     }
 
 
@@ -4299,18 +4545,23 @@ def render_net_result(session_date: date) -> str:
         summary = net_summary(
             [state for state in states if str(state.get("mode", "")) == mode]
         )
+        incomplete = summary.get("unrealized_complete") is False
+        unrealized = "UNAVAILABLE (partial exit)" if incomplete else f"{summary['unrealized_net_rs']:+.2f}"
+        total = "UNAVAILABLE" if incomplete else f"{summary['total_net_rs']:+.2f}"
+        roc = "UNAVAILABLE" if incomplete else f"{summary['return_on_capital_pct']:+.3f}"
         lines.append(
             f"{mode} | {summary['signals']} | {summary['pending']} | {summary['open']} | "
             f"{summary['closed']} | {summary['no_fill']} | {summary['cancelled']} | "
             f"{summary['blocked']} | "
             f"{summary['capital_deployed_rs']:.2f} | {summary['realized_net_rs']:+.2f} | "
-            f"{summary['unrealized_net_rs']:+.2f} | {summary['total_net_rs']:+.2f} | "
-            f"{summary['return_on_capital_pct']:+.3f}"
+            f"{unrealized} | {total} | {roc}"
         )
     return "\n".join(lines) + "\n"
 
 
 def _publish(role: str, state: str, **extra: Any) -> None:
+    if is_g3_config(config) and EXECUTION_SESSION_NAMESPACE:
+        extra.update(config.live_execution_policy.execution_metadata())
     common.publish_status(
         ROLE_SESSIONS[role],
         state,
@@ -4420,6 +4671,8 @@ def _record_worker_observability(
 
 
 def _heartbeat(role: str, state: str, **extra: Any) -> None:
+    if is_g3_config(config) and EXECUTION_SESSION_NAMESPACE:
+        extra.update(config.live_execution_policy.execution_metadata())
     common.publish_heartbeat(
         ROLE_SESSIONS[role],
         state,
@@ -4820,22 +5073,25 @@ def run_worker(
             _publish_upstream_block(role, issue)
             return 2
         states: list[dict[str, Any]] = []
+        validation_errors: list[dict[str, str]] = []
         for signal in signals:
             path = _order_path(session_date, mode, str(signal["signal_id"]))
             existing_state = _read_json(path)
-            state = existing_state or create_order_state(
-                signal,
-                mode,
-                live_quantity=live_quantity,
-            )
-            state.setdefault("origin_run_id", state.get("run_id", ""))
-            state["last_managed_run_id"] = RUN_ID
-            _validate_order_state(
-                state,
-                signal,
-                mode,
-                live_quantity=live_quantity,
-            )
+            try:
+                state = existing_state or create_order_state(signal, mode, live_quantity=live_quantity)
+                state.setdefault("origin_run_id", state.get("run_id", ""))
+                state["last_managed_run_id"] = RUN_ID
+                _validate_order_state(state, signal, mode, live_quantity=live_quantity)
+            except (ValueError, RuntimeError, TypeError, KeyError) as exc:
+                if mode != "LIVE" or not is_g3_config(config):
+                    raise
+                # A stale unsubmitted signal must block its own entry, not stop
+                # an independent admitted position's protective management.
+                validation_errors.append({"phase": "LIVE_STATE_VALIDATION_FAILED_MANUAL_RECONCILIATION"
+                    if existing_state.get("entry_order_id") else "LIVE_ENTRY_POLICY_BLOCKED",
+                    "signal_id": str(signal.get("signal_id", "")),
+                    "error_type": type(exc).__name__, "message": str(exc)})
+                continue
             if not existing_state and mode == "PAPER" and state["status"] == "PENDING_ENTRY":
                 activation_deadline = datetime.fromisoformat(
                     str(state["entry_activation_deadline_ist"])
@@ -4851,7 +5107,7 @@ def run_worker(
                         timespec="seconds"
                     )
             states.append(state)
-        if mode == "PAPER" and is_g_config(config):
+        if mode == "PAPER" and is_modern_config(config):
             # Persist pending expiries even if authentication or quotes fail next.
             for state in states:
                 result = _advance_g_paper_state(state, None, now)
@@ -4863,7 +5119,7 @@ def run_worker(
         prices: dict[str, float] = {}
         quote_app = ""
         quote_failures: list[dict[str, str]] = []
-        iteration_errors: list[dict[str, str]] = []
+        iteration_errors: list[dict[str, str]] = list(validation_errors)
         quote_states = (
             active
             if mode == "PAPER"
@@ -4906,7 +5162,7 @@ def run_worker(
             try:
                 if mode == "PAPER":
                     price = prices.get(str(state["tradingsymbol"]))
-                    if is_g_config(config):
+                    if is_modern_config(config):
                         result = _advance_g_paper_state(state, price, now)
                         state.clear()
                         state.update(result)
@@ -4961,7 +5217,7 @@ def run_worker(
                     }
                 )
                 _write_order_state(state)
-            if mode != "PAPER" or not is_g_config(config):
+            if mode != "PAPER" or not is_modern_config(config):
                 _write_order_state(state)
         common.atomic_write_text(report_path(role), _render_worker_report(session_date, side, mode))
         counts = {name: sum(state.get("status") == name for state in states) for name in (
@@ -5064,11 +5320,16 @@ def _publish_broker_position_reconciliation(
     attributed_symbols = local_symbols | tagged_symbols
     expected: dict[str, int] = {symbol: 0 for symbol in attributed_symbols}
     for state in local_states:
-        if str(state.get("status", "")).upper() not in {"OPEN", "SQUARE_OFF_PENDING"}:
+        status = str(state.get("status", "")).upper()
+        if status == "PENDING_ENTRY" and is_g3_config(config):
+            quantity = max(0, _safe_int(state.get("entry_partial_quantity_observed"), 0))
+        elif status in {"OPEN", "SQUARE_OFF_PENDING"}:
+            quantity = (_g3_exit_residual(state) if is_g3_config(config) and state.get("g3_exit_fills_by_order")
+                        else max(0, _safe_int(state.get("quantity"), 0)
+                                 - _safe_int(state.get("staged_partial_exit_quantity"), 0)))
+        else:
             continue
         symbol = str(state.get("tradingsymbol", "")).strip().upper()
-        quantity = max(0, _safe_int(state.get("quantity"), 0)
-                       - _safe_int(state.get("staged_partial_exit_quantity"), 0))
         expected[symbol] = expected.get(symbol, 0) + (
             quantity if str(state.get("side", "")).upper() == "LONG" else -quantity
         )
@@ -5178,6 +5439,10 @@ def _publish_broker_position_reconciliation(
                                 - (_safe_int(state.get("staged_partial_exit_quantity"), 0)
                                    if role in {"stop", "squareoff"} else 0)),
             }
+            if is_g3_config(config) and role == "squareoff":
+                expected_row["tag"] = state.get("g3_squareoff_tag") or expected_row["tag"]
+                own_filled = int(dict(state.get("g3_exit_fills_by_order", {}).get(order_id) or {}).get("quantity", 0))
+                expected_row["quantity"] = _g3_exit_residual(state) + own_filled
             previous = expected_active_orders.get(order_id)
             if previous is not None:
                 active_order_mismatches.append(
@@ -5328,7 +5593,11 @@ def _publish_broker_position_reconciliation(
         "active_order_mismatches": active_order_mismatches,
     }
     report = {
-        "schema_version": "v13_v10_g_broker_position_reconciliation_v2",
+        "schema_version": ("v13_v10_g_3_broker_position_reconciliation_v2" if is_g3_config(config)
+                           else "v13_v10_g_broker_position_reconciliation_v2"),
+        "strategy_profile": getattr(config, "STRATEGY_PROFILE", ""),
+        "strategy_version": config.STRATEGY_VERSION,
+        "strategy_fingerprint": config.strategy_fingerprint(),
         "session_date": session_date.isoformat(),
         "generated_at_ist": _iso_now(),
         "run_id": RUN_ID,
@@ -5339,7 +5608,7 @@ def _publish_broker_position_reconciliation(
     # not an authentication substitute for the broker API response itself.
     report["report_sha256"] = common.canonical_json_sha256(report)
     path = common.runtime_dir("observability", "reconciliation") / (
-        f"broker_positions_{session_date.isoformat()}.json"
+        f"broker_positions_{'v13_v10_g_3_' if is_g3_config(config) else ''}{session_date.isoformat()}.json"
     )
     common.atomic_write_json(path, report)
     return reconciliation

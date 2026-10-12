@@ -1,5 +1,15 @@
 $ErrorActionPreference = "Stop"
 
+# Legacy installer: profile migration has a separate reviewed task transaction.
+$deploymentPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'configs/strategies/active_profile.json'
+if (Test-Path -LiteralPath $deploymentPath) {
+    $deployment = Get-Content -LiteralPath $deploymentPath -Raw | ConvertFrom-Json
+    if ($deployment.profile -eq 'V13_V10_G_3') {
+        throw 'G task installation is blocked while persisted profile is G3. Use bat/migrate_fno_v13_v10_g_to_g3.ps1 after reviewing its dry-run plan.'
+    }
+}
+# End deployment guard: no scheduled-task command may precede this point.
+
 $baseDir = "C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
 $batDir = Join-Path $baseDir "bat"
 $hardener = Join-Path $batDir "harden_scheduled_task.ps1"

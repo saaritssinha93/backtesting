@@ -64,6 +64,70 @@
       "result_source_id": "options_three_lot_historical_result",
       "validation_source_id": "options_three_lot_historical_validation",
       "evidence_class": "REUSED_HISTORY_HISTORICAL_REFERENCE_NOT_UNTOUCHED"
+    },
+    "V13_V10_G_3": {
+      "label": "V13-V10-G-3",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V1",
+      "strategy_fingerprint": "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275",
+      "live_generation": "v6",
+      "frozen_config_path": "C:/TradingData/eqidv2/fno_oi/strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1/frozen_config.json",
+      "frozen_config_sha256": "788fbb3dbda6cf86d3f0f26a9db777e7462ba64c7906368cca077e983f72552a",
+      "confirmation_policy": {
+        "live_required_prior_observations": 20,
+        "research_min_periods": 5,
+        "difference": "Live fails closed until 20 prior completed one-minute candles exist; historical research accepts a minimum of five.",
+        "minimum_volume_by_side": {
+          "LONG": 1.1,
+          "SHORT": 1.2
+        },
+        "window_minutes": 1
+      },
+      "execution_profiles": [
+        "V13_V10_G_3_EQUITY_LIVE_10K_5X",
+        "V13_V10_G_3_EQUITY_PAPER_EXPOSURE",
+        "V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4"
+      ],
+      "evidence_class": "ACCEPTED_FROZEN_G3_REUSED_HISTORY_WITH_SEPARATE_PRODUCTION_CONTRACT",
+      "production_config_relative_path": "configs/strategies/v13_v10_g_3_production_v1.json",
+      "execution_authority": false
+    },
+    "V13_V10_G_3_EQUITY_LIVE_10K_5X": {
+      "asset": "EQUITY",
+      "mode": "LIVE",
+      "quantity_policy": "FLOOR_TARGET_EXPOSURE_EQUITY_SHARES",
+      "execution_profile": "live_kite_qty1",
+      "live_execution_profile": "G3_LIVE_10K_5X",
+      "live_execution_policy_schema_version": "g3_live_execution_policy_v1",
+      "live_execution_policy_fingerprint": "ec621fc330b7f31bb82964387987822ef44e2923a8b03deb24cad643fe23c702",
+      "capital_per_trade_rs": 10000.0,
+      "leverage": 5.0,
+      "target_exposure_rs": 50000.0,
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V1",
+      "strategy_fingerprint": "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275",
+      "source_id": "g3_equity_live_orders"
+    },
+    "V13_V10_G_3_EQUITY_PAPER_EXPOSURE": {
+      "asset": "EQUITY",
+      "mode": "PAPER",
+      "quantity_policy": "STRATEGY_SIZED",
+      "capital_per_entry_rs": 100000.0,
+      "leverage": 5.0,
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V1",
+      "strategy_fingerprint": "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275",
+      "source_id": "g3_equity_paper_orders"
+    },
+    "V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4": {
+      "label": "V13-V10-G-3 options: one lot ATM, 30% stop, 40.4% target",
+      "strategy_version": "FNO_V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4_20261011",
+      "equity_strategy_version": "V13-V10-G-3-PRODUCTION-V1",
+      "strategy_fingerprint": "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275",
+      "mode": "PAPER",
+      "lots": 1,
+      "execution_sources": [
+        "LIVE_GUARDED_NFO_QUOTE",
+        "HISTORICAL_EXACT_5M_REPLAY"
+      ],
+      "source_id": "g3_option_paper_orders"
     }
   }
 }

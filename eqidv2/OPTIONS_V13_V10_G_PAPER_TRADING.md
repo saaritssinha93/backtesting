@@ -1,5 +1,7 @@
 # Options V13-V10-G one-lot paper trading
 
+> Current deployment, 12 October 2026: active options-PAPER launchers use `fno_v13_v10_g_3_options_paper.py` and consume identity-verified G3 equity orders. The independent options rules and PAPER-only restriction remain unchanged. The G tasks and paths below are historical. See the [G3 implementation record](docs/V13_V10_G3_MIGRATION_PLAN_2026-10-11.md#implementation-record--12-october-2026).
+
 ## Behavior
 
 - Source: an actual filled V13-V10-G equity order state (`OPEN` or `CLOSED` with a positive entry price and entry timestamp).

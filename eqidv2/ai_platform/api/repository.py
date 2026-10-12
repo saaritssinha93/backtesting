@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -14,6 +15,7 @@ from ai_platform.adapters.options_orders import read_option_orders
 from ai_platform.adapters.snapshot import read_coherent_snapshot
 from ai_platform.adapters.status import inspect_status
 from ai_platform.services.accounting import summarize_options_by_run_kind
+from ai_platform.schemas import ArtifactState
 
 from .cache import TTLCache
 from .registry import SourceRegistry
@@ -34,6 +36,8 @@ class PlatformRepository:
         heartbeat_max_age_seconds: float = 120.0,
     ):
         self.sources = source_registry
+        self.equity_profile = source_registry.profile
+        self.option_profile = self.equity_profile + "_OPTIONS_ONE_LOT_ATM_SL30_T40P4"
         self.profile_registry_path = profile_registry_path.resolve()
         self.cache = TTLCache(cache_ttl_seconds)
         self.heartbeat_max_age = timedelta(seconds=heartbeat_max_age_seconds)
@@ -49,11 +53,11 @@ class PlatformRepository:
         return self.cache.get_or_create("profiles", load)
 
     def _equity_identity(self) -> tuple[str, str]:
-        profile = self._profiles()[EQUITY_PROFILE]
+        profile = self._profiles()[self.equity_profile]
         return str(profile["strategy_version"]), str(profile["strategy_fingerprint"])
 
     def _option_identity(self) -> tuple[str, str, str]:
-        profile = self._profiles()[OPTION_PROFILE]
+        profile = self._profiles()[self.option_profile]
         return (
             str(profile["strategy_version"]),
             str(profile["equity_strategy_version"]),
@@ -62,7 +66,7 @@ class PlatformRepository:
 
     def strategy(self) -> dict[str, Any]:
         profiles = self._profiles()
-        base = profiles[EQUITY_PROFILE]
+        base = profiles[self.equity_profile]
         frozen_path = self.sources.path("frozen_strategy_config")
         observed_sha = file_sha256(frozen_path)
         expected_sha = str(base["frozen_config_sha256"]).lower()
@@ -71,8 +75,22 @@ class PlatformRepository:
         settings, _, _ = read_json(frozen_path)
         if settings.get("morning_slots", False) or settings.get("two_bar_continuation", False):
             raise ArtifactError("Rejected strategy expansions are enabled")
+        if self.equity_profile == "V13_V10_G_3":
+            from fno_v13_v10_g_3_contract import config_fingerprint, verify_frozen_config
+            from fno_v13_v10_g_3_live_execution_policy import validate_execution_metadata
+            verify_frozen_config(frozen_path)
+            if base.get("strategy_fingerprint") != config_fingerprint():
+                raise ArtifactError("Registered G3 fingerprint differs from the production contract")
+            live_profiles = [profiles[key] for key in base["execution_profiles"]
+                             if profiles[key].get("mode") == "LIVE"]
+            if len(live_profiles) != 1:
+                raise ArtifactError("Expected exactly one G3 LIVE execution profile")
+            try:
+                validate_execution_metadata(live_profiles[0])
+            except (TypeError, ValueError) as exc:
+                raise ArtifactError(f"Registered G3 LIVE execution policy mismatch: {exc}") from exc
         return {
-            "profile": EQUITY_PROFILE,
+            "profile": self.equity_profile,
             "identity": {
                 "label": base["label"],
                 "strategy_version": base["strategy_version"],
@@ -139,12 +157,34 @@ class PlatformRepository:
                 required_fields=("session_date", "state"),
                 max_age=self.heartbeat_max_age,
             )
+        if self.equity_profile == "V13_V10_G_3":
+            from fno_v13_v10_g_3_live_execution_policy import validate_execution_metadata
+            def verify_policy(snapshot):
+                if snapshot.payload is not None:
+                    try:
+                        validate_execution_metadata(snapshot.payload)
+                    except (TypeError, ValueError) as exc:
+                        return replace(snapshot, state=ArtifactState.INTEGRITY_ERROR,
+                                       detail=f"G3 LIVE execution policy mismatch: {exc}")
+                return snapshot
+            status, heartbeat = verify_policy(status), verify_policy(heartbeat)
         coherent = None
-        if status_path.is_file() and heartbeat_path.is_file():
-            coherent = read_coherent_snapshot(
+        invalid_states = {ArtifactState.SCHEMA_ERROR, ArtifactState.INTEGRITY_ERROR}
+        if (status_path.is_file() and heartbeat_path.is_file()
+                and status.state not in invalid_states and heartbeat.state not in invalid_states):
+            snapshot = read_coherent_snapshot(
                 {"status": status_path, "heartbeat": heartbeat_path},
                 equal_fields=("session_date", "strategy_version", "strategy_fingerprint", "state"),
-            ).snapshot_id
+            )
+            if self.equity_profile == "V13_V10_G_3":
+                # Validate the coherent read too: either mutable file may have
+                # changed since the individual schema/freshness inspections.
+                for payload in snapshot.payloads.values():
+                    try:
+                        validate_execution_metadata(payload)
+                    except (TypeError, ValueError) as exc:
+                        raise ArtifactError(f"G3 LIVE execution policy mismatch: {exc}") from exc
+            coherent = snapshot.snapshot_id
         return {
             "status": public_value(status),
             "heartbeat": public_value(heartbeat),
@@ -288,7 +328,7 @@ class PlatformRepository:
             return None
         evidence = []
         slot = None
-        generation = str(self._profiles()[EQUITY_PROFILE]["live_generation"])
+        generation = str(self._profiles()[self.equity_profile]["live_generation"])
         if equity:
             signal_end = str(equity[0].raw.get("signal_end", ""))
             slot = signal_end.replace(":", "") if signal_end else None

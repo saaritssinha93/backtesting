@@ -1,5 +1,7 @@
 # Daily V13-V10-G dashboard backtest
 
+> Superseded for active operations on 12 October 2026 by `backtesting_result_v13_v10_g_3_daily.py` and `bat/run_backtesting_result_v13_v10_g_3_1620.bat`. The G task is disabled and its historical outputs are preserved. See the [G3 implementation record](docs/V13_V10_G3_MIGRATION_PLAN_2026-10-11.md#implementation-record--12-october-2026). New daily publications use verified G3 manifests and update established cumulative history; the frozen G3 archive CLI remains separate.
+
 The dashboard session is **Backtesting result v13-v10-G**, with ID `backtesting_result_v13_v10_g`. Its launcher is `bat/run_backtesting_result_v13_v10_g_1620.bat`, which calls `backtesting_result_v13_v10_g_daily.py`. The dated reconstruction and execution implementation is `fno_v13_v10_g_daily_replay.py`.
 
 The session runs only the session-effective V13-V10-G strategy for one explicit IST date. The default is today's date, including on holidays and weekends: there is no fallback to Friday or to a previously completed backtest. The old runner and scheduler installer are compatibility forwarders to G. Historical multi-strategy research files remain available separately.

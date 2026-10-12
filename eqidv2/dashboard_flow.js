@@ -38,25 +38,40 @@
   function setView(view) {
     stopReplay();state.view=view;
     $('flow-view').hidden=view!=='flow';$('ledger-view').hidden=view!=='ledger';$('compare-view').hidden=view!=='compare';
-    ['summary-metrics','scope-bar','run-controls'].forEach(id=>$(id).hidden=view==='compare');
+    if($('live-view'))$('live-view').hidden=view!=='live';
+    if($('research-heading'))$('research-heading').hidden=view==='live';
+    ['summary-metrics','scope-bar','run-controls','source-strip'].forEach(id=>$(id).hidden=view==='compare'||view==='live');
+    $('research-analysis').hidden=view!=='flow';
+    $('notice').hidden=view==='live'||!$('notice').textContent;
+    if(typeof FlowLive!=='undefined'){
+      if(view==='live')FlowLive.activate($('live-view'),{api});else FlowLive.deactivate();
+    }
+    $('refresh').setAttribute('aria-label',view==='live'?'Refresh saved intraday data':'Refresh backtest data');
+    $('source-label').textContent=view==='live'?'Equity candles / futures OI / G-3 evidence':(state.data?.selected_run?.source_label||'Saved backtest artifacts');
     document.querySelectorAll('[data-view]').forEach(button=>{const active=button.dataset.view===view;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
     if(view==='compare')renderComparison();
+    if(view!=='live'&&!state.data&&!state.loading)load();
   }
   function stopReplay() {if(state.timer)clearInterval(state.timer);state.timer=null;$('replay-toggle').textContent='▶';$('replay-toggle').setAttribute('aria-label','Play historical sessions');}
-  function setNotice(message) {$('notice').textContent=message;$('notice').hidden=!message;}
+  function setNotice(message) {$('notice').textContent=message;$('notice').hidden=!message||state.view==='live';}
   async function load(run) {
-    stopReplay(); const request=++state.request; $('refresh').disabled=true; $('run-select').disabled=true;
-    setNotice(''); $('flow-view').setAttribute('aria-busy','true');
+    stopReplay(); const request=++state.request; state.loading=true; $('refresh').disabled=true; $('run-select').disabled=true;
+    setNotice(''); $('flow-view').setAttribute('aria-busy','true');$('research-state').textContent='READING ARTIFACTS';
     const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),20000);
     try {
       const response=await fetch(api('/api/dashboard-flow'+(run?'?run='+encodeURIComponent(run):'')),{cache:'no-store',signal:controller.signal});
       if(!response.ok)throw new Error(response.status===401?'Your dashboard session has expired. Reopen Dashboard Flow from its launcher.':'The saved run could not be loaded. Refresh to try again.');
       const data=await response.json();if(request!==state.request)return;if(data.error)throw new Error(data.error);
       state.data=data;state.selected=null;state.setup=null;state.frame=0;state.page=0;
+      const loaded = new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Asia/Kolkata'}).format(new Date());
+      $('research-loaded').textContent='Loaded '+loaded+' IST';
+      $('research-state').textContent=data.daily?.length?'HISTORICAL / LOADED':'HISTORICAL / EMPTY';
+      $('research-provenance').textContent=data.selected_run ? data.selected_run.strategy+' · '+data.selected_run.source_label+' · Through '+dayLabel(data.summary.period_end) : 'No saved backtest artifacts';
+      $('research-provenance').title=data.selected_run?.run_name||'';
       renderRunControls();renderFlow(true);setNotice((data.warnings||[]).join(' '));
       if(state.view==='compare')await renderComparison(true);
-    } catch(error) {if(request!==state.request)return;setNotice(error.name==='AbortError'?'Reading the saved results timed out. Please refresh.':error.message);if(state.data?.selected_run)$('run-select').value=state.data.selected_run.id;if(!state.data){empty($('flow-chart'),'Data is unavailable. Use Refresh to retry.');empty($('stock-cards'),'Waiting for saved results.');}}
-    finally {clearTimeout(timeout);if(request===state.request){$('refresh').disabled=false;$('run-select').disabled=false;$('flow-view').removeAttribute('aria-busy');}}
+    } catch(error) {if(request!==state.request)return;$('research-state').textContent=state.data?'REFRESH FAILED / SAVED VIEW':'RESULTS UNAVAILABLE';setNotice(error.name==='AbortError'?'Reading the saved results timed out. Please refresh.':error.message);if(state.data?.selected_run)$('run-select').value=state.data.selected_run.id;if(!state.data){empty($('flow-chart'),'Data is unavailable. Use Refresh to retry.');empty($('stock-cards'),'Waiting for saved results.');}}
+    finally {clearTimeout(timeout);if(request===state.request){state.loading=false;$('refresh').disabled=false;$('run-select').disabled=false;$('flow-view').removeAttribute('aria-busy');}}
   }
   function renderMetrics() {
     if(!state.data)return;
@@ -70,12 +85,34 @@
     $('metric-pf').textContent=s.profit_factor==null?'—':s.profit_factor.toFixed(2)+'×';
     $('metric-dd').textContent=money(s.max_drawdown);$('metric-sessions').textContent=`${num(s.sessions)} / ${num(s.trades)}`;
     $('metric-cost').textContent=money(s.cost)+' total costs';$('period').textContent=`${dayLabel(state.data.summary.period_start)} — ${dayLabel(state.data.summary.period_end)} · ${num(state.data.summary.sessions)} recorded sessions`;
-    $('source-label').textContent=r?r.source_label:'No saved results';
+    $('source-label').textContent=state.view==='live'?'Equity candles / futures OI / G-3 evidence':r?r.source_label:'No saved results';
     const filters=[];if(state.query)filters.push('Search: '+state.query);if(state.side!=='all')filters.push(state.side==='LONG'?'Long only':'Short only');if(state.setup)filters.push('Setup: '+state.setup);if(state.range!=='all')filters.push('Last '+state.range+' sessions');if(state.frame<state.dates.length)filters.push('Replay to '+dayLabel(dates.at(-1)));
     $('filter-summary').textContent=filters.join(' · ');
     $('scope-description').textContent=filtered?`${num(s.trades)} trades · ${num(s.sessions)} sessions${!FlowCore.hasCompleteLedger(state.data)?' · Incomplete ledger: totals unavailable':''}`:'Full recorded run · map filters do not change this summary or ledger';
     $('clear-global-filters').hidden=!filters.length;
     $('summary-metrics').setAttribute('aria-label',filtered?'Filtered selection performance':'Entire run performance');
+    renderResearch();
+  }
+  function renderResearch() {
+    const complete=FlowCore.hasCompleteLedger(state.data),filtered=state.scope==='filtered';
+    const trades=filtered?state.scopedTrades:state.data.trades;
+    const dates=filtered?state.dates.slice(0,state.frame):state.data.daily.map(row=>row.date);
+    const rows=FlowChart.sessionSeries({daily:state.data.daily,trades,dates,scope:state.scope,complete});
+    $('session-scope').textContent=filtered?'FILTERED SELECTION':'ENTIRE RUN';
+    $('session-caption').textContent=filtered?'Uses map filters and replay. Net P&L starts from zero at the selected window; drawdown is measured at session close.':'Uses all saved daily results. Map filters and replay do not change this curve. Drawdown is measured at session close.';
+    FlowChart.renderSessions($('session-chart'),rows);
+    $('session-values-body').replaceChildren(...[...rows].reverse().map(row=>{const tr=el('tr');tr.append(el('td','',dayLabel(row.date)),el('td','numeric '+cls(row.net_pnl),money(row.net_pnl,2)),el('td','numeric '+cls(row.cumulative),money(row.cumulative,2)),el('td','numeric '+cls(row.drawdown),money(row.drawdown,2)));return tr;}));
+    const allKnown=rows.length&&rows.every(row=>row.net_pnl!=null);
+    const best=allKnown?rows.reduce((a,b)=>a.net_pnl>=b.net_pnl?a:b):null;
+    const worst=allKnown?rows.reduce((a,b)=>a.net_pnl<=b.net_pnl?a:b):null;
+    const stocks=complete?aggregate(trades,dates):[];
+    const leader=stocks[0];
+    const cards=['LONG','SHORT'].map(side=>{const selected=trades.filter(trade=>trade.side===side);const total=complete?selected.reduce((sum,trade)=>sum+trade.net_pnl,0):null;return [side+' CONTRIBUTION',money(total),complete?num(selected.length)+' executed trades':'Requires a reconciled ledger',cls(total)];});
+    cards.push(['BEST SESSION',money(best?.net_pnl),best?dayLabel(best.date):'No complete session series',cls(best?.net_pnl)]);
+    cards.push(['WORST SESSION',money(worst?.net_pnl),worst?dayLabel(worst.date):'No complete session series',cls(worst?.net_pnl)]);
+    cards.push(['TOP NET CONTRIBUTOR',leader?leader.symbol:'—',leader?money(leader.net_pnl)+' · '+num(leader.trades)+' trades':complete?'No trades in this selection':'Requires a reconciled ledger',leader?cls(leader.net_pnl):'']);
+    cards.push(['LEDGER INTEGRITY',complete?'Reconciled':'Incomplete',num(state.data.trades.length)+' / '+num(state.data.summary.trades)+' saved trades · Full run',complete?'positive':'']);
+    $('evidence-cards').replaceChildren(...cards.map(([label,value,note,color],index)=>{const card=el('div','evidence-card');card.append(el('span','evidence-index',String(index+1).padStart(2,'0')),el('span','evidence-label',label),el('strong',color,value),el('span','evidence-note',note));return card;}));
   }
   function aggregate(trades, dates) {
     const rows=new Map();
@@ -167,7 +204,7 @@
     $('ledger-pagination').textContent=rows.length?`${state.page*size+1}–${Math.min((state.page+1)*size,rows.length)} of ${rows.length} executions`:'0 executions';$('page-prev').disabled=state.page===0;$('page-next').disabled=state.page>=pages-1;
   }
   function resetFilters() {stopReplay();state.query='';state.side='all';state.setup=null;state.selected=null;state.range='all';state.page=0;$('stock-search').value='';$('ledger-search').value='';$('side-filter').value='all';document.querySelectorAll('[data-range]').forEach(b=>{b.classList.toggle('active',b.dataset.range==='all');b.setAttribute('aria-pressed',String(b.dataset.range==='all'));});renderFlow(true);}
-  $('run-select').addEventListener('change',e=>load(e.target.value));$('refresh').onclick=()=>load(state.data?.selected_run?.id);
+  $('run-select').addEventListener('change',e=>load(e.target.value));$('refresh').onclick=()=>state.view==='live'?FlowLive.refresh():load(state.data?.selected_run?.verified?undefined:state.data?.selected_run?.id);
   $('show-archives').onchange=()=>{const latest=state.data?.runs.find(run=>run.strategy===state.data.selected_run?.strategy);if(!$('show-archives').checked&&latest?.id!==state.data?.selected_run?.id)load(latest.id);else if(state.data)renderRunControls();};
   $('summary-scope').onchange=e=>{state.scope=e.target.value;state.page=0;renderMetrics();renderLedger();};$('clear-global-filters').onclick=resetFilters;
   $('stock-search').addEventListener('input',e=>{state.query=e.target.value.trim().toLowerCase();$('ledger-search').value=e.target.value;state.selected=null;state.page=0;renderFlow();});
@@ -181,7 +218,7 @@
   [$('stock-dialog'),$('about-dialog')].forEach(dialog=>dialog.addEventListener('click',event=>{const r=dialog.getBoundingClientRect();if(event.target===dialog&&(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom))dialog.close();}));
   $('ledger-search').oninput=e=>{state.scope='filtered';$('summary-scope').value='filtered';state.query=e.target.value.trim().toLowerCase();$('stock-search').value=e.target.value;state.page=0;state.selected=null;renderFlow();};$('page-prev').onclick=()=>{state.page--;renderLedger();};$('page-next').onclick=()=>{state.page++;renderLedger();};
   $('export-csv').onclick=()=>{const keys=['date','symbol','side','setup','entry_price','exit_price','net_pnl','gross_pnl','cost','exit_reason'];const safe=value=>{let s=String(value??'');if(typeof value==='string'&&/^[=+\-@\t\r]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};const csv=[keys.join(','),...ledgerRows().map(row=>keys.map(key=>safe(row[key])).join(','))].join('\r\n');const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob),link=el('a');link.href=url;link.download='dashboard-flow-trades.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),5000);};
-  document.addEventListener('keydown',event=>{if(event.key==='/'&&state.view!=='compare'&&!['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)&&!$('stock-dialog').open&&!$('about-dialog').open){event.preventDefault();if(state.view==='ledger')$('ledger-search').focus();else $('stock-search').focus();}});
+  document.addEventListener('keydown',event=>{if(event.key==='/'&&!['compare','live'].includes(state.view)&&!['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)&&!$('stock-dialog').open&&!$('about-dialog').open){event.preventDefault();if(state.view==='ledger')$('ledger-search').focus();else $('stock-search').focus();}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopReplay();});
-  load();
+  if(location.hash==='#live')setView('live');else load();
 })();

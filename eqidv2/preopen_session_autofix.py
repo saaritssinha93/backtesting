@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 from zoneinfo import ZoneInfo
+from fno_strategy_registry import active_profile
 
 IST = ZoneInfo("Asia/Kolkata")
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,6 +33,10 @@ TASK_TO_BAT: Dict[str, Path] = {
     "EQIDV2_nifty_guard_fetch_v16_5min_0915": BAT_DIR / "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
     "EQIDV2_fno_v13_v10_g_equity_1min_feed_0915": BAT_DIR / "run_fno_v13_v10_g_equity_1min_feed.bat",
 }
+
+_strategy_profile = active_profile()
+TASK_TO_BAT = {_strategy_profile.reference(task): Path(_strategy_profile.reference(str(path)))
+               for task, path in TASK_TO_BAT.items()}
 
 FAIL_CHECK_TO_BAT: Dict[str, Path] = {
     "eod_15min_data": BAT_DIR / "run_eqidv2_eod_scheduler_for_15mins_data_live_minimal.bat",

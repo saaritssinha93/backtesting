@@ -121,6 +121,7 @@ def evaluate_v13_v10_g_base_row(
     strategy_version: str = "",
     strategy_fingerprint: str = "",
     input_slice_sha256: str | None = None,
+    strategy_config=None,
 ) -> dict[str, Any]:
     """Explain V13-V10-G gates for one full-universe feature row.
 
@@ -128,8 +129,16 @@ def evaluate_v13_v10_g_base_row(
     safe to use for raw-data tooling that does not start a live runtime.
     """
 
-    import fno_v13_v10_g_live_config as config
-    import fno_v13_v10_g_policy as policy
+    if strategy_config is None:
+        if strategy_version == "V13-V10-G-3-PRODUCTION-V1" or row.get("strategy_profile") == "V13_V10_G_3":
+            import fno_v13_v10_g_3_live_config as strategy_config
+        else:
+            import fno_v13_v10_g_live_config as strategy_config
+    config = strategy_config
+    import fno_v13_v10_g_policy as legacy_policy
+    import fno_oi_common as common
+    policy = getattr(config, "policy", legacy_policy)
+    g3 = getattr(config, "STRATEGY_PROFILE", "") == "V13_V10_G_3"
 
     values = {name: _value(row, name) for name in _FEATURE_FIELDS}
     values["confirmation_open"] = _value(row, "confirmation_open", "confirm_open")
@@ -158,8 +167,8 @@ def evaluate_v13_v10_g_base_row(
         signal_stamp = pd.Timestamp(signal_ts)
         if pd.isna(signal_stamp):
             raise ValueError("Missing signal timestamp")
-        signal_stamp = (signal_stamp.tz_localize(config.common.IST) if signal_stamp.tzinfo is None
-                        else signal_stamp.tz_convert(config.common.IST))
+        signal_stamp = (signal_stamp.tz_localize(common.IST) if signal_stamp.tzinfo is None
+                        else signal_stamp.tz_convert(common.IST))
         session_date = pd.Timestamp(day_value).date() if day_value is not None else signal_stamp.date()
         session_date_valid = session_date == signal_stamp.date()
     except (TypeError, ValueError):
@@ -174,7 +183,7 @@ def evaluate_v13_v10_g_base_row(
     # Explain the applicable branch without rejecting a promoted LONG because
     # it lacks the EMA alignment or OI ceiling required by the original branch.
     relaxed_long = bool(
-        session_date_valid and policy.enabled_for_session(session_date)
+        not g3 and session_date_valid and policy.enabled_for_session(session_date)
         and signal_end == "09:25" and original_side != "LONG"
         and math.isfinite(numeric["price_change_pct"]) and numeric["price_change_pct"] >= 0
     )
@@ -236,9 +245,11 @@ def evaluate_v13_v10_g_base_row(
             or (base_side == "SHORT" and close < o and close < signal_close)
         )
     )
+    minimum_confirmation_volume = (config.confirmation_volume_minimum(base_side)
+        if g3 and base_side in {"LONG", "SHORT"} else (math.inf if g3 else config.MIN_CONFIRMATION_VOLUME_RATIO))
     confirmation_volume = bool(
         math.isfinite(numeric["v9_1m_volume_ratio"])
-        and numeric["v9_1m_volume_ratio"] >= config.MIN_CONFIRMATION_VOLUME_RATIO
+        and numeric["v9_1m_volume_ratio"] >= minimum_confirmation_volume
     )
     strict_signal = bool(base_side and confirmation_present and confirmation_range and confirmation_direction)
 
@@ -341,7 +352,9 @@ def evaluate_v13_v10_g_base_row(
         picker_value = config.picker_value(picker_candidate, setup.picker)
 
     result: dict[str, Any] = {
-        "schema_version": FEATURE_LEDGER_SCHEMA,
+        "schema_version": "v13_v10_g_3_feature_ledger_v1" if g3 else FEATURE_LEDGER_SCHEMA,
+        "strategy_profile": getattr(config, "STRATEGY_PROFILE", "V13_V10_G"),
+        "minimum_confirmation_volume_ratio": _json_number(minimum_confirmation_volume),
         "run_id": str(_value(row, "run_id") or ""),
         "replay_id": str(_value(row, "replay_id") or ""),
         "strategy_version": strategy_version or config.STRATEGY_VERSION,
@@ -389,7 +402,7 @@ def evaluate_v13_v10_g_base_row(
             margin_body_ratio=body_ratio - setup.body_ratio if math.isfinite(body_ratio) else None,
             margin_wick_ratio=setup.max_wick_ratio - wick_ratio if math.isfinite(wick_ratio) else None,
             margin_confirmation_volume_ratio=(
-                numeric["v9_1m_volume_ratio"] - config.MIN_CONFIRMATION_VOLUME_RATIO
+                numeric["v9_1m_volume_ratio"] - minimum_confirmation_volume
                 if math.isfinite(numeric["v9_1m_volume_ratio"]) else None
             ),
         )
@@ -403,6 +416,7 @@ def build_v13_v10_g_feature_ledger(
     nifty_return: float,
     strategy_version: str = "",
     strategy_fingerprint: str = "",
+    strategy_config=None,
 ) -> pd.DataFrame:
     """Build a deterministic full-universe feature/gate ledger."""
 
@@ -415,6 +429,7 @@ def build_v13_v10_g_feature_ledger(
             strategy_version=strategy_version,
             strategy_fingerprint=strategy_fingerprint,
             input_slice_sha256=str(row.get("input_slice_sha256") or ""),
+            strategy_config=strategy_config,
         )
         for row in pool.to_dict("records")
     ]
@@ -466,7 +481,8 @@ def write_feature_ledger(frame: pd.DataFrame, path: Path | str) -> dict[str, Any
     _atomic_bytes(ledger_path, encoded)
     manifest = {
         "schema_version": FEATURE_LEDGER_MANIFEST_SCHEMA,
-        "feature_schema_version": FEATURE_LEDGER_SCHEMA,
+        "feature_schema_version": (str(frame.schema_version.iloc[0])
+            if not frame.empty and "schema_version" in frame else FEATURE_LEDGER_SCHEMA),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "path": str(ledger_path.resolve()),
         "artifact_sha256": hashlib.sha256(encoded).hexdigest(),

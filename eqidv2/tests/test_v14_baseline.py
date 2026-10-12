@@ -72,6 +72,16 @@ def test_confirmation_threshold_and_exact_clock():
         baseline.select_orders(rows)
 
 
+def test_native_paths_normalize_parquet_timestamp_resolution():
+    orders = baseline.select_orders(pd.DataFrame([_candidate()]))
+    path = _path(orders.confirmation_ts.iloc[0])
+    minute = pd.DataFrame({key: value for key, value in path.items() if key != "timestamp_ns"})
+    minute["ts"] = pd.to_datetime(path["timestamp_ns"], utc=True).tz_convert(baseline.IST).as_unit("us")
+    normalized = baseline.native_paths(minute, orders.confirmation_ts.iloc[0])
+    np.testing.assert_array_equal(normalized["timestamp_ns"], path["timestamp_ns"])
+    assert baseline.simulate(orders, {0: normalized}).portfolio_executed.all()
+
+
 def test_expiry_all_unfilled_and_same_bar_stop_first():
     orders = baseline.select_orders(pd.DataFrame([_candidate()]))
     sid = int(orders.sid.iloc[0])

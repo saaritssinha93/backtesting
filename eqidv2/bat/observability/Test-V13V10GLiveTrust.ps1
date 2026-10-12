@@ -2,6 +2,8 @@
 param(
     [string]$RuntimeRoot = $(if ($env:EQIDV2_RUNTIME_ROOT) { $env:EQIDV2_RUNTIME_ROOT } else { "C:\TradingData\eqidv2" }),
     [string]$SessionDate = "",
+    [ValidateSet('', 'V13_V10_G', 'V13_V10_G_3')]
+    [string]$Profile = "",
     [double]$StatusMaxAgeSeconds = 30.0,
     [double]$ReconciliationMaxAgeSeconds = 120.0,
     [double]$PipelineMaxAgeSeconds = 120.0,
@@ -28,6 +30,7 @@ $arguments = @(
     "--market-data-max-age-seconds", $MarketDataMaxAgeSeconds.ToString([Globalization.CultureInfo]::InvariantCulture)
 )
 if ($SessionDate) { $arguments += @("--session-date", $SessionDate) }
+if ($Profile) { $arguments += @("--profile", $Profile) }
 
 Push-Location $repoRoot
 try {

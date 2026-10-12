@@ -64,6 +64,92 @@
       "sha256": "f1053a235c07a292ce5388f14450d49841499596ab6426a7778800f6d5b369ae",
       "access": "read_only_historical_reference",
       "adapter": "ai_platform.adapters.snapshot.read_coherent_snapshot"
+    },
+    "g3_daily_replay_latest_json": {
+      "relative_path": "backtesting_result_v13_v10_g_3/latest/latest_backtesting_result_v13_v10_g_3.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.daily_replay.read_daily_replay",
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_daily_replay_latest_markdown": {
+      "relative_path": "backtesting_result_v13_v10_g_3/latest/latest_backtesting_result_v13_v10_g_3.md",
+      "access": "read_only",
+      "adapter": null,
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_strategy_manifest": {
+      "relative_path": "fno_oi/v13_v10_g_3_live/strategy_manifest.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.snapshot.read_coherent_snapshot",
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_equity_live_status": {
+      "relative_path": "fno_oi/v13_v10_g_3_live/live_kite/status.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.status.inspect_status",
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_equity_live_heartbeat": {
+      "relative_path": "fno_oi/v13_v10_g_3_live/live_kite/heartbeat.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.status.inspect_status",
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_equity_paper_orders": {
+      "relative_path": "fno_oi/v13_v10_g_3_live/orders/PAPER",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.equity_orders.read_equity_orders",
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_equity_live_orders": {
+      "relative_path": "fno_oi/v13_v10_g_3_live/orders/LIVE/live_kite_qty1",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.equity_orders.read_equity_orders",
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_option_paper_orders": {
+      "relative_path": "fno_oi/v13_v10_g_3_options_paper/orders",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.options_orders.read_option_orders",
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_immutable_evidence": {
+      "relative_path": "fno_oi/v13_v10_g_3_live/evidence",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.evidence.list_evidence",
+      "strategy_profile": "V13_V10_G_3"
+    },
+    "g3_frozen_strategy_config": {
+      "relative_path": "fno_oi/strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1/frozen_config.json",
+      "access": "read_only",
+      "adapter": "ai_platform.adapters.strategy.read_strategy_contract",
+      "strategy_profile": "V13_V10_G_3"
+    }
+  },
+  "profile_sources": {
+    "V13_V10_G": {
+      "daily_replay_latest_json": "daily_replay_latest_json",
+      "daily_replay_latest_markdown": "daily_replay_latest_markdown",
+      "strategy_manifest": "strategy_manifest",
+      "equity_live_status": "equity_live_status",
+      "equity_live_heartbeat": "equity_live_heartbeat",
+      "equity_paper_orders": "equity_paper_orders",
+      "equity_live_orders": "equity_live_orders",
+      "option_paper_orders": "option_paper_orders",
+      "immutable_evidence": "immutable_evidence",
+      "frozen_strategy_config": "frozen_strategy_config"
+    },
+    "V13_V10_G_3": {
+      "daily_replay_latest_json": "g3_daily_replay_latest_json",
+      "daily_replay_latest_markdown": "g3_daily_replay_latest_markdown",
+      "strategy_manifest": "g3_strategy_manifest",
+      "equity_live_status": "g3_equity_live_status",
+      "equity_live_heartbeat": "g3_equity_live_heartbeat",
+      "equity_paper_orders": "g3_equity_paper_orders",
+      "equity_live_orders": "g3_equity_live_orders",
+      "option_paper_orders": "g3_option_paper_orders",
+      "immutable_evidence": "g3_immutable_evidence",
+      "frozen_strategy_config": "g3_frozen_strategy_config"
     }
   }
 }

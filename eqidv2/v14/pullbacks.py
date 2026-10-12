@@ -119,3 +119,168 @@ def label_outcome(minute: pd.DataFrame, decision_ts: pd.Timestamp,
         early_exit=bool(exit_ts < horizon_end), censored=censored,
         outcome_available=not unknown, unknown_reason="UNKNOWN_INTRABAR_ORDER" if unknown else "",
         full_horizon_eligible=not censored and not unknown, recovered_by_later_close=recovered)
+
+
+def _minute_context(minute: pd.DataFrame, day: str) -> pd.DataFrame:
+    """Match the archived monitor's 200 real preceding minutes and session."""
+    start = pd.Timestamp(day + " 09:16", tz=IST)
+    end = pd.Timestamp(day + " 15:15", tz=IST)
+    prior = minute.loc[minute.ts.lt(start)].tail(200)
+    session = minute.loc[minute.ts.between(start, end)]
+    expected = pd.date_range(start, end, freq="min")
+    if len(prior) < 200:
+        raise ValueError("INSUFFICIENT_200_MINUTE_MONITOR_WARMUP")
+    if session.ts.duplicated().any() or not np.array_equal(pd.DatetimeIndex(session.ts).asi8, expected.asi8):
+        raise ValueError("INCOMPLETE_MONITOR_SESSION")
+    result = pd.concat([prior, session], ignore_index=True)
+    numeric = result[["open", "high", "low", "close", "volume"]].to_numpy(float)
+    invalid = (~np.isfinite(numeric).all(axis=1) | (numeric[:, :4] <= 0).any(axis=1)
+               | (numeric[:, 4] < 0) | (numeric[:, 1] < numeric[:, 2])
+               | (numeric[:, 1] < np.maximum(numeric[:, 0], numeric[:, 3]))
+               | (numeric[:, 2] > np.minimum(numeric[:, 0], numeric[:, 3])))
+    if invalid.any():
+        raise ValueError("INVALID_MONITOR_OHLCV")
+    same_day = result.ts.dt.date.eq(result.ts.shift().dt.date)
+    if (same_day & result.ts.diff().ne(pd.Timedelta(minutes=1))).any():
+        raise ValueError("INTERRUPTED_MONITOR_CONTEXT")
+    for flag in ("gap_filled", "opening_snapshot", "provisional_stale"):
+        if flag in result:
+            values = result[flag]
+            flagged = pd.to_numeric(values, errors="coerce").fillna(0).ne(0)
+            flagged |= values.astype(str).str.strip().str.lower().isin(["true", "1", "1.0", "yes", "on"])
+            if flagged.any():
+                raise ValueError("FLAGGED_MONITOR_CONTEXT")
+    return features(result)
+
+
+def _truth(values: pd.Series) -> pd.Series:
+    return values.eq(True) | values.astype(str).str.strip().str.lower().isin(["true", "1", "1.0", "yes"])
+
+
+def annotate_trades(ledger: pd.DataFrame, minute_by_symbol: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Observe executed trades without changing any financial or signal field.
+
+    The observations table contains the primary fixed non-overlapping windows
+    and causal cooldown warning episodes. ``is_grid`` and ``emitted_warning``
+    distinguish the two evaluation populations; one row can belong to both.
+    Rows with ``outcome_available=False`` have unknown intrabar ordering and
+    must be excluded from resolved event/confusion counts. Zero-warning periods
+    are observations, not an assertion that a trade is safe.
+    """
+    trades = ledger.copy(deep=True)
+    if not trades.index.is_unique:
+        raise ValueError("Trade ledger row indices must be unique")
+    trades["monitor_version"] = MONITOR_VERSION
+    trades["monitor_status"] = "NOT_EXECUTED"
+    trades["monitor_unavailable_reason"] = ""
+    trades["first_monitor_ts"] = ""
+    for column in ("monitoring_minutes", "fast_warnings", "slow_warnings", "fast_pullback_windows",
+                   "slow_pullback_windows", "fast_unknown_windows", "slow_unknown_windows"):
+        trades[column] = 0
+    if trades.empty:
+        return trades, pd.DataFrame(columns=["is_grid", "emitted_warning", "horizon_minutes", "warning", "event", "outcome_available"])
+    required = {"sid", "day", "tradingsymbol", "setup_id", "side", "entry_ts", "exit_ts",
+                "exit_bar_end_ts", "exit_event", "entry_price", "exit_price", "portfolio_executed"}
+    missing = required.difference(trades)
+    if missing:
+        # All-unfilled baseline batches legitimately have no exit-bar metadata.
+        if "portfolio_executed" in trades and not _truth(trades.portfolio_executed).any():
+            return trades, pd.DataFrame(columns=["is_grid", "emitted_warning", "horizon_minutes", "warning", "event", "outcome_available"])
+        raise ValueError(f"Missing executed-trade monitoring fields: {sorted(missing)}")
+    prepared: dict[str, pd.DataFrame] = {}
+    contexts: dict[tuple[str, str], pd.DataFrame | str] = {}
+    observations = []
+    for index, trade in trades.loc[_truth(trades.portfolio_executed)].iterrows():
+        day, symbol = str(trade.day), str(trade.tradingsymbol)
+        key = (day, symbol)
+        if key not in contexts:
+            try:
+                if symbol not in prepared:
+                    source = minute_by_symbol[symbol].copy()
+                    source["ts"] = pd.to_datetime(source.ts, utc=True).dt.tz_convert(IST).dt.as_unit("ns")
+                    clock = source.ts.dt.hour * 60 + source.ts.dt.minute
+                    source = source.loc[clock.between(9 * 60 + 16, 15 * 60 + 30)]
+                    prepared[symbol] = source.sort_values("ts", kind="stable").reset_index(drop=True)
+                contexts[key] = _minute_context(prepared[symbol], day)
+            except KeyError:
+                contexts[key] = "MISSING_SYMBOL_MINUTE_CONTEXT"
+            except (ValueError, TypeError) as exc:
+                contexts[key] = str(exc)
+        context = contexts[key]
+        if isinstance(context, str):
+            trades.at[index, "monitor_status"] = "MONITOR_UNAVAILABLE"
+            trades.at[index, "monitor_unavailable_reason"] = context
+            continue
+        entry, exit_stamp, exit_end = [pd.Timestamp(trade[name]) for name in ("entry_ts", "exit_ts", "exit_bar_end_ts")]
+        sign = 1 if trade.side == "LONG" else -1
+        observed = context.loc[context.ts.gt(entry) & context.ts.lt(exit_stamp)]
+        favorable = float(trade.entry_price)
+        first = None
+        decision_count = 0
+        next_warning = {5: None, 30: None}
+        trade_id = f"{day}|{trade.setup_id}|{symbol}|{trade.sid}"
+        for candle in observed.itertuples(index=False):
+            favorable = max(favorable, float(candle.close)) if sign == 1 else min(favorable, float(candle.close))
+            feature = warning_features(candle, sign, favorable)
+            if not feature["feature_ready"]:
+                continue
+            stamp = pd.Timestamp(candle.ts)
+            if first is None:
+                first = stamp
+            elapsed = int((stamp - first).total_seconds() / 60)
+            age = (stamp - entry).total_seconds() / 60
+            decision_count += 1
+            for horizon, threshold in SPECS.items():
+                prefix = "fast" if horizon == 5 else "slow"
+                warning = feature[f"{prefix}_warning"]
+                emitted = bool(warning and (next_warning[horizon] is None or stamp >= next_warning[horizon]))
+                if emitted:
+                    next_warning[horizon] = stamp + pd.Timedelta(minutes=horizon)
+                    trades.at[index, f"{prefix}_warnings"] += 1
+                is_grid = elapsed % horizon == 0
+                if not is_grid and not emitted:
+                    continue
+                outcome = label_outcome(context, stamp, float(candle.close), sign, horizon, threshold,
+                                        exit_stamp, exit_end, float(trade.exit_price), str(trade.exit_event))
+                observations.append(dict(trade_id=trade_id, sid=int(trade.sid), day=day, tradingsymbol=symbol,
+                    setup_id=trade.setup_id, side=trade.side, monitor_version=MONITOR_VERSION,
+                    decision_ts=stamp, decision_close=float(candle.close), trade_age_minutes=age,
+                    phase="ENTRY_1_5" if age <= 5 else "EARLY_6_30" if age <= 30 else "LATE_31_PLUS",
+                    horizon_minutes=horizon, threshold_pct=threshold, is_grid=is_grid, emitted_warning=emitted,
+                    warning=warning, **feature, **outcome))
+                if is_grid and outcome["outcome_available"]:
+                    trades.at[index, f"{prefix}_pullback_windows"] += int(outcome["event"])
+                elif is_grid:
+                    trades.at[index, f"{prefix}_unknown_windows"] += 1
+        trades.at[index, "monitoring_minutes"] = decision_count
+        trades.at[index, "monitor_status"] = "OBSERVED_UNCALIBRATED" if decision_count else "MONITOR_UNAVAILABLE"
+        trades.at[index, "first_monitor_ts"] = str(first) if first is not None else ""
+        if not decision_count:
+            trades.at[index, "monitor_unavailable_reason"] = "EXIT_BEFORE_FIRST_COMPLETE_POST_ENTRY_OBSERVATION"
+    return trades, pd.DataFrame(observations, columns=None if observations else [
+        "is_grid", "emitted_warning", "horizon_minutes", "warning", "event", "outcome_available"])
+
+
+def summarize(observations: pd.DataFrame) -> pd.DataFrame:
+    """Separate grid recall from alert precision; unknown labels stay explicit."""
+    records = []
+    for horizon in SPECS:
+        window = observations.loc[observations.horizon_minutes.eq(horizon)]
+        grid = window.loc[window.is_grid.eq(True)]
+        resolved = grid.loc[grid.outcome_available.eq(True)]
+        alerts = window.loc[window.emitted_warning.eq(True)]
+        resolved_alerts = alerts.loc[alerts.outcome_available.eq(True)]
+        tp = int((resolved.warning.eq(True) & resolved.event.eq(True)).sum())
+        fp = int((resolved.warning.eq(True) & resolved.event.eq(False)).sum())
+        fn = int((resolved.warning.eq(False) & resolved.event.eq(True)).sum())
+        tn = int((resolved.warning.eq(False) & resolved.event.eq(False)).sum())
+        records.append(dict(monitor_version=MONITOR_VERSION, horizon_minutes=horizon,
+            grid_windows=len(grid), unresolved_windows=len(grid) - len(resolved),
+            pullback_windows=tp + fn, warned_event_windows=tp, missed_event_windows=fn,
+            grid_precision=tp / (tp + fp) if tp + fp else None,
+            grid_recall=tp / (tp + fn) if tp + fn else None,
+            grid_false_positive_rate=fp / (fp + tn) if fp + tn else None,
+            warning_episodes=len(alerts), unresolved_warning_episodes=len(alerts) - len(resolved_alerts),
+            alert_precision=float(resolved_alerts.event.mean()) if len(resolved_alerts) else None,
+            interpretation="Observational fixed rules; uncalibrated on MIS non-NFO; no change to trade P&L"))
+    return pd.DataFrame(records)

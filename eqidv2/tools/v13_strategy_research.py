@@ -17,6 +17,7 @@ from ai_platform.observability.strategy_research import (  # noqa: E402
     generate_research_bundle,
 )
 from eqidv2_runtime_paths import runtime_dir  # noqa: E402
+from fno_strategy_registry import active_profile  # noqa: E402
 
 
 DEFAULT_SOURCE_ROOT = runtime_dir(
@@ -26,6 +27,13 @@ DEFAULT_OUTPUT_ROOT = runtime_dir("v13_v10_g_strategy_research")
 DEFAULT_LIVE_ROOT = runtime_dir("fno_oi", "v13_v10_g_live")
 DEFAULT_REPLAY_ROOT = runtime_dir("backtesting_result_v13_v10_g", "runs")
 DEFAULT_EXECUTION_RESEARCH_ROOT = runtime_dir("v13_v10_g_execution_research")
+ACTIVE_PROFILE = active_profile()
+if ACTIVE_PROFILE.name == "V13_V10_G_3":
+    DEFAULT_SOURCE_ROOT = runtime_dir(ACTIVE_PROFILE.backtest_dir)
+    DEFAULT_OUTPUT_ROOT = runtime_dir(ACTIVE_PROFILE.slug + "_strategy_research")
+    DEFAULT_LIVE_ROOT = runtime_dir("fno_oi", ACTIVE_PROFILE.live_dir)
+    DEFAULT_REPLAY_ROOT = DEFAULT_SOURCE_ROOT / "production" / "runs"
+    DEFAULT_EXECUTION_RESEARCH_ROOT = runtime_dir(ACTIVE_PROFILE.slug + "_execution_research")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.minimum_history < 1 or args.minimum_context < 1:
         raise SystemExit("minimum history/context must be positive")
+    if ACTIVE_PROFILE.name == "V13_V10_G_3":
+        from ai_platform.observability.g3_analysis import generate_g3_analysis
+        result = generate_g3_analysis(source_root=args.source, output_root=args.output_root,
+                                      execution_research_root=args.execution_research_root)
+        print(json.dumps({key: result[key] for key in ("state", "strategy_version", "source_run", "run_dir", "baseline")}, indent=2))
+        return 0
     source_run = discover_source_run(args.source)
     bundle = generate_research_bundle(
         source_run=source_run,

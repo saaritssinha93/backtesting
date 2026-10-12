@@ -35,6 +35,7 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+. (Join-Path $PSScriptRoot 'dashboard_public_link_helpers.ps1')
 
 function Write-LogLine {
     param(
@@ -78,53 +79,60 @@ function Send-UrlByGmailApi {
 
     $toAddr = ("" + $To).Trim()
     if ([string]::IsNullOrWhiteSpace($toAddr)) {
-        return @{ ok = $false; reason = "Missing LOG_DASH_EMAIL_TO." }
+        return @{ ok = $false; retryable = $false; delivery_unknown = $false; reason = "Missing LOG_DASH_EMAIL_TO." }
     }
     if (-not (Test-Path -LiteralPath $ScriptPath)) {
-        return @{ ok = $false; reason = "Gmail API script not found: $ScriptPath" }
+        return @{ ok = $false; retryable = $false; delivery_unknown = $false; reason = "Gmail API script not found: $ScriptPath" }
     }
     if (-not (Test-Path -LiteralPath $CredentialsPath)) {
-        return @{ ok = $false; reason = "Gmail OAuth client file not found: $CredentialsPath" }
+        return @{ ok = $false; retryable = $false; delivery_unknown = $false; reason = "Gmail OAuth client file not found: $CredentialsPath" }
     }
 
     $subjectBase = ("" + $SubjectPrefix).Trim()
     if ([string]::IsNullOrWhiteSpace($subjectBase)) { $subjectBase = "EQIDV2 Dashboard URL" }
     $subject = "$subjectBase - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
-    $body = @"
-EQIDV2 dashboard URL generated.
+    $body = Get-DashboardPublicEmailBody -Url $Url
 
-URL:
-$Url
-
-Generated at:
-$(Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz")
-"@
-
-    $args = @(
+    $senderArgs = @(
         $ScriptPath,
         "--credentials", $CredentialsPath,
         "--token", $TokenPath,
         "--to", $toAddr,
-        "--subject", $subject,
-        "--body", $body
+        "--subject", $subject
     )
 
     $fromAddr = ("" + $From).Trim()
     if (-not [string]::IsNullOrWhiteSpace($fromAddr)) {
-        $args += @("--from", $fromAddr)
+        $senderArgs += @("--from", $fromAddr)
     }
     if ($AllowInteractiveAuth) {
-        $args += "--allow-interactive-auth"
+        $senderArgs += "--allow-interactive-auth"
     }
 
-    $output = & $PythonPath @args 2>&1
-    $exitCode = $LASTEXITCODE
+    $bodyFile = $null
+    $commandInvoked = $false
+    try {
+        $bodyFile = [System.IO.Path]::GetTempFileName()
+        [System.IO.File]::WriteAllText($bodyFile, $body, (New-Object System.Text.UTF8Encoding($false)))
+        $senderArgs += @("--body-file", $bodyFile)
+        $commandInvoked = $true
+        $output = & $PythonPath @senderArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    } catch {
+        return @{ ok = $false; retryable = $false; delivery_unknown = $commandInvoked; reason = "Gmail command failed: $($_.Exception.Message)" }
+    } finally {
+        if ($bodyFile -and (Test-Path -LiteralPath $bodyFile)) {
+            Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue
+        }
+    }
     $outText = ($output | ForEach-Object { $_.ToString() }) -join "`n"
 
     if ($exitCode -eq 0) {
         return @{ ok = $true; reason = $outText }
     }
-    return @{ ok = $false; reason = "exit=$exitCode output=$outText" }
+    # Exit 3 is authentication failure before sending; exit 4 is input failure.
+    # Exit 5 and unexpected failures cannot establish whether Gmail accepted it.
+    return @{ ok = $false; retryable = ($exitCode -eq 3); delivery_unknown = ($exitCode -notin @(3, 4)); reason = "exit=$exitCode output=$outText" }
 }
 
 function Send-UrlBySmtp {
@@ -159,21 +167,13 @@ function Send-UrlBySmtp {
     $subjectBase = ("" + $SubjectPrefix).Trim()
     if ([string]::IsNullOrWhiteSpace($subjectBase)) { $subjectBase = "EQIDV2 Dashboard URL" }
     $subject = "$subjectBase - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
-    $body = @"
-EQIDV2 dashboard URL generated.
-
-URL:
-$Url
-
-Generated at:
-$(Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz")
-"@
+    $body = Get-DashboardPublicEmailBody -Url $Url
 
     try {
         $secure = ConvertTo-SecureString $AppPassword -AsPlainText -Force
         $cred = New-Object System.Management.Automation.PSCredential($User, $secure)
-        $recipients = $toAddr -split '\s*,\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        Send-MailMessage -SmtpServer $Server -Port $Port -UseSsl -Credential $cred -From $fromAddr -To $recipients -Subject $subject -Body $body -BodyAsHtml:$false
+        $recipients = $toAddr -split '\s*[,;]\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        Send-MailMessage -SmtpServer $Server -Port $Port -UseSsl -Credential $cred -From $fromAddr -To $recipients -Subject $subject -Body $body -BodyAsHtml:$false -ErrorAction Stop
         return @{ ok = $true; reason = "" }
     }
     catch {
@@ -184,7 +184,7 @@ $(Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz")
             }
         }
         catch {}
-        return @{ ok = $false; reason = $reason }
+        return @{ ok = $false; retryable = $false; delivery_unknown = $true; reason = $reason }
     }
 }
 
@@ -210,47 +210,43 @@ try {
     }
 
     $announced = $false
+    $publicationAttempted = $false
+    $candidateUrl = ""
+    $registered = $false
     & $CloudflaredPath tunnel --url $DashUrl --protocol http2 --edge-ip-version 4 2>&1 | ForEach-Object {
         $line = $_.ToString()
         Write-LogLine $line $LogFile
 
-        if (-not $announced -and $line -match "https://[a-z0-9-]+\.trycloudflare\.com") {
-            $url = $Matches[0]
-            Set-Content -Path $LatestUrlFile -Value $url -Encoding utf8
-            Write-LogLine "[INFO] Public URL saved: $url" $LogFile
+        $foundUrl = Get-QuickTunnelPublicUrl -Line $line
+        if ($foundUrl) { $candidateUrl = $foundUrl }
+        if ($line -match '\bRegistered tunnel connection\b' -and $line -notmatch '(?i)\b(ERR|error|failed|failure|exception)\b') { $registered = $true }
 
-            if ($sendMode -eq "gmail_api_only" -or $sendMode -eq "gmail_api_then_smtp") {
-                $send = Send-UrlByGmailApi -Url $url -To $emailToResolved -From $EmailFrom -SubjectPrefix $EmailSubjectPrefix -PythonPath $PythonExe -ScriptPath $GmailApiScript -CredentialsPath $GmailCredentialsFile -TokenPath $GmailTokenFile -AllowInteractiveAuth $allowInteractive
-                if ($send.ok) {
-                    if ([string]::IsNullOrWhiteSpace($send.reason)) {
-                        Write-LogLine "[INFO] Gmail API email sent successfully to $emailToResolved." $LogFile
-                    } else {
-                        Write-LogLine "[INFO] Gmail API email sent successfully to $emailToResolved. $($send.reason)" $LogFile
-                    }
-                } else {
-                    Write-LogLine "[ERROR] Gmail API email send failed: $($send.reason)" $LogFile
-                    if ($sendMode -eq "gmail_api_then_smtp") {
-                        $smtpSend = Send-UrlBySmtp -Url $url -To $emailToResolved -From $EmailFrom -User $SmtpUser -AppPassword $SmtpAppPassword -Server $SmtpServer -Port $SmtpPort -SubjectPrefix $EmailSubjectPrefix
-                        if ($smtpSend.ok) {
-                            Write-LogLine "[INFO] SMTP fallback email sent successfully to $emailToResolved via ${SmtpServer}:$SmtpPort." $LogFile
-                        } else {
-                            Write-LogLine "[ERROR] SMTP fallback email send failed: $($smtpSend.reason)" $LogFile
-                        }
-                    }
-                }
-            } elseif ($sendMode -eq "smtp_only") {
-                $smtpSend = Send-UrlBySmtp -Url $url -To $emailToResolved -From $EmailFrom -User $SmtpUser -AppPassword $SmtpAppPassword -Server $SmtpServer -Port $SmtpPort -SubjectPrefix $EmailSubjectPrefix
-                if ($smtpSend.ok) {
-                    Write-LogLine "[INFO] SMTP email sent successfully to $emailToResolved via ${SmtpServer}:$SmtpPort." $LogFile
-                } else {
-                    Write-LogLine "[ERROR] SMTP email send failed: $($smtpSend.reason)" $LogFile
-                }
+        if (-not $announced -and -not $publicationAttempted -and $candidateUrl -and $registered) {
+            $publicationAttempted = $true
+            $url = $candidateUrl
+            if (-not (Wait-DashboardPublicReady -Url $url)) {
+                Write-LogLine "[ERROR] Public dashboard readiness checks exhausted; URL was not saved or emailed." $LogFile
             } else {
-                Write-LogLine "[INFO] Email send mode link_only: URL was generated but email was skipped." $LogFile
+                Set-Content -LiteralPath $LatestUrlFile -Value $url -Encoding utf8 -ErrorAction Stop
+                Write-LogLine "[INFO] Public Main and Flow routes verified; URL saved: $url" $LogFile
+                $send = Invoke-DashboardEmailDelivery -Mode $sendMode -GmailSend {
+                    Send-UrlByGmailApi -Url $url -To $emailToResolved -From $EmailFrom -SubjectPrefix $EmailSubjectPrefix -PythonPath $PythonExe -ScriptPath $GmailApiScript -CredentialsPath $GmailCredentialsFile -TokenPath $GmailTokenFile -AllowInteractiveAuth $allowInteractive
+                } -SmtpSend {
+                    Send-UrlBySmtp -Url $url -To $emailToResolved -From $EmailFrom -User $SmtpUser -AppPassword $SmtpAppPassword -Server $SmtpServer -Port $SmtpPort -SubjectPrefix $EmailSubjectPrefix
+                }
+                if ($send.ok) {
+                    if ($send.skipped) {
+                        Write-LogLine "[INFO] Email send mode link_only: verified URLs were saved; email skipped." $LogFile
+                    } else {
+                        Write-LogLine "[INFO] Dashboard Main and Flow email sent successfully to $emailToResolved. $($send.reason)" $LogFile
+                    }
+                    $announced = $true
+                } else {
+                    Write-LogLine "[ERROR] Dashboard email failed; not marked sent. $($send.reason)" $LogFile
+                    if ($send.delivery_unknown) { Write-LogLine "[WARN] Delivery outcome is unknown; automatic retry/fallback suppressed to avoid duplicates." $LogFile }
+                }
+                try { Set-Clipboard -Value $url } catch {}
             }
-
-            try { Set-Clipboard -Value $url } catch {}
-            $announced = $true
         }
     }
 

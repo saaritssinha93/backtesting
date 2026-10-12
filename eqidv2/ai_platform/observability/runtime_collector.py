@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
+from fno_strategy_registry import PROFILES, active_profile_name
+
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -451,7 +453,9 @@ class RuntimeMetricsCollector:
         textfile_max_age_seconds: float = 300.0,
         now: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
+        profile: str | None = None,
     ) -> None:
+        self.profile = PROFILES[profile or active_profile_name()]
         self.runtime_root = Path(runtime_root).expanduser().resolve()
         self.observability_root = Path(
             observability_root or self.runtime_root / "observability"
@@ -785,7 +789,7 @@ class RuntimeMetricsCollector:
         return [item[2] for item in sorted(newest, reverse=True)]
 
     def _collect_heartbeats(self, samples: _Samples, now: datetime) -> None:
-        canonical = self.runtime_root / "fno_oi" / "v13_v10_g_live" / "live_kite" / "heartbeat.json"
+        canonical = self.runtime_root / "fno_oi" / self.profile.live_dir / "live_kite" / "heartbeat.json"
         paths = [canonical] if canonical.is_file() else []
         paths.extend(
             self._direct_files(
@@ -836,7 +840,7 @@ class RuntimeMetricsCollector:
         and therefore emits a failure even when scanner evidence is absent.
         """
 
-        labels = {"pipeline": "v13_v10_g_scanner", "mode": "live"}
+        labels = {"pipeline": self.profile.slug + "_scanner", "mode": "live"}
         slot_datetimes = [
             datetime.combine(
                 now.date(), day_time.fromisoformat(value), tzinfo=IST
@@ -859,7 +863,7 @@ class RuntimeMetricsCollector:
         heartbeat = self._read_artifact(
             self.runtime_root
             / "runtime_status"
-            / f"{_V13_SCANNER_SESSION}.heartbeat",
+            / f"fno_{self.profile.slug}_scanner_5min.heartbeat",
             max_bytes=256 * 1024,
         )
         stamp = self._semantic_timestamp(heartbeat) if heartbeat else None
@@ -1072,10 +1076,12 @@ class RuntimeMetricsCollector:
             )
 
     def _replay_candidates(self) -> list[Path]:
-        root = self.runtime_root / "backtesting_result_v13_v10_g"
-        latest = root / "latest" / "latest_backtesting_result_v13_v10_g.json"
+        root = self.runtime_root / self.profile.backtest_dir
+        latest = root / "latest" / f"latest_backtesting_result_{self.profile.slug}.json"
         rows = [latest] if latest.is_file() else []
-        rows.extend(self._bounded_recursive_files(root / "runs", "replay_result.json", limit=128))
+        run_root = root / "production" / "runs" if self.profile.name == "V13_V10_G_3" else root / "runs"
+        artifact_name = "run_manifest.json" if self.profile.name == "V13_V10_G_3" else "replay_result.json"
+        rows.extend(self._bounded_recursive_files(run_root, artifact_name, limit=128))
         return rows
 
     @staticmethod
@@ -1102,6 +1108,18 @@ class RuntimeMetricsCollector:
             result = self._success_payload(payload)
             if result is None:
                 continue
+            if self.profile.name == "V13_V10_G_3":
+                # G3 health requires explicit production identity and all
+                # sealed artifacts; an archived G/G3 success cannot satisfy it.
+                from ai_platform.adapters.daily_replay import verified_g3_result
+                try:
+                    result = verified_g3_result(path)
+                except Exception:
+                    continue
+                if (result.get("strategy_version") != self.profile.version
+                        or not self._expected_fingerprint()
+                        or result.get("strategy_fingerprint") != self._expected_fingerprint()):
+                    continue
             try:
                 session_day = date.fromisoformat(
                     str(result.get("session_date") or payload.get("session_date"))[:10]
@@ -1130,7 +1148,7 @@ class RuntimeMetricsCollector:
                 continue
             if newest is None or (session_day, epoch) > newest:
                 newest = session_day, epoch
-        labels = {"profile": "v13-v10-g", "replay_kind": "daily"}
+        labels = {"profile": self.profile.label.lower(), "replay_kind": "daily"}
         required = self._required_replay_date(now)
         due = newest is None or newest[0] < required
         samples.add("trading_replay_due", 1 if due else 0, labels)
@@ -1144,7 +1162,7 @@ class RuntimeMetricsCollector:
         profiles = payload.get("profiles")
         if not isinstance(profiles, dict):
             return ""
-        profile = profiles.get("V13_V10_G")
+        profile = profiles.get(self.profile.name)
         return (
             str(profile.get("strategy_fingerprint", "")).strip()
             if isinstance(profile, dict)
@@ -1155,12 +1173,12 @@ class RuntimeMetricsCollector:
         expected = self._expected_fingerprint()
         if not expected:
             return
-        root = self.runtime_root / "fno_oi" / "v13_v10_g_live"
+        root = self.runtime_root / "fno_oi" / self.profile.live_dir
         active_paths = (
             root / "live_kite" / "status.json",
             root / "live_kite" / "heartbeat.json",
         )
-        default_service = "fno_v13_v10_g_live_kite_qty1"
+        default_service = f"fno_{self.profile.slug}_live_kite_qty1"
         active: list[tuple[datetime, dict[str, object], str]] = []
         for path in active_paths:
             payload = self._read_artifact(path)
@@ -1209,7 +1227,7 @@ class RuntimeMetricsCollector:
         samples.add(
             "trading_strategy_fingerprint_mismatch",
             1 if any(value != expected for value in observed) else 0,
-            {"service": service, "strategy": "v13_v10_g", "mode": "live"},
+            {"service": service, "strategy": self.profile.slug, "mode": "live"},
         )
 
     @staticmethod
@@ -1296,7 +1314,8 @@ class RuntimeMetricsCollector:
         for service, (_, payload) in records.items():
             restarts = self._finite_field(payload, ("restart_count",))
             mode = self._mode(payload, service)
-            strategy = "v13_v10_g" if "v13_v10_g" in service.lower() else "unknown"
+            strategy = ("v13_v10_g_3" if "v13_v10_g_3" in service.lower() else
+                        "v13_v10_g" if "v13_v10_g" in service.lower() else "unknown")
             if restarts is not None and restarts >= 0:
                 samples.add(
                     "trading_process_restarts_total", restarts,
@@ -1306,7 +1325,7 @@ class RuntimeMetricsCollector:
             samples.add("trading_clock_offset_seconds", offset, {"service": service})
 
     def _collect_local_protection(self, samples: _Samples, now: datetime) -> None:
-        root = self.runtime_root / "fno_oi" / "v13_v10_g_live" / "orders" / "LIVE"
+        root = self.runtime_root / "fno_oi" / self.profile.live_dir / "orders" / "LIVE"
         paths = self._bounded_recursive_files(root, "*.json", limit=2048, max_depth=5)
         if not paths:
             return
@@ -1415,6 +1434,11 @@ class RuntimeMetricsCollector:
             payload = self._read_artifact(path, max_bytes=2 * 1024 * 1024)
             if not payload:
                 continue
+            if self.profile.name == "V13_V10_G_3" and (
+                payload.get("strategy_version") != self.profile.version
+                or payload.get("strategy_fingerprint") != self._expected_fingerprint()
+            ):
+                continue
             mismatch_counts: dict[tuple[str, str], int] = defaultdict(int)
             feature_counts: dict[str, int] = defaultdict(int)
             report_digest = self._verified_reconciliation_digest(payload)
@@ -1507,7 +1531,7 @@ class RuntimeMetricsCollector:
             if (
                 report_digest is not None
                 and payload.get("schema_version")
-                == "v13_v10_g_broker_position_reconciliation_v2"
+                == self.profile.slug + "_broker_position_reconciliation_v2"
                 and isinstance(broker, dict)
                 and broker.get("broker_truth_available") is True
             ):
@@ -1563,7 +1587,7 @@ class RuntimeMetricsCollector:
         for feature, count in self._reconciliation_feature_totals.items():
             samples.add(
                 "trading_feature_parity_mismatch_total", count,
-                {"strategy": "v13_v10_g", "feature": feature},
+                {"strategy": self.profile.slug, "feature": feature},
             )
         if latest_broker is not None:
             samples.add(

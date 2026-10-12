@@ -1,5 +1,9 @@
 # V13-V10-G dashboard, paper trading and live execution
 
+> Current deployment, 12 October 2026: the active operational profile is **V13-V10-G-3**, at `PAPER_VALIDATION` with LIVE disabled. Follow the [G3 implementation record](docs/V13_V10_G3_MIGRATION_PLAN_2026-10-11.md#implementation-record--12-october-2026). The G paths, policy dates and auto-arming launchers described below are retained historical reference, not the active deployment instructions.
+
+> G3 LIVE sizing update, 12 October 2026: [₹10,000 capital × 5](docs/V13_V10_G3_LIVE_SIZING_2026-10-12.md) replaces the active G3 one-share execution setting. The `qty1` task/file namespace remains compatible. PAPER/backtest sizing and LIVE activation gates are unchanged.
+
 **Policy update effective 2026-10-06:** All dated equity scanner, confirmation,
 paper and quantity-one live sessions adopt the G-2 09:25 LONG relaxation and
 1.25% to 1.00% stop tightening after 120 minutes. See

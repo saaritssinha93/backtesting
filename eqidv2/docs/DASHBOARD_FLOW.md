@@ -1,6 +1,24 @@
 # Dashboard Flow
 
+Active G3 publication contract (12 October 2026): the default is the hash-verified cumulative G3 history referenced by `backtesting_result_v13_v10_g_3/latest/current_history.json`, falling back only to a verified G3 production daily package while history is being built. An invalid current package cannot silently fall back to G or an unverified research export. Historical G-3, G-2, G remain selectable in decreasing version order. Excluded source sessions and newer failed attempts are shown explicitly. Refresh follows the newest verified generation; historical selections retain their saved identity. See the [implementation record](V13_V10_G3_MIGRATION_PLAN_2026-10-11.md#implementation-record--12-october-2026).
+
 Dashboard Flow is a separate visual workspace for retained **V13-V10-G, G-2 and G-3 backtesting**. It reads saved CSV evidence, offers full-history and daily replay selection, and presents performance and trade details. It does not place trades or modify the source results.
+
+
+## Live flow and five-minute session review
+
+Open **Live flow** in the top navigation, or append `#live` to the authenticated Dashboard Flow URL. This read-only workspace uses the same authentication on ports 8787 and 8790. It reads local files only and has no order or strategy-control action.
+
+- Select a retained session and any five-minute boundary from **09:15 to 15:30 IST**. Follow latest refreshes saved data; pausing and replaying earlier slots keeps the selected time fixed. Future slots and source gaps remain explicit.
+- LONG and SHORT show up to **15 stocks each**. Price change and five-minute change sort descending for LONG and ascending for SHORT. Absolute OI sorts descending on both sides; positive OI-change ranking includes only OI increases and also sorts descending on both sides. The direction uses the selected price reference, not the sign of OI.
+- The default price reference is a verified previous-session closing bar. If none exists but a prior real bar is retained, the view explicitly offers a **last real prior-session price proxy**. The selected reference, timestamp and coverage are shown; mixed or missing baselines are never silently substituted. October 9's gap-filled final cash bars mean today's previous close may be unavailable.
+- Five-minute price and OI changes use adjacent completed boundaries. OI belongs to the dated near-month futures contract, not cash shares; its percentage change compares the same contract. The 09:15 opening point is reconstructed from the first completed candle's open and is labelled accordingly. It is not a real-time opening tick.
+- Select a stock to inspect its path through the selected time and source metrics. **Strategy decisions / misses** shows recorded G-3 base filters, published candidates, later confirmation outcomes and saved PAPER/LIVE or verified backtest evidence. Market rankings are descriptive, not recomputed entry decisions.
+- A base-pass row absent from published candidates is labelled as such. It is **not proof of a missed executable trade**. In particular, the preserved October 12 09:25 and 09:30 packets contain 5 and 15 base-pass candidates respectively but zero publications; the timestamp incident is documented in `G3_ISSUES_FIXED_2026-10-12.md`.
+
+The authenticated endpoint is `GET /api/dashboard-flow/live?date=YYYY-MM-DD`; omitting the date selects today in IST. Concurrent requests for the same session share one load, with up to four responses cached for at most 20 seconds. Follow latest polls every 30 seconds. First reads on a busy server can take up to 90 seconds; failures preserve the last successful view, and an initial failure pauses automatic retries until Refresh. Dates are validated and callers cannot supply source paths. The adapter reads equity indicator/candle directories, `fno_oi/raw_contracts_5m`, dated near-month universes, `fno_oi/v13_v10_g_3_live` scanner/confirmation/order evidence, and verified G3 historical packages. Source paths and coverage are exposed in the view. Historical market reconstruction is kept separate from as-recorded strategy decisions; missing data never creates a zero return, signal, order or execution. Historical G, G-2 and G-3 performance tabs remain separate.
+
+Implementation: `dashboard_flow_live.py` joins the market adapter (`dashboard_flow_live_data.py`) with recorded evidence (`dashboard_flow_live_evidence.py`); `dashboard_flow_live.js` and `.css` render the session workspace; `dashboard_flow_live_cache.py` coalesces simultaneous reads. Opening `#live` loads market data directly and defers the historical backtest request until a research tab is selected. The main server serves the same assets and authenticated API for both dashboard instances.
 
 ## Open it
 
