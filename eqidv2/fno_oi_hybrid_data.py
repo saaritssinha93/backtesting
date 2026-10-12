@@ -280,7 +280,7 @@ def completed_real_equity_five_minute_bars(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ("gap_filled", "opening_snapshot", "provisional_stale"):
         if column in out.columns:
             flagged = (
-                pd.to_numeric(out[column], errors="coerce").fillna(0).ne(0)
+                pd.to_numeric(out[column].astype(object), errors="coerce").fillna(0).ne(0)
                 | out[column].astype(str).str.strip().str.lower().isin({"true", "yes", "on"})
             )
             eligible &= ~flagged
@@ -326,7 +326,7 @@ def aggregate_equity_one_minute_to_five_minute(frame: pd.DataFrame) -> pd.DataFr
     for column in ("gap_filled", "opening_snapshot", "provisional_stale"):
         if column in minute.columns:
             flagged = (
-                pd.to_numeric(minute[column], errors="coerce").fillna(0).ne(0)
+                pd.to_numeric(minute[column].astype(object), errors="coerce").fillna(0).ne(0)
                 | minute[column].astype(str).str.strip().str.lower().isin({"true", "yes", "on"})
             )
             eligible &= ~flagged

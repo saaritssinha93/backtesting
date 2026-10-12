@@ -195,6 +195,8 @@ def _ticker_is_fresh_strict(
     expected = core.expected_last_stamp(mode, now_ist_dt, holidays, intraday_ts)["value"]
     if expected.tzinfo is None:
         expected = core.IST_TZ.localize(expected)
+    if core._is_closing_target(expected, intraday_ts):
+        return bool(last_ts >= expected - timedelta(seconds=1)) and core._closing_row_quality(existing_path, expected) == "VERIFIED"
     return bool(last_ts >= expected - timedelta(seconds=1))
 
 

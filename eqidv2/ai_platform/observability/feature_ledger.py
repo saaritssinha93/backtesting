@@ -130,7 +130,7 @@ def evaluate_v13_v10_g_base_row(
     """
 
     if strategy_config is None:
-        if strategy_version == "V13-V10-G-3-PRODUCTION-V1" or row.get("strategy_profile") == "V13_V10_G_3":
+        if strategy_version.startswith("V13-V10-G-3-PRODUCTION-") or row.get("strategy_profile") == "V13_V10_G_3":
             import fno_v13_v10_g_3_live_config as strategy_config
         else:
             import fno_v13_v10_g_live_config as strategy_config
@@ -245,7 +245,7 @@ def evaluate_v13_v10_g_base_row(
             or (base_side == "SHORT" and close < o and close < signal_close)
         )
     )
-    minimum_confirmation_volume = (config.confirmation_volume_minimum(base_side)
+    minimum_confirmation_volume = (config.confirmation_volume_minimum(base_side, signal_end=signal_end)
         if g3 and base_side in {"LONG", "SHORT"} else (math.inf if g3 else config.MIN_CONFIRMATION_VOLUME_RATIO))
     confirmation_volume = bool(
         math.isfinite(numeric["v9_1m_volume_ratio"])

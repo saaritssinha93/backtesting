@@ -38,7 +38,9 @@ def harness(tmp_path, monkeypatch):
 
     def verify(day, root):
         calls.append(("verify", day))
-        return dict(date=day.isoformat(), scope="fno", overall_status="PASS", overall_exit_code=0)
+        return dict(date=day.isoformat(), scope="fno_g_replay_1515", overall_status="PASS",
+                    overall_exit_code=0, verified_cutoff_ist=f"{day}T15:15:00+05:30",
+                    full_cash_session_verified=False)
 
     def replay(day, output):
         calls.append(("replay", day))
@@ -261,50 +263,55 @@ def test_artifact_from_another_day_fails_even_with_today_manifest(tmp_path):
         daily.validate_result(result, DAY)
 
 
-@pytest.mark.parametrize("field,bad", [("date", "2026-09-11"), ("scope", "all"),
-                                      ("overall_status", "WARN"), ("overall_exit_code", 1)])
-def test_verification_is_dated_fno_scoped_and_restores_shared_directory(tmp_path, monkeypatch, field, bad):
+def _good_g_scan(day=DAY):
+    return dict(overall="PASS", exit_code=0, expected_bars=360,
+                expected_first_timestamp=f"{day}T09:16:00+05:30",
+                expected_last_timestamp=f"{day}T15:15:00+05:30",
+                total_tickers=2, ok=2, fail=0)
+
+
+@pytest.mark.parametrize("field,bad", [("overall", "FAIL"), ("exit_code", 2),
+                                      ("expected_bars", 359), ("ok", 1)])
+def test_g_cutoff_verification_rejects_incomplete_inputs(tmp_path, monkeypatch, field, bad):
     import data_for_backtesting_verify as verifier
-    legacy = tmp_path / "legacy_verification"
     root = tmp_path / "g_daily"
-    monkeypatch.setattr(verifier, "VERIFY_DIR", legacy)
-
-    def verify(day, scope):
-        assert day == DAY.isoformat() and scope == "fno"
-        assert verifier.VERIFY_DIR.is_relative_to(root)
-        payload = dict(date=day, scope=scope, overall_status="PASS", overall_exit_code=0)
-        payload[field] = bad
-        daily.common.atomic_write_json(verifier.VERIFY_DIR / f"data_verify_{day}.json", payload)
-        return 0
-
-    monkeypatch.setattr(verifier, "run_verify", verify)
-    with pytest.raises(ValueError, match="verification did not pass"):
+    monkeypatch.setattr(verifier, "_fno_equity_universe",
+                        lambda day: ({"ABC", "XYZ"}, tmp_path / "dated_universe.parquet"))
+    scan = _good_g_scan()
+    scan[field] = bad
+    monkeypatch.setattr(verifier, "_scan_parquet_dir", lambda *args, **kwargs: scan)
+    with pytest.raises(ValueError, match="verification did not pass through 15:15"):
         daily.verify_data(DAY, root)
-    assert verifier.VERIFY_DIR == legacy
-    assert not legacy.exists()
+    proofs = list((root / "verification").glob("*/g_strategy_input_verify_*.json"))
+    assert len(proofs) == 1
+    proof = json.loads(proofs[0].read_text(encoding="utf-8"))
+    assert proof["overall_status"] == "FAIL"
+    assert proof["full_cash_session_verified"] is False
 
 
-def test_verification_exception_restores_shared_directory(tmp_path, monkeypatch):
+def test_verification_exception_does_not_write_generic_proof(tmp_path, monkeypatch):
     import data_for_backtesting_verify as verifier
-    legacy = tmp_path / "legacy_verification"
-    monkeypatch.setattr(verifier, "VERIFY_DIR", legacy)
-
+    root = tmp_path / "g_daily"
+    monkeypatch.setattr(verifier, "_fno_equity_universe",
+                        lambda day: ({"ABC"}, tmp_path / "dated_universe.parquet"))
     def fail(*args, **kwargs):
         raise RuntimeError("SIMULATED_VERIFICATION_CRASH")
-
-    monkeypatch.setattr(verifier, "run_verify", fail)
+    monkeypatch.setattr(verifier, "_scan_parquet_dir", fail)
     with pytest.raises(RuntimeError, match="SIMULATED_VERIFICATION_CRASH"):
-        daily.verify_data(DAY, tmp_path / "g_daily")
-    assert verifier.VERIFY_DIR == legacy
+        daily.verify_data(DAY, root)
+    assert not (root / "verification").exists()
 
 
-def test_old_verification_file_is_not_accepted_if_no_new_proof_is_written(tmp_path, monkeypatch):
+def test_old_generic_verification_file_cannot_satisfy_g_cutoff(tmp_path, monkeypatch):
     import data_for_backtesting_verify as verifier
     root = tmp_path / "g_daily"
     daily.common.atomic_write_json(root / "verification" / f"data_verify_{DAY}.json",
                                   dict(date=DAY.isoformat(), scope="fno", overall_status="PASS", overall_exit_code=0))
-    monkeypatch.setattr(verifier, "run_verify", lambda *args, **kwargs: 0)
-    with pytest.raises((FileNotFoundError, ValueError, RuntimeError)):
+    monkeypatch.setattr(verifier, "_fno_equity_universe",
+                        lambda day: ({"ABC", "XYZ"}, tmp_path / "dated_universe.parquet"))
+    monkeypatch.setattr(verifier, "_scan_parquet_dir",
+                        lambda *args, **kwargs: {**_good_g_scan(), "ok": 1, "fail": 1})
+    with pytest.raises(ValueError, match="verification did not pass through 15:15"):
         daily.verify_data(DAY, root)
 
 
@@ -353,8 +360,8 @@ def test_data_wait_uses_requested_day_and_latest_producer_attempt(tmp_path, monk
     assert publications[0][2] == "WAITING_FOR_DATA"
 
 
-@pytest.mark.parametrize("state,timeout", [("FAIL", 30), ("WAIT", 0)])
-def test_failed_or_timed_out_producer_blocks_without_sleep(tmp_path, monkeypatch, state, timeout):
+@pytest.mark.parametrize("state,timeout,expected", [("FAIL", 30, True), ("WAIT", 0, False)])
+def test_failed_producer_defers_to_g_check_but_timeout_blocks(tmp_path, monkeypatch, state, timeout, expected):
     import wait_for_data_backtesting_ready as readiness
     observed, publications = [], []
 
@@ -367,28 +374,35 @@ def test_failed_or_timed_out_producer_blocks_without_sleep(tmp_path, monkeypatch
     monkeypatch.setattr(daily.time, "monotonic", lambda: 0.)
     monkeypatch.setattr(daily.time, "sleep", lambda delay: pytest.fail("Must not sleep after failure or timeout"))
     args = SimpleNamespace(output_root=tmp_path, timeout_sec=timeout, poll_sec=15.)
-    assert daily.wait_for_data(DAY, args) is False
+    assert daily.wait_for_data(DAY, args) is expected
     assert observed == [DAY.isoformat()]
-    assert publications[-1][2] == "BLOCKED_DATA_NOT_READY"
+    if expected:
+        assert not publications
+    else:
+        assert publications[-1][2] == "BLOCKED_DATA_NOT_READY"
 
 
-def test_fresh_verification_is_accepted_and_never_writes_legacy_root(tmp_path, monkeypatch):
+def test_fresh_g_cutoff_verification_passes_without_full_close(tmp_path, monkeypatch):
     import data_for_backtesting_verify as verifier
-    legacy = tmp_path / "legacy_verification"
     root = tmp_path / "g_daily"
-    monkeypatch.setattr(verifier, "VERIFY_DIR", legacy)
-    payload = dict(date=DAY.isoformat(), scope="fno", overall_status="PASS", overall_exit_code=0)
-
-    def verify(day, scope):
-        assert verifier.VERIFY_DIR.is_relative_to(root)
-        assert scope == "fno" and day == DAY.isoformat()
-        daily.common.atomic_write_json(verifier.VERIFY_DIR / f"data_verify_{day}.json", payload)
-        return 0
-
-    monkeypatch.setattr(verifier, "run_verify", verify)
-    assert daily.verify_data(DAY, root) == payload
-    assert verifier.VERIFY_DIR == legacy
-    assert not legacy.exists()
+    calls = []
+    monkeypatch.setattr(verifier, "_fno_equity_universe",
+                        lambda day: ({"ABC", "XYZ"}, tmp_path / "dated_universe.parquet"))
+    def scan(source, day, expected, **kwargs):
+        calls.append((source, day, expected, kwargs))
+        return _good_g_scan()
+    monkeypatch.setattr(verifier, "_scan_parquet_dir", scan)
+    proof = daily.verify_data(DAY, root)
+    assert proof["overall_status"] == "PASS"
+    assert proof["scope"] == "fno_g_replay_1515"
+    assert proof["verified_cutoff_ist"] == f"{DAY}T15:15:00+05:30"
+    assert proof["full_cash_session_verified"] is False
+    assert len(calls) == 1
+    assert calls[0][1] == DAY.isoformat()
+    assert calls[0][3]["required_tickers"] == {"ABC", "XYZ"}
+    assert calls[0][3]["require_closing_bar"] is False
+    assert calls[0][3]["now"].strftime("%H:%M") == "15:15"
+    assert len(list((root / "verification").glob("*/g_strategy_input_verify_*.json"))) == 1
 
 
 def test_incomplete_coverage_has_blocked_status_and_no_success_metrics(harness, monkeypatch):

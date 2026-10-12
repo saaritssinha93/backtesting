@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from fno_v13_v10_g_3_contract import STRATEGY_VERSION as G3_STRATEGY_VERSION
+
 WORKSPACE = Path(__file__).resolve().parent
 ACTIVE_PROFILE_PATH = WORKSPACE / "configs" / "strategies" / "active_profile.json"
 
@@ -51,7 +53,7 @@ class StrategyProfile:
 
 PROFILES = {
     "V13_V10_G": StrategyProfile("V13_V10_G", "v13_v10_g", "V13-V10-G", "FNO_V13_V10_G_RETAINED_20260914"),
-    "V13_V10_G_3": StrategyProfile("V13_V10_G_3", "v13_v10_g_3", "V13-V10-G-3", "V13-V10-G-3-PRODUCTION-V1"),
+    "V13_V10_G_3": StrategyProfile("V13_V10_G_3", "v13_v10_g_3", "V13-V10-G-3", G3_STRATEGY_VERSION),
 }
 
 

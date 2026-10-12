@@ -1,6 +1,7 @@
 """Historical aggregation and allowlisted discovery contracts for Dashboard Flow."""
 
 import csv
+import hashlib
 import json
 
 import pytest
@@ -19,6 +20,9 @@ def write_csv(path, rows):
 @pytest.fixture
 def data_root(tmp_path, monkeypatch):
     monkeypatch.setattr(flow, "DATA_ROOT", tmp_path)
+    # These fixtures describe legacy archive discovery, not promoted G3
+    # production packages. Keep the user's active deployment out of this test.
+    monkeypatch.setattr(flow, "active_profile_name", lambda: "V13_V10_G")
     return tmp_path
 
 
@@ -96,6 +100,56 @@ def test_all_three_families_are_selectable_without_mixing_results(data_root):
     for value in ("../unrelated", str(make_run(data_root)), "missing-run"):
         with pytest.raises(ValueError, match="Unknown dashboard run"):
             flow.load_flow_data(value)
+
+
+def test_latest_selection_is_scoped_to_requested_strategy(data_root):
+    for strategy_root, pnl in (
+        ("backtesting_result_v13_v10_g/runs/2026-10-09/g", 10),
+        ("fno_oi/strategy_research/v13_corrected_v10_g_2/run_20261010_g2", 20),
+        ("backtesting_result_v13_v10_g_3/runs/2026-10-09/g3", 30),
+    ):
+        write_csv(data_root / strategy_root / "daily_results.csv", [dict(day="2026-10-09", trades=0, wins=0, losses=0, net_pnl=pnl)])
+    assert flow.load_flow_data(strategy="V13-V10-G-2")["selected_run"]["strategy"] == "V13-V10-G-2"
+    assert flow.load_flow_data(strategy="V13-V10-G")["selected_run"]["strategy"] == "V13-V10-G"
+    with pytest.raises(ValueError, match="known strategy"):
+        flow.load_flow_data(strategy="../../private")
+    with pytest.raises(ValueError, match="one saved run"):
+        flow.load_flow_data(run_id="g-id", strategy="V13-V10-G")
+
+
+@pytest.mark.parametrize("variant_id,target", [
+    ("V13-V10-G-3-BT-0950-LONG-V1", 1.0),
+    ("V13-V10-G-3-BT-0950-LONG-T075-V1", .75),
+])
+def test_hash_verified_backtest_only_g3_variant_is_selectable(data_root, variant_id, target):
+    run = data_root / flow._G3_RESEARCH_ROOT / "run_20261012_full49_v1"
+    write_csv(run / "daily_results.csv", [dict(day="2026-10-12", variant_fills=1, variant_wins=1, variant_net_pnl_rs=4750)])
+    write_csv(run / "variant_trades.csv", [dict(day="2026-10-12", tradingsymbol="AAA", side="LONG",
+        setup_id="0951_LONG", portfolio_executed=True, portfolio_net_profit_rupees=4750,
+        portfolio_gross_profit_rupees=5000, portfolio_cost_rupees=250)])
+    (run / "config.json").write_text(json.dumps({"scope": "BACKTEST_ONLY", "variant_id": variant_id,
+        "new_setup": {"target_pct": target}}), encoding="utf-8")
+    (run / "summary.json").write_text(json.dumps({"variant_id": variant_id,
+        "scope": "BACKTEST_ONLY", "execution_authority": False, "sessions": 1,
+        "first_date": "2026-10-12", "last_date": "2026-10-12",
+        "with_0950_long": {"fills": 1, "wins": 1, "net_pnl_rs": 4750}}), encoding="utf-8")
+    files = {name: hashlib.sha256((run / name).read_bytes()).hexdigest() for name in
+        ("daily_results.csv", "variant_trades.csv", "config.json", "summary.json")}
+    (run / "manifest.json").write_text(json.dumps({"variant_id": variant_id,
+        "execution_authority": False, "files": files}), encoding="utf-8")
+    payload = flow.load_flow_data()
+    variant = next(row for row in payload["runs"] if row["kind"] == "research_variant")
+    selected = flow.load_flow_data(variant["id"])
+    assert selected["summary"]["net_pnl"] == 4750
+    assert selected["summary"]["trades"] == 1
+    assert selected["summary"]["profit_factor"] is None
+    assert selected["trades"][0]["symbol"] == "AAA"
+    assert selected["selected_run"]["role"] == "backtest_only"
+    assert selected["selected_run"]["target_pct"] == target
+    assert selected["selected_run"]["promoted_rules"] is False
+    assert any("research backtest has no order execution authority" in warning for warning in selected["warnings"])
+    (run / "daily_results.csv").write_text("tampered", encoding="utf-8")
+    assert not any(row["kind"] == "research_variant" for row in flow.load_flow_data()["runs"])
 
 
 def make_full_run(root, name, trades):

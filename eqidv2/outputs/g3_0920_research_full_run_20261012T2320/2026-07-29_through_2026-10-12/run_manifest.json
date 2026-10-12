@@ -1,0 +1,13 @@
+{
+  "schema": "g3_0920_research_history_run_v1",
+  "created_at": "2026-10-12T23:09:16.380768+05:30",
+  "trading_logic_changed": false,
+  "immutable_output": true,
+  "requested_calendar_start": "2026-07-29",
+  "requested_calendar_through": "2026-10-12",
+  "artifacts_sha256": {
+    "features.parquet": "79f9a28a6820591b33991fc054891dc003bb468445fcf15b2d15aa2d4a593c94",
+    "features.csv": "659c58021bacb3d9b3b1097be38f097f14a83fb66bc1f48236ff335f4038c0ab",
+    "coverage.json": "cdc7a0dbfbafa6a50cdbe91502a27cc2d30c6c8ffa9609ba8fe8bb4620109e9b"
+  }
+}

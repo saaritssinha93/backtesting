@@ -91,6 +91,18 @@ def test_flow_api_passes_only_selected_run(monkeypatch):
     assert handler.response_headers["Cache-Control"] == "no-store"
 
 
+def test_flow_api_selects_latest_within_one_strategy(monkeypatch):
+    import dashboard_flow
+    monkeypatch.setattr(dashboard_flow, "load_flow_data", lambda run, strategy=None: {"run": run, "strategy": strategy})
+    handler = Handler("/api/dashboard-flow?strategy=V13-V10-G-2")
+    handler.do_GET()
+    assert handler.status == 200
+    assert json.loads(handler.wfile.getvalue()) == {"run": None, "strategy": "V13-V10-G-2"}
+    duplicate = Handler("/api/dashboard-flow?strategy=V13-V10-G-2&strategy=V13-V10-G")
+    duplicate.do_GET()
+    assert duplicate.status == 400
+
+
 def test_flow_api_rejects_unknown_run(monkeypatch):
     import dashboard_flow
     def invalid(run):

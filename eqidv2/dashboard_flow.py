@@ -15,7 +15,8 @@ from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from fno_strategy_registry import active_profile_name, expected_fingerprint, PROFILES
+from fno_strategy_registry import active_profile_name, g3_live_activation_authorized, PROFILES
+from fno_v13_v10_g_3_contract import confirmation_volume_minimum, setup_for, supported_identity
 
 
 DATA_ROOT = Path(r"C:\TradingData\eqidv2")
@@ -25,6 +26,32 @@ _SOURCES = (
     ("g2", "V13-V10-G-2", "V13-V10-G-2 backtesting", "fno_oi/strategy_research/v13_corrected_v10_g_2", "run_*/daily_results.csv"),
     ("g3", "V13-V10-G-3", "V13-V10-G-3 backtesting", "backtesting_result_v13_v10_g_3", "runs/*/*/daily_results.csv"),
 )
+_G3_RESEARCH_ROOT = "fno_oi/strategy_research/v13_v10_g_3_0950_long_backtesting"
+_G3_RESEARCH_TARGETS = {
+    "V13-V10-G-3-BT-0950-LONG-V1": 1.0,
+    "V13-V10-G-3-BT-0950-LONG-T075-V1": 0.75,
+}
+_STRATEGIES = {"V13-V10-G-3", "V13-V10-G-2", "V13-V10-G"}
+
+
+def _uses_current_g3_0950_rules(config: dict) -> bool:
+    """Say rules were promoted only when this saved configuration still matches."""
+    spec = config.get("new_setup")
+    setup = setup_for("09:50", "LONG")
+    if not isinstance(spec, dict) or setup is None:
+        return False
+    fields = {
+        "signal_end": setup.signal_end, "confirmation_end": setup.confirmation_end,
+        "side": setup.side, "mode": setup.mode, "max_entries": setup.max_entries,
+        "picker": setup.picker, "price_change_pct": setup.price_change_pct,
+        "oi_change_pct": setup.oi_change_pct, "five_minute_volume_ratio_min": setup.volume_ratio,
+        "one_minute_body_ratio_min": setup.body_ratio,
+        "one_minute_upper_wick_ratio_max": setup.max_wick_ratio,
+        "one_minute_volume_ratio_min": confirmation_volume_minimum("LONG", setup_id=setup.setup_id),
+        "initial_stop_pct": setup.stop_pct, "target_pct": setup.target_pct,
+        "require_green_candle": True, "require_close_above_signal_close": True,
+    }
+    return all(spec.get(name) == value for name, value in fields.items())
 
 
 @lru_cache(maxsize=128)
@@ -47,8 +74,13 @@ def _verified_g3_runs() -> list[tuple[dict, Path]]:
     """Discover only promoted, hash-verified production/history packages."""
     root = DATA_ROOT / "backtesting_result_v13_v10_g_3"
     found = []
+    pointers = []
     for filename, role in (("current_history.json", "cumulative_history"), ("current_run.json", "production_daily")):
-        pointer_path = root / "latest" / filename
+        pointers.append((root / "latest" / filename, role, None))
+        pointers.extend((path, role, path.parent.name)
+                        for path in sorted((root / "latest" / "archived").glob("*/" + filename)))
+    seen = set()
+    for pointer_path, role, archived_version in pointers:
         try:
             if not _inside(pointer_path, DATA_ROOT) or not pointer_path.is_file():
                 continue
@@ -66,9 +98,11 @@ def _verified_g3_runs() -> list[tuple[dict, Path]]:
                     or pointer.get("session_date") != manifest.get("session_date")
                     or run.relative_to(root).parts[:2] != (expected_tree, "runs")):
                 continue
-            version = PROFILES["V13_V10_G_3"].version
-            fingerprint = expected_fingerprint("V13_V10_G_3")
-            if (not fingerprint or manifest.get("complete") is not True
+            version = manifest.get("strategy_version")
+            fingerprint = manifest.get("strategy_fingerprint")
+            if (not supported_identity(version, fingerprint, allow_legacy=True)
+                    or (archived_version is not None and archived_version != version)
+                    or manifest.get("complete") is not True
                     or manifest.get("state", manifest.get("status")) not in {"SUCCESS", "SUCCESS_WITH_EXCLUDED_SESSIONS"}
                     or manifest.get("role") != role or pointer.get("role") != role
                     or any(record.get("strategy_version") != version
@@ -90,13 +124,21 @@ def _verified_g3_runs() -> list[tuple[dict, Path]]:
             if not days:
                 continue
             identity = run.relative_to(root).as_posix()
+            if identity in seen:
+                continue
+            seen.add(identity)
+            current_strategy = supported_identity(version, fingerprint)
+            source_label = "G-3 verified cumulative backtest" if role == "cumulative_history" else "G-3 production daily backtest"
+            if not current_strategy:
+                source_label = f"Archived {version} verified result"
             found.append(({
                 "id": "g3p-" + hashlib.sha256(identity.encode()).hexdigest()[:16],
                 "label": "V13-V10-G-3 · " + run.name,
                 "strategy": "V13-V10-G-3", "run_name": run.name,
-                "source_label": "G-3 verified cumulative backtest" if role == "cumulative_history" else "G-3 production daily backtest",
+                "source_label": source_label,
                 "kind": "production_history" if role == "cumulative_history" else "production_daily",
                 "role": role, "verified": True,
+                "strategy_matches_active": current_strategy,
                 "strategy_version": version, "strategy_fingerprint": fingerprint,
                 "period_start": days[0], "period_end": days[-1], "sessions": len(days),
                 "coverage": coverage,
@@ -192,8 +234,108 @@ def _full_sessions(run: Path, warnings: list[str]) -> list[str]:
     return sessions if len(sessions) == count and sessions[0] == first and sessions[-1] == last else []
 
 
+def _verified_g3_0950_runs(root: Path, manifests, *, current: bool = False) -> list[tuple[dict, Path]]:
+    """Verify complete 09:50 historical runs without changing the live book."""
+    found = []
+    if not _inside(root, DATA_ROOT):
+        return found
+    for manifest_path in manifests:
+        run = manifest_path.parent
+        try:
+            if not _inside(run, root):
+                continue
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            files = manifest["files"]
+            if (manifest.get("variant_id") not in _G3_RESEARCH_TARGETS
+                    or (current and manifest["variant_id"] != "V13-V10-G-3-BT-0950-LONG-T075-V1")
+                    or manifest.get("execution_authority") is not False
+                    or not {"summary.json", "daily_results.csv", "variant_trades.csv", "config.json"}.issubset(files)
+                    or any(Path(name).name != name or not _inside(run / name, run)
+                           or not _checked_hash(run / name, digest) for name, digest in files.items())):
+                continue
+            summary = json.loads((run / "summary.json").read_text(encoding="utf-8-sig"))
+            config = json.loads((run / "config.json").read_text(encoding="utf-8-sig"))
+            if (summary.get("variant_id") != manifest["variant_id"]
+                    or summary.get("scope") != "BACKTEST_ONLY"
+                    or summary.get("execution_authority") is not False
+                    or config.get("scope") != "BACKTEST_ONLY"
+                    or ("variant_id" in config and config["variant_id"] != manifest["variant_id"])
+                    or ("new_setup" in config and
+                        config["new_setup"].get("target_pct") != _G3_RESEARCH_TARGETS[manifest["variant_id"]])):
+                continue
+            if current and (summary.get("frozen_baseline_parity") is not True
+                    or summary.get("existing_g3_trades_unchanged") is not True
+                    or summary.get("sessions") != 49
+                    or config != json.loads((Path(__file__).resolve().parent / "configs/strategies/v13_v10_g_3_backtest_0950_long_target075_v1.json").read_text(encoding="utf-8"))
+                    or not _checked_hash(Path(manifest["code"]), manifest.get("code_sha256"))):
+                continue
+            rows = _rows(run / "daily_results.csv", [])
+            days = [_day(_text(row, "day")) for row in rows]
+            variant = summary["with_0950_long"]
+            if (not days or "" in days or len(set(days)) != len(days)
+                    or days != sorted(days) or len(days) != summary.get("sessions")
+                    or days[0] != summary.get("first_date") or days[-1] != summary.get("last_date")
+                    or _sum(_numeric(row, "variant_fills") for row in rows) != variant["fills"]
+                    or _sum(_numeric(row, "variant_wins") for row in rows) != variant["wins"]
+                    or not math.isclose(_sum(_numeric(row, "variant_net_pnl_rs") for row in rows),
+                                        variant["net_pnl_rs"], abs_tol=0.02)):
+                continue
+            identity = run.relative_to(root).as_posix()
+            promoted_rules = _uses_current_g3_0950_rules(config)
+            found.append(({
+                "id": ("g3b-" if current else "g3r-") + hashlib.sha256(identity.encode()).hexdigest()[:16],
+                "label": "V13-V10-G-3 · " + run.name,
+                "strategy": "V13-V10-G-3", "run_name": run.name,
+                "source_label": "G-3 09:50 LONG research backtest · no execution authority",
+                "kind": "research_variant", "role": "backtest_history" if current else "backtest_only",
+                "integrity_verified": True, "verified": current,
+                "promoted_rules": promoted_rules,
+                "target_pct": _G3_RESEARCH_TARGETS[manifest["variant_id"]],
+                "period_start": days[0], "period_end": days[-1], "sessions": len(days),
+                "created_at_ist": summary.get("created_at_ist"),
+                "_run_dir": str(run), "_ledger": "variant_trades.csv",
+            }, run / "daily_results.csv"))
+            if current:
+                found[-1][0]["source_label"] = (
+                    "G-3 current 09:50 LONG historical backtest using production V2 rules"
+                    if promoted_rules else "G-3 current 09:50 LONG historical backtest; no execution authority")
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            continue
+    return found
+
+
+def _verified_g3_research_runs() -> list[tuple[dict, Path]]:
+    root = DATA_ROOT / _G3_RESEARCH_ROOT
+    return _verified_g3_0950_runs(root, root.glob("run_*/manifest.json"))
+
+
+def _verified_g3_current_backtest() -> list[tuple[dict, Path]]:
+    root = DATA_ROOT / "backtesting_result_v13_v10_g_3"
+    pointer_path = root / "latest" / "current_backtest.json"
+    try:
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8-sig"))
+        relative = Path(pointer["run_dir"])
+        if (pointer.get("schema_version") != "fno_g3_current_backtest_v1"
+                or pointer.get("role") != "backtest_history"
+                or pointer.get("execution_authority") is not False
+                or relative.is_absolute() or relative.parts[:2] != ("backtests", "runs")
+                or len(relative.parts) != 4 or relative.parts[2] != pointer.get("session_date")):
+            return []
+        run = root / relative
+        manifest_path = run / "manifest.json"
+        if not _inside(run, root) or not _checked_hash(manifest_path, pointer["manifest_sha256"]):
+            return []
+        found = _verified_g3_0950_runs(root, [manifest_path], current=True)
+        if (len(found) != 1 or found[0][0]["period_end"] != pointer["session_date"]
+                or pointer.get("variant_id") != "V13-V10-G-3-BT-0950-LONG-T075-V1"):
+            return []
+        return found
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return []
+
+
 def _discover() -> list[tuple[dict, Path]]:
-    found = _verified_g3_runs()
+    found = _verified_g3_runs() + _verified_g3_current_backtest() + _verified_g3_research_runs()
     for prefix, strategy, source_label, relative, pattern in _SOURCES:
         root = DATA_ROOT / relative
         if not _inside(root, DATA_ROOT):
@@ -227,11 +369,17 @@ def _discover() -> list[tuple[dict, Path]]:
                 "sessions": len(sessions),
             }
             found.append((meta, daily_path))
-    # Newest strategy first, then newest run; retain full-history priority within G.
+    # Preserve authoritative history before daily or research variants, then
+    # choose the latest covered session within that source category.
     family_order = {"V13-V10-G-3": 3, "V13-V10-G-2": 2, "V13-V10-G": 1}
     found.sort(key=lambda entry: (family_order[entry[0]["strategy"]],
-        2 if entry[0].get("role") == "cumulative_history" else 1 if entry[0].get("verified") else 0,
-        entry[0]["kind"] == "full_history", entry[0]["run_name"]), reverse=True)
+        4 if entry[0].get("role") in {"backtest_history", "cumulative_history"} else
+        3 if entry[0].get("role") == "production_daily" else
+        2 if entry[0]["kind"] == "full_history" else
+        1 if entry[0]["kind"] == "research_variant" else 0,
+        entry[0]["period_end"] or "",
+        1 if entry[0].get("role") == "backtest_history" else 0,
+        entry[0].get("created_at_ist") or entry[0]["run_name"]), reverse=True)
     return found
 
 
@@ -388,15 +536,17 @@ def _summary(daily: list[dict], trades: list[dict], warnings: list[str]) -> dict
     return result
 
 
-def load_flow_data(run_id: str | None = None) -> dict:
+def load_flow_data(run_id: str | None = None, strategy: str | None = None) -> dict:
     """Return normalized historical evidence; reject IDs absent from discovery."""
+    if strategy is not None and (strategy not in _STRATEGIES or run_id is not None):
+        raise ValueError("Choose one known strategy or one saved run.")
     discovered = _discover()
     runs = [{k: v for k, v in metadata.items() if not k.startswith("_")} for metadata, _ in discovered]
-    selected = next((entry for entry in discovered if entry[0]["id"] == run_id), None) if run_id else (discovered[0] if discovered else None)
+    selected = next((entry for entry in discovered if entry[0]["id"] == run_id), None) if run_id else next((entry for entry in discovered if strategy is None or entry[0]["strategy"] == strategy), None)
     if run_id and selected is None:
         raise ValueError("Unknown dashboard run.")
     warnings: list[str] = []
-    if not run_id and active_profile_name() == "V13_V10_G_3":
+    if not run_id and (strategy is None or strategy == "V13-V10-G-3") and active_profile_name() == "V13_V10_G_3":
         for name, label in (("status.json", "Daily backtest"), ("history_status.json", "History rebuild")):
             status_path = DATA_ROOT / "backtesting_result_v13_v10_g_3" / name
             try:
@@ -406,16 +556,35 @@ def load_flow_data(run_id: str | None = None) -> dict:
                     warnings.append(f"{label} attempt for {attempt.get('session_date', 'the requested period')}: {state}. Only the last verified complete package can be displayed.")
             except (OSError, ValueError, AttributeError):
                 pass
-    if not run_id and active_profile_name() == "V13_V10_G_3" and (selected is None or not selected[0].get("verified")):
+    if not run_id and (strategy is None or strategy == "V13-V10-G-3") and active_profile_name() == "V13_V10_G_3" and (selected is None or not selected[0].get("verified")):
         selected = None
         warnings.append("Active G-3 has no verified complete backtest. Historical runs remain available from the run selector.")
     if selected:
         metadata, path = selected
+        if metadata.get("strategy_matches_active") is False:
+            warnings.append(f"This saved result uses {metadata['strategy_version']}. Current paper/live decisions use {PROFILES['V13_V10_G_3'].version}; the saved history has not been relabeled or recomputed.")
         trades = _load_trades(Path(metadata.get("_run_dir", path.parent)), warnings, metadata.get("_ledger"))
         excluded_sessions = metadata.get("coverage", {}).get("excluded_sessions", [])
         if excluded_sessions:
             warnings.append(f"{len(excluded_sessions)} source sessions were excluded from this backtest. See the coverage report for dates and reasons; these are not zero-trade days.")
-        daily = _load_full_daily(path.parent, trades, warnings) if metadata["kind"] == "full_history" else _load_daily(path, trades, warnings)
+        if metadata["kind"] == "full_history":
+            daily = _load_full_daily(path.parent, trades, warnings)
+        elif metadata["kind"] == "research_variant":
+            rows = [{"day": row.get("day"), "trades": row.get("variant_fills"),
+                     "wins": row.get("variant_wins"),
+                     "losses": _number(row.get("variant_fills")) - _number(row.get("variant_wins")),
+                     "net_pnl": row.get("variant_net_pnl_rs")}
+                    for row in _rows(path, warnings)]
+            daily = _normalize_daily(rows, trades, warnings)
+            if metadata.get("promoted_rules") and active_profile_name() == "V13_V10_G_3":
+                live_state = ("LIVE execution authorization is active."
+                              if g3_live_activation_authorized() else
+                              "LIVE order execution is currently disabled.")
+                warnings.append("This saved historical simulation uses the 09:50 LONG / 0.75% target rules configured in G-3 V2 for PAPER, daily backtesting, and the LIVE rule book. Its modeled fills are not PAPER or broker orders; the saved run cannot place orders. " + live_state)
+            else:
+                warnings.append("This saved G-3 research backtest has no order execution authority. Its results are preserved for review.")
+        else:
+            daily = _load_daily(path, trades, warnings)
         # Keep the ledger in the same date scope as the daily summary.
         dates = {row["date"] for row in daily}
         excluded = sum(trade["date"] not in dates for trade in trades)

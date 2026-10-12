@@ -1,0 +1,1377 @@
+{
+  "schema": "g3_0920_research_history_v1",
+  "first_day": "2026-08-11",
+  "last_day": "2026-10-12",
+  "requested_days": [
+    "2026-08-11",
+    "2026-08-12",
+    "2026-08-13",
+    "2026-08-14",
+    "2026-08-15",
+    "2026-08-16",
+    "2026-08-17",
+    "2026-08-18",
+    "2026-08-19",
+    "2026-08-20",
+    "2026-08-21",
+    "2026-08-22",
+    "2026-08-23",
+    "2026-08-26",
+    "2026-08-27",
+    "2026-08-28",
+    "2026-08-29",
+    "2026-08-30",
+    "2026-08-31",
+    "2026-09-01",
+    "2026-09-02",
+    "2026-09-03",
+    "2026-09-04",
+    "2026-09-05",
+    "2026-09-06",
+    "2026-09-07",
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11",
+    "2026-09-12",
+    "2026-09-13",
+    "2026-09-14",
+    "2026-09-15",
+    "2026-09-16",
+    "2026-09-17",
+    "2026-09-18",
+    "2026-09-19",
+    "2026-09-20",
+    "2026-09-24",
+    "2026-09-25",
+    "2026-09-26",
+    "2026-09-27",
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-03",
+    "2026-10-04",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12"
+  ],
+  "included_days": [
+    "2026-08-11",
+    "2026-08-12",
+    "2026-08-13",
+    "2026-08-14",
+    "2026-08-17",
+    "2026-08-18",
+    "2026-08-19",
+    "2026-08-20",
+    "2026-08-21",
+    "2026-08-26",
+    "2026-08-27",
+    "2026-08-28",
+    "2026-08-31",
+    "2026-09-01",
+    "2026-09-02",
+    "2026-09-03",
+    "2026-09-04",
+    "2026-09-07",
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11",
+    "2026-09-15",
+    "2026-09-16",
+    "2026-09-17",
+    "2026-09-18",
+    "2026-09-24",
+    "2026-09-25",
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-12"
+  ],
+  "skipped_closed_days": [
+    {
+      "day": "2026-08-15",
+      "reason": "NSE market closed: weekend (2026-08-15)"
+    },
+    {
+      "day": "2026-08-16",
+      "reason": "NSE market closed: weekend (2026-08-16)"
+    },
+    {
+      "day": "2026-08-22",
+      "reason": "NSE market closed: weekend (2026-08-22)"
+    },
+    {
+      "day": "2026-08-23",
+      "reason": "NSE market closed: weekend (2026-08-23)"
+    },
+    {
+      "day": "2026-08-29",
+      "reason": "NSE market closed: weekend (2026-08-29)"
+    },
+    {
+      "day": "2026-08-30",
+      "reason": "NSE market closed: weekend (2026-08-30)"
+    },
+    {
+      "day": "2026-09-05",
+      "reason": "NSE market closed: weekend (2026-09-05)"
+    },
+    {
+      "day": "2026-09-06",
+      "reason": "NSE market closed: weekend (2026-09-06)"
+    },
+    {
+      "day": "2026-09-12",
+      "reason": "NSE market closed: weekend (2026-09-12)"
+    },
+    {
+      "day": "2026-09-13",
+      "reason": "NSE market closed: weekend (2026-09-13)"
+    },
+    {
+      "day": "2026-09-14",
+      "reason": "NSE market closed: Ganesh Chaturthi (2026-09-14)"
+    },
+    {
+      "day": "2026-09-19",
+      "reason": "NSE market closed: weekend (2026-09-19)"
+    },
+    {
+      "day": "2026-09-20",
+      "reason": "NSE market closed: weekend (2026-09-20)"
+    },
+    {
+      "day": "2026-09-26",
+      "reason": "NSE market closed: weekend (2026-09-26)"
+    },
+    {
+      "day": "2026-09-27",
+      "reason": "NSE market closed: weekend (2026-09-27)"
+    },
+    {
+      "day": "2026-10-02",
+      "reason": "NSE market closed: Mahatma Gandhi Jayanti (2026-10-02)"
+    },
+    {
+      "day": "2026-10-03",
+      "reason": "NSE market closed: weekend (2026-10-03)"
+    },
+    {
+      "day": "2026-10-04",
+      "reason": "NSE market closed: weekend (2026-10-04)"
+    },
+    {
+      "day": "2026-10-10",
+      "reason": "NSE market closed: weekend (2026-10-10)"
+    },
+    {
+      "day": "2026-10-11",
+      "reason": "NSE market closed: weekend (2026-10-11)"
+    }
+  ],
+  "trading_sessions": 38,
+  "stock_rows": 7986,
+  "cash_first_bars": 7951,
+  "real_0921_confirmations": 7951,
+  "valid_0916_oi_changes": 2082,
+  "signal_inputs_received_by_0921": 0,
+  "complete_decision_evidence_by_0922": 0,
+  "per_day": [
+    {
+      "session_date": "2026-08-11",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-11.parquet",
+        "master_date": "2026-08-11",
+        "rows": 213,
+        "file_sha256": "24170f39c7cf99021553396e40e0d88a435f857364b2423dcfbe9312539dbf09",
+        "universe_sha256": "18c496bbf9e09b6914d073cba21c4c6c56305da1ed5759f4f91cc8cb66c19ad5",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 213,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 5,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 193,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 14,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 1
+      }
+    },
+    {
+      "session_date": "2026-08-12",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-12.parquet",
+        "master_date": "2026-08-12",
+        "rows": 214,
+        "file_sha256": "e318f0492afe6581c5aa00ad4b5a1926a715ea5c8bf6037b5d42b556e39ef45b",
+        "universe_sha256": "8dd7565bd3ea954a09098b8b1b1fd94161ecc11bf15974745a0f5c8cea4082d6",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 214,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-08-13",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-13.parquet",
+        "master_date": "2026-08-13",
+        "rows": 214,
+        "file_sha256": "de36030f184aec36f49bc8f40ad24ad8055f574878fa029133b3efe847a54291",
+        "universe_sha256": "8dd7565bd3ea954a09098b8b1b1fd94161ecc11bf15974745a0f5c8cea4082d6",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 214,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-08-14",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-14.parquet",
+        "master_date": "2026-08-14",
+        "rows": 214,
+        "file_sha256": "95de308315b676679993ab73d8f36a0ff27ea8cbcd822b37623291b13a617eb9",
+        "universe_sha256": "8dd7565bd3ea954a09098b8b1b1fd94161ecc11bf15974745a0f5c8cea4082d6",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 214,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-08-17",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-17.parquet",
+        "master_date": "2026-08-17",
+        "rows": 214,
+        "file_sha256": "bc0c135d8419b2cc98b347c2f5a5629b81e9228a535a7f7d7b8e2d82c13831b8",
+        "universe_sha256": "8dd7565bd3ea954a09098b8b1b1fd94161ecc11bf15974745a0f5c8cea4082d6",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 214,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-08-18",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-18.parquet",
+        "master_date": "2026-08-18",
+        "rows": 214,
+        "file_sha256": "6b2266788b4e7d83a08502611e1ca6a59cce5db58b83792f3fedb138e993a928",
+        "universe_sha256": "8dd7565bd3ea954a09098b8b1b1fd94161ecc11bf15974745a0f5c8cea4082d6",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 214,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-08-19",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-19.parquet",
+        "master_date": "2026-08-19",
+        "rows": 214,
+        "file_sha256": "dd61d84acf49187c8e67ad3d56498dfd7f1a5b87d7b1b7a24e8d01acea6ef403",
+        "universe_sha256": "8dd7565bd3ea954a09098b8b1b1fd94161ecc11bf15974745a0f5c8cea4082d6",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 214,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-08-20",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-20.parquet",
+        "master_date": "2026-08-20",
+        "rows": 214,
+        "file_sha256": "4dc01b5b77f6e1d0b4ca73d3b8c56b08dee57a0442ea61797d8a0b575f2272d7",
+        "universe_sha256": "8dd7565bd3ea954a09098b8b1b1fd94161ecc11bf15974745a0f5c8cea4082d6",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 214,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 3
+      }
+    },
+    {
+      "session_date": "2026-08-21",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-21.parquet",
+        "master_date": "2026-08-21",
+        "rows": 214,
+        "file_sha256": "4fdf6efa665bb4ec36cd9684f9103164a9a77e6153844aaf33f2dfe99d663327",
+        "universe_sha256": "8dd7565bd3ea954a09098b8b1b1fd94161ecc11bf15974745a0f5c8cea4082d6",
+        "contract_month_filter": "26AUG",
+        "selected_contracts": 214,
+        "mapped_stock_futures": 208,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "2cc160189f87bff4eb987a15a4684d95619ee9c810db3cd37276b114ad5824bf",
+        "mapped_symbol_set_sha256": "d42f87a9c5fc8ab1710b09b6c4c9832c9d19ecc440ef92b84cad6981499a05a3"
+      },
+      "stock_rows": 208,
+      "cash_first_bars": 207,
+      "real_0921_confirmations": 207,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-08-26",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-26.parquet",
+        "master_date": "2026-08-26",
+        "rows": 216,
+        "file_sha256": "7a304d8325519828e0bb51e518a9651f0c4acb031de19e8ea62c08cc1e214236",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 3,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 207,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-08-27",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-27.parquet",
+        "master_date": "2026-08-27",
+        "rows": 216,
+        "file_sha256": "54ad2f31e079b8527262ce203190775b4bd4d6739bff8d4f132aaba799fad4d6",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 5,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 205,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-08-28",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-28.parquet",
+        "master_date": "2026-08-28",
+        "rows": 216,
+        "file_sha256": "0334ba27b27a01f60e9ebe878aab45276e7f13ee0001e5dd46c6e258d7964d7e",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 5,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 205,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-08-31",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-31.parquet",
+        "master_date": "2026-08-31",
+        "rows": 216,
+        "file_sha256": "f9e2b9dfbb1dbe998460bfbd147abe4083c1c097408b7a5ab3af2fdbead3c217",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 209,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 1
+      }
+    },
+    {
+      "session_date": "2026-09-01",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-01.parquet",
+        "master_date": "2026-09-01",
+        "rows": 216,
+        "file_sha256": "db50cfc18af69ad5c7d2ae5dae1701ed8a55bb7c3831c2b89e00736fd7cfe230",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 3,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 207,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-09-02",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-02.parquet",
+        "master_date": "2026-09-02",
+        "rows": 216,
+        "file_sha256": "e4ce1336a6d5a002521e012eb42a3ba05d486a9c61c7650c52acf3d508852b5e",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 1,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 209,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-09-03",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-03.parquet",
+        "master_date": "2026-09-03",
+        "rows": 216,
+        "file_sha256": "cd1af97034cb5ea1ee9925603d80817fe6393bbed73687a5c10727aaa1731ffb",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 1,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 209,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-09-04",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-04.parquet",
+        "master_date": "2026-09-04",
+        "rows": 216,
+        "file_sha256": "e18873e8893c6247a98b1a4dc8792511f21435d9423a5e131193c5af32bc8a29",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 2,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 208,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-09-07",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-07.parquet",
+        "master_date": "2026-09-07",
+        "rows": 216,
+        "file_sha256": "692f69aea2d541323a7bc0c33df1229c0bcdc3f4077b0b4536bc599050f24ff7",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 6,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 204,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 2
+      }
+    },
+    {
+      "session_date": "2026-09-08",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-08.parquet",
+        "master_date": "2026-09-08",
+        "rows": 216,
+        "file_sha256": "bc4a795e7039ee337ef3467b31428dcd97e476b457a2f7c9a28d8f60fff8b44f",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 209,
+        "MISSING_G3_RESEARCH_INDICATORS": 2,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 5,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 1
+      }
+    },
+    {
+      "session_date": "2026-09-09",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-09.parquet",
+        "master_date": "2026-09-09",
+        "rows": 216,
+        "file_sha256": "d789d10c01c9ed1774d762512bd0b87c54cf8b72b44acb9e4f3de598ebb75648",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 4,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 206,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-09-10",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-10.parquet",
+        "master_date": "2026-09-10",
+        "rows": 216,
+        "file_sha256": "c33f32f6c0b80cc2ffa35a2b7086606323bf8f20ae2d183b1a516f12f9db0b85",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 1,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 209,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 2
+      }
+    },
+    {
+      "session_date": "2026-09-11",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-11.parquet",
+        "master_date": "2026-09-11",
+        "rows": 216,
+        "file_sha256": "b7a542b2868de36235f2fcc1ad7a8399bd5f5755c0c367252e89c5b327660a24",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 5,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 205,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-09-15",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-15.parquet",
+        "master_date": "2026-09-15",
+        "rows": 216,
+        "file_sha256": "993fc4ebb1bd0f668228435513f4a16ab80eefd743997a4df3f11769a5377449",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 210,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 2
+      }
+    },
+    {
+      "session_date": "2026-09-16",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-16.parquet",
+        "master_date": "2026-09-16",
+        "rows": 216,
+        "file_sha256": "24cdaa18dfdc871400a6092868199e5a56f28b4748e42c9f871b8261697e2ff1",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 210,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 2
+      }
+    },
+    {
+      "session_date": "2026-09-17",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-17.parquet",
+        "master_date": "2026-09-17",
+        "rows": 216,
+        "file_sha256": "ae6c34a97f8e5708e571b907098e8c16673ae64dc5c8e41499a6b46a18ca0f0c",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 210,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 2
+      }
+    },
+    {
+      "session_date": "2026-09-18",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-18.parquet",
+        "master_date": "2026-09-18",
+        "rows": 216,
+        "file_sha256": "ad382a31fc8deb48734293b8224b91dda515f4b5b7e6a85263c9037fa616ac76",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 210,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-09-24",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-24.parquet",
+        "master_date": "2026-09-24",
+        "rows": 216,
+        "file_sha256": "b5eab79af364d87f2ba350346031982969faf6c7b48ab411420d21e955f5bfd7",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 210,
+        "MISSING_G3_RESEARCH_INDICATORS": 3
+      }
+    },
+    {
+      "session_date": "2026-09-25",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-25.parquet",
+        "master_date": "2026-09-25",
+        "rows": 216,
+        "file_sha256": "bb2017305292a7eafd6832da42e043ae633fd3f5e1b8588205286465699a51a0",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 210,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-09-28",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-28.parquet",
+        "master_date": "2026-09-28",
+        "rows": 216,
+        "file_sha256": "1c7bcfe1dc6c7b996026f7152960d5f49a06e009aad1decefc2c652749003644",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 210,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1
+      }
+    },
+    {
+      "session_date": "2026-09-29",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-29.parquet",
+        "master_date": "2026-09-29",
+        "rows": 216,
+        "file_sha256": "1848bedb8ea7f18b928be5fd44c38857b782c3d278bbc7533990d5a798edea58",
+        "universe_sha256": "e840c9955fedf19e48b1bc6b337c7225900b26b333604be455c6c8d2f250e007",
+        "contract_month_filter": "26SEP",
+        "selected_contracts": 216,
+        "mapped_stock_futures": 210,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "c35b25af281c690d780a5d32dc3e84e1ca662007f2570a3db3bec0ef3e3585d9",
+        "mapped_symbol_set_sha256": "f50edf9cb5fdb33d1210578647b428781150de4130ca2fa0b56247cb728d35c4"
+      },
+      "stock_rows": 210,
+      "cash_first_bars": 209,
+      "real_0921_confirmations": 209,
+      "valid_0916_oi_changes": 0,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 210,
+        "MISSING_G3_RESEARCH_INDICATORS": 1
+      }
+    },
+    {
+      "session_date": "2026-09-30",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-09-30.parquet",
+        "master_date": "2026-09-30",
+        "rows": 219,
+        "file_sha256": "9ce84ffb311fd50d2c76906de8da8e043194d0ae7bd91ecbce3d6d791326b572",
+        "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+        "contract_month_filter": "26OCT",
+        "selected_contracts": 219,
+        "mapped_stock_futures": 213,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+        "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+      },
+      "stock_rows": 213,
+      "cash_first_bars": 212,
+      "real_0921_confirmations": 212,
+      "valid_0916_oi_changes": 205,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 4,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 4
+      }
+    },
+    {
+      "session_date": "2026-10-01",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-01.parquet",
+        "master_date": "2026-10-01",
+        "rows": 219,
+        "file_sha256": "f1b4b9d7a44ca775bb6df4ab52a71c761919e34033a419531cc976d606fc452a",
+        "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+        "contract_month_filter": "26OCT",
+        "selected_contracts": 219,
+        "mapped_stock_futures": 213,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+        "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+      },
+      "stock_rows": 213,
+      "cash_first_bars": 212,
+      "real_0921_confirmations": 212,
+      "valid_0916_oi_changes": 204,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 1,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 8
+      }
+    },
+    {
+      "session_date": "2026-10-05",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-05.parquet",
+        "master_date": "2026-10-05",
+        "rows": 219,
+        "file_sha256": "89028d8bea06b528f6785846982bb233b32e11f814bcb186cb293e33bd93185a",
+        "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+        "contract_month_filter": "26OCT",
+        "selected_contracts": 219,
+        "mapped_stock_futures": 213,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+        "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+      },
+      "stock_rows": 213,
+      "cash_first_bars": 212,
+      "real_0921_confirmations": 212,
+      "valid_0916_oi_changes": 211,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 1,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 1
+      }
+    },
+    {
+      "session_date": "2026-10-06",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-06.parquet",
+        "master_date": "2026-10-06",
+        "rows": 219,
+        "file_sha256": "e2edc75117085fa70174a3537c8c277073f44a42ee082ff87ecc64b1719c73e9",
+        "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+        "contract_month_filter": "26OCT",
+        "selected_contracts": 219,
+        "mapped_stock_futures": 213,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+        "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+      },
+      "stock_rows": 213,
+      "cash_first_bars": 212,
+      "real_0921_confirmations": 212,
+      "valid_0916_oi_changes": 198,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_G3_RESEARCH_INDICATORS": 2,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 13,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 2,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 2
+      }
+    },
+    {
+      "session_date": "2026-10-07",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-07.parquet",
+        "master_date": "2026-10-07",
+        "rows": 219,
+        "file_sha256": "34a6901bc122423e83a8e5fed3408de200f5b96e364bd2cd70ea5ebb2e4109a7",
+        "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+        "contract_month_filter": "26OCT",
+        "selected_contracts": 219,
+        "mapped_stock_futures": 213,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+        "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+      },
+      "stock_rows": 213,
+      "cash_first_bars": 212,
+      "real_0921_confirmations": 212,
+      "valid_0916_oi_changes": 208,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_FLAGGED_CASH_FIRST_BAR": 1,
+        "MISSING_OR_FLAGGED_0921_MINUTE": 1,
+        "MISSING_G3_RESEARCH_INDICATORS": 1,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 4,
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 1
+      }
+    },
+    {
+      "session_date": "2026-10-08",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-08.parquet",
+        "master_date": "2026-10-08",
+        "rows": 219,
+        "file_sha256": "b2a98f7ce7438a5a1b27dd605aee83512f01857b1d396b31d9643da32f40b714",
+        "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+        "contract_month_filter": "26OCT",
+        "selected_contracts": 219,
+        "mapped_stock_futures": 213,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+        "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+      },
+      "stock_rows": 213,
+      "cash_first_bars": 213,
+      "real_0921_confirmations": 213,
+      "valid_0916_oi_changes": 202,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 2,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 2,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 9
+      }
+    },
+    {
+      "session_date": "2026-10-09",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-09.parquet",
+        "master_date": "2026-10-09",
+        "rows": 219,
+        "file_sha256": "6bd1e8dfda7de570618a4dc3436f3eb69115da72f1ce0b6e688e1520842a8fad",
+        "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+        "contract_month_filter": "26OCT",
+        "selected_contracts": 219,
+        "mapped_stock_futures": 213,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+        "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+      },
+      "stock_rows": 213,
+      "cash_first_bars": 213,
+      "real_0921_confirmations": 213,
+      "valid_0916_oi_changes": 211,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "INVALID_ZERO_FIRST_MINUTE_OI": 2
+      }
+    },
+    {
+      "session_date": "2026-10-12",
+      "universe": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-12.parquet",
+        "master_date": "2026-10-12",
+        "rows": 219,
+        "file_sha256": "d496efd1fe749d5f009251b7a85363bbcd431da624d45c30f78679924a79a39e",
+        "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+        "contract_month_filter": "26OCT",
+        "selected_contracts": 219,
+        "mapped_stock_futures": 213,
+        "excluded_index_futures": 6,
+        "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+        "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+      },
+      "stock_rows": 213,
+      "cash_first_bars": 213,
+      "real_0921_confirmations": 213,
+      "valid_0916_oi_changes": 205,
+      "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+      "signal_inputs_received_by_0921": 0,
+      "complete_decision_evidence_by_0922": 0,
+      "missing_reason_counts": {
+        "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+        "MISSING_OR_INVALID_FIRST_MINUTE_OI": 2,
+        "INVALID_ZERO_FIRST_MINUTE_OI": 6
+      }
+    }
+  ],
+  "trading_logic_changed": false,
+  "semantics": {
+    "cash": "Completed 09:15-09:20 first bar from five genuine cash minutes; full-history EMA/volume warmup is causal",
+    "oi": "Same dated contract 09:16 minute to 09:20 completed bar over four minutes; post-market acquisition is retrospective",
+    "confirmation": "Separate 09:21 completed cash minute, never available as of 09:20",
+    "receipt_flags": "True only for evidence timestamped received after its candle end and before the stated cutoff"
+  },
+  "requested_calendar_start": "2026-08-11",
+  "requested_calendar_through": "2026-10-12",
+  "skipped_missing_universe_days": [
+    "2026-08-24",
+    "2026-08-25",
+    "2026-09-21",
+    "2026-09-22",
+    "2026-09-23"
+  ],
+  "data_root": "C:\\TradingData\\eqidv2"
+}

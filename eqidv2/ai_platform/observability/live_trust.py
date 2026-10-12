@@ -829,7 +829,9 @@ def _profile_identity(profile_name: str, runtime_root: Path) -> tuple[str, str]:
         raise ValueError("Invalid registered strategy identity")
     if profile_name == "V13_V10_G_3":
         from fno_v13_v10_g_3_contract import config_fingerprint, load_contract
-        load_contract(workspace / "configs/strategies/v13_v10_g_3_production_v1.json")
+        production_config = (workspace / record["production_config_relative_path"]).resolve()
+        production_config.relative_to((workspace / "configs/strategies").resolve())
+        load_contract(production_config)
         if fingerprint != config_fingerprint():
             raise ValueError("G3 registered strategy fingerprint differs from the production contract")
     else:

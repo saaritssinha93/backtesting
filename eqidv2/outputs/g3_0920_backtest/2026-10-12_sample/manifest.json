@@ -1,0 +1,15 @@
+{
+  "variant_id": "V13-V10-G-3-BT-0920-LONG-SHORT-V1",
+  "execution_authority": false,
+  "code": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\research\\g3_0920_backtest.py",
+  "code_sha256": "70f9382be1cbd62dab673e1865d7d7cc90d636ebe984414f9c2b4c775a1d5338",
+  "files": {
+    "added_0920_orders.csv": "bb924d500743c9cff0b6d7b420ea66eef8eb8aacbd4a137ebe73b1ec3f7c8ad0",
+    "added_0920_trades.csv": "87622c870406f817807cea3f18e3a04ea7414a36336bc38af046346f238d2796",
+    "baseline_trades.csv": "b5adfeac2cfa5750203659d4aa45088b48bde61837cc653a1c51d1f19dfbd7d9",
+    "daily_comparison.csv": "0cd683fd7f5b7a171fa5c1e714aae2a90522bcb58ca72bec9c41dc0edf7e6c3b",
+    "selection_audit_0920.csv": "3670b9f22c1e3cade4aa7e3da5598eb65f7219f8e952a5a9059e6f6651847aa2",
+    "summary.json": "b3380bace2900b0c034cb71cf001309351e6fd35647306ddc3237a92eaa37ab7",
+    "variant_trades.csv": "6433df2a9c3b3c3f64e34469a6c3069b90ec2e0e7a5d621e247eafb350f0d226"
+  }
+}

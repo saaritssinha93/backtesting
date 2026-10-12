@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 
@@ -20,9 +21,13 @@ def inspect_deployment(*, verify_frozen: bool = True) -> dict:
               workspace / "backtesting_result_v13_v10_g_3_daily.py"]
     missing = [str(path.relative_to(workspace)) for path in paths if not path.is_file()]
     state = deployment_state()
+    promoted = config.setup_for("09:50", "LONG")
     return {"schema_version": "g3_local_preflight_v1", "ready": not missing,
             "strategy_profile": config.STRATEGY_PROFILE, "strategy_version": config.STRATEGY_VERSION,
             "strategy_fingerprint": config.strategy_fingerprint(), "missing_files": missing,
+            "strategy_config_file": str(config.CONFIG_PATH), "active_setup_count": len(config.ACTIVE_SETUPS),
+            "promoted_0950_long_setup": {**asdict(promoted), "minimum_confirmation_volume_ratio":
+                config.confirmation_volume_minimum(promoted.side, signal_end=promoted.signal_end)},
             **config.live_execution_policy.execution_metadata(),
             "configured_profile": state.get("profile"), "deployment_stage": state.get("deployment_stage"),
             "live_activation_authorized": state.get("live_activation_authorized") is True,

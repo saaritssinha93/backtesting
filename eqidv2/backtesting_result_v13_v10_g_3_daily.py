@@ -70,15 +70,19 @@ def render_report(result: dict) -> str:
     excluded = result.get("coverage", {}).get("excluded_sessions", [])
     if excluded:
         lines += ["", "Excluded incomplete sessions: " + ", ".join(row["day"] for row in excluded)]
+    coverage = result.get("coverage", {})
+    if coverage.get("history_scope") == "CURRENT_STRATEGY_REVISION_DAILY_SESSIONS":
+        lines += ["", f"This strategy revision's daily history starts on {coverage['history_start_day']}.",
+                  "Earlier strategy revisions remain archived and are excluded from these totals."]
     return "\n".join(lines) + "\n"
 
 
 def _validate_package(root: Path, directory: Path, manifest: dict, *, role: str | None = None,
-                      require_complete: bool = False) -> None:
+                      require_complete: bool = False, allow_legacy: bool = False) -> None:
     role = role or manifest.get("role")
     if (manifest.get("schema_version") != replay.SCHEMA_VERSION or manifest.get("strategy") != replay.STRATEGY
-            or manifest.get("strategy_version") != contract.STRATEGY_VERSION
-            or manifest.get("strategy_fingerprint") != contract.strategy_fingerprint()
+            or not contract.supported_identity(manifest.get("strategy_version"),
+                                               manifest.get("strategy_fingerprint"), allow_legacy=allow_legacy)
             or manifest.get("execution_authority") is not False or manifest.get("role") != role
             or role not in ("production_daily", "cumulative_history")):
         raise ValueError("Package schema, role, authority, or strategy identity is invalid")
@@ -138,6 +142,12 @@ def publish_result(root: Path, run_dir: Path, result: dict, *, history: bool = F
         old_path = latest / pointer_name
         old = json.loads(old_path.read_text(encoding="utf-8")) if old_path.exists() else {}
         if str(old.get("session_date", "")) <= str(result["session_date"]):
+            if old and (old.get("strategy_version"), old.get("strategy_fingerprint")) != (
+                    result["strategy_version"], result["strategy_fingerprint"]):
+                # Keep the last committed pointer to the prior revision, in
+                # addition to its untouched immutable run and source chain.
+                _read_verified_pointer(root, pointer_name, result["role"], allow_legacy=True)
+                replay.atomic_json(latest / "archived" / old["strategy_version"] / pointer_name, old)
             # The pointer is the commit record. Readers verify the manifest and
             # artifact hashes; mutable presentation summaries are not authority.
             suffix = "history" if history else SESSION
@@ -151,7 +161,7 @@ def publish_result(root: Path, run_dir: Path, result: dict, *, history: bool = F
     return summary
 
 
-def _read_verified_pointer(root: Path, name: str, role: str) -> tuple[Path, dict] | None:
+def _read_verified_pointer(root: Path, name: str, role: str, *, allow_legacy: bool = False) -> tuple[Path, dict] | None:
     pointer_path = root / "latest" / name
     if not pointer_path.is_file():
         return None
@@ -161,10 +171,8 @@ def _read_verified_pointer(root: Path, name: str, role: str) -> tuple[Path, dict
     if not directory.is_relative_to(root.resolve()) or replay.sha256(manifest_path) != pointer.get("manifest_sha256"):
         raise ValueError("Current history pointer/manifest integrity failed")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    _validate_package(root, directory, manifest, role=role, require_complete=True)
+    _validate_package(root, directory, manifest, role=role, require_complete=True, allow_legacy=allow_legacy)
     if (not manifest.get("complete") or manifest.get("role") != role or pointer.get("role") != role
-            or manifest.get("strategy_version") != contract.STRATEGY_VERSION
-            or manifest.get("strategy_fingerprint") != contract.strategy_fingerprint()
             or pointer.get("strategy_version") != manifest["strategy_version"]
             or pointer.get("strategy_fingerprint") != manifest["strategy_fingerprint"]
             or pointer.get("session_date") != manifest["session_date"]):
@@ -244,10 +252,6 @@ def refresh_history(root: Path, daily_dir: Path, daily: dict) -> dict | None:
         return None
     if daily.get("role") != "production_daily" or len(daily.get("days", [])) != 1:
         raise ValueError("History refresh needs exactly one complete production day")
-    previous = _read_verified_pointer(root, "current_history.json", "cumulative_history")
-    if previous is None:
-        return None
-    previous_dir, history = previous
     day = date.fromisoformat(daily["days"][0])
     if (daily.get("strategy_version") != contract.STRATEGY_VERSION
             or daily.get("strategy_fingerprint") != contract.strategy_fingerprint()):
@@ -260,6 +264,40 @@ def refresh_history(root: Path, daily_dir: Path, daily: dict) -> dict | None:
         path = (daily_dir / value["path"]).resolve()
         if not path.is_relative_to(daily_dir) or replay.sha256(path) != value["sha256"]:
             raise ValueError("Daily history member failed artifact verification")
+    previous = _read_verified_pointer(root, "current_history.json", "cumulative_history", allow_legacy=True)
+    if previous is None or not contract.supported_identity(
+            previous[1].get("strategy_version"), previous[1].get("strategy_fingerprint")):
+        # The first daily run of a promoted strategy starts its own history.
+        # Earlier ledgers must be recomputed before they can join this cohort.
+        frames = {}
+        for name in ("candidate_signals", "selected_orders", "selection_audit", "feature_ledger"):
+            item = daily["artifacts"].get(name)
+            if item is not None:
+                frames[name] = pd.read_csv(daily_dir / item["path"])
+        ledger = pd.read_csv(daily_dir / daily["artifacts"]["portfolio_trades"]["path"])
+        revision_boundary = None
+        if previous is not None:
+            previous_dir, previous_manifest = previous
+            revision_boundary = dict(strategy_version=previous_manifest["strategy_version"],
+                strategy_fingerprint=previous_manifest["strategy_fingerprint"],
+                run_dir=str(previous_dir), manifest_sha256=replay.sha256(previous_dir / "run_manifest.json"),
+                ledger_consumed=False)
+        coverage = dict(eligible_days=[str(day)], requested_through=str(day),
+            history_start_day=str(day), history_scope="CURRENT_STRATEGY_REVISION_DAILY_SESSIONS",
+            prior_revision=revision_boundary, excluded_sessions=[], blocking_problems=[],
+            all_available_dated_universes_attempted=False, requested_calendar_coverage_complete=False,
+            complete_usable_session_aggregate=True, incremental_update=True,
+            session_coverage=_session_coverage(root, daily_dir, daily),
+            historical_eligibility_policy=HISTORICAL_ELIGIBILITY_POLICY)
+        run_dir = root / "history" / "runs" / str(day) / _run_id()
+        result = replay._finish(run_dir, days=[day], role="cumulative_history",
+            source_kind="CURRENT_REVISION_G3_PRODUCTION_HISTORY", frames=frames,
+            provenance=dict(source_kind="CURRENT_REVISION_G3_PRODUCTION_HISTORY",
+                completed_legacy_trade_outputs_consumed=False, prior_revision=revision_boundary,
+                daily_member=dict(run_dir=str(daily_dir), manifest_sha256=replay.sha256(daily_dir / "run_manifest.json"))),
+            coverage=coverage, complete=True, ledger=ledger)
+        return publish_result(root, run_dir, result, history=True)
+    previous_dir, history = previous
     def replaced(name):
         pieces, columns = [], []
         for directory, manifest, old in ((previous_dir, history, True), (daily_dir, daily, False)):

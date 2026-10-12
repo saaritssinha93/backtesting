@@ -1,8 +1,9 @@
-"""Publish an unchanged G archive plus a verified, zero-order dated session.
+"""Extend the frozen G archive with a verified dated session.
 
 This intentionally does not claim a regenerated V9 feature dataset. The source
 archive remains the authority for prior results; a sealed daily ledger proves
-the added session with the original retained G selector and settings.
+the added session with the original retained G selector and settings. Genuine
+missing futures-OI exclusions remain visible for dated sessions with trades.
 """
 from __future__ import annotations
 
@@ -68,6 +69,78 @@ def require_zero_complete(source: dict, pool: pd.DataFrame, orders: pd.DataFrame
         raise ValueError("This publisher only handles a proven zero-order session")
 
 
+def require_trade_source(source: dict, pool: pd.DataFrame, orders: pd.DataFrame, day: date) -> None:
+    """A dated trade may use the native replay's disclosed missing-OI exclusions."""
+    coverage = source["coverage"]
+    count = int(coverage["universe_stocks"])
+    excluded = coverage.get("excluded_stocks") or []
+    ignored = coverage.get("ignored_problems") or []
+    excluded_symbols = {str(row["symbol"]) for row in excluded}
+    if (source.get("state") != "SUCCESS" or source.get("complete") is not True
+            or source.get("session_date") != str(day) or not len(orders)
+            or count <= 0 or coverage.get("checked_stocks") != count
+            or coverage.get("included_stocks") != count - len(excluded_symbols)
+            or coverage.get("problems")
+            or len(excluded_symbols) != len(excluded)
+            or any(set(row.get("reasons", [])) != {"MISSING_SIGNAL_OR_PRIOR_FUTURES_OI_BAR"}
+                   for row in excluded)
+            or {str(row.get("symbol")) for row in ignored} != excluded_symbols
+            or any(row.get("reason") != "MISSING_SIGNAL_OR_PRIOR_FUTURES_OI_BAR" for row in ignored)):
+        raise ValueError("Dated trade source lacks complete replay with only disclosed OI exclusions")
+    if (set(pool.day) != {day} or pool.tradingsymbol.nunique() != count - len(excluded_symbols)
+            or set(pool.tradingsymbol) & excluded_symbols
+            or pool.duplicated(["tradingsymbol", "signal_ts"]).any()):
+        raise ValueError("Dated trade features do not match the included stock universe")
+
+
+def verified_dataset_lineage(base_root: Path, last_session: str) -> tuple[Path, dict, list[str], list[Path]]:
+    """Find the full frozen dataset beneath prior sealed dated extensions."""
+    cursor = base_root.resolve()
+    expected_cutoff = last_session
+    extensions: list[str] = []
+    evidence: list[Path] = []
+    visited: set[Path] = set()
+    while True:
+        if cursor in visited:
+            raise ValueError("Circular G archive source lineage")
+        visited.add(cursor)
+        metadata = g2.read_json(cursor / "g_backtest/run_metadata.json")
+        if metadata["last_session"] != expected_cutoff:
+            raise ValueError("G archive source lineage cutoff differs")
+        dataset = cursor / "dataset"
+        manifest_path = dataset / "dataset_manifest.json"
+        if manifest_path.is_file():
+            manifest = g2.read_json(manifest_path)
+            if manifest["through_day"] != expected_cutoff:
+                raise ValueError("Full G dataset cutoff differs from source archive")
+            return dataset, manifest, sorted(extensions), evidence
+        proof_path = cursor / "g_backtest/dated_extension_proof.json"
+        extension_path = cursor / "extension_manifest.json"
+        proof = g2.read_json(proof_path)
+        extension = g2.read_json(extension_path)
+        if (proof.get("complete") is not True or proof.get("session_date") != expected_cutoff
+                or int(proof.get("selected_orders", -1)) < 0 or int(proof.get("trades", -1)) < 0
+                or not (proof.get("historical_rows_unchanged") is True
+                        or proof.get("historical_ledger_unchanged") is True)
+                or extension.get("complete") is not True
+                or extension.get("through_day") != expected_cutoff):
+            raise ValueError("Prior G dated extension is not a sealed session")
+        for relative, expected in extension["artifacts"].items():
+            path = (cursor / relative).resolve()
+            if not path.is_relative_to(cursor) or g2.sha256(path) != expected:
+                raise ValueError(f"Prior G dated extension artifact drift: {relative}")
+        for name, expected in proof["input_hashes"].items():
+            if g2.sha256(Path(name)) != expected:
+                raise ValueError(f"Prior G dated extension input drift: {name}")
+        prior = Path(metadata["source_archive"]).resolve()
+        if prior == cursor or Path(proof["source_archive"]).resolve() != prior:
+            raise ValueError("Prior G dated extension source archive differs")
+        extensions.append(expected_cutoff)
+        evidence.extend((proof_path, extension_path))
+        cursor = prior
+        expected_cutoff = g2.read_json(cursor / "g_backtest/run_metadata.json")["last_session"]
+
+
 def prepare(base_root: Path, day: date, staging: Path) -> dict:
     _require_closed(day, datetime.now(IST))
     if staging.exists():
@@ -83,19 +156,19 @@ def prepare(base_root: Path, day: date, staging: Path) -> dict:
     settings = g.checked_settings(g2.read_json(config))
     if settings.get("morning_slots") or settings.get("two_bar_continuation"):
         raise ValueError("This dated source supports the original retained setup book")
-    dataset = base_root / "dataset"
-    dataset_manifest = g2.read_json(dataset / "dataset_manifest.json")
-    if dataset_manifest["through_day"] != metadata["last_session"]:
-        raise ValueError("Archived calendar and metadata cutoff disagree")
+    dataset, dataset_manifest, prior_dated_days, lineage_evidence = verified_dataset_lineage(
+        base_root, metadata["last_session"]
+    )
     # Verify persisted historical inputs, not their mutable upstream raw files.
     for name, expected in dataset_manifest["output_sha256"].items():
         if g2.sha256(dataset / name) != expected:
             raise ValueError(f"Archived dataset artifact drift: {name}")
-    calendar_path = dataset / "source_session_eligibility.csv"
+    calendar_path = base_root / "dataset/source_session_eligibility.csv"
     archived_calendar = pd.read_csv(calendar_path)
     eligible = archived_calendar.loc[archived_calendar.eligible.astype(str).str.lower().eq("true")]
     old_days = sorted(eligible.loc[eligible.day.between(metadata["first_session"], metadata["last_session"]), "day"].tolist())
-    if old_days != dataset_manifest["days"] or len(old_days) != int(metadata["session_count"]):
+    if (old_days != sorted([*dataset_manifest["days"], *prior_dated_days])
+            or len(old_days) != int(metadata["session_count"])):
         raise ValueError("Archived session calendar does not reconcile")
     ledger = pd.read_csv(old / "portfolio_trades.csv")
     metrics = g.r.metric(ledger, old_days)
@@ -107,12 +180,15 @@ def prepare(base_root: Path, day: date, staging: Path) -> dict:
     if source_manifest["frozen_config_sha256"] != g2.sha256(config):
         raise ValueError("Dated source references a different retained G configuration")
     pool, strict, orders = retained_selection(run, settings)
-    require_zero_complete(source, pool, orders, day)
+    if len(orders):
+        require_trade_source(source, pool, orders, day)
+    else:
+        require_zero_complete(source, pool, orders, day)
     setups = g.v9.v5.profile_setups(g.v9.v5.PROFILES["higher_frequency"])
     required_slots = {int(setup.signal_end.replace(":", "")) for setup in setups}
     if any(set(part.hhmm_int) != required_slots for _, part in pool.groupby("tradingsymbol")):
         raise ValueError("Dated features do not cover every retained setup slot")
-    if len(pool) != source["coverage"]["universe_stocks"] * len(required_slots):
+    if len(pool) != source["coverage"]["included_stocks"] * len(required_slots):
         raise ValueError("Dated features do not have one row per stock and setup slot")
     # Retain evidence that the same dated selector reproduces recent full-data
     # selections, including native feature values at those selected decisions.
@@ -122,12 +198,16 @@ def prepare(base_root: Path, day: date, staging: Path) -> dict:
         prior_run, _ = ext._latest_successful_run(ext.DEFAULT_DAILY_ROOT, date.fromisoformat(prior_day))
         _, _, current = retained_selection(prior_run, settings)
         expected = ledger.loc[ledger.day.eq(prior_day)].copy()
+        # The retained selector can return duplicate column labels on an
+        # empty day; there is no selected row to compare in that case.
+        if current.empty:
+            current = current.loc[:, ~current.columns.duplicated()].copy()
         current["day"] = current.day.astype(str)
         current, expected = [part.sort_values(identity).reset_index(drop=True) for part in (current, expected)]
         if current[identity].astype(str).to_dict("records") != expected[identity].astype(str).to_dict("records"):
             raise ValueError(f"Dated retained selection differs from archive: {prior_day}")
         for field in ("trigger", "body_ratio", "wick_ratio", "v9_1m_volume_ratio"):
-            if not np.allclose(current[field], expected[field], rtol=0, atol=1e-7, equal_nan=True):
+            if len(current) and not np.allclose(current[field], expected[field], rtol=0, atol=1e-7, equal_nan=True):
                 raise ValueError(f"Dated feature differs from archive: {prior_day}/{field}")
         overlap.append(dict(day=prior_day, selected_orders=len(expected), selection_identity_verified=True,
             selected_features_verified=True, feature_ledger=str(prior_run / "feature_ledger.csv"),
@@ -157,30 +237,66 @@ def prepare(base_root: Path, day: date, staging: Path) -> dict:
         contract_month_contains=str(row.required_contract.iloc[0]), require_persisted_mapping=True)
     if len(universe) != source["coverage"]["universe_stocks"]:
         raise ValueError("Snapshot universe size differs from completed replay coverage")
-    if set(universe.futures_tradingsymbol) != set(pool.futures_tradingsymbol):
+    excluded = {row["symbol"] for row in source["coverage"]["excluded_stocks"]}
+    expected_futures = set(universe.loc[~universe.equity_symbol.isin(excluded), "futures_tradingsymbol"])
+    if expected_futures != set(pool.futures_tradingsymbol):
         raise ValueError("Dated features differ from the snapshot stock universe")
     if not pool.futures_tradingsymbol.str.contains(str(row.required_contract.iloc[0]), regex=False).all():
         raise ValueError("Dated futures contract differs from eligibility calendar")
     paths = [config, old / "portfolio_trades.csv", old / "summary.json", old / "run_metadata.json", calendar_path,
         dataset / "dataset_manifest.json", run / "replay_result.json", run / "source_manifest.json", ledger_path,
-        run / "feature_ledger.csv.manifest.json", snapshot / "snapshot_manifest.json"]
+        run / "feature_ledger.csv.manifest.json", snapshot / "snapshot_manifest.json", *lineage_evidence]
     input_hashes = {str(path): g2.sha256(path) for path in paths}
     days = old_days + [str(day)]
-    proof = dict(schema_version="RETAINED_G_DATED_ZERO_SESSION_V1", complete=True, session_date=str(day),
+    if len(orders):
+        selected = ext._apply_retained_g_exits(orders, settings)
+        execution_paths = ext._selected_paths(selected, day, snapshot)
+        dated_trades, _, _ = ext._simulate(
+            selected, execution_paths, ext._portfolio_config(settings), stop_pct=None
+        )
+        combined, combined_summary = g.v9.v6.apply_portfolio_constraints(
+            pd.concat([ledger, dated_trades], ignore_index=True, sort=False),
+            ext._portfolio_config(settings).portfolio_config(),
+        )
+        # Recompute portfolio allocation, then verify every archived row after
+        # CSV normalization. New orders must not change any earlier result.
+        historical = pd.read_csv(StringIO(combined.iloc[:len(ledger)][ledger.columns].to_csv(index=False)))
+        pd.testing.assert_frame_equal(
+            ledger.reset_index(drop=True), historical.reset_index(drop=True),
+            check_dtype=False, check_exact=False, rtol=0, atol=1e-7,
+        )
+        orders = selected
+    else:
+        combined, combined_summary = ledger, None
+    dated_ledger = combined.loc[combined.day.astype(str).eq(str(day))]
+    if len(dated_ledger) != len(orders):
+        raise ValueError("Dated portfolio ledger does not match selected orders")
+    combined_metrics = g.r.metric(combined, days)
+    source_kind = ("VERIFIED_FROZEN_G_ARCHIVE_PLUS_DATED_SESSION" if len(orders)
+                   else "VERIFIED_FROZEN_G_ARCHIVE_PLUS_DATED_ZERO_SESSION")
+    proof = dict(schema_version="RETAINED_G_DATED_SESSION_V2" if len(orders)
+                 else "RETAINED_G_DATED_ZERO_SESSION_V1", complete=True, session_date=str(day),
         strategy="V13-V10-G", frozen_g_config=str(config), frozen_g_config_sha256=g2.sha256(config),
         selection_rule="Original retained G strict raw signals and frozen setup selection; no revised production policy",
-        raw_features=len(pool), strict_signals=len(strict), selected_orders=len(orders), trades=0,
-        net_profit_rupees=0., cost_rupees=0., coverage=source["coverage"], source_g_daily_run=str(run),
+        raw_features=len(pool), strict_signals=len(strict), selected_orders=len(orders),
+        trades=int(dated_ledger.portfolio_executed.sum()),
+        net_profit_rupees=float(dated_ledger.portfolio_net_profit_rupees.sum()),
+        cost_rupees=float(dated_ledger.portfolio_cost_rupees.sum()),
+        coverage=source["coverage"], source_g_daily_run=str(run),
         snapshot_manifest=str(snapshot / "snapshot_manifest.json"), input_snapshot_fully_verified=True,
         exact_next_minute_confirmation_verified=True, all_retained_setup_slots_covered=True,
         historical_selection_parity=overlap, source_eligibility_scan=scan_source,
         observed_eligibility=row.to_dict("records"), input_hashes=input_hashes,
-        source_archive=str(base_root), historical_ledger_unchanged=True, execution_authority=False)
+        source_archive=str(base_root), historical_ledger_unchanged=not len(orders),
+        historical_rows_unchanged=True, execution_authority=False)
     staging.mkdir(parents=True, exist_ok=False)
     output = staging / "g_backtest"
     output.mkdir()
     (staging / "dataset").mkdir()
-    shutil.copy2(old / "portfolio_trades.csv", output / "portfolio_trades.csv")
+    if len(orders):
+        combined.to_csv(output / "portfolio_trades.csv", index=False)
+    else:
+        shutil.copy2(old / "portfolio_trades.csv", output / "portfolio_trades.csv")
     shutil.copy2(config, output / "frozen_config.json")
     source_calendar = calendar_path.read_bytes()
     addition = StringIO(newline="")
@@ -195,47 +311,64 @@ def prepare(base_root: Path, day: date, staging: Path) -> dict:
         core_first=settings["core_first"]).to_csv(output / "dated_selection_audit.csv", index=False)
     write_json(output / "dated_extension_proof.json", proof)
     summary = g2.read_json(old / "summary.json")
+    if combined_summary is not None:
+        summary.update(combined_summary)
     summary.update(first_session=min(days), last_session=max(days), through_day=str(day), session_count=len(days),
-        source_kind="VERIFIED_FROZEN_G_ARCHIVE_PLUS_DATED_ZERO_SESSION", historical_results_unchanged=True,
+        source_kind=source_kind, historical_results_unchanged=True,
         regenerated_feature_dataset=False, dated_extension_proof="dated_extension_proof.json")
     write_json(output / "summary.json", summary)
     metadata.update(through_day=str(day), last_session=str(day), session_count=len(days),
         generated_at=datetime.now(IST).isoformat(), source_kind=summary["source_kind"],
         source_archive=str(base_root), regenerated_feature_dataset=False,
         historical_overlap_parity=True, historical_overlap_cutoff=max(old_days),
-        dated_extension_proof="dated_extension_proof.json", metrics={"full_history": g.r.metric(ledger, days)})
+        dated_extension_proof="dated_extension_proof.json", metrics={"full_history": combined_metrics})
     write_json(output / "run_metadata.json", metadata)
     coverage = g2.read_json(old / "data_coverage_audit.json")
     coverage["dates"][str(day)] = dict(coverage_basis="Completed sealed daily replay at every retained setup slot",
-        **source["coverage"], raw_features=len(pool), strict_signals=len(strict), selected_orders=0)
+        **source["coverage"], raw_features=len(pool), strict_signals=len(strict),
+        selected_orders=len(orders), executed_trades=proof["trades"])
     coverage["scope"] = "Historical dataset coverage preserved; added session coverage from its verified sealed daily replay"
     write_json(output / "data_coverage_audit.json", coverage)
     daily = []
     for session in days:
-        part = ledger.loc[ledger.day.eq(session) & ledger.portfolio_executed.eq(True)]
+        part = combined.loc[combined.day.astype(str).eq(session) & combined.portfolio_executed.eq(True)]
         daily.append(dict(day=session, trades=len(part), wins=int(part.portfolio_net_profit_rupees.gt(0).sum()),
             losses=int(part.portfolio_net_profit_rupees.lt(0).sum()), net_pnl=float(part.portfolio_net_profit_rupees.sum()),
             cost=float(part.portfolio_cost_rupees.sum()), gross_pnl=float(part.portfolio_gross_profit_rupees.sum())))
     daily = pd.DataFrame(daily)
     daily["cumulative_net_pnl"] = daily.net_pnl.cumsum()
     daily.to_csv(output / "daily_results.csv", index=False)
-    report = ('<!doctype html><html><head><meta charset="utf-8"><title>V13-V10-G dated extension</title>'
+    report = (
+        '<!doctype html><html><head><meta charset="utf-8"><title>V13-V10-G dated extension</title>'
         '<style>body{font:15px system-ui;margin:40px;color:#173b42}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #ccc}</style></head><body>'
-        '<h1>V13-V10-G through ' + str(day) + '</h1><p>The frozen archive is preserved exactly. '
-        'The added completed session was replayed with the original retained G selector against its sealed daily inputs and produced zero orders. '
-        'This is an archive plus dated extension; the historical feature dataset was not regenerated.</p>'
-        '<p>' + str(len(days)) + ' sessions · ' + str(metrics['trades']) + ' trades · Net P&amp;L ₹' + f"{metrics['net_profit_rupees']:,.2f}" + '</p>'
-        '<p><a href="dated_extension_proof.json">Dated source and selection proof</a> · <a href="portfolio_trades.csv">Unchanged trade archive</a> · <a href="daily_results.csv">Daily results</a></p>'
+        '<h1>V13-V10-G through ' + str(day) + '</h1><p>Earlier archived trade rows are unchanged. '
+        'The added session uses the original retained G selector and sealed daily minute inputs. '
+        'Stock exclusions for missing futures OI are disclosed in the dated proof. '
+        'The historical feature dataset was not regenerated.</p>'
+        '<p>' + str(len(days)) + ' sessions; ' + str(combined_metrics['trades']) +
+        ' trades; modeled net P&amp;L INR ' + f"{combined_metrics['net_profit_rupees']:,.2f}" + '</p>'
+        '<p><a href="dated_extension_proof.json">Dated source and selection proof</a> | '
+        '<a href="portfolio_trades.csv">Extended trade archive</a> | '
+        '<a href="daily_results.csv">Daily results</a></p>'
         + daily.to_html(index=False) + '</body></html>')
     (output / "report.html").write_text(report, encoding="utf-8")
     for path, expected in input_hashes.items():
         if g2.sha256(Path(path)) != expected:
             raise ValueError(f"Source changed during publication: {path}")
-    if g2.sha256(output / "portfolio_trades.csv") != input_hashes[str(old / "portfolio_trades.csv")]:
+    published_ledger = pd.read_csv(output / "portfolio_trades.csv")
+    if len(published_ledger) != len(combined):
+        raise ValueError("Dated trade archive row count differs")
+    pd.testing.assert_frame_equal(
+        ledger.reset_index(drop=True),
+        published_ledger.iloc[:len(ledger)][ledger.columns].reset_index(drop=True),
+        check_dtype=False, check_exact=False, rtol=0, atol=1e-7,
+    )
+    if not len(orders) and g2.sha256(output / "portfolio_trades.csv") != input_hashes[str(old / "portfolio_trades.csv")]:
         raise ValueError("Copied historical trade archive differs")
     inventory = {p.relative_to(staging).as_posix(): g2.sha256(p) for p in staging.rglob("*") if p.is_file()}
     write_json(staging / "extension_manifest.json", dict(complete=True, through_day=str(day), source_kind=summary["source_kind"],
-        historical_ledger_unchanged=True, config_bytes_unchanged=g2.sha256(output / "frozen_config.json") == g2.sha256(config),
+        historical_ledger_unchanged=not len(orders), historical_rows_unchanged=True,
+        config_bytes_unchanged=g2.sha256(output / "frozen_config.json") == g2.sha256(config),
         artifacts=inventory, helper_sha256=g2.sha256(Path(__file__))))
     return proof
 

@@ -79,7 +79,7 @@ def test_runtime_side_thresholds_and_strict_0925(runtime):
     assert runtime.select_entry_signals([row], DAY, "09:25", capital_rs=100000., leverage=5.) == []
 
 
-@pytest.mark.parametrize("clock,side", [("09:25","LONG"),("09:25","SHORT"),("09:30","LONG"),("09:30","SHORT")])
+@pytest.mark.parametrize("clock,side", [("09:25","LONG"),("09:25","SHORT"),("09:30","LONG"),("09:30","SHORT"),("09:50","LONG"),("09:50","SHORT")])
 def test_scanner_adapts_exact_join_timestamp_to_g3_contract(runtime,monkeypatch,clock,side):
     # The real equity/futures join returns `ts`, not either of the decision
     # contract's signal timestamp keys. A missing adapter silently rejects all
@@ -143,6 +143,60 @@ def test_g3_staged_stop_for_all_dates_and_quote_free_expiry(runtime):
     assert opened["status"] == "OPEN"
     assert runtime._staged_stop_target(opened, config.slot_datetime(DAY, "11:31")) is None
     assert runtime._staged_stop_target(opened, config.slot_datetime(DAY, "11:32")) == 101.
+
+
+def test_promoted_0950_long_passes_confirmation_and_sizes_both_execution_modes(runtime):
+    row = candidate(clock="09:50", ratio=.6)
+    row.update(price_change_pct=.1, oi_change_pct=.05, volume_ratio=1.3)
+    bar = dict(timestamp=row["confirmation_timestamp"], open=100., high=102., low=99.5, close=101.5,
+               volume=60., v9_1m_volume_ratio=.6, v9_1m_feature_ts=row["v9_1m_feature_ts"])
+    confirmed = runtime.confirmation_metrics(row, bar)
+    assert confirmed["confirmed"] is True
+    assert confirmed["minimum_confirmation_volume_ratio"] == .6
+    selected = runtime.select_entry_signals([confirmed], DAY, "09:50", capital_rs=100000., leverage=5.)
+    assert len(selected) == 1
+    signal = selected[0]
+    assert signal["setup_id"] == "0951_LONG"
+    assert signal["confirmation_end"] == "09:51"
+    assert signal["target_pct"] == .75 and signal["stop_pct"] == 1.25
+    assert signal["trigger"] == 102.
+    assert signal["paper_sizing"]["quantity"] == 4901
+    assert signal["live_sizing"]["quantity"] == 490
+    assert config.entry_expiry(DAY, "09:51") == config.slot_datetime(DAY, "10:01")
+    # Constructing either mode is offline; actual LIVE execution still uses its
+    # independent deployment, acknowledgement, arm and portfolio gates.
+    assert runtime.create_order_state(signal, "LIVE")["quantity"] == 490
+    pending = runtime.create_order_state(signal, "PAPER")
+    opened = runtime.advance_paper_order(pending, 102., config.slot_datetime(DAY, "09:52"))
+    assert opened["status"] == "OPEN"
+    assert runtime._staged_stop_target(opened, config.slot_datetime(DAY, "11:51")) is None
+    assert runtime._staged_stop_target(opened, config.slot_datetime(DAY, "11:52")) == 101.
+
+
+@pytest.mark.parametrize("clock,side,ratio,minimum,expected", [
+    ("09:50", "LONG", .6, .6, True),
+    ("09:50", "LONG", .599999, .6, False),
+    ("09:30", "LONG", .6, 1.1, False),
+    ("09:50", "SHORT", .6, 1.2, False),
+    ("09:50", "SHORT", 1.2, 1.2, True),
+])
+def test_confirmation_volume_exception_is_only_0950_long(runtime, clock, side, ratio, minimum, expected):
+    row = candidate(side=side, ratio=ratio, clock=clock)
+    bar = dict(timestamp=row["confirmation_timestamp"], open=100., high=102., low=98.,
+               close=101.5 if side == "LONG" else 98.5, volume=100.*ratio,
+               v9_1m_volume_ratio=ratio, v9_1m_feature_ts=row["v9_1m_feature_ts"])
+    result = runtime.confirmation_metrics(row, bar)
+    assert result["confirmed"] is expected
+    assert result["minimum_confirmation_volume_ratio"] == minimum
+
+
+def test_promoted_slot_ranks_liquidity_after_confirmation_and_keeps_one_entry(runtime):
+    rows = [candidate(clock="09:50", ratio=.6) for _ in range(3)]
+    for row, symbol, liquidity, ratio in zip(rows, ("LOW", "WINNER", "REJECT"), (1e6, 2e6, 1e9), (.6, .6, .59999)):
+        row.update(tradingsymbol=symbol, traded_value=liquidity, v9_1m_volume_ratio=ratio)
+    selected = runtime.select_entry_signals(rows, DAY, "09:50", capital_rs=100000., leverage=5.)
+    assert [row["tradingsymbol"] for row in selected] == ["WINNER"]
+    assert selected[0]["target_pct"] == .75
 
 
 def test_g3_capacity_book_uses_g3_fingerprint(runtime):
@@ -227,6 +281,29 @@ def test_feature_ledger_g3_threshold_and_strict_branch(runtime):
     assert result["relaxed_0925_long_base_branch"] is False
     assert result["strategy_profile"] == config.STRATEGY_PROFILE
     assert result["setup_filter_pass"] is True
+
+
+def test_feature_ledger_infers_v2_and_explains_promoted_threshold(runtime):
+    from ai_platform.observability.feature_ledger import evaluate_v13_v10_g_base_row
+    row = candidate(clock="09:50", ratio=.6)
+    row.update(confirmation_open=100., confirmation_high=102., confirmation_low=99.5,
+               confirmation_close=101.5, confirmation_volume=60., session_date=DAY.isoformat())
+    result = evaluate_v13_v10_g_base_row(row, strategy_version=config.STRATEGY_VERSION)
+    assert result["strategy_profile"] == config.STRATEGY_PROFILE
+    assert result["minimum_confirmation_volume_ratio"] == .6
+    assert result["gate_confirmation_volume"] is True
+    assert result["setup_filter_pass"] is True
+
+
+def test_preflight_reports_promoted_configuration_without_runtime_mutations():
+    from fno_v13_v10_g_3_preflight import inspect_deployment
+    report = inspect_deployment(verify_frozen=False)
+    assert report["ready"] is True
+    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V2"
+    assert report["active_setup_count"] == 15
+    assert report["promoted_0950_long_setup"]["target_pct"] == .75
+    assert report["promoted_0950_long_setup"]["minimum_confirmation_volume_ratio"] == .6
+    assert report["workers_started"] is report["broker_requests"] is report["arm_files_written"] is False
 
 
 def test_g3_volume_snapshot_requires_20_causal_prior_bars(runtime):

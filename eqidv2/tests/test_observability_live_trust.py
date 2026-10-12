@@ -197,9 +197,10 @@ def _evaluate(tmp_path: Path, status: dict, reconciliation: dict):
 
 
 def _g3_evidence(tmp_path: Path):
+    from fno_v13_v10_g_3_contract import STRATEGY_VERSION
     from fno_v13_v10_g_3_live_execution_policy import execution_metadata
     _runtime_evidence(tmp_path)
-    version = "V13-V10-G-3-PRODUCTION-V1"
+    version = STRATEGY_VERSION
     for heartbeat in (tmp_path / "runtime_status").glob("*.heartbeat"):
         content = heartbeat.read_text().replace("fno_v13_v10_g_", "fno_v13_v10_g_3_").replace(VERSION, version)
         (heartbeat.parent / heartbeat.name.replace("fno_v13_v10_g_", "fno_v13_v10_g_3_")).write_text(content)

@@ -1,0 +1,125 @@
+<div id="lf-design-explorer">
+<div class="viz-carousel" aria-label="Live flow layout designs">
+  <section data-variant="Comparison desk"><div class="df-product" data-design="comparison" aria-label="Comparison desk"></div></section>
+  <section data-variant="Table and inspector" hidden><div class="df-product" data-design="inspector" aria-label="Table and inspector"></div></section>
+  <section data-variant="Session heatmap" hidden><div class="df-product" data-design="heatmap" aria-label="Session heatmap"></div></section>
+  <section data-variant="Phone cards" hidden><div class="df-product" data-design="phone" aria-label="Phone cards"></div></section>
+</div>
+</div>
+<style>
+#lf-design-explorer{color-scheme:light dark}
+#lf-design-explorer .df-product{--df-bg:light-dark(#f4f7f5,#111c19);--df-panel:light-dark(#fff,#17241f);--df-text:light-dark(#193b32,#e5efea);--df-muted:light-dark(#5f746a,#a6bdb1);--df-line:light-dark(#dce7df,#314b3e);--df-soft:light-dark(#f3f7f4,#1c3027);--df-up:light-dark(#08704a,#74deb2);--df-down:light-dark(#a63455,#ffabc0);--df-up-bg:light-dark(#e8f5ed,#193b2c);--df-down-bg:light-dark(#fbeef2,#402631);--df-select:light-dark(#e1ede6,#2c4738);--df-cell:13px;--df-pad:12px;background:var(--df-bg);color:var(--df-text);font:14px/1.5 'Segoe UI',Arial,sans-serif;border:1px solid var(--df-line);border-radius:12px;overflow:hidden;min-height:610px;box-sizing:border-box}
+#lf-design-explorer .df-product{min-height:850px}
+#lf-design-explorer .df-product *{box-sizing:border-box}
+#lf-design-explorer .df-product [hidden]{display:none!important}
+#lf-design-explorer .df-header{background:var(--df-panel);display:flex;justify-content:space-between;align-items:center;gap:12px;padding:17px 22px;border-bottom:1px solid var(--df-line)}
+#lf-design-explorer .df-brand{font-size:20px;font-weight:600;letter-spacing:-.6px}.df-brand span{font-weight:400}
+#lf-design-explorer .df-example{color:var(--df-muted);font-size:12px;text-align:right}
+#lf-design-explorer .df-main{padding:20px}
+#lf-design-explorer .df-titlebar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:17px}
+#lf-design-explorer .df-titlebar h2{font-size:23px;letter-spacing:-.7px;margin:0;font-weight:600}
+#lf-design-explorer .df-titlebar small{display:block;font-size:12px;color:var(--df-muted);margin-top:3px}
+#lf-design-explorer .df-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+#lf-design-explorer .df-time{font-variant-numeric:tabular-nums;font-size:20px;font-weight:600;margin-right:4px}
+#lf-design-explorer .df-product button,#lf-design-explorer .df-product select{font:inherit;color:var(--df-text);background:var(--df-panel);border:1px solid var(--df-line);border-radius:6px;min-height:35px;padding:6px 11px;cursor:pointer}
+#lf-design-explorer .df-product button[aria-pressed=true]{background:var(--df-text);color:var(--df-panel);border-color:var(--df-text)}
+#lf-design-explorer .df-product select{font-size:12px;max-width:100%}
+#lf-design-explorer .df-product label{font-size:12px;color:var(--df-muted);display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+#lf-design-explorer .df-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+#lf-design-explorer .df-lane{background:var(--df-panel);border:1px solid var(--df-line);border-radius:8px;min-width:0;overflow:hidden}
+#lf-design-explorer .df-lanehead{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--df-line);background:var(--df-up-bg)}
+#lf-design-explorer .df-short .df-lanehead{background:var(--df-down-bg)}
+#lf-design-explorer .df-lanehead strong{font-size:16px;font-weight:600;letter-spacing:.8px;color:var(--df-up)}
+#lf-design-explorer .df-short .df-lanehead strong{color:var(--df-down)}
+#lf-design-explorer .df-lanehead span{font-size:12px;color:var(--df-muted)}
+#lf-design-explorer .df-scroll{overflow-x:auto;max-width:100%}
+#lf-design-explorer .df-table{border-collapse:collapse;width:100%;font-size:var(--df-cell);font-variant-numeric:tabular-nums}
+#lf-design-explorer .df-table th{font-weight:500;color:var(--df-muted);font-size:11px;text-align:right;white-space:nowrap;background:var(--df-soft);padding:9px 8px;border-bottom:1px solid var(--df-line)}
+#lf-design-explorer .df-table th:first-child,#lf-design-explorer .df-table td:first-child{text-align:left}
+#lf-design-explorer .df-table td{padding:var(--df-pad) 8px;border-bottom:1px solid var(--df-line);text-align:right;white-space:nowrap}
+#lf-design-explorer .df-table tbody tr:nth-child(even){background:var(--df-soft)}
+#lf-design-explorer .df-table tr:last-child td{border-bottom:0}
+#lf-design-explorer .df-table .df-active{background:var(--df-select)}
+#lf-design-explorer .df-symbol{font-weight:600;font-size:12px;display:block}
+#lf-design-explorer .df-sub{color:var(--df-muted);font-size:11px;display:block;font-weight:400;margin-top:3px}
+#lf-design-explorer .df-num-up{color:var(--df-up)}
+#lf-design-explorer .df-num-down{color:var(--df-down)}
+#lf-design-explorer .df-caption{font-size:12px;color:var(--df-muted);padding-top:13px;display:flex;justify-content:space-between;gap:9px;flex-wrap:wrap}
+#lf-design-explorer .df-product .df-stockbutton{padding:0;border:0;background:transparent;min-height:32px;text-align:left;border-radius:0}
+#lf-design-explorer .df-product .df-stockbutton:hover{text-decoration:underline}
+#lf-design-explorer .df-badge{display:inline-block;padding:3px 7px;border-radius:4px;font-size:11px;background:var(--df-soft);color:var(--df-muted)}
+#lf-design-explorer .df-stockcard{padding:13px 16px;border:1px solid var(--df-line);border-radius:8px;background:var(--df-panel);margin-top:9px}
+#lf-design-explorer .df-cardhead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px}
+#lf-design-explorer .df-cardhead strong{font-size:14px}
+#lf-design-explorer .df-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}
+#lf-design-explorer .df-values small{display:block;color:var(--df-muted);font-size:11px}
+#lf-design-explorer .df-values b{display:block;font-size:16px;font-weight:500;font-variant-numeric:tabular-nums;margin-top:3px}
+#lf-design-explorer .df-stockcard details{margin-top:10px;border-top:1px solid var(--df-line);padding-top:8px}
+#lf-design-explorer .df-stockcard summary{font-size:12px;cursor:pointer;color:var(--df-muted)}
+#lf-design-explorer .df-stockcard details .df-values{margin-top:12px}
+#lf-design-explorer .df-layout{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(230px,1fr);gap:17px;align-items:start}
+#lf-design-explorer .df-inspector{background:var(--df-panel);border:1px solid var(--df-line);border-radius:8px;padding:17px;min-width:0}
+#lf-design-explorer .df-inspector h3{margin:0;font-size:19px;font-weight:600;letter-spacing:-.4px}
+#lf-design-explorer .df-inspector .df-values{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:17px}
+#lf-design-explorer .df-inspector hr{height:1px;border:0;background:var(--df-line);margin:17px 0}
+#lf-design-explorer .df-chart{display:block;width:100%;height:145px;overflow:visible}
+#lf-design-explorer .df-chart text{fill:var(--df-muted);font:11px 'Segoe UI',Arial,sans-serif}
+#lf-design-explorer .df-chart .df-chartline{fill:none;stroke:var(--df-up);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+#lf-design-explorer .df-chart .df-shortline{stroke:var(--df-down)}
+#lf-design-explorer .df-chart .df-grid{stroke:var(--df-line);stroke-width:1}
+#lf-design-explorer .df-chart circle{fill:var(--df-up)}
+#lf-design-explorer .df-heat th,#lf-design-explorer .df-heat td{padding:11px 10px}
+#lf-design-explorer .df-heatcell{display:block;padding:8px 3px;border-radius:4px;text-align:center;min-width:57px}
+#lf-design-explorer .df-gap{background:repeating-linear-gradient(135deg,var(--df-soft),var(--df-soft) 3px,var(--df-panel) 3px,var(--df-panel) 6px);color:var(--df-muted)}
+#lf-design-explorer .df-phones{display:grid;grid-template-columns:minmax(0,370px) minmax(0,1fr);align-items:start;gap:24px}
+#lf-design-explorer .df-mobilepane{background:var(--df-panel);border:1px solid var(--df-line);border-radius:14px;padding:14px}
+#lf-design-explorer .df-mobilepane .df-controls{margin:0 0 13px}
+#lf-design-explorer .df-mobilepane .df-stockcard{border:0;border-bottom:1px solid var(--df-line);border-radius:0;padding:11px 0}
+#lf-design-explorer .df-glance{padding:13px 0}.df-glance>div{padding:17px 0;border-bottom:1px solid var(--df-line)}
+#lf-design-explorer .df-glance strong{font-size:14px;font-weight:600}.df-glance small{display:block;color:var(--df-muted);font-size:12px;margin-top:6px}
+#lf-design-explorer .df-group td{padding:9px 12px;background:var(--df-soft);font-size:12px;text-align:left!important;font-weight:600}
+#lf-design-explorer .df-selected td{background:var(--df-select)!important}
+@media(max-width:850px){#lf-design-explorer .df-pair{grid-template-columns:1fr}#lf-design-explorer .df-layout{grid-template-columns:1fr}#lf-design-explorer .df-product{min-height:980px}#lf-design-explorer .df-table{font-size:13px}}
+@media(max-width:540px){#lf-design-explorer .df-main{padding:13px}#lf-design-explorer .df-header{padding:14px;align-items:start;flex-direction:column;gap:5px}#lf-design-explorer .df-example{text-align:left}#lf-design-explorer .df-phones{grid-template-columns:1fr}#lf-design-explorer .df-glance{display:none}#lf-design-explorer .df-table th,#lf-design-explorer .df-table td{padding-left:7px;padding-right:7px}#lf-design-explorer .df-controls{gap:9px}#lf-design-explorer .df-product{min-height:1030px}}
+@media(pointer:coarse){#lf-design-explorer .df-product button,#lf-design-explorer .df-product select,#lf-design-explorer .df-stockcard summary{min-height:44px}#lf-design-explorer .df-product select{font-size:16px}}
+@media(max-width:850px){#lf-design-explorer .df-product{min-height:1290px}}
+@media(max-width:540px){#lf-design-explorer .df-product{min-height:1440px}}
+</style>
+<script>
+(()=>{
+ const root=document.getElementById('lf-design-explorer');
+ const times=['09:20','09:25','09:30','09:35','09:40'];
+ const rows=[
+ {s:'RELIANCE',side:'LONG',price:1251.20,gap:.32,oi:28.2,oid:3.8,p:[.45,.65,.91,1.1,1.42],o:[1.1,1.4,2.5,2.3,3.8]},
+ {s:'SBIN',side:'LONG',price:816.35,gap:.15,oi:31.6,oid:4.2,p:[.12,.24,.45,.73,1.16],o:[.7,1.1,1.8,3.1,4.2]},
+ {s:'TATASTEEL',side:'LONG',price:153.45,gap:-.28,oi:49.4,oid:2.4,p:[-.1,.04,.29,.56,.88],o:[.5,.8,1.1,1.7,2.4]},
+ {s:'HDFCBANK',side:'LONG',price:1613.80,gap:.10,oi:22.7,oid:.8,p:[.2,.31,null,.64,.72],o:[.3,.4,null,1,.8]},
+ {s:'SAIL',side:'SHORT',price:126.70,gap:-.6,oi:17.3,oid:4.6,p:[-.75,-1.0,-1.35,-1.56,-1.91],o:[1.8,2.0,2.7,3.6,4.6]},
+ {s:'TATAMOTORS',side:'SHORT',price:964.30,gap:.42,oi:24.6,oid:3.1,p:[.21,-.13,-.55,-.81,-1.31],o:[.4,.9,1.4,2.0,3.1]},
+ {s:'INFY',side:'SHORT',price:1735.25,gap:-.35,oi:15.7,oid:1.7,p:[-.41,-.62,-.79,-.91,-1.04],o:[.5,.7,1.3,1.2,1.7]},
+ {s:'AXISBANK',side:'SHORT',price:1174.50,gap:-.12,oi:19.4,oid:.6,p:[-.26,-.38,-.44,-.66,-.77],o:[.2,.3,.7,.8,.6]}
+ ];
+ const fmt=v=>v==null?'—':(v>0?'+':'')+v.toFixed(2)+'%';
+ const five=(r,i=4)=>i===0?(r.p[0]-r.gap)/(100+r.gap)*100:r.p[i]==null||r.p[i-1]==null?null:(r.p[i]-r.p[i-1])/(100+r.p[i-1])*100;
+ const value=(r,k)=>k==='day'?r.p[4]:k==='five'?five(r):k==='oi'?r.oi:r.oid;
+ const cl=v=>v==null?'':v<0?'df-num-down':'df-num-up';
+ const cell=(v,active=false)=>`<td class="${cl(v)} ${active?'df-active':''}">${fmt(v)}</td>`;
+ const ranked=(side,metric)=>rows.filter(r=>r.side===side).sort((a,b)=>{let dir=side==='SHORT'&&['day','five'].includes(metric)?1:-1;return (value(a,metric)-value(b,metric))*dir;});
+ function shell(el,title,subtitle){el.innerHTML=`<header class="df-header"><div class="df-brand">Dashboard <span>Flow</span></div><div class="df-example">Design concept · Illustrative values</div></header><div class="df-main"><div class="df-titlebar"><div><h2>${title}</h2><small>${subtitle}</small></div><span class="df-badge">G-3 · Live flow</span></div><div class="df-controls"><span class="df-time">09:40 <small>IST</small></span><span class="df-badge">Verified previous close</span></div><div class="df-content"></div></div>`;}
+ const sortControl=(el,fn)=>{const label=document.createElement('label');label.innerHTML='Rank by <select aria-label="Rank both LONG and SHORT"><option value="day">Since previous close %</option><option value="five">Price 5m %</option><option value="oi">Open interest</option><option value="oid">OI 5m %</option></select>';el.querySelector('.df-controls').append(label);label.querySelector('select').onchange=e=>fn(e.target.value);};
+ function stock(r,i,click=false){return `${click?`<button class="df-stockbutton" data-symbol="${r.s}">`:'<span>'}<span class="df-symbol">${i?i+'. ':''}${r.s}</span><span class="df-sub">₹${r.price.toLocaleString('en-IN',{minimumFractionDigits:2})}</span>${click?'</button>':'</span>'}`;}
+ function table(side,metric){return `<section class="df-lane ${side==='SHORT'?'df-short':''}"><header class="df-lanehead"><strong>${side==='LONG'?'↑ LONG':'↓ SHORT'}</strong><span>4 illustrative stocks</span></header><div class="df-scroll"><table class="df-table"><thead><tr><th rowspan="2">Stock / price</th><th colspan="3">Price action</th><th colspan="2">Futures interest</th></tr><tr><th>Open gap</th><th class="${metric==='day'?'df-active':''}">Since close</th><th class="${metric==='five'?'df-active':''}">5m Δ</th><th class="${metric==='oi'?'df-active':''}">OI (L)</th><th class="${metric==='oid'?'df-active':''}">5m Δ %</th></tr></thead><tbody>${ranked(side,metric).map((r,i)=>`<tr><td>${stock(r,i+1)}</td>${cell(r.gap)}${cell(r.p[4],metric==='day')}${cell(five(r),metric==='five')}<td class="${metric==='oi'?'df-active':''}">${r.oi.toFixed(1)}</td>${cell(r.oid,metric==='oid')}</tr>`).join('')}</tbody></table></div></section>`;}
+ const comparison=root.querySelector('[data-design="comparison"]');shell(comparison,'Long & short, together','Paired tables · aligned columns · one shared ranking');
+ const renderPair=m=>{comparison.querySelector('.df-content').innerHTML=`<div class="df-pair">${table('LONG',m)}${table('SHORT',m)}</div><div class="df-caption"><span>Percentages: open gap / since previous close / last 5 minutes</span><span>OI: lakhs · Missing: —</span></div>`;};sortControl(comparison,renderPair);renderPair('day');
+ const inspector=root.querySelector('[data-design="inspector"]');shell(inspector,'Explore without losing your place','Full-width rows · grouped directions · persistent stock inspector');let chosen='RELIANCE';
+ function chart(r){let path=[],segments=[];r.p.forEach((v,i)=>{if(v==null){if(path.length)segments.push(path);path=[];}else path.push([38+i*47,113-(v+2.1)*22]);});if(path.length)segments.push(path);return `<svg class="df-chart" viewBox="0 0 254 145" role="img" aria-label="Illustrative ${r.s} return since previous close, through 09:40 only"><line class="df-grid" x1="37" y1="114" x2="235" y2="114"/><line class="df-grid" x1="37" y1="67" x2="235" y2="67"/><text x="0" y="117">−2%</text><text x="10" y="70">0%</text><text x="4" y="26">+2%</text>${segments.map(seg=>`<polyline class="df-chartline ${r.side==='SHORT'?'df-shortline':''}" points="${seg.map(p=>p.join(',')).join(' ')}"/>`).join('')}<text x="37" y="139">09:20</text><text x="198" y="139">09:40</text></svg>`;}
+ function renderInspector(){const r=rows.find(x=>x.s===chosen);inspector.querySelector('.df-content').innerHTML=`<div class="df-layout"><div class="df-lane df-scroll"><table class="df-table"><thead><tr><th>Stock / price</th><th>Since close</th><th>Price 5m</th><th>OI 5m</th></tr></thead><tbody>${['LONG','SHORT'].map(side=>`<tr class="df-group"><td colspan="4">${side==='LONG'?'↑ LONG':'↓ SHORT'}</td></tr>${ranked(side,'day').map(row=>`<tr class="${row.s===chosen?'df-selected':''}"><td>${stock(row,0,true)}</td>${cell(row.p[4])}${cell(five(row))}${cell(row.oid)}</tr>`).join('')}`).join('')}</tbody></table></div><aside class="df-inspector"><h3>${r.s}</h3><span class="df-sub">${r.side} · through 09:40 IST</span><div class="df-values"><div><small>Since previous close</small><b class="${cl(r.p[4])}">${fmt(r.p[4])}</b></div><div><small>Open gap · fixed</small><b class="${cl(r.gap)}">${fmt(r.gap)}</b></div></div>${chart(r)}<div class="df-values"><div><small>Open interest</small><b>${r.oi.toFixed(1)} L</b></div><div><small>OI change · 5m</small><b class="${cl(r.oid)}">${fmt(r.oid)}</b></div></div><hr><span class="df-sub">Recorded strategy evidence</span><span>Not included in design sample</span></aside></div>`;inspector.querySelectorAll('[data-symbol]').forEach(b=>b.onclick=()=>{chosen=b.dataset.symbol;renderInspector();});}renderInspector();
+ const heat=root.querySelector('[data-design="heatmap"]');shell(heat,'Read the session across time','Aligned five-minute columns · signed values · visible missing observations');
+ const hlabel=document.createElement('label');hlabel.innerHTML='Colour by <select aria-label="Heatmap metric"><option value="day">Since previous close %</option><option value="five">Price 5m %</option><option value="oid">OI 5m %</option></select>';heat.querySelector('.df-controls').append(hlabel);
+ function renderHeat(metric){heat.querySelector('.df-content').innerHTML=`<div class="df-lane df-scroll"><table class="df-table df-heat"><thead><tr><th>Stock</th>${times.map(t=>`<th>${t}</th>`).join('')}</tr></thead><tbody>${['LONG','SHORT'].map(side=>`<tr class="df-group"><td colspan="6">${side==='LONG'?'↑ LONG':'↓ SHORT'} · direction at 09:40</td></tr>${ranked(side,'day').slice(0,side==='LONG'?4:3).map(r=>`<tr><td><span class="df-symbol">${r.s}</span></td>${times.map((_,i)=>{let v=metric==='day'?r.p[i]:metric==='oid'?r.o[i]:five(r,i);let percent=v==null?0:Math.min(65,12+Math.abs(v)*13);return `<td><span class="df-heatcell ${v==null?'df-gap':''}" style="${v==null?'':`background:color-mix(in srgb,var(--df-${v<0?'down':'up'}) ${percent}%,var(--df-panel))`}">${fmt(v)}</span></td>`;}).join('')}</tr>`).join('')}`).join('')}</tbody></table></div><div class="df-caption"><span>Deeper tint = larger absolute change · Positive / negative signs remain visible</span><span>— Missing · not zero</span></div>`;}
+ hlabel.querySelector('select').onchange=e=>renderHeat(e.target.value);renderHeat('day');
+ const phone=root.querySelector('[data-design="phone"]');shell(phone,'A phone view you can scan','Direction tabs · three key values · tap for opening gap and OI');let phoneSide='LONG';
+ function renderPhone(){phone.querySelector('.df-content').innerHTML=`<div class="df-phones"><div class="df-mobilepane"><div class="df-controls"><button data-side="LONG" aria-pressed="${phoneSide==='LONG'}">↑ LONG</button><button data-side="SHORT" aria-pressed="${phoneSide==='SHORT'}">↓ SHORT</button><span class="df-badge">09:40</span></div>${ranked(phoneSide,'day').slice(0,3).map((r,i)=>`<article class="df-stockcard"><div class="df-cardhead"><strong>${i+1}. ${r.s}</strong><span class="df-sub">₹${r.price.toFixed(2)}</span></div><div class="df-values"><div><small>Since close</small><b class="${cl(r.p[4])}">${fmt(r.p[4])}</b></div><div><small>Price 5m</small><b class="${cl(five(r))}">${fmt(five(r))}</b></div><div><small>OI 5m</small><b class="${cl(r.oid)}">${fmt(r.oid)}</b></div></div><details><summary>Opening gap &amp; open interest</summary><div class="df-values"><div><small>Open gap · fixed</small><b class="${cl(r.gap)}">${fmt(r.gap)}</b></div><div><small>OI</small><b>${r.oi.toFixed(1)} L</b></div></div></details></article>`).join('')}</div><div class="df-glance"><div><strong>One direction in focus</strong><small>LONG and SHORT stay one tap apart.</small></div><div><strong>Primary values stay visible</strong><small>Since close · price 5m · OI 5m.</small></div><div><strong>Extra detail expands in place</strong><small>Opening gap and absolute OI stay within the stock row.</small></div><div><strong>No sideways table scrolling</strong><small>Cards adapt to the available phone width.</small></div></div></div>`;phone.querySelectorAll('[data-side]').forEach(b=>b.onclick=()=>{phoneSide=b.dataset.side;renderPhone();});}renderPhone();
+ if(globalThis.Tweak){root.querySelectorAll('.df-product').forEach(el=>{const design={textSize:13,rowSpace:12};const tweak=new Tweak({container:el,onChange:()=>{el.style.setProperty('--df-cell',design.textSize+'px');el.style.setProperty('--df-pad',design.rowSpace+'px');}});tweak.addSlider(design,'textSize',{label:'Table text size',min:12,max:16,unit:'px'});tweak.addSlider(design,'rowSpace',{label:'Row spacing',min:8,max:18,unit:'px'});});}
+})();
+</script>

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import dashboard_flow_live_evidence as evidence
+from fno_v13_v10_g_3_contract import LEGACY_STRATEGY_VERSION, LEGACY_STRATEGY_FINGERPRINT
 
 DAY = "2026-10-12"
 NOW = datetime.fromisoformat(DAY + "T12:00:00+05:30")
@@ -34,6 +35,21 @@ def write_json(root, path, value):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(value), encoding="utf-8")
     return target
+
+
+def make_legacy(path, *, selected=False):
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.update(strategy_version=LEGACY_STRATEGY_VERSION,
+               strategy_fingerprint=LEGACY_STRATEGY_FINGERPRINT)
+    for row in raw.get("feature_evaluations", []):
+        row.update(strategy_version=LEGACY_STRATEGY_VERSION,
+                   strategy_fingerprint=LEGACY_STRATEGY_FINGERPRINT)
+    if selected:
+        raw["selected_signal_ids"] = [evidence.canonical_signal_id(
+            LEGACY_STRATEGY_VERSION, datetime.fromisoformat(DAY).date(),
+            "09:25", "09:26", "LONG", "TEST")]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    return path
 
 
 def scanner(root, *, rows=None, candidates=None, **changes):
@@ -116,6 +132,57 @@ def test_invalid_or_future_scanner_is_omitted(tmp_path, change):
     assert result["slots"]["09:25"]["rows"] == {}
     assert result["slots"]["09:25"]["counts"]["evaluated"] is None
     assert result["warnings"]
+
+
+def test_archived_v1_packets_remain_distinct_from_v2_retrospective_history(tmp_path):
+    make_legacy(scanner(tmp_path, candidates=[dict(tradingsymbol="TEST", side="LONG", signal_end="09:25")]))
+    make_legacy(confirmation(tmp_path, selected=True), selected=True)
+    history(tmp_path)
+    result = load(tmp_path)
+    slot = result["slots"]["09:25"]
+    row = slot["rows"]["TEST"]
+    assert result["warnings"] == []
+    assert slot["state"] == "RECORDED"
+    assert slot["scanner"]["strategy_version"] == LEGACY_STRATEGY_VERSION
+    assert slot["confirmation"]["strategy_version"] == LEGACY_STRATEGY_VERSION
+    assert row["recorded_strategy_version"] == LEGACY_STRATEGY_VERSION
+    assert row["selected"] is True
+    assert row["backtest"][0]["strategy_version"] == evidence.STRATEGY_VERSION
+    assert result["history"]["strategy_version"] == evidence.STRATEGY_VERSION
+
+
+def test_mixed_v1_v2_packets_and_feature_rows_are_not_combined(tmp_path):
+    scanner_path = make_legacy(scanner(tmp_path))
+    confirmation(tmp_path, selected=True)
+    mixed = load(tmp_path)
+    slot = mixed["slots"]["09:25"]
+    assert slot["scanner"]["strategy_version"] == LEGACY_STRATEGY_VERSION
+    assert slot["confirmation"] is None
+    assert slot["rows"]["TEST"]["selected"] is None
+    assert any("strategy identities differ" in warning for warning in mixed["warnings"])
+    raw = json.loads(scanner_path.read_text(encoding="utf-8"))
+    raw["feature_evaluations"][0]["strategy_version"] = evidence.STRATEGY_VERSION
+    scanner_path.write_text(json.dumps(raw), encoding="utf-8")
+    invalid_row = load(tmp_path)
+    assert invalid_row["slots"]["09:25"]["counts"]["evaluated"] == 0
+    assert any("invalid or duplicate G3 feature row" in warning for warning in invalid_row["warnings"])
+
+
+def test_legacy_order_needs_legacy_signal_id_and_matching_packet(tmp_path):
+    make_legacy(scanner(tmp_path))
+    legacy_order = make_legacy(order(tmp_path))
+    raw = json.loads(legacy_order.read_text(encoding="utf-8"))
+    raw["signal_id"] = evidence.canonical_signal_id(
+        LEGACY_STRATEGY_VERSION, datetime.fromisoformat(DAY).date(),
+        "09:25", "09:26", "LONG", "TEST")
+    legacy_order.write_text(json.dumps(raw), encoding="utf-8")
+    accepted = load(tmp_path)["slots"]["09:25"]
+    assert accepted["counts"]["paper_orders"] == 1
+    assert accepted["rows"]["TEST"]["orders"][0]["strategy_version"] == LEGACY_STRATEGY_VERSION
+    order(tmp_path, mode="LIVE")
+    rejected = load(tmp_path)
+    assert rejected["slots"]["09:25"]["counts"]["live_orders"] == 0
+    assert any("invalid G3 order snapshot omitted" in warning for warning in rejected["warnings"])
 
 
 def test_confirmation_volume_rejection_not_direction_success(tmp_path):

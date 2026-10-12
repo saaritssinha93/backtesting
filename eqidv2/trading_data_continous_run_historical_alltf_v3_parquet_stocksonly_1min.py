@@ -781,6 +781,11 @@ def ticker_is_fresh(
     stale_ok_td = _live_1min_stale_ok_timedelta(mode)
     freshness_tol = max(tol, stale_ok_td)
 
+    if _is_closing_target(exp_ts, intraday_ts):
+        # Same-day/live lag allowances must not waive the actual closing bar.
+        # In particular, a 15:29 end-stamped bar is not the 15:30 close.
+        return last_ts >= (exp_ts - tol) and _closing_row_quality(existing_path, exp_ts) == "VERIFIED"
+
     if _live_1min_same_day_stale_ok(mode) and last_ts.date() == exp_ts.date():
         return True
 
@@ -1123,20 +1128,88 @@ def _finalize_and_save(df: pd.DataFrame, out_path: str):
 
 # ========= INCREMENTAL LOAD + MERGE =========
 
+OHLC_QUALITY_FLAGS = (
+    "gap_filled", "is_gap_filled", "is_synthetic", "synthetic", "forward_filled",
+    "opening_snapshot", "provisional_stale", "is_filled", "interpolated", "is_interpolated",
+    "synthetic_repair", "repaired_synthetic",
+)
+OHLC_REQUIRED_COLUMNS = ("date", "open", "high", "low", "close", "volume")
+SYNTHETIC_SOURCE_PATTERN = "SYNTHETIC|GAP.?FILL|FORWARD.?FILL|CARRY.?FORWARD|INTERPOLAT|PROXY"
+
+
+def _quality_metadata_columns(columns) -> list[str]:
+    """Retain evidence metadata without loading every derived indicator."""
+    base = ["date", "open", "high", "low", "close", "volume"]
+    available = set(columns)
+    metadata = sorted(column for column in available.difference(base)
+                      if column in OHLC_QUALITY_FLAGS or any(part in column.lower()
+                      for part in ("source", "provenance", "quality", "fetch", "repair", "synthetic", "gap_fill", "stale", "interpolat")))
+    return [column for column in base if column in available] + metadata
+
+
+def _validated_genuine_ohlc(frame: pd.DataFrame, start, end) -> pd.DataFrame:
+    """Validate observations without changing their quality or provenance."""
+    required = list(OHLC_REQUIRED_COLUMNS)
+    if not set(required).issubset(frame):
+        raise ValueError("MISSING_FIELDS")
+    work = frame.copy()
+    work["date"] = _to_ist(work["date"])
+    stamps = work["date"]
+    if stamps.isna().any() or stamps.duplicated().any() or not (stamps.eq(stamps.dt.floor("min")) & stamps.ge(start) & stamps.le(end)).all():
+        raise ValueError("INVALID_TIMESTAMP")
+    if any(work[column].map(lambda value: isinstance(value, (bool, np.bool_))).any() for column in required[1:]):
+        raise ValueError("INVALID_OHLCV")
+    numeric = work[required[1:]].apply(pd.to_numeric, errors="coerce")
+    if not (np.isfinite(numeric["close"].to_numpy(dtype=float)) & numeric["close"].gt(0)).all():
+        raise ValueError("INVALID_PRICE")
+    valid = (np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
+             & numeric[["open", "high", "low", "close"]].gt(0).all(axis=1)
+             & numeric["volume"].ge(0) & numeric["volume"].mod(1).eq(0)
+             & numeric["low"].le(numeric[["open", "close"]].min(axis=1))
+             & numeric["high"].ge(numeric[["open", "close"]].max(axis=1)))
+    if not valid.all():
+        raise ValueError("INVALID_OHLCV")
+    for column in OHLC_QUALITY_FLAGS:
+        if column in work:
+            flagged = work[column].fillna(False).astype(str).str.strip().str.lower()
+            if (~flagged.isin({"", "false", "0", "0.0", "no", "none"})).any():
+                raise ValueError("FLAGGED_" + column.upper())
+    if "quality_state" in work and not work["quality_state"].fillna("").astype(str).str.upper().isin({"", "VALID", "RAW", "REAL", "GENUINE", "OK"}).all():
+        raise ValueError("INVALID_QUALITY")
+    if "source" in work and work["source"].fillna("").astype(str).str.upper().str.contains(SYNTHETIC_SOURCE_PATTERN, regex=True).any():
+        raise ValueError("SYNTHETIC_SOURCE")
+    work[required[1:]] = numeric
+    return work
+
+
+def _prepare_fetched_ohlc(fetched: pd.DataFrame, existing_columns, start, end) -> pd.DataFrame:
+    """Only validated exact broker observations receive genuine provenance."""
+    work = _validated_genuine_ohlc(fetched, start, end)
+    for column in OHLC_QUALITY_FLAGS:
+        if column in existing_columns or column in work or column in {"gap_filled", "is_synthetic"}:
+            work[column] = False
+    work["quality_state"] = "VALID"
+    work["source"] = "KITE_HISTORICAL_1M"
+    work["fetched_at"] = datetime.now(IST_TZ).isoformat()
+    return work
+
 def _load_existing_ohlc(out_path: str, intraday_ts: str, mode: str) -> pd.DataFrame:
     existing_path = _resolve_existing_store_path(out_path)
     if not os.path.exists(existing_path):
         return pd.DataFrame()
 
     try:
-        keep_cols = ["date", "open", "high", "low", "close", "volume"]
         ext = str(Path(existing_path).suffix).lower()
 
         if ext == ".parquet":
             _ensure_parquet_engine()
+            import pyarrow.parquet as pq
+            available = set(pq.ParquetFile(existing_path).schema_arrow.names)
+            keep_cols = _quality_metadata_columns(available)
             df = pd.read_parquet(existing_path, columns=keep_cols, engine="pyarrow")
         else:
             df = pd.read_csv(existing_path)
+            keep_cols = _quality_metadata_columns(df.columns)
 
         if df.empty or "date" not in df.columns:
             return pd.DataFrame()
@@ -1273,11 +1346,76 @@ class UpdateReport:
     total_secs: float
 
 
+def _is_closing_target(expected_ts_ist: datetime, intraday_ts: str = "end") -> bool:
+    stamp = pd.Timestamp(expected_ts_ist)
+    stamp = stamp.tz_localize(IST_TZ) if stamp.tzinfo is None else stamp.tz_convert(IST_TZ)
+    if intraday_ts.lower() == "start":
+        stamp += pd.Timedelta(minutes=1)
+    return (stamp.hour, stamp.minute, stamp.second) == (15, 30, 0)
+
+
+def _verify_recovery_enabled(expected_ts_ist: datetime, intraday_ts: str = "end") -> bool:
+    return _env_flag("EQIDV2_1MIN_STRICT_VERIFY_RECOVERY", "0") or (
+        _is_closing_target(expected_ts_ist, intraday_ts)
+        and _env_flag("EQIDV2_1MIN_EOD_VERIFY_RECOVERY", "1")
+    )
+
+
+def _require_verified_close(mode: str, failures: list[str], expected_ts_ist: datetime, intraday_ts: str = "end") -> None:
+    if failures and _is_closing_target(expected_ts_ist, intraday_ts):
+        raise RuntimeError(
+            f"[{mode.upper()}][VERIFY] End-of-session data incomplete for {len(failures)} symbol(s); "
+            "the required closing candle was not verified. No synthetic minute bars were substituted."
+        )
+
+
+def _closing_row_quality(path: str, expected_ts_ist: datetime) -> str:
+    """Verify the exact saved minute, including imported quality flags."""
+    try:
+        if str(path).lower().endswith(".parquet"):
+            import pyarrow.parquet as pq
+            schema = pq.ParquetFile(path).schema_arrow
+            if not set(OHLC_REQUIRED_COLUMNS).issubset(schema.names):
+                return "MISSING_FIELDS"
+            value = pd.Timestamp(expected_ts_ist)
+            dtype = schema.field("date").type
+            filters = None
+            if hasattr(dtype, "tz"):
+                if dtype.tz is None:
+                    value = value.tz_localize(None) if value.tzinfo is not None else value
+                elif value.tzinfo is None:
+                    value = value.tz_localize(IST_TZ)
+                filters = [("date", "==", value)]
+            frame = pd.read_parquet(path, columns=_quality_metadata_columns(schema.names), filters=filters)
+        else:
+            frame = pd.read_csv(path, usecols=lambda name: bool(_quality_metadata_columns([name])))
+        if not set(OHLC_REQUIRED_COLUMNS).issubset(frame.columns):
+            return "MISSING_FIELDS"
+        expected = pd.Timestamp(expected_ts_ist)
+        expected = expected.tz_localize(IST_TZ) if expected.tzinfo is None else expected.tz_convert(IST_TZ)
+        exact = frame.loc[_to_ist(frame["date"]).eq(expected)]
+        if len(exact) != 1:
+            return "MISSING" if exact.empty else "DUPLICATE"
+        try:
+            _validated_genuine_ohlc(exact, expected, expected)
+        except ValueError as exc:
+            return str(exc)
+        return "VERIFIED"
+    except Exception as exc:
+        return "READ_ERROR_" + type(exc).__name__
+
+
+def _recovery_worker_count(max_workers: int, work_count: int, expected_ts_ist: datetime, intraday_ts: str) -> int:
+    limit = 3 if _is_closing_target(expected_ts_ist, intraday_ts) else 10
+    return min(max(1, int(max_workers)), max(1, work_count), limit)
+
+
 def verify_mode_outputs(
     mode: str,
     symbols: list[str],
     expected_ts_ist: datetime,
     logger: logging.Logger,
+    intraday_ts: str = "end",
 ) -> tuple[int, list[str]]:
     """
     Post-run verification:
@@ -1289,6 +1427,9 @@ def verify_mode_outputs(
     tol = timedelta(seconds=1)
     stale_ok_td = _live_1min_stale_ok_timedelta(mode)
     freshness_tol = max(tol, stale_ok_td)
+    closing_target = _is_closing_target(expected_ts_ist, intraday_ts)
+    if closing_target:
+        freshness_tol = tol
 
     if expected_ts_ist.tzinfo is None:
         expected_ts_ist = IST_TZ.localize(expected_ts_ist)
@@ -1310,7 +1451,13 @@ def verify_mode_outputs(
         else:
             last_ts = last_ts.tz_convert(IST_TZ)
 
-        if _live_1min_same_day_stale_ok(mode) and last_ts.date() == expected_ts_ist.date():
+        if closing_target and last_ts >= (expected_ts_ist - freshness_tol):
+            quality = _closing_row_quality(existing_path, expected_ts_ist)
+            if quality == "VERIFIED":
+                ok += 1
+            else:
+                failed.append(f"{t_u}:closing_bar={quality}")
+        elif not closing_target and _live_1min_same_day_stale_ok(mode) and last_ts.date() == expected_ts_ist.date():
             ok += 1
         elif last_ts >= (expected_ts_ist - freshness_tol):
             ok += 1
@@ -1432,7 +1579,7 @@ def _recover_verify_failures(
             )
 
         if work_items:
-            retry_workers = min(max(1, int(max_workers)), max(1, len(work_items)), 10)
+            retry_workers = _recovery_worker_count(max_workers, len(work_items), expected_ts_ist, intraday_ts)
             logger.warning(
                 "[%s][VERIFY] Recovery attempt %d/%d: refetching %d symbol(s) with max_workers=%d",
                 mode.upper(),
@@ -1472,7 +1619,7 @@ def _recover_verify_failures(
                         logger.exception("[%s][VERIFY] Recovery worker crashed for %s: %s", mode.upper(), tkr, e)
 
         check_symbols = token_missing + [t for (t, _) in work_items]
-        _, verify_failed_subset = verify_mode_outputs(mode, check_symbols, expected_ts_ist, logger)
+        _, verify_failed_subset = verify_mode_outputs(mode, check_symbols, expected_ts_ist, logger, intraday_ts)
         remaining = _extract_failed_tickers(verify_failed_subset, check_symbols)
 
         if remaining and attempt < max_attempts:
@@ -1568,6 +1715,8 @@ def process_ticker(
 
         if mode == "1min":
             fetched = fetch_historical_1min_df(kite_client, token, inc_start, end_dt_ist, logger, intraday_ts)
+            if fetched is not None and not fetched.empty:
+                fetched = _prepare_fetched_ohlc(fetched, existing.columns, inc_start, end_dt_ist)
         else:
             return UpdateReport(mode, ticker, "failed", out_path, existed_before,
                                 last_before_ts.strftime("%Y-%m-%d %H:%M:%S") if last_before_ts is not None else None,
@@ -1772,7 +1921,7 @@ def run_mode(
     if not missing_rows:
         logger.info("[%s] Nothing missing - all symbols fresh.", mode.upper())
         t_verify0 = _time.perf_counter()
-        ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger)
+        ok_count, verify_failed = verify_mode_outputs(mode, syms, verify_expected_ts, logger, intraday_ts)
         verify_secs = _time.perf_counter() - t_verify0
         logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d | failed=%d | elapsed=%.2fs",
                     mode.upper(),
@@ -1780,6 +1929,7 @@ def run_mode(
                     ok_count, len(syms), len(verify_failed), verify_secs)
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=0.00s | workers=0.00s | verify=%.2fs | total=%.2fs",
                     mode.upper(), freshness_scan_secs, verify_secs, _time.perf_counter() - t_mode0)
+        _require_verified_close(mode, verify_failed, verify_expected_ts, intraday_ts)
         return
 
     t_token0 = _time.perf_counter()
@@ -1818,7 +1968,7 @@ def run_mode(
     if not work_items:
         logger.info("No valid symbols with tokens.")
         t_verify0 = _time.perf_counter()
-        ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger) if verify_syms else (0, [])
+        ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger, intraday_ts) if verify_syms else (0, [])
         verify_secs = _time.perf_counter() - t_verify0
         logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d fetchable | failed=%d | tokenless_skipped=%d | elapsed=%.2fs",
                     mode.upper(),
@@ -1826,6 +1976,7 @@ def run_mode(
                     ok_count, len(verify_syms), len(verify_failed), len(tokenless_syms), verify_secs)
         logger.info("[%s][TIMING] scan=%.2fs | token_prep=%.2fs | workers=0.00s | verify=%.2fs | total=%.2fs",
                     mode.upper(), freshness_scan_secs, token_prep_secs, verify_secs, _time.perf_counter() - t_mode0)
+        _require_verified_close(mode, verify_failed, verify_expected_ts, intraday_ts)
         return
 
     logger.info("[%s] Processing ONLY missing symbols=%d with max_workers=%d ...", mode.upper(), len(work_items), max_workers)
@@ -1906,7 +2057,7 @@ def run_mode(
                     mode.upper(), sum_load, sum_fetch, sum_ind, sum_persist, sum_total)
 
     t_verify0 = _time.perf_counter()
-    ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger)
+    ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger, intraday_ts)
     verify_secs = _time.perf_counter() - t_verify0
     logger.info("[%s][VERIFY] expected_last=%s | ok=%d/%d fetchable | failed=%d | tokenless_skipped=%d | elapsed=%.2fs",
                 mode.upper(),
@@ -1915,7 +2066,7 @@ def run_mode(
 
     recovery_secs = 0.0
     verify_post_secs = 0.0
-    strict_recovery = _env_flag("EQIDV2_1MIN_STRICT_VERIFY_RECOVERY", "0")
+    strict_recovery = _verify_recovery_enabled(verify_expected_ts, intraday_ts)
     if verify_failed and strict_recovery:
         recovery_secs = _recover_verify_failures(
             mode=mode,
@@ -1936,7 +2087,7 @@ def run_mode(
             print_missing_rows_max=print_missing_rows_max,
         )
         t_verify1 = _time.perf_counter()
-        ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger)
+        ok_count, verify_failed = verify_mode_outputs(mode, verify_syms, verify_expected_ts, logger, intraday_ts)
         verify_post_secs = _time.perf_counter() - t_verify1
         logger.info("[%s][VERIFY][POST] expected_last=%s | ok=%d/%d fetchable | failed=%d | elapsed=%.2fs",
                     mode.upper(),
@@ -1969,6 +2120,7 @@ def run_mode(
                     workers_secs,
                     verify_secs,
                     _time.perf_counter() - t_mode0)
+    _require_verified_close(mode, verify_failed, verify_expected_ts, intraday_ts)
 
 def parse_args():
     p = argparse.ArgumentParser()

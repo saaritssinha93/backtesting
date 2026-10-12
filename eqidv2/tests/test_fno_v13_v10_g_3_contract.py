@@ -39,8 +39,8 @@ def candidate(symbol="A", *, side="LONG", signal="09:30", **changes):
 def test_normalized_effective_book_and_frozen_metadata_are_distinct():
     config.validate_strategy()
     assert config.strategy_fingerprint() == contract.config_fingerprint()
-    assert len(config.ACTIVE_SETUPS) == 14
-    assert config.setup_for("09:50", "LONG") is None
+    assert len(config.ACTIVE_SETUPS) == 15
+    assert config.setup_for("09:50", "LONG").target_pct == .75
     assert config.setup_for("09:55", "SHORT") is None
     assert config.setup_for("10:00", "SHORT") is None
     assert config.setup_for("09:55", "LONG").target_pct == .9
@@ -55,13 +55,40 @@ def test_normalized_effective_book_and_frozen_metadata_are_distinct():
     assert frozen["execution_authority"] is False
 
 
+def test_promoted_setup_matches_research_without_changing_existing_rules():
+    prior = json.loads((ROOT / "configs/strategies/v13_v10_g_3_production_v1.json").read_text())
+    research = json.loads((ROOT / "configs/strategies/v13_v10_g_3_backtest_0950_long_target075_v1.json").read_text())["new_setup"]
+    current = contract.strategy_payload()
+    for family in ("core_setups", "active_setups"):
+        retained = [{**asdict(s), "source_version": contract.LEGACY_STRATEGY_VERSION}
+                    for s in getattr(contract, family.upper()) if s.setup_id != "0951_LONG"]
+        assert retained == prior[family]
+    setup = contract.setup_for("09:50", "LONG")
+    for key in ("signal_end", "confirmation_end", "side", "mode", "max_entries", "picker",
+                "price_change_pct", "oi_change_pct", "target_pct"):
+        assert getattr(setup, key) == research[key]
+    assert (setup.volume_ratio, setup.body_ratio, setup.max_wick_ratio, setup.stop_pct) == (
+        research["five_minute_volume_ratio_min"], research["one_minute_body_ratio_min"],
+        research["one_minute_upper_wick_ratio_max"], research["initial_stop_pct"])
+    assert contract.confirmation_volume_minimum("LONG", signal_end="09:50") == research["one_minute_volume_ratio_min"]
+    assert contract.confirmation_volume_minimum("LONG", signal_end="09:55") == 1.1
+    assert contract.confirmation_volume_minimum("SHORT", signal_end="09:50") == 1.2
+    assert current["exit"]["tighten_after_minutes"] == research["tighten_after_minutes"]
+    assert current["exit"]["tightened_stop_pct"] == research["tightened_stop_pct"]
+    assert contract.supported_identity(contract.STRATEGY_VERSION, contract.strategy_fingerprint())
+    assert not contract.supported_identity(prior["strategy_version"], contract.LEGACY_STRATEGY_FINGERPRINT)
+    assert contract.supported_identity(prior["strategy_version"], contract.LEGACY_STRATEGY_FINGERPRINT, allow_legacy=True)
+    assert not contract.supported_identity(prior["strategy_version"], contract.strategy_fingerprint(), allow_legacy=True)
+
+
 @pytest.mark.parametrize("setup", config.ACTIVE_SETUPS, ids=lambda s:s.setup_id)
 def test_all_setup_boundary_thresholds_and_quotas(setup):
     side = setup.side
     row = candidate(side=side, signal=setup.signal_end,
         price_change_pct=setup.price_change_pct * (1 if side == "LONG" else -1),
         oi_change_pct=setup.oi_change_pct, volume_ratio=setup.volume_ratio,
-        body_ratio=setup.body_ratio, wick_ratio=setup.max_wick_ratio)
+        body_ratio=setup.body_ratio, wick_ratio=setup.max_wick_ratio,
+        v9_1m_volume_ratio=config.confirmation_volume_minimum(side, setup_id=setup.setup_id))
     assert config.passes_selected_filters(row, setup)
     for field in ("oi_change_pct", "volume_ratio", "body_ratio", "v9_1m_volume_ratio"):
         assert not config.passes_selected_filters({**row,field:row[field]-1e-9},setup), field
@@ -217,6 +244,7 @@ work=x.copy()
 work.loc[work.side.eq("LONG"),"v9_1m_volume_ratio"]*=1.2/1.1
 old=g.select_orders(work,g.v9.V9Config(),g.SelectionChange(**settings["selection_change"]),core_first=True)
 new=c.select_orders(x)
+new=new.loc[new.setup_id.ne("0951_LONG")]
 keys=lambda z:set(zip(z.sid.astype(int),z.setup_id))
 assert keys(old)==keys(new),(keys(old)-keys(new),keys(new)-keys(old))
 assert len(old)==len(new)==88

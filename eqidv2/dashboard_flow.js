@@ -26,10 +26,10 @@
     $('family-tabs').replaceChildren(...families.map(family=>{
       const button=el('button',family===selected?.strategy?'active':'',FlowCore.shortStrategy(family));button.type='button';
       button.setAttribute('aria-pressed',String(family===selected?.strategy));button.setAttribute('aria-label','Show '+FlowCore.shortStrategy(family)+' backtests');
-      button.onclick=()=>{$('show-archives').checked=false;load(data.runs.find(run=>run.strategy===family).id);};return button;
+      button.onclick=()=>{$('show-archives').checked=false;$('follow-latest').checked=true;load(null,family);};return button;
     }));
     const familyRuns=data.runs.filter(run=>run.strategy===selected?.strategy);
-    const visible=$('show-archives').checked?familyRuns:familyRuns.filter((run,index)=>index===0||run.id===selected?.id);
+    const visible=$('show-archives').checked?familyRuns:familyRuns.filter((run,index)=>index===0||run.kind==='research_variant'||run.id===selected?.id);
     $('run-select').replaceChildren(...visible.map(run=>{const index=familyRuns.indexOf(run);const option=el('option','',FlowCore.runLabel(run,index===0,index));option.value=run.id;option.title=FlowCore.runLabel(run,index===0,index);return option;}));
     if(selected)$('run-select').value=selected.id;
     if(!data.runs.length)$('run-select').append(el('option','','No saved runs'));
@@ -54,14 +54,26 @@
   }
   function stopReplay() {if(state.timer)clearInterval(state.timer);state.timer=null;$('replay-toggle').textContent='▶';$('replay-toggle').setAttribute('aria-label','Play historical sessions');}
   function setNotice(message) {$('notice').textContent=message;$('notice').hidden=!message||state.view==='live';}
-  async function load(run) {
-    stopReplay(); const request=++state.request; state.loading=true; $('refresh').disabled=true; $('run-select').disabled=true;
-    setNotice(''); $('flow-view').setAttribute('aria-busy','true');$('research-state').textContent='READING ARTIFACTS';
+  async function load(run=null,strategy=null,quiet=false) {
+    const request=++state.request; state.loading=true;
+    if(!quiet){stopReplay();$('refresh').disabled=true;$('run-select').disabled=true;
+      setNotice('');$('flow-view').setAttribute('aria-busy','true');$('research-state').textContent='READING ARTIFACTS';}
     const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),20000);
     try {
-      const response=await fetch(api('/api/dashboard-flow'+(run?'?run='+encodeURIComponent(run):'')),{cache:'no-store',signal:controller.signal});
+      const query=run?'?run='+encodeURIComponent(run):strategy?'?strategy='+encodeURIComponent(strategy):'';
+      const response=await fetch(api('/api/dashboard-flow'+query),{cache:'no-store',signal:controller.signal});
       if(!response.ok)throw new Error(response.status===401?'Your dashboard session has expired. Reopen Dashboard Flow from its launcher.':'The saved run could not be loaded. Refresh to try again.');
       const data=await response.json();if(request!==state.request)return;if(data.error)throw new Error(data.error);
+      if(quiet&&state.data?.selected_run?.id===data.selected_run?.id){
+        const catalogChanged=JSON.stringify(state.data.runs.map(row=>row.id))!==JSON.stringify(data.runs.map(row=>row.id));
+        const evidenceChanged=JSON.stringify([state.data.summary,state.data.daily,state.data.trades])!==JSON.stringify([data.summary,data.daily,data.trades]);
+        const atLatest=state.frame===state.dates.length;
+        state.data=data;renderRunControls();
+        if(evidenceChanged){renderFlow(atLatest);setNotice((data.warnings||[]).join(' '));}
+        if((catalogChanged||evidenceChanged)&&state.view==='compare')renderComparison(true);
+        return;
+      }
+      if(quiet)stopReplay();
       state.data=data;state.selected=null;state.setup=null;state.frame=0;state.page=0;
       const loaded = new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Asia/Kolkata'}).format(new Date());
       $('research-loaded').textContent='Loaded '+loaded+' IST';
@@ -71,7 +83,7 @@
       renderRunControls();renderFlow(true);setNotice((data.warnings||[]).join(' '));
       if(state.view==='compare')await renderComparison(true);
     } catch(error) {if(request!==state.request)return;$('research-state').textContent=state.data?'REFRESH FAILED / SAVED VIEW':'RESULTS UNAVAILABLE';setNotice(error.name==='AbortError'?'Reading the saved results timed out. Please refresh.':error.message);if(state.data?.selected_run)$('run-select').value=state.data.selected_run.id;if(!state.data){empty($('flow-chart'),'Data is unavailable. Use Refresh to retry.');empty($('stock-cards'),'Waiting for saved results.');}}
-    finally {clearTimeout(timeout);if(request===state.request){state.loading=false;$('refresh').disabled=false;$('run-select').disabled=false;$('flow-view').removeAttribute('aria-busy');}}
+    finally {clearTimeout(timeout);if(request===state.request){state.loading=false;if(!quiet){$('refresh').disabled=false;$('run-select').disabled=false;$('flow-view').removeAttribute('aria-busy');}}}
   }
   function renderMetrics() {
     if(!state.data)return;
@@ -204,8 +216,14 @@
     $('ledger-pagination').textContent=rows.length?`${state.page*size+1}–${Math.min((state.page+1)*size,rows.length)} of ${rows.length} executions`:'0 executions';$('page-prev').disabled=state.page===0;$('page-next').disabled=state.page>=pages-1;
   }
   function resetFilters() {stopReplay();state.query='';state.side='all';state.setup=null;state.selected=null;state.range='all';state.page=0;$('stock-search').value='';$('ledger-search').value='';$('side-filter').value='all';document.querySelectorAll('[data-range]').forEach(b=>{b.classList.toggle('active',b.dataset.range==='all');b.setAttribute('aria-pressed',String(b.dataset.range==='all'));});renderFlow(true);}
-  $('run-select').addEventListener('change',e=>load(e.target.value));$('refresh').onclick=()=>state.view==='live'?FlowLive.refresh():load(state.data?.selected_run?.verified?undefined:state.data?.selected_run?.id);
-  $('show-archives').onchange=()=>{const latest=state.data?.runs.find(run=>run.strategy===state.data.selected_run?.strategy);if(!$('show-archives').checked&&latest?.id!==state.data?.selected_run?.id)load(latest.id);else if(state.data)renderRunControls();};
+  $('run-select').addEventListener('change',e=>{$('follow-latest').checked=e.target.value===state.data?.runs.find(row=>row.strategy===state.data.selected_run?.strategy)?.id;load(e.target.value);});
+  $('refresh').onclick=()=>state.view==='live'?FlowLive.refresh():$('follow-latest').checked?load(null,state.data?.selected_run?.strategy):load(state.data?.selected_run?.id);
+  $('follow-latest').onchange=()=>{if($('follow-latest').checked)load(null,state.data?.selected_run?.strategy);};
+  $('show-archives').onchange=()=>{const latest=state.data?.runs.find(run=>run.strategy===state.data.selected_run?.strategy);if(!$('show-archives').checked&&latest?.id!==state.data?.selected_run?.id&&state.data?.selected_run?.kind!=='research_variant'){$('follow-latest').checked=true;load(null,state.data.selected_run.strategy);}else if(state.data)renderRunControls();};
+  setInterval(()=>{if(document.hidden||state.loading||!state.data||state.view==='live'||(!$('follow-latest').checked&&state.view!=='compare'))return;
+    if($('follow-latest').checked)load(null,state.data.selected_run?.strategy,true);
+    else load(state.data.selected_run?.id,null,true);
+  },60000);
   $('summary-scope').onchange=e=>{state.scope=e.target.value;state.page=0;renderMetrics();renderLedger();};$('clear-global-filters').onclick=resetFilters;
   $('stock-search').addEventListener('input',e=>{state.query=e.target.value.trim().toLowerCase();$('ledger-search').value=e.target.value;state.selected=null;state.page=0;renderFlow();});
   $('side-filter').onchange=e=>{state.side=e.target.value;state.selected=null;renderFlow();};$('reset-filters').onclick=resetFilters;

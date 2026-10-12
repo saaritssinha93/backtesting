@@ -66,7 +66,7 @@ def read_daily_replay(
 ) -> DailyReplaySnapshot:
     envelope, source, sha = read_json(path)
     g3 = envelope.get("schema_version") == G3_DAILY_REPLAY_SCHEMA
-    if expected_strategy_version == "V13-V10-G-3-PRODUCTION-V1" and not g3:
+    if str(expected_strategy_version or envelope.get("strategy_version", "")).startswith("V13-V10-G-3-PRODUCTION-") and not g3:
         raise ArtifactError("G3 daily result has no production-run schema")
     if g3:
         envelope = verified_g3_result(source)

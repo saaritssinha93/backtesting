@@ -38,29 +38,45 @@ function fixture(incomplete = false) {
   if (incomplete) data.summary.trades = 4;
   return data;
 }
-async function app(data) {
+async function app(data, hash = '') {
   const root = path.join(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'dashboard_flow.html'), 'utf8');
   const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(match => [match[1], new Element()]));
   const ranges = ['20','40','all'].map(range => Object.assign(new Element('button'), {dataset:{range}}));
-  const views = ['flow','ledger','compare'].map(view => Object.assign(new Element('button'), {dataset:{view}}));
+  const views = ['live','flow','ledger','compare'].map(view => Object.assign(new Element('button'), {dataset:{view}}));
   const document = {body:new Element('body'), getElementById(id) {if (!elements.has(id)) throw Error('Missing element '+id);return elements.get(id);},
     createElement:tag=>new Element(tag), createElementNS:(_,tag)=>new Element(tag), querySelector:()=>new Element('a'),
     querySelectorAll:selector=>selector==='[data-range]'?ranges:selector==='[data-view]'?views:[], addEventListener(){}};
   let failure = false;
-  const context = {document, location:{origin:'http://localhost'}, URL, Blob, AbortController, Intl, Date,
+  const requests = [], intervals = [], live = {activated:0,deactivated:0};
+  const context = {document, location:{origin:'http://localhost',hash}, URL, Blob, AbortController, Intl, Date,
     FLOW_API_TOKEN:'', localStorage:{getItem:()=>null,setItem(){}}, addEventListener(){},
     getComputedStyle:()=>({paddingLeft:0,paddingRight:0,paddingTop:0,paddingBottom:0}),
-    setTimeout,clearTimeout,setInterval,clearInterval, FlowComparison:{render(){}},
-    fetch:async()=>{if(failure)throw Error('Saved results unavailable');return {ok:true,json:async()=>data};}};
+    setTimeout,clearTimeout,setInterval:callback=>{intervals.push(callback);return intervals.length;},clearInterval, FlowComparison:{render(){}},
+    FlowLive:{activate(){live.activated++;},deactivate(){live.deactivated++;}},
+    fetch:async url=>{requests.push(url);if(failure)throw Error('Saved results unavailable');return {ok:true,json:async()=>typeof data==='function'?data(url):data};}};
   context.window = context;
   vm.createContext(context);
   for (const file of ['dashboard_flow_core.js','dashboard_flow_chart.js','dashboard_flow.js']) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(elements.get('notice').hidden,true, elements.get('notice').textContent);
-  return {get:id=>elements.get(id), views, failRefresh:()=>{failure=true;}};
+  return {get:id=>elements.get(id), views, requests, intervals, live, failRefresh:()=>{failure=true;}};
 }
 const values = app => app.get('session-values-body').children.map(row=>row.children.map(cell=>cell.textContent));
+
+test('live deep link defers backtest loading until a research tab is selected', async () => {
+  const ui = await app(fixture(), '#live');
+  assert.equal(ui.live.activated, 1);
+  assert.equal(ui.requests.length, 0);
+  assert.equal(ui.get('live-view').hidden, false);
+  assert.equal(ui.get('flow-view').hidden, true);
+  assert.equal(ui.get('research-heading').hidden, true);
+  ui.views.find(view=>view.dataset.view==='flow').onclick();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.requests.length, 1);
+  assert.equal(ui.get('live-view').hidden, true);
+  assert.equal(ui.get('research-state').textContent, 'HISTORICAL / LOADED');
+});
 
 test('initial load wires sourced evidence, provenance and the exact session table', async () => {
   const ui = await app(fixture());
@@ -73,6 +89,22 @@ test('initial load wires sourced evidence, provenance and the exact session tabl
   assert.match(ui.get('evidence-cards').children[1].textContent,/−₹40/);
   assert.match(ui.get('evidence-cards').children[5].textContent,/Reconciled/);
   assert.deepEqual(values(ui).map(row=>row.slice(1)),[['₹20.00','₹80.00','−₹20.00'],['−₹40.00','₹60.00','−₹40.00'],['₹100.00','₹100.00','₹0.00']]);
+});
+
+test('strategy tabs and refresh follow the newest run within the chosen family', async () => {
+  const g3=fixture(), g2=fixture();
+  g2.selected_run={...g2.selected_run,id:'g2-latest',strategy:'V13-V10-G-2'};
+  g3.runs=[g3.selected_run,g2.selected_run];g2.runs=g3.runs;
+  const ui=await app(url=>url.includes('strategy=V13-V10-G-2')?g2:g3);
+  ui.get('family-tabs').children[1].onclick();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.get('run-select').value,'g2-latest');
+  await ui.get('refresh').onclick();
+  assert.match(ui.requests.at(-1),/strategy=V13-V10-G-2/);
+  assert.equal(ui.get('follow-latest').checked,true);
+  ui.intervals.at(-1)();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(ui.requests.at(-1),/strategy=V13-V10-G-2/);
 });
 
 test('direction and replay update session evidence; entire-run scope restores daily totals', async () => {
@@ -88,7 +120,7 @@ test('direction and replay update session evidence; entire-run scope restores da
   assert.equal(ui.get('session-scope').textContent,'ENTIRE RUN');
   assert.equal(values(ui).length,3);
   assert.match(ui.get('evidence-cards').children[0].textContent,/₹120/);
-  ui.views[2].onclick();
+  ui.views.find(view=>view.dataset.view==='compare').onclick();
   assert.equal(ui.get('research-analysis').hidden,true);
   assert.equal(ui.get('source-strip').hidden,true);
 });

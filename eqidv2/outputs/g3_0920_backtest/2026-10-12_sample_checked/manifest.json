@@ -1,0 +1,19 @@
+{
+  "variant_id": "V13-V10-G-3-BT-0920-LONG-SHORT-V1",
+  "execution_authority": false,
+  "code_sha256": {
+    "g3_0920_backtest.py": "dbd3516cd20f1e5bdbd17223c6cfab4d60d17aa97dccb519ae1a3b240b0a3427",
+    "g3_0920_strategy.py": "dbdfe14b28ffa1f9cd347e62767add46e1bf3ba55ee69564578d95bfc5d38763",
+    "g3_0920_history.py": "ed5cc1781b0839b0e737c93b549050a56a605df64cf981428e5313789369a410",
+    "g3_0920_feature_export.py": "d9e3bbe629a8ca1691834058341cbc638769437aacea2aada015ffbb35aaee4d"
+  },
+  "files": {
+    "added_0920_orders.csv": "bb924d500743c9cff0b6d7b420ea66eef8eb8aacbd4a137ebe73b1ec3f7c8ad0",
+    "added_0920_trades.csv": "87622c870406f817807cea3f18e3a04ea7414a36336bc38af046346f238d2796",
+    "baseline_trades.csv": "b5adfeac2cfa5750203659d4aa45088b48bde61837cc653a1c51d1f19dfbd7d9",
+    "daily_comparison.csv": "0cd683fd7f5b7a171fa5c1e714aae2a90522bcb58ca72bec9c41dc0edf7e6c3b",
+    "selection_audit_0920.csv": "3670b9f22c1e3cade4aa7e3da5598eb65f7219f8e952a5a9059e6f6651847aa2",
+    "summary.json": "d0e5772bafc1015b32a7131493bf3678324b4aa2ec41ebaa3526cf8458729702",
+    "variant_trades.csv": "6433df2a9c3b3c3f64e34469a6c3069b90ec2e0e7a5d621e247eafb350f0d226"
+  }
+}

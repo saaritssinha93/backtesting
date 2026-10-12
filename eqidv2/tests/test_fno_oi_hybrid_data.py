@@ -181,6 +181,25 @@ class FnoOiHybridDataTests(unittest.TestCase):
         self.assertEqual(five.iloc[0]["volume"], 15.0)
         self.assertEqual(five.iloc[0]["source_1m_count"], 5)
 
+    def test_nullable_boolean_quality_flags_do_not_crash_or_approve_flagged_bars(self) -> None:
+        timestamps = pd.date_range("2026-10-12 09:16", periods=5, freq="1min", tz=common.IST)
+        minute = pd.DataFrame({
+            "ts": timestamps, "open": [100.0] * 5, "high": [101.0] * 5,
+            "low": [99.0] * 5, "close": [100.5] * 5, "volume": [10.0] * 5,
+            "gap_filled": pd.array([False, pd.NA, False, False, False], dtype="boolean"),
+        })
+        assert len(hybrid.aggregate_equity_one_minute_to_five_minute(minute)) == 1
+        minute.loc[4, "gap_filled"] = True
+        assert hybrid.aggregate_equity_one_minute_to_five_minute(minute).empty
+
+        five = pd.DataFrame({
+            "ts": pd.date_range("2026-10-12 09:20", periods=2, freq="5min", tz=common.IST),
+            "open": [100.0, 100.0], "high": [101.0, 101.0],
+            "low": [99.0, 99.0], "close": [100.5, 100.5], "volume": [50.0, 50.0],
+            "gap_filled": pd.array([pd.NA, True], dtype="boolean"),
+        })
+        assert len(hybrid.completed_real_equity_five_minute_bars(five)) == 1
+
     def test_file_bar_reader_rejects_exact_adjacent_ohlcv_copy(self) -> None:
         timestamps = pd.date_range(
             "2026-08-10 09:20", periods=3, freq="5min", tz=common.IST

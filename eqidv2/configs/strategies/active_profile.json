@@ -1,9 +1,10 @@
 {
   "schema_version": "fno_active_strategy_deployment_v1",
   "profile": "V13_V10_G_3",
-  "strategy_version": "V13-V10-G-3-PRODUCTION-V1",
-  "strategy_fingerprint": "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275",
-  "accepted_variant": "G3_W1_V1p1",
+  "strategy_version": "V13-V10-G-3-PRODUCTION-V2",
+  "strategy_fingerprint": "8d4d62d7f3e4aff5f39905e4f1cd2297a50b74af7c8fa83ee7b69aa855cc2aa6",
+  "accepted_variant": "G3_W1_V1p1_0950_LONG_T075",
+  "production_config": "configs/strategies/v13_v10_g_3_production_v2.json",
   "deployment_stage": "PAPER_VALIDATION",
   "live_activation_authorized": false,
   "live_execution_policy": {

@@ -2,13 +2,19 @@
 import csv
 import hashlib
 import json
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
 import dashboard_flow as flow
 import fno_strategy_registry as registry
-from fno_v13_v10_g_3_contract import STRATEGY_VERSION, strategy_fingerprint
+from fno_v13_v10_g_3_contract import (
+    STRATEGY_VERSION, LEGACY_STRATEGY_VERSION, LEGACY_STRATEGY_FINGERPRINT,
+    strategy_fingerprint,
+)
+from fno_v13_v10_g_3_backtest import publish_current_backtest
+from research.g3_0950_long_backtest import PREFERRED_CONFIG
 from ai_platform.observability.g3_analysis import generate_g3_analysis, verified_package
 
 
@@ -63,6 +69,49 @@ def test_canonical_nested_artifacts_and_zero_day_survive(package):
     assert str(package[0]) not in json.dumps(payload)
 
 
+def test_deployed_identity_tracks_the_shared_contract():
+    state = registry.deployment_state()
+    assert registry.PROFILES["V13_V10_G_3"].version == STRATEGY_VERSION
+    assert state["strategy_version"] == STRATEGY_VERSION
+    assert state["strategy_fingerprint"] == strategy_fingerprint()
+    assert state["deployment_stage"] == "PAPER_VALIDATION"
+    assert state["live_activation_authorized"] is False
+
+
+def test_archived_v1_history_keeps_its_identity_and_results(package):
+    root, run, manifest, pointer, promote = package
+    for record in (manifest, pointer):
+        record.update(strategy_version=LEGACY_STRATEGY_VERSION,
+                      strategy_fingerprint=LEGACY_STRATEGY_FINGERPRINT)
+    ledger = run / "canonical" / "portfolio_trades.csv"
+    with ledger.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    for row in rows:
+        row.update(strategy_version=LEGACY_STRATEGY_VERSION,
+                   strategy_fingerprint=LEGACY_STRATEGY_FINGERPRINT)
+    write_csv(ledger, rows)
+    manifest["artifacts"]["portfolio_trades"]["sha256"] = sha(ledger)
+    promote()
+    archive = root / "latest" / "archived" / LEGACY_STRATEGY_VERSION / "current_history.json"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes((root / "latest/current_history.json").read_bytes())
+    payload = flow.load_flow_data()
+    assert len(payload["runs"]) == 1  # Current and archive pointers are the same immutable run.
+    selected = payload["selected_run"]
+    assert selected["strategy_version"] == LEGACY_STRATEGY_VERSION
+    assert selected["strategy_matches_active"] is False
+    assert selected["source_label"].startswith("Archived ")
+    assert payload["summary"]["net_pnl"] == 100
+    assert any(STRATEGY_VERSION in warning for warning in payload["warnings"])
+    (root / "latest/current_history.json").unlink()
+    assert flow.load_flow_data(selected["id"])["summary"]["net_pnl"] == 100
+    manifest["strategy_fingerprint"] = strategy_fingerprint()
+    (run / "run_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    pointer["manifest_sha256"] = sha(run / "run_manifest.json")
+    archive.write_text(json.dumps(pointer), encoding="utf-8")
+    assert flow.load_flow_data()["state"] == "empty"
+
+
 def test_production_history_outranks_future_research(package):
     root, *_ = package
     write_csv(root / "runs" / "2099-01-01" / "future" / "daily_results.csv", [dict(day="2099-01-01", net_pnl=999)])
@@ -70,6 +119,55 @@ def test_production_history_outranks_future_research(package):
     assert payload["selected_run"]["role"] == "cumulative_history"
     research = next(item for item in payload["runs"] if item["run_name"] == "future")
     assert flow.load_flow_data(research["id"])["summary"]["net_pnl"] == 999
+
+
+def test_verified_current_0950_backtest_becomes_latest_without_replacing_production(package, monkeypatch):
+    root, *_ = package
+    production_pointer = (root / "latest/current_history.json").read_bytes()
+    run = root / "backtests" / "runs" / "2026-10-12" / "g3_0950_t075"
+    days = [(date(2026, 10, 12) - timedelta(days=48 - index)).isoformat()
+            for index in range(49)]
+    write_csv(run / "daily_results.csv", [dict(day=day, variant_fills=int(index == 48),
+        variant_wins=int(index == 48), variant_net_pnl_rs=100 if index == 48 else 0)
+        for index, day in enumerate(days)])
+    write_csv(run / "variant_trades.csv", [dict(day=days[-1], tradingsymbol="AAA", side="LONG",
+        setup_id="0951_LONG", filled=True, portfolio_executed=True,
+        portfolio_net_profit_rupees=100)])
+    (run / "config.json").write_bytes(PREFERRED_CONFIG.read_bytes())
+    (run / "summary.json").write_text(json.dumps(dict(
+        variant_id="V13-V10-G-3-BT-0950-LONG-T075-V1", scope="BACKTEST_ONLY",
+        execution_authority=False, sessions=49, first_date=days[0], last_date=days[-1],
+        created_at_ist="2026-10-12T17:40:00+05:30", frozen_baseline_parity=True,
+        existing_g3_trades_unchanged=True,
+        with_0950_long=dict(fills=1, wins=1, net_pnl_rs=100))), encoding="utf-8")
+    code = Path(__file__).resolve().parents[1] / "research/g3_0950_long_backtest.py"
+    files = {name: sha(run / name) for name in
+        ("daily_results.csv", "variant_trades.csv", "config.json", "summary.json")}
+    (run / "manifest.json").write_text(json.dumps(dict(
+        variant_id="V13-V10-G-3-BT-0950-LONG-T075-V1", execution_authority=False,
+        code=str(code), code_sha256=sha(code), files=files)), encoding="utf-8")
+    publish_current_backtest(root, run)
+    selected = flow.load_flow_data()
+    assert selected["selected_run"]["role"] == "backtest_history"
+    assert selected["selected_run"]["target_pct"] == .75
+    assert selected["selected_run"]["promoted_rules"] is True
+    assert any("historical simulation" in warning and "09:50 LONG / 0.75%" in warning
+               for warning in selected["warnings"])
+    assert any("modeled fills are not PAPER or broker orders" in warning
+               and "LIVE order execution is currently disabled" in warning
+               for warning in selected["warnings"])
+    monkeypatch.setattr(flow, "g3_live_activation_authorized", lambda: True)
+    authorized = flow.load_flow_data()
+    assert any("LIVE execution authorization is active" in warning
+               for warning in authorized["warnings"])
+    assert selected["summary"]["net_pnl"] == 100
+    assert (root / "latest/current_history.json").read_bytes() == production_pointer
+    current_pointer = (root / "latest/current_backtest.json").read_bytes()
+    (run / "daily_results.csv").write_text("tampered", encoding="utf-8")
+    with pytest.raises(ValueError, match="manifest or artifact"):
+        publish_current_backtest(root, run)
+    assert (root / "latest/current_backtest.json").read_bytes() == current_pointer
+    assert flow.load_flow_data()["selected_run"]["role"] == "cumulative_history"
 
 
 @pytest.mark.parametrize("corruption", ["manifest", "ledger", "fingerprint", "role", "path", "incomplete", "undocumented_gap", "schema", "authority", "date"])
@@ -188,3 +286,42 @@ def test_main_daily_report_rejects_unverified_saved_markdown(package, monkeypatc
     monkeypatch.setattr(dashboard, "FNO_G_BACKTEST_REPORT", old_report)
     _, _, body = dashboard._backtesting_v13_v10_g_view({"status": "SUCCESS"}, today_ist="2026-10-09")
     assert "AWAITING_VERIFIED_G3_REPORT" in body and "999999" not in body
+
+
+def test_main_daily_report_labels_verified_v1_as_archived(package, monkeypatch):
+    import log_dashboard_server as dashboard
+    root, *_ = package
+    run = root / "production/runs/2026-10-09/prior-v1"
+    daily = run / "daily_results.csv"
+    ledger = run / "portfolio_trades.csv"
+    write_csv(daily, [dict(day="2026-10-09", trades=1, net_pnl=100)])
+    write_csv(ledger, [dict(day="2026-10-09", tradingsymbol="AAA", portfolio_net_profit_rupees=100,
+                           strategy_version=LEGACY_STRATEGY_VERSION,
+                           strategy_fingerprint=LEGACY_STRATEGY_FINGERPRINT)])
+    source = run / "source_manifest.json"
+    source.write_text("{}", encoding="utf-8")
+    identity = dict(strategy_version=LEGACY_STRATEGY_VERSION,
+                    strategy_fingerprint=LEGACY_STRATEGY_FINGERPRINT)
+    manifest = dict(schema_version="fno_g3_production_run_v1", execution_authority=False,
+        role="production_daily", complete=True, state="SUCCESS", session_date="2026-10-09", **identity,
+        metrics=dict(trades=1, net_pnl_rupees=100), artifacts={name:dict(path=path.name, sha256=sha(path))
+            for name,path in (("daily_results",daily),("portfolio_trades",ledger),("source_manifest",source))})
+    manifest_path = run / "run_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    pointer_path = root / "latest/current_run.json"
+    pointer = dict(role="production_daily", session_date="2026-10-09", run_dir=run.relative_to(root).as_posix(),
+                   manifest_sha256=sha(manifest_path), **identity)
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    original = pointer_path.read_bytes()
+    monkeypatch.setattr(dashboard, "FNO_ACTIVE_PROFILE", registry.PROFILES["V13_V10_G_3"])
+    monkeypatch.setattr(dashboard, "FNO_G_BACKTEST_ROOT", root)
+    _, _, body = dashboard._backtesting_v13_v10_g_view({"status":"SUCCESS"}, today_ist="2026-10-12")
+    assert "VERIFIED_ARCHIVED_PRODUCTION_DAILY" in body
+    assert f"Strategy version: {LEGACY_STRATEGY_VERSION}" in body
+    assert f"Current strategy: {STRATEGY_VERSION}" in body
+    assert "Net P&L (rupees): 100" in body
+    assert pointer_path.read_bytes() == original
+    pointer["strategy_fingerprint"] = strategy_fingerprint()
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    _, _, body = dashboard._backtesting_v13_v10_g_view({"status":"SUCCESS"}, today_ist="2026-10-12")
+    assert "AWAITING_VERIFIED_G3_REPORT" in body

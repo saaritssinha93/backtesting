@@ -19,7 +19,8 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
-from fno_v13_v10_g_3_contract import IST, SIGNAL_TO_CONFIRMATION, STRATEGY_VERSION, strategy_fingerprint
+from fno_v13_v10_g_3_contract import (IST, SIGNAL_TO_CONFIRMATION, STRATEGY_VERSION,
+    strategy_fingerprint, supported_identity)
 from fno_v13_v10_g_identity import canonical_signal_id
 
 MAX_JSON = 4 * 1024 * 1024
@@ -83,10 +84,9 @@ def _json(path: Path, root: Path) -> dict:
     return _cached_json(str(path.resolve()), str(root.resolve()), info.st_mtime_ns, info.st_size)
 
 
-def _identity(raw: dict, day: str) -> bool:
-    return (raw.get("strategy_version") == STRATEGY_VERSION
-            and raw.get("strategy_fingerprint") == FINGERPRINT
-            and raw.get("session_date") == day)
+def _identity(raw: dict, day: str, *, allow_legacy: bool = False) -> bool:
+    return (raw.get("session_date") == day and supported_identity(
+        raw.get("strategy_version"), raw.get("strategy_fingerprint"), allow_legacy=allow_legacy))
 
 
 def _source(path: Path, root: Path, kind: str) -> dict:
@@ -122,7 +122,7 @@ def _packet(path: Path, root: Path, day: str, clock: str, now: datetime, warning
     try:
         raw = _json(path, root)
         stamp = _stamp(raw.get("published_at_ist"))
-        if (not _identity(raw, day) or raw.get("signal_end") != clock or stamp is None
+        if (not _identity(raw, day, allow_legacy=True) or raw.get("signal_end") != clock or stamp is None
                 or stamp.date().isoformat() != day or stamp > now + timedelta(seconds=5)
                 or stamp < datetime.fromisoformat(f"{day}T{clock}:00").replace(tzinfo=IST)
                 or raw.get("confirmation_end") != SIGNAL_TO_CONFIRMATION[clock]):
@@ -141,7 +141,9 @@ def _features(raw: dict, day: str, clock: str, warnings: list[str]) -> list[dict
     for value in raw.get("feature_evaluations", []):
         symbol = value.get("tradingsymbol") if isinstance(value, dict) else None
         if (not isinstance(value, dict) or not isinstance(symbol, str) or not SYMBOL.fullmatch(symbol)
-                or not _identity(value, day) or value.get("signal_end") != clock
+                or not _identity(value, day, allow_legacy=True) or value.get("signal_end") != clock
+                or value.get("strategy_version") != raw.get("strategy_version")
+                or value.get("strategy_fingerprint") != raw.get("strategy_fingerprint")
                 or symbol in symbols):
             warnings.append(f"{clock}: invalid or duplicate G3 feature row omitted")
             continue
@@ -157,16 +159,23 @@ def _load_slot(slot: dict, root: Path, data_root: Path, day: str, clock: str, no
     confirmation_path = root / "confirmation_1m" / day / f"slot_{confirmation_clock.replace(':', '')}.json"
     scanner = _packet(scanner_path, data_root, day, clock, now, warnings)
     confirmation = _packet(confirmation_path, data_root, day, clock, now, warnings)
+    if (scanner is not None and confirmation is not None
+            and (scanner["strategy_version"], scanner["strategy_fingerprint"])
+            != (confirmation["strategy_version"], confirmation["strategy_fingerprint"])):
+        warnings.append(f"{clock}: scanner and confirmation strategy identities differ; confirmation omitted")
+        confirmation = None
     if scanner is not None:
         sources.append(_source(scanner_path, data_root, "Recorded G3 scanner"))
         features = _features(scanner, day, clock, warnings)
         slot["scanner"] = dict(state=_text(scanner.get("state")), published_at_ist=scanner["published_at_ist"],
+            strategy_version=scanner["strategy_version"],
             source=sources[-1]["path"], contracts_expected=_number(scanner.get("contracts_expected")),
             contracts_missing=_number(scanner.get("contracts_missing_slot")))
         for value in features:
             row = _row(slot, value["tradingsymbol"])
             long, short = value.get("base_long_pass") is True, value.get("base_short_pass") is True
             row.update(side="LONG" if long else "SHORT" if short else None, base_pass=long or short,
+                       recorded_strategy_version=scanner["strategy_version"],
                        scanner_gates=_gates(value), decision="BASE_PASSED" if long or short else "BASE_REJECTED",
                        reasons=_failed(value), signal_at_ist=_text(value.get("signal_ts")))
         candidates = []
@@ -178,7 +187,8 @@ def _load_slot(slot: dict, root: Path, data_root: Path, day: str, clock: str, no
                 continue
             candidates.append(symbol)
             row = _row(slot, symbol)
-            row.update(side=value["side"], published=True, decision="PUBLISHED_CANDIDATE")
+            row.update(side=value["side"], published=True, decision="PUBLISHED_CANDIDATE",
+                       recorded_strategy_version=scanner["strategy_version"])
         for row in slot["rows"].values():
             if row["published"] is None:
                 row["published"] = False if "candidates" in scanner else None
@@ -197,6 +207,7 @@ def _load_slot(slot: dict, root: Path, data_root: Path, day: str, clock: str, no
         rejections = rejections if isinstance(rejections, dict) else {}
         slot["confirmation"] = dict(state=_text(confirmation.get("state")),
             confirmation_end=confirmation_clock, published_at_ist=confirmation["published_at_ist"],
+            strategy_version=confirmation["strategy_version"],
             source=sources[-1]["path"], selected_signal_ids=sorted(selected_ids),
             timing="SUBSEQUENT_OUTCOME", scanner_complete=confirmation.get("scanner_complete") is True)
         for value in _features(confirmation, day, clock, warnings):
@@ -204,7 +215,8 @@ def _load_slot(slot: dict, root: Path, data_root: Path, day: str, clock: str, no
             side = value.get("base_side")
             if side in {"LONG", "SHORT"}:
                 row["side"] = side
-            row.update(confirmation_gates=_gates(value), confirmation_at_ist=_text(value.get("confirmation_ts")),
+            row.update(recorded_strategy_version=confirmation["strategy_version"],
+                confirmation_gates=_gates(value), confirmation_at_ist=_text(value.get("confirmation_ts")),
                 confirmation_volume_ratio=_number(value.get("v9_1m_volume_ratio")),
                 minimum_confirmation_volume_ratio=_number(value.get("minimum_confirmation_volume_ratio")),
                 setup_id=_text(value.get("setup_id")), setup_filter_pass=_truth(value.get("setup_filter_pass")))
@@ -220,12 +232,14 @@ def _load_slot(slot: dict, root: Path, data_root: Path, day: str, clock: str, no
         for symbol, reason in rejections.items():
             if isinstance(symbol, str) and SYMBOL.fullmatch(symbol):
                 row = _row(slot, symbol)
-                row.update(confirmed=False, decision="CONFIRMATION_REJECTED", reasons=[_text(reason)] + row["reasons"])
+                row.update(recorded_strategy_version=confirmation["strategy_version"],
+                           confirmed=False, decision="CONFIRMATION_REJECTED", reasons=[_text(reason)] + row["reasons"])
         mapped_ids = set()
         for row in slot["rows"].values():
             if row["side"] not in {"LONG", "SHORT"}:
                 continue
-            signal_id = canonical_signal_id(STRATEGY_VERSION, date.fromisoformat(day), clock, confirmation_clock, row["side"], row["symbol"])
+            signal_id = canonical_signal_id(confirmation["strategy_version"], date.fromisoformat(day),
+                clock, confirmation_clock, row["side"], row["symbol"])
             row["selected"] = signal_id in selected_ids if "selected_signal_ids" in confirmation else None
             if row["selected"]:
                 row.update(decision="SELECTED_SIGNAL", reasons=[])
@@ -238,6 +252,8 @@ def _load_slot(slot: dict, root: Path, data_root: Path, day: str, clock: str, no
         slot["notes"].append(f"Confirmation at {confirmation_clock} and eventual order outcomes occurred after the {clock} market snapshot.")
     if scanner is not None or confirmation is not None:
         slot["state"] = "RECORDED" if scanner and scanner.get("state") == "SUCCESS" else "PARTIAL_EVIDENCE"
+        if (scanner or confirmation)["strategy_version"] != STRATEGY_VERSION:
+            slot["notes"].append("Recorded G-3 V1 decisions are historical; V2 retrospective backtest evidence is separate.")
 
 
 def _load_orders(slots: dict, root: Path, data_root: Path, day: str, now: datetime,
@@ -258,15 +274,19 @@ def _load_orders(slots: dict, root: Path, data_root: Path, day: str, now: dateti
                     raw = _json(path, data_root)
                     symbol, clock, signal_id = raw.get("tradingsymbol"), raw.get("signal_end"), raw.get("signal_id")
                     stamp = _stamp(raw.get("updated_at_ist"))
-                    if (not _identity(raw, day) or raw.get("mode") != mode or clock not in SIGNAL_TO_CONFIRMATION
+                    if (not _identity(raw, day, allow_legacy=True) or raw.get("mode") != mode or clock not in SIGNAL_TO_CONFIRMATION
                             or not isinstance(symbol, str) or not SYMBOL.fullmatch(symbol) or not isinstance(signal_id, str)
                             or raw.get("side") not in {"LONG", "SHORT"} or stamp is None or stamp > now + timedelta(seconds=5)
                             or stamp.date().isoformat() != day
                             or stamp < datetime.fromisoformat(f"{day}T{clock}:00").replace(tzinfo=IST)):
                         raise ValueError("Order identity mismatch")
-                    expected_id = canonical_signal_id(STRATEGY_VERSION, date.fromisoformat(day), clock, SIGNAL_TO_CONFIRMATION[clock], raw["side"], symbol)
+                    expected_id = canonical_signal_id(raw["strategy_version"], date.fromisoformat(day),
+                        clock, SIGNAL_TO_CONFIRMATION[clock], raw["side"], symbol)
                     if signal_id != expected_id:
                         raise ValueError("Signal identity mismatch")
+                    packet = slots[clock].get("scanner") or slots[clock].get("confirmation")
+                    if packet and packet["strategy_version"] != raw["strategy_version"]:
+                        raise ValueError("Order and recorded packet strategy identities differ")
                     if signal_id in seen:
                         if seen[signal_id] != raw:
                             bad = True
@@ -285,8 +305,15 @@ def _load_orders(slots: dict, root: Path, data_root: Path, day: str, now: dateti
         for raw, path in valid:
             slot = slots[raw["signal_end"]]
             row = _row(slot, raw["tradingsymbol"])
+            if (row.get("recorded_strategy_version") is not None
+                    and row["recorded_strategy_version"] != raw["strategy_version"]):
+                slot["orders_state"][mode] = "INCOMPLETE"
+                warnings.append(f"{mode} {raw['tradingsymbol']}: mixed strategy versions; order omitted")
+                continue
             row["side"] = raw["side"]
+            row["recorded_strategy_version"] = raw["strategy_version"]
             row["orders"].append(dict(mode=mode, status=_text(raw.get("status")), reason=_text(raw.get("status_reason")),
+                strategy_version=raw["strategy_version"],
                 signal_id=raw["signal_id"], quantity=_number(raw.get("quantity")),
                 entry_at_ist=_text(raw.get("entry_at_ist")), exit_at_ist=_text(raw.get("exit_at_ist")),
                 updated_at_ist=raw["updated_at_ist"], timing="LATEST_RECORDED_OUTCOME",
@@ -349,6 +376,7 @@ def _history(data_root: Path, day: str, warnings: list[str], sources: list[dict]
             artifact_sources.append(_source(path, data_root, f"Hash-verified G3 backtest {name}"))
         sources.extend(artifact_sources)
         return {"state": "VERIFIED_BACKTEST", "run": run.relative_to(data_root).as_posix(),
+                "strategy_version": STRATEGY_VERSION,
                 "manifest_sha256": pointer["manifest_sha256"], "timing": "RETROSPECTIVE_BACKTEST"}, result[0], result[1]
     except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError):
         warnings.append("G3 historical package failed identity/integrity checks; no backtest decisions accepted")
@@ -375,11 +403,12 @@ def _load_history(slots: dict, history: dict, audits: list[dict], trades: list[d
         if slot["state"] == "FUTURE":
             continue
         row = _row(slot, symbol)
-        if row["side"] is None:
+        if row["side"] is None and row.get("recorded_strategy_version") is None:
             row["side"] = side
         trade = trade_index.get(raw.get("signal_id"), {})
         filled = _truth(trade.get("portfolio_executed")) if trade else None
         row["backtest"].append(dict(side=side, selected=selected, filled=filled,
+            strategy_version=history["strategy_version"],
             decision=_text(raw.get("v9_decision")), setup_id=_text(raw.get("setup_id")),
             filter_pass=_truth(raw.get("v9_filter_pass")), rank=_number(raw.get("v9_rank_in_setup_day")),
             signal_id=_text(raw.get("signal_id")), signal_at_ist=stamp.isoformat(),

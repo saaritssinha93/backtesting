@@ -14,6 +14,7 @@ def inputs(monkeypatch):
     monkeypatch.setattr(live, "load_session_market", lambda *args, **kwargs: {
         "slots": [{"time": "09:25", "rows": [{"symbol": "AAA", "price": 102, "price_pct": 2, "oi_change5m_pct": 4, "oi_change_pct": 999}]},
                   {"time": "10:00", "rows": [{"symbol": "FUTURE", "price": 200}]}],
+        "opening_first_minutes": [{"symbol": "AAA", "contract": "AAA26OCTFUT", "first_minute": {"oi": 1050, "candle_end": "2026-10-12T09:16:00+05:30", "instrument": "FUTURES"}}],
         "warnings": ["Baseline gap"], "sources": [{"label": "market", "path": "saved"}],
     })
     monkeypatch.setattr(live, "build_live_evidence", lambda *args, **kwargs: {
@@ -34,6 +35,7 @@ def test_join_preserves_as_recorded_miss_and_five_minute_oi(inputs):
     assert slot["evidence"]["counts"]["published"] == 0
     assert slot["strategy_rows"][0]["symbol"] == "AAA"
     assert payload["read_only"] is True
+    assert payload["opening_first_minutes"][0]["first_minute"]["oi"] == 1050
     assert payload["available_dates"] == ["2026-10-09", "2026-10-12"]
 
 

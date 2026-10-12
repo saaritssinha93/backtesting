@@ -1,0 +1,255 @@
+{
+  "variant_id": "V13-V10-G-3-BT-0920-LONG-SHORT-V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "method": "PUBLISHED_G3_V2_FROZEN_TRADE_OUTCOMES_PLUS_FRESH_0920_EXECUTION_AND_PAIRED_PORTFOLIO_REPLAY",
+  "created_at_ist": "2026-10-12T22:53:10.756831+05:30",
+  "sessions": 49,
+  "period_start": "2026-07-29",
+  "period_end": "2026-10-12",
+  "retrospective_opening_oi": true,
+  "live_tradability_verified": false,
+  "opening_oi_interval_minutes": 4,
+  "price_basis": "09:15_CASH_OPEN_TO_09:20_CASH_CLOSE",
+  "baseline_provenance": {
+    "pointer": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\latest\\current_backtest.json",
+    "pointer_sha256": "92c66c8c6733b4d1298f1823f42077486be8f687b3af8508453a7ec8bfb5fdef",
+    "run_dir": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\backtests\\runs\\2026-10-12\\20261012T185109507457_a9213404_0950_long_t075",
+    "manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\backtests\\runs\\2026-10-12\\20261012T185109507457_a9213404_0950_long_t075\\manifest.json",
+    "manifest_sha256": "cc4760fbd58bf76cc6042d1a5b0e14f930c2ea5cc3d85b3a7f42c7e6913d3015",
+    "variant_trades_sha256": "e5abc6fccd82053c122b50a26000316b64b78057b1cd693d50a952dbe5559404",
+    "published_summary": {
+      "selected_orders": 123,
+      "fills": 112,
+      "wins": 80,
+      "losses": 32,
+      "win_rate_pct": 71.42857142857143,
+      "net_pnl_rs": 286682.15529869765
+    }
+  },
+  "features_path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\g3_0920_research\\2026-10-12\\features.parquet",
+  "features_sha256": "92d8b2f3c38a49463141ce62f44d2991cf88bb25be4269d559f83464d57111f4",
+  "feature_export_provenance": {
+    "manifest": null,
+    "manifest_sha256": null,
+    "coverage": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\g3_0920_research\\2026-10-12\\coverage.json",
+    "coverage_sha256": "f7da06d5e369c25eebb22ffdbf16d5f45b636e226767765634b98d26ba78d005",
+    "sealed": false
+  },
+  "dated_universe_provenance": {
+    "complete_dated_universes": 1,
+    "per_day": [
+      {
+        "session_date": "2026-10-12",
+        "stock_rows": 213,
+        "universe_file_sha256": "d496efd1fe749d5f009251b7a85363bbcd431da624d45c30f78679924a79a39e",
+        "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7"
+      }
+    ]
+  },
+  "feature_export_coverage": {
+    "schema": "g3_0920_research_features_v1",
+    "session_date": "2026-10-12",
+    "universe": {
+      "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-12.parquet",
+      "master_date": "2026-10-12",
+      "rows": 219,
+      "file_sha256": "d496efd1fe749d5f009251b7a85363bbcd431da624d45c30f78679924a79a39e",
+      "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+      "contract_month_filter": "26OCT",
+      "selected_contracts": 219,
+      "mapped_stock_futures": 213,
+      "excluded_index_futures": 6,
+      "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+      "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+      "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+    },
+    "stock_rows": 213,
+    "cash_first_bars": 213,
+    "real_0921_confirmations": 213,
+    "valid_0916_oi_changes": 205,
+    "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+    "signal_inputs_received_by_0921": 0,
+    "complete_decision_evidence_by_0922": 0,
+    "missing_reason_counts": {
+      "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+      "MISSING_OR_INVALID_FIRST_MINUTE_OI": 2,
+      "INVALID_ZERO_FIRST_MINUTE_OI": 6
+    },
+    "semantics": {
+      "price_first_5m_pct": "Completed 09:15-09:20 cash candle close/open - 1",
+      "price_vs_previous_completed_5m_pct": "G3 native previous completed cash 5m bar, usually prior session at the open; not first-bar movement or verified PDC",
+      "oi_change_pct": "Valid same dated futures contract 09:16 minute OI to completed 09:20 OI; four minutes, retrospective unless acquisition proved timely",
+      "confirmation_0921": "Real next minute, unavailable at 09:20; its source receipt is recorded separately"
+    },
+    "trading_logic_changed": false
+  },
+  "selected_path_provenance": [
+    {
+      "day": "2026-10-12",
+      "symbol": "POLYCAB",
+      "path": "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\POLYCAB_stocks_indicators_1min.parquet",
+      "source_sha256": "8f446966d02ee87acdab7fd06c4c514436b90e97e5ed9d81b1f3bcbbd93c8164",
+      "first_bar": "2026-10-12T09:22:00+05:30",
+      "last_bar": "2026-10-12T15:15:00+05:30",
+      "bars": 354
+    }
+  ],
+  "coverage": {
+    "research_stock_days": 213,
+    "valid_0920_oi_stock_days": 205,
+    "complete_research_stock_days": 205,
+    "eligible_dates": [
+      "2026-10-12"
+    ],
+    "exported_dates_not_in_baseline": [],
+    "baseline_dates_without_dated_0920_features": [
+      "2026-07-29",
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09"
+    ],
+    "selected_0920_orders": 1,
+    "selected_0920_live_equivalent": 0
+  },
+  "baseline": {
+    "selected_orders": 123,
+    "native_fills": 112,
+    "executed_trades": 112,
+    "wins": 80,
+    "losses": 32,
+    "win_rate_pct": 71.42857142857143,
+    "gross_pnl_rs": 314682.1552986976,
+    "costs_rs": 28000.0,
+    "net_pnl_rs": 286682.15529869765,
+    "max_drawdown_rs": 14142.13607078424
+  },
+  "with_0920": {
+    "selected_orders": 124,
+    "native_fills": 113,
+    "executed_trades": 113,
+    "wins": 80,
+    "losses": 33,
+    "win_rate_pct": 70.79646017699115,
+    "gross_pnl_rs": 314206.4179057385,
+    "costs_rs": 28250.0,
+    "net_pnl_rs": 285956.4179057386,
+    "max_drawdown_rs": 14142.13607078424
+  },
+  "delta_net_pnl_rs": -725.7373929590685,
+  "added_0920": {
+    "selected_orders": 1,
+    "native_fills": 1,
+    "executed_trades": 1,
+    "wins": 0,
+    "losses": 1,
+    "win_rate_pct": 0.0,
+    "gross_pnl_rs": -475.7373929590858,
+    "costs_rs": 250.0,
+    "net_pnl_rs": -725.7373929590857,
+    "max_drawdown_rs": 725.7373929590857
+  },
+  "eligible_window": {
+    "sessions": 1,
+    "baseline": {
+      "selected_orders": 1,
+      "native_fills": 1,
+      "executed_trades": 1,
+      "wins": 1,
+      "losses": 0,
+      "win_rate_pct": 100.0,
+      "gross_pnl_rs": 4850.000000000021,
+      "costs_rs": 250.0,
+      "net_pnl_rs": 4600.00000000002,
+      "max_drawdown_rs": 0.0
+    },
+    "with_0920": {
+      "selected_orders": 2,
+      "native_fills": 2,
+      "executed_trades": 2,
+      "wins": 1,
+      "losses": 1,
+      "win_rate_pct": 50.0,
+      "gross_pnl_rs": 4374.262607040935,
+      "costs_rs": 500.0,
+      "net_pnl_rs": 3874.262607040934,
+      "max_drawdown_rs": 0.0
+    },
+    "delta_net_pnl_rs": -725.7373929590858
+  },
+  "old_trade_effect": {
+    "displaced_count": 0,
+    "newly_accepted_count": 0,
+    "net_pnl_change_rs": 0.0,
+    "displaced_signal_ids": [],
+    "newly_accepted_signal_ids": []
+  },
+  "added_0920_long": {
+    "selected_orders": 1,
+    "native_fills": 1,
+    "executed_trades": 1,
+    "wins": 0,
+    "losses": 1,
+    "win_rate_pct": 0.0,
+    "gross_pnl_rs": -475.7373929590858,
+    "costs_rs": 250.0,
+    "net_pnl_rs": -725.7373929590857,
+    "max_drawdown_rs": 725.7373929590857
+  },
+  "added_0920_short": {
+    "selected_orders": 0,
+    "native_fills": 0,
+    "executed_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate_pct": null,
+    "gross_pnl_rs": 0.0,
+    "costs_rs": 0.0,
+    "net_pnl_rs": 0.0,
+    "max_drawdown_rs": 0.0
+  }
+}

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import os
 import tempfile
@@ -13,6 +12,8 @@ from contextlib import contextmanager
 from datetime import date, datetime, time as day_time
 from pathlib import Path
 from typing import Any
+
+import pandas as pd
 
 import fno_oi_common as common
 import fno_v13_v10_g_live_config as config
@@ -223,14 +224,19 @@ def _publish(day: date, root: Path, state: str, reason: str = "", result: dict |
 
 
 def wait_for_data(day: date, args: argparse.Namespace) -> bool:
-    """Wait for the dated 15:45 producer; exact G source checks follow this gate."""
+    """Wait for the dated producer to finish; G checks its own consumed inputs."""
     from wait_for_data_backtesting_ready import _data_job_status
     deadline = time.monotonic() + args.timeout_sec
     while True:
         state, note = _data_job_status(day.isoformat())
         if state == "PASS":
             return True
-        if state == "FAIL" or time.monotonic() >= deadline:
+        if state == "FAIL":
+            # A shared 15:30 failure cannot decide G's 15:15 input coverage.
+            # The fresh strategy-specific verification is the next gate.
+            print(f"[{SESSION}] {day} shared producer failed ({note}); checking G's 15:15 inputs.", flush=True)
+            return True
+        if time.monotonic() >= deadline:
             _publish(day, args.output_root, "BLOCKED_DATA_NOT_READY", note)
             return False
         _publish(day, args.output_root, "WAITING_FOR_DATA", note)
@@ -238,31 +244,42 @@ def wait_for_data(day: date, args: argparse.Namespace) -> bool:
 
 
 def verify_data(day: date, root: Path) -> dict:
-    """Generate a fresh dated FnO-only coarse proof in this session's own root."""
+    """Verify genuine FnO cash minutes through G's 15:15 square-off cutoff."""
     import data_for_backtesting_verify as verifier
+    import fno_v13_v10_g_daily_replay as replay
+
+    date_str = day.isoformat()
+    cutoff = pd.Timestamp(f"{date_str} 15:15", tz="Asia/Kolkata")
+    symbols, universe_path = verifier._fno_equity_universe(date_str)
+    scan = verifier._scan_parquet_dir(
+        replay.DataRoots().equity_1m, date_str, verifier.EXPECTED_1MIN_BARS,
+        required_tickers=symbols, now=cutoff, require_closing_bar=False,
+    )
+    passed = (scan.get("overall") == "PASS" and scan.get("exit_code") == 0
+              and scan.get("expected_bars") == 360
+              and scan.get("expected_first_timestamp") == f"{date_str}T09:16:00+05:30"
+              and scan.get("expected_last_timestamp") == cutoff.isoformat()
+              and scan.get("total_tickers") == len(symbols)
+              and scan.get("ok") == len(symbols))
+    payload = dict(
+        schema_version="V13_V10_G_STRATEGY_INPUT_VERIFICATION_V1",
+        date=date_str, scope="fno_g_replay_1515", strategy=STRATEGY,
+        verified_cutoff_ist=cutoff.isoformat(), full_cash_session_verified=False,
+        required_ticker_count=len(symbols), universe_path=str(universe_path),
+        equity_1m=scan, overall_status="PASS" if passed else "FAIL",
+        overall_exit_code=0 if passed else 2,
+        verification_policy="All genuine 09:16-15:15 equity minutes for the dated FnO universe; sealed replay separately checks OI, warmup and execution coverage",
+    )
     verification_root = root / "verification"
     verification_root.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix=f"{day}_", dir=verification_root))
-    original = verifier.VERIFY_DIR
-    try:
-        verifier.VERIFY_DIR = directory
-        code = verifier.run_verify(day.isoformat(), scope="fno")
-    finally:
-        verifier.VERIFY_DIR = original
-    proof_path = directory / f"data_verify_{day}.json"
-    payload = json.loads(proof_path.read_text(encoding="utf-8"))
-    if (code != 0 or payload.get("overall_exit_code") != 0 or payload.get("overall_status") != "PASS"
-            or payload.get("date") != day.isoformat() or payload.get("scope") != "fno"):
-        coverage = []
-        for interval in ("5min", "1min"):
-            group = payload.get(interval) or {}
-            coverage.append(
-                f"{interval}={group.get('overall', 'UNKNOWN')} "
-                f"({group.get('ok', '?')}/{group.get('total_tickers', '?')} symbols OK)"
-            )
+    proof_path = directory / f"g_strategy_input_verify_{day}.json"
+    common.atomic_write_json(proof_path, payload)
+    if not passed:
         raise ValueError(
-            "Fresh dated FnO data verification did not pass for the requested session: "
-            f"{', '.join(coverage)}; proof={proof_path}"
+            "Fresh dated G input verification did not pass through 15:15: "
+            f"equity_1m={scan.get('overall', 'UNKNOWN')} "
+            f"({scan.get('ok', '?')}/{len(symbols)} symbols OK); proof={proof_path}"
         )
     return payload
 
@@ -386,7 +403,11 @@ def run(args: argparse.Namespace) -> int:
                 lambda: run_replay(day, output),
             )
         validate_result(result, day)
-        result["data_verification"] = dict(date=proof["date"], scope=proof["scope"], status=proof["overall_status"])
+        result["data_verification"] = dict(
+            date=proof["date"], scope=proof["scope"], status=proof["overall_status"],
+            verified_cutoff_ist=proof["verified_cutoff_ist"],
+            full_cash_session_verified=proof["full_cash_session_verified"],
+        )
         if result.get("state") != "SUCCESS":
             _publish(day, root, str(result.get("state") or "BLOCKED_INCOMPLETE_DATA"),
                      "G source or execution-path coverage is incomplete; see result coverage problems.", result)

@@ -1,0 +1,162 @@
+[
+  {
+    "view": "comparison",
+    "panels": 2,
+    "pageOverflow": false
+  },
+  {
+    "view": "focus",
+    "panels": 2,
+    "pageOverflow": false
+  },
+  {
+    "view": "heatmap",
+    "panels": 2,
+    "pageOverflow": false
+  },
+  {
+    "view": "movement",
+    "panels": 2,
+    "pageOverflow": false
+  },
+  {
+    "view": "scatter",
+    "panels": 1,
+    "pageOverflow": false
+  },
+  {
+    "view": "cards",
+    "panels": 2,
+    "pageOverflow": false
+  },
+  {
+    "view": "comparison",
+    "width": 320,
+    "pageOverflow": false
+  },
+  {
+    "view": "focus",
+    "width": 320,
+    "pageOverflow": false
+  },
+  {
+    "view": "heatmap",
+    "width": 320,
+    "pageOverflow": false
+  },
+  {
+    "view": "movement",
+    "width": 320,
+    "pageOverflow": false
+  },
+  {
+    "view": "scatter",
+    "width": 320,
+    "pageOverflow": false
+  },
+  {
+    "view": "cards",
+    "width": 320,
+    "pageOverflow": false
+  },
+  {
+    "view": "comparison",
+    "width": 390,
+    "pageOverflow": false
+  },
+  {
+    "view": "focus",
+    "width": 390,
+    "pageOverflow": false
+  },
+  {
+    "view": "heatmap",
+    "width": 390,
+    "pageOverflow": false
+  },
+  {
+    "view": "movement",
+    "width": 390,
+    "pageOverflow": false
+  },
+  {
+    "view": "scatter",
+    "width": 390,
+    "pageOverflow": false
+  },
+  {
+    "view": "cards",
+    "width": 390,
+    "pageOverflow": false
+  },
+  {
+    "view": "comparison",
+    "width": 736,
+    "pageOverflow": false
+  },
+  {
+    "view": "focus",
+    "width": 736,
+    "pageOverflow": false
+  },
+  {
+    "view": "heatmap",
+    "width": 736,
+    "pageOverflow": false
+  },
+  {
+    "view": "movement",
+    "width": 736,
+    "pageOverflow": false
+  },
+  {
+    "view": "scatter",
+    "width": 736,
+    "pageOverflow": false
+  },
+  {
+    "view": "cards",
+    "width": 736,
+    "pageOverflow": false
+  },
+  {
+    "view": "comparison",
+    "width": 1024,
+    "pageOverflow": false
+  },
+  {
+    "view": "focus",
+    "width": 1024,
+    "pageOverflow": false
+  },
+  {
+    "view": "heatmap",
+    "width": 1024,
+    "pageOverflow": false
+  },
+  {
+    "view": "movement",
+    "width": 1024,
+    "pageOverflow": false
+  },
+  {
+    "view": "scatter",
+    "width": 1024,
+    "pageOverflow": false
+  },
+  {
+    "view": "cards",
+    "width": 1024,
+    "pageOverflow": false
+  },
+  {
+    "heatmapSelectionAndEscape": "passed"
+  },
+  {
+    "historicalSession": "2026-10-09",
+    "viewsChecked": 6
+  },
+  {
+    "browserErrors": []
+  }
+]

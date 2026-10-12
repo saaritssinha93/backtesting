@@ -14,7 +14,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from fno_v13_v10_g_3_contract import IST, STRATEGY_VERSION, strategy_fingerprint
+from fno_v13_v10_g_3_contract import IST, STRATEGY_VERSION, strategy_fingerprint, supported_identity
 from ai_platform.observability.strategy_research import (
     classify_regime, performance, point_in_time_audit,
 )
@@ -28,10 +28,21 @@ def _sha(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verified_package(root: Path, *, history: bool = True) -> tuple[Path, dict, dict[str, Path]]:
+def verified_package(root: Path, *, history: bool = True, allow_legacy: bool = False,
+                     archived_version: str | None = None) -> tuple[Path, dict, dict[str, Path]]:
+    """Verify current evidence, or explicitly inspect a retained prior revision.
+
+    Legacy evidence is readable only with opt-in and is never treated as active
+    strategy evidence by research/execution consumers using this default API.
+    """
     root = Path(root).resolve()
     role = "cumulative_history" if history else "production_daily"
-    pointer_path = root / "latest" / ("current_history.json" if history else "current_run.json")
+    pointer_root = root / "latest"
+    if archived_version is not None:
+        if not archived_version or Path(archived_version).name != archived_version or archived_version in (".", ".."):
+            raise ValueError("Invalid archived strategy version")
+        pointer_root = pointer_root / "archived" / archived_version
+    pointer_path = pointer_root / ("current_history.json" if history else "current_run.json")
     pointer = json.loads(pointer_path.read_text(encoding="utf-8-sig"))
     run = (root / pointer["run_dir"]).resolve()
     if Path(pointer["run_dir"]).is_absolute() or not run.is_relative_to(root):
@@ -47,9 +58,13 @@ def verified_package(root: Path, *, history: bool = True) -> tuple[Path, dict, d
             or run.relative_to(root).parts[:2] != (expected_tree, "runs")):
         raise ValueError("G3 schema, authority, date or publication tree mismatch")
     for record in (pointer, manifest):
-        if (record.get("role") != role or record.get("strategy_version") != STRATEGY_VERSION
-                or record.get("strategy_fingerprint") != strategy_fingerprint()):
+        if (record.get("role") != role or not supported_identity(record.get("strategy_version"),
+                record.get("strategy_fingerprint"), allow_legacy=allow_legacy)):
             raise ValueError("G3 package identity/role mismatch")
+    if any(pointer.get(key) != manifest.get(key) for key in ("strategy_version", "strategy_fingerprint")):
+        raise ValueError("G3 pointer and package strategy revision differ")
+    if archived_version is not None and manifest.get("strategy_version") != archived_version:
+        raise ValueError("G3 archived pointer strategy revision differs")
     if (manifest.get("complete") is not True or manifest.get("state") not in
             {"SUCCESS", "SUCCESS_WITH_EXCLUDED_SESSIONS"}):
         raise ValueError("G3 package is incomplete")
@@ -222,7 +237,7 @@ def generate_g3_analysis(*, source_root: Path, output_root: Path,
     report("observability_selection_funnel", "Selection Funnel", f"- Audit rows: `{len(audit_rows)}`\n- Selected orders: `{baseline['selected_orders']}`\n- Filled orders: `{baseline['filled_orders']}`\n- Portfolio executions: `{baseline['executed_trades']}`\n\n" + _table([{"reason": k, "rows": v} for k, v in sorted(reasons.items())], ["reason", "rows"]))
     exits = Counter(row.get("exit_reason") or "UNKNOWN" for row in rows)
     report("observability_entry_execution", "Historical Entry and Exit Evidence", _table([{"exit_reason": k, "orders": v} for k, v in sorted(exits.items())], ["exit_reason", "orders"]) +
-           f"\n\nPoint-in-time violations: `{audit['violation_count']}`. Missing timestamp counts: `{json.dumps(audit['missing_timestamps'], sort_keys=True)}`.\n\nG3 uses strict 09:25, LONG/SHORT confirmation volume 1.10/1.20, exact next minute, staged 1.25% to 1.00% stop at 120 minutes, and 15:15 square-off. Runtime stop timing starts at actual fill; historical replay uses the accepted candle clock."
+           f"\n\nPoint-in-time violations: `{audit['violation_count']}`. Missing timestamp counts: `{json.dumps(audit['missing_timestamps'], sort_keys=True)}`.\n\nG3 uses strict 09:25 and 15 setups, including 09:50 LONG with a 0.75% target and 0.60 confirmation volume minimum. Other LONG/SHORT confirmation volume minima remain 1.10/1.20. All use the exact next minute, staged 1.25% to 1.00% stop at 120 minutes, and 15:15 square-off. Runtime stop timing starts at actual fill; historical replay uses the accepted candle clock."
            + execution_section, execution["state"])
     report("research_walkforward", "Chronological Historical Review", "The accepted parameters are held fixed across these sessions. This daily review is descriptive; it is not a newly trained walk-forward model or new out-of-sample validation.\n\n" + _table(daily, [key for key in ("day", "trades", "wins", "losses", "net_pnl", "net_profit_rupees", "net_pnl_rupees") if daily and key in daily[0]]))
     pending = "A separate G3 prospective cohort must accumulate under this exact fingerprint. Prior G model, calibration, and live/PAPER evidence cannot establish G3 readiness. No simulated prospective observations are created."

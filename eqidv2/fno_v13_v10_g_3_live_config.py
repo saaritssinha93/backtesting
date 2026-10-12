@@ -32,11 +32,11 @@ CONTROL_ROOT_NAME = "v13_v10_g_3_live"
 LEGACY_EMERGENCY_CONTROL_ROOT_NAME = "v6_live"
 SESSION_END = "15:32"
 PIPELINE_DEADLINE = "11:23"
-SELECTED_OBJECTIVE = "G3_W1_LONG110_SHORT120_CORE_FIRST"
+SELECTED_OBJECTIVE = "G3_W1_LONG110_SHORT120_CORE_FIRST_0950_LONG060_TARGET075"
 LIVE_ACK_ENV = "FNO_V13_V10_G_3_LIVE_ACK"
 LIVE_ACK = "I_UNDERSTAND_REAL_FNO_V13_V10_G_3_EQUITY_ORDERS"
 ORDER_TAG_PREFIX = "FVG3"
-CONFIG_PATH = Path(__file__).resolve().parent / "configs/strategies/v13_v10_g_3_production_v1.json"
+CONFIG_PATH = Path(__file__).resolve().parent / "configs/strategies/v13_v10_g_3_production_v2.json"
 CONFIG_SHA256 = hashlib.sha256((json.dumps(contract.strategy_payload(), indent=2, sort_keys=True) + "\n").encode()).hexdigest()
 FROZEN_ROOT = (Path(os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2")) / "fno_oi/strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1")
 FROZEN_CONFIG_PATH = FROZEN_ROOT / "frozen_config.json"
@@ -47,7 +47,8 @@ EXPECTED_BACKTEST = dict(sessions=46, orders=102, fills=93, net_profit_rupees=23
 CAPABILITIES = dict(exact_minute_confirmation=True, confirmation_volume_warmup=True,
     paper_portfolio_lock=True, staged_stops=True, strict_0925_long=True,
     profile_scoped_identity=True, isolated_controls=True, live_quantity_one=False,
-    separate_live_execution_policy=True, live_exposure_sizing=True)
+    separate_live_execution_policy=True, live_exposure_sizing=True,
+    setup_specific_confirmation_volume=True, long_0950_target075=True)
 FNO_FETCH_SLOT_SCHEMA_VERSION = "fno_oi_fetch_slot_v2"
 FNO_READINESS_POLICY = "verified_stock_no_candle_skip_v1"
 MIN_STOCK_FUTURES_COVERAGE = .99
@@ -59,7 +60,7 @@ CONFIRMATION_NO_CANDLE_OBSERVATIONS = 3
 CONFIRMATION_NO_CANDLE_MIN_AGE_SEC = 15
 CONFIRMATION_NO_CANDLE_OBSERVATION_SPACING_SEC = 2.
 CONFIRMATION_COMPLETED_BOUNDARY_BUFFER_SEC = 3.
-# Side-aware mapping; callers must use confirmation_volume_minimum(side).
+# Side defaults only; setup-aware callers must include the signal slot.
 MIN_CONFIRMATION_VOLUME_RATIO = dict(MIN_CONFIRMATION_VOLUME_BY_SIDE)
 
 
@@ -85,7 +86,7 @@ def validate_strategy() -> None:
     if hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest() != CONFIG_SHA256:
         raise ValueError("G3 production configuration bytes changed")
     if (STRATEGY_PROFILE, STRATEGY_VERSION, LIVE_ROOT_NAME, CONTROL_ROOT_NAME, LIVE_QUANTITY_CAP,
-            ARMED, EXECUTION_AUTHORITY) != ("V13_V10_G_3", "V13-V10-G-3-PRODUCTION-V1",
+            ARMED, EXECUTION_AUTHORITY) != ("V13_V10_G_3", "V13-V10-G-3-PRODUCTION-V2",
             "v13_v10_g_3_live", "v13_v10_g_3_live", 1, False, False):
         raise ValueError("G3 runtime identity, controls or accepted decision contract changed")
     live_execution_policy.validate_policy()
@@ -227,7 +228,7 @@ def confirmation_metrics(candidate: dict[str, Any], bar: dict[str, Any],
         result.update(confirmed=False, confirmation_reason="confirmation_clock_mismatch")
         return result
     ratio = _number(result.get("v9_1m_volume_ratio"))
-    minimum = confirmation_volume_minimum(side)
+    minimum = confirmation_volume_minimum(side, signal_end=signal.strftime("%H:%M"))
     result["minimum_confirmation_volume_ratio"] = minimum
     if not math.isfinite(ratio) or ratio < minimum:
         result.update(confirmed=False, confirmation_reason=f"confirmation_volume_below_{minimum:.2f}_or_missing")

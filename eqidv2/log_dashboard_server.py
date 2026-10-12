@@ -24,6 +24,8 @@ from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 from nse_market_calendar import market_closed_reason
+from dashboard_flow_observer_sessions import CARD_TASK_NAMES as OPENING_OBSERVER_TASK_NAMES
+from dashboard_flow_observer_sessions import session_items as opening_observer_session_items
 from fno_strategy_registry import active_profile, expected_fingerprint, deployment_state
 from fno_v13_v10_g_3_live_execution_policy import execution_metadata as g3_execution_metadata
 from fno_v13_v10_g_3_live_execution_policy import validate_execution_metadata as validate_g3_execution_metadata
@@ -853,6 +855,7 @@ def _active_strategy_display(text: str) -> str:
 def _route_active_fno_profile() -> None:
     """Preserve saved card IDs while routing every active action to one profile."""
     global FNO_EQ_ID_MONITOR_GROUPS
+    CARD_TASK_NAMES.update(OPENING_OBSERVER_TASK_NAMES)
     FNO_EQ_ID_MONITOR_GROUPS = tuple((_active_strategy_display(title), ids) for title, ids in FNO_EQ_ID_MONITOR_GROUPS)
     for mapping in (LOG_FILES, STATUS_FILES, HEARTBEAT_FILES, RESTARTABLE_CARDS,
                     FNO_OI_CARD_REPORTS, V13_V10_G_RESEARCH_CARD_REPORTS,
@@ -2551,7 +2554,7 @@ def _backtesting_v13_v10_g_view(
     if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
         try:
             from ai_platform.observability.g3_analysis import verified_package
-            run, manifest, _ = verified_package(FNO_G_BACKTEST_ROOT, history=False)
+            run, manifest, _ = verified_package(FNO_G_BACKTEST_ROOT, history=False, allow_legacy=True)
             metric = manifest["metrics"]
             coverage = manifest.get("coverage", {})
             report_lines = ["# V13-V10-G-3 daily backtest", "",
@@ -2566,6 +2569,10 @@ def _backtesting_v13_v10_g_view(
                 f"Included stocks: {coverage.get('included_stocks', 'recorded in source coverage')}",
                 f"Excluded stocks: {len(coverage.get('excluded_stocks', []))}", "",
                 f"Verified run: `{run}`", "Execution authority: false. Historical OHLC simulation, not broker fills."]
+            if manifest["strategy_version"] != FNO_ACTIVE_PROFILE.version:
+                report_lines[4] = "Evidence: VERIFIED_ARCHIVED_PRODUCTION_DAILY"
+                report_lines += ["", f"Current strategy: {FNO_ACTIVE_PROFILE.version}.",
+                    "Awaiting the first verified daily result for the current strategy. The result above retains its original strategy version."]
             if runtime and runtime not in {"SUCCESS", "SUCCESS_WITH_EXCLUDED_SESSIONS"}:
                 report_lines += ["", f"Latest attempt: {session_date} / {runtime}. The verified prior result remains displayed."]
             return FNO_G_BACKTEST_REPORT, display, "\n".join(report_lines) + "\n"
@@ -7365,8 +7372,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/dashboard-flow":
             from dashboard_flow import load_flow_data
 
+            if len(params.get("run", [])) > 1 or len(params.get("strategy", [])) > 1:
+                self._send_json({"error": "Specify one saved run or strategy."}, status=HTTPStatus.BAD_REQUEST)
+                return
             try:
-                payload = load_flow_data((params.get("run") or [None])[0])
+                run_id = (params.get("run") or [None])[0]
+                strategy = (params.get("strategy") or [None])[0]
+                payload = load_flow_data(run_id, strategy) if strategy is not None else load_flow_data(run_id)
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -9785,6 +9797,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_1540_update"
     ];
     const LOG_TITLES = {
+      "dashboard_flow_opening_observer": "G3 LIVE / PAPER opening-data observer",
+      "dashboard_flow_opening_history": "G3 BACKTEST opening-data recovery",
       "signal_early_engine_v16_5min":  "V16 5min Signal Early Engine (SEE)",
       "pending_signals_v16_5min":      "V16 5min Pending Pool CSV",
       "pending_data_fetcher_v16_5min": "V16 5min Pending Data Fetcher",
@@ -10001,6 +10015,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         ]
       },
       {
+        key: "opening-monitoring",
+        nav: "Opening data",
+        title: "G3 Opening Data Monitoring",
+        accent: "research",
+        ids: ["dashboard_flow_opening_observer", "dashboard_flow_opening_history"]
+      },
+      {
         key: "research",
         nav: "Research",
         title: "Research & Suggestions",
@@ -10127,6 +10148,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     const SESSION_TIMELINE = [
       { time: "08:50", id: "fno_oi_universe", label: "FnO Universe" },
       { time: "08:30", id: "authentication_v2", label: "Auth" },
+      { time: "08:55", id: "dashboard_flow_opening_observer", label: "G3 LIVE / PAPER opening observer (reporting only)" },
       { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
       { time: "09:00", id: "kiteticker_5min_data", label: "Live Data KiteTicker Fetch 5min (shadow monitoring)" },
       { time: "09:05", id: "fno_oi_fetch_5min_fast_production", label: "FnO Futures OI Fetch (Fast Production)" },
@@ -10170,6 +10192,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "16:30", id: "v7_full_pipeline_entry_research_v2", label: "Full-Pipeline Entry Research v2" },
       { time: "16:45", id: "v7_shadow_candidate_monitor", label: "V7 Shadow Candidate Monitor" },
       { time: "16:55", id: "v11_lab_shadow_monitor", label: "V11 Lab Shadow Monitor" },
+      { time: "17:00", id: "dashboard_flow_opening_history", label: "G3 BACKTEST opening recovery (reporting only)" },
       { time: "17:00", id: "", label: "Dashboard Close" }
     ];
     const API_TOKEN = __API_TOKEN_JSON__;
@@ -11771,6 +11794,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 </div>
               </div>
               ${killControls}
+              ${["dashboard_flow_opening_observer", "dashboard_flow_opening_history"].includes(id) ? `<div class="compact-desc"><a href="${esc(apiUrl('/dashboard-flow') + '#live')}" target="_blank" rel="noopener noreferrer">Open opening-data analysis in Dashboard Flow &#8599;</a> &middot; Reporting only</div>` : ""}
               ${id === "v7_live_5min_monitor" ? '<section id="fno-stock-monitor" class="fno-detail-panel" data-read-only="true" aria-label="Stock-level 5-minute and 1-minute monitoring"></section>' : ""}
               ${isEmptyLog ? `<div class="empty-state"><div><strong>${esc(emptyLabel)}</strong><span>${esc(emptyHint)}</span></div></div>` : `<pre>${esc(logText)}</pre>`}
             </div>
@@ -13127,6 +13151,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 "last_command": command_meta,
             }
 
+        items.extend(opening_observer_session_items(runtime_dir()))
         for item in items:
             item["status"] = apply_scheduler_status(str(item.get("id", "")), item.get("status", {}), task_snapshot)
             item["status"] = _apply_fno_v13_v10_g_identity(str(item.get("id", "")), item["status"])

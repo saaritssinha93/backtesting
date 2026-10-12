@@ -1,0 +1,30 @@
+[
+  {
+    "port": 8787,
+    "opening_state": "HISTORICAL_CONTEXT_ONLY",
+    "first_minute_contexts_at_0920": 211,
+    "first_minute_contexts_at_0915": 0,
+    "regular_0915_changes_unavailable": true
+  },
+  {
+    "port": 8790,
+    "opening_state": "HISTORICAL_CONTEXT_ONLY",
+    "first_minute_contexts_at_0920": 211,
+    "first_minute_contexts_at_0915": 0,
+    "regular_0915_changes_unavailable": true
+  },
+  {
+    "session_cards": [
+      {
+        "id": "dashboard_flow_opening_observer",
+        "state": "SCHEDULED",
+        "phase": "WAITING_FIRST_RUN"
+      },
+      {
+        "id": "dashboard_flow_opening_history",
+        "state": "PARTIAL",
+        "phase": "PARTIAL"
+      }
+    ]
+  }
+]

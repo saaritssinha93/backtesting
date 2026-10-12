@@ -295,3 +295,93 @@ def test_production_spec_drift_fails_before_input_capture(raw, tmp_path, monkeyp
         replay.replay_day(DAY, tmp_path / "never_created", roots=roots)
     assert not (tmp_path / "never_created").exists()
 
+
+def test_daily_promoted_0950_long_uses_slot_volume_and_target(raw, tmp_path):
+    roots, equity, _ = raw
+    frame = pd.read_parquet(equity)
+    frame = frame.loc[frame.date.dt.date.ne(DAY)]
+    today = _minute_frame(DAY, move=False)
+    for clock, price in zip(("09:46", "09:47", "09:48", "09:49", "09:50", "09:51"),
+                            (101.2, 101.4, 101.6, 101.8, 102., 102.2)):
+        mask = today.date.dt.strftime("%H:%M").eq(clock)
+        today.loc[mask, ["open", "high", "low", "close", "volume"]] = [price - .2, price + .05, price - .21, price, 200.]
+    confirmation = today.date.dt.strftime("%H:%M").eq("09:51")
+    # Prior twenty one-minute volumes: fifteen at 100, five at 200.
+    today.loc[confirmation, "volume"] = 75.
+    after = today.date.dt.strftime("%H:%M").ge("09:52")
+    today.loc[after, ["open", "high", "low", "close", "volume"]] = [102.3, 102.4, 102.3, 102.35, 100.]
+    target = today.date.dt.strftime("%H:%M").ge("09:53")
+    today.loc[target, ["open", "high", "low", "close"]] = [103., 103.2, 103., 103.1]
+    pd.concat([frame, today], ignore_index=True).to_parquet(equity, index=False)
+    result = replay.replay_day(DAY, tmp_path / "promoted", roots=roots)
+    assert result["complete"], result["coverage"]
+    ledger = pd.read_csv(tmp_path / "promoted" / "portfolio_trades.csv")
+    added = ledger.loc[ledger.setup_id.eq("0951_LONG")]
+    assert len(added) == 1
+    assert added.v9_1m_volume_ratio.iloc[0] == pytest.approx(.6)
+    assert added.native_target_pct.iloc[0] == .75
+    assert added.native_stop_pct.iloc[0] == 1.25
+    assert added.filled.iloc[0]
+    assert added.gross_return_pct.iloc[0] == pytest.approx(.75)
+    assert added.strategy_version.iloc[0] == replay.contract.STRATEGY_VERSION
+    daily = pd.read_csv(tmp_path / "promoted" / "daily_results.csv")
+    assert daily.strategy_fingerprint.eq(replay.contract.strategy_fingerprint()).all()
+
+
+def _relabel_archived_run(root, directory, result, *, history):
+    """Represent a previously sealed V1 package without executing an old engine."""
+    from fno_v13_v10_g_3_contract import LEGACY_STRATEGY_VERSION, LEGACY_STRATEGY_FINGERPRINT
+    old = dict(result, strategy_version=LEGACY_STRATEGY_VERSION, strategy_fingerprint=LEGACY_STRATEGY_FINGERPRINT)
+    for name in ("portfolio_trades", "daily_results"):
+        path = directory / old["artifacts"][name]["path"]
+        frame = pd.read_csv(path)
+        frame["strategy_version"] = LEGACY_STRATEGY_VERSION
+        frame["strategy_fingerprint"] = LEGACY_STRATEGY_FINGERPRINT
+        frame.to_csv(path, index=False)
+        old["artifacts"][name]["sha256"] = replay.sha256(path)
+    replay.atomic_json(directory / "run_manifest.json", old)
+    replay.atomic_json(root / "latest" / ("current_history.json" if history else "current_run.json"),
+        dict(run_dir=directory.relative_to(root).as_posix(), manifest_sha256=replay.sha256(directory / "run_manifest.json"),
+            role=old["role"], strategy_version=old["strategy_version"], strategy_fingerprint=old["strategy_fingerprint"],
+            session_date=old["session_date"]))
+    return old
+
+
+def test_promotion_keeps_archived_history_readable_without_mixing_revisions(raw, tmp_path):
+    from ai_platform.observability.g3_analysis import verified_package
+    roots, _, _ = raw
+    root = tmp_path / "revision-boundary"
+    prior = DAY - timedelta(days=3)
+    old_dir = root / "history" / "runs" / str(prior) / "v1-history"
+    empty = replay.contract.select_orders(source._empty_signals())
+    old = replay._finish(old_dir, days=[prior], role="cumulative_history", source_kind="TEST_SOURCE",
+        frames=dict(selected_orders=empty, candidate_signals=source._empty_signals()), provenance={},
+        coverage=dict(session_coverage=[dict(day=str(prior), method="TEST_SOURCE")]), complete=True, paths={})
+    old = _relabel_archived_run(root, old_dir, old, history=True)
+    original_bytes = {p.name: p.read_bytes() for p in old_dir.iterdir() if p.is_file()}
+    with pytest.raises(ValueError, match="identity"):
+        verified_package(root)
+    assert verified_package(root, allow_legacy=True)[1]["strategy_version"] == old["strategy_version"]
+    daily_dir = root / "production" / "runs" / str(DAY) / "v2-daily"
+    daily = replay.replay_day(DAY, daily_dir, roots=roots)
+    result = publisher.refresh_history(root, daily_dir, daily)
+    assert result["days"] == [str(DAY)]
+    assert result["metrics"]["sessions"] == 1
+    assert result["coverage"]["prior_revision"]["ledger_consumed"] is False
+    assert result["coverage"]["prior_revision"]["strategy_version"] == old["strategy_version"]
+    assert result["coverage"]["history_scope"] == "CURRENT_STRATEGY_REVISION_DAILY_SESSIONS"
+    assert verified_package(root)[1]["strategy_version"] == replay.contract.STRATEGY_VERSION
+    assert verified_package(root, allow_legacy=True, archived_version=old["strategy_version"])[0] == old_dir
+    assert original_bytes == {p.name: p.read_bytes() for p in old_dir.iterdir() if p.is_file()}
+
+
+def test_aggregate_refuses_old_revision_ledger(raw, tmp_path):
+    roots, _, _ = raw
+    run = tmp_path / "source-run"
+    replay.replay_day(DAY, run, roots=roots)
+    ledger = pd.read_csv(run / "portfolio_trades.csv")
+    ledger["strategy_version"] = replay.contract.LEGACY_STRATEGY_VERSION
+    with pytest.raises(ValueError, match="another production strategy revision"):
+        replay._finish(tmp_path / "mixed", days=[DAY], role="cumulative_history", source_kind="TEST_SOURCE",
+            frames={}, provenance={}, coverage={}, complete=True, ledger=ledger)
+

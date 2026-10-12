@@ -24,3 +24,15 @@ test('friendly latest labels use the actual session cutoff, not the folder date'
   assert.equal(result,'G-3 · Latest · Through 09 Oct 2026');
   assert.ok(!result.includes('pullbacks'));
 });
+test('research target is visible in its saved-run label', () => {
+  const label=runLabel({strategy:'V13-V10-G-3',run_name:'run_20261012_full49_target075_v1',
+    period_end:'2026-10-12',kind:'research_variant',target_pct:0.75},false);
+  assert.match(label,/Target 0\.75%/);
+  assert.match(label,/Backtest-only/);
+});
+test('promoted historical target is labelled as the latest G-3 backtest', () => {
+  const label=runLabel({strategy:'V13-V10-G-3',run_name:'20261012_0950_long_t075',
+    period_end:'2026-10-12',kind:'research_variant',role:'backtest_history',target_pct:0.75},true);
+  assert.match(label,/Latest backtest 09:50 LONG/);
+  assert.match(label,/Target 0\.75%/);
+});

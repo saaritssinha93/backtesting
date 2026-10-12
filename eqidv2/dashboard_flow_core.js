@@ -39,6 +39,7 @@
     const shortDate = value => value ? new Date(value + 'T12:00:00').toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'}) : 'date unavailable';
     const match = run.run_name.match(/(?:^run_|^)(\d{4})(\d{2})(\d{2})/);
     const saved = match ? shortDate(`${match[1]}-${match[2]}-${match[3]}`) : '';
+    if (run.kind === 'research_variant') return `${shortStrategy(run.strategy)} · ${run.role === 'backtest_history' ? 'Latest backtest' : 'Backtest-only'} 09:50 LONG · Target ${run.target_pct}% · Through ${shortDate(run.period_end)}`;
     const kind = run.kind === 'daily' ? 'Daily replay' : run.kind === 'full_history' ? 'Full history' : 'Backtest';
     return `${shortStrategy(run.strategy)} · ${latest ? 'Latest' : 'Archive ' + index} · Through ${shortDate(run.period_end)}${latest ? '' : saved ? ' · Saved ' + saved : ''}${run.kind === 'daily' ? ' · ' + kind : ''}`;
   }

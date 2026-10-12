@@ -24,9 +24,12 @@ from fno_v13_v10_g_identity import canonical_signal_id
 
 IST = ZoneInfo("Asia/Kolkata")
 STRATEGY_PROFILE = "V13_V10_G_3"
-STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V1"
+STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V2"
+LEGACY_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V1"
+LEGACY_STRATEGY_FINGERPRINT = "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275"
 SIGNAL_ID_SCHEMA_VERSION = "eqidv2.v13_v10_g_3.signal_id.v1"
-ACCEPTED_VARIANT = "G3_W1_V1p1"
+ACCEPTED_VARIANT = "G3_W1_V1p1_0950_LONG_T075"
+FROZEN_ACCEPTED_VARIANT = "G3_W1_V1p1"
 FROZEN_VERSION = "V13-V10-G-3-FROZEN-LONG110-NEXTMINUTE-V1"
 FROZEN_CONFIG_SHA256 = "788fbb3dbda6cf86d3f0f26a9db777e7462ba64c7906368cca077e983f72552a"
 FROZEN_LEDGER_SHA256 = "f7287c21ebeba5cd1d2346fb241e6daafc270d33822e979d681f3f508690aaf3"
@@ -35,6 +38,7 @@ BASE_OI_CHANGE_PCT = .05
 BASE_VOLUME_RATIO = .80
 MAX_OI_CHANGE_PCT = 1.
 MIN_CONFIRMATION_VOLUME_BY_SIDE = {"LONG": 1.10, "SHORT": 1.20}
+MIN_CONFIRMATION_VOLUME_BY_SETUP = {"0951_LONG": .60}
 CONFIRMATION_VOLUME_LOOKBACK = 20
 CONFIRMATION_VOLUME_MIN_PERIODS = 5
 CONFIRMATION_VOLUME_POLICY = "previous_20_observed_completed_1m_min5_excluding_current_v1"
@@ -112,6 +116,7 @@ _SETUP_ROWS = (
     ("09:40", "SHORT", 1, "max_move", .20, .05, 1., .40, .60, 2.43),
     ("09:45", "LONG", 1, "max_move", .65, .10, 1., .40, .60, 1.23),
     ("09:45", "SHORT", 1, "max_volume", .20, .375, 1., .40, .40, 1.23),
+    ("09:50", "LONG", 1, "max_liquidity", .10, .05, 1.3, .50, .50, .75),
     ("09:50", "SHORT", 1, "max_liquidity", .20, .05, 1., .40, .60, .93),
     ("09:55", "LONG", 1, "max_liquidity", .20, .10, 1., .40, .60, .90),
     ("10:00", "LONG", 1, "max_liquidity", .40, .05, 1., .40, .60, 3.),
@@ -139,11 +144,23 @@ def setup_for(signal_end: str, side: str, *, session_date: date | None = None) -
     return next((s for s in ACTIVE_SETUPS if s.signal_end == signal_end and s.side == side.upper()), None)
 
 
-def confirmation_volume_minimum(side: str) -> float:
+def confirmation_volume_minimum(side: str, *, signal_end: str | None = None,
+                                setup_id: str | None = None) -> float:
+    """Apply an exception only to its exact setup; retain other side defaults."""
     try:
-        return MIN_CONFIRMATION_VOLUME_BY_SIDE[str(side).upper()]
+        side = str(side).upper()
+        minimum = MIN_CONFIRMATION_VOLUME_BY_SIDE[side]
     except KeyError as exc:
         raise ValueError("Confirmation side must be LONG or SHORT") from exc
+    if signal_end is not None:
+        setup = setup_for(signal_end, side)
+        expected_id = setup.setup_id if setup is not None else None
+        if setup_id is not None and setup_id != expected_id:
+            raise ValueError("Confirmation setup clock mismatch")
+        setup_id = expected_id
+    if setup_id is not None and not setup_id.endswith("_" + side):
+        raise ValueError("Confirmation setup side mismatch")
+    return MIN_CONFIRMATION_VOLUME_BY_SETUP.get(setup_id, minimum)
 
 
 def _number(value: Any) -> float:
@@ -267,7 +284,7 @@ def passes_selected_filters(candidate: Mapping[str, Any], setup: SetupSpec, *,
             and setup.body_ratio <= vals["body_ratio"] <= 1.
             and 0 <= vals["wick_ratio"] <= setup.max_wick_ratio
             and vals["traded_value"] >= setup.min_traded_value
-            and vals["v9_1m_volume_ratio"] >= confirmation_volume_minimum(setup.side))
+            and vals["v9_1m_volume_ratio"] >= confirmation_volume_minimum(setup.side, setup_id=setup.setup_id))
 
 
 def picker_value(candidate: Mapping[str, Any], picker: str) -> float:
@@ -401,6 +418,7 @@ def strategy_payload() -> dict[str, Any]:
         core_setups=[asdict(s) for s in CORE_SETUPS], active_setups=[asdict(s) for s in ACTIVE_SETUPS],
         signal_to_confirmation=dict(SIGNAL_TO_CONFIRMATION), confirmation_window_minutes=1,
         minimum_confirmation_1m_volume_ratio=dict(MIN_CONFIRMATION_VOLUME_BY_SIDE),
+        minimum_confirmation_1m_volume_ratio_by_setup=dict(MIN_CONFIRMATION_VOLUME_BY_SETUP),
         confirmation_volume_policy=CONFIRMATION_VOLUME_POLICY,
         live_confirmation_volume_warmup=dict(required_prior_observations=LIVE_CONFIRMATION_VOLUME_REQUIRED_PRIOR,
             initial_history_days=LIVE_CONFIRMATION_HISTORY_DAYS, fallback_history_days=LIVE_CONFIRMATION_HISTORY_FALLBACK_DAYS,
@@ -427,6 +445,12 @@ def strategy_fingerprint() -> str:
 config_fingerprint = strategy_fingerprint
 
 
+def supported_identity(version: str, fingerprint: str, *, allow_legacy: bool = False) -> bool:
+    """Archived readers may opt into V1; current execution requires V2."""
+    return ((version, fingerprint) == (STRATEGY_VERSION, strategy_fingerprint()) or
+            allow_legacy and (version, fingerprint) == (LEGACY_STRATEGY_VERSION, LEGACY_STRATEGY_FINGERPRINT))
+
+
 def load_contract(path: Path | str | None = None) -> dict[str, Any]:
     value = strategy_payload() if path is None else json.loads(Path(path).read_text(encoding="utf-8"))
     validate_contract(value)
@@ -436,10 +460,15 @@ def load_contract(path: Path | str | None = None) -> dict[str, Any]:
 def validate_contract(value: dict[str, Any] | None = None) -> None:
     if value is not None and value != strategy_payload():
         raise ValueError("G3 production configuration differs from the accepted normalized contract")
-    if len(ACTIVE_SETUPS) != 14 or len(_ACTIVE_BY_ID) != 14:
-        raise ValueError("G3 requires exactly 14 effective setups")
+    if len(ACTIVE_SETUPS) != 15 or len(_ACTIVE_BY_ID) != 15:
+        raise ValueError("G3 V2 requires exactly 15 effective setups")
     if MIN_CONFIRMATION_VOLUME_BY_SIDE != {"LONG": 1.1, "SHORT": 1.2}:
         raise ValueError("G3 side confirmation thresholds changed")
+    if MIN_CONFIRMATION_VOLUME_BY_SETUP != {"0951_LONG": .6}:
+        raise ValueError("G3 09:50 LONG confirmation threshold changed")
+    new = setup_for("09:50", "LONG")
+    if new != _make_setup(("09:50", "LONG", 1, "max_liquidity", .10, .05, 1.3, .50, .50, .75)):
+        raise ValueError("G3 09:50 LONG production setup changed")
     if (INITIAL_STOP_PCT, TIGHTENED_STOP_PCT, TIGHTEN_AFTER_MINUTES) != (1.25, 1., 120):
         raise ValueError("G3 scheduled stops changed")
     if any(s.stop_pct != 1.25 or not 0 < s.target_pct <= 3 for s in ACTIVE_SETUPS):
@@ -455,11 +484,13 @@ def verify_frozen_config(path: Path | str) -> dict[str, Any]:
     if hashlib.sha256(raw).hexdigest() != FROZEN_CONFIG_SHA256:
         raise ValueError("Accepted frozen G3 configuration hash mismatch")
     frozen = json.loads(raw)
-    if (frozen["version"] != FROZEN_VERSION or frozen["accepted_variant"] != ACCEPTED_VARIANT
+    if (frozen["version"] != FROZEN_VERSION or frozen["accepted_variant"] != FROZEN_ACCEPTED_VARIANT
             or frozen["confirmation_window_minutes"] != 1 or frozen["execution_authority"] is not False
             or frozen["minimum_confirmation_1m_volume_ratio"] != MIN_CONFIRMATION_VOLUME_BY_SIDE):
         raise ValueError("Accepted frozen G3 baseline metadata mismatch")
     for family, setups in (("core", CORE_SETUPS), ("expanded", ACTIVE_SETUPS)):
+        # The archived oracle covers the original fourteen setups only.
+        setups = tuple(s for s in setups if s.setup_id != "0951_LONG")
         actual = {f"{row[family]['confirmation_end'].replace(':', '')}_{row[family]['side']}": row[family]
                   for row in frozen["setup_rules"]}
         if set(actual) != {s.setup_id for s in setups}:

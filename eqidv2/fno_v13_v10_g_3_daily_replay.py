@@ -20,7 +20,7 @@ from eqidv2_runtime_paths import runtime_dir
 
 STRATEGY = "V13-V10-G-3"
 SCHEMA_VERSION = "fno_g3_production_run_v1"
-PRODUCTION_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "strategies" / "v13_v10_g_3_production_v1.json"
+PRODUCTION_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "strategies" / "v13_v10_g_3_production_v2.json"
 DEFAULT_SEALED_SOURCE = runtime_dir("fno_oi", "strategy_research", "v13_v10_g_full_history",
     "run_20260925_cutoff_corrected_through_20260923", "dataset")
 DataRoots = source.DataRoots
@@ -128,9 +128,16 @@ def _finish(run_dir: Path, *, days: list[date], role: str, source_kind: str,
         if ledger is None:
             ledger, metric = simulate(frames["selected_orders"], paths or {}, days)
         else:
+            # Historical revisions are independent cohorts. Never relabel an
+            # old ledger with the active contract merely by sealing it again.
+            for column, expected in (("strategy_version", contract.STRATEGY_VERSION),
+                                     ("strategy_fingerprint", contract.strategy_fingerprint())):
+                if column not in ledger or not ledger[column].eq(expected).all():
+                    raise ValueError("Replay ledger contains another production strategy revision")
             metric = metrics_for_ledger(ledger, days)
         artifacts["portfolio_trades"] = _csv(run_dir, "portfolio_trades", ledger)
         daily = [dict(day=day.isoformat(), strategy=STRATEGY,
+            strategy_version=contract.STRATEGY_VERSION, strategy_fingerprint=contract.strategy_fingerprint(),
             **metrics_for_ledger(ledger.loc[pd.to_datetime(ledger.day).dt.date.eq(day)], [day])) for day in days]
         artifacts["daily_results"] = _csv(run_dir, "daily_results", pd.DataFrame(daily))
     provenance.update(code=_code_provenance(), strategy_contract=contract.strategy_payload(), production_config=contract_proof)
