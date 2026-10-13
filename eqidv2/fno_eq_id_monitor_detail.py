@@ -11,6 +11,8 @@ import json
 import math
 import re
 from functools import lru_cache
+from collections import Counter
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -32,10 +34,14 @@ PINNED_RULE_SOURCES = {
     "ai_platform/observability/feature_ledger.py": "f3b9518bc4048218f0655280f2c73db5693a665360ff70361a9a11765ba8c266",
 }
 SLOTS = ("09:25", "09:30", "09:35", "09:40", "09:45", "09:50", "09:55", "10:00", "11:20")
+if ACTIVE_PROFILE.name == "V13_V10_G_3":
+    from fno_v13_v10_g_3_contract import SIGNAL_TO_CONFIRMATION
+    SLOTS = tuple(SIGNAL_TO_CONFIRMATION)
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_FEATURE_ROWS = 2000
 MAX_ORDER_FILES = 1000
 MAX_EVENT_ROWS = 10000
+_BUILD_IDENTITY: ContextVar[tuple[str, str] | None] = ContextVar("monitor_build_identity", default=None)
 BASE_GATES = (
     "gate_session_date", "gate_values_finite", "gate_oi_pair_positive", "gate_oi_increasing",
     "gate_base_oi_min", "gate_base_oi_max", "gate_base_volume", "gate_ema_long",
@@ -48,6 +54,8 @@ CONFIRMATION_GATES = (
     "gate_setup_wick", "gate_setup_liquidity",
 )
 FEATURES = (
+    "price_change_basis", "oi_change_source", "oi_change_from", "oi_change_to",
+    "opening_0920_status", "availability", "feature_available_at_ist",
     "open", "high", "low", "close", "volume", "prev_close", "signal_close", "ema9", "ema20",
     "ema50", "price_change_pct", "oi", "prev_oi", "oi_change_pct", "volume_ratio", "traded_value",
     "confirmation_open", "confirmation_high", "confirmation_low", "confirmation_close",
@@ -56,6 +64,7 @@ FEATURES = (
     "required_price_change_pct", "required_oi_change_pct", "required_volume_ratio",
     "required_body_ratio", "maximum_wick_ratio", "minimum_traded_value",
     "ema_alignment_bypassed", "relaxed_0925_long_base_branch",
+    "minimum_confirmation_volume_ratio", "opening_evidence_sha256",
     "maximum_base_oi_change_pct", "v9_1m_upper_wick_ratio", "v9_1m_lower_wick_ratio",
 )
 
@@ -127,13 +136,23 @@ def _pinned_sources_available(row: dict) -> bool:
 def _valid_identity(row: dict) -> bool:
     if row.get("strategy_version") != STRATEGY_VERSION or not row.get("strategy_fingerprint"):
         return False
-    expected = expected_fingerprint(ACTIVE_PROFILE.name)
+    identity = _BUILD_IDENTITY.get()
+    expected = identity[1] if identity is not None and identity[0] == ACTIVE_PROFILE.name else expected_fingerprint(ACTIVE_PROFILE.name)
     return not expected or row.get("strategy_fingerprint") == expected
 
 
-def _confirmation_threshold(row: dict) -> float:
+def _confirmation_threshold(row: dict) -> float | None:
+    if "minimum_confirmation_volume_ratio" in row:
+        value = _number(row["minimum_confirmation_volume_ratio"])
+        return value if value is not None and value > 0 else None
     side = str(row.get("base_side") or row.get("side") or "").upper()
-    return 1.10 if ACTIVE_PROFILE.name == "V13_V10_G_3" and side == "LONG" else 1.20
+    if ACTIVE_PROFILE.name == "V13_V10_G_3":
+        from fno_v13_v10_g_3_contract import confirmation_volume_minimum
+        try:
+            return confirmation_volume_minimum(side, signal_end=row.get("signal_end"), setup_id=row.get("setup_id") or None)
+        except ValueError:
+            return None
+    return 1.20
 
 
 def _source_reference(symbol: str) -> str:
@@ -366,6 +385,8 @@ def _enhance_gate(check: dict, row: dict, pinned: bool) -> dict:
     if name in base_specs:
         scalar_gate(*base_specs[name])
         if name == "gate_confirmation_volume":
+            if "minimum_confirmation_volume_ratio" in row:
+                scalar_gate("v9_1m_volume_ratio", _confirmation_threshold(row), ">=", "x", "minimum_confirmation_volume_ratio")
             margin_field = "margin_confirmation_volume_ratio"
             if pinned:
                 required += " (current volume / mean of preceding 20 completed minutes; current excluded)"
@@ -490,7 +511,7 @@ def _gate(row: dict, name: str, phase: str, *, pinned: bool | None = None) -> di
         "gate_confirmation_present": (row.get("confirmation_ts"), "Exact completed signal + 1 minute candle exists", None),
         "gate_confirmation_range": (None, "Valid positive OHLC; high > low; open/close within range", None),
         "gate_confirmation_direction": (row.get("confirmation_close"), "LONG: close > open and 5m close; SHORT: close < both", None),
-        "gate_confirmation_volume": (row.get("v9_1m_volume_ratio"), f">= {_confirmation_threshold(row):.2f}x prior completed-minute volume (current excluded)", row.get("margin_confirmation_volume_ratio")),
+        "gate_confirmation_volume": (row.get("v9_1m_volume_ratio"), "Recorded setup confirmation-volume minimum; prior completed minutes only", row.get("margin_confirmation_volume_ratio")),
         "gate_setup_exists": (row.get("setup_id"), "Configured dated setup exists for side and signal slot", None),
         "gate_exact_confirmation_clock": (row.get("confirmation_ts"), "Exact configured completed confirmation clock", None),
     }
@@ -574,6 +595,54 @@ def _feature_row(raw: dict, parent: dict, day: str, slot: str, phase: str, sourc
                 strategy_fingerprint=_text(parent.get("strategy_fingerprint")), ledger_row_sha256=_text(raw.get("ledger_row_sha256")))
 
 
+def _opening_source_check(raw: dict, parent: dict, day: str) -> dict:
+    """Display the recorded opening validator, not the regular 09:15/09:20 pair."""
+    start, end = _stamp(raw.get("oi_change_from")), _stamp(raw.get("oi_change_to"))
+    available, published = _stamp(raw.get("feature_available_at_ist")), _stamp(parent.get("published_at_ist"))
+    verified = (raw.get("opening_0920_status") == "VALID"
+                and raw.get("availability") == "LIVE_AS_OF_VERIFIED"
+                and raw.get("price_change_basis") == "09:15_CASH_OPEN_TO_09:20_CASH_CLOSE"
+                and raw.get("oi_change_source") in {"PROVISIONAL_FULL_QUOTE", "FIRST_MINUTE_0916_TO_COMPLETED_0920_FUTURES_4M"}
+                and bool(re.fullmatch(r"[0-9a-f]{64}", str(raw.get("opening_evidence_sha256", ""))))
+                and start is not None and _at(day, "09:16") <= start < _at(day, "09:17")
+                and end == _at(day, "09:20") and available is not None and published is not None
+                and end <= available <= published)
+    return _check("opening_oi_source_quality", "PASS" if verified else "UNKNOWN",
+                  raw.get("opening_0920_status"),
+                  "Recorded VALID opening OI evidence, verified as of evaluation: 09:16 baseline to 09:20 completed OI",
+                  reason=f"Source: {_text(raw.get('oi_change_source'))}; baseline: {_text(raw.get('oi_change_from'))}. A 09:15 futures candle is not an input to this setup.")
+
+
+def _count(value: Any) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def _selection_summary(scanner: dict, confirmation: dict) -> dict:
+    """Keep complete zero selections distinct from missing or blocked evidence."""
+    counts = {key: scanner.get(key) if scanner["state"] == "RECORDED" else None
+              for key in ("long_candidates", "short_candidates", "candidates")}
+    result = dict(**counts, selected_long=None, selected_short=None, reasons=[], outcome="UNAVAILABLE")
+    if scanner["state"] != "RECORDED":
+        result["outcome"] = "SCANNER_" + scanner["state"]
+        return result
+    if confirmation["state"] != "RECORDED":
+        result["outcome"] = "CONFIRMATION_" + confirmation["state"]
+        return result
+    expected, observed = _count(counts["candidates"]), _count(confirmation.get("candidates"))
+    longs, shorts = _count(confirmation.get("selected_long")), _count(confirmation.get("selected_short"))
+    bars, absent = _count(confirmation.get("confirmation_bars")), _count(confirmation.get("ineligible_no_candle"))
+    if (None in (expected, observed, longs, shorts, bars) or expected != observed
+            or bars + (absent or 0) != expected or longs + shorts > expected):
+        result["outcome"] = "INCOMPLETE_COUNTS"
+        return result
+    if confirmation.get("durable_feed", {}).get("state") != "RECORDED":
+        result["outcome"] = "CONFIRMATION_FEED_UNVERIFIED"
+        return result
+    result.update(selected_long=longs, selected_short=shorts, reasons=confirmation.get("rejection_counts", []))
+    result["outcome"] = "SELECTED" if longs + shorts else "NO_5M_CANDIDATES" if not expected else "NO_FINAL_SELECTION"
+    return result
+
+
 def _read_phase(root: Path, day: str, slot: str, phase: str, now: datetime, warnings: list[str]) -> tuple[list[dict], dict, dict]:
     clock = slot if phase == "5m" else (_at(day, slot) + timedelta(minutes=1)).strftime("%H:%M")
     path = root / ("scanner_5m" if phase == "5m" else "confirmation_1m") / day / f"slot_{clock.replace(':', '')}.json"
@@ -605,10 +674,28 @@ def _read_phase(root: Path, day: str, slot: str, phase: str, now: datetime, warn
         quality = quality if isinstance(quality, list) else []
         quality_by_symbol = {(_text(item.get("symbol")), _text(item.get("source"))): item for item in quality[:MAX_FEATURE_ROWS * 2] if isinstance(item, dict)}
         for result, raw in zip(rows, (row for row in raw_rows[:MAX_FEATURE_ROWS] if isinstance(row, dict))):
+            opening = None
+            if ACTIVE_PROFILE.name == "V13_V10_G_3" and slot == "09:20":
+                opening = _opening_source_check(raw, payload, day)
+                if result["evidence_state"] not in {"RECORDED", "BLOCKED"}:
+                    opening = _invalidate_check(opening, "Invalid opening row evidence")
+                result["checks"].append(opening)
             for label, symbol, source in (("equity", result["symbol"], "NSE_EQUITY_5M_LIVE"), ("futures_oi", raw.get("futures_tradingsymbol"), "NFO_FUTURE_5M_LIVE")):
                 entry = quality_by_symbol.get((symbol, source), {})
                 valid = entry.get("session_date") == day and entry.get("signal_end") == slot and _stamp(entry.get("timestamp_max")) == _at(day, slot) and result["evidence_state"] in {"RECORDED", "BLOCKED"}
-                result["checks"].append(_check(f"{label}_source_quality", _status(entry.get("usable")) if valid else "UNKNOWN", entry.get("timestamp_max"), "Recorded source quality usable flag; source timestamp shown separately", reason="Recorded raw-data quality audit" if valid else "No valid dated source-quality audit"))
+                status = _status(entry.get("usable")) if valid else "UNKNOWN"
+                reason = "Recorded raw-data quality audit" if valid else "No valid dated source-quality audit"
+                # Older scanner telemetry expected the regular 09:15 candle.
+                # Preserve its recorded failure, but label that audit inapplicable
+                # only when this is its sole issue and opening evidence is valid.
+                if (valid and label == "futures_oi" and opening and opening["status"] == "PASS"
+                        and entry.get("missing_timestamps") == [_at(day, "09:15").isoformat()]
+                        and {item.get("code") for item in entry.get("issues", []) if isinstance(item, dict)} == {"MISSING_EXPECTED_TIMESTAMPS"}):
+                    status = "NOT_APPLICABLE"
+                    reason = "Legacy regular-pair audit expected 09:15; this opening setup uses the separately recorded 09:16 baseline. Original audit remains unchanged."
+                check = _check(f"{label}_source_quality", status, entry.get("timestamp_max"), "Recorded source quality usable flag; source timestamp shown separately", reason=reason)
+                check["recorded_status"] = _status(entry.get("usable")) if valid else "UNKNOWN"
+                result["checks"].append(check)
                 if entry:
                     result["indicators"][f"{label}_latest_completed_at"] = _scalar(entry.get("timestamp_max"))
                     result["indicators"][f"{label}_source_quality"] = _scalar(entry.get("status"))
@@ -624,6 +711,15 @@ def _read_phase(root: Path, day: str, slot: str, phase: str, now: datetime, warn
                 "unexpected_missing": _scalar(payload.get("contracts_unexpected_missing")),
                 "ineligible_no_candle": _scalar(payload.get("ineligible_no_candle_count")),
                 "source": _text(payload.get("confirmation_source" if phase == "1m" else "price_volume_indicator_source"))}
+    if phase == "5m":
+        longs, shorts = _count(payload.get("long_candidates")), _count(payload.get("short_candidates"))
+        coverage.update(long_candidates=longs, short_candidates=shorts,
+                        candidates=longs + shorts if longs is not None and shorts is not None else None,
+                        opening_excluded=len(payload.get("opening_0920_exclusions", [])) if isinstance(payload.get("opening_0920_exclusions"), list) else None)
+    elif state == "RECORDED":
+        rejected = payload.get("candidate_rejections", {})
+        reasons = Counter(_text(value) for value in rejected.values()) if isinstance(rejected, dict) else Counter()
+        coverage["rejection_counts"] = [dict(reason=reason, count=count) for reason, count in sorted(reasons.items())]
     # Stocks with no completed candle are not present in the feature ledger.
     omitted = payload.get("ineligible_no_candle_symbols" if phase == "1m" else "unexpected_missing_symbols", [])
     if isinstance(omitted, list) and state in {"RECORDED", "BLOCKED"}:
@@ -643,6 +739,16 @@ def _read_phase(root: Path, day: str, slot: str, phase: str, now: datetime, warn
                              stage="DATA_COVERAGE", decision="VERIFIED_NO_FUTURES_CANDLE", evidence_state="UNAVAILABLE", source=str(path.relative_to(root)),
                              indicators={"futures_tradingsymbol": _scalar(item.get("futures_tradingsymbol"))},
                              checks=[_check("futures_oi_available", "FAIL", False, "Exact futures OI candle required", reason=_text(item.get("reason")))]))
+    exclusions = payload.get("opening_0920_exclusions", [])
+    if phase == "5m" and slot == "09:20" and isinstance(exclusions, list) and state in {"RECORDED", "BLOCKED"}:
+        for i, item in enumerate(exclusions[:MAX_FEATURE_ROWS]):
+            if not isinstance(item, dict):
+                continue
+            rows.append(dict(id=f"g:5m:{slot}:opening-excluded:{i}", strategy=ACTIVE_PROFILE.label, session_date=day,
+                             symbol=_text(item.get("equity_symbol"), 100), side="LONG", setup_id="0921_LONG", signal_time=slot, minute=clock,
+                             stage="DATA_COVERAGE", decision="OPENING_OI_EXCLUDED", evidence_state="UNAVAILABLE", source=str(path.relative_to(root)),
+                             indicators={"futures_tradingsymbol": _scalar(item.get("futures_tradingsymbol"))},
+                             checks=[_check("opening_oi_available", "FAIL", False, "Timely 09:16 opening OI baseline required", reason=_text(item.get("reason")))]))
     return rows, coverage, payload
 
 
@@ -765,6 +871,17 @@ def _event_rows(root: Path, day: str, now: datetime, warnings: list[str]) -> lis
 
 def build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetime | None = None) -> dict[str, Any]:
     """Return bounded, dated observations. Does not fetch, write, or trade."""
+    # The contract is constant within one response. Hashing all its setups for
+    # every row made refreshes grow with the intraday event log. Context-local
+    # reuse is thread-safe and revalidates the contract on every new build.
+    token = _BUILD_IDENTITY.set((ACTIVE_PROFILE.name, expected_fingerprint(ACTIVE_PROFILE.name)))
+    try:
+        return _build_monitor_detail(fno_root, session_date, now_ist=now_ist)
+    finally:
+        _BUILD_IDENTITY.reset(token)
+
+
+def _build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetime | None = None) -> dict[str, Any]:
     if not isinstance(session_date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session_date):
         raise ValueError("session_date must be YYYY-MM-DD")
     date.fromisoformat(session_date)
@@ -787,7 +904,8 @@ def build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetime
                 row["checks"] = [_invalidate_check(check, "Scanner/confirmation strategy identity mismatch") for check in row["checks"]]
         rows_5m.extend(scanner)
         rows_1m.extend(confirmation)
-        coverage.append(dict(slot=slot, scanner_state=scan_coverage["state"], confirmation_state=conf_coverage["state"], scanner_rows=scan_coverage["rows"], confirmation_rows=conf_coverage["rows"], scanner=scan_coverage, confirmation=conf_coverage))
+        coverage.append(dict(slot=slot, confirmation_time=(_at(session_date, slot) + timedelta(minutes=1)).strftime("%H:%M"),
+                             selection=_selection_summary(scan_coverage, conf_coverage), scanner_state=scan_coverage["state"], confirmation_state=conf_coverage["state"], scanner_rows=scan_coverage["rows"], confirmation_rows=conf_coverage["rows"], scanner=scan_coverage, confirmation=conf_coverage))
     rows_1m.extend(_event_rows(root, session_date, now, warnings))
     rows_1m.extend(_order_rows(root, session_date, now, warnings))
     warnings.append("Order evidence is recorded transitions/latest snapshots, not a complete tick-by-tick or per-minute guard history. Missing checks remain UNKNOWN.")

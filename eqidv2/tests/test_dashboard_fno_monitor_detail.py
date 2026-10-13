@@ -250,9 +250,9 @@ def test_detail_cache_reuses_current_payload_then_expires(tmp_path, monkeypatch,
     monkeypatch.setattr(dashboard, "_build_fno_eq_id_stock_detail", build)
 
     first = dashboard._fno_eq_id_stock_detail(DAY)
-    tick[0] = 104.9
+    tick[0] = 119.9
     second = dashboard._fno_eq_id_stock_detail(DAY)
-    tick[0] = 105.1
+    tick[0] = 120.1
     third = dashboard._fno_eq_id_stock_detail(DAY)
 
     assert first == second
@@ -364,7 +364,7 @@ def _run_monitor_browser_scenario(scenario: str) -> dict:
       const flush = () => new Promise(resolve => setImmediate(resolve));
       function fakeHost() {
         const zones = Object.fromEntries(['controls', 'status', 'warnings', 'summary',
-          'rows', 'pager', 'detail', 'coverage'].map(name => [name, {
+          'rows', 'pager', 'detail', 'coverage', 'selections'].map(name => [name, {
             innerHTML: '', textContent: '', hidden: false, scrollIntoView() {}
           }]));
         return {zones, listeners: {}, isConnected: true, innerHTML: '',
@@ -455,6 +455,96 @@ def test_monitor_ui_can_be_removed_while_evidence_request_is_pending():
     assert result["unhandled"] == []
 
 
+def test_monitor_waits_for_operations_and_disconnects_observer_on_remount():
+    result = _run_monitor_browser_scenario("""
+      const calls = [], observers = [];
+      const operations = {hidden: true};
+      global.MutationObserver = class {
+        constructor(callback) { this.callback = callback; this.disconnected = false; observers.push(this); }
+        observe(target, options) { this.target = target; this.options = options; }
+        disconnect() { this.disconnected = true; }
+      };
+      global.fetch = async url => {
+        calls.push(String(url));
+        return {ok: true, json: async () => ({session_date: url.searchParams.get('date'),
+          state: 'READY', warnings: [], coverage: [], rows_5m: [], rows_1m: []})};
+      };
+      const first = fakeHost();
+      first.closest = selector => selector === '#terminalOperations' ? operations : null;
+      window.FnoMonitor.mount(first, '');
+      await flush();
+      const hiddenCalls = calls.length;
+      operations.hidden = false;
+      observers[0].callback();
+      await flush(); await flush();
+      const shownCalls = calls.length;
+      click(first, {action: 'refresh'});
+      await flush(); await flush();
+      const refreshedCalls = calls.length;
+      operations.hidden = true;
+      observers[0].callback();
+      first.isConnected = false;
+      const second = fakeHost();
+      second.closest = selector => selector === '#terminalOperations' ? operations : null;
+      window.FnoMonitor.mount(second, '');
+      await flush();
+      process.stdout.write(JSON.stringify({hiddenCalls, shownCalls, refreshedCalls,
+        remountCalls: calls.length, firstObserverDisconnected: observers[0].disconnected,
+        observerCount: observers.length, watchingHidden: observers[1].options.attributeFilter}));
+    """)
+    assert result == {
+        "hiddenCalls": 0,
+        "shownCalls": 1,
+        "refreshedCalls": 2,
+        "remountCalls": 2,
+        "firstObserverDisconnected": True,
+        "observerCount": 2,
+        "watchingHidden": ["hidden"],
+    }
+
+
+def test_monitor_aborts_inflight_evidence_when_operations_is_hidden():
+    result = _run_monitor_browser_scenario("""
+      const operations = {hidden: false};
+      let notifyVisibility, resolveFirst, firstSignal;
+      global.MutationObserver = class {
+        constructor(callback) { notifyVisibility = callback; }
+        observe() {}
+        disconnect() {}
+      };
+      let calls = 0;
+      global.fetch = (url, options) => {
+        calls++;
+        if (calls === 1) {
+          firstSignal = options.signal;
+          return new Promise(resolve => { resolveFirst = resolve; });
+        }
+        return Promise.resolve({ok: true, json: async () => ({
+          session_date: url.searchParams.get('date'), state: 'READY',
+          warnings: [], coverage: [], rows_5m: [], rows_1m: []})});
+      };
+      const host = fakeHost();
+      host.closest = selector => selector === '#terminalOperations' ? operations : null;
+      window.FnoMonitor.mount(host, '');
+      operations.hidden = true;
+      notifyVisibility();
+      const aborted = firstSignal.aborted;
+      resolveFirst({ok: true, json: async () => ({session_date: '2026-10-13',
+        state: 'STALE', warnings: [], coverage: [], rows_5m: [], rows_1m: []})});
+      await flush(); await flush();
+      const hiddenCalls = calls;
+      operations.hidden = false;
+      notifyVisibility();
+      await flush(); await flush();
+      process.stdout.write(JSON.stringify({aborted, hiddenCalls, calls,
+        status: host.zones.status.textContent}));
+    """)
+    assert result["aborted"] is True
+    assert result["hiddenCalls"] == 1
+    assert result["calls"] == 2
+    assert "READY" in result["status"]
+
+
 def test_gate_filter_keeps_confirmation_stage_and_final_selection_separate():
     result = _run_monitor_browser_scenario("""
       const common = {signal_time: '09:45', side: 'LONG', setup_id: '0946_LONG', indicators: {}};
@@ -513,6 +603,27 @@ def test_gate_filter_keeps_confirmation_stage_and_final_selection_separate():
     assert result["oneFail"].count("data-row-index=") == 1
     assert "ONE_FAIL" in result["oneFail"]
     assert "ONE_PASS" not in result["oneFail"]
+
+
+def test_slot_summary_distinguishes_candidates_rejections_and_missing_confirmation():
+    result = _run_monitor_browser_scenario("""
+      global.fetch = async url => ({ok: true, json: async () => ({
+        session_date: url.searchParams.get('date'), state: 'PARTIAL', warnings: [], rows_5m: [], rows_1m: [],
+        coverage: [
+          {slot: '09:20', confirmation_time: '09:21', scanner: {opening_excluded: 5}, selection: {
+            long_candidates: 10, short_candidates: 0, selected_long: 0, selected_short: 0,
+            outcome: 'NO_FINAL_SELECTION', reasons: [{reason: 'confirmation_volume_below_1.80_or_missing', count: 9}]}},
+          {slot: '09:25', confirmation_time: '09:26', scanner: {}, selection: {
+            long_candidates: 5, short_candidates: 0, selected_long: null, selected_short: null,
+            outcome: 'CONFIRMATION_MISSING', reasons: []}}
+        ]})});
+      const host = fakeHost(); window.FnoMonitor.mount(host, ''); await flush(); await flush();
+      process.stdout.write(JSON.stringify({summary: host.zones.selections.innerHTML}));
+    """)
+    assert "L10 / S0" in result["summary"] and "L0 / S0" in result["summary"]
+    assert "09:21" in result["summary"] and "Opening OI excluded: 5" in result["summary"]
+    assert "No final selection: completed evaluation" in result["summary"]
+    assert "CONFIRMATION MISSING" in result["summary"] and "Unavailable" in result["summary"]
 
 
 def test_failed_checks_show_values_thresholds_gaps_and_missing_checks_together():

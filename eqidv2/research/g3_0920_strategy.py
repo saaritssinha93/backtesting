@@ -13,7 +13,7 @@ import math
 
 import pandas as pd
 
-import fno_v13_v10_g_3_contract as contract
+from research import g3_v2_contract as contract
 from fno_v13_v10_g_identity import canonical_signal_id
 
 

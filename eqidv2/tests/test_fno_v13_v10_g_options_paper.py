@@ -300,3 +300,86 @@ def test_entry_expires_without_a_quote_so_restart_cannot_backfill_a_trade(tmp_pa
     assert changed is True
     assert state["status"] == "SKIPPED"
     assert "NO_RETROACTIVE" in state["status_reason"]
+
+
+@pytest.mark.parametrize("locked_output", ["report", "consolidated"])
+def test_reporting_recovers_from_windows_lock_after_atomic_retries(tmp_path, monkeypatch, locked_output):
+    args = options.build_parser().parse_args(["--role", "net-result", "--once"])
+    report = tmp_path / "report.md"
+    report.write_text("previous complete report")
+    published, sleeps, calls = [], [], []
+    monkeypatch.setattr(options.common, "now_ist", lambda: datetime.fromisoformat("2026-09-15T10:00:00+05:30"))
+    monkeypatch.setattr(options, "load_states", lambda day: [])
+    monkeypatch.setattr(options, "report_path", lambda role: report)
+    monkeypatch.setattr(options, "render_report", lambda *args: "new complete report")
+    monkeypatch.setattr(options, "_publish", lambda role, state, **kw: published.append((state, kw)))
+    monkeypatch.setattr(options.time, "sleep", sleeps.append)
+    original_write = options.common.atomic_write_text
+
+    def maybe_locked(kind):
+        if kind != locked_output:
+            return
+        calls.append(kind)
+        if len(calls) == 1:
+            assert report.read_text() == "previous complete report"
+            raise PermissionError(13, "Windows sharing violation")
+
+    def write(path, text):
+        maybe_locked("report")
+        original_write(path, text)
+
+    def consolidate(day):
+        maybe_locked("consolidated")
+        return tmp_path / "consolidated.csv"
+
+    monkeypatch.setattr(options.common, "atomic_write_text", write)
+    monkeypatch.setattr(options, "publish_consolidated", consolidate)
+    assert options.run_reporting(args, DAY, "net-result") == 0
+    assert [state for state, _ in published] == ["DEGRADED", "DONE"]
+    assert published[0][1]["phase"] == "REPORT_PUBLISH_RETRY"
+    assert published[-1][1]["report_write_retries"] == 1
+    assert report.read_text() == "new complete report"
+    assert sleeps == [args.reporting_poll_sec]
+
+
+@pytest.mark.parametrize("once", [True, False])
+def test_reporting_persistent_lock_is_bounded_when_finishing(monkeypatch, once):
+    args = options.build_parser().parse_args(["--role", "net-result"] + (["--once"] if once else []))
+    monkeypatch.setattr(options.common, "now_ist", lambda: datetime.fromisoformat("2026-09-15T16:00:00+05:30"))
+    monkeypatch.setattr(options, "load_states", lambda day: [])
+    monkeypatch.setattr(options, "publish_consolidated", lambda day: (_ for _ in ()).throw(PermissionError(13, "locked")))
+    states = []
+    monkeypatch.setattr(options, "_publish", lambda role, state, **kw: states.append((state, kw)))
+    monkeypatch.setattr(options.time, "sleep", lambda seconds: None)
+    assert options.run_reporting(args, DAY, "net-result") == 2
+    assert [state for state, _ in states] == ["DEGRADED", "DEGRADED", "FAILED"]
+    assert states[-1][1]["phase"] == "REPORT_PUBLISH_BLOCKED"
+
+
+def test_reporting_non_lock_io_failure_is_not_hidden(monkeypatch):
+    args = options.build_parser().parse_args(["--role", "net-result", "--once"])
+    monkeypatch.setattr(options, "load_states", lambda day: [])
+    monkeypatch.setattr(options, "publish_consolidated", lambda day: (_ for _ in ()).throw(OSError(28, "disk full")))
+    with pytest.raises(OSError, match="disk full"):
+        options.run_reporting(args, DAY, "net-result")
+
+
+def test_reporting_keeps_retrying_during_session_then_recovers(monkeypatch):
+    args = options.build_parser().parse_args(["--role", "net-result"])
+    clocks = iter([datetime.fromisoformat("2026-09-15T10:00:00+05:30")] * 4
+                  + [datetime.fromisoformat("2026-09-15T16:00:00+05:30")])
+    monkeypatch.setattr(options.common, "now_ist", lambda: next(clocks))
+    monkeypatch.setattr(options, "load_states", lambda day: [])
+    attempts, published = [], []
+    def consolidate(day):
+        attempts.append(day)
+        if len(attempts) <= 4:
+            raise PermissionError(13, "temporarily locked")
+        return Path("consolidated.csv")
+    monkeypatch.setattr(options, "publish_consolidated", consolidate)
+    monkeypatch.setattr(options, "render_report", lambda *args: "report")
+    monkeypatch.setattr(options.common, "atomic_write_text", lambda *args: None)
+    monkeypatch.setattr(options, "_publish", lambda role, state, **kw: published.append(state))
+    monkeypatch.setattr(options.time, "sleep", lambda seconds: None)
+    assert options.run_reporting(args, DAY, "net-result") == 0
+    assert published == ["DEGRADED"] * 4 + ["DONE"]

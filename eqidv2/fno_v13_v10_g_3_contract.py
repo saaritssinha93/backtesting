@@ -21,14 +21,18 @@ if TYPE_CHECKING:
     import pandas as pd
 
 from fno_v13_v10_g_identity import canonical_signal_id
+import fno_v13_v10_g_3_late_setups as late_setups
+import fno_v13_v10_g_3_selected_setups as selected_setups
 
 IST = ZoneInfo("Asia/Kolkata")
 STRATEGY_PROFILE = "V13_V10_G_3"
-STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V2"
+STRATEGY_VERSION = selected_setups.VERSION
+PREVIOUS_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V4"
+PREVIOUS_STRATEGY_FINGERPRINT = "181c37b6a43291311525b0b6970ea0019d5237bce172735913418cba623fb6b9"
 LEGACY_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V1"
 LEGACY_STRATEGY_FINGERPRINT = "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275"
 SIGNAL_ID_SCHEMA_VERSION = "eqidv2.v13_v10_g_3.signal_id.v1"
-ACCEPTED_VARIANT = "G3_W1_V1p1_0950_LONG_T075"
+ACCEPTED_VARIANT = selected_setups.ACCEPTED_VARIANT
 FROZEN_ACCEPTED_VARIANT = "G3_W1_V1p1"
 FROZEN_VERSION = "V13-V10-G-3-FROZEN-LONG110-NEXTMINUTE-V1"
 FROZEN_CONFIG_SHA256 = "788fbb3dbda6cf86d3f0f26a9db777e7462ba64c7906368cca077e983f72552a"
@@ -38,7 +42,8 @@ BASE_OI_CHANGE_PCT = .05
 BASE_VOLUME_RATIO = .80
 MAX_OI_CHANGE_PCT = 1.
 MIN_CONFIRMATION_VOLUME_BY_SIDE = {"LONG": 1.10, "SHORT": 1.20}
-MIN_CONFIRMATION_VOLUME_BY_SETUP = {"0951_LONG": .60}
+MIN_CONFIRMATION_VOLUME_BY_SETUP = {"0921_LONG": 1.80, "0951_LONG": .60,
+    **late_setups.CONFIRMATION_VOLUME, **selected_setups.CONFIRMATION_VOLUME}
 CONFIRMATION_VOLUME_LOOKBACK = 20
 CONFIRMATION_VOLUME_MIN_PERIODS = 5
 CONFIRMATION_VOLUME_POLICY = "previous_20_observed_completed_1m_min5_excluding_current_v1"
@@ -106,6 +111,7 @@ class PositionSize:
 # Selection fields are the frozen setup_rules.core table. Final two columns
 # are effective exit.setups targets, NOT donor setup_rules targets/stops.
 _SETUP_ROWS = (
+    ("09:20", "LONG", 1, "max_liquidity", .30, .10, 3., .75, .35, 3.),
     ("09:25", "LONG", 1, "max_liquidity", .30, .10, 3., .60, .60, .97),
     ("09:25", "SHORT", 2, "max_volume", .20, .05, 1.5, .40, .60, 2.67),
     ("09:30", "LONG", 1, "max_move", .65, .10, 1., .50, .60, 2.),
@@ -121,6 +127,8 @@ _SETUP_ROWS = (
     ("09:55", "LONG", 1, "max_liquidity", .20, .10, 1., .40, .60, .90),
     ("10:00", "LONG", 1, "max_liquidity", .40, .05, 1., .40, .60, 3.),
     ("11:20", "SHORT", 1, "max_liquidity", .20, .05, 1., .40, .60, 2.),
+    *late_setups.ROWS,
+    *selected_setups.ROWS,
 )
 
 
@@ -132,8 +140,10 @@ def _make_setup(row: tuple) -> SetupSpec:
 
 
 CORE_SETUPS = tuple(_make_setup(row) for row in _SETUP_ROWS)
+# Late G4 thresholds are already effective, with identical core/expanded pools.
 ACTIVE_SETUPS = tuple(replace(s, price_change_pct=max(BASE_PRICE_CHANGE_PCT,
-                     s.price_change_pct * (.65 if s.side == "SHORT" else 1.))) for s in CORE_SETUPS)
+                     s.price_change_pct * (.65 if s.side == "SHORT" and s.setup_id not in
+                         (late_setups.SETUP_IDS | selected_setups.SETUP_IDS) else 1.))) for s in CORE_SETUPS)
 SIGNAL_TO_CONFIRMATION = dict(sorted({s.signal_end: s.confirmation_end for s in ACTIVE_SETUPS}.items()))
 _CORE_BY_ID = {s.setup_id: s for s in CORE_SETUPS}
 _ACTIVE_BY_ID = {s.setup_id: s for s in ACTIVE_SETUPS}
@@ -201,6 +211,13 @@ def _candidate(row: Mapping[str, Any]) -> dict[str, Any]:
 def base_signal_side(row: Mapping[str, Any], signal_end: str = "", nifty_first_bar_return_pct: float | None = None,
                      *, session_date: date | None = None, original_only: bool = False) -> str | None:
     row = _candidate(row)
+    if signal_end == "09:20":
+        # Never accept the usual previous-session price/OI differences here.
+        if (row.get("opening_0920_status") != "VALID"
+                or row.get("price_change_basis") != "09:15_CASH_OPEN_TO_09:20_CASH_CLOSE"
+                or row.get("oi_change_source") not in {
+                    "FIRST_MINUTE_0916_TO_COMPLETED_0920_FUTURES_4M", "PROVISIONAL_FULL_QUOTE"}):
+            return None
     if session_date is not None:
         try:
             if _stamp(row.get("signal_timestamp")).date() != session_date:
@@ -217,7 +234,7 @@ def base_signal_side(row: Mapping[str, Any], signal_end: str = "", nifty_first_b
         return None
     if vals["ema9"] > vals["ema20"] > vals["ema50"] and vals["price_change_pct"] >= BASE_PRICE_CHANGE_PCT:
         return "LONG"
-    if vals["ema9"] < vals["ema20"] < vals["ema50"] and vals["price_change_pct"] <= -BASE_PRICE_CHANGE_PCT:
+    if signal_end != "09:20" and vals["ema9"] < vals["ema20"] < vals["ema50"] and vals["price_change_pct"] <= -BASE_PRICE_CHANGE_PCT:
         if signal_end == "09:25":
             context = _number(nifty_first_bar_return_pct if nifty_first_bar_return_pct is not None
                               else row.get("nifty_first_bar_return_pct"))
@@ -412,6 +429,12 @@ def strategy_payload() -> dict[str, Any]:
         frozen_baseline=dict(version=FROZEN_VERSION, config_sha256=FROZEN_CONFIG_SHA256,
                              execution_authority=False),
         core_first=True, strict_0925_long=True, morning_slots=False, two_bar_continuation=False,
+        opening_0920=dict(side="LONG", short_enabled=False, price_basis="09:15_CASH_OPEN_TO_09:20_CASH_CLOSE",
+            historical_oi_baseline="VERIFIED_DATED_FUTURES_0915_0916_MINUTE",
+            live_oi_baseline="VERIFIED_MINUTE_OR_TIMELY_PROVISIONAL_QUOTE",
+            baseline_received_before="09:20", quote_window_seconds=15, maximum_quote_receipt_lag_seconds=15,
+            missing_or_late_evidence="EXCLUDE_STOCK_FROM_0920_AND_DISCLOSE",
+            all_opening_inputs_missing="BLOCK_0920", oi_comparison_interval="ACTUAL_0916_TO_0920_NOT_FIVE_MINUTES"),
         base_gates=dict(minimum_price_change_pct=BASE_PRICE_CHANGE_PCT, minimum_oi_change_pct=BASE_OI_CHANGE_PCT,
                         maximum_oi_change_pct=MAX_OI_CHANGE_PCT, minimum_volume_ratio=BASE_VOLUME_RATIO,
                         positive_increasing_oi=True, strict_ema_order=[9, 20, 50]),
@@ -446,9 +469,14 @@ config_fingerprint = strategy_fingerprint
 
 
 def supported_identity(version: str, fingerprint: str, *, allow_legacy: bool = False) -> bool:
-    """Archived readers may opt into V1; current execution requires V2."""
+    """Archived readers may opt into prior identities; execution requires V5."""
     return ((version, fingerprint) == (STRATEGY_VERSION, strategy_fingerprint()) or
-            allow_legacy and (version, fingerprint) == (LEGACY_STRATEGY_VERSION, LEGACY_STRATEGY_FINGERPRINT))
+            allow_legacy and (version, fingerprint) in {
+                (LEGACY_STRATEGY_VERSION, LEGACY_STRATEGY_FINGERPRINT),
+                ("V13-V10-G-3-PRODUCTION-V2", "8d4d62d7f3e4aff5f39905e4f1cd2297a50b74af7c8fa83ee7b69aa855cc2aa6"),
+                ("V13-V10-G-3-PRODUCTION-V3", "0119d67996b0f801dcfe55057d76e82482d10bec40898dab017262b09506a811"),
+                ("V13-V10-G-3-BACKTEST-SELECTED-TEN-V5", "494ca2cc653ca5c58f297040b43e33355a3c38351d9a9ac00b592b1ac6e44eb0"),
+                (PREVIOUS_STRATEGY_VERSION, PREVIOUS_STRATEGY_FINGERPRINT)})
 
 
 def load_contract(path: Path | str | None = None) -> dict[str, Any]:
@@ -460,18 +488,25 @@ def load_contract(path: Path | str | None = None) -> dict[str, Any]:
 def validate_contract(value: dict[str, Any] | None = None) -> None:
     if value is not None and value != strategy_payload():
         raise ValueError("G3 production configuration differs from the accepted normalized contract")
-    if len(ACTIVE_SETUPS) != 15 or len(_ACTIVE_BY_ID) != 15:
-        raise ValueError("G3 V2 requires exactly 15 effective setups")
+    if len(ACTIVE_SETUPS) != 32 or len(_ACTIVE_BY_ID) != 32:
+        raise ValueError("G3 V5 requires exactly 32 effective setups")
     if MIN_CONFIRMATION_VOLUME_BY_SIDE != {"LONG": 1.1, "SHORT": 1.2}:
         raise ValueError("G3 side confirmation thresholds changed")
-    if MIN_CONFIRMATION_VOLUME_BY_SETUP != {"0951_LONG": .6}:
-        raise ValueError("G3 09:50 LONG confirmation threshold changed")
+    if MIN_CONFIRMATION_VOLUME_BY_SETUP != {"0921_LONG": 1.8, "0951_LONG": .6,
+            **late_setups.CONFIRMATION_VOLUME, **selected_setups.CONFIRMATION_VOLUME}:
+        raise ValueError("G3 setup confirmation thresholds changed")
+    for row in (*late_setups.ROWS, *selected_setups.ROWS):
+        expected = _make_setup(row)
+        if _ACTIVE_BY_ID.get(expected.setup_id) != expected or _CORE_BY_ID.get(expected.setup_id) != expected:
+            raise ValueError("G3 approved late setup differs from historical rules")
+    if setup_for("09:20", "LONG") != _make_setup(("09:20", "LONG", 1, "max_liquidity", .30, .10, 3., .75, .35, 3.)) or setup_for("09:20", "SHORT") is not None:
+        raise ValueError("G3 09:20 LONG production setup changed")
     new = setup_for("09:50", "LONG")
     if new != _make_setup(("09:50", "LONG", 1, "max_liquidity", .10, .05, 1.3, .50, .50, .75)):
         raise ValueError("G3 09:50 LONG production setup changed")
     if (INITIAL_STOP_PCT, TIGHTENED_STOP_PCT, TIGHTEN_AFTER_MINUTES) != (1.25, 1., 120):
         raise ValueError("G3 scheduled stops changed")
-    if any(s.stop_pct != 1.25 or not 0 < s.target_pct <= 3 for s in ACTIVE_SETUPS):
+    if any(s.stop_pct != 1.25 or not 0 < s.target_pct <= 4.20 for s in ACTIVE_SETUPS):
         raise ValueError("G3 effective exits changed")
     if (CAPITAL_PER_ENTRY_RS, LEVERAGE, PORTFOLIO_CAPITAL_RS, MAX_POSITIONS, ENTRY_EXPIRY_MINUTES,
             LIVE_QUANTITY_CAP, ARMED, EXECUTION_AUTHORITY) != (100_000., 5., 1_000_000., None, 10, 1, False, False):
@@ -490,7 +525,8 @@ def verify_frozen_config(path: Path | str) -> dict[str, Any]:
         raise ValueError("Accepted frozen G3 baseline metadata mismatch")
     for family, setups in (("core", CORE_SETUPS), ("expanded", ACTIVE_SETUPS)):
         # The archived oracle covers the original fourteen setups only.
-        setups = tuple(s for s in setups if s.setup_id != "0951_LONG")
+        setups = tuple(s for s in setups if s.setup_id not in
+            {"0921_LONG", "0951_LONG", *late_setups.SETUP_IDS, *selected_setups.SETUP_IDS})
         actual = {f"{row[family]['confirmation_end'].replace(':', '')}_{row[family]['side']}": row[family]
                   for row in frozen["setup_rules"]}
         if set(actual) != {s.setup_id for s in setups}:

@@ -745,6 +745,7 @@ def scan_five_minute_slot(
     unknown_verified_skips = sorted(verified_skips - expected_futures)
     skipped_no_candle: list[dict[str, Any]] = []
     missing_contracts: list[dict[str, Any]] = []
+    opening_exclusions: list[dict[str, Any]] = []
     evaluated = 0
     invalid = 0
     nifty_context: dict[str, Any] = {}
@@ -768,7 +769,11 @@ def scan_five_minute_slot(
             # This is deliberately decided from the contemporaneous fetch marker.
             # A later backfill must not turn a live skip into a hindsight signal.
             continue
-        futures_frame = backtest.load_five_minute(futures_symbol)
+        if is_g3_config(config) and signal_end == "09:20":
+            from fno_v13_v10_g_3_opening_inputs import load_futures_frame
+            futures_frame = load_futures_frame(common.raw_contract_path(futures_symbol))
+        else:
+            futures_frame = backtest.load_five_minute(futures_symbol)
         equity_frame = hybrid.load_equity_five_minute(
             equity_symbol, root=hybrid.LIVE_EQUITY_5M_DIR
         )
@@ -801,9 +806,11 @@ def scan_five_minute_slot(
                 equity_history = equity_frame.loc[
                     equity_frame["ts"].le(pd.Timestamp(slot)), equity_columns
                 ] if "ts" in equity_frame else equity_frame.loc[:, equity_columns]
+                opening_slot = is_g3_config(config) and signal_end == "09:20"
+                futures_rows = 1 if opening_slot else 2
                 futures_pair = futures_frame.loc[
                     futures_frame["ts"].le(pd.Timestamp(slot)), futures_columns
-                ].tail(2) if "ts" in futures_frame else futures_frame.loc[:, futures_columns].tail(2)
+                ].tail(futures_rows) if "ts" in futures_frame else futures_frame.loc[:, futures_columns].tail(futures_rows)
                 effective_input = {
                     "schema_version": f"{config.STRATEGY_PROFILE.lower()}_live_base_input_slice_v1",
                     "equity_5m_history_sha256": canonical_frame_sha256(
@@ -835,7 +842,9 @@ def scan_five_minute_slot(
                     {
                         **evaluate_ohlcv(
                             futures_pair,
-                            expected_timestamps=[slot - timedelta(minutes=5), slot],
+                            # G3 opening OI uses its separately validated 09:16
+                            # baseline, not a non-existent 09:15 completed bar.
+                            expected_timestamps=[slot] if opening_slot else [slot - timedelta(minutes=5), slot],
                             source="NFO_FUTURE_5M_LIVE",
                             symbol=futures_symbol,
                         ).to_dict(),
@@ -875,6 +884,19 @@ def scan_five_minute_slot(
             )
             continue
         row = selected.iloc[-1]
+        if is_g3_config(config) and signal_end == "09:20":
+            from fno_v13_v10_g_3_opening_inputs import build_opening_features
+            opening_feature = build_opening_features(row, futures_frame, day=session_date,
+                symbol=equity_symbol, contract=futures_symbol, expiry=contract.get("expiry"),
+                as_of=common.now_ist())
+            if opening_feature["opening_0920_status"] != "VALID":
+                opening_exclusions.append(dict(state="EXCLUDED_0920_ONLY", futures_tradingsymbol=futures_symbol,
+                    equity_symbol=equity_symbol, signal_end=signal_end,
+                    reason="missing_or_late_0916_opening_oi_evidence"))
+                continue
+            row = row.copy()
+            for name, value in opening_feature.items():
+                row[name] = value
         evaluated += 1
         if is_modern_config(config):
             try:
@@ -966,6 +988,12 @@ def scan_five_minute_slot(
             values.update(nifty_context)
             values["strategy_profile"] = config.STRATEGY_PROFILE
             values["feature_available_at_ist"] = slot.isoformat()
+        if is_g3_config(config) and signal_end == "09:20":
+            values.update(opening_feature)
+            values["input_slice_sha256"] = common.canonical_json_sha256({
+                "market_input": effective_input.get("input_slice_sha256", ""),
+                "opening_evidence_sha256": opening_feature["opening_evidence_sha256"],
+                "opening_oi_source": opening_feature["oi_change_source"]})
         if values["instrument_token"] <= 0 or values["signal_close"] <= 0:
             invalid += 1
             continue
@@ -1002,6 +1030,7 @@ def scan_five_minute_slot(
         "contracts_unexpected_missing": len(missing_contracts),
         "unexpected_missing_symbols": missing_symbols,
         "missing_contracts": missing_contracts,
+        "opening_0920_exclusions": opening_exclusions,
         "unknown_verified_no_candle_symbols": unknown_verified_skips,
         "invalid_candidates": invalid,
         "long_candidates": sum(item["side"] == "LONG" for item in candidates),
@@ -1013,6 +1042,7 @@ def scan_five_minute_slot(
             if not missing_contracts
             and invalid == 0
             and not unknown_verified_skips
+            and not (is_g3_config(config) and signal_end == "09:20" and evaluated == 0)
             else "PARTIAL"
         ),
     }
@@ -1850,6 +1880,7 @@ def _render_scanner_report(session_date: date) -> str:
                 "long": snapshot.get("long_candidates", 0),
                 "short": snapshot.get("short_candidates", 0),
                 "published": snapshot.get("published_at_ist", ""),
+                "opening_exclusions": snapshot.get("opening_0920_exclusions", []),
             }
         )
     lines = [
@@ -1873,6 +1904,10 @@ def _render_scanner_report(session_date: date) -> str:
             f"{row['evaluated']} | {row['skipped']} | {row['missing']} | "
             f"{row['long']} | {row['short']} | {_md(row['published'])}"
         )
+    for row in rows:
+        if row["opening_exclusions"]:
+            lines += ["", "Excluded from 09:20 only (missing/late/invalid opening OI): " +
+                ", ".join(str(item.get("equity_symbol", "")) for item in row["opening_exclusions"])]
     return "\n".join(lines) + "\n"
 
 
@@ -4149,6 +4184,25 @@ def _quote_prices_with_failover(
     ) from last_error
 
 
+def _persist_order_snapshot(state_path: Path, state: dict[str, Any]) -> None:
+    # The common writer already retries os.replace for about 1.4 seconds.
+    # Windows can keep an existing PAPER order open longer while readers scan
+    # it. Give G3 PAPER snapshots a few more bounded chances; do not change
+    # the timing or failure behavior of LIVE execution and market-data writes.
+    attempts = 4 if is_g3_config(config) and str(state.get("mode", "")).upper() == "PAPER" else 1
+    for attempt in range(attempts):
+        try:
+            common.atomic_write_json(state_path, state)
+            return
+        except PermissionError as exc:
+            if (attempt + 1 == attempts or getattr(exc, "winerror", None) not in {5, 32}
+                    or not exc.filename2 or Path(exc.filename2) != state_path):
+                raise
+            if attempt == 0:
+                print(f"[WARN] Retrying locked PAPER order snapshot {state_path.name}", flush=True)
+            time.sleep(0.25 * (attempt + 1))
+
+
 def _write_order_state(state: dict[str, Any]) -> None:
     session_date = date.fromisoformat(str(state["session_date"]))
     state_path = _order_path(session_date, str(state["mode"]), str(state["signal_id"]))
@@ -4163,7 +4217,7 @@ def _write_order_state(state: dict[str, Any]) -> None:
     # Persist the recovery authority before any diagnostic disk/network work.
     # A successful broker call must never wait for, or be lost behind, a log,
     # journal, textfile, or exporter failure.
-    common.atomic_write_json(state_path, state)
+    _persist_order_snapshot(state_path, state)
 
     # This hash-chained journal adds a durable transition history without being
     # able to block order management if observability itself is unavailable.

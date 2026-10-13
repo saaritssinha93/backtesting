@@ -1,0 +1,13338 @@
+#!/usr/bin/env python3
+"""Simple secured log dashboard for EQIDV2 scheduled jobs."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import csv
+import datetime as dt
+import gzip
+import hashlib
+import json
+import math
+import os
+import re
+import subprocess
+import threading
+import time
+from collections import deque
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple
+from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
+from nse_market_calendar import market_closed_reason
+from dashboard_flow_observer_sessions import CARD_TASK_NAMES as OPENING_OBSERVER_TASK_NAMES
+from dashboard_flow_observer_sessions import session_items as opening_observer_session_items
+from fno_strategy_registry import active_profile, expected_fingerprint, deployment_state
+from fno_v13_v10_g_3_live_execution_policy import execution_metadata as g3_execution_metadata
+from fno_v13_v10_g_3_live_execution_policy import validate_execution_metadata as validate_g3_execution_metadata
+from fno_v13_v10_g_3_live_execution_policy import size_position as size_g3_live_position
+from fno_v13_v10_g_options_config import PROFILE_LABEL as FNO_OPTIONS_PROFILE_LABEL
+from fno_v13_v10_g_options_config import STOP_PCT as FNO_OPTIONS_STOP_PCT, TARGET_PCT as FNO_OPTIONS_TARGET_PCT
+from eqidv2_runtime_paths import (
+    LIVE_SIGNALS_DIR as RUNTIME_LIVE_SIGNALS_DIR,
+    RUNTIME_STATUS_DIR,
+    runtime_dir,
+)
+
+try:
+    from nse_intraday_costs import CostConfig as _NseCostConfig
+    from nse_intraday_costs import intraday_equity_costs as _nse_intraday_equity_costs
+except Exception:  # pragma: no cover - dashboard can still render legacy gross rows
+    _NseCostConfig = None
+    _nse_intraday_equity_costs = None
+
+try:
+    from fno_v13_run_vintage import (
+        DEFAULT_FAMILIES as _V13_VINTAGE_FAMILIES,
+        build_vintage_status as _build_v13_vintage_status,
+        render_markdown as _render_v13_vintage_markdown,
+    )
+except Exception:  # pragma: no cover - dashboard remains usable without research files
+    _V13_VINTAGE_FAMILIES = None
+    _build_v13_vintage_status = None
+    _render_v13_vintage_markdown = None
+
+BASE_DIR = Path(__file__).resolve().parent
+FNO_ACTIVE_PROFILE = active_profile()
+LOG_DIR = BASE_DIR / "logs"
+DASHBOARD_RUNTIME_IDENTITY_SCHEMA_VERSION = "eqidv2_log_dashboard_runtime_identity_v1"
+DASHBOARD_RUNTIME_IDENTITY_PATH = RUNTIME_STATUS_DIR / "log_dashboard_server.runtime.json"
+
+
+def _resolve_status_path(filename: str) -> Path:
+    # v16_5min scripts now write runtime status off OneDrive; older scripts
+    # still write under logs/. Prefer the off-OneDrive copy when present.
+    off_onedrive = RUNTIME_STATUS_DIR / filename
+    if off_onedrive.exists():
+        return off_onedrive
+    return LOG_DIR / filename
+LIVE_SIGNAL_DIR = RUNTIME_LIVE_SIGNALS_DIR
+SIGNAL_DISCOVERY_V7_ROOT = runtime_dir("signal_discovery_v7_5mins_ID")
+SIGNAL_DISCOVERY_V7_LATEST_DIR = SIGNAL_DISCOVERY_V7_ROOT / "latest"
+SIGNAL_DISCOVERY_V7_CSV_DIR = SIGNAL_DISCOVERY_V7_ROOT / "csv"
+SLOT_READY_5M_DIR = runtime_dir("slot_ready_5m")
+V7_MONITOR_FETCH_VERIFY_TOLERANCE = max(
+    0,
+    int(os.getenv("EQIDV2_SIGNAL_DISCOVERY_V7_FEED_GATE_MAX_VERIFICATION_FAILURES", "5")),
+)
+V7_RESEARCH_LAYER_ROOT = runtime_dir("live_research_v7_research_layer")
+V7_RESEARCH_LAYER_LATEST_DIR = V7_RESEARCH_LAYER_ROOT / "latest"
+DAILY_LIVE_V7_RESEARCH_ROOT = runtime_dir("daily_live_v7_research_session")
+DAILY_LIVE_V7_RESEARCH_LATEST_DIR = DAILY_LIVE_V7_RESEARCH_ROOT / "latest"
+V7_NSE_ID_COST_ROOT = runtime_dir("v7_nse_id_cost")
+V7_NSE_ID_COST_LATEST_DIR = V7_NSE_ID_COST_ROOT / "latest"
+V7_WALKFORWARD_GATE_ROOT = runtime_dir("v7_walkforward_gate")
+V7_WALKFORWARD_GATE_LATEST_DIR = V7_WALKFORWARD_GATE_ROOT / "latest"
+V7_CAUSALITY_AUDIT_ROOT = runtime_dir("v7_causality_audit")
+V7_CAUSALITY_AUDIT_LATEST_DIR = V7_CAUSALITY_AUDIT_ROOT / "latest"
+V7_GATE_PROMOTION_ROOT = runtime_dir("v7_gate_promotion")
+V7_GATE_PROMOTION_LATEST_DIR = V7_GATE_PROMOTION_ROOT / "latest"
+V7_QUALIFICATION_ROOT = runtime_dir("v7_qualification")
+V7_QUALIFICATION_LATEST_DIR = V7_QUALIFICATION_ROOT / "latest"
+V7_PRE_MOMENTUM_FILTER_ANALYST_ROOT = runtime_dir("v7_pre_momentum_filter_analyst")
+V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR = V7_PRE_MOMENTUM_FILTER_ANALYST_ROOT / "latest"
+V7_FULL_PIPELINE_ENTRY_RESEARCH_ROOT = runtime_dir("v7_full_pipeline_entry_research")
+V7_FULL_PIPELINE_ENTRY_RESEARCH_LATEST_DIR = V7_FULL_PIPELINE_ENTRY_RESEARCH_ROOT / "latest"
+V7_FULL_PIPELINE_ENTRY_RESEARCH_V2_ROOT = runtime_dir("v7_full_pipeline_entry_research_v2")
+V7_FULL_PIPELINE_ENTRY_RESEARCH_V2_LATEST_DIR = V7_FULL_PIPELINE_ENTRY_RESEARCH_V2_ROOT / "latest"
+V7_SHADOW_CANDIDATE_MONITOR_ROOT = runtime_dir("v7_shadow_candidates")
+V7_SHADOW_CANDIDATE_MONITOR_LATEST_DIR = V7_SHADOW_CANDIDATE_MONITOR_ROOT / "latest"
+V11_LAB_SHADOW_MONITOR_ROOT = runtime_dir("v11_lab_shadow")
+V11_LAB_SHADOW_MONITOR_LATEST_DIR = V11_LAB_SHADOW_MONITOR_ROOT / "latest"
+FUNDAMENTAL_PRICE_ACTION_V1_ROOT = runtime_dir("fundamental_price_action_v1")
+FUNDAMENTAL_PRICE_ACTION_V1_LATEST_DIR = FUNDAMENTAL_PRICE_ACTION_V1_ROOT / "latest"
+COLLECT_FILTERED_STOCK_DATA_ROOT = runtime_dir("collect_filtered_stock_data")
+COLLECT_FILTERED_STOCK_DATA_LATEST_DIR = COLLECT_FILTERED_STOCK_DATA_ROOT / "latest"
+FNO_OI_ROOT = runtime_dir("fno_oi")
+FNO_OI_LATEST_DIR = FNO_OI_ROOT / "latest"
+FNO_G_BACKTEST_ROOT = runtime_dir(FNO_ACTIVE_PROFILE.backtest_dir)
+FNO_G_BACKTEST_REPORT = FNO_G_BACKTEST_ROOT / "latest" / ("latest_" + FNO_ACTIVE_PROFILE.backtest_dir + ".md")
+V13_V10_G_STRATEGY_RESEARCH_ROOT = runtime_dir(FNO_ACTIVE_PROFILE.slug + "_strategy_research")
+V13_V10_G_STRATEGY_RESEARCH_LATEST_DIR = V13_V10_G_STRATEGY_RESEARCH_ROOT / "latest"
+# These are artifact views, not runnable sessions.  Keep the mapping ordered so
+# the dashboard, generated bundle and tests share one explicit presentation
+# contract without giving a report a restart/kill control.
+V13_V10_G_RESEARCH_CARD_REPORTS: Dict[str, str] = {
+    "fno_v13_v10_g_research_data_quality":
+        "latest_fno_v13_v10_g_research_data_quality.md",
+    "fno_v13_v10_g_research_dataset":
+        "latest_fno_v13_v10_g_research_dataset.md",
+    "fno_v13_v10_g_research_baseline":
+        "latest_fno_v13_v10_g_research_baseline.md",
+    "fno_v13_v10_g_research_attribution":
+        "latest_fno_v13_v10_g_research_attribution.md",
+    "fno_v13_v10_g_research_regimes":
+        "latest_fno_v13_v10_g_research_regimes.md",
+    "fno_v13_v10_g_research_predictions":
+        "latest_fno_v13_v10_g_research_predictions.md",
+    "fno_v13_v10_g_research_walkforward":
+        "latest_fno_v13_v10_g_research_walkforward.md",
+    "fno_v13_v10_g_research_shadow":
+        "latest_fno_v13_v10_g_research_shadow.md",
+}
+V13_V10_G_OBSERVABILITY_CARD_REPORTS: Dict[str, str] = {
+    "fno_v13_v10_g_observability_market_regime":
+        "latest_fno_v13_v10_g_observability_market_regime.md",
+    "fno_v13_v10_g_observability_selection_funnel":
+        "latest_fno_v13_v10_g_observability_selection_funnel.md",
+    "fno_v13_v10_g_observability_entry_execution":
+        "latest_fno_v13_v10_g_observability_entry_execution.md",
+    "fno_v13_v10_g_observability_live_finalized_drift":
+        "latest_fno_v13_v10_g_observability_live_finalized_drift.md",
+    "fno_v13_v10_g_observability_pnl_attribution":
+        "latest_fno_v13_v10_g_observability_pnl_attribution.md",
+    "fno_v13_v10_g_observability_regime_profitability":
+        "latest_fno_v13_v10_g_observability_regime_profitability.md",
+}
+V13_V10_G_IMPROVEMENT_CARD_REPORTS: Dict[str, str] = {
+    "fno_v13_v10_g_research_improvements":
+        "latest_fno_v13_v10_g_research_improvements.md",
+}
+V13_V10_G_ARTIFACT_CARD_REPORTS: Dict[str, str] = {
+    **V13_V10_G_RESEARCH_CARD_REPORTS,
+    **V13_V10_G_OBSERVABILITY_CARD_REPORTS,
+    **V13_V10_G_IMPROVEMENT_CARD_REPORTS,
+}
+# G owns canonical dashboard/task names and an isolated evidence directory.
+FNO_V13_V10_G_STRATEGY_VERSION = FNO_ACTIVE_PROFILE.version
+FNO_V6_LIVE_KITE_ROOT = FNO_OI_ROOT / FNO_ACTIVE_PROFILE.live_dir / "live_kite"
+FNO_MULTI_PAPER_ROOT = FNO_OI_ROOT / "multi_strategy_paper_v1"
+FNO_MULTI_PAPER_STATUS_PATH = FNO_MULTI_PAPER_ROOT / "status.json"
+FNO_MULTI_PAPER_HEARTBEAT_PATH = FNO_MULTI_PAPER_ROOT / "heartbeat.json"
+FNO_EQ_ID_MONITOR_5M_SLOTS: Tuple[str, ...] = tuple(
+    f"09:{minute:02d}" for minute in range(15, 51, 5)
+)
+FNO_EQ_ID_MONITOR_1M_MINUTES: Tuple[str, ...] = tuple(
+    f"09:{minute:02d}" for minute in range(15, 51)
+)
+FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS: Tuple[str, ...] = (
+    "09:25", "09:30", "09:35", "09:40", "09:45",
+)
+FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL: Dict[str, str] = {
+    "09:25": "09:26",
+    "09:30": "09:31",
+    "09:35": "09:36",
+    "09:40": "09:41",
+    "09:45": "09:46",
+    "09:50": "09:51",
+    "09:55": "09:56",
+    "10:00": "10:01",
+    "11:20": "11:21",
+}
+if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+    from fno_v13_v10_g_3_contract import SIGNAL_TO_CONFIRMATION as _G3_SIGNAL_CLOCKS
+    FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL = dict(_G3_SIGNAL_CLOCKS)
+FNO_V13_V10_G_SIGNAL_SLOTS: Tuple[str, ...] = tuple(FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL)
+FNO_V13_V10_G_CARD_IDS: Tuple[str, ...] = (
+    "fno_v13_v10_g_scanner_5min", "fno_v13_v10_g_equity_1min_feed",
+    "fno_v13_v10_g_confirmation_1min", "fno_v13_v10_g_live_long", "fno_v13_v10_g_live_short",
+    "fno_v13_v10_g_trade_logger", "fno_v13_v10_g_net_result",
+    "live_signals_csv_fno_id_v13_v10_g_short", "live_signals_csv_fno_id_v13_v10_g_long",
+    "live_kite_trades_csv_fno_id_v13_v10_g", "kite_trade_fno_id_v13_v10_g",
+)
+FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS: Tuple[str, ...] = (
+    "fno_v13_v10_g_options_live_long",
+    "fno_v13_v10_g_options_live_short",
+    "fno_v13_v10_g_options_trade_logger",
+    "fno_v13_v10_g_options_net_result",
+)
+FNO_V13_V10_G_LIVE_ENTRY_COLUMNS: Tuple[Tuple[str, Sequence[str]], ...] = (
+    ("signal_datetime", ("signal_datetime", "signal_timestamp", "confirmation_timestamp", "created_at_ist")),
+    ("detected_time_ist", ("detected_time_ist", "published_at_ist")),
+    ("ticker", ("ticker", "tradingsymbol")),
+    ("side", ("side",)),
+    ("setup_id", ("setup_id",)),
+    ("strategy_version", ("strategy_version",)),
+    ("entry_price", ("entry_price", "trigger_price", "trigger")),
+    ("target_price", ("target_price",)),
+    ("stop_price", ("stop_price", "_stop_price")),
+    ("stop_pct", ("stop_pct",)),
+    ("target_pct", ("target_pct",)),
+    ("quantity", ("quantity",)),
+    ("entry_expires_at_ist", ("entry_expires_at_ist", "entry_expiry_at_ist", "expires_at_ist", "activation_deadline_ist")),
+)
+FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS = 3
+# Only the parent is an operational session.  The three version cards are
+# read-only projections of that session's independent strategy ledgers.
+FNO_MULTI_PAPER_CARD_PROFILES: Dict[str, str] = {
+    "fno_v10_v11_v12_paper": "",
+    "fno_v10_paper": "v10",
+    "fno_v11_paper": "v11",
+    "fno_v12_paper": "v12",
+}
+FNO_MULTI_PAPER_CARD_IDS: Tuple[str, ...] = tuple(FNO_MULTI_PAPER_CARD_PROFILES)
+FNO_EQ_ID_MONITOR_CARD_ID = "v7_live_5min_monitor"
+_FNO_MONITOR_DETAIL_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+_FNO_MONITOR_DETAIL_LOCK = threading.RLock()
+
+
+def _build_fno_eq_id_stock_detail(root: Path, session_date: str, *, now_ist=None) -> dict:
+    # Lazy import keeps other dashboard cards available if this optional
+    # read-only detail reader cannot be loaded. No trading engine is invoked.
+    from fno_eq_id_monitor_detail import build_monitor_detail
+    return build_monitor_detail(root, session_date, now_ist=now_ist)
+
+
+def _fno_eq_id_stock_detail(session_date: str, *, now_ist=None) -> dict:
+    if not isinstance(session_date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session_date):
+        raise ValueError("Use a session date in YYYY-MM-DD format")
+    dt.date.fromisoformat(session_date)
+    key = (str(FNO_OI_ROOT.resolve()), session_date)
+    with _FNO_MONITOR_DETAIL_LOCK:
+        cached = _FNO_MONITOR_DETAIL_CACHE.get(key)
+        if cached is not None and time.monotonic() - cached[0] < 5.0:
+            return cached[1]
+        payload = _build_fno_eq_id_stock_detail(
+            FNO_OI_ROOT, session_date, now_ist=now_ist or dt.datetime.now(IST))
+        _FNO_MONITOR_DETAIL_CACHE[key] = (time.monotonic(), payload)
+        while len(_FNO_MONITOR_DETAIL_CACHE) > 4:
+            oldest = min(_FNO_MONITOR_DETAIL_CACHE, key=lambda item: _FNO_MONITOR_DETAIL_CACHE[item][0])
+            del _FNO_MONITOR_DETAIL_CACHE[oldest]
+        return payload
+
+
+# The card keeps its historical ID so saved dashboard pins/full-screen state do
+# not break, but its scope is now the complete FnO operational chain requested
+# by the operator.  The grouping mirrors the visible dashboard headings.
+FNO_EQ_ID_MONITOR_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    (
+        "Live Market Data",
+        (
+            "nifty_guard_fetch_v16_5min",
+            "eod_5min_data",
+            "kiteticker_5min_data",
+            "eod_1min_data",
+        ),
+    ),
+    (
+        "FnO",
+        (
+            "fno_oi_universe",
+            "fno_oi_fetch_5min_fast_production",
+            "fno_oi_fetch_5min",
+            "fno_oi_fetch_5min_fast_shadow",
+            "fno_options_atm_fetch_5min",
+            "fno_oi_feature_ranker",
+            "fno_v13_v10_g_scanner_5min",
+            "fno_v13_v10_g_equity_1min_feed",
+            "fno_v13_v10_g_confirmation_1min",
+            "fno_v13_v10_g_live_long",
+            "fno_v13_v10_g_live_short",
+            "fno_v13_v10_g_trade_logger",
+            "fno_v13_v10_g_net_result",
+            "fno_v8_combined_paper",
+            "fno_oi_eod_qc",
+        ),
+    ),
+    (
+        "V10 / V11 / V12 Shared Papertrade Session",
+        ("fno_v10_v11_v12_paper",),
+    ),
+    (
+        "FnO V13-V10-G Live Kite - Quantity 1",
+        (
+            "live_signals_csv_fno_id_v13_v10_g_short",
+            "live_signals_csv_fno_id_v13_v10_g_long",
+            "live_kite_trades_csv_fno_id_v13_v10_g",
+            "kite_trade_fno_id_v13_v10_g",
+        ),
+    ),
+    (
+        "Options V13-V10-G Paper Trading",
+        FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS,
+    ),
+    ("V10", ("fno_v10_paper",)),
+    ("V11", ("fno_v11_paper",)),
+    ("V12", ("fno_v12_paper",)),
+    (
+        "Data & Backtesting",
+        ("data_for_backtesting", "backtesting_result_v13_v10_g"),
+    ),
+    ("SESSION", ("authentication_v2",)),
+)
+FNO_EQ_ID_MONITOR_STAGE_LABELS: Dict[str, str] = {
+    "nifty_guard_fetch_v16_5min": "market guard fetch",
+    "eod_5min_data": "equity 5m fetch",
+    "kiteticker_5min_data": "KiteTicker 5m fetch",
+    "eod_1min_data": "equity 1m fetch",
+    "fno_oi_universe": "futures universe",
+    "fno_oi_fetch_5min_fast_production": "fast production futures OI 5m fetch",
+    "fno_options_atm_fetch_5min": "ATM CE/PE options 5m + 1m fetch",
+    "fno_oi_fetch_5min": "old futures OI 5m fetch",
+    "fno_oi_fetch_5min_fast_shadow": "fast OI shadow validator",
+    "fno_oi_feature_ranker": "OI rank / selection",
+    "fno_v13_v10_g_scanner_5min": "V13-V10-G 5m selection",
+    "fno_v13_v10_g_equity_1min_feed": "V13-V10-G candidate 1m fetch",
+    "fno_v13_v10_g_confirmation_1min": "V13-V10-G 1m entry confirmation",
+    "fno_v13_v10_g_live_long": "V13-V10-G LONG paper entry",
+    "fno_v13_v10_g_live_short": "V13-V10-G SHORT paper entry",
+    "fno_v13_v10_g_trade_logger": "V13-V10-G papertrade ledger",
+    "fno_v13_v10_g_net_result": "V13-V10-G result / P&L",
+    "live_signals_csv_fno_id_v13_v10_g_short": "V13-V10-G qty-1 SHORT live-entry sheet",
+    "live_signals_csv_fno_id_v13_v10_g_long": "V13-V10-G qty-1 LONG live-entry sheet",
+    "live_kite_trades_csv_fno_id_v13_v10_g": "V13-V10-G qty-1 live Kite trade ledger",
+    "kite_trade_fno_id_v13_v10_g": "V13-V10-G qty-1 live Kite executor",
+    "fno_v13_v10_g_options_live_long": "V13-V10-G LONG to ATM CE paper entry",
+    "fno_v13_v10_g_options_live_short": "V13-V10-G SHORT to ATM PE paper entry",
+    "fno_v13_v10_g_options_trade_logger": "V13-V10-G options papertrade ledger",
+    "fno_v13_v10_g_options_net_result": "V13-V10-G options result / P&L",
+    "fno_v8_combined_paper": "V8 selection + entry + papertrade",
+    "fno_oi_eod_qc": "FnO fetch quality guard",
+    "fno_v10_v11_v12_paper": "shared fetch + chronological reducer",
+    "fno_v10_paper": "V10 selection + guards + entry + result",
+    "fno_v11_paper": "V11 selection + guards + entry + result",
+    "fno_v12_paper": "V12 selection + guards + entry + result",
+    "data_for_backtesting": "historical-data preparation",
+    "backtesting_result_v13_v10_g": "V13-v10-G daily backtest",
+    "authentication_v2": "Kite app authentication",
+}
+FNO_EQ_ID_MONITOR_SESSION_LABELS: Dict[str, str] = {
+    "nifty_guard_fetch_v16_5min": "NIFTY Fetch 5min",
+    "eod_5min_data": "Live Data Fetch (5mins)",
+    "kiteticker_5min_data": "Live Data kiteticker Fetch (5mins)",
+    "eod_1min_data": "Live Data Fetch (1min)",
+    "fno_oi_universe": "FnO Near-Month Futures Universe",
+    "fno_oi_fetch_5min_fast_production": "FnO Live 5-Minute Futures OI Fetch (Fast Production)",
+    "fno_options_atm_fetch_5min": "FnO ATM CE/PE Options Fetch (5-Minute + 1-Minute)",
+    "fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch (Old)",
+    "fno_oi_fetch_5min_fast_shadow": "FnO Fast Shadow OI Validator",
+    "fno_oi_feature_ranker": "FnO OI Gainers, Losers & Activity Rankings",
+    "fno_v13_v10_g_scanner_5min": "FnO V13-V10-G Equity 5-Minute + Futures OI Scanner",
+    "fno_v13_v10_g_equity_1min_feed": "FnO V13-V10-G Durable Completed Equity 1-Minute Feed",
+    "fno_v13_v10_g_confirmation_1min": "FnO V13-V10-G Candidate Equity 1-Minute Confirmation",
+    "fno_v13_v10_g_live_long": "FnO V13-V10-G LONG Paper Entry Session",
+    "fno_v13_v10_g_live_short": "FnO V13-V10-G SHORT Paper Entry Session",
+    "fno_v13_v10_g_trade_logger": "FnO V13-V10-G Continuous Paper Trade Log",
+    "fno_v13_v10_g_net_result": "FnO V13-V10-G Paper Net Result",
+    "live_signals_csv_fno_id_v13_v10_g_short": "FnO V13-V10-G Live Entries CSV Short",
+    "live_signals_csv_fno_id_v13_v10_g_long": "FnO V13-V10-G Live Entries CSV Long",
+    "live_kite_trades_csv_fno_id_v13_v10_g": "FnO V13-V10-G Live Kite Trades CSV",
+    "kite_trade_fno_id_v13_v10_g": "FnO V13-V10-G Live Trade Runner Log",
+    "fno_v13_v10_g_options_live_long": "Options V13-V10-G LONG ATM CE Buy Paper Entry Session",
+    "fno_v13_v10_g_options_live_short": "Options V13-V10-G SHORT ATM PE Buy Paper Entry Session",
+    "fno_v13_v10_g_options_trade_logger": "Options V13-V10-G Continuous Paper Trade Log",
+    "fno_v13_v10_g_options_net_result": "Options V13-V10-G Paper Net Result",
+    "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
+    "fno_oi_eod_qc": "FnO EOD Data Quality Control",
+    "fno_v10_v11_v12_paper": "FnO V10/V11/V12 Papertrade - Shared Session",
+    "fno_v10_paper": "FnO V10 Papertrade View",
+    "fno_v11_paper": "FnO V11 Papertrade View",
+    "fno_v12_paper": "FnO V12 Papertrade View",
+    "data_for_backtesting": "Data for backtesting",
+    "backtesting_result_v13_v10_g": "Backtesting result v13-v10-G",
+    "authentication_v2": "Auth_V2",
+}
+FNO_OI_CARD_REPORTS: Dict[str, str] = {
+    "fno_oi_universe": "latest_fno_oi_universe.md",
+    "fno_oi_fetch_5min_fast_production": "latest_fno_oi_fast_production.md",
+    "fno_options_atm_fetch_5min": "latest_fno_options_atm.md",
+    "fno_oi_fetch_5min": "latest_fno_oi_fetch_old.md",
+    "fno_oi_fetch_5min_fast_shadow": "latest_fno_oi_fast_shadow.md",
+    "fno_oi_feature_ranker": "latest_fno_oi_leaderboard.md",
+    "fno_v13_v10_g_scanner_5min": "latest_fno_v13_v10_g_scanner_5min.md",
+    "fno_v13_v10_g_equity_1min_feed": "latest_fno_v13_v10_g_equity_1min_feed.md",
+    "fno_v13_v10_g_confirmation_1min": "latest_fno_v13_v10_g_confirmation_1min.md",
+    "fno_v13_v10_g_live_long": "latest_fno_v13_v10_g_live_long.md",
+    "fno_v13_v10_g_live_short": "latest_fno_v13_v10_g_live_short.md",
+    "fno_v13_v10_g_trade_logger": "latest_fno_v13_v10_g_trade_logger.md",
+    "fno_v13_v10_g_net_result": "latest_fno_v13_v10_g_net_result.md",
+    "fno_v13_v10_g_options_live_long": "latest_fno_v13_v10_g_options_live_long.md",
+    "fno_v13_v10_g_options_live_short": "latest_fno_v13_v10_g_options_live_short.md",
+    "fno_v13_v10_g_options_trade_logger": "latest_fno_v13_v10_g_options_trade_logger.md",
+    "fno_v13_v10_g_options_net_result": "latest_fno_v13_v10_g_options_net_result.md",
+    "fno_v8_combined_paper": "latest_fno_v8_combined_paper.md",
+    "fno_v10_v11_v12_paper": "latest_fno_v10_v11_v12_paper.md",
+    "fno_v10_paper": "latest_fno_v10_paper.md",
+    "fno_v11_paper": "latest_fno_v11_paper.md",
+    "fno_v12_paper": "latest_fno_v12_paper.md",
+    "fno_oi_eod_qc": "latest_fno_oi_eod_qc.md",
+}
+KITE_EXPORT_DIR = BASE_DIR / "kite_exports"
+IST = ZoneInfo("Asia/Kolkata")
+AUTH_V2_STATE_FILE = BASE_DIR / "auth_v2_state.json"
+AUTH_V2_ACCESS_TOKEN_FILE = BASE_DIR / "access_token.txt"
+OPEN_LIVE_TRADES_STATE_PATTERN_V5 = "open_live_trades_state_{}_v5.json"
+OPEN_PAPER_TRADES_STATE_PATTERN_V5 = "open_trades_state_{}_v5.json"
+OPEN_LIVE_TRADES_STATE_PATTERN_V7_SWEEP = "open_live_trades_state_{}_v7_sweep.json"
+OPEN_PAPER_TRADES_STATE_PATTERN_V7_SWEEP = "open_trades_state_{}_v7_sweep.json"
+OPEN_LIVE_TRADES_STATE_PATTERN_ID_5MIN_V7 = "open_live_trades_state_{}_id_5min_v7.json"
+OPEN_PAPER_TRADES_STATE_PATTERN_ID_5MIN_V7 = "open_trades_state_{}_id_5min_v7.json"
+OPEN_LIVE_TRADES_STATE_PATTERN_V15 = "open_live_trades_state_{}_v15_new.json"
+OPEN_PAPER_TRADES_STATE_PATTERN_V15 = "open_trades_state_{}_v15_new.json"
+OPEN_LIVE_TRADES_STATE_PATTERN_V16_5MIN = "open_live_trades_state_{}_v16_5min.json"
+OPEN_PAPER_TRADES_STATE_PATTERN_V16_5MIN = "open_trades_state_{}_v16_5min.json"
+KILL_SWITCH_LIVE_FILE_V5 = LIVE_SIGNAL_DIR / "kill_switch_false_v5.json"
+KILL_SWITCH_PAPER_FILE_V5 = LIVE_SIGNAL_DIR / "kill_switch_true_v5.json"
+KILL_SWITCH_LIVE_FILE_V7_SWEEP = LIVE_SIGNAL_DIR / "kill_switch_false_v7_sweep.json"
+KILL_SWITCH_PAPER_FILE_V7_SWEEP = LIVE_SIGNAL_DIR / "kill_switch_true_v7_sweep.json"
+KILL_SWITCH_LIVE_FILE_ID_5MIN_V7 = LIVE_SIGNAL_DIR / "kill_switch_false_id_5min_v7.json"
+KILL_SWITCH_PAPER_FILE_ID_5MIN_V7 = LIVE_SIGNAL_DIR / "kill_switch_true_id_5min_v7.json"
+KILL_SWITCH_LIVE_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_false_v15_new.json"
+KILL_SWITCH_PAPER_FILE_V15 = LIVE_SIGNAL_DIR / "kill_switch_true_v15_new.json"
+KILL_SWITCH_LIVE_FILE_V16_5MIN = LIVE_SIGNAL_DIR / "kill_switch_false_v16_5min.json"
+KILL_SWITCH_PAPER_FILE_V16_5MIN = LIVE_SIGNAL_DIR / "kill_switch_true_v16_5min.json"
+V15_SHORT_SHARD_IDS: Tuple[str, ...] = tuple(f"{idx:02d}" for idx in range(1, 11))
+V15_LONG_SHARD_IDS: Tuple[str, ...] = tuple(f"{idx:02d}" for idx in range(1, 11))
+HIDDEN_CARD_IDS = {
+    "live_combined_csv_v5_unified",
+    "live_combined_csv_v5_short",
+    "live_combined_csv_v5_long",
+    "live_combined_csv_v7_sweep_short",
+    "live_combined_csv_v7_sweep_long",
+    "live_signals_csv_v5_short",
+    "live_signals_csv_v5_long",
+    "live_signals_csv_v7_sweep_short",
+    "live_signals_csv_v7_sweep_long",
+    "paper_trade_v5",
+    "paper_trade_v7_sweep",
+    "live_papertrade_result_csv_v5",
+    "live_papertrade_result_csv_v7_sweep",
+    "kite_trade",
+    "live_kite_trades_csv",
+    "kite_trade_v7_sweep",
+    "live_kite_trades_csv_v7_sweep",
+    "live_signals_csv_v15_short",
+    "live_signals_csv_v15_long",
+    *{f"live_combined_csv_v15_short_s{shard_id}" for shard_id in V15_SHORT_SHARD_IDS},
+    *{f"live_combined_csv_v15_long_s{shard_id}" for shard_id in V15_LONG_SHARD_IDS},
+}
+
+LOG_FILES: Dict[str, str] = {
+    "authentication_v2": "authentication_v2_runner.log",
+    "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.log",
+    "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.log",
+    "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.log",
+    "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.log",
+    "eod_15min_data": "eqidv2_eod_scheduler_for_15mins_data_live_minimal.log",
+    "eod_1540_update": "eqidv2_eod_scheduler_for_1540_update.log",
+    "fno_oi_universe": "fno_oi_universe.log",
+    "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.log",
+    "fno_oi_fetch_5min": "fno_oi_fetch_5min.log",
+    "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.log",
+    "fno_options_atm_fetch_5min": "fno_options_atm_fetch_5min.log",
+    "fno_oi_feature_ranker": "fno_oi_feature_ranker.log",
+    "fno_v13_v10_g_scanner_5min": "fno_v13_v10_g_scanner_5min.log",
+    "fno_v13_v10_g_equity_1min_feed": "fno_v13_v10_g_equity_1min_feed.log",
+    "fno_v13_v10_g_confirmation_1min": "fno_v13_v10_g_confirmation_1min.log",
+    "fno_v13_v10_g_live_long": "fno_v13_v10_g_live_long.log",
+    "fno_v13_v10_g_live_short": "fno_v13_v10_g_live_short.log",
+    "fno_v13_v10_g_trade_logger": "fno_v13_v10_g_trade_logger.log",
+    "fno_v13_v10_g_net_result": "fno_v13_v10_g_net_result.log",
+    "kite_trade_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.log",
+    "fno_v13_v10_g_options_live_long": "fno_v13_v10_g_options_live_long.log",
+    "fno_v13_v10_g_options_live_short": "fno_v13_v10_g_options_live_short.log",
+    "fno_v13_v10_g_options_trade_logger": "fno_v13_v10_g_options_trade_logger.log",
+    "fno_v13_v10_g_options_net_result": "fno_v13_v10_g_options_net_result.log",
+    "fno_v8_combined_paper": "fno_v8_combined_paper.log",
+    "fno_v10_v11_v12_paper": "fno_v10_v11_v12_paper.log",
+    "fno_v10_paper": "fno_v10_v11_v12_paper.log",
+    "fno_v11_paper": "fno_v10_v11_v12_paper.log",
+    "fno_v12_paper": "fno_v10_v11_v12_paper.log",
+    "fno_oi_eod_qc": "fno_oi_eod_qc.log",
+    "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.log",
+    "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.log",
+    "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.log",
+    "live_combined_csv_v7_sweep_long": "eqidv2_live_combined_analyser_csv_v7_sweep_long.log",
+    "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.log",
+    "nifty_guard_fetch_v16_5min": "nifty_guard_fetcher_v16_5min.log",
+    "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.log",
+    "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.log",
+    "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.log",
+    "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID/heartbeat/candidate_tickers.status.json",
+    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID/heartbeat/entry_engine.status.json",
+    "v7_research_layer":                "live_research_v7_research_layer/latest/latest_summary.json",
+    "daily_live_v7_research_session":   "daily_live_v7_research_session/latest/latest_daily_live_v7_research.md",
+    "v7_nse_id_cost":                    "v7_nse_id_cost/latest/latest_v7_nse_id_cost.md",
+    "v7_walkforward_gate":               "v7_walkforward_gate/latest/latest_v7_walkforward_gate.md",
+    "v7_causality_audit":                "v7_causality_audit/latest/v7_causality_audit.md",
+    "v7_gate_promotion":                 "v7_gate_promotion/latest/latest_v7_gate_promotion.md",
+    "v7_qualification":                  "v7_qualification/latest/latest_v7_qualification.md",
+    "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst/latest/latest_v7_pre_momentum_filter_analyst.md",
+    "v7_full_pipeline_entry_research":    "v7_full_pipeline_entry_research/latest/latest_v7_full_pipeline_entry_research.md",
+    "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2/latest/latest_v7_full_pipeline_entry_research_v2.md",
+    "v7_shadow_candidate_monitor":        "v7_shadow_candidates/latest/latest_v7_shadow_candidate_monitor.md",
+    "v11_lab_shadow_monitor":             "v11_lab_shadow/latest/latest_v11_lab_shadow_monitor.md",
+    "fundamental_price_action_v1":         "fundamental_price_action_v1/latest/latest_fundamental_price_action_v1.md",
+    "collect_filtered_stock_data":         "collect_filtered_stock_data/latest/latest_collect_filtered_stock_data.md",
+    "data_for_backtesting":             "data_for_backtesting_latest.log",
+    "backtesting_result_v13_v10_g":            "backtesting_result_v13_v10_g_latest.log",
+    "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.log",
+    "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.log",
+    "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.log",
+}
+
+LIVE_FETCH_STATUS_JSON_FILES: Dict[str, str] = {
+    "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.status.json",
+    "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.status.json",
+    "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.status.json",
+}
+
+LIVE_FETCH_CARD_TITLES: Dict[str, str] = {
+    "eod_5min_data": "Live Data Fetch (5mins)",
+    "kiteticker_5min_data": "Live Data kiteticker Fetch (5mins)",
+    "eod_1min_data": "Live Data Fetch (1min)",
+}
+
+LOG_IDS = tuple(LOG_FILES.keys()) + tuple(V13_V10_G_ARTIFACT_CARD_REPORTS) + (
+    "paper_trade_v5",
+    "paper_trade_v7_sweep",
+    "paper_trade_v15",
+    "paper_trade_v16_5min",
+    "paper_trade_id_5min_v7",
+    "paper_trade_fpa_v1",
+    "kite_trade",
+    "kite_trade_v7_sweep",
+    "kite_trade_v15",
+    "kite_trade_v16_5min",
+    "kite_trade_id_5min_v7",
+    "preopen_healthcheck",
+    "pending_signals_v16_5min",
+    "detected_signals_v16_5min",
+)
+
+STATUS_FILES: Dict[str, str] = {
+    "backtesting_result_v13_v10_g": "backtesting_result_v13_v10_g.status",
+    "authentication_v2": "authentication_v2_runner.status",
+    "live_combined_csv_v5_unified": "eqidv2_live_combined_analyser_csv_v5_unified.status",
+    "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.status",
+    "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.status",
+    "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.status",
+    "fno_oi_universe": "fno_oi_universe.status",
+    "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.supervisor.status",
+    "fno_options_atm_fetch_5min": "fno_options_atm_fetch_5min.supervisor.status",
+    "fno_oi_fetch_5min": "fno_oi_fetch_5min.supervisor.status",
+    "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.supervisor.status",
+    "fno_oi_feature_ranker": "fno_oi_feature_ranker.supervisor.status",
+    "fno_v13_v10_g_scanner_5min": "fno_v13_v10_g_scanner_5min.status",
+    "fno_v13_v10_g_equity_1min_feed": "fno_v13_v10_g_equity_1min_feed.status",
+    "fno_v13_v10_g_confirmation_1min": "fno_v13_v10_g_confirmation_1min.status",
+    "fno_v13_v10_g_live_long": "fno_v13_v10_g_live_long.status",
+    "fno_v13_v10_g_live_short": "fno_v13_v10_g_live_short.status",
+    "fno_v13_v10_g_trade_logger": "fno_v13_v10_g_trade_logger.status",
+    "fno_v13_v10_g_net_result": "fno_v13_v10_g_net_result.status",
+    "live_signals_csv_fno_id_v13_v10_g_short": "fno_v13_v10_g_live_kite_qty1.status",
+    "live_signals_csv_fno_id_v13_v10_g_long": "fno_v13_v10_g_live_kite_qty1.status",
+    "live_kite_trades_csv_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.status",
+    "kite_trade_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.status",
+    "fno_v13_v10_g_options_live_long": "fno_v13_v10_g_options_live_long.status",
+    "fno_v13_v10_g_options_live_short": "fno_v13_v10_g_options_live_short.status",
+    "fno_v13_v10_g_options_trade_logger": "fno_v13_v10_g_options_trade_logger.status",
+    "fno_v13_v10_g_options_net_result": "fno_v13_v10_g_options_net_result.status",
+    "fno_v8_combined_paper": "fno_v8_combined_paper.status",
+    "fno_oi_eod_qc": "fno_oi_eod_qc.status",
+    "live_combined_csv_v5_short": "eqidv2_live_combined_analyser_csv_v5_short.status",
+    "live_combined_csv_v5_long": "eqidv2_live_combined_analyser_csv_v5_long.status",
+    "live_combined_csv_v7_sweep_short": "eqidv2_live_combined_analyser_csv_v7_sweep_short.status",
+    "live_combined_csv_v7_sweep_long": "eqidv2_live_combined_analyser_csv_v7_sweep_long.status",
+    "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.status",
+    "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.status",
+    "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.status",
+    "kite_trade_id_5min_v7": "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.status",
+    "nifty_guard_fetch_v15": "nifty_guard_fetcher_v15.status",
+    "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.status",
+    "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.status",
+    "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.status",
+    "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.status",
+    "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID.status",
+    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.supervisor.status",
+    "v7_research_layer":                "live_research_v7_research_layer.status",
+    "daily_live_v7_research_session":   "daily_live_v7_research_session.status",
+    "v7_nse_id_cost":                    "v7_nse_id_cost.status",
+    "v7_walkforward_gate":               "v7_walkforward_gate.status",
+    "v7_causality_audit":                "v7_causality_audit.status",
+    "v7_gate_promotion":                 "v7_gate_promotion.status",
+    "v7_qualification":                  "v7_qualification.status",
+    "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.status",
+    "v7_full_pipeline_entry_research":    "v7_full_pipeline_entry_research.status",
+    "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2.status",
+    "v7_shadow_candidate_monitor":        "v7_shadow_candidate_monitor.status",
+    "v11_lab_shadow_monitor":             "v11_lab_shadow_monitor.status",
+    "fundamental_price_action_v1":         "fundamental_price_action_v1.status",
+    "paper_trade_fpa_v1":                  "fundamental_price_action_v1_papertrade.status",
+    "collect_filtered_stock_data":         "collect_filtered_stock_data.status",
+    "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.status",
+    "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.status",
+    "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.status",
+}
+
+# If a heartbeat file claims RUNNING but was not touched within this many
+# seconds, the process is presumed dead and the status is overridden to
+# STALE_HB_RUNNING so the dashboard shows amber instead of green.
+HB_STALE_RUNNING_OVERRIDE_SEC: int = int(
+    os.getenv("EQIDV2_DASHBOARD_HB_STALE_SEC", "120")
+)
+
+HEARTBEAT_FILES: Dict[str, str] = {
+    "backtesting_result_v13_v10_g": "backtesting_result_v13_v10_g.heartbeat",
+    "eod_5min_data": "eqidv2_eod_scheduler_for_5mins_data_live_minimal.supervisor.heartbeat",
+    "kiteticker_5min_data": "eqidv2_kiteticker_5min_live.supervisor.heartbeat",
+    "eod_1min_data": "eqidv2_eod_scheduler_for_1min_data_live.supervisor.heartbeat",
+    "fno_oi_universe": "fno_oi_universe.heartbeat",
+    "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.supervisor.heartbeat",
+    "fno_options_atm_fetch_5min": "fno_options_atm_fetch_5min.supervisor.heartbeat",
+    "fno_oi_fetch_5min": "fno_oi_fetch_5min.supervisor.heartbeat",
+    "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.supervisor.heartbeat",
+    "fno_oi_feature_ranker": "fno_oi_feature_ranker.supervisor.heartbeat",
+    "fno_v13_v10_g_scanner_5min": "fno_v13_v10_g_scanner_5min.heartbeat",
+    "fno_v13_v10_g_equity_1min_feed": "fno_v13_v10_g_equity_1min_feed.heartbeat",
+    "fno_v13_v10_g_confirmation_1min": "fno_v13_v10_g_confirmation_1min.heartbeat",
+    "fno_v13_v10_g_live_long": "fno_v13_v10_g_live_long.heartbeat",
+    "fno_v13_v10_g_live_short": "fno_v13_v10_g_live_short.heartbeat",
+    "fno_v13_v10_g_trade_logger": "fno_v13_v10_g_trade_logger.heartbeat",
+    "fno_v13_v10_g_net_result": "fno_v13_v10_g_net_result.heartbeat",
+    "live_signals_csv_fno_id_v13_v10_g_short": "fno_v13_v10_g_live_kite_qty1.heartbeat",
+    "live_signals_csv_fno_id_v13_v10_g_long": "fno_v13_v10_g_live_kite_qty1.heartbeat",
+    "live_kite_trades_csv_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.heartbeat",
+    "kite_trade_fno_id_v13_v10_g": "fno_v13_v10_g_live_kite_qty1.heartbeat",
+    "fno_v13_v10_g_options_live_long": "fno_v13_v10_g_options_live_long.heartbeat",
+    "fno_v13_v10_g_options_live_short": "fno_v13_v10_g_options_live_short.heartbeat",
+    "fno_v13_v10_g_options_trade_logger": "fno_v13_v10_g_options_trade_logger.heartbeat",
+    "fno_v13_v10_g_options_net_result": "fno_v13_v10_g_options_net_result.heartbeat",
+    "fno_v8_combined_paper": "fno_v8_combined_paper.heartbeat",
+    "fno_oi_eod_qc": "fno_oi_eod_qc.heartbeat",
+    "nifty_guard_fetch_v16_5min": "eqidv2_nifty_guard_fetcher_supervised_v16_5min.heartbeat",
+    "kite_trade_v7_sweep": "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.heartbeat",
+    "kite_trade_v15": "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.heartbeat",
+    "kite_trade_v16_5min": "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.heartbeat",
+    "kite_trade_id_5min_v7": "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.heartbeat",
+    "live_combined_csv_v15_new_persistent": "eqidv2_live_combined_analyser_csv_v15_new_persistent.heartbeat",
+    "live_combined_csv_id_5min_v7_persistent": "eqidv2_live_combined_analyser_csv_id_5min_v7_persistent.heartbeat",
+    "live_combined_csv_v16_5min":      "eqidv2_live_combined_analyser_csv_v16_5min.heartbeat",
+    "signal_discovery_v7_5min_id":     "signal_discovery_v7_5mins_ID.heartbeat",
+    "entry_engine_1min_v5_id":          "entry_engine_1min_v5_ID.supervisor.heartbeat",
+    "v7_research_layer":                "live_research_v7_research_layer.heartbeat",
+    "daily_live_v7_research_session":   "daily_live_v7_research_session.heartbeat",
+    "v7_nse_id_cost":                    "v7_nse_id_cost.heartbeat",
+    "v7_walkforward_gate":               "v7_walkforward_gate.heartbeat",
+    "v7_causality_audit":                "v7_causality_audit.heartbeat",
+    "v7_gate_promotion":                 "v7_gate_promotion.heartbeat",
+    "v7_qualification":                  "v7_qualification.heartbeat",
+    "v7_pre_momentum_filter_analyst":    "v7_pre_momentum_filter_analyst.heartbeat",
+    "v7_full_pipeline_entry_research":    "v7_full_pipeline_entry_research.heartbeat",
+    "v7_full_pipeline_entry_research_v2": "v7_full_pipeline_entry_research_v2.heartbeat",
+    "v7_shadow_candidate_monitor":        "v7_shadow_candidate_monitor.heartbeat",
+    "v11_lab_shadow_monitor":             "v11_lab_shadow_monitor.heartbeat",
+    "fundamental_price_action_v1":         "fundamental_price_action_v1.heartbeat",
+    "paper_trade_fpa_v1":                  "fundamental_price_action_v1_papertrade.heartbeat",
+    "collect_filtered_stock_data":         "collect_filtered_stock_data.heartbeat",
+    "signal_early_engine_v16_5min":    "eqidv2_signal_early_engine_v16_5min.heartbeat",
+    "pending_data_fetcher_v16_5min":   "eqidv2_pending_data_fetcher_v16_5min.heartbeat",
+    "detection_engine_v16_5min":       "eqidv2_detection_engine_v16_5min.heartbeat",
+}
+
+CARD_TASK_NAMES: Dict[str, Tuple[str, ...]] = {
+    "authentication_v2": ("\\EQIDV2_authentication_v2_0900",),
+    "eod_5min_data": ("\\EQIDV2_eod_5mins_data_0900",),
+    "kiteticker_5min_data": ("\\EQIDV2_kiteticker_5mins_data_0900",),
+    "eod_1min_data": ("\\EQIDV2_eod_1min_data_0915",),
+    "fno_oi_universe": ("\\EQIDV2_fno_oi_universe_0850",),
+    "fno_options_atm_fetch_5min": ("\\EQIDV2_fno_options_atm_fetch_5min_0907",),
+    "fno_oi_fetch_5min_fast_production": ("\\EQIDV2_fno_oi_fetch_5min_fast_production_0905",),
+    "fno_oi_fetch_5min": ("\\EQIDV2_fno_oi_fetch_5min_0905",),
+    "fno_oi_fetch_5min_fast_shadow": ("\\EQIDV2_fno_oi_fetch_5min_fast_shadow_0906",),
+    "fno_oi_feature_ranker": ("\\EQIDV2_fno_oi_feature_ranker_0915",),
+    "fno_v13_v10_g_scanner_5min": ("\\EQIDV2_fno_v13_v10_g_scanner_5min_0915",),
+    "fno_v13_v10_g_equity_1min_feed": ("\\EQIDV2_fno_v13_v10_g_equity_1min_feed_0915",),
+    "fno_v13_v10_g_confirmation_1min": ("\\EQIDV2_fno_v13_v10_g_confirmation_1min_0915",),
+    "fno_v13_v10_g_live_long": ("\\EQIDV2_fno_v13_v10_g_live_long_0915",),
+    "fno_v13_v10_g_live_short": ("\\EQIDV2_fno_v13_v10_g_live_short_0915",),
+    "fno_v13_v10_g_trade_logger": ("\\EQIDV2_fno_v13_v10_g_trade_logger_0915",),
+    "fno_v13_v10_g_net_result": ("\\EQIDV2_fno_v13_v10_g_net_result_0915",),
+    "live_signals_csv_fno_id_v13_v10_g_short": ("\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915",),
+    "live_signals_csv_fno_id_v13_v10_g_long": ("\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915",),
+    "live_kite_trades_csv_fno_id_v13_v10_g": ("\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915",),
+    "kite_trade_fno_id_v13_v10_g": ("\\EQIDV2_fno_v13_v10_g_live_kite_qty1_0915",),
+    "fno_v13_v10_g_options_live_long": ("\\EQIDV2_fno_v13_v10_g_options_live_long_0915",),
+    "fno_v13_v10_g_options_live_short": ("\\EQIDV2_fno_v13_v10_g_options_live_short_0915",),
+    "fno_v13_v10_g_options_trade_logger": ("\\EQIDV2_fno_v13_v10_g_options_trade_logger_0915",),
+    "fno_v13_v10_g_options_net_result": ("\\EQIDV2_fno_v13_v10_g_options_net_result_0915",),
+    "fno_v8_combined_paper": ("\\EQIDV2_fno_v8_combined_paper_0915",),
+    "fno_v10_v11_v12_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
+    "fno_v10_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
+    "fno_v11_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
+    "fno_v12_paper": ("\\EQIDV2_fno_v10_v11_v12_paper_0915",),
+    "fno_oi_eod_qc": ("\\EQIDV2_fno_oi_eod_qc_1540",),
+    "eod_15min_data": ("\\EQIDV2_eod_15mins_data_0900",),
+    "eod_1540_update": ("\\EQIDV2_eod_1540_update_1540",),
+    "nifty_guard_fetch_v15": ("\\EQIDV2_nifty_guard_fetch_v15_0915",),
+    "nifty_guard_fetch_v16_5min": ("\\EQIDV2_nifty_guard_fetch_v16_5min_0915",),
+    "live_combined_csv_v15_new_persistent": ("\\EQIDV2_live_combined_csv_v15_new_0900",),
+    "live_signals_csv_v15_new_short": ("\\EQIDV2_live_combined_csv_v15_new_0900",),
+    "live_signals_csv_v15_new_long": ("\\EQIDV2_live_combined_csv_v15_new_0900",),
+    "live_combined_csv_id_5min_v7_persistent": ("\\EQIDV2_live_combined_csv_id_5min_v7_0909",),
+    "signal_discovery_v7_5min_id": ("\\EQIDV2_signal_discovery_v7_5mins_ID",),
+    "candidate_tickers_v7_5min_id": ("\\EQIDV2_signal_discovery_v7_5mins_ID",),
+    "entry_engine_1min_v5_id": ("\\EQIDV2_entry_engine_1min_v5_ID",),
+    "v7_research_layer": (
+        "\\EQIDV2_v7_research_layer_0917",
+        "\\EQIDV2_suggestions_v7_live_research_1615",
+    ),
+    "daily_live_v7_research_session": ("\\EQIDV2_daily_live_v7_research_0917",),
+    "v7_nse_id_cost": ("\\EQIDV2_v7_nse_id_cost_1605",),
+    "v7_walkforward_gate": ("\\EQIDV2_v7_walkforward_gate_1620",),
+    "v7_causality_audit": ("\\EQIDV2_v7_causality_audit_1605",),
+    "v7_gate_promotion": ("\\EQIDV2_v7_gate_promotion_1625",),
+    "v7_qualification": ("\\EQIDV2_v7_qualification_1630",),
+    "v7_pre_momentum_filter_analyst": ("\\EQIDV2_v7_pre_momentum_filter_analyst_0917",),
+    "v7_full_pipeline_entry_research": ("\\EQIDV2_v7_full_pipeline_entry_research_1620",),
+    "v7_full_pipeline_entry_research_v2": ("\\EQIDV2_v7_full_pipeline_entry_research_v2_1630",),
+    "v7_shadow_candidate_monitor": ("\\EQIDV2_v7_shadow_candidate_monitor_1645",),
+    "v11_lab_shadow_monitor": ("\\EQIDV2_v11_lab_shadow_monitor_1655",),
+    "fundamental_price_action_v1": ("\\EQIDV2_fundamental_price_action_v1_0915",),
+    # The entry sheets are published by the FPA session itself, so both side
+    # cards track that task; only the paper-trade cards track the runner.
+    "live_signals_csv_fpa_v1_short": ("\\EQIDV2_fundamental_price_action_v1_0915",),
+    "live_signals_csv_fpa_v1_long": ("\\EQIDV2_fundamental_price_action_v1_0915",),
+    "paper_trade_fpa_v1": ("\\EQIDV2_fundamental_price_action_v1_papertrade_0920",),
+    "live_papertrade_result_csv_fpa_v1": ("\\EQIDV2_fundamental_price_action_v1_papertrade_0920",),
+    "collect_filtered_stock_data": ("\\EQIDV2_collect_filtered_stock_data_0930",),
+    "live_signals_csv_id_5min_v7_short": ("\\EQIDV2_entry_engine_1min_v5_ID",),
+    "live_signals_csv_id_5min_v7_long": ("\\EQIDV2_entry_engine_1min_v5_ID",),
+    "paper_trade_id_5min_v7": ("\\EQIDV2_paper_trade_id_5min_v7_0900",),
+    "live_papertrade_result_csv_id_5min_v7": ("\\EQIDV2_paper_trade_id_5min_v7_0900",),
+    "kite_trade_id_5min_v7": ("\\EQIDV2_live_trade_id_5min_v7_0900",),
+    "live_kite_trades_csv_id_5min_v7": ("\\EQIDV2_live_trade_id_5min_v7_0900",),
+    "data_for_backtesting": ("\\EQIDV2_data_for_backtesting_1545",),
+    "backtesting_result_v13_v10_g": ("\\EQIDV2_backtesting_result_v13_v10_g_1620",),
+    "paper_trade_v15": ("\\EQIDV2_avwap_paper_trade_v15_0900",),
+    "live_papertrade_result_csv_v15": ("\\EQIDV2_avwap_paper_trade_v15_0900",),
+    "kite_trade_v15": ("\\EQIDV2_avwap_live_trade_v15_0905",),
+    "live_kite_trades_csv_v15": ("\\EQIDV2_avwap_live_trade_v15_0905",),
+    "live_combined_csv_v16_5min": ("\\EQIDV2_live_combined_csv_v16_5min_0900",),
+    "live_signals_csv_v16_5min_short": ("\\EQIDV2_detection_engine_v16_5min_0900",),
+    "live_signals_csv_v16_5min_long": ("\\EQIDV2_detection_engine_v16_5min_0900",),
+    "paper_trade_v16_5min": ("\\EQIDV2_paper_trade_v16_5min_0900",),
+    "live_papertrade_result_csv_v16_5min": ("\\EQIDV2_paper_trade_v16_5min_0900",),
+    "kite_trade_v16_5min": ("\\EQIDV2_live_trade_v16_5min_0900",),
+    "live_kite_trades_csv_v16_5min": ("\\EQIDV2_live_trade_v16_5min_0900",),
+    "preopen_healthcheck": ("\\EQIDV2_preopen_session_healthcheck_0905",),
+    "kite_holdings_today_csv": ("\\EQIDV2_kite_export_start_0915",),
+    "kite_positions_day_today_csv": ("\\EQIDV2_kite_export_start_0915",),
+    "signal_early_engine_v16_5min":  ("\\EQIDV2_signal_early_engine_v16_5min_0900",),
+    "pending_signals_v16_5min":      ("\\EQIDV2_signal_early_engine_v16_5min_0900",),
+    "pending_data_fetcher_v16_5min": ("\\EQIDV2_pending_data_fetcher_v16_5min_0900",),
+    "detection_engine_v16_5min":     ("\\EQIDV2_detection_engine_v16_5min_0900",),
+    "detected_signals_v16_5min":     ("\\EQIDV2_detection_engine_v16_5min_0900",),
+}
+
+_TASK_SNAPSHOT_CACHE: Dict[str, Dict[str, str]] = {}
+_TASK_SNAPSHOT_CACHE_AT: Optional[dt.datetime] = None
+_TASK_SNAPSHOT_LOCK = threading.Lock()
+_TASK_SNAPSHOT_BOOTSTRAP_LOCK = threading.Lock()
+_TASK_SNAPSHOT_REFRESHING = False
+_TASK_SNAPSHOT_CACHE_TTL_SEC = 60.0
+
+RESTARTABLE_CARDS: Dict[str, str] = {
+    "nifty_guard_fetch_v16_5min":    "run_eqidv2_nifty_guard_fetcher_supervised_v16_5min.bat",
+    "eod_5min_data":                 "run_eqidv2_eod_scheduler_for_5mins_data_live_minimal.bat",
+    "eod_1min_data":                 "run_eqidv2_eod_scheduler_for_1min_data_live.bat",
+    "fno_oi_fetch_5min_fast_production": "run_fno_oi_fetch_5min_fast_production.bat",
+    "fno_options_atm_fetch_5min":       "run_fno_options_atm_fetch_5min.bat",
+    "fno_oi_feature_ranker":         "run_fno_oi_feature_ranker.bat",
+    "fno_v13_v10_g_scanner_5min":           "run_fno_v13_v10_g_scanner_5min.bat",
+    "fno_v13_v10_g_equity_1min_feed":        "run_fno_v13_v10_g_equity_1min_feed.bat",
+    "fno_v13_v10_g_confirmation_1min":       "run_fno_v13_v10_g_confirmation_1min.bat",
+    "fno_v13_v10_g_live_long":               "run_fno_v13_v10_g_live_long.bat",
+    "fno_v13_v10_g_live_short":              "run_fno_v13_v10_g_live_short.bat",
+    "fno_v13_v10_g_trade_logger":            "run_fno_v13_v10_g_trade_logger.bat",
+    "fno_v13_v10_g_net_result":              "run_fno_v13_v10_g_net_result.bat",
+    "fno_v13_v10_g_options_live_long":        "run_fno_v13_v10_g_options_live_long.bat",
+    "fno_v13_v10_g_options_live_short":       "run_fno_v13_v10_g_options_live_short.bat",
+    "fno_v13_v10_g_options_trade_logger":     "run_fno_v13_v10_g_options_trade_logger.bat",
+    "fno_v13_v10_g_options_net_result":       "run_fno_v13_v10_g_options_net_result.bat",
+    "fno_v10_v11_v12_paper":          "run_fno_v10_v11_v12_paper_session.bat",
+    "signal_early_engine_v16_5min":  "run_eqidv2_signal_early_engine_v16_5min.bat",
+    "detection_engine_v16_5min":     "run_eqidv2_detection_engine_v16_5min.bat",
+    "pending_data_fetcher_v16_5min": "run_eqidv2_pending_data_fetcher_v16_5min.bat",
+    # These cards must track the conf wrappers used by Task Scheduler.  Pointing
+    # process discovery at the base BATs allowed a dashboard restart to miss (or
+    # preserve) a worker launched with a different setup/risk configuration.
+    "entry_engine_1min_v5_id": "run_conf_paper_entry_engine.bat",
+    "signal_discovery_v7_5min_id": "run_conf_paper_signal_discovery.bat",
+    "paper_trade_id_5min_v7": "run_conf_paper_executor.bat",
+    "v7_research_layer": "run_eqidv2_v7_research_layer.bat",
+    "daily_live_v7_research_session": "run_eqidv2_daily_live_v7_research_session.bat",
+    "v7_nse_id_cost": "run_v7_nse_id_cost_report.bat",
+    "v7_walkforward_gate": "run_v7_walkforward_gate_report.bat",
+    "v7_causality_audit": "run_v7_causality_audit.bat",
+    "v7_gate_promotion": "run_v7_gate_promotion_report.bat",
+    "v7_qualification": "run_v7_qualification_report.bat",
+    "v7_pre_momentum_filter_analyst": "run_eqidv2_v7_pre_momentum_filter_analyst.bat",
+    "v7_full_pipeline_entry_research": "run_v7_full_pipeline_entry_research.bat",
+    "v7_full_pipeline_entry_research_v2": "run_v7_full_pipeline_entry_research_v2.bat",
+    "v7_shadow_candidate_monitor": "run_v7_shadow_candidate_monitor.bat",
+    "v11_lab_shadow_monitor": "run_v11_lab_shadow_monitor.bat",
+    "fundamental_price_action_v1": "run_fundamental_price_action_v1_session.bat",
+    "paper_trade_fpa_v1": "run_fundamental_price_action_v1_papertrade.bat",
+    "collect_filtered_stock_data": "run_collect_filtered_stock_data_session.bat",
+    "kite_positions_day_today_csv":  "run_zerodha_kite_export_scheduler.bat",
+    "kite_holdings_today_csv":       "run_zerodha_kite_export_scheduler.bat",
+    "authentication_v2":             "run_authentication_v2.bat",
+    "preopen_healthcheck":           "run_preopen_session_healthcheck.bat",
+    "backtesting_result_v13_v10_g":        "run_backtesting_result_v13_v10_g_1620.bat",
+}
+
+
+def _active_strategy_display(text: str) -> str:
+    """Human labels follow active sizing; stable task/card/storage IDs stay intact."""
+    text = FNO_ACTIVE_PROFILE.display(text)
+    if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        for old, new in (
+            ("V13-V10-G-3 Live Kite - Quantity 1", "V13-V10-G-3 Live Kite - ₹10,000 × 5"),
+            ("V13-V10-G-3 Live Kite Qty 1", "V13-V10-G-3 Live Kite ₹10,000 × 5"),
+            ("V13-V10-G-3 qty-1", "V13-V10-G-3 capital-sized"),
+            ("one task | fixed quantity 1 | SHORT | LONG | trades | runner log",
+             "₹10,000 capital | 5× | ₹50,000 target exposure | SHORT | LONG | trades | runner log"),
+            ("G LIVE (Kite qty-1)", "G3 LIVE (₹10,000 × 5)"),
+            ("is the real-order execution path at fixed quantity 1. G PAPER uses its configured strategy sizing.",
+             "uses whole shares within ₹50,000 target exposure (₹10,000 capital × 5), subject to broker margin checks. G3 PAPER uses its configured strategy sizing."),
+        ):
+            text = text.replace(old, new)
+    return text
+
+
+def _route_active_fno_profile() -> None:
+    """Preserve saved card IDs while routing every active action to one profile."""
+    global FNO_EQ_ID_MONITOR_GROUPS
+    CARD_TASK_NAMES.update(OPENING_OBSERVER_TASK_NAMES)
+    FNO_EQ_ID_MONITOR_GROUPS = tuple((_active_strategy_display(title), ids) for title, ids in FNO_EQ_ID_MONITOR_GROUPS)
+    for mapping in (LOG_FILES, STATUS_FILES, HEARTBEAT_FILES, RESTARTABLE_CARDS,
+                    FNO_OI_CARD_REPORTS, V13_V10_G_RESEARCH_CARD_REPORTS,
+                    V13_V10_G_OBSERVABILITY_CARD_REPORTS,
+                    V13_V10_G_IMPROVEMENT_CARD_REPORTS, V13_V10_G_ARTIFACT_CARD_REPORTS):
+        for key, value in list(mapping.items()):
+            if "v13_v10_g" in key:
+                mapping[key] = FNO_ACTIVE_PROFILE.reference(value)
+    for key, value in list(CARD_TASK_NAMES.items()):
+        if "v13_v10_g" in key:
+            CARD_TASK_NAMES[key] = tuple(FNO_ACTIVE_PROFILE.reference(v) for v in value)
+    for mapping in (FNO_EQ_ID_MONITOR_STAGE_LABELS, FNO_EQ_ID_MONITOR_SESSION_LABELS):
+        for key, value in list(mapping.items()):
+            if "v13_v10_g" in key:
+                mapping[key] = _active_strategy_display(value)
+
+
+_route_active_fno_profile()
+
+
+def _runtime_status_path_for_card(card_id: str) -> Optional[Path]:
+    if card_id == "backtesting_result_v13_v10_g" and FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        return FNO_G_BACKTEST_ROOT / "status.json"
+    if card_id in FNO_MULTI_PAPER_CARD_PROFILES:
+        return FNO_MULTI_PAPER_STATUS_PATH
+    filename = STATUS_FILES.get(card_id)
+    return _resolve_status_path(filename) if filename else None
+
+
+def _runtime_heartbeat_path_for_card(card_id: str) -> Optional[Path]:
+    if card_id == "backtesting_result_v13_v10_g" and FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        return FNO_G_BACKTEST_ROOT / "status.json"
+    if card_id in FNO_MULTI_PAPER_CARD_PROFILES:
+        return FNO_MULTI_PAPER_HEARTBEAT_PATH
+    filename = HEARTBEAT_FILES.get(card_id)
+    return _resolve_status_path(filename) if filename else None
+
+
+def _run_cmd_silent(cmd: Sequence[str], timeout: float = 5.0) -> Tuple[int, str]:
+    kwargs: Dict[str, Any] = {
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = subprocess.run(list(cmd), **kwargs)
+        combined = (result.stdout or "") + (result.stderr or "")
+        return result.returncode, combined.strip()
+    except subprocess.TimeoutExpired:
+        return 124, "timeout"
+    except FileNotFoundError as exc:
+        return 127, str(exc)
+    except Exception as exc:
+        return 1, str(exc)
+
+
+def _find_bat_process_pids(bat_basename: str) -> list[int]:
+    if not bat_basename:
+        return []
+    # Escape single quotes for PowerShell literal
+    safe = bat_basename.replace("'", "''")
+    ps_cmd = (
+        "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe' OR "
+        "Name='powershell.exe' OR Name='python.exe' OR Name='pythonw.exe' OR Name='conhost.exe'\" "
+        f"| Where-Object {{ $_.CommandLine -and $_.CommandLine -like '*{safe}*' }} "
+        "| Select-Object -ExpandProperty ProcessId"
+    )
+    rc, out = _run_cmd_silent(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+        timeout=6.0,
+    )
+    if rc != 0 or not out:
+        return []
+    pids: list[int] = []
+    for line in out.splitlines():
+        token = line.strip()
+        if token.isdigit():
+            pids.append(int(token))
+    return pids
+
+
+def _parse_pid_value(value: object) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        pid = int(text)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def _find_process_pids_by_token(token: str) -> list[int]:
+    if not token:
+        return []
+    safe = token.replace("'", "''")
+    ps_cmd = (
+        "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe' OR "
+        "Name='powershell.exe' OR Name='python.exe' OR Name='pythonw.exe' OR Name='conhost.exe'\" "
+        f"| Where-Object {{ $_.CommandLine -and $_.CommandLine -like '*{safe}*' }} "
+        "| Select-Object -ExpandProperty ProcessId"
+    )
+    rc, out = _run_cmd_silent(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+        timeout=6.0,
+    )
+    if rc != 0 or not out:
+        return []
+    pids: list[int] = []
+    for line in out.splitlines():
+        item = line.strip()
+        if item.isdigit():
+            pids.append(int(item))
+    return pids
+
+
+def _list_alive_pids(pids: Sequence[int]) -> list[int]:
+    clean = sorted({int(pid) for pid in pids if int(pid) > 0})
+    if not clean:
+        return []
+    joined = ",".join(str(pid) for pid in clean)
+    ps_cmd = (
+        f"$ids=@({joined}); "
+        "Get-Process -Id $ids -ErrorAction SilentlyContinue | "
+        "Select-Object -ExpandProperty Id"
+    )
+    rc, out = _run_cmd_silent(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+        timeout=5.0,
+    )
+    if rc != 0 or not out:
+        return []
+    alive: list[int] = []
+    for line in out.splitlines():
+        item = line.strip()
+        if item.isdigit():
+            alive.append(int(item))
+    return alive
+
+
+def _pid_is_alive_fast(pid: int) -> bool:
+    """Check one PID without spawning PowerShell on every dashboard card."""
+    parsed = _parse_pid_value(pid)
+    if parsed is None:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            synchronize = 0x00100000
+            wait_timeout = 0x00000102
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            kernel32.WaitForSingleObject.restype = ctypes.c_ulong
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+            handle = kernel32.OpenProcess(synchronize, False, parsed)
+            if not handle:
+                return False
+            try:
+                return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+            finally:
+                kernel32.CloseHandle(handle)
+        except (AttributeError, OSError, ValueError):
+            return False
+    try:
+        os.kill(parsed, 0)
+    except (OSError, ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def _kill_pid_tree(pid: int, force: bool) -> Tuple[int, str]:
+    cmd = ["taskkill"]
+    if force:
+        cmd.append("/F")
+    cmd.extend(["/T", "/PID", str(pid)])
+    return _run_cmd_silent(cmd, timeout=6.0)
+
+
+def _wait_for_pids_exit(pids: Sequence[int], timeout: float) -> list[int]:
+    deadline = time.time() + max(0.5, timeout)
+    remaining = _list_alive_pids(pids)
+    while remaining and time.time() < deadline:
+        time.sleep(0.35)
+        remaining = _list_alive_pids(remaining)
+    return remaining
+
+
+def _supervisor_status_path(card_id: str) -> Optional[Path]:
+    filename = STATUS_FILES.get(card_id)
+    if not filename:
+        return None
+    return LOG_DIR / filename
+
+
+def _default_supervisor_spawn_path(card_id: str) -> Optional[Path]:
+    filename = STATUS_FILES.get(card_id)
+    if not filename:
+        return None
+    stem = filename[:-7] if filename.lower().endswith(".status") else Path(filename).stem
+    return RUNTIME_STATUS_DIR / f"{stem}.supervisor.spawn"
+
+
+def _read_restart_identity(card_id: str) -> Dict[str, str]:
+    info: Dict[str, str] = {}
+    filename = STATUS_FILES.get(card_id)
+    worker_status_path = _runtime_status_path_for_card(card_id)
+    if worker_status_path is None:
+        return info
+
+    supervisor_status_path = _supervisor_status_path(card_id) if filename else None
+
+    worker_status = parse_status_file(worker_status_path)
+    if worker_status:
+        for key, value in worker_status.items():
+            info[f"worker_{key}"] = value
+
+    supervisor_status = parse_status_file(supervisor_status_path) if supervisor_status_path else {}
+    if supervisor_status:
+        for key, value in supervisor_status.items():
+            info[f"supervisor_{key}"] = value
+
+    spawn_path: Optional[Path] = None
+    raw_spawn_path = str(supervisor_status.get("spawn_record_file", "")).strip()
+    if raw_spawn_path:
+        try:
+            spawn_path = Path(raw_spawn_path)
+        except (TypeError, ValueError):
+            spawn_path = None
+    if spawn_path is None:
+        spawn_path = _default_supervisor_spawn_path(card_id)
+    if spawn_path is not None:
+        spawn = parse_status_file(spawn_path)
+        if spawn:
+            for key, value in spawn.items():
+                info[f"spawn_{key}"] = value
+
+    info["card_id"] = card_id
+    if supervisor_status_path is not None:
+        info["supervisor_status_path"] = str(supervisor_status_path)
+    info["worker_status_path"] = str(worker_status_path)
+    if spawn_path is not None:
+        info["spawn_path"] = str(spawn_path)
+    return info
+
+
+def _restart_identity_key(snapshot: Dict[str, str]) -> Tuple[str, ...]:
+    return (
+        str(snapshot.get("worker_pid", "")).strip(),
+        str(snapshot.get("worker_start_ts", "")).strip(),
+        str(snapshot.get("worker_start_ts_utc", "")).strip(),
+        str(snapshot.get("supervisor_run_id", "")).strip(),
+        str(snapshot.get("spawn_run_id", "")).strip(),
+        str(snapshot.get("supervisor_supervisor_pid", "")).strip(),
+        str(snapshot.get("supervisor_launcher_pid", "")).strip(),
+        str(snapshot.get("supervisor_worker_pid", "")).strip(),
+        str(snapshot.get("supervisor_launcher_start_utc", "")).strip(),
+        str(snapshot.get("supervisor_worker_start_utc", "")).strip(),
+        str(snapshot.get("spawn_supervisor_pid", "")).strip(),
+        str(snapshot.get("spawn_launcher_pid", "")).strip(),
+        str(snapshot.get("spawn_worker_pid", "")).strip(),
+        str(snapshot.get("spawn_launcher_start_utc", "")).strip(),
+        str(snapshot.get("spawn_worker_start_utc", "")).strip(),
+    )
+
+
+def _wait_for_restart_identity_change(card_id: str, before: Dict[str, str], timeout: float = 20.0) -> Dict[str, str]:
+    before_key = _restart_identity_key(before)
+    deadline = time.time() + max(2.0, timeout)
+    latest = before
+    while time.time() < deadline:
+        latest = _read_restart_identity(card_id)
+        if _restart_identity_key(latest) != before_key:
+            return latest
+        time.sleep(0.5)
+    return latest
+
+
+def _collect_restart_candidate_pids(card_id: str, bat_basename: str) -> Tuple[list[int], Dict[str, str], Set[str]]:
+    snapshot = _read_restart_identity(card_id)
+    pids: Set[int] = set()
+    for key in (
+        "worker_pid",
+        "supervisor_pid",
+        "launcher_pid",
+        "pid",
+    ):
+        for prefix in ("supervisor_", "spawn_", "worker_"):
+            pid = _parse_pid_value(snapshot.get(f"{prefix}{key}", ""))
+            if pid is not None:
+                pids.add(pid)
+
+    tokens: Set[str] = set()
+    if bat_basename:
+        tokens.add(Path(bat_basename).name)
+
+    for raw in (
+        snapshot.get("worker_script", ""),
+        snapshot.get("supervisor_name", ""),
+    ):
+        value = str(raw or "").strip()
+        if value:
+            tokens.add(Path(value).name)
+
+    for token in list(tokens):
+        for pid in _find_process_pids_by_token(token):
+            if pid > 0:
+                pids.add(pid)
+
+    return sorted(pids), snapshot, tokens
+
+
+def _verify_restart_success(card_id: str, before: Dict[str, str], trace: list[str]) -> Optional[Dict[str, Any]]:
+    after = _wait_for_restart_identity_change(card_id, before, timeout=20.0)
+    if _restart_identity_key(after) == _restart_identity_key(before):
+        trace.append("verify=no_change")
+        return None
+
+    new_worker_pid = (
+        _parse_pid_value(after.get("supervisor_worker_pid"))
+        or _parse_pid_value(after.get("spawn_worker_pid"))
+        or _parse_pid_value(after.get("worker_pid"))
+    )
+    new_supervisor_pid = (
+        _parse_pid_value(after.get("supervisor_supervisor_pid"))
+        or _parse_pid_value(after.get("spawn_supervisor_pid"))
+    )
+    new_status = (
+        str(after.get("worker_status", "")).strip()
+        or str(after.get("supervisor_status", "")).strip()
+        or str(after.get("spawn_state", "")).strip()
+    )
+    trace.append(
+        "verify=changed"
+        f"; new_supervisor_pid={new_supervisor_pid or ''}"
+        f"; new_worker_pid={new_worker_pid or ''}"
+        f"; new_status={new_status}"
+    )
+    return {
+        "new_supervisor_pid": new_supervisor_pid,
+        "new_worker_pid": new_worker_pid,
+        "new_status": new_status,
+        "after": after,
+    }
+
+
+def _fresh_task_restart_eligibility(task_name: str) -> Tuple[bool, str]:
+    """Fail closed unless a fresh Task Scheduler query says Enabled.
+
+    This deliberately bypasses the dashboard's ten-second scheduler cache and
+    `_run_cmd_silent`.  A V6/V8 cutover can disable a task between dashboard
+    refreshes, and a restart attempt must be rejected before reading stale PID
+    files, issuing `/End`, or terminating any process tree.
+    """
+
+    kwargs: Dict[str, Any] = {
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "timeout": 5.0,
+        "check": False,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            ["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"],
+            **kwargs,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"Task Scheduler query failed: {exc}"
+
+    raw = "\n".join(
+        part for part in (completed.stdout, completed.stderr) if part
+    ).strip()
+    if completed.returncode != 0:
+        detail = raw[:240] if raw else f"exit={completed.returncode}"
+        return False, f"Task Scheduler query failed: {detail}"
+
+    records = _parse_schtasks_verbose(raw)
+    normalized = str(task_name or "").strip().lstrip("\\").upper()
+    record: Optional[Dict[str, str]] = None
+    for observed_name, observed in records.items():
+        if str(observed_name).strip().lstrip("\\").upper() == normalized:
+            record = observed
+            break
+    if record is None:
+        return False, "Task Scheduler returned no matching task definition."
+
+    scheduled_state = str(record.get("Scheduled Task State", "")).strip().upper()
+    if scheduled_state != "ENABLED":
+        observed = scheduled_state or "UNKNOWN"
+        return False, f"Scheduled task is not enabled (state={observed})."
+    return True, "ENABLED"
+
+
+def _restart_card_session(card_id: str) -> Dict[str, Any]:
+    task_names = CARD_TASK_NAMES.get(card_id, ())
+    bat_basename = RESTARTABLE_CARDS.get(card_id, "")
+    if not task_names or not bat_basename:
+        return {"ok": False, "message": "Session is not restartable."}
+    task_name = task_names[0]
+    restart_allowed, scheduler_detail = _fresh_task_restart_eligibility(task_name)
+    if not restart_allowed:
+        return {
+            "ok": False,
+            "message": f"Restart blocked: {scheduler_detail}",
+            "task_name": task_name,
+        }
+    trace: list[str] = []
+    identity_before = _read_restart_identity(card_id)
+    cutoff_hhmm = str(identity_before.get("supervisor_cutoff_hhmm", "")).strip()
+    if cutoff_hhmm.isdigit():
+        now_hhmm = dt.datetime.now(IST).strftime("%H%M")
+        if now_hhmm >= cutoff_hhmm:
+            return {
+                "ok": False,
+                "message": (
+                    f"Restart blocked after cutoff ({cutoff_hhmm}). "
+                    "A relaunch now would be skipped by this session's BAT/supervisor."
+                ),
+                "task_name": task_name,
+            }
+
+    def _run_and_verify(step_no: int, success_message: str, run_label: str) -> Optional[Dict[str, Any]]:
+        run_rc, run_out = _run_cmd_silent(["schtasks", "/Run", "/TN", task_name], timeout=5.0)
+        trace.append(f"{run_label}_rc={run_rc}")
+        if run_out:
+            trace.append(f"{run_label}_out={run_out[:240]}")
+        verified = _verify_restart_success(card_id, identity_before, trace)
+        if verified is not None:
+            return {
+                "ok": True,
+                "step": step_no,
+                "message": success_message,
+                "task_name": task_name,
+                "trace": " | ".join(trace),
+                "new_supervisor_pid": verified["new_supervisor_pid"],
+                "new_worker_pid": verified["new_worker_pid"],
+                "new_status": verified["new_status"],
+            }
+        if run_rc != 0 and run_out:
+            trace.append(f"{run_label}_verify_failed")
+        return None
+
+    # Step 1: graceful restart via Task Scheduler (/End then /Run)
+    end_rc, _ = _run_cmd_silent(["schtasks", "/End", "/TN", task_name], timeout=5.0)
+    trace.append(f"end_rc={end_rc}")
+    time.sleep(1.0)
+    pids, _, tokens = _collect_restart_candidate_pids(card_id, bat_basename)
+    for pid in pids:
+        _kill_pid_tree(pid, force=False)
+    remaining = _wait_for_pids_exit(pids, timeout=4.0)
+    trace.append(f"post_end_pids={pids}")
+    if tokens:
+        trace.append(f"tokens={sorted(tokens)}")
+    if remaining:
+        trace.append(f"post_end_remaining={remaining}")
+    else:
+        verified = _run_and_verify(1, "Restarted via Task Scheduler and verified.", "run1")
+        if verified is not None:
+            return verified
+
+    # Step 2: graceful taskkill on scheduler/supervisor tree (no /F), then /Run
+    pids, _, tokens = _collect_restart_candidate_pids(card_id, bat_basename)
+    for pid in pids:
+        _kill_pid_tree(pid, force=False)
+    remaining = _wait_for_pids_exit(pids, timeout=4.0)
+    trace.append(f"graceful_pids={pids}")
+    if tokens:
+        trace.append(f"tokens={sorted(tokens)}")
+    if remaining:
+        trace.append(f"graceful_remaining={remaining}")
+    else:
+        time.sleep(1.2)
+        verified = _run_and_verify(2, "Graceful stop + verified start succeeded.", "run2")
+        if verified is not None:
+            return verified
+
+    # Step 3: force taskkill + /Run
+    pids, _, _ = _collect_restart_candidate_pids(card_id, bat_basename)
+    for pid in pids:
+        _kill_pid_tree(pid, force=True)
+    remaining = _wait_for_pids_exit(pids, timeout=6.0)
+    trace.append(f"force_pids={pids}")
+    if remaining:
+        trace.append(f"force_remaining={remaining}")
+        return {
+            "ok": False,
+            "step": 3,
+            "message": "Restart aborted because the previous session could not be stopped.",
+            "task_name": task_name,
+            "trace": " | ".join(trace),
+        }
+    time.sleep(1.0)
+    verified = _run_and_verify(3, "Force stop + verified start succeeded.", "run3")
+    if verified is not None:
+        return verified
+
+    run_rc, run_out = _run_cmd_silent(["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"], timeout=5.0)
+    trace.append(f"query_rc={run_rc}")
+    if run_out:
+        trace.append(f"query_out={run_out[:240]}")
+    err_msg = run_out or "restart verification failed"
+    return {
+        "ok": False,
+        "step": 3,
+        "message": f"Restart failed: {err_msg}",
+        "task_name": task_name,
+        "trace": " | ".join(trace),
+    }
+
+
+def _latest_matching_file(base_dir: Path, glob_pattern: str) -> Optional[Path]:
+    try:
+        candidates = list(base_dir.glob(glob_pattern))
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    try:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def resolve_log_target(name: str) -> Tuple[Path, str]:
+    today_ist = dt.datetime.now(IST).date().isoformat()
+    if name == "backtesting_result_v13_v10_g":
+        return FNO_G_BACKTEST_REPORT, str(
+            Path(FNO_ACTIVE_PROFILE.backtest_dir) / "latest" / FNO_G_BACKTEST_REPORT.name
+        )
+    if name in V13_V10_G_ARTIFACT_CARD_REPORTS:
+        report_name = V13_V10_G_ARTIFACT_CARD_REPORTS[name]
+        report_path = V13_V10_G_STRATEGY_RESEARCH_LATEST_DIR / report_name
+        return report_path, str(
+            Path(FNO_ACTIVE_PROFILE.slug + "_strategy_research") / "latest" / report_name
+        )
+    if name in FNO_OI_CARD_REPORTS:
+        report_name = FNO_OI_CARD_REPORTS[name]
+        report_path = FNO_OI_LATEST_DIR / report_name
+        if report_path.exists():
+            return report_path, str(Path("fno_oi") / "latest" / report_name)
+        log_name = LOG_FILES[name]
+        return LOG_DIR / log_name, log_name
+
+    if name == "signal_discovery_v7_5min_id":
+        latest_log = _latest_matching_file(
+            LOG_DIR, f"eqidv2_signal_discovery_v7_5min_id_persistent_{today_ist}*.log"
+        )
+        if latest_log is not None:
+            return latest_log, latest_log.name
+        path = SIGNAL_DISCOVERY_V7_ROOT / "heartbeat" / "candidate_tickers.status.json"
+        return path, str(Path("signal_discovery_v7_5mins_ID") / "heartbeat" / path.name)
+
+    if name == "entry_engine_1min_v5_id":
+        path = runtime_dir("entry_engine_1min_v5_ID") / "heartbeat" / "entry_engine.status.json"
+        return path, str(Path("entry_engine_1min_v5_ID") / "heartbeat" / path.name)
+
+    if name == "v7_research_layer":
+        path = V7_RESEARCH_LAYER_LATEST_DIR / "latest_summary.json"
+        return path, str(Path("live_research_v7_research_layer") / "latest" / path.name)
+
+    if name == "daily_live_v7_research_session":
+        path = DAILY_LIVE_V7_RESEARCH_LATEST_DIR / "latest_daily_live_v7_research.md"
+        return path, str(Path("daily_live_v7_research_session") / "latest" / path.name)
+
+    if name == "fundamental_price_action_v1":
+        path = FUNDAMENTAL_PRICE_ACTION_V1_LATEST_DIR / "latest_fundamental_price_action_v1.md"
+        return path, str(Path("fundamental_price_action_v1") / "latest" / path.name)
+
+    if name == "collect_filtered_stock_data":
+        path = COLLECT_FILTERED_STOCK_DATA_LATEST_DIR / "latest_collect_filtered_stock_data.md"
+        return path, str(Path("collect_filtered_stock_data") / "latest" / path.name)
+
+    if name == "v7_nse_id_cost":
+        path = V7_NSE_ID_COST_LATEST_DIR / "latest_v7_nse_id_cost.md"
+        return path, str(Path("v7_nse_id_cost") / "latest" / path.name)
+
+    if name == "v7_walkforward_gate":
+        path = V7_WALKFORWARD_GATE_LATEST_DIR / "latest_v7_walkforward_gate.md"
+        return path, str(Path("v7_walkforward_gate") / "latest" / path.name)
+
+    if name == "v7_causality_audit":
+        path = V7_CAUSALITY_AUDIT_LATEST_DIR / "v7_causality_audit.md"
+        return path, str(Path("v7_causality_audit") / "latest" / path.name)
+
+    if name == "v7_gate_promotion":
+        path = V7_GATE_PROMOTION_LATEST_DIR / "latest_v7_gate_promotion.md"
+        return path, str(Path("v7_gate_promotion") / "latest" / path.name)
+
+    if name == "v7_qualification":
+        path = V7_QUALIFICATION_LATEST_DIR / "latest_v7_qualification.md"
+        return path, str(Path("v7_qualification") / "latest" / path.name)
+
+    if name == "v7_pre_momentum_filter_analyst":
+        path = V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.md"
+        return path, str(Path("v7_pre_momentum_filter_analyst") / "latest" / path.name)
+
+    if name == "v7_full_pipeline_entry_research":
+        path = V7_FULL_PIPELINE_ENTRY_RESEARCH_LATEST_DIR / "latest_v7_full_pipeline_entry_research.md"
+        return path, str(Path("v7_full_pipeline_entry_research") / "latest" / path.name)
+
+    if name == "v7_full_pipeline_entry_research_v2":
+        path = V7_FULL_PIPELINE_ENTRY_RESEARCH_V2_LATEST_DIR / "latest_v7_full_pipeline_entry_research_v2.md"
+        return path, str(Path("v7_full_pipeline_entry_research_v2") / "latest" / path.name)
+
+    if name == "v7_shadow_candidate_monitor":
+        path = V7_SHADOW_CANDIDATE_MONITOR_LATEST_DIR / "latest_v7_shadow_candidate_monitor.md"
+        return path, str(Path("v7_shadow_candidates") / "latest" / path.name)
+
+    if name == "v11_lab_shadow_monitor":
+        path = V11_LAB_SHADOW_MONITOR_LATEST_DIR / "latest_v11_lab_shadow_monitor.md"
+        return path, str(Path("v11_lab_shadow") / "latest" / path.name)
+
+    if name == "nifty_guard_fetch_v16_5min":
+        today_log = _latest_matching_file(
+            LOG_DIR,
+            f"eqidv2_nifty_guard_fetcher_supervised_v16_5min_{today_ist}*.log",
+        )
+        if today_log is not None:
+            return today_log, today_log.name
+        latest_supervised = _latest_matching_file(
+            LOG_DIR,
+            "eqidv2_nifty_guard_fetcher_supervised_v16_5min_*.log",
+        )
+        if latest_supervised is not None:
+            return latest_supervised, latest_supervised.name
+        legacy_name = LOG_FILES[name]
+        legacy_path = LOG_DIR / legacy_name
+        if legacy_path.exists():
+            return legacy_path, legacy_name
+        fallback_name = f"eqidv2_nifty_guard_fetcher_supervised_v16_5min_{today_ist}.log"
+        return LOG_DIR / fallback_name, fallback_name
+
+    if name == "kite_trade_fno_id_v13_v10_g":
+        today_name = f"fno_{FNO_ACTIVE_PROFILE.slug}_live_kite_qty1_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, f"fno_{FNO_ACTIVE_PROFILE.slug}_live_kite_qty1_*.log")
+        if latest is not None:
+            return latest, latest.name
+        return today_path, today_name
+
+    if name in LOG_FILES:
+        file_name = LOG_FILES[name]
+        return LOG_DIR / file_name, file_name
+
+    if name == "paper_trade_v5":
+        runtime_name = f"paper_trade_execution_{today_ist}_v5.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*_v5.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v5_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v5_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v5.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "paper_trade_v7_sweep":
+        runtime_name = f"paper_trade_execution_{today_ist}_v7_sweep.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*_v7_sweep.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v7_sweep_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v7_sweep_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v7_sweep.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "paper_trade_v15":
+        runtime_name = f"paper_trade_execution_{today_ist}_v15_new.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*_v15_new.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v15_new_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v15_new_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v15_new.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "kite_trade":
+        runtime_name = f"live_trade_execution_{today_ist}_v5.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "live_trade_execution_*_v5.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_FALSE_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE.log"
+        legacy_path = LOG_DIR / legacy_name
+        if legacy_path.exists():
+            return legacy_path, legacy_name
+        signal_log_name = "live_trade_execution.log"
+        signal_log_path = LIVE_SIGNAL_DIR / signal_log_name
+        if signal_log_path.exists():
+            return signal_log_path, str(Path("live_signals") / signal_log_name)
+        return legacy_path, legacy_name
+
+    if name == "kite_trade_v7_sweep":
+        runtime_name = f"live_trade_execution_{today_ist}_v7_sweep.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "live_trade_execution_*_v7_sweep.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE_v7_sweep.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "kite_trade_v15":
+        runtime_name = f"live_trade_execution_{today_ist}_v15_new.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "live_trade_execution_*_v15_new.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_v15_new_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE_v15_new.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "paper_trade_v16_5min":
+        runtime_name = f"paper_trade_execution_{today_ist}_v16_5min.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*_v16_5min.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_v16_5min_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_v16_5min_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_v16_5min.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "paper_trade_fpa_v1":
+        today_name = f"fundamental_price_action_v1_papertrade_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(
+            LOG_DIR, "fundamental_price_action_v1_papertrade_*.log"
+        )
+        if latest is not None:
+            return latest, latest.name
+        return today_path, today_name
+
+    if name == "paper_trade_id_5min_v7":
+        runtime_name = f"paper_trade_execution_{today_ist}_id_5min_v7.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*_id_5min_v7.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_TRUE_id_5min_v7.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "kite_trade_v16_5min":
+        runtime_name = f"live_trade_execution_{today_ist}_v16_5min.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "live_trade_execution_*_v16_5min.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE_v16_5min.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "kite_trade_id_5min_v7":
+        runtime_name = f"live_trade_execution_{today_ist}_id_5min_v7.log"
+        runtime_path = LIVE_SIGNAL_DIR / runtime_name
+        if runtime_path.exists():
+            return runtime_path, str(Path("live_signals") / runtime_name)
+        latest_runtime = _latest_matching_file(LIVE_SIGNAL_DIR, "live_trade_execution_*_id_5min_v7.log")
+        if latest_runtime is not None:
+            return latest_runtime, str(Path("live_signals") / latest_runtime.name)
+        today_name = f"avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest = _latest_matching_file(LOG_DIR, "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7_*.log")
+        if latest is not None:
+            return latest, latest.name
+        legacy_name = "avwap_trade_execution_PAPER_TRADE_FALSE_id_5min_v7.log"
+        return LOG_DIR / legacy_name, legacy_name
+
+    if name == "preopen_healthcheck":
+        today_name = f"preopen_session_healthcheck_{today_ist}.log"
+        today_path = LOG_DIR / today_name
+        if today_path.exists():
+            return today_path, today_name
+        latest_name = "preopen_session_healthcheck_latest.log"
+        latest_path = LOG_DIR / latest_name
+        if latest_path.exists():
+            return latest_path, latest_name
+        fallback = _latest_matching_file(LOG_DIR, "preopen_session_healthcheck_*.log")
+        if fallback is not None:
+            return fallback, fallback.name
+        return latest_path, latest_name
+
+    if name == "paper_trade_exec":
+        today_name = f"paper_trade_execution_{today_ist}.log"
+        today_path = LIVE_SIGNAL_DIR / today_name
+        if today_path.exists():
+            return today_path, str(Path("live_signals") / today_name)
+        latest = _latest_matching_file(LIVE_SIGNAL_DIR, "paper_trade_execution_*.log")
+        if latest is not None:
+            return latest, str(Path("live_signals") / latest.name)
+        legacy_name = "paper_trade_execution.log"
+        return LIVE_SIGNAL_DIR / legacy_name, str(Path("live_signals") / legacy_name)
+
+    if name == "pending_signals_v16_5min":
+        today_name = f"pending_signals_{today_ist}_v16_5min.csv"
+        today_path = LIVE_SIGNAL_DIR / today_name
+        return today_path, str(Path("live_signals") / today_name)
+
+    if name == "detected_signals_v16_5min":
+        today_name = f"detected_signals_{today_ist}_v16_5min.csv"
+        today_path = LIVE_SIGNAL_DIR / today_name
+        return today_path, str(Path("live_signals") / today_name)
+
+    raise KeyError(name)
+
+
+def _research_artifact_status(path: Path) -> Dict[str, Any]:
+    """Status for an offline report view, with no scheduler/process semantics."""
+
+    exists = path.is_file()
+    result = {
+        "status": "READY" if exists else "WAITING_OUTPUT",
+        "phase": "READ_ONLY_REPORT",
+        "view_scope": "ARTIFACT",
+        "execution_mode": "RESEARCH_ONLY",
+        "execution_authority": False,
+        "derived_status": (
+            "Published offline evidence; not consumed by live trading."
+            if exists
+            else "Run bat\\run_v13_strategy_research_refresh.bat after a complete historical bundle exists."
+        ),
+    }
+    if exists and FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" and path.parent == V13_V10_G_STRATEGY_RESEARCH_LATEST_DIR:
+        try:
+            manifest = json.loads((path.parent / "analysis_manifest.json").read_text(encoding="utf-8-sig"))
+            pointer = json.loads((FNO_G_BACKTEST_ROOT / "latest/current_history.json").read_text(encoding="utf-8-sig"))
+            if (manifest.get("strategy_version") != FNO_ACTIVE_PROFILE.version
+                    or manifest.get("strategy_fingerprint") != expected_fingerprint()
+                    or manifest.get("execution_authority") is not False
+                    or manifest.get("reports", {}).get(path.name, {}).get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest()):
+                raise ValueError("report identity/hash mismatch")
+            if manifest.get("source_manifest_sha256") != pointer.get("manifest_sha256"):
+                result.update(status="STALE_SOURCE", derived_status="A newer G-3 history package exists; refresh the G-3 analysis reports.")
+            else:
+                match = re.search(r"^- State: \*\*([A-Z0-9_]+)\*\*", path.read_text(encoding="utf-8"), re.M)
+                if match:
+                    result["status"] = match.group(1)
+                result.update(strategy_version=FNO_ACTIVE_PROFILE.version, strategy_fingerprint=expected_fingerprint())
+        except (OSError, ValueError, TypeError, AttributeError):
+            result.update(status="INVALID_EVIDENCE", derived_status="G-3 report provenance is missing or inconsistent; regenerate analysis from the verified history package.")
+    return result
+
+
+def parse_status_file(path: Path) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    if not path.exists():
+        return out
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if text.startswith("\ufeff"):
+            text = text.lstrip("\ufeff")
+        # The modern FnO multi-paper runtime publishes one canonical JSON
+        # status/heartbeat shared by its parent card and all profile views.
+        # Preserve the legacy key=value parser, but also expose top-level JSON
+        # scalars to the existing scheduler/restart/status machinery.
+        if text.lstrip().startswith("{"):
+            payload = json.loads(text)
+            if not isinstance(payload, dict):
+                return {}
+            for key, value in payload.items():
+                if isinstance(value, bool):
+                    out[str(key)] = "true" if value else "false"
+                elif value is None:
+                    out[str(key)] = ""
+                elif not isinstance(value, (dict, list)):
+                    out[str(key)] = str(value)
+            return out
+        for line in text.splitlines():
+            # Most writers emit one key/value per line.  A few legacy stop
+            # scripts emitted the entire status on one line, separated by
+            # spaces (``status=STOPPED script=... ts=...``).  Parse both forms
+            # so the status value does not accidentally swallow the rest of
+            # the record and become an unknown hard failure in the dashboard.
+            matches = list(re.finditer(r"(?<!\S)([A-Za-z_][A-Za-z0-9_.-]*)=", line))
+            for index, match in enumerate(matches):
+                value_end = matches[index + 1].start() if index + 1 < len(matches) else len(line)
+                key = match.group(1).strip().lstrip("\ufeff")
+                out[key] = line[match.end() : value_end].strip()
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return out
+
+
+def _parse_status_datetime(raw: object, *, default_tz: dt.tzinfo = IST) -> Optional[dt.datetime]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=default_tz)
+        return parsed.astimezone(IST)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d_%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return dt.datetime.strptime(text, fmt).replace(tzinfo=default_tz)
+        except ValueError:
+            continue
+    return None
+
+
+def _append_status_note(status: Dict[str, str], note: str) -> Dict[str, str]:
+    merged = dict(status or {})
+    extra = str(note or "").strip()
+    if not extra:
+        return merged
+    current = str(merged.get("derived_status", "")).strip()
+    merged["derived_status"] = f"{current}; {extra}" if current else extra
+    return merged
+
+
+def infer_pid_session_provenance(card_id: str, status: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(status or {})
+    candidate_keys = (
+        ("start_ts_utc", "start_ts_utc"),
+        ("worker_start_utc", "worker_start_utc"),
+        ("launcher_start_utc", "launcher_start_utc"),
+        ("start_ts", "start_ts"),
+    )
+    sources_to_check = [("status", merged)]
+    supervisor_path = _runtime_status_path_for_card(card_id)
+    if supervisor_path is not None:
+        supervisor_status = parse_status_file(supervisor_path)
+        if supervisor_status:
+            sources_to_check.append(("runtime_status", supervisor_status))
+
+    start_ist: Optional[dt.datetime] = None
+    start_source = ""
+    for scope, source_dict in sources_to_check:
+        for key, source in candidate_keys:
+            parsed = _parse_status_datetime(source_dict.get(key, ""))
+            if parsed is not None:
+                start_ist = parsed.astimezone(IST)
+                start_source = f"{scope}:{source}"
+                break
+        if start_ist is not None:
+            break
+
+    if start_ist is None:
+        return merged
+
+    session_start = dt.datetime.combine(dt.datetime.now(IST).date(), dt.time(9, 0), tzinfo=IST)
+    merged["pid_start_ist"] = start_ist.strftime("%Y-%m-%d %H:%M:%S%z")
+    merged["pid_start_source"] = start_source
+    merged["session_start_ist"] = session_start.strftime("%Y-%m-%d %H:%M:%S%z")
+
+    if start_ist < session_start:
+        merged["provenance_flag"] = "PID_PREDATES_SESSION"
+        merged = _append_status_note(
+            merged,
+            (
+                f"provenance=pid_predates_session"
+                f" | pid_start={merged['pid_start_ist']}"
+                f" | session_start={merged['session_start_ist']}"
+            ),
+        )
+    return merged
+
+
+def merge_runtime_status(status: Dict[str, str], heartbeat: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(status or {})
+    if not heartbeat:
+        return merged
+
+    hb_state = str(heartbeat.get("state", "")).strip().upper()
+    if hb_state:
+        heartbeat_time_text = next(
+            (
+                str(heartbeat.get(field, "")).strip()
+                for field in ("ts", "ts_ist", "ts_utc", "updated_at_ist", "updated_at")
+                if str(heartbeat.get(field, "")).strip()
+            ),
+            "",
+        )
+        status_time_text = next(
+            (
+                str(merged.get(field, "")).strip()
+                for field in ("ts", "ts_ist", "updated_at_ist", "updated_at")
+                if str(merged.get(field, "")).strip()
+            ),
+            "",
+        )
+        heartbeat_time = _parse_status_datetime(heartbeat_time_text)
+        status_time = _parse_status_datetime(status_time_text)
+        merged["heartbeat_state"] = hb_state
+        merged["heartbeat_ts"] = heartbeat_time_text
+        merged["heartbeat_ts_utc"] = str(heartbeat.get("ts_utc", "")).strip()
+        merged["heartbeat_idle_sec"] = str(heartbeat.get("idle_sec", "")).strip()
+        merged["heartbeat_note"] = str(heartbeat.get("note", "")).strip()
+        # A heartbeat from a newer trading date supersedes an old terminal
+        # status file.  This prevents, for example, a Friday SUCCESS badge
+        # from painting Monday green after Monday's worker reached WAITING and
+        # exited without publishing a new terminal status.
+        if (
+            heartbeat_time is not None
+            and status_time is not None
+            and heartbeat_time.date() > status_time.date()
+            and hb_state not in {"RUNNING", "RESTARTING", "COOLDOWN"}
+        ):
+            merged["previous_status"] = str(merged.get("status", "")).strip() or "UNKNOWN"
+            merged["previous_status_ts"] = status_time_text
+            merged["status"] = hb_state
+            merged["ts"] = heartbeat_time_text
+            for field in ("phase", "slot", "reason"):
+                value = str(heartbeat.get(field, "")).strip()
+                if value:
+                    merged[field] = value
+            merged["status_scope"] = "newer_heartbeat_supersedes_prior_session"
+        # Newest-evidence-wins: if the heartbeat file was not touched recently,
+        # a stale RUNNING state must not override a newer worker STOPPED/CRASHED
+        # status. The file age is injected by _v7_monitor_status_for before this
+        # function is called.
+        hb_file_age = heartbeat.get("_file_age_sec")
+        hb_is_stale = (
+            hb_file_age is not None
+            and HB_STALE_RUNNING_OVERRIDE_SEC > 0
+            and float(hb_file_age) > HB_STALE_RUNNING_OVERRIDE_SEC
+        )
+        if hb_state in {"RUNNING", "RESTARTING", "COOLDOWN"}:
+            if hb_is_stale:
+                # Stale heartbeat — do not promote dead process to green.
+                # Keep whatever the worker status file says, but annotate it.
+                merged.setdefault("status", "STALE_HB_RUNNING")
+                merged["heartbeat_stale"] = "true"
+                merged["heartbeat_file_age_sec"] = str(hb_file_age)
+            else:
+                merged["status"] = hb_state
+        elif "status" not in merged:
+            merged["status"] = hb_state
+    return merged
+
+
+def infer_scanner_runtime_status(key: str, path: Path, status: Dict[str, str]) -> Dict[str, str]:
+    if not key.startswith("live_combined_csv_"):
+        return dict(status or {})
+
+    merged = dict(status or {})
+    current = str(merged.get("status", "")).strip().upper()
+    if current in {"RUNNING", "RESTARTING", "COOLDOWN"}:
+        return merged
+    if not path.exists():
+        return merged
+    try:
+        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, tz=IST)
+    except OSError:
+        return merged
+    now = dt.datetime.now(IST)
+    age_min = max(0.0, (now - mtime).total_seconds() / 60.0)
+    if mtime.date() == now.date() and age_min <= 20.0:
+        merged["status"] = "RUNNING"
+        merged["derived_status"] = f"log_fresh_{age_min:.1f}m"
+    return merged
+
+
+def _count_csv_data_rows(path: Path, side: Optional[str] = None) -> int:
+    if not path.exists():
+        return 0
+    side_upper = str(side or "").strip().upper()
+    count = 0
+    try:
+        with open(path, newline="", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if side_upper and str(row.get("side", "")).strip().upper() != side_upper:
+                    continue
+                count += 1
+    except (OSError, csv.Error):
+        return 0
+    return count
+
+
+def infer_v16_side_output_status(side_csv_path: Path, side: str, detected_csv_path: Path) -> Dict[str, str]:
+    side_upper = str(side or "").strip().upper()
+    side_rows = _count_csv_data_rows(side_csv_path)
+    detected_rows = _count_csv_data_rows(detected_csv_path, side=side_upper)
+    derived = f"side_rows={side_rows}; detected_rows={detected_rows}"
+
+    if not side_csv_path.exists():
+        return {
+            "status": "MISSING_OUTPUT" if detected_rows > 0 else "WAITING_OUTPUT",
+            "derived_status": derived,
+        }
+
+    if side_rows <= 0:
+        return {
+            "status": "EMPTY_OUTPUT",
+            "derived_status": derived,
+        }
+
+    if not detected_csv_path.exists():
+        return {
+            "status": "STALE_OUTPUT",
+            "derived_status": f"{derived}; reason=missing_detected_csv",
+        }
+
+    if detected_rows <= 0:
+        return {
+            "status": "STALE_OUTPUT",
+            "derived_status": f"{derived}; reason=no_detected_rows",
+        }
+
+    if detected_rows > 0 and side_rows < detected_rows:
+        return {
+            "status": "STALE_OUTPUT",
+            "derived_status": f"{derived}; reason=row_count_lag",
+        }
+
+    if detected_rows > 0 and detected_csv_path.exists():
+        try:
+            side_mtime = side_csv_path.stat().st_mtime
+            detected_mtime = detected_csv_path.stat().st_mtime
+        except OSError:
+            side_mtime = 0.0
+            detected_mtime = 0.0
+        lag_sec = max(0.0, detected_mtime - side_mtime)
+        if lag_sec > 2.0:
+            return {
+                "status": "STALE_OUTPUT",
+                "derived_status": f"{derived}; reason=mtime_lag_{lag_sec:.1f}s",
+            }
+
+    return {"derived_status": derived}
+
+
+def _parse_schtasks_verbose(text: str) -> Dict[str, Dict[str, str]]:
+    tasks: Dict[str, Dict[str, str]] = {}
+    if not text:
+        return tasks
+    blocks = re.split(r"(?:\r?\n){2,}", text)
+    for block in blocks:
+        if "TaskName:" not in block:
+            continue
+        record: Dict[str, str] = {}
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if not line or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            record[key.strip()] = value.strip()
+        task_name = str(record.get("TaskName", "")).strip()
+        if task_name:
+            tasks[task_name] = record
+    return tasks
+
+
+def _query_task_scheduler_snapshot() -> Dict[str, Dict[str, str]]:
+    tasks: Dict[str, Dict[str, str]] = {}
+    try:
+        completed = subprocess.run(
+            ["schtasks", "/Query", "/FO", "LIST", "/V"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+        raw = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        parsed = _parse_schtasks_verbose(raw)
+        tasks = {
+            task_name: fields
+            for task_name, fields in parsed.items()
+            if str(task_name).strip().upper().startswith("\\EQIDV2")
+        }
+    except (OSError, subprocess.SubprocessError):
+        tasks = {}
+    return tasks
+
+
+def _refresh_task_scheduler_snapshot_background() -> None:
+    global _TASK_SNAPSHOT_CACHE_AT, _TASK_SNAPSHOT_CACHE, _TASK_SNAPSHOT_REFRESHING
+    tasks = _query_task_scheduler_snapshot()
+    observed = dt.datetime.now(dt.timezone.utc)
+    with _TASK_SNAPSHOT_LOCK:
+        if tasks:
+            _TASK_SNAPSHOT_CACHE = tasks
+        # A transient timeout is not evidence that tasks disappeared.  Keep
+        # the last known-good data and delay the next refresh attempt.
+        _TASK_SNAPSHOT_CACHE_AT = observed
+        _TASK_SNAPSHOT_REFRESHING = False
+
+
+def load_task_scheduler_snapshot(force: bool = False) -> Dict[str, Dict[str, str]]:
+    """Return task metadata without blocking dashboard HTTP refreshes.
+
+    A full Windows ``schtasks /Query /V`` regularly takes 10-15 seconds on
+    this host. The first request waits for one scheduler query so historical
+    failures from disabled tasks are not briefly presented as active failures.
+    Subsequent requests use stale-while-refresh: the last good snapshot is
+    returned immediately and one daemon refreshes it in the background.
+    ``force=True`` remains synchronous for diagnostics and tests.
+    """
+    global _TASK_SNAPSHOT_CACHE_AT, _TASK_SNAPSHOT_CACHE, _TASK_SNAPSHOT_REFRESHING
+    if force:
+        tasks = _query_task_scheduler_snapshot()
+        observed = dt.datetime.now(dt.timezone.utc)
+        with _TASK_SNAPSHOT_LOCK:
+            if tasks:
+                _TASK_SNAPSHOT_CACHE = tasks
+            _TASK_SNAPSHOT_CACHE_AT = observed
+            return dict(_TASK_SNAPSHOT_CACHE)
+
+    with _TASK_SNAPSHOT_LOCK:
+        cold_start = _TASK_SNAPSHOT_CACHE_AT is None and not _TASK_SNAPSHOT_CACHE
+    if cold_start:
+        # Only one concurrent first request may query schtasks. A warm process
+        # never waits on this lock or on the scheduler subprocess.
+        with _TASK_SNAPSHOT_BOOTSTRAP_LOCK:
+            with _TASK_SNAPSHOT_LOCK:
+                cold_start = _TASK_SNAPSHOT_CACHE_AT is None and not _TASK_SNAPSHOT_CACHE
+            if cold_start:
+                return load_task_scheduler_snapshot(force=True)
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    with _TASK_SNAPSHOT_LOCK:
+        age_sec = (
+            (now_utc - _TASK_SNAPSHOT_CACHE_AT).total_seconds()
+            if _TASK_SNAPSHOT_CACHE_AT is not None
+            else float("inf")
+        )
+        if age_sec < _TASK_SNAPSHOT_CACHE_TTL_SEC:
+            return dict(_TASK_SNAPSHOT_CACHE)
+        if not _TASK_SNAPSHOT_REFRESHING:
+            _TASK_SNAPSHOT_REFRESHING = True
+            threading.Thread(
+                target=_refresh_task_scheduler_snapshot_background,
+                name="eqidv2-task-snapshot-refresh",
+                daemon=True,
+            ).start()
+        return dict(_TASK_SNAPSHOT_CACHE)
+
+
+def _parse_scheduler_datetime(raw: object) -> Optional[dt.datetime]:
+    text = str(raw or "").strip()
+    if not text or text.upper() == "N/A":
+        return None
+    parsed = _parse_status_datetime(text)
+    if parsed is not None:
+        return parsed
+    for fmt in (
+        "%d-%m-%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%m/%d/%Y %I:%M:%S %p",
+    ):
+        try:
+            return dt.datetime.strptime(text, fmt).replace(tzinfo=IST)
+        except ValueError:
+            continue
+    return None
+
+
+def apply_scheduler_status(
+    card_id: str,
+    status: Dict[str, str],
+    task_snapshot: Dict[str, Dict[str, str]],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> Dict[str, str]:
+    merged = dict(status or {})
+    task_names = CARD_TASK_NAMES.get(card_id, ())
+    if not task_names:
+        return merged
+
+    records = [task_snapshot.get(task_name) for task_name in task_names if task_snapshot.get(task_name)]
+    if not records:
+        if card_id == "fno_options_atm_fetch_5min" and task_snapshot and not merged.get("status"):
+            merged["status"] = "NOT_SCHEDULED"
+            merged["derived_status"] = "Options fetch is delivered but intentionally not scheduled."
+        return merged
+
+    def _upper(value: object) -> str:
+        return str(value or "").strip().upper()
+
+    scheduler_states = [_upper(rec.get("Scheduled Task State")) for rec in records]
+    scheduler_statuses = [_upper(rec.get("Status")) for rec in records]
+    next_runs = [
+        str(rec.get("Next Run Time", "")).strip()
+        for rec in records
+        if str(rec.get("Next Run Time", "")).strip() and str(rec.get("Next Run Time", "")).strip().upper() != "N/A"
+    ]
+
+    all_disabled = bool(records) and all(
+        state == "DISABLED" or status_val == "DISABLED"
+        for state, status_val in zip(scheduler_states, scheduler_statuses)
+    )
+    any_enabled = any(state == "ENABLED" for state in scheduler_states)
+    any_running = any(status_val == "RUNNING" for status_val in scheduler_statuses)
+
+    if all_disabled:
+        scheduler_status = "DISABLED"
+        scheduler_state = "DISABLED"
+    elif any_running:
+        scheduler_status = "RUNNING"
+        scheduler_state = "ENABLED" if any_enabled else ""
+    elif any_enabled:
+        scheduler_status = "SCHEDULED"
+        scheduler_state = "ENABLED"
+    else:
+        scheduler_status = ""
+        scheduler_state = ""
+
+    if scheduler_state:
+        merged["scheduler_state"] = scheduler_state
+    if scheduler_status:
+        merged["scheduler_status"] = scheduler_status
+    if next_runs:
+        merged["scheduler_next_run"] = min(next_runs)
+    merged["scheduler_tasks"] = ", ".join(task_names)
+
+    current = _upper(merged.get("status"))
+    runtime_active_states = {
+        "RUNNING",
+        "RESTARTING",
+        "COOLDOWN",
+        "STALE_HB_RUNNING",
+        "RECOVERED",
+    }
+    runtime_pids = [
+        parsed
+        for parsed in (
+            _parse_pid_value(merged.get("worker_pid")),
+            _parse_pid_value(merged.get("launcher_pid")),
+            _parse_pid_value(merged.get("supervisor_pid")),
+            _parse_pid_value(merged.get("pid")),
+        )
+        if parsed is not None
+    ]
+    current_time = now_ist or dt.datetime.now(IST)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=IST)
+    else:
+        current_time = current_time.astimezone(IST)
+    if scheduler_status == "DISABLED":
+        # A disabled Scheduled Task does not mean an independently started
+        # worker is stopped.  Preserve fresh runtime evidence so manually
+        # launched sessions remain in their normal dashboard section, while
+        # retaining scheduler_state=DISABLED as a separate warning/future-run
+        # fact.
+        # A PID can be reused long after the heartbeat writer has stopped.
+        # A disabled task is a manual run only with runtime evidence from this
+        # IST session; an old RUNNING status plus a live, unrelated PID is not
+        # proof that this worker is still running.
+        same_day_runtime_evidence = any(
+            parsed is not None and parsed.date() == current_time.date()
+            for parsed in (
+                _parse_status_datetime(merged.get(field, ""))
+                for field in (
+                    "heartbeat_ts", "heartbeat_ts_utc", "ts", "ts_ist",
+                    "updated_at_ist", "updated_at", "last_update_ist",
+                )
+            )
+        )
+        if current in runtime_active_states and same_day_runtime_evidence:
+            if runtime_pids:
+                runtime_is_live = any(_pid_is_alive_fast(pid) for pid in runtime_pids)
+            else:
+                try:
+                    heartbeat_idle_sec = float(merged.get("heartbeat_idle_sec", "inf"))
+                except (TypeError, ValueError):
+                    heartbeat_idle_sec = float("inf")
+                runtime_is_live = (
+                    _upper(merged.get("heartbeat_state")) == "RUNNING"
+                    and heartbeat_idle_sec <= HB_STALE_RUNNING_OVERRIDE_SEC
+                )
+        else:
+            runtime_is_live = False
+        if runtime_is_live:
+            merged["runtime_start_mode"] = "MANUAL"
+            merged["scheduler_attention"] = "DISABLED_WHILE_RUNNING"
+            merged = _append_status_note(
+                merged,
+                "worker is running manually; automatic scheduled start is disabled",
+            )
+        else:
+            merged["status"] = "DISABLED"
+            merged.pop("runtime_start_mode", None)
+            merged.pop("scheduler_attention", None)
+    elif not current and scheduler_status:
+        merged["status"] = scheduler_status
+
+    # A terminal status file belongs to the run that wrote it. Before today's
+    # scheduled run, retain that evidence as history instead of presenting it
+    # as today's active state (for example, yesterday's EOD QC failure).
+    # Status writers are not fully uniform: the older supervisors use ``ts``
+    # while newer research jobs (including the V11 shadow monitor) use
+    # ``ts_ist`` or ``updated_at_ist``.  Read the first populated timestamp so
+    # a prior-day terminal state can be shown as history while today's enabled
+    # run is still waiting for its scheduled start.
+    status_time_text = next(
+        (
+            str(merged.get(field, "")).strip()
+            for field in ("ts", "ts_ist", "updated_at_ist", "updated_at")
+            if str(merged.get(field, "")).strip()
+        ),
+        "",
+    )
+    status_time = _parse_status_datetime(status_time_text)
+    next_run = min(
+        (parsed for parsed in (_parse_scheduler_datetime(value) for value in next_runs) if parsed),
+        default=None,
+    )
+    active_states = runtime_active_states
+    if (
+        scheduler_status == "SCHEDULED"
+        and merged.get("status_scope") != "awaiting_today_scheduled_run"
+        and current not in active_states
+        and status_time is not None
+        and status_time.date() < current_time.date()
+        and next_run is not None
+        and next_run.date() == current_time.date()
+        and next_run > current_time
+    ):
+        merged["previous_status"] = current or "UNKNOWN"
+        merged["previous_status_ts"] = status_time_text
+        for field in ("reason", "error", "phase"):
+            value = str(merged.get(field, "")).strip()
+            if value:
+                merged[f"previous_{field}"] = value
+        merged["status"] = "SCHEDULED"
+        merged["phase"] = "WAIT_SCHEDULE"
+        merged["status_scope"] = "awaiting_today_scheduled_run"
+        merged = _append_status_note(
+            merged,
+            f"previous_run={current or 'UNKNOWN'} at {merged['previous_status_ts']}",
+        )
+
+    return merged
+
+
+def reconcile_authentication_status(
+    status: Dict[str, str],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> Dict[str, str]:
+    """Let a newer same-day auth session supersede an older runner failure."""
+    merged = dict(status or {})
+    if str(merged.get("status", "")).strip().upper() != "FAILED":
+        return merged
+    if not AUTH_V2_STATE_FILE.exists() or not AUTH_V2_ACCESS_TOKEN_FILE.exists():
+        return merged
+
+    try:
+        state = json.loads(AUTH_V2_STATE_FILE.read_text(encoding="utf-8", errors="replace"))
+        if not isinstance(state, dict):
+            return merged
+        current_ist = now_ist or dt.datetime.now(IST)
+        if current_ist.tzinfo is None:
+            current_ist = current_ist.replace(tzinfo=IST)
+        today = current_ist.astimezone(IST).date().isoformat()
+        date_fields = ("session_date_ist",) + tuple(
+            f"session_date_ist_app{index}" for index in range(2, 9)
+        )
+        current_apps = sum(
+            1 for field in date_fields if str(state.get(field, "")).strip() == today
+        )
+        if current_apps != len(date_fields):
+            return merged
+
+        token_paths = [AUTH_V2_ACCESS_TOKEN_FILE] + [
+            AUTH_V2_STATE_FILE.parent / f"access_token{index}.txt"
+            for index in range(2, 9)
+        ]
+        for token_path in token_paths:
+            if not token_path.read_text(encoding="utf-8", errors="replace").strip():
+                return merged
+
+        failure_at = _parse_status_datetime(str(merged.get("ts", "")))
+        token_times = [
+            dt.datetime.fromtimestamp(token_path.stat().st_mtime, tz=IST)
+            for token_path in token_paths
+        ]
+        state_at = _parse_status_datetime(str(state.get("updated_at_ist", "")))
+        recovery_at = max(
+            candidate
+            for candidate in (*token_times, state_at)
+            if candidate is not None
+        )
+        if failure_at is not None and recovery_at <= failure_at:
+            return merged
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return merged
+
+    merged["previous_status"] = "FAILED"
+    merged["previous_status_ts"] = str(merged.get("ts", "")).strip()
+    merged["status"] = "SUCCESS"
+    merged["session_date_ist"] = today
+    merged["authenticated_apps"] = "8"
+    merged["configured_apps"] = "8"
+    merged["recovered_at_ist"] = recovery_at.astimezone(IST).strftime(
+        "%Y-%m-%d %H:%M:%S%z"
+    )
+    merged["recovery_source"] = "newer_same_day_complete_auth_roster"
+    return merged
+
+
+FNO_RECOVERY_WORKER_STATUS_FILES: Dict[str, str] = {
+    "fno_oi_fetch_5min_fast_production": "fno_oi_fetch_5min_fast_production.status",
+    "fno_options_atm_fetch_5min": "fno_options_atm_fetch_5min.status",
+    "fno_oi_fetch_5min": "fno_oi_fetch_5min.status",
+    "fno_oi_fetch_5min_fast_shadow": "fno_oi_fetch_5min_fast_shadow.status",
+    "fno_oi_feature_ranker": "fno_oi_feature_ranker.status",
+}
+
+
+def reconcile_fno_worker_recovery(
+    card_id: str,
+    status: Dict[str, str],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> Dict[str, str]:
+    """Expose a newer same-day worker recovery without erasing a supervisor failure."""
+    merged = dict(status or {})
+    worker_filename = FNO_RECOVERY_WORKER_STATUS_FILES.get(card_id)
+    if not worker_filename or str(merged.get("status", "")).strip().upper() != "FAILED":
+        return merged
+
+    worker = parse_status_file(RUNTIME_STATUS_DIR / worker_filename)
+    if str(worker.get("status", "")).strip().upper() != "SUCCESS":
+        return merged
+    failure_at = _parse_status_datetime(merged.get("ts", ""))
+    recovery_at = _parse_status_datetime(worker.get("ts", ""))
+    current = now_ist or dt.datetime.now(IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=IST)
+    if (
+        failure_at is None
+        or recovery_at is None
+        or recovery_at <= failure_at
+        or recovery_at.astimezone(IST).date() != current.astimezone(IST).date()
+    ):
+        return merged
+
+    merged["previous_status"] = "FAILED"
+    merged["previous_status_ts"] = str(merged.get("ts", "")).strip()
+    merged["previous_reason"] = str(merged.get("reason", "")).strip()
+    merged["status"] = "RECOVERED"
+    merged["recovered_at_ist"] = recovery_at.astimezone(IST).isoformat(
+        timespec="seconds"
+    )
+    merged["recovery_source"] = "newer_same_day_worker_success"
+    merged["recovery_phase"] = str(worker.get("phase", "")).strip()
+    merged["recovery_output"] = str(worker.get("output", "")).strip()
+    return merged
+
+
+def tail_text(path: Path, lines: int = 80, max_bytes: int = 120_000) -> str:
+    if not path.exists():
+        return ""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            chunk = f.read()
+        text = chunk.decode("utf-8", errors="replace")
+        return "\n".join(text.splitlines()[-lines:])
+    except OSError as exc:
+        return f"[ERROR reading log: {exc}]"
+
+
+def report_text(path: Path, lines: int = 80, max_bytes: int = 400_000, max_lines: int = 1200) -> str:
+    """Read a published markdown report from the top.
+
+    Tailing a markdown report drops the title, the ``key: value`` preamble and
+    the table header row once the report outgrows the tail window, which leaves
+    the dashboard with orphan table rows it cannot render. Reports are small, so
+    read them whole and only fall back to tailing if one grows unexpectedly big.
+    """
+    if not path.exists():
+        return ""
+    try:
+        size = path.stat().st_size
+        if size > max_bytes:
+            return tail_text(path, lines=lines, max_bytes=max_bytes)
+        text = path.read_bytes().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return f"[ERROR reading report: {exc}]"
+    all_lines = text.splitlines()
+    if len(all_lines) > max_lines:
+        return "\n".join(all_lines[-max(lines, max_lines // 2):])
+    return "\n".join(all_lines)
+
+
+def _backtesting_v13_v10_g_view(
+    status: Dict[str, Any], *, today_ist: str, lines: int = 500,
+) -> Tuple[Path, str, str]:
+    """Render only the dedicated G daily report or its current running log."""
+    session_date = str(status.get("session_date") or status.get("session_date_ist") or today_ist)
+    display = str(Path(FNO_ACTIVE_PROFILE.backtest_dir) / "latest" / FNO_G_BACKTEST_REPORT.name)
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session_date):
+            raise ValueError("Session date must use YYYY-MM-DD")
+        session_date = dt.date.fromisoformat(session_date).isoformat()
+    except ValueError:
+        return FNO_G_BACKTEST_REPORT, display, (
+            "# Backtesting result v13-v10-G\n\nStatus: INVALID_SESSION_DATE\n\n"
+            "The runtime session date must be a valid YYYY-MM-DD date.\n"
+            "No dated log or previous report has been substituted.\n"
+        )
+    runtime = str(status.get("status", "") or "").strip().upper()
+    current_log = LOG_DIR / f"{FNO_ACTIVE_PROFILE.backtest_dir}_{session_date}.log"
+    if runtime in {"RUNNING", "RESTARTING", "COOLDOWN"} and current_log.is_file():
+        text = (
+            "# Backtesting result v13-v10-G\n\n"
+            f"Session date: {session_date}\nStatus: {runtime}\n\n"
+            + tail_text(current_log, lines=lines)
+        )
+        return current_log, current_log.name, text
+    if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        try:
+            from ai_platform.observability.g3_analysis import verified_package
+            run, manifest, _ = verified_package(FNO_G_BACKTEST_ROOT, history=False, allow_legacy=True)
+            metric = manifest["metrics"]
+            coverage = manifest.get("coverage", {})
+            report_lines = ["# V13-V10-G-3 daily backtest", "",
+                f"Session date: {manifest['session_date']}", f"State: {manifest['state']}",
+                "Evidence: VERIFIED_PRODUCTION_DAILY", f"Strategy version: {manifest['strategy_version']}",
+                f"Strategy fingerprint: {manifest['strategy_fingerprint']}", "",
+                f"Selected orders: {metric.get('selected_orders')}", f"Executed trades: {metric.get('trades')}",
+                f"Net P&L (rupees): {metric.get('net_profit_rupees', metric.get('net_pnl_rupees'))}",
+                f"Wins / losses: {metric.get('wins', 0)} / {metric.get('losses', 0)}",
+                f"Daily-close maximum drawdown (rupees): {metric.get('daily_close_drawdown_rupees', 'unavailable')}",
+                f"Round-trip cost estimate (basis points): {metric.get('cost_bps', 'unavailable')}",
+                f"Included stocks: {coverage.get('included_stocks', 'recorded in source coverage')}",
+                f"Excluded stocks: {len(coverage.get('excluded_stocks', []))}", "",
+                f"Verified run: `{run}`", "Execution authority: false. Historical OHLC simulation, not broker fills."]
+            if manifest["strategy_version"] != FNO_ACTIVE_PROFILE.version:
+                report_lines[4] = "Evidence: VERIFIED_ARCHIVED_PRODUCTION_DAILY"
+                report_lines += ["", f"Current strategy: {FNO_ACTIVE_PROFILE.version}.",
+                    "Awaiting the first verified daily result for the current strategy. The result above retains its original strategy version."]
+            if runtime and runtime not in {"SUCCESS", "SUCCESS_WITH_EXCLUDED_SESSIONS"}:
+                report_lines += ["", f"Latest attempt: {session_date} / {runtime}. The verified prior result remains displayed."]
+            return FNO_G_BACKTEST_REPORT, display, "\n".join(report_lines) + "\n"
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return FNO_G_BACKTEST_REPORT, display, (
+                "# V13-V10-G-3 daily backtest\n\nState: AWAITING_VERIFIED_G3_REPORT\n\n"
+                "The current production manifest is missing, incomplete or inconsistent. No prior unverified report is substituted.\n"
+            )
+    projected = report_text(FNO_G_BACKTEST_REPORT, lines=lines)
+    if projected:
+        return FNO_G_BACKTEST_REPORT, display, projected
+    # A missing G artifact must never fall back to a V6/V8/V10/V11/V12 ledger,
+    # its old latest log, or a prior session's current-looking comparison.
+    text = (
+        "# Backtesting result v13-v10-G\n\n"
+        f"Session date: {session_date}\nStatus: AWAITING_G_REPORT\n"
+        f"Runtime status: {runtime or 'NOT_RUN'}\n\n"
+        "The dedicated V13-v10-G daily report has not been published.\n"
+        "No result is inferred from historical multi-strategy comparisons.\n"
+    )
+    return FNO_G_BACKTEST_REPORT, display, text
+
+
+def _format_data_for_backtesting_live_view(today_ist: str) -> str:
+    """Expose the live 15:45 pipeline instead of yesterday's final combined log."""
+    stages = (
+        (
+            "File merge",
+            LOG_DIR / f"moving_files_{today_ist}.log",
+            r"END moving_files\.py \(exit=(\d+)\)",
+        ),
+        (
+            "Full-universe 1-minute build",
+            LOG_DIR / f"stocksonly_1min_{today_ist}.log",
+            r"END trading_data_continous_run_historical_alltf_v3_parquet_stocksonly_1min\.py \(exit=(\d+)\)",
+        ),
+        (
+            "Data completeness verifier",
+            LOG_DIR / f"data_verify_{today_ist}.log",
+            r"END data_for_backtesting_verify\.py \(exit=(\d+)\)",
+        ),
+    )
+    wrapper = LOG_DIR / f"data_for_backtesting_{today_ist}.log"
+    wrapper_tail = tail_text(wrapper, lines=12)
+    wrapper_end = re.search(
+        r"END Data for backtesting parallel session \(exit=(\d+)\)",
+        wrapper_tail,
+    )
+    overall = (
+        f"DONE (exit={wrapper_end.group(1)})"
+        if wrapper_end
+        else ("RUNNING" if wrapper.exists() else "WAITING FOR 15:45 START")
+    )
+    output = [
+        "# Data for backtesting — live progress",
+        "",
+        f"- Trading date: `{today_ist}`",
+        f"- Pipeline: **{overall}**",
+        "- Dependency: the 16:20 V13-v10-G daily backtest waits for this pipeline and a PASS verifier.",
+        "",
+        "| Stage | State | Updated | Latest evidence |",
+        "|---|---|---|---|",
+    ]
+    for label, path, end_pattern in stages:
+        stage_tail = tail_text(path, lines=30)
+        end_match = re.search(end_pattern, stage_tail)
+        if end_match:
+            state = f"DONE exit={end_match.group(1)}"
+        elif path.exists():
+            state = "RUNNING"
+        else:
+            state = "WAITING"
+        evidence_lines = [line.strip() for line in stage_tail.splitlines() if line.strip()]
+        evidence = evidence_lines[-1] if evidence_lines else "-"
+        # While the verifier is active its redirected output is still in the
+        # temporary file; use that as the most current, honest progress line.
+        if label == "Data completeness verifier" and state == "RUNNING":
+            verify_live = tail_text(Path(f"{path}.stdout.tmp"), lines=8)
+            live_lines = [line.strip() for line in verify_live.splitlines() if line.strip()]
+            if live_lines:
+                evidence = live_lines[-1]
+        evidence = evidence.replace("|", "\\|")[:240]
+        output.append(f"| {label} | {state} | {iso_mtime(path) or '-'} | {evidence} |")
+    return "\n".join(output)
+
+
+def _read_csv_tail_rows(path: Path, limit: int = 30) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    rows: deque[dict[str, str]] = deque(maxlen=max(1, int(limit)))
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                if not row:
+                    continue
+                rows.append({str(k): ("" if v is None else str(v)) for k, v in row.items()})
+    except (OSError, csv.Error):
+        return []
+    return list(rows)
+
+
+def _pick_csv_value(row: dict[str, str], keys: Sequence[str]) -> str:
+    for key in keys:
+        val = str(row.get(key, "")).strip()
+        if val:
+            return val
+    return ""
+
+
+def _clip_text(value: str, width: int) -> str:
+    s = str(value)
+    if len(s) <= width:
+        return s
+    if width <= 1:
+        return s[:width]
+    return s[: width - 1] + "~"
+
+
+def _extract_time_only(value: str) -> str:
+    """
+    Strip YYYY-MM-DD and trailing timezone offsets from common datetime strings,
+    and keep only the time part.
+    Examples:
+      2026-02-24 11:05:18+0530 -> 11:05:18
+      2026-02-24T11:05:18+05:30 -> 11:05:18
+    """
+    s = str(value or "").strip()
+    if not s:
+        return s
+    m = re.match(r"^\d{4}-\d{2}-\d{2}[ T](.+)$", s)
+    if m:
+        s = m.group(1).strip()
+    s = re.sub(r"\s*(?:Z|[+-]\d{2}:?\d{2})$", "", s).strip()
+    return s
+
+
+def _shift_iso_5min(value: str) -> str:
+    """
+    Display-only shift: add 5 minutes to a bar-anchored ISO/naive timestamp so
+    bar-open stamps render as bar-close. Does NOT modify source data. Preserves
+    input format (date separator and tz offset) when possible; falls back to
+    naive HH:MM[:SS] arithmetic for bare time strings. Empty/unparsable -> original.
+    """
+    s = str(value or "").strip()
+    if not s:
+        return s
+    # Full datetime: YYYY-MM-DD(T| )HH:MM(:SS)?(tz)?
+    m = re.match(
+        r"^(\d{4}-\d{2}-\d{2})([ T])(\d{2}):(\d{2})(:\d{2}(?:\.\d+)?)?([+\-]\d{2}:?\d{2}|Z)?$",
+        s,
+    )
+    if m:
+        date_s, sep, hh, mm, sec, tz = m.groups()
+        total = int(hh) * 60 + int(mm) + 5
+        nh = (total // 60) % 24
+        nm = total % 60
+        return f"{date_s}{sep}{nh:02d}:{nm:02d}{sec or ''}{tz or ''}"
+    # Bare time: HH:MM(:SS)?
+    m = re.match(r"^(\d{2}):(\d{2})(:\d{2}(?:\.\d+)?)?$", s)
+    if m:
+        hh, mm, sec = m.groups()
+        total = int(hh) * 60 + int(mm) + 5
+        nh = (total // 60) % 24
+        nm = total % 60
+        return f"{nh:02d}:{nm:02d}{sec or ''}"
+    return s
+
+
+_BAR_SLOT_RE_FULL = re.compile(
+    r"\b(slot|target_slot|signal_bar)=(\d{4}-\d{2}-\d{2})([ T])(\d{2}):(\d{2})(:\d{2})?([+\-]\d{2}:?\d{2}|Z)?"
+)
+_BAR_SLOT_RE_HHMM = re.compile(r"\b(slot|target_slot|signal_bar)=(\d{2}):(\d{2})(?![:\d])")
+
+
+def _shift_bar_slots_in_text(text: str) -> str:
+    """
+    Display-only shift on raw log tails: rewrites `slot=`, `target_slot=`, and
+    `signal_bar=` tokens so bar-open stamps render as bar-close. Wallclock
+    timestamps (which never carry these prefixes) are left untouched.
+    """
+    if not text:
+        return text
+
+    def _full(m: "re.Match[str]") -> str:
+        key, date_s, sep, hh, mm, sec, tz = m.groups()
+        total = int(hh) * 60 + int(mm) + 5
+        nh = (total // 60) % 24
+        nm = total % 60
+        return f"{key}={date_s}{sep}{nh:02d}:{nm:02d}{sec or ''}{tz or ''}"
+
+    def _hhmm(m: "re.Match[str]") -> str:
+        key, hh, mm = m.group(1), int(m.group(2)), int(m.group(3))
+        total = hh * 60 + mm + 5
+        return f"{key}={(total // 60) % 24:02d}:{total % 60:02d}"
+
+    text = _BAR_SLOT_RE_FULL.sub(_full, text)
+    text = _BAR_SLOT_RE_HHMM.sub(_hhmm, text)
+    return text
+
+
+def _to_float_or_nan(value: str) -> float:
+    s = str(value or "").strip()
+    if not s:
+        return float("nan")
+    # tolerate display formats like Rs.+1,234.56
+    s = s.replace(",", "")
+    s = s.replace("Rs.", "").replace("RS.", "").replace("rs.", "")
+    s = s.replace("%", "")
+    try:
+        return float(s)
+    except ValueError:
+        return float("nan")
+
+
+def _fmt_indian_number(value: float, decimals: int = 2, signed: bool = False) -> str:
+    if math.isnan(value):
+        return "n/a"
+
+    sign = ""
+    if value < 0:
+        sign = "-"
+    elif signed and value > 0:
+        sign = "+"
+
+    abs_val = abs(value)
+    if decimals <= 0:
+        numeric = f"{abs_val:.0f}"
+        int_part = numeric
+        frac_part = ""
+    else:
+        numeric = f"{abs_val:.{decimals}f}"
+        int_part, frac_part = numeric.split(".", 1)
+
+    if len(int_part) > 3:
+        head = int_part[:-3]
+        tail = int_part[-3:]
+        groups = []
+        while len(head) > 2:
+            groups.append(head[-2:])
+            head = head[:-2]
+        if head:
+            groups.append(head)
+        groups.reverse()
+        int_part = ",".join(groups + [tail])
+
+    if decimals <= 0:
+        return f"{sign}{int_part}"
+    return f"{sign}{int_part}.{frac_part}"
+
+
+def _fmt_pct(value: float, signed: bool = True) -> str:
+    return f"{_fmt_indian_number(value, decimals=2, signed=signed)}%"
+
+
+def _fmt_rs(value: float) -> str:
+    return f"Rs.{_fmt_indian_number(value, decimals=2, signed=True)}"
+
+
+def _fmt_rs_plain(value: float) -> str:
+    return f"Rs.{_fmt_indian_number(value, decimals=2, signed=False)}"
+
+
+def _compute_holding_total_pnl_pct(row: dict[str, str]) -> str:
+    qty = _to_float_or_nan(_pick_csv_value(row, ("quantity", "qty")))
+    t1_qty = _to_float_or_nan(_pick_csv_value(row, ("t1_quantity",)))
+    avg = _to_float_or_nan(_pick_csv_value(row, ("average_price", "avg_price", "price")))
+    pnl = _to_float_or_nan(_pick_csv_value(row, ("pnl", "unrealised", "unrealized")))
+
+    if math.isnan(avg) or math.isnan(pnl):
+        return ""
+
+    q = 0.0
+    if not math.isnan(qty):
+        q += float(qty)
+    if not math.isnan(t1_qty):
+        q += float(t1_qty)
+    if q <= 0.0:
+        return ""
+
+    invested = q * float(avg)
+    if invested <= 0.0:
+        return ""
+
+    return str((float(pnl) * 100.0) / invested)
+
+
+def _format_csv_projection(
+    path: Path,
+    columns: Sequence[Tuple[str, Sequence[str]]],
+    limit_rows: int = 25,
+    time_only_cols: Optional[Set[str]] = None,
+    time_shift_5min_cols: Optional[Set[str]] = None,
+    sort_numeric_desc_by_keys: Optional[Sequence[str]] = None,
+    total_numeric_by_keys: Optional[Sequence[str]] = None,
+    total_numeric_label: str = "",
+    total_numeric_first: bool = False,
+    indian_numeric_cols: Optional[Set[str]] = None,
+    indian_int_cols: Optional[Set[str]] = None,
+    percent_cols: Optional[Set[str]] = None,
+    signed_numeric_cols: Optional[Set[str]] = None,
+    computed_cols: Optional[Dict[str, Callable[[dict[str, str]], str]]] = None,
+) -> str:
+    """
+    Render a compact fixed-width table from selected CSV columns.
+    Shows latest rows (oldest-to-newest order within the selected tail window).
+    """
+    if not path.exists():
+        return ""
+
+    rows_raw = _read_csv_tail_rows(path, limit=limit_rows)
+    if not rows_raw:
+        return "(no rows yet)"
+
+    computed_cols = dict(computed_cols or {})
+
+    if sort_numeric_desc_by_keys:
+        def _pick_numeric_raw_for_sort(row: dict[str, str], keys: Sequence[str]) -> str:
+            for key in keys:
+                if key in computed_cols:
+                    try:
+                        val = str(computed_cols[key](row) or "").strip()
+                    except Exception:
+                        val = ""
+                else:
+                    val = _pick_csv_value(row, (key,))
+                if val:
+                    return val
+            return ""
+
+        def _sort_key(row: dict[str, str]) -> tuple[int, float]:
+            raw = _pick_numeric_raw_for_sort(row, sort_numeric_desc_by_keys)
+            num = _to_float_or_nan(raw)
+            if not math.isnan(num):
+                return (0, -float(num))
+            return (1, 0.0)
+
+        rows_raw = sorted(rows_raw, key=_sort_key)
+
+    total_val = 0.0
+    total_count = 0
+    if total_numeric_by_keys:
+        for row in rows_raw:
+            raw = _pick_csv_value(row, total_numeric_by_keys)
+            num = _to_float_or_nan(raw)
+            if math.isnan(num):
+                continue
+            total_val += float(num)
+            total_count += 1
+
+    rows: list[dict[str, str]] = []
+    time_only_cols = set(time_only_cols or set())
+    time_shift_5min_cols = set(time_shift_5min_cols or set())
+    indian_numeric_cols = set(indian_numeric_cols or set())
+    indian_int_cols = set(indian_int_cols or set())
+    percent_cols = set(percent_cols or set())
+    signed_numeric_cols = set(signed_numeric_cols or set())
+    for row in rows_raw:
+        projected: dict[str, str] = {}
+        for col_name, key_candidates in columns:
+            if col_name in computed_cols:
+                try:
+                    val = str(computed_cols[col_name](row) or "")
+                except Exception:
+                    val = ""
+            else:
+                val = _pick_csv_value(row, key_candidates)
+            if col_name in time_shift_5min_cols:
+                val = _shift_iso_5min(val)
+            if col_name in time_only_cols:
+                val = _extract_time_only(val)
+            elif col_name in percent_cols:
+                num = _to_float_or_nan(val)
+                if not math.isnan(num):
+                    val = _fmt_pct(num, signed=(col_name in signed_numeric_cols))
+            elif col_name in indian_int_cols:
+                num = _to_float_or_nan(val)
+                if not math.isnan(num):
+                    val = _fmt_indian_number(num, decimals=0, signed=(col_name in signed_numeric_cols))
+            elif col_name in indian_numeric_cols:
+                num = _to_float_or_nan(val)
+                if not math.isnan(num):
+                    val = _fmt_indian_number(num, decimals=2, signed=(col_name in signed_numeric_cols))
+            projected[col_name] = val
+        rows.append(projected)
+
+    widths: dict[str, int] = {}
+    for col_name, _ in columns:
+        max_len = max([len(col_name)] + [len(r[col_name]) for r in rows])
+        widths[col_name] = min(max_len, 30)
+
+    header = " | ".join(col_name.ljust(widths[col_name]) for col_name, _ in columns)
+    sep = "-+-".join("-" * widths[col_name] for col_name, _ in columns)
+    body = [
+        " | ".join(
+            _clip_text(r[col_name], widths[col_name]).ljust(widths[col_name])
+            for col_name, _ in columns
+        )
+        for r in rows
+    ]
+    out_lines = [f"rows_shown={len(rows)} (latest)", header, sep] + body
+    if total_numeric_by_keys and total_numeric_label:
+        total_text = _fmt_rs(total_val) if total_count > 0 else "n/a"
+        total_line = f"{total_numeric_label}={total_text}"
+        if total_numeric_first:
+            out_lines = [total_line] + out_lines
+        else:
+            out_lines.append(total_line)
+    return "\n".join(out_lines)
+
+
+def _fmt_price(value: float) -> str:
+    if math.isnan(value):
+        return ""
+    return _fmt_indian_number(value, decimals=2, signed=False)
+
+
+def _fmt_qty(value: float) -> str:
+    if math.isnan(value):
+        return ""
+    return _fmt_indian_number(value, decimals=0, signed=False)
+
+
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _json_status_scalars(payload: object) -> Dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for key, value in payload.items():
+        if isinstance(value, bool):
+            out[str(key)] = "true" if value else "false"
+        elif value is None:
+            out[str(key)] = ""
+        elif not isinstance(value, (dict, list)):
+            out[str(key)] = str(value)
+    return out
+
+
+def _g3_execution_scalar_evidence(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize CSV/.status scalars without treating missing values as zero."""
+    evidence = dict(record)
+    for key in ("capital_per_trade_rs", "leverage", "target_exposure_rs"):
+        if isinstance(evidence.get(key), str):
+            evidence[key] = float(evidence[key])
+    validate_g3_execution_metadata(evidence)
+    return evidence
+
+
+def _apply_g3_options_paper_identity(card_id: str, status: Dict[str, Any]) -> Dict[str, Any]:
+    """Read the options publisher's declared contract without importing its engine.
+
+    Older status files omit the equity fingerprint even though option order
+    states contain it. Keep that absence explicitly unverified, not mismatched.
+    """
+    result = dict(status)
+    version = FNO_V13_V10_G_STRATEGY_VERSION
+    option_version = f"FNO_V13_V10_G_3_OPTIONS_ONE_LOT_ATM_{FNO_OPTIONS_PROFILE_LABEL}_20261011"
+    role = dict(zip(FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS,
+                    ("long-entry", "short-entry", "trade-logger", "net-result")))[card_id]
+    fingerprint = expected_fingerprint(FNO_ACTIVE_PROFILE.name)
+    observed_fingerprint = str(status.get("strategy_fingerprint", "") or "").strip()
+    mismatches = [key for key, value in (
+        ("strategy_version", version), ("options_strategy_version", option_version),
+        ("execution_mode", "PAPER"), ("role", role),
+    ) if status.get(key) != value]
+    for key, expected in (("stop_pct", FNO_OPTIONS_STOP_PCT * 100),
+                          ("target_pct", FNO_OPTIONS_TARGET_PCT * 100)):
+        try:
+            matches = math.isclose(float(status[key]), expected, rel_tol=0, abs_tol=1e-9)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            matches = False
+        if not matches:
+            mismatches.append(key)
+    fingerprint_state = ("NOT_PUBLISHED" if not observed_fingerprint else
+                         "MATCH" if observed_fingerprint == fingerprint else "MISMATCH")
+    if fingerprint_state == "MISMATCH":
+        mismatches.append("strategy_fingerprint")
+    result.update(expected_strategy_version=version, expected_options_strategy_version=option_version,
+                  expected_strategy_fingerprint=fingerprint, active_strategy_profile=FNO_ACTIVE_PROFILE.name,
+                  fingerprint_evidence=fingerprint_state,
+                  strategy_identity_scope="OPTIONS_PAPER_STATUS_CONTRACT")
+    if not mismatches:
+        result["strategy_identity_state"] = "MATCH" if fingerprint_state == "MATCH" else "DECLARED_MATCH"
+        result["strategy_identity_detail"] = (
+            "G3 options PAPER versions, role and premium stop/target match. "
+            + ("Equity strategy fingerprint matches." if fingerprint_state == "MATCH" else
+               "This status publisher did not include a fingerprint; checksum identity is unverified."))
+        if fingerprint_state == "NOT_PUBLISHED":
+            previous = str(status.get("derived_status", "") or "").strip()
+            result["derived_status"] = result["strategy_identity_detail"] + (f" {previous}" if previous else "")
+        return result
+    result["strategy_identity_state"] = "MISMATCH" if status.get("strategy_version") else "AWAITING_G_RUNTIME"
+    result["strategy_identity_detail"] = "G3 options PAPER runtime contract differs or is missing: " + ", ".join(mismatches) + "."
+    previous_detail = str(status.get("derived_status", "") or "").strip()
+    result["derived_status"] = result["strategy_identity_detail"] + (f" Previous runtime: {previous_detail}" if previous_detail else "")
+    if str(status.get("status", "") or "").upper() in {"", "RUNNING", "SUCCESS", "COMPLETE", "COMPLETED", "READY", "IDLE", "DONE"}:
+        result["status"] = "PARTIAL" if status.get("strategy_version") else "WAITING"
+    return result
+
+
+def _apply_fno_v13_v10_g_identity(card_id: str, status: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep old task status from presenting a V6 process as a healthy G worker."""
+    if card_id not in (
+        *FNO_V13_V10_G_CARD_IDS,
+        *FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS,
+    ):
+        return status
+    if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" and card_id in FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS:
+        return _apply_g3_options_paper_identity(card_id, status)
+    result = dict(status)
+    observed = str(status.get("strategy_version", "") or "").strip()
+    result["expected_strategy_version"] = FNO_V13_V10_G_STRATEGY_VERSION
+    expected = expected_fingerprint(FNO_ACTIVE_PROFILE.name)
+    observed_fingerprint = str(status.get("strategy_fingerprint", "") or "")
+    result["expected_strategy_fingerprint"] = expected
+    result["active_strategy_profile"] = FNO_ACTIVE_PROFILE.name
+    if observed == FNO_V13_V10_G_STRATEGY_VERSION and (not expected or observed_fingerprint == expected):
+        result["strategy_identity_state"] = "MATCH"
+        if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" and card_id in FNO_V13_V10_G_CARD_IDS[-4:]:
+            result["configured_live_execution_policy"] = g3_execution_metadata()
+            try:
+                _g3_execution_scalar_evidence(status)
+            except (ValueError, TypeError):
+                result["live_execution_policy_state"] = "MISMATCH" if status.get("live_execution_policy_fingerprint") else "AWAITING_RUNTIME"
+                result["derived_status"] = "Configured G3 LIVE: ₹10,000 capital × 5; awaiting runtime evidence with the matching execution policy. " + str(status.get("derived_status", ""))
+                if str(status.get("status", "")).upper() in {"", "RUNNING", "SUCCESS", "COMPLETE", "COMPLETED", "READY", "IDLE", "DONE", "READY_DISARMED"}:
+                    result["status"] = "PARTIAL"
+                return result
+            result["live_execution_policy_state"] = "MATCH"
+        # A read-only G readiness export is distinct from an older supervisor
+        # failure. Preserve that failure while showing what was checked now.
+        if (card_id in FNO_V13_V10_G_CARD_IDS[-4:]
+                and str(status.get("readiness_only", "")).lower() == "true"
+                and str(status.get("workers_started", "")).lower() == "false"
+                and str(status.get("execution_enabled", "")).lower() == "false"
+                and str(status.get("armed", "")).lower() == "false"
+                and str(status.get("order_states", "")) == "0"
+                and status.get("execution_state") == "READY_DISARMED"
+                and status.get("session_date") == dt.datetime.now(IST).date().isoformat()
+                and str(status.get("status", "")).upper() != "DISABLED"
+                and str(status.get("scheduler_state", "")).upper() != "DISABLED"):
+            exported_at = _parse_status_datetime(status.get("updated_at_ist"))
+            runtime_at = _parse_status_datetime(status.get("ts"))
+            if exported_at and (runtime_at is None or exported_at > runtime_at):
+                result.setdefault("previous_status", status.get("status", ""))
+                result.setdefault("previous_reason", status.get("reason", ""))
+                result["status"] = "READY_DISARMED"
+                result["derived_status"] = (
+                    "G readiness checked; no LIVE workers started or broker requests made. "
+                    f"Earlier supervisor status: {result['previous_status']}."
+                )
+        return result
+    result["strategy_identity_state"] = "MISMATCH" if observed else "AWAITING_G_RUNTIME"
+    result["strategy_identity_detail"] = (
+        f"Expected {FNO_ACTIVE_PROFILE.label} with its current configuration; observed {observed}. Awaiting matching runtime evidence."
+        if observed else f"Awaiting {FNO_ACTIVE_PROFILE.label} runtime evidence in its isolated data directory."
+    )
+    previous_detail = str(status.get("derived_status", "") or "").strip()
+    result["derived_status"] = result["strategy_identity_detail"] + (
+        f" Previous runtime: {previous_detail}" if previous_detail else ""
+    )
+    if str(status.get("status", "") or "").upper() in {
+        "", "RUNNING", "SUCCESS", "COMPLETE", "COMPLETED", "READY", "IDLE", "DONE",
+    }:
+        result["status"] = "PARTIAL" if observed else "WAITING"
+    return result
+
+
+def _apply_fno_market_calendar(
+    card_id: str, status: Dict[str, Any], *, now_ist: Optional[dt.datetime] = None
+) -> Dict[str, Any]:
+    """Explain expected inactivity without concealing runtime failures."""
+    market_cards = (set(FNO_OI_CARD_REPORTS) - {"fno_oi_universe"}) | {
+        "live_signals_csv_fno_id_v13_v10_g_short", "live_signals_csv_fno_id_v13_v10_g_long",
+        "live_kite_trades_csv_fno_id_v13_v10_g", "kite_trade_fno_id_v13_v10_g",
+        "nifty_guard_fetch_v16_5min", "eod_5min_data", "kiteticker_5min_data",
+        "eod_1min_data",
+    }
+    if card_id not in market_cards:
+        return status
+    current = now_ist or dt.datetime.now(IST)
+    current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
+    reason = market_closed_reason(current.date())
+    if not reason:
+        return status
+    result = dict(status)
+    result["market_closed_reason"] = reason
+    result["market_session_date"] = current.date().isoformat()
+    runtime = str(status.get("status", "")).upper()
+    scheduler = str(status.get("scheduler_status") or status.get("scheduler_state") or "").upper()
+    if runtime == "DISABLED" or scheduler == "DISABLED":
+        return result
+    if (
+        status.get("execution_state") == "SKIPPED_NON_TRADING_DAY"
+        and status.get("session_date") == current.date().isoformat()
+        and str(status.get("armed", "")).lower() == "false"
+        and str(status.get("order_states", "")) == "0"
+    ):
+        # A newer closed-day export explains today's empty live sheets. Keep
+        # the earlier failed supervisor run as evidence; this is not a claim
+        # that the live executor was restarted or armed.
+        exported_at = _parse_status_datetime(status.get("updated_at_ist"))
+        runtime_at = _parse_status_datetime(status.get("ts"))
+        if exported_at and runtime_at and exported_at > runtime_at:
+            result.setdefault("previous_status", runtime)
+            result.setdefault("previous_reason", status.get("reason", ""))
+            result["status"] = "SKIPPED_NON_TRADING_DAY"
+            result["derived_status"] = reason + f"; current export skipped; earlier supervisor={result['previous_status']}."
+            return result
+    worker_filename = FNO_RECOVERY_WORKER_STATUS_FILES.get(card_id)
+    if runtime == "SUCCESS" and worker_filename:
+        worker = parse_status_file(RUNTIME_STATUS_DIR / worker_filename)
+        if (
+            worker.get("status") == "SKIPPED_NON_TRADING_DAY"
+            and worker.get("session_date_ist") == current.date().isoformat()
+        ):
+            result["observed_runtime_status"] = runtime
+            result["status"] = "SKIPPED_NON_TRADING_DAY"
+            result["derived_status"] = reason + "; worker skipped; supervisor exited normally."
+            return result
+    # Failures, active processes and degraded outputs remain visible. Only an
+    # idle/waiting card gets a calendar-derived state, preserving raw evidence.
+    if runtime in {
+        "NOT_RUN", "WAITING", "WAITING_OUTPUT", "SCHEDULED", "ENABLED",
+        "READY", "SKIPPED_NON_TRADING_DAY",
+    }:
+        result.setdefault("observed_runtime_status", runtime)
+        result["status"] = "SKIPPED_NON_TRADING_DAY"
+        result["derived_status"] = reason + "; no regular-session candles or entries expected."
+    return result
+
+
+def _normalise_fno_multi_paper_state(raw: object) -> str:
+    state = str(raw or "").strip().upper()
+    return {
+        "NOT_RUN": "WAITING_OUTPUT",
+        "PREFLIGHT_OK": "READY",
+        "COMPLETE": "SUCCESS",
+        "DEGRADED": "PARTIAL",
+    }.get(state, state)
+
+
+def _load_fno_multi_paper_runtime_status(card_id: str) -> Dict[str, str]:
+    """Project one shared JSON runtime into the parent or a profile view."""
+    if card_id not in FNO_MULTI_PAPER_CARD_PROFILES:
+        return {}
+
+    payload = _read_json_dict(FNO_MULTI_PAPER_STATUS_PATH)
+    status = _json_status_scalars(payload)
+    raw_session_state = status.get("status", "")
+    if raw_session_state:
+        status["runtime_status"] = raw_session_state
+        status["status"] = _normalise_fno_multi_paper_state(raw_session_state)
+    update_ist = status.get("last_update_ist", "")
+    if update_ist:
+        status["ts"] = update_ist
+        status["updated_at_ist"] = update_ist
+    session_date = status.get("session_date", "")
+    if session_date:
+        status["session_date_ist"] = session_date
+    if status.get("message"):
+        status["derived_status"] = status["message"]
+
+    heartbeat_payload = _read_json_dict(FNO_MULTI_PAPER_HEARTBEAT_PATH)
+    heartbeat = _json_status_scalars(heartbeat_payload)
+    heartbeat_raw_state = heartbeat.get("status", "")
+    if heartbeat_raw_state:
+        heartbeat["runtime_status"] = heartbeat_raw_state
+        heartbeat["state"] = _normalise_fno_multi_paper_state(heartbeat_raw_state)
+    heartbeat_ist = heartbeat.get("heartbeat_ist", "")
+    if heartbeat_ist:
+        heartbeat["ts"] = heartbeat_ist
+        heartbeat["ts_ist"] = heartbeat_ist
+    if heartbeat.get("message"):
+        heartbeat["note"] = heartbeat["message"]
+    if heartbeat and FNO_MULTI_PAPER_HEARTBEAT_PATH.exists():
+        try:
+            heartbeat["_file_age_sec"] = str(
+                dt.datetime.now(dt.timezone.utc).timestamp()
+                - FNO_MULTI_PAPER_HEARTBEAT_PATH.stat().st_mtime
+            )
+        except OSError:
+            pass
+        status_time = _parse_status_datetime(
+            status.get("ts") or status.get("updated_at_ist")
+        )
+        heartbeat_time = _parse_status_datetime(
+            heartbeat.get("ts") or heartbeat.get("ts_ist")
+        )
+        if heartbeat_time is not None and (
+            status_time is None or heartbeat_time >= status_time
+        ):
+            for field in (
+                "phase",
+                "message",
+                "last_processed_minute",
+                "preferred_app_count",
+                "healthy_app_count",
+                "healthy_apps",
+                "unhealthy_apps",
+                "app_pool_state",
+                "last_app_event_minute",
+                "last_app_usage",
+                "last_app_retry_count",
+                "last_app_failure_count",
+            ):
+                if field in heartbeat:
+                    status[field] = heartbeat[field]
+            if heartbeat.get("message"):
+                status["derived_status"] = heartbeat["message"]
+        status = merge_runtime_status(status, heartbeat)
+
+    profile_key = FNO_MULTI_PAPER_CARD_PROFILES[card_id]
+    if not profile_key:
+        status["view_scope"] = "SESSION"
+        return status
+
+    # Apply the profile outcome after the shared heartbeat so a healthy parent
+    # process cannot paint a BLOCKED/DEGRADED strategy profile green.
+    status["view_scope"] = "PROFILE"
+    status["profile_key"] = profile_key
+    status["session_status"] = status.get("status", "")
+    profiles = payload.get("profiles", {}) if isinstance(payload, dict) else {}
+    profile_payload = profiles.get(profile_key, {}) if isinstance(profiles, dict) else {}
+    profile_status = _json_status_scalars(profile_payload)
+    if not profile_status:
+        return status
+    raw_profile_state = profile_status.get("status", "")
+    status.update(profile_status)
+    if raw_profile_state:
+        status["profile_runtime_status"] = raw_profile_state
+        status["status"] = _normalise_fno_multi_paper_state(raw_profile_state)
+    status["profile_key"] = profile_key
+    return status
+
+
+def _format_fixed_table(
+    rows: Sequence[dict[str, str]],
+    columns: Sequence[str],
+    *,
+    rows_meta: str,
+    summary_lines: Sequence[str] = (),
+    column_max_widths: Optional[dict[str, int]] = None,
+) -> str:
+    if not rows:
+        return "\n".join([*summary_lines, rows_meta, "(no rows yet)"])
+
+    widths: dict[str, int] = {}
+    for col_name in columns:
+        max_len = max([len(col_name)] + [len(str(r.get(col_name, ""))) for r in rows])
+        max_width = int((column_max_widths or {}).get(col_name, 30))
+        widths[col_name] = min(max_len, max_width)
+
+    header = " | ".join(col_name.ljust(widths[col_name]) for col_name in columns)
+    sep = "-+-".join("-" * widths[col_name] for col_name in columns)
+    body = [
+        " | ".join(
+            _clip_text(str(row.get(col_name, "")), widths[col_name]).ljust(widths[col_name])
+            for col_name in columns
+        )
+        for row in rows
+    ]
+    return "\n".join([*summary_lines, rows_meta, header, sep, *body])
+
+
+def _compact_status_value(value: Any, *, width: int = 90) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if math.isnan(value):
+            return ""
+        return _fmt_indian_number(value, decimals=2, signed=False)
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(_compact_status_value(v, width=width) for v in value if v not in (None, ""))
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    return _clip_text(str(value), width)
+
+
+def _format_status_seconds(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{float(value):.1f}s"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+_LIVE_FETCH_1MIN_NO_TOKEN_RE = re.compile(r"^No token for ([^,]+), skipping\.$")
+_LIVE_FETCH_1MIN_SLOT_START_RE = re.compile(r"^\[SLOT\]\s+(\d{2}:\d{2}:\d{2})\s+\|\s+fetching\b")
+_LIVE_FETCH_1MIN_SLOT_DONE_RE = re.compile(r"^\[SLOT\]\s+(\d{2}:\d{2}:\d{2})\s+done\b")
+
+
+def _infer_live_fetch_console_state(card_id: str, log_path: Path) -> str:
+    if card_id != "eod_1min_data":
+        return ""
+    raw = tail_text(log_path, lines=300, max_bytes=400_000)
+    if not raw:
+        return ""
+
+    last_start_idx = -1
+    last_done_idx = -1
+    current_slot = ""
+    for idx, line in enumerate(raw.splitlines()):
+        started = _LIVE_FETCH_1MIN_SLOT_START_RE.match(line.strip())
+        if started:
+            last_start_idx = idx
+            current_slot = started.group(1)
+            continue
+        if _LIVE_FETCH_1MIN_SLOT_DONE_RE.match(line.strip()):
+            last_done_idx = idx
+
+    if last_start_idx > last_done_idx and current_slot:
+        return f"console_state=running | current_slot={current_slot}"
+    return ""
+
+
+def _live_fetch_console_tail(card_id: str, log_path: Path, *, lines: int) -> str:
+    if card_id != "eod_1min_data":
+        return tail_text(log_path, lines=lines)
+
+    raw = tail_text(log_path, lines=max(lines * 4, lines + 120), max_bytes=400_000)
+    if not raw:
+        return ""
+
+    kept: list[str] = []
+    missing_token_symbols: list[str] = []
+    for line in raw.splitlines():
+        match = _LIVE_FETCH_1MIN_NO_TOKEN_RE.match(line.strip())
+        if match:
+            missing_token_symbols.append(match.group(1).strip())
+            continue
+        kept.append(line)
+
+    visible = kept[-lines:] if kept else raw.splitlines()[-lines:]
+    if not missing_token_symbols:
+        return "\n".join(visible)
+
+    unique_symbols = list(dict.fromkeys(missing_token_symbols))
+    sample = ", ".join(unique_symbols[:12])
+    summary = f"[dashboard] suppressed {len(missing_token_symbols)} no-token line(s)"
+    if sample:
+        summary += f"; sample={sample}"
+        if len(unique_symbols) > 12:
+            summary += f", +{len(unique_symbols) - 12} more"
+    return "\n".join([summary, *visible])
+
+
+def _format_live_data_fetch_console_view(card_id: str, log_path: Path, *, lines: int) -> str:
+    title = LIVE_FETCH_CARD_TITLES.get(card_id, card_id)
+    status_name = LIVE_FETCH_STATUS_JSON_FILES.get(card_id, "")
+    status_path = _resolve_status_path(status_name) if status_name else None
+    status_json = _read_json_dict(status_path) if status_path is not None else {}
+
+    out: list[str] = [title]
+    out.append(f"source_log={log_path.name}")
+    if status_path is not None:
+        status_note = "" if status_json else " (missing or empty)"
+        out.append(f"status_json={status_path.name}{status_note}")
+
+    if status_json:
+        state = _compact_status_value(status_json.get("state") or status_json.get("overall_state"))
+        updated = _compact_status_value(status_json.get("updated_at_ist"))
+        if state or updated:
+            out.append("status=" + " | ".join(part for part in (state, f"updated={updated}" if updated else "") if part))
+
+        console_state = _infer_live_fetch_console_state(card_id, log_path)
+        if console_state:
+            out.append(console_state)
+
+        schedule_parts: list[str] = []
+        first_slot = _compact_status_value(status_json.get("first_slot"))
+        end_cutoff = _compact_status_value(status_json.get("end_cutoff"))
+        interval_min = _compact_status_value(status_json.get("interval_min"))
+        if first_slot or end_cutoff or interval_min:
+            if first_slot or end_cutoff:
+                schedule_parts.append(f"window={first_slot or '?'}..{end_cutoff or '?'}")
+            if interval_min:
+                schedule_parts.append(f"every={interval_min}min")
+        slot_index = _compact_status_value(status_json.get("slot_index"))
+        total_slots = _compact_status_value(status_json.get("total_slots"))
+        if slot_index or total_slots:
+            schedule_parts.append(f"slot={slot_index or '?'}/{total_slots or '?'}")
+        next_slot = _compact_status_value(status_json.get("next_slot_ist"))
+        wait_left = _format_status_seconds(status_json.get("seconds_to_next_slot"))
+        if next_slot:
+            next_text = f"next={next_slot}"
+            if wait_left:
+                next_text += f" ({wait_left})"
+            schedule_parts.append(next_text)
+        if schedule_parts:
+            out.append("schedule=" + " | ".join(schedule_parts))
+
+        slot_parts: list[str] = []
+        for key, label in (
+            ("slot_ist", "slot"),
+            ("last_slot_ist", "last_slot"),
+            ("total_elapsed_sec", "elapsed"),
+            ("max_partition_elapsed_sec", "max_part"),
+            ("avg_partition_elapsed_sec", "avg_part"),
+            ("min_partition_elapsed_sec", "min_part"),
+        ):
+            value = status_json.get(key)
+            if value in (None, ""):
+                continue
+            text = _format_status_seconds(value) if key.endswith("_sec") else _compact_status_value(value)
+            slot_parts.append(f"{label}={text}")
+        if slot_parts:
+            out.append("latest=" + " | ".join(slot_parts))
+
+        worker_parts: list[str] = []
+        for key, label in (
+            ("max_workers", "max_workers"),
+            ("total_worker_budget", "worker_budget"),
+            ("per_app_cap", "per_app_cap"),
+            ("effective_per_app", "effective_per_app"),
+            ("intraday_ts", "intraday_ts"),
+        ):
+            value = _compact_status_value(status_json.get(key))
+            if value:
+                worker_parts.append(f"{label}={value}")
+        if worker_parts:
+            out.append("workers=" + " | ".join(worker_parts))
+
+        guard_parts: list[str] = []
+        for key, label in (
+            ("sla_state", "sla"),
+            ("sla_warn_sec", "sla_warn"),
+            ("sla_mode", "sla_mode"),
+            ("completion_policy", "completion"),
+            ("verification_failed_count", "verify_failed"),
+        ):
+            value = status_json.get(key)
+            if value in (None, ""):
+                continue
+            text = _format_status_seconds(value) if key.endswith("_sec") else _compact_status_value(value)
+            guard_parts.append(f"{label}={text}")
+        failures = status_json.get("failures")
+        if failures:
+            guard_parts.append(f"failures={_compact_status_value(failures)}")
+        if guard_parts:
+            out.append("guards=" + " | ".join(guard_parts))
+
+        last_summary = status_json.get("last_slot_summary")
+        if isinstance(last_summary, dict) and last_summary:
+            summary_parts: list[str] = []
+            for key, label in (("ok", "ok"), ("elapsed_sec", "elapsed"), ("error", "error")):
+                value = last_summary.get(key)
+                if value in (None, ""):
+                    continue
+                text = _format_status_seconds(value) if key.endswith("_sec") else _compact_status_value(value)
+                summary_parts.append(f"{label}={text}")
+            if summary_parts:
+                out.append("last_slot_summary=" + " | ".join(summary_parts))
+
+        elapsed_by_app = status_json.get("partition_elapsed_sec")
+        counts_by_app = status_json.get("partition_symbol_counts")
+        if isinstance(elapsed_by_app, dict) and elapsed_by_app:
+            app_names = sorted(elapsed_by_app, key=lambda x: str(x))
+            rows = []
+            for app in app_names:
+                symbol_count = ""
+                if isinstance(counts_by_app, dict):
+                    symbol_count = _compact_status_value(counts_by_app.get(app))
+                rows.append(
+                    {
+                        "app": str(app),
+                        "symbols": symbol_count,
+                        "elapsed": _format_status_seconds(elapsed_by_app.get(app)),
+                    }
+                )
+            out.append("")
+            out.append(
+                _format_fixed_table(
+                    rows,
+                    ("app", "symbols", "elapsed"),
+                    rows_meta=f"partitions={len(rows)}",
+                    column_max_widths={"app": 12, "symbols": 10, "elapsed": 12},
+                )
+            )
+
+    tail = _live_fetch_console_tail(card_id, log_path, lines=lines)
+    out.append("")
+    out.append("console_tail:")
+    out.append(tail if tail else "(no console lines yet)")
+    return "\n".join(out)
+
+
+def _parse_latest_live_pnl_line(log_path: Path) -> dict[str, Any]:
+    text = tail_text(log_path, lines=250, max_bytes=300_000)
+    out: dict[str, Any] = {"ticker_pnl": {}}
+    for line in reversed(text.splitlines()):
+        if "[LIVE.PNL]" not in line:
+            continue
+        out["raw_line"] = line
+        ts_match = re.match(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})", line)
+        if ts_match:
+            out["log_time"] = ts_match.group(1)
+        open_match = re.search(r"\[LIVE\.PNL\]\s+open=(\d+)", line)
+        if open_match:
+            out["open"] = int(open_match.group(1))
+
+        tickers_match = re.search(r"\|\s*tickers=(.*?)\s*\|\s*unrealized=", line)
+        ticker_pnl: dict[str, float] = {}
+        if tickers_match:
+            for part in tickers_match.group(1).split(","):
+                if "=" not in part:
+                    continue
+                ticker, raw_val = part.rsplit("=", 1)
+                ticker = ticker.strip().upper()
+                pnl = _to_float_or_nan(raw_val)
+                if ticker and not math.isnan(pnl):
+                    ticker_pnl[ticker] = float(pnl)
+        out["ticker_pnl"] = ticker_pnl
+
+        for key in ("unrealized", "realized", "total", "deployed_margin"):
+            match = re.search(rf"\|\s*{key}=([^|]+)", line)
+            if match:
+                val = _to_float_or_nan(match.group(1))
+                if not math.isnan(val):
+                    out[key] = float(val)
+        return out
+    return out
+
+
+def _read_signal_setup_map(today_ist: str) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for side in ("short", "long"):
+        path = LIVE_SIGNAL_DIR / f"signals_{today_ist}_id_5min_v7_{side}.csv"
+        for row in _read_csv_tail_rows(path, limit=5000):
+            signal_id = str(row.get("signal_id", "")).strip()
+            if signal_id:
+                out[signal_id] = row
+    return out
+
+
+def _paper_open_pnl_from_state(row: dict[str, Any]) -> float:
+    qty = _to_float_or_nan(str(row.get("quantity", "")))
+    entry = _to_float_or_nan(str(row.get("entry_price", "")))
+    ltp = _to_float_or_nan(str(row.get("last_ltp", "")))
+    side = str(row.get("side", "")).upper().strip()
+    if math.isnan(qty) or math.isnan(entry) or math.isnan(ltp) or ltp <= 0:
+        return float("nan")
+    if _nse_intraday_equity_costs is not None and side in {"LONG", "SHORT"}:
+        try:
+            return float(_nse_intraday_equity_costs(entry, ltp, qty, side, _NseCostConfig()).net_pnl)
+        except Exception:
+            pass
+    if side == "SHORT":
+        return (entry - ltp) * qty
+    return (ltp - entry) * qty
+
+
+def _paper_pnl_pct(pnl_rs: float, entry_price: float, qty: float) -> float:
+    if math.isnan(pnl_rs) or math.isnan(entry_price) or math.isnan(qty):
+        return float("nan")
+    invested = entry_price * qty
+    if invested <= 0:
+        return float("nan")
+    return pnl_rs * 100.0 / invested
+
+
+def _v7_monitor_slot_label(value: object) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    m = re.search(r"\b\d{4}-\d{2}-\d{2}[ T](\d{2}):(\d{2})", s)
+    if not m:
+        m = re.search(r"\b(\d{2}):(\d{2})(?::\d{2})?", s)
+    if not m:
+        return ""
+    hour = int(m.group(1))
+    minute = int(m.group(2))
+    return f"{hour:02d}:{(minute // 5) * 5:02d}"
+
+
+def _v7_monitor_slot_from_path(path: Path, date_key: str) -> str:
+    m = re.search(rf"_{re.escape(date_key)}_(\d{{2}})(\d{{2}})", path.stem)
+    if not m:
+        return ""
+    return f"{int(m.group(1)):02d}:{(int(m.group(2)) // 5) * 5:02d}"
+
+
+def _v7_monitor_slot_rows(path: Path, date_key: str, field: str, slots: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    slot = _v7_monitor_slot_from_path(path, date_key)
+    rows = _read_csv_tail_rows(path, limit=20000)
+    if slot:
+        rec = slots.setdefault(slot, {"slot": slot})
+        rec[field] = max(int(rec.get(field, 0) or 0), len(rows))
+    return rows
+
+
+def _v7_monitor_num(row: dict[str, str], keys: Sequence[str]) -> float:
+    return _to_float_or_nan(_pick_csv_value(row, keys))
+
+
+def _v7_monitor_add_avg(bucket: dict[str, Any], name: str, value: float) -> None:
+    if math.isnan(value):
+        return
+    bucket[f"{name}_sum"] = float(bucket.get(f"{name}_sum", 0.0) or 0.0) + float(value)
+    bucket[f"{name}_n"] = int(bucket.get(f"{name}_n", 0) or 0) + 1
+
+
+def _v7_monitor_avg(bucket: dict[str, Any], name: str) -> float:
+    count = int(bucket.get(f"{name}_n", 0) or 0)
+    if count <= 0:
+        return float("nan")
+    return float(bucket.get(f"{name}_sum", 0.0) or 0.0) / count
+
+
+def _v7_monitor_fmt_avg(bucket: dict[str, Any], name: str, decimals: int = 2, signed: bool = False) -> str:
+    value = _v7_monitor_avg(bucket, name)
+    if math.isnan(value):
+        return ""
+    return _fmt_indian_number(value, decimals=decimals, signed=signed)
+
+
+def _v7_monitor_setup_key(row: dict[str, str]) -> tuple[str, str]:
+    side = str(row.get("side", "")).upper().strip()
+    setup = str(row.get("setup", "")).strip()
+    return side, setup
+
+
+def _v7_monitor_setup_bucket(
+    setup_stats: dict[tuple[str, str], dict[str, Any]],
+    row: dict[str, str],
+) -> Optional[dict[str, Any]]:
+    side, setup = _v7_monitor_setup_key(row)
+    if not side and not setup:
+        return None
+    bucket = setup_stats.setdefault(
+        (side, setup),
+        {
+            "side": side,
+            "setup": setup,
+            "raw": 0,
+            "potential": 0,
+            "entry_raw": 0,
+            "v11_rej": 0,
+            "pre_rej": 0,
+            "adv_cap_rej": 0,
+            "fno_ban_rej": 0,
+            "pre_pass": 0,
+            "entries": 0,
+            "signals": 0,
+            "paper": 0,
+            "open": 0,
+            "target": 0,
+            "sl": 0,
+            "eod": 0,
+            "skips": 0,
+            "pnl": 0.0,
+            "pnl_n": 0,
+        },
+    )
+    for avg_name, keys in (
+        ("q", ("quality_score", "score")),
+        ("rank", ("ranker_score",)),
+        ("rs", ("rs_pct",)),
+        ("vol", ("vol_ratio",)),
+        ("atr", ("atr_pct",)),
+        ("pre", ("pre_entry_momentum_score",)),
+        ("adx", ("pre1_adx", "sig5_adx_calc", "adx")),
+        ("rsi", ("pre1_rsi_dir", "sig5_rsi_dir", "rsi")),
+    ):
+        _v7_monitor_add_avg(bucket, avg_name, _v7_monitor_num(row, keys))
+    return bucket
+
+
+def _v7_monitor_add_setup_count(
+    setup_stats: dict[tuple[str, str], dict[str, Any]],
+    row: dict[str, str],
+    field: str,
+    qty: int = 1,
+) -> None:
+    bucket = _v7_monitor_setup_bucket(setup_stats, row)
+    if bucket is None:
+        return
+    bucket[field] = int(bucket.get(field, 0) or 0) + qty
+
+
+def _v7_monitor_outcome_bucket(outcome: object) -> str:
+    text = str(outcome or "").upper().strip()
+    if not text:
+        return ""
+    if "TARGET" in text or text == "TGT":
+        return "target"
+    if text == "SL" or "STOP" in text:
+        return "sl"
+    if "EOD" in text or "SQUARE" in text or text in {"CLOSED", "EXIT"}:
+        return "eod"
+    if "SKIP" in text:
+        return "skips"
+    if text == "OPEN":
+        return "open"
+    return ""
+
+
+def _v7_monitor_parse_dt(value: object) -> Optional[dt.datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parsed = _parse_status_datetime(text)
+    if parsed is not None:
+        return parsed
+    cleaned = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", text)
+    try:
+        out = dt.datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+    if out.tzinfo is None:
+        out = out.replace(tzinfo=IST)
+    return out.astimezone(IST)
+
+
+def _v7_monitor_fmt_duration(start: object, end: object, *, now: Optional[dt.datetime] = None) -> str:
+    start_dt = _v7_monitor_parse_dt(start)
+    end_dt = _v7_monitor_parse_dt(end) if end else None
+    if start_dt is None:
+        return ""
+    if end_dt is None:
+        end_dt = now or dt.datetime.now(IST)
+    total_sec = max(0, int((end_dt - start_dt).total_seconds()))
+    minutes = total_sec // 60
+    seconds = total_sec % 60
+    if minutes >= 60:
+        return f"{minutes // 60}h{minutes % 60:02d}m"
+    return f"{minutes}m{seconds:02d}s"
+
+
+def _v7_monitor_sec_between(start: object, end: object) -> float:
+    start_dt = _v7_monitor_parse_dt(start)
+    end_dt = _v7_monitor_parse_dt(end)
+    if start_dt is None or end_dt is None:
+        return float("nan")
+    return max(0.0, (end_dt - start_dt).total_seconds())
+
+
+def _v7_monitor_fmt_sec(value: float) -> str:
+    if math.isnan(value):
+        return ""
+    return _fmt_indian_number(float(value), decimals=2)
+
+
+def _v7_monitor_slot_key_from_time(value: object) -> str:
+    parsed = _v7_monitor_parse_dt(value)
+    if parsed is None:
+        return ""
+    floored = parsed.replace(minute=(parsed.minute // 5) * 5, second=0, microsecond=0)
+    return floored.strftime("%Y%m%d_%H%M")
+
+
+def _v7_monitor_raw_fetch_lag_sec(slot_time: object, ticker: object) -> float:
+    slot_dt = _v7_monitor_parse_dt(slot_time)
+    slot_key = _v7_monitor_slot_key_from_time(slot_time)
+    symbol = str(ticker or "").upper().strip()
+    if slot_dt is None or not slot_key or not symbol:
+        return float("nan")
+    raw_path = runtime_dir("entry_engine_1min_v5_ID") / "slot_raw_1min" / slot_key / f"{symbol}_raw_1min.parquet"
+    if not raw_path.exists():
+        return float("nan")
+    try:
+        raw_mtime = dt.datetime.fromtimestamp(raw_path.stat().st_mtime, tz=IST)
+    except OSError:
+        return float("nan")
+    return max(0.0, (raw_mtime - slot_dt).total_seconds())
+
+
+def _v7_monitor_slot_dt(today_ist: str, slot: str) -> Optional[dt.datetime]:
+    try:
+        return dt.datetime.strptime(f"{today_ist} {slot}", "%Y-%m-%d %H:%M").replace(tzinfo=IST)
+    except ValueError:
+        return None
+
+
+def _v7_monitor_mtime(path: Path) -> Optional[dt.datetime]:
+    try:
+        return dt.datetime.fromtimestamp(path.stat().st_mtime, tz=IST)
+    except OSError:
+        return None
+
+
+def _v7_monitor_executor_events(log_path: Path, *, live: bool) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+    events: dict[str, dict[str, str]] = {}
+    failures: dict[str, str] = {}
+    if not log_path.exists():
+        return events, failures
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return events, failures
+    for line in lines:
+        ts_match = re.match(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:,\d+)?)", line)
+        sid_match = re.search(r"\bsignal_id=([A-Za-z0-9_-]+)", line)
+        if sid_match is None:
+            continue
+        signal_id = sid_match.group(1).strip()
+        ticker_match = re.search(r"\bticker=([A-Za-z0-9&._-]+)", line)
+        ticker = ticker_match.group(1).upper() if ticker_match else ""
+        event_match = "[LIVE][ENTRY.REBASE]" in line if live else "[ENTRY.NEW]" in line
+        if event_match and ts_match:
+            events[signal_id] = {
+                "time": ts_match.group(1).replace(",", "."),
+                "ticker": ticker,
+                "line": line,
+            }
+        upper_line = line.upper()
+        if any(token in upper_line for token in ("[ERROR", "[SKIP", "[REJECT", "FAILED")):
+            failures[signal_id] = re.sub(r"^\S+\s+\S+\s+\|\s+\w+\s+\|\s*", "", line).strip()
+    return events, failures
+
+
+def _v7_monitor_find_signal_event(events: dict[str, dict[str, str]], signal_id: str) -> Optional[dict[str, str]]:
+    signal_id = str(signal_id or "").strip()
+    if not signal_id:
+        return None
+    if signal_id in events:
+        return events[signal_id]
+    for event_id, event in events.items():
+        if signal_id.startswith(event_id) or event_id.startswith(signal_id):
+            return event
+    return None
+
+
+def _v7_monitor_task_disabled(status: dict[str, str]) -> bool:
+    values = (
+        status.get("scheduler_status"),
+        status.get("scheduler_state"),
+        status.get("status"),
+    )
+    return any(str(value or "").strip().upper() == "DISABLED" for value in values)
+
+
+def _v7_monitor_status_for(card_id: str, task_snapshot: Dict[str, Dict[str, str]]) -> Dict[str, str]:
+    status_path = _runtime_status_path_for_card(card_id)
+    status = parse_status_file(status_path) if status_path is not None else {}
+    hb_path = _runtime_heartbeat_path_for_card(card_id)
+    heartbeat = parse_status_file(hb_path) if hb_path else {}
+    if heartbeat and hb_path is not None:
+        # Inject heartbeat file age so merge_runtime_status can apply the
+        # staleness check (newest-evidence-wins rule).
+        try:
+            hb_age = (dt.datetime.now(dt.timezone.utc).timestamp() - hb_path.stat().st_mtime)
+            heartbeat["_file_age_sec"] = hb_age
+        except OSError:
+            pass
+        status = merge_runtime_status(status, heartbeat)
+    status = apply_scheduler_status(card_id, status, task_snapshot)
+    status = infer_pid_session_provenance(card_id, status)
+    return status
+
+
+def _v7_monitor_fetch_verdict(
+    rec: dict[str, Any],
+    *,
+    fetch_lag: float,
+    due_fetch: bool,
+) -> tuple[str, bool, list[str]]:
+    marker_seen = bool(rec.get("fetch_marker_seen"))
+    marker_complete = bool(rec.get("fetch_complete"))
+    failed = int(rec.get("fetch_failed", 0) or 0)
+    verify_failed = int(rec.get("fetch_verify_failed", 0) or 0)
+    non_verify_failed = max(0, failed - verify_failed)
+    has_lag = not math.isnan(fetch_lag)
+    verification_only_tolerated = (
+        marker_seen
+        and has_lag
+        and not marker_complete
+        and non_verify_failed == 0
+        and 0 < verify_failed <= V7_MONITOR_FETCH_VERIFY_TOLERANCE
+    )
+    fetch_ok = marker_seen and has_lag and (marker_complete or verification_only_tolerated)
+    reasons: list[str] = []
+
+    if fetch_ok:
+        fetch_state = "YES" if fetch_lag <= 60.0 else "LATE"
+        if fetch_lag > 60.0:
+            reasons.append(f"fetch_late={fetch_lag:.1f}s")
+        if verification_only_tolerated:
+            reasons.append(
+                f"fetch_verify_tolerated={verify_failed}/"
+                f"{V7_MONITOR_FETCH_VERIFY_TOLERANCE}"
+            )
+        elif failed or verify_failed:
+            fetch_state = "NO"
+            reasons.append(f"fetch_fail={failed},verify={verify_failed}")
+        return fetch_state, fetch_ok, reasons
+
+    if due_fetch:
+        if marker_seen:
+            fetch_state = "NO"
+            if not has_lag:
+                reasons.append("fetch_marker_unparseable")
+            else:
+                reasons.append(f"fetch_marker_incomplete fail={failed},verify={verify_failed}")
+                if fetch_lag > 60.0:
+                    reasons.append(f"fetch_late={fetch_lag:.1f}s")
+        else:
+            fetch_state = "NO"
+            reasons.append("fetch_marker_missing")
+    else:
+        fetch_state = "WAIT"
+
+    return fetch_state, fetch_ok, reasons
+
+
+def _fno_eq_id_monitor_detail_path(card_id: str) -> Optional[Path]:
+    """Return the most granular structured event source available for a card."""
+    live_fetch_name = LIVE_FETCH_STATUS_JSON_FILES.get(card_id)
+    if live_fetch_name:
+        return _resolve_status_path(live_fetch_name)
+    if card_id in {
+        "fno_oi_fetch_5min_fast_production",
+        "fno_options_atm_fetch_5min",
+        "fno_oi_fetch_5min",
+        "fno_oi_fetch_5min_fast_shadow",
+        "fno_oi_feature_ranker",
+    }:
+        return _runtime_heartbeat_path_for_card(card_id)
+    return None
+
+
+def _fno_eq_id_monitor_clean(value: object, *, limit: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip().replace("|", "/")
+    if len(text) > limit:
+        return text[: max(0, limit - 1)].rstrip() + "~"
+    return text
+
+
+def _fno_eq_id_monitor_latest_evidence(tail: object) -> str:
+    keywords = (
+        "slot", "fetch", "select", "candidate", "entry", "guard", "paper",
+        "trade", "result", "auth", "backtest", "complete", "failed",
+        "blocked", "success",
+    )
+    fallback = ""
+    for raw in reversed(str(tail or "").splitlines()):
+        line = _fno_eq_id_monitor_clean(raw)
+        if not line or re.fullmatch(r"[-+: ]+", line):
+            continue
+        if line.startswith("#") or re.match(r"^\|?\s*:?-{3,}", line):
+            continue
+        if not fallback:
+            fallback = line
+        if any(keyword in line.lower() for keyword in keywords):
+            return line
+    return fallback
+
+
+def _fno_eq_id_monitor_safe_auth_status(today_ist: str) -> Dict[str, object]:
+    """Expose only auth health facts; never tokens, keys, or raw auth payloads."""
+    payload = _read_json_dict(AUTH_V2_STATE_FILE)
+    date_fields = ("session_date_ist",) + tuple(
+        f"session_date_ist_app{index}" for index in range(2, 9)
+    )
+    authenticated_apps = sum(
+        1 for field in date_fields if str(payload.get(field, "")).strip() == today_ist
+    )
+    try:
+        access_token_present = AUTH_V2_ACCESS_TOKEN_FILE.stat().st_size > 0
+    except OSError:
+        access_token_present = False
+    token_files_present = 0
+    token_files_current = 0
+    for index in range(1, 9):
+        suffix = "" if index == 1 else str(index)
+        token_path = BASE_DIR / f"access_token{suffix}.txt"
+        try:
+            stat = token_path.stat()
+        except OSError:
+            continue
+        if stat.st_size <= 0:
+            continue
+        token_files_present += 1
+        if dt.datetime.fromtimestamp(stat.st_mtime, tz=IST).date().isoformat() == today_ist:
+            token_files_current += 1
+    return {
+        "authenticated_apps": authenticated_apps,
+        "configured_apps": len(date_fields),
+        "token_files_present": token_files_present,
+        "token_files_current": token_files_current,
+        "auth_session_date": str(payload.get("session_date_ist", "")).strip(),
+        "auth_state_updated_at_ist": str(payload.get("updated_at_ist", "")).strip(),
+        "access_token_present": "YES" if access_token_present else "NO",
+    }
+
+
+_FNO_EQ_ID_ACTIVITY_FIELDS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "backtesting_result_v13_v10_g": (
+        ("session_date", "day"), ("phase", "phase"), ("fills", "trades"),
+        ("win_rate_pct", "win_pct"), ("trade_pf", "PF"), ("net_profit_rupees", "net_rs"),
+    ),
+    "nifty_guard_fetch_v16_5min": (("slot", "slot"), ("phase", "phase")),
+    "eod_5min_data": (
+        ("slot_ist", "slot"), ("complete_symbol_count", "complete"),
+        ("universe_count", "universe"), ("unresolved_symbol_count", "unresolved"),
+        ("failed_symbol_count", "failed"), ("verification_failed_count", "verify_failed"),
+        ("total_elapsed_sec", "elapsed_s"), ("sla_state", "SLA"),
+    ),
+    "kiteticker_5min_data": (
+        ("slot_ist", "slot"), ("written_symbol_count", "written"),
+        ("universe_count", "universe"), ("failed_symbol_count", "failed"),
+        ("total_elapsed_sec", "elapsed_s"),
+    ),
+    "eod_1min_data": (
+        ("current_slot_ist", "slot"), ("slot_index", "slot_no"),
+        ("total_slots", "slots"), ("universe_count", "universe"),
+        ("slot_elapsed_sec", "elapsed_s"),
+    ),
+    "fno_oi_universe": (
+        ("active_futures", "active_futures"),
+        ("near_month_contracts", "near_month"), ("source_app", "app"),
+    ),
+    "fno_oi_fetch_5min_fast_production": (
+        ("slot", "slot"), ("processed_slots", "slots"),
+        ("contracts_written", "written"), ("contracts_expected", "expected"),
+        ("stock_contracts_written", "stock_written"),
+        ("stock_contracts_expected", "stock_expected"),
+        ("duration_sec", "elapsed_s"),
+    ),
+    "fno_options_atm_fetch_5min": (
+        ("slot_ist", "slot"), ("contracts_written", "written"),
+        ("contracts_expected", "expected"), ("rows_written", "rows"),
+        ("coverage", "coverage"), ("expiry_policy", "expiry"),
+    ),
+    "fno_oi_fetch_5min": (("slot", "slot"), ("processed_slots", "slots")),
+    "fno_oi_fetch_5min_fast_shadow": (
+        ("slot", "slot"), ("processed_slots", "slots"),
+        ("contracts_written", "written"), ("contracts_expected", "expected"),
+        ("quality_parity", "Kite_parity"),
+        ("fetch_persist_duration_sec", "elapsed_s"), ("speedup", "speedup"),
+    ),
+    "fno_oi_feature_ranker": (("slot", "slot"), ("processed_slots", "slots")),
+    "fno_v13_v10_g_scanner_5min": (("processed_slots", "slots"),),
+    "fno_v13_v10_g_equity_1min_feed": (
+        ("slot", "slot"), ("written", "written"), ("expected", "expected"),
+    ),
+    "fno_v13_v10_g_confirmation_1min": (("processed_slots", "slots"),),
+    "fno_v13_v10_g_live_long": (
+        ("signals", "signals"), ("pending_entry", "pending"), ("open", "open"),
+        ("closed", "closed"), ("no_fill", "no_fill"),
+        ("blocked_sizing", "size_guard"),
+    ),
+    "fno_v13_v10_g_live_short": (
+        ("signals", "signals"), ("pending_entry", "pending"), ("open", "open"),
+        ("closed", "closed"), ("no_fill", "no_fill"),
+        ("blocked_sizing", "size_guard"),
+    ),
+    "fno_v13_v10_g_trade_logger": (("rows", "trades"), ("closed", "closed")),
+    "fno_v13_v10_g_net_result": (
+        ("signals", "signals"), ("open", "open"), ("closed", "closed"),
+        ("blocked", "blocked"), ("total_net_rs", "net_rs"),
+        ("return_on_capital_pct", "ROC_pct"),
+    ),
+    "fno_v13_v10_g_options_live_long": (
+        ("equity_entries", "equity_fills"), ("trades", "trades"),
+        ("open", "open"), ("closed", "closed"), ("skipped", "skipped"),
+        ("blocked", "blocked"), ("unresolved", "unresolved"),
+        ("net_pnl_rs", "net_rs"), ("free_cash_rs", "free_cash_rs"),
+    ),
+    "fno_v13_v10_g_options_live_short": (
+        ("equity_entries", "equity_fills"), ("trades", "trades"),
+        ("open", "open"), ("closed", "closed"), ("skipped", "skipped"),
+        ("blocked", "blocked"), ("unresolved", "unresolved"),
+        ("net_pnl_rs", "net_rs"), ("free_cash_rs", "free_cash_rs"),
+    ),
+    "fno_v13_v10_g_options_trade_logger": (
+        ("trades", "trades"), ("open", "open"), ("closed", "closed"),
+        ("skipped", "skipped"), ("blocked", "blocked"),
+        ("unresolved", "unresolved"), ("net_pnl_rs", "net_rs"),
+        ("free_cash_rs", "free_cash_rs"),
+    ),
+    "fno_v13_v10_g_options_net_result": (
+        ("trades", "trades"), ("open", "open"), ("closed", "closed"),
+        ("skipped", "skipped"), ("blocked", "blocked"),
+        ("unresolved", "unresolved"), ("net_pnl_rs", "net_rs"),
+        ("free_cash_rs", "free_cash_rs"),
+    ),
+    "fno_v8_combined_paper": (
+        ("candidate_count", "candidates"), ("fill_count", "fills"),
+        ("open_count", "open"), ("closed_count", "closed"),
+        ("net_pnl_rs", "net_rs"),
+    ),
+    "fno_oi_eod_qc": (
+        ("contracts_complete", "complete"), ("contracts_expected", "expected"),
+        ("repair_failed", "repair_failed"),
+    ),
+    "fno_v10_v11_v12_paper": (
+        ("last_processed_minute", "minute"), ("completed_minutes", "minutes"),
+        ("healthy_app_count", "apps_ok"), ("preferred_app_count", "apps_total"),
+        ("last_app_retry_count", "retries"),
+        ("last_app_failure_count", "app_errors"),
+    ),
+    "fno_v10_paper": (
+        ("candidate_count", "candidates"), ("long_candidates", "long"),
+        ("short_candidates", "short"), ("gap_guard_rejections", "gap_guard_rej"),
+        ("fill_count", "fills"), ("open_count", "open"),
+        ("closed_count", "closed"), ("net_pnl_rs", "net_rs"),
+    ),
+    "fno_v11_paper": (
+        ("candidate_count", "candidates"), ("long_candidates", "long"),
+        ("short_candidates", "short"), ("gap_guard_rejections", "gap_guard_rej"),
+        ("fill_count", "fills"), ("open_count", "open"),
+        ("closed_count", "closed"), ("net_pnl_rs", "net_rs"),
+    ),
+    "fno_v12_paper": (
+        ("candidate_count", "candidates"), ("long_candidates", "long"),
+        ("short_candidates", "short"), ("gap_guard_rejections", "gap_guard_rej"),
+        ("fill_count", "fills"), ("open_count", "open"),
+        ("closed_count", "closed"), ("net_pnl_rs", "net_rs"),
+    ),
+    "authentication_v2": (
+        ("authenticated_apps", "apps_authenticated"),
+        ("configured_apps", "apps_total"),
+        ("token_files_current", "tokens_current"),
+        ("token_files_present", "tokens_present"),
+        ("access_token_present", "access_token_file"),
+        ("auth_session_date", "session_date"),
+        ("exit_code", "exit"),
+    ),
+}
+
+
+def _fno_eq_id_monitor_activity(
+    card_id: str,
+    status: Dict[str, object],
+    tail: object,
+) -> str:
+    if status.get("strategy_identity_state") in {"MISMATCH", "AWAITING_G_RUNTIME"}:
+        return _fno_eq_id_monitor_clean(status.get("strategy_identity_detail", ""))
+    parts: list[str] = []
+    if status.get("strategy_identity_state") == "DECLARED_MATCH":
+        parts.append("options contract declared; fingerprint not published (unverified)")
+    for field, label in _FNO_EQ_ID_ACTIVITY_FIELDS.get(card_id, ()):
+        value = _fno_eq_id_monitor_clean(status.get(field, ""), limit=64)
+        if value:
+            parts.append(f"{label}={value}")
+    if parts:
+        return "; ".join(parts)
+    for field in ("derived_status", "message", "reason", "error"):
+        value = _fno_eq_id_monitor_clean(status.get(field, ""))
+        if value:
+            return value
+    next_run = _fno_eq_id_monitor_clean(status.get("scheduler_next_run", ""), limit=64)
+    if next_run:
+        return f"next={next_run}"
+    if card_id == "authentication_v2":
+        return "authentication health evidence unavailable"
+    return _fno_eq_id_monitor_latest_evidence(tail) or "no structured activity yet"
+
+
+def _fno_eq_id_monitor_state(
+    status: Dict[str, object],
+    *,
+    exists: bool,
+) -> tuple[str, str, bool]:
+    runtime = str(status.get("status", "") or "").strip().upper()
+    phase = str(status.get("phase", "") or "").strip().upper()
+    scheduler = str(
+        status.get("scheduler_status", "") or status.get("scheduler_state", "") or ""
+    ).strip().upper()
+    manual_live = bool(
+        scheduler == "DISABLED"
+        and runtime in {"RUNNING", "RESTARTING", "COOLDOWN", "STALE_HB_RUNNING", "RECOVERED"}
+        and (
+            str(status.get("scheduler_attention", "") or "").strip().upper()
+            == "DISABLED_WHILE_RUNNING"
+            or str(status.get("runtime_start_mode", "") or "").strip().upper() == "MANUAL"
+        )
+    )
+    if runtime in {"DISABLED", "NOT_SCHEDULED"} or (scheduler == "DISABLED" and not manual_live):
+        return "INACTIVE", runtime or "DISABLED", False
+
+    healthy = {
+        "SUCCESS", "RUNNING", "READY", "SCHEDULED", "ENABLED", "DONE",
+        "COMPLETE", "COMPLETED", "IDLE", "STOPPED_AFTER_CUTOFF",
+        "SKIPPED_CUTOFF", "SKIPPED_NON_TRADING_DAY",
+    }
+    watch = {
+        "WAITING", "WAITING_OUTPUT", "EMPTY_OUTPUT", "PARTIAL", "DEGRADED",
+        "RECOVERED", "RESTARTING", "COOLDOWN", "BLOCKED_STALE_ACTIVATION",
+    }
+    stop_reason = " ".join(
+        str(status.get(field, "") or "").strip().upper()
+        for field in ("reason", "phase", "exit_reason")
+    )
+    normal_market_stop = runtime == "STOPPED" and any(
+        marker in stop_reason
+        for marker in (
+            "HARD_STOP_REACHED", "NORMAL_EXIT", "AFTER_CUTOFF",
+            "MARKET_CLOSED", "END_TIME",
+        )
+    )
+    if runtime in healthy or normal_market_stop:
+        monitor = "OK"
+    elif runtime in watch or (
+        runtime == "BLOCKED" and phase in {"INCOMPLETE_BY_DEADLINE", "UPSTREAM_BLOCKED"}
+    ):
+        monitor = "WATCH"
+    elif runtime:
+        monitor = "PROBLEM"
+    else:
+        monitor = "UNKNOWN"
+    if manual_live and monitor == "OK":
+        monitor = "WATCH"
+    if not exists and runtime not in {"SCHEDULED", "ENABLED", "SKIPPED_NON_TRADING_DAY"} and monitor == "OK":
+        monitor = "WATCH"
+    return monitor, runtime or "UNKNOWN", True
+
+
+def _fno_eq_id_timeline_truth(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "complete", "success"}
+
+
+def _fno_eq_id_timeline_timestamp(
+    value: object,
+    session_date: str,
+) -> Optional[dt.datetime]:
+    """Parse one timestamp and reject evidence from another IST session date."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    parsed = parsed.replace(tzinfo=IST) if parsed.tzinfo is None else parsed.astimezone(IST)
+    return parsed if parsed.date().isoformat() == session_date else None
+
+
+def _fno_eq_id_timeline_hhmm(value: object, session_date: str) -> str:
+    parsed = _fno_eq_id_timeline_timestamp(value, session_date)
+    if parsed is not None:
+        return parsed.strftime("%H:%M")
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{2}):(\d{2})", text)
+    return text if match else ""
+
+
+def _fno_eq_id_timeline_at(session_date: str, hhmm: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(f"{session_date}T{hhmm}:00").replace(tzinfo=IST)
+
+
+def _fno_eq_id_timeline_pending_state(
+    now_ist: dt.datetime,
+    event_at: dt.datetime,
+    *,
+    deadline_minutes: int = 1,
+) -> str:
+    ready_at = event_at + dt.timedelta(seconds=FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS)
+    deadline = ready_at + dt.timedelta(minutes=deadline_minutes)
+    if now_ist < ready_at:
+        return "WAIT"
+    if now_ist < deadline:
+        return "IN PROGRESS"
+    return "BLOCKED: evidence missing after deadline"
+
+
+def _fno_eq_id_timeline_card_disabled(
+    by_id: Dict[str, Dict[str, object]],
+    card_id: str,
+) -> bool:
+    item = by_id.get(card_id, {})
+    raw = item.get("status", {}) if isinstance(item, dict) else {}
+    status = raw if isinstance(raw, dict) else {}
+    runtime = str(status.get("status", "") or "").strip().upper()
+    scheduler = str(
+        status.get("scheduler_status", "")
+        or status.get("scheduler_state", "")
+        or ""
+    ).strip().upper()
+    manual_live = bool(
+        scheduler == "DISABLED"
+        and runtime in {"RUNNING", "RESTARTING", "COOLDOWN", "STALE_HB_RUNNING", "RECOVERED"}
+        and (
+            str(status.get("scheduler_attention", "") or "").strip().upper()
+            == "DISABLED_WHILE_RUNNING"
+            or str(status.get("runtime_start_mode", "") or "").strip().upper() == "MANUAL"
+        )
+    )
+    return runtime == "DISABLED" or (scheduler == "DISABLED" and not manual_live)
+
+
+def _fno_eq_id_timeline_number(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _fno_eq_id_timeline_rs(value: float) -> str:
+    sign = "+" if value > 0 else ""
+    return f"{sign}₹{value:,.2f}"
+
+
+def _fno_eq_id_timeline_symbols(
+    values: Sequence[object],
+    *,
+    limit: int = 4,
+) -> str:
+    symbols = sorted({str(value or "").strip().upper() for value in values if str(value or "").strip()})
+    if not symbols:
+        return ""
+    shown = symbols[:limit]
+    suffix = f",+{len(symbols) - limit}" if len(symbols) > limit else ""
+    return ",".join(shown) + suffix
+
+
+def _fno_eq_id_timeline_jsonl(path: Path, *, limit: int = 50000) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: deque[dict[str, Any]] = deque(maxlen=max(1, int(limit)))
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+    except OSError:
+        return []
+    return list(rows)
+
+
+def _fno_eq_id_timeline_source_cell(
+    payload: Dict[str, Any],
+    *,
+    slot: str,
+    session_date: str,
+    now_ist: dt.datetime,
+    complete_fields: Sequence[str],
+    written_fields: Sequence[str],
+    expected_fields: Sequence[str],
+    prefix: str = "",
+) -> str:
+    if not payload:
+        pending = _fno_eq_id_timeline_pending_state(
+            now_ist,
+            _fno_eq_id_timeline_at(session_date, slot),
+        )
+        return f"{prefix}{pending}".strip()
+    slot_at = _fno_eq_id_timeline_at(session_date, slot)
+    payload_slot = _fno_eq_id_timeline_hhmm(
+        payload.get("slot_ist") or payload.get("timestamp"),
+        session_date,
+    )
+    published_at = _fno_eq_id_timeline_timestamp(payload.get("published_at_ist"), session_date)
+    if payload_slot != slot or published_at is None or published_at < slot_at:
+        observed = payload_slot or "invalid timestamp"
+        return f"{prefix}EVIDENCE MISMATCH ({observed})".strip()
+    if "source" in payload and str(payload.get("source", "")).strip().lower() != "final":
+        return f"{prefix}INCOMPLETE NON_FINAL_SOURCE".strip()
+    required_present = all(field in payload for field in complete_fields)
+    complete = required_present and all(
+        _fno_eq_id_timeline_truth(payload.get(field)) for field in complete_fields
+    )
+    written = next(
+        (payload.get(field) for field in written_fields if str(payload.get(field, "")).strip()),
+        "",
+    )
+    expected = next(
+        (payload.get(field) for field in expected_fields if str(payload.get(field, "")).strip()),
+        "",
+    )
+    coverage = f" {written}/{expected}" if str(written) and str(expected) else ""
+    written_number = _fno_eq_id_timeline_number(written)
+    expected_number = _fno_eq_id_timeline_number(expected)
+    if (
+        written_number is None
+        or expected_number is None
+        or expected_number <= 0
+        or written_number < 0
+        or written_number > expected_number
+    ):
+        return f"{prefix}EVIDENCE MISMATCH (invalid coverage)".strip()
+    state = str(payload.get("state", "") or "").strip().upper()
+    lag_seconds = (published_at - slot_at).total_seconds()
+    lag_text = f" (+{lag_seconds:.0f}s)"
+    if complete:
+        if state and state not in {"SUCCESS", "COMPLETE"}:
+            return f"{prefix}EVIDENCE MISMATCH (state={state})".strip()
+        if lag_seconds > 60 + FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS:
+            return f"{prefix}LATE{coverage}{lag_text}".strip()
+        return f"{prefix}OK{coverage}{lag_text}".strip()
+    failures = next(
+        (
+            payload.get(field)
+            for field in ("failed_count", "stock_failed_count", "tickers_failed", "verification_failed_count")
+            if str(payload.get(field, "")).strip()
+        ),
+        "",
+    )
+    failure_text = f"; fail={failures}" if str(failures) else ""
+    return f"{prefix}INCOMPLETE {state or 'NOT_COMPLETE'}{coverage}{failure_text}".strip()
+
+
+def _fno_eq_id_timeline_session_rows(
+    rows: Sequence[Dict[str, Any]],
+    session_date: str,
+) -> list[Dict[str, Any]]:
+    output: list[Dict[str, Any]] = []
+    for row in rows:
+        explicit_date = str(row.get("session_date", "") or "").strip()
+        if explicit_date and explicit_date != session_date:
+            continue
+        timestamp = next(
+            (
+                row.get(field)
+                for field in ("signal_time", "signal_end", "event_time", "entry_time", "entry_at_ist")
+                if str(row.get(field, "") or "").strip()
+            ),
+            "",
+        )
+        if explicit_date or not timestamp or _fno_eq_id_timeline_hhmm(timestamp, session_date):
+            output.append(dict(row))
+    return output
+
+
+def _fno_eq_id_timeline_row_slot(
+    row: Dict[str, Any],
+    session_date: str,
+    fields: Sequence[str],
+) -> str:
+    for field in fields:
+        value = row.get(field)
+        if not str(value or "").strip():
+            continue
+        hhmm = _fno_eq_id_timeline_hhmm(value, session_date)
+        if hhmm:
+            return hhmm
+    return ""
+
+
+def _fno_eq_id_timeline_current_trade_summary(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    entry_field: str,
+    exit_field: str,
+) -> str:
+    filled = [row for row in rows if str(row.get(entry_field, "") or "").strip()]
+    closed = [row for row in filled if str(row.get(exit_field, "") or "").strip()]
+    open_rows = [row for row in filled if row not in closed]
+    rejected = sum(1 for row in rows if _fno_eq_id_timeline_truth(row.get("gap_guard_rejected")))
+    pnl_values = [
+        number
+        for number in (_fno_eq_id_timeline_number(row.get("net_pnl_rs")) for row in filled)
+        if number is not None
+    ]
+    parts = [f"E{len(filled)} O{len(open_rows)}/C{len(closed)}"]
+    if rejected:
+        parts.append(f"G{rejected}")
+    if pnl_values:
+        parts.append(f"net={_fno_eq_id_timeline_rs(sum(pnl_values))}")
+    return " ".join(parts)
+
+
+def _fno_eq_id_timeline_book_as_of(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    minute_end: dt.datetime,
+    session_date: str,
+    entry_field: str,
+    exit_field: str,
+    pnl_field: str = "net_pnl_rs",
+) -> str:
+    cutoff = minute_end + dt.timedelta(minutes=1) - dt.timedelta(microseconds=1)
+    entered: list[tuple[Dict[str, Any], dt.datetime]] = []
+    for row in rows:
+        entry_at = _fno_eq_id_timeline_timestamp(row.get(entry_field), session_date)
+        if entry_at is not None and entry_at <= cutoff:
+            entered.append((row, entry_at))
+    closed: list[Dict[str, Any]] = []
+    for row, _ in entered:
+        exit_at = _fno_eq_id_timeline_timestamp(row.get(exit_field), session_date)
+        if exit_at is not None and exit_at <= cutoff:
+            closed.append(row)
+    open_count = len(entered) - len(closed)
+    realized = sum(
+        number
+        for number in (_fno_eq_id_timeline_number(row.get(pnl_field)) for row in closed)
+        if number is not None
+    )
+    return f"book O{open_count}/C{len(closed)} R={_fno_eq_id_timeline_rs(realized)}"
+
+
+def _fno_eq_id_timeline_event_symbols(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    timestamp_field: str,
+    minute: str,
+    session_date: str,
+) -> list[str]:
+    # The G PAPER ledger uses `tradingsymbol`; the G LIVE Kite qty-1 ledger
+    # uses `ticker`.  Accept both so one helper serves both schemas.
+    return [
+        str(
+            row.get("symbol")
+            or row.get("tradingsymbol")
+            or row.get("ticker")
+            or ""
+        ).strip().upper()
+        for row in rows
+        if _fno_eq_id_timeline_row_slot(row, session_date, (timestamp_field,)) == minute
+    ]
+
+
+def _fno_eq_id_timeline_v6_live_arm_state(
+    *,
+    disabled: bool,
+    status_present: bool,
+    armed: bool,
+    arm_reason: str,
+    kill_switch: bool,
+) -> str:
+    """Return the G LIVE executor's gating state.
+
+    An unarmed live executor is a normal, deliberate condition - LIVE requires
+    an explicit same-day acknowledgement - so it must be reported as its own
+    state rather than being indistinguishable from "armed but no signal fired".
+    """
+    if disabled:
+        return "DISABLED"
+    if not status_present:
+        return "NO LIVE STATUS"
+    if kill_switch:
+        return "KILL SWITCH ON"
+    if not armed:
+        return f"NOT ARMED ({arm_reason})" if arm_reason else "NOT ARMED"
+    return "ARMED"
+
+
+def _fno_eq_id_timeline_signal_id_symbol(signal_id: object) -> str:
+    text = str(signal_id or "").strip()
+    match = re.match(r"^\d{8}_\d{4}_(?:LONG|SHORT)_(.+)_[0-9a-fA-F]{8,}$", text)
+    return match.group(1).upper() if match else text
+
+
+def _fno_eq_id_timeline_profile_selection_cell(
+    audit_rows: Sequence[Dict[str, Any]],
+    trade_rows: Sequence[Dict[str, Any]],
+) -> str:
+    selected = [row for row in audit_rows if _fno_eq_id_timeline_truth(row.get("selected_5m"))]
+    rejected = len(audit_rows) - len(selected)
+    longs = [row for row in selected if str(row.get("side", "")).upper() == "LONG"]
+    shorts = [row for row in selected if str(row.get("side", "")).upper() == "SHORT"]
+    if not selected:
+        return f"NO SIGNAL; audited={len(audit_rows)} rejected={rejected}"
+    symbols = _fno_eq_id_timeline_symbols([row.get("symbol") for row in selected])
+    result = _fno_eq_id_timeline_current_trade_summary(
+        trade_rows,
+        entry_field="entry_time",
+        exit_field="exit_time",
+    )
+    return (
+        f"SEL L{len(longs)}/S{len(shorts)} [{symbols}]; "
+        f"rejected={rejected}; {result}"
+    )
+
+
+def _fno_eq_id_timeline_manifest_valid(
+    manifest: Dict[str, Any],
+    *,
+    session_date: str,
+    slot: str,
+) -> bool:
+    rows = manifest.get("rows")
+    tokens = manifest.get("symbol_tokens")
+    signal_at = _fno_eq_id_timeline_timestamp(manifest.get("signal_timestamp"), session_date)
+    due_at = _fno_eq_id_timeline_timestamp(manifest.get("confirmation_due_ist"), session_date)
+    decision_at = _fno_eq_id_timeline_timestamp(manifest.get("decision_at_ist"), session_date)
+    unsigned = dict(manifest)
+    claimed = str(unsigned.pop("manifest_sha256", "") or "")
+    try:
+        calculated = hashlib.sha256(
+            json.dumps(
+                unsigned,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        universe_count = int(manifest.get("universe_count", -1))
+        row_count = int(manifest.get("row_count", -1))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        manifest.get("schema_version") == "fno_multi_paper_5m_source_v2"
+        and manifest.get("session_date") == session_date
+        and manifest.get("signal_end") == slot
+        and manifest.get("decision_before_confirmation_due") is True
+        and signal_at == _fno_eq_id_timeline_at(session_date, slot)
+        and due_at == signal_at + dt.timedelta(minutes=1)
+        and decision_at is not None
+        and due_at is not None
+        and decision_at < due_at
+        and isinstance(rows, list)
+        and isinstance(tokens, dict)
+        and universe_count == len(tokens) > 0
+        and row_count == len(rows) == 2 * universe_count
+        and len(claimed) == 64
+        and claimed == calculated
+    )
+
+
+def _fno_eq_id_timeline_v6_confirmation_valid(
+    payload: Dict[str, Any],
+    *,
+    session_date: str,
+    signal_slot: str,
+    confirmation_slot: str,
+) -> bool:
+    candidate_count = _fno_eq_id_timeline_number(payload.get("candidate_count"))
+    confirmation_bars = _fno_eq_id_timeline_number(payload.get("confirmation_bars"))
+    no_candle = _fno_eq_id_timeline_number(payload.get("ineligible_no_candle_count", 0))
+    errors = _fno_eq_id_timeline_number(payload.get("error_count"))
+    selected_long = _fno_eq_id_timeline_number(payload.get("selected_long"))
+    selected_short = _fno_eq_id_timeline_number(payload.get("selected_short"))
+    if None in (
+        candidate_count,
+        confirmation_bars,
+        no_candle,
+        errors,
+        selected_long,
+        selected_short,
+    ):
+        return False
+    return bool(
+        payload.get("session_date") == session_date
+        and payload.get("strategy_version") == FNO_V13_V10_G_STRATEGY_VERSION
+        and (FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or payload.get("strategy_fingerprint") == expected_fingerprint())
+        and payload.get("signal_end") == signal_slot
+        and payload.get("confirmation_end") == confirmation_slot
+        and str(payload.get("state", "") or "").strip().upper() in {"SUCCESS", "COMPLETE"}
+        and payload.get("scanner_complete") is True
+        and errors == 0
+        and candidate_count >= 0
+        and confirmation_bars >= 0
+        and no_candle >= 0
+        and confirmation_bars + no_candle == candidate_count
+        and selected_long >= 0
+        and selected_short >= 0
+        and selected_long + selected_short <= candidate_count
+    )
+
+
+def _fno_v13_v10_g_timeline_minutes(
+    session_date: str, paper_rows: Sequence[Dict[str, Any]], live_rows: Sequence[Dict[str, Any]],
+) -> Tuple[str, ...]:
+    """Cover signal/expiry windows and actual later events without 360 idle rows."""
+    minutes = set(FNO_EQ_ID_MONITOR_1M_MINUTES)
+    for signal in FNO_V13_V10_G_SIGNAL_SLOTS:
+        start = _fno_eq_id_timeline_at(session_date, signal)
+        minutes.update((start + dt.timedelta(minutes=offset)).strftime("%H:%M") for offset in range(13))
+    for rows, fields in (
+        (paper_rows, ("entry_at_ist", "exit_at_ist")),
+        (live_rows, ("entry_time", "exit_time")),
+    ):
+        for row in rows:
+            for field in fields:
+                minute = _fno_eq_id_timeline_hhmm(row.get(field), session_date)
+                if minute and "09:15" <= minute <= "15:15":
+                    minutes.add(minute)
+    return tuple(sorted(minutes))
+
+
+def _g3_live_timeline_evidence_valid(record: Dict[str, Any], *, trade: bool = False) -> bool:
+    try:
+        _g3_execution_scalar_evidence(record)
+        if (record.get("strategy_version") != FNO_V13_V10_G_STRATEGY_VERSION
+                or record.get("strategy_fingerprint") != expected_fingerprint(FNO_ACTIVE_PROFILE.name)):
+            return False
+        if trade:
+            quantity = _fno_eq_id_timeline_number(record.get("quantity"))
+            requested = _fno_eq_id_timeline_number(record.get("requested_quantity"))
+            budget = size_g3_live_position(record.get("sizing_reference_price"))["quantity"]
+            if (record.get("execution_mode") != "LIVE" or quantity is None or requested is None
+                    or not quantity.is_integer() or not requested.is_integer()
+                    or not 0 < quantity <= requested <= budget):
+                return False
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _build_fno_eq_id_strategy_timelines(
+    items: Sequence[Dict[str, object]],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> Dict[str, Any]:
+    """Build causal 5m selection and 1m event grids for the current IST day."""
+    current = now_ist or dt.datetime.now(IST)
+    current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
+    session_date = current.date().isoformat()
+    closed_reason = market_closed_reason(current.date())
+    if closed_reason:
+        return {
+            "session_date": session_date, "generated_at_ist": current.isoformat(),
+            "market_closed_reason": closed_reason,
+            "five_minute_rows": [], "one_minute_rows": [],
+            "hard_issue_count": 0, "active_hard_issue_count": 0,
+            "closed_hard_issue_count": 0, "watch_issue_count": 0,
+            "issue_count": 0, "timeline_window_closed": True,
+        }
+    date_key = session_date.replace("-", "")
+    by_id = {str(item.get("id", "")): item for item in items}
+
+    v6_root = FNO_OI_ROOT / FNO_ACTIVE_PROFILE.live_dir
+    v6_trade_path = (
+        v6_root / "consolidated" / f"fno_{FNO_ACTIVE_PROFILE.slug}_trades_{session_date}.csv"
+    )
+    v6_trade_file_exists = v6_trade_path.is_file()
+    v6_trade_rows = _fno_eq_id_timeline_session_rows(
+        _read_csv_tail_rows(v6_trade_path, limit=50000),
+        session_date,
+    )
+
+    # G LIVE Kite executor. This separate execution path consumes the same
+    # signals with its active execution profile's sizing. Its
+    # armed state matters as much as its fills - an unarmed session produces no
+    # trades for a legitimate reason, which must not read as "nothing happened".
+    v6_live_root = v6_root / "live_kite"
+    v6_live_trade_path = (
+        v6_live_root / f"live_trades_{session_date}_fno_id_{FNO_ACTIVE_PROFILE.slug}.csv"
+    )
+    v6_live_trade_file_exists = v6_live_trade_path.is_file()
+    v6_live_trade_rows = _fno_eq_id_timeline_session_rows(
+        _read_csv_tail_rows(v6_live_trade_path, limit=50000),
+        session_date,
+    )
+    v6_live_status = _read_json_dict(v6_live_root / "status.json")
+    if str(v6_live_status.get("session_date", "") or "").strip() != session_date:
+        v6_live_status = {}
+    v6_live_policy_invalid = False
+    if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+        v6_live_policy_invalid = bool(v6_live_status) and not _g3_live_timeline_evidence_valid(v6_live_status)
+        v6_live_policy_invalid |= any(not _g3_live_timeline_evidence_valid(row, trade=True) for row in v6_live_trade_rows)
+        if v6_live_policy_invalid:
+            # An invalid ledger must not become a believable zero-fill day.
+            v6_live_status, v6_live_trade_rows = {}, []
+    v6_live_armed = bool(v6_live_status.get("armed"))
+    v6_live_arm_reason = str(v6_live_status.get("arm_reason", "") or "").strip()
+    v6_live_kill_switch = bool(v6_live_status.get("kill_switch_enabled"))
+    v6_live_state = str(v6_live_status.get("state", "") or "").strip().upper()
+    v6_live_signals = int(
+        _fno_eq_id_timeline_number(v6_live_status.get("signals")) or 0
+    )
+    v6_live_disabled = _fno_eq_id_timeline_card_disabled(
+        by_id, "kite_trade_fno_id_v13_v10_g"
+    )
+    shared_day_root = FNO_MULTI_PAPER_ROOT / "sessions" / session_date
+    shared_status = _read_json_dict(FNO_MULTI_PAPER_STATUS_PATH)
+    if str(shared_status.get("session_date", "") or "").strip() != session_date:
+        shared_status = {}
+    ingested_slots = {
+        str(value) for value in shared_status.get("ingested_slots", [])
+    } if isinstance(shared_status.get("ingested_slots"), list) else set()
+    skipped_slots = {
+        str(value) for value in shared_status.get("skipped_slots", [])
+    } if isinstance(shared_status.get("skipped_slots"), list) else set()
+    shared_runtime = str(shared_status.get("status", "") or "").strip().upper()
+    shared_phase = str(shared_status.get("phase", "") or "").strip().upper()
+    shared_disabled = _fno_eq_id_timeline_card_disabled(
+        by_id, "fno_v10_v11_v12_paper"
+    )
+    v6_scanner_disabled = _fno_eq_id_timeline_card_disabled(
+        by_id, "fno_v13_v10_g_scanner_5min"
+    )
+    v6_confirmation_disabled = _fno_eq_id_timeline_card_disabled(
+        by_id, "fno_v13_v10_g_confirmation_1min"
+    )
+    v6_entries_disabled = all(
+        _fno_eq_id_timeline_card_disabled(by_id, card_id)
+        for card_id in ("fno_v13_v10_g_live_long", "fno_v13_v10_g_live_short")
+    )
+
+    profile_audits: Dict[str, list[Dict[str, Any]]] = {}
+    profile_trades: Dict[str, list[Dict[str, Any]]] = {}
+    profile_audit_exists: Dict[str, bool] = {}
+    profile_trade_exists: Dict[str, bool] = {}
+    for profile in ("v10", "v11", "v12"):
+        profile_root = shared_day_root / "profiles" / profile
+        audit_path = profile_root / "selection_audit.csv"
+        trade_path = profile_root / "trades.csv"
+        profile_audit_exists[profile] = audit_path.is_file()
+        profile_trade_exists[profile] = trade_path.is_file()
+        profile_audits[profile] = _fno_eq_id_timeline_session_rows(
+            _read_csv_tail_rows(audit_path, limit=50000),
+            session_date,
+        )
+        profile_trades[profile] = _fno_eq_id_timeline_session_rows(
+            _read_csv_tail_rows(trade_path, limit=50000),
+            session_date,
+        )
+    shared_events = _fno_eq_id_timeline_session_rows(
+        _fno_eq_id_timeline_jsonl(shared_day_root / "events.jsonl"),
+        session_date,
+    )
+
+    five_minute_rows: list[Dict[str, str]] = []
+    v6_scanners: Dict[str, Dict[str, Any]] = {}
+    v6_confirmations: Dict[str, Dict[str, Any]] = {}
+    for slot in sorted(set(FNO_EQ_ID_MONITOR_5M_SLOTS) | set(FNO_V13_V10_G_SIGNAL_SLOTS)):
+        cash_payload = _read_json_dict(
+            SLOT_READY_5M_DIR / f"slot_{date_key}_{slot.replace(':', '')}.json"
+        )
+        if slot == "09:15" and cash_payload:
+            cash_slot = _fno_eq_id_timeline_hhmm(cash_payload.get("slot_ist"), session_date)
+            cash_published = _fno_eq_id_timeline_timestamp(
+                cash_payload.get("published_at_ist"), session_date
+            )
+            if cash_slot != slot or cash_published is None:
+                cash_cell = "OPEN SNAPSHOT EVIDENCE MISMATCH"
+            else:
+                ready = cash_payload.get("tickers_complete", cash_payload.get("tickers_written", 0))
+                expected = cash_payload.get("tickers_expected", "?")
+                cash_cell = (
+                    f"OPEN SNAPSHOT marker; completed 5m N/A; readiness={ready}/{expected}"
+                )
+        elif slot == "09:15":
+            cash_cell = "OPEN SNAPSHOT marker " + _fno_eq_id_timeline_pending_state(
+                current,
+                _fno_eq_id_timeline_at(session_date, slot),
+            )
+        else:
+            cash_cell = _fno_eq_id_timeline_source_cell(
+                cash_payload,
+                slot=slot,
+                session_date=session_date,
+                now_ist=current,
+                complete_fields=("complete", "fno_equity_quality_complete"),
+                written_fields=("tickers_complete", "tickers_written", "fno_equity_ready"),
+                expected_fields=("tickers_expected", "fno_equity_expected"),
+            )
+
+        if slot == "09:15":
+            oi_cell = "N/A (OI starts 09:20)"
+            rank_cell = "N/A (rank starts 09:20)"
+        else:
+            oi_payload = _read_json_dict(
+                FNO_OI_ROOT / "slot_ready" / f"slot_{date_key}_{slot.replace(':', '')}.json"
+            )
+            rank_payload = _read_json_dict(
+                FNO_OI_ROOT / "ranking_ready" / f"slot_{date_key}_{slot.replace(':', '')}.json"
+            )
+            oi_cell = _fno_eq_id_timeline_source_cell(
+                oi_payload,
+                slot=slot,
+                session_date=session_date,
+                now_ist=current,
+                complete_fields=("complete", "global_complete", "stock_complete"),
+                written_fields=("stock_contracts_written", "contracts_written"),
+                expected_fields=("stock_contracts_expected", "contracts_expected"),
+            )
+            if slot == "09:20" and rank_payload and not _fno_eq_id_timeline_truth(
+                rank_payload.get("complete")
+            ):
+                rank_slot = _fno_eq_id_timeline_hhmm(
+                    rank_payload.get("slot_ist"), session_date
+                )
+                rank_published = _fno_eq_id_timeline_timestamp(
+                    rank_payload.get("published_at_ist"), session_date
+                )
+                if rank_slot == slot and rank_published is not None:
+                    rank_cell = (
+                        f"WARMUP {str(rank_payload.get('state', 'PARTIAL')).upper()}; "
+                        f"features={rank_payload.get('features_available', '?')}/"
+                        f"{rank_payload.get('contracts_expected', '?')}; "
+                        f"eligible={rank_payload.get('eligible_contracts', '?')}"
+                    )
+                else:
+                    rank_cell = "WARMUP EVIDENCE MISMATCH"
+            else:
+                rank_cell = _fno_eq_id_timeline_source_cell(
+                    rank_payload,
+                    slot=slot,
+                    session_date=session_date,
+                    now_ist=current,
+                    complete_fields=("complete",),
+                    written_fields=("eligible_contracts", "features_available"),
+                    expected_fields=("contracts_expected",),
+                )
+
+        if slot == "09:15":
+            purpose = "OPEN SNAPSHOT"
+        elif slot == "09:20":
+            purpose = "G-3 LONG SELECTION (09:21 CONFIRM)" if slot in FNO_V13_V10_G_SIGNAL_SLOTS else "DATA/OI WARMUP"
+        elif slot in FNO_V13_V10_G_SIGNAL_SLOTS and slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+            purpose = "G STRATEGY SELECTION"
+        else:
+            purpose = "STRATEGY SELECTION"
+
+        if slot not in FNO_V13_V10_G_SIGNAL_SLOTS:
+            v6_cell = "OFF WINDOW"
+        elif v6_scanner_disabled:
+            v6_cell = "DISABLED"
+        else:
+            scanner_path = (
+                v6_root / "scanner_5m" / session_date
+                / f"slot_{slot.replace(':', '')}.json"
+            )
+            scanner = _read_json_dict(scanner_path)
+            if scanner:
+                valid_scanner = (
+                    str(scanner.get("session_date", "") or "") == session_date
+                    and str(scanner.get("signal_end", "") or "") == slot
+                    and scanner.get("strategy_version") == FNO_V13_V10_G_STRATEGY_VERSION
+                    and (FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or scanner.get("strategy_fingerprint") == expected_fingerprint())
+                )
+                if not valid_scanner:
+                    v6_cell = "EVIDENCE MISMATCH"
+                else:
+                    v6_scanners[slot] = scanner
+                    scanner_state = str(scanner.get("state", "") or "").strip().upper()
+                    long_count = int(_fno_eq_id_timeline_number(scanner.get("long_candidates")) or 0)
+                    short_count = int(_fno_eq_id_timeline_number(scanner.get("short_candidates")) or 0)
+                    selection_text = f"SEL L{long_count}/S{short_count}"
+                    opening_exclusions = scanner.get("opening_0920_exclusions", [])
+                    if slot == "09:20" and isinstance(opening_exclusions, list) and opening_exclusions:
+                        selection_text += f"; opening OI excluded {len(opening_exclusions)}"
+                    if scanner_state not in {"SUCCESS", "COMPLETE"}:
+                        v6_cell = f"{selection_text}; {scanner_state or 'INCOMPLETE'}"
+                    else:
+                        confirmation_slot = FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL[slot]
+                        confirmation_path = (
+                            v6_root / "confirmation_1m" / session_date
+                            / f"slot_{confirmation_slot.replace(':', '')}.json"
+                        )
+                        confirmation = _read_json_dict(confirmation_path)
+                        if confirmation:
+                            valid_confirmation = _fno_eq_id_timeline_v6_confirmation_valid(
+                                confirmation,
+                                session_date=session_date,
+                                signal_slot=slot,
+                                confirmation_slot=confirmation_slot,
+                            )
+                            if not valid_confirmation:
+                                confirmation_text = (
+                                    "CONF BLOCKED/INCOMPLETE "
+                                    f"state={str(confirmation.get('state', 'INVALID')).upper()}"
+                                )
+                            else:
+                                v6_confirmations[confirmation_slot] = confirmation
+                                selected_ids = confirmation.get("selected_signal_ids", [])
+                                selected_ids = selected_ids if isinstance(selected_ids, list) else []
+                                selected_symbols = _fno_eq_id_timeline_symbols(
+                                    [_fno_eq_id_timeline_signal_id_symbol(value) for value in selected_ids]
+                                )
+                                confirmed_long = int(
+                                    _fno_eq_id_timeline_number(confirmation.get("selected_long")) or 0
+                                )
+                                confirmed_short = int(
+                                    _fno_eq_id_timeline_number(confirmation.get("selected_short")) or 0
+                                )
+                                symbol_text = f" [{selected_symbols}]" if selected_symbols else ""
+                                confirmation_text = (
+                                    f"CONF L{confirmed_long}/S{confirmed_short}{symbol_text}"
+                                )
+                                ledger_ids = {
+                                    str(row.get("signal_id", "") or "").strip()
+                                    for row in v6_trade_rows
+                                    if str(row.get("signal_id", "") or "").strip()
+                                }
+                                missing_ledger_ids = sorted(set(map(str, selected_ids)) - ledger_ids)
+                                if selected_ids and (not v6_trade_file_exists or missing_ledger_ids):
+                                    ledger_deadline = _fno_eq_id_timeline_at(
+                                        session_date, confirmation_slot
+                                    ) + dt.timedelta(minutes=1)
+                                    confirmation_text += (
+                                        "; LEDGER PENDING"
+                                        if current < ledger_deadline
+                                        else f"; LEDGER MISMATCH missing={len(missing_ledger_ids) or len(selected_ids)}"
+                                    )
+                        elif v6_confirmation_disabled:
+                            confirmation_text = "CONF DISABLED"
+                        else:
+                            confirmation_text = "CONF " + _fno_eq_id_timeline_pending_state(
+                                current,
+                                _fno_eq_id_timeline_at(session_date, confirmation_slot),
+                            )
+                        cohort = [
+                            row for row in v6_trade_rows
+                            if str(row.get("signal_end", "") or "").strip() == slot
+                        ]
+                        result_text = _fno_eq_id_timeline_current_trade_summary(
+                            cohort,
+                            entry_field="entry_at_ist",
+                            exit_field="exit_at_ist",
+                        )
+                        v6_cell = f"{selection_text}; {confirmation_text}; {result_text}"
+            else:
+                v6_cell = _fno_eq_id_timeline_pending_state(
+                    current,
+                    _fno_eq_id_timeline_at(session_date, slot),
+                )
+
+        if slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+            shared_source_cell = "OFF WINDOW"
+        elif shared_disabled:
+            shared_source_cell = "DISABLED"
+        else:
+            manifest_path = (
+                FNO_MULTI_PAPER_ROOT / "evidence" / session_date / "five_minute"
+                / f"slot_{slot.replace(':', '')}" / "manifest.json"
+            )
+            manifest = _read_json_dict(manifest_path)
+            if slot in skipped_slots:
+                shared_source_cell = "SKIPPED (forward-only recovery)"
+            elif manifest:
+                valid_manifest = _fno_eq_id_timeline_manifest_valid(
+                    manifest,
+                    session_date=session_date,
+                    slot=slot,
+                )
+                if not valid_manifest:
+                    shared_source_cell = "EVIDENCE MISMATCH"
+                elif slot in ingested_slots:
+                    shared_source_cell = f"PROCESSED rows={manifest.get('row_count', '?')}"
+                else:
+                    shared_source_cell = (
+                        f"SOURCE SEALED rows={manifest.get('row_count', '?')}; REDUCER PENDING"
+                    )
+            elif slot in ingested_slots:
+                shared_source_cell = "EVIDENCE MISMATCH (ingested/no manifest)"
+            else:
+                shared_source_cell = _fno_eq_id_timeline_pending_state(
+                    current,
+                    _fno_eq_id_timeline_at(session_date, slot),
+                )
+
+        profile_cells: Dict[str, str] = {}
+        for profile in ("v10", "v11", "v12"):
+            if slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
+                profile_cells[profile] = "OFF WINDOW"
+                continue
+            if shared_disabled:
+                profile_cells[profile] = "DISABLED"
+                continue
+            if shared_source_cell.startswith("SKIPPED"):
+                profile_cells[profile] = "SKIPPED / NO SIGNAL"
+                continue
+            if not shared_source_cell.startswith("PROCESSED"):
+                profile_cells[profile] = shared_source_cell
+                continue
+            if not profile_audit_exists[profile]:
+                profile_cells[profile] = "MISSING SELECTION AUDIT"
+                continue
+            audits = [
+                row for row in profile_audits[profile]
+                if _fno_eq_id_timeline_row_slot(row, session_date, ("signal_time",)) == slot
+            ]
+            trades = [
+                row for row in profile_trades[profile]
+                if _fno_eq_id_timeline_row_slot(row, session_date, ("signal_time",)) == slot
+            ]
+            selected_count = sum(
+                1 for row in audits if _fno_eq_id_timeline_truth(row.get("selected_5m"))
+            )
+            if selected_count and not profile_trade_exists[profile]:
+                profile_cells[profile] = (
+                    f"SEL {selected_count}; MISSING STRATEGY LEDGER"
+                )
+                continue
+            profile_cells[profile] = _fno_eq_id_timeline_profile_selection_cell(
+                audits,
+                trades,
+            )
+
+        v6_live_arm_state = _fno_eq_id_timeline_v6_live_arm_state(
+            disabled=v6_live_disabled,
+            status_present=bool(v6_live_status),
+            armed=v6_live_armed,
+            arm_reason=v6_live_arm_reason,
+            kill_switch=v6_live_kill_switch,
+        )
+        if slot not in FNO_V13_V10_G_SIGNAL_SLOTS:
+            v6_live_cell = "OFF WINDOW"
+        elif v6_live_policy_invalid:
+            v6_live_cell = "LIVE EXECUTION POLICY MISMATCH; fills unavailable"
+        elif v6_live_arm_state != "ARMED":
+            # Still show the cohort so an unarmed day remains auditable.
+            slot_live_rows = [
+                row for row in v6_live_trade_rows
+                if str(row.get("signal_end", "") or "").strip() == slot
+            ]
+            v6_live_cell = f"{v6_live_arm_state}; {len(slot_live_rows)} live fill(s)"
+        elif not v6_live_trade_file_exists:
+            v6_live_cell = "ARMED; MISSING LIVE LEDGER"
+        else:
+            slot_live_rows = [
+                row for row in v6_live_trade_rows
+                if str(row.get("signal_end", "") or "").strip() == slot
+            ]
+            if slot_live_rows:
+                symbols = _fno_eq_id_timeline_symbols(
+                    [
+                        str(row.get("ticker") or "").strip().upper()
+                        for row in slot_live_rows
+                    ]
+                )
+                realized = sum(
+                    number
+                    for number in (
+                        _fno_eq_id_timeline_number(row.get("pnl_rs"))
+                        for row in slot_live_rows
+                    )
+                    if number is not None
+                )
+                v6_live_cell = (
+                    f"ARMED; LIVE {len(slot_live_rows)}"
+                    + (f" [{symbols}]" if symbols else "")
+                    + f"; R={_fno_eq_id_timeline_rs(realized)}"
+                )
+            else:
+                v6_live_cell = "ARMED; NO LIVE FILL"
+
+        five_minute_rows.append(
+            {
+                "slot": slot,
+                "purpose": purpose,
+                "cash": cash_cell,
+                "oi": oi_cell,
+                "rank": rank_cell,
+                "v6": v6_cell,
+                "v6_live": v6_live_cell,
+                "shared": shared_source_cell,
+                **profile_cells,
+            }
+        )
+
+    checkpoint = _read_json_dict(shared_day_root / "checkpoint.json")
+    raw_engines = (
+        checkpoint.get("engine", {}).get("engines", {})
+        if isinstance(checkpoint.get("engine"), dict)
+        else {}
+    )
+    processed_by_profile: Dict[str, set[str]] = {}
+    for profile in ("v10", "v11", "v12"):
+        raw_engine = raw_engines.get(profile, {}) if isinstance(raw_engines, dict) else {}
+        fingerprints = (
+            raw_engine.get("processed_minute_fingerprints", {})
+            if isinstance(raw_engine, dict) else {}
+        )
+        processed_by_profile[profile] = {
+            hhmm
+            for value in (fingerprints.keys() if isinstance(fingerprints, dict) else [])
+            if (hhmm := _fno_eq_id_timeline_hhmm(value, session_date))
+        }
+
+    terminal_empty_shared = bool(
+        shared_runtime in {"BLOCKED", "DEGRADED", "COMPLETE"}
+        and skipped_slots
+        and not any(profile_trades.values())
+        and not any(profile_audits.values())
+    )
+    one_minute_rows: list[Dict[str, str]] = []
+    for minute in _fno_v13_v10_g_timeline_minutes(session_date, v6_trade_rows, v6_live_trade_rows):
+        minute_at = _fno_eq_id_timeline_at(session_date, minute)
+        marker_path = (
+            FNO_MULTI_PAPER_ROOT / "evidence" / session_date / "one_minute_union"
+            / f"minute_{minute.replace(':', '')}.json"
+        )
+        marker = _read_json_dict(marker_path)
+        processed_flags = [minute in processed_by_profile[key] for key in ("v10", "v11", "v12")]
+        processed_all = all(processed_flags)
+        processed_conflict = any(processed_flags) and not processed_all
+        if shared_disabled:
+            minute_source = "DISABLED"
+        elif marker:
+            marker_minute = _fno_eq_id_timeline_hhmm(
+                marker.get("expected_end_ist") or marker.get("slot_ist"),
+                session_date,
+            )
+            marker_complete = (
+                marker_minute == minute
+                and _fno_eq_id_timeline_truth(marker.get("complete"))
+                and _fno_eq_id_timeline_truth(
+                    marker.get("exact_symbol_completeness", True)
+                )
+            )
+            written = marker.get("written_count", marker.get("data_rows", "?"))
+            expected = marker.get("candidate_count", marker.get("union_symbol_count", "?"))
+            if not marker_complete:
+                minute_source = "BLOCKED: incomplete/mismatched union 1m evidence"
+            elif processed_all:
+                minute_source = f"FETCHED {written}/{expected}; REDUCED"
+            else:
+                minute_source = f"FETCHED {written}/{expected}; REDUCER PENDING"
+        elif processed_conflict:
+            minute_source = "BLOCKED: reducer evidence conflict"
+        elif processed_all:
+            minute_source = "REDUCED; no required symbols"
+        elif minute not in FNO_EQ_ID_MONITOR_1M_MINUTES:
+            minute_source = "OFF MONITOR WINDOW"
+        else:
+            pending = _fno_eq_id_timeline_pending_state(current, minute_at)
+            if terminal_empty_shared and pending.startswith("BLOCKED"):
+                minute_source = "NOT RUN; recovery ended/no active symbols"
+            else:
+                minute_source = pending
+
+        v6_parts: list[str] = []
+        if v6_scanner_disabled and v6_confirmation_disabled and v6_entries_disabled:
+            v6_cell_1m = "DISABLED"
+        else:
+            if minute in FNO_V13_V10_G_SIGNAL_SLOTS:
+                scanner = v6_scanners.get(minute)
+                if scanner:
+                    long_count = int(_fno_eq_id_timeline_number(scanner.get("long_candidates")) or 0)
+                    short_count = int(_fno_eq_id_timeline_number(scanner.get("short_candidates")) or 0)
+                    v6_parts.append(f"5m SEL L{long_count}/S{short_count}")
+            if minute in set(FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL.values()):
+                confirmation = v6_confirmations.get(minute)
+                if confirmation:
+                    selected_ids = confirmation.get("selected_signal_ids", [])
+                    selected_ids = selected_ids if isinstance(selected_ids, list) else []
+                    symbols = _fno_eq_id_timeline_symbols(
+                        [_fno_eq_id_timeline_signal_id_symbol(value) for value in selected_ids]
+                    )
+                    count = int(_fno_eq_id_timeline_number(confirmation.get("selected_long")) or 0) + int(
+                        _fno_eq_id_timeline_number(confirmation.get("selected_short")) or 0
+                    )
+                    v6_parts.append(f"1m CONF {count}" + (f" [{symbols}]" if symbols else ""))
+                elif v6_confirmation_disabled:
+                    v6_parts.append("1m CONF DISABLED")
+                else:
+                    signal = next(
+                        key for key, value in FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL.items()
+                        if value == minute
+                    )
+                    upstream = "upstream 5m missing" if signal not in v6_scanners else "evidence missing"
+                    state = _fno_eq_id_timeline_pending_state(current, minute_at)
+                    v6_parts.append(f"1m CONF {state} ({upstream})")
+            entry_symbols = _fno_eq_id_timeline_event_symbols(
+                v6_trade_rows,
+                timestamp_field="entry_at_ist",
+                minute=minute,
+                session_date=session_date,
+            )
+            exit_symbols = _fno_eq_id_timeline_event_symbols(
+                v6_trade_rows,
+                timestamp_field="exit_at_ist",
+                minute=minute,
+                session_date=session_date,
+            )
+            if entry_symbols:
+                v6_parts.append(f"ENTRY {len(entry_symbols)} [{_fno_eq_id_timeline_symbols(entry_symbols)}]")
+            if exit_symbols:
+                v6_parts.append(f"EXIT {len(exit_symbols)} [{_fno_eq_id_timeline_symbols(exit_symbols)}]")
+            book = _fno_eq_id_timeline_book_as_of(
+                v6_trade_rows,
+                minute_end=minute_at,
+                session_date=session_date,
+                entry_field="entry_at_ist",
+                exit_field="exit_at_ist",
+            )
+            v6_cell_1m = "; ".join(v6_parts or ["NO EVENT"]) + f"; {book}"
+
+        profile_minute_cells: Dict[str, str] = {}
+        for profile in ("v10", "v11", "v12"):
+            if shared_disabled:
+                profile_minute_cells[profile] = "DISABLED"
+                continue
+            trades = profile_trades[profile]
+            audits = profile_audits[profile]
+            parts: list[str] = []
+            selected_now = [
+                row for row in audits
+                if _fno_eq_id_timeline_truth(row.get("selected_5m"))
+                and _fno_eq_id_timeline_row_slot(row, session_date, ("signal_time",)) == minute
+            ]
+            five_row_for_minute = next(
+                (row for row in five_minute_rows if row["slot"] == minute),
+                None,
+            )
+            shared_processed_now = bool(
+                five_row_for_minute
+                and five_row_for_minute["shared"].startswith("PROCESSED")
+            )
+            if shared_processed_now and not profile_audit_exists[profile]:
+                parts.append("MISSING SELECTION AUDIT")
+            elif selected_now:
+                longs = sum(1 for row in selected_now if str(row.get("side", "")).upper() == "LONG")
+                shorts = len(selected_now) - longs
+                parts.append(
+                    f"5m SEL L{longs}/S{shorts} "
+                    f"[{_fno_eq_id_timeline_symbols([row.get('symbol') for row in selected_now])}]"
+                )
+                if not profile_trade_exists[profile]:
+                    parts.append("MISSING STRATEGY LEDGER")
+            for label, field in (
+                ("CONF", "confirmation_time"),
+                ("ENTRY", "entry_time"),
+                ("EXIT", "exit_time"),
+                ("GAP-REJ", "gap_guard_event_time"),
+            ):
+                symbols = _fno_eq_id_timeline_event_symbols(
+                    trades,
+                    timestamp_field=field,
+                    minute=minute,
+                    session_date=session_date,
+                )
+                if symbols:
+                    parts.append(f"{label} {len(symbols)} [{_fno_eq_id_timeline_symbols(symbols)}]")
+            direct_states = {
+                "CONFIRMED_WAITING_CAP", "PENDING_STOP", "FILLED_OPEN",
+                "STOPPED", "TARGETED", "SQUARE_OFF", "POSTCONF_CANCELLED",
+            }
+            other_events = [
+                row for row in shared_events
+                if str(row.get("profile_key", "") or "").lower() == profile
+                and _fno_eq_id_timeline_row_slot(row, session_date, ("event_time",)) == minute
+                and str(row.get("state_after", "") or "").upper() not in direct_states
+            ]
+            if other_events:
+                reasons = _fno_eq_id_timeline_symbols(
+                    [row.get("reason") for row in other_events],
+                    limit=2,
+                )
+                parts.append(f"OTHER {len(other_events)} [{reasons}]")
+            book = _fno_eq_id_timeline_book_as_of(
+                trades,
+                minute_end=minute_at,
+                session_date=session_date,
+                entry_field="entry_time",
+                exit_field="exit_time",
+            )
+            if not parts:
+                if minute in skipped_slots:
+                    parts.append("5m SOURCE SKIPPED")
+                elif minute_source.startswith(("WAIT", "IN PROGRESS", "BLOCKED")):
+                    parts.append(minute_source)
+                elif terminal_empty_shared:
+                    parts.append("NO SIGNAL")
+                else:
+                    parts.append("NO EVENT")
+            profile_minute_cells[profile] = "; ".join(parts) + f"; {book}"
+
+        v6_live_arm_state_1m = _fno_eq_id_timeline_v6_live_arm_state(
+            disabled=v6_live_disabled,
+            status_present=bool(v6_live_status),
+            armed=v6_live_armed,
+            arm_reason=v6_live_arm_reason,
+            kill_switch=v6_live_kill_switch,
+        )
+        if v6_live_policy_invalid:
+            v6_live_cell_1m = "LIVE EXECUTION POLICY MISMATCH; fills unavailable"
+        elif v6_live_arm_state_1m == "DISABLED":
+            v6_live_cell_1m = "DISABLED"
+        else:
+            live_parts: list[str] = []
+            live_entry_symbols = _fno_eq_id_timeline_event_symbols(
+                v6_live_trade_rows,
+                timestamp_field="entry_time",
+                minute=minute,
+                session_date=session_date,
+            )
+            live_exit_symbols = _fno_eq_id_timeline_event_symbols(
+                v6_live_trade_rows,
+                timestamp_field="exit_time",
+                minute=minute,
+                session_date=session_date,
+            )
+            if live_entry_symbols:
+                live_parts.append(
+                    f"ENTRY {len(live_entry_symbols)} "
+                    f"[{_fno_eq_id_timeline_symbols(live_entry_symbols)}]"
+                )
+            if live_exit_symbols:
+                live_parts.append(
+                    f"EXIT {len(live_exit_symbols)} "
+                    f"[{_fno_eq_id_timeline_symbols(live_exit_symbols)}]"
+                )
+            live_book = _fno_eq_id_timeline_book_as_of(
+                v6_live_trade_rows,
+                minute_end=minute_at,
+                session_date=session_date,
+                entry_field="entry_time",
+                exit_field="exit_time",
+                pnl_field="pnl_rs",
+            )
+            if not live_parts:
+                # Carry the gate reason on every quiet minute: without it an
+                # unarmed session is visually identical to an armed idle one.
+                live_parts.append(
+                    "NO EVENT" if v6_live_arm_state_1m == "ARMED"
+                    else v6_live_arm_state_1m
+                )
+            v6_live_cell_1m = "; ".join(live_parts) + f"; {live_book}"
+
+        one_minute_rows.append(
+            {
+                "minute": minute,
+                "shared_source": minute_source,
+                "v6": v6_cell_1m,
+                "v6_live": v6_live_cell_1m,
+                **profile_minute_cells,
+            }
+        )
+
+    generic_1m_disabled = _fno_eq_id_timeline_card_disabled(by_id, "eod_1min_data")
+    generic_1m_state = "DISABLED (intentional)" if generic_1m_disabled else "ENABLED"
+    hard_terms = ("BLOCKED", "INCOMPLETE", "MISMATCH", "CONFLICT", "MISSING")
+    hard_issue_count = 0
+    watch_issue_count = 0
+    for row in five_minute_rows:
+        if row["slot"] not in FNO_V13_V10_G_SIGNAL_SLOTS:
+            continue
+        market_cells = [row[key] for key in ("cash", "oi", "rank")]
+        strategy_cells = [row[key] for key in ("v6", "shared", "v10", "v11", "v12")]
+        # A deliberately unarmed LIVE executor reports "NOT ARMED
+        # (LIVE_ACK_MISSING)".  That is an intended state, not a fault, and its
+        # reason string contains a hard-issue term - so only scan this cell
+        # once the executor is actually armed and expected to trade.
+        if str(row.get("v6_live", "")).startswith("ARMED"):
+            strategy_cells.append(row["v6_live"])
+        cells = market_cells + strategy_cells
+        if any(any(term in cell for term in hard_terms) for cell in cells):
+            hard_issue_count += 1
+        elif any("LATE" in cell for cell in market_cells) or any(
+            "SKIPPED" in cell for cell in strategy_cells
+        ):
+            watch_issue_count += 1
+    for row in one_minute_rows:
+        cells = [row[key] for key in ("shared_source", "v6", "v10", "v11", "v12")]
+        if str(row.get("v6_live", "")).startswith("ARMED"):
+            cells.append(row["v6_live"])
+        if any(any(term in cell for term in hard_terms) for cell in cells):
+            hard_issue_count += 1
+    timeline_window_closed = current >= (
+        _fno_eq_id_timeline_at(session_date, "11:32")
+        + dt.timedelta(minutes=1, seconds=FNO_EQ_ID_TIMELINE_BOUNDARY_BUFFER_SECONDS)
+    )
+    active_hard_issue_count = 0 if timeline_window_closed else hard_issue_count
+    closed_hard_issue_count = hard_issue_count if timeline_window_closed else 0
+    issue_count = hard_issue_count + watch_issue_count
+    return {
+        "session_date": session_date,
+        "generated_at_ist": current.isoformat(timespec="seconds"),
+        "five_minute_rows": five_minute_rows,
+        "one_minute_rows": one_minute_rows,
+        "generic_1m_state": generic_1m_state,
+        "shared_runtime": shared_runtime or "NOT_RUN",
+        "shared_phase": shared_phase or "-",
+        "hard_issue_count": hard_issue_count,
+        "active_hard_issue_count": active_hard_issue_count,
+        "closed_hard_issue_count": closed_hard_issue_count,
+        "watch_issue_count": watch_issue_count,
+        "timeline_window_closed": timeline_window_closed,
+        "issue_count": issue_count,
+    }
+
+
+def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
+    if timeline.get("market_closed_reason"):
+        return [
+            "", "## Market session", "",
+            f"- {timeline['market_closed_reason']}",
+            "- Five-minute selection and one-minute execution timelines are not due.",
+            "- Runtime failures, if any, remain visible in the session table.",
+        ]
+    lines = [
+        "",
+        "## 5-Minute Market Readiness (G selection slots through 11:20 IST)",
+        "",
+        f"- Session date: `{_fno_eq_id_monitor_clean(timeline.get('session_date'))}`; every label is a completed-candle end in IST.",
+        "- `09:15` is the opening snapshot. Active G-family signal times: " + ", ".join(f"`{slot}`" for slot in FNO_V13_V10_G_SIGNAL_SLOTS) + ". G-3 includes 09:20 LONG with exact 09:21 confirmation and verified opening OI. The separate shared V10/V11/V12 session keeps its `09:25-09:45` windows.",
+        "",
+        "| 5m end | Purpose | Equity 5m | Futures OI | OI ranker |",
+        "|---|---|---|---|---|",
+    ]
+    five_rows = timeline.get("five_minute_rows", [])
+    for row in five_rows if isinstance(five_rows, list) else []:
+        lines.append(
+            "| {slot} | {purpose} | {cash} | {oi} | {rank} |".format(
+                **{key: _fno_eq_id_monitor_clean(row.get(key, ""), limit=220) for key in (
+                    "slot", "purpose", "cash", "oi", "rank"
+                )}
+            )
+        )
+    lines.extend((
+        "",
+        "## 5-Minute Strategy Selection and Current Cohort Result",
+        "",
+        "| 5m signal end | V13-V10-G selection -> S+1 confirmation -> current cohort | G LIVE (Kite qty-1) | Shared source | V10 | V11 | V12 |",
+        "|---|---|---|---|---|---|---|",
+    ))
+    for row in five_rows if isinstance(five_rows, list) else []:
+        lines.append(
+            "| {slot} | {v6} | {v6_live} | {shared} | {v10} | {v11} | {v12} |".format(
+                **{key: _fno_eq_id_monitor_clean(row.get(key, ""), limit=300) for key in (
+                    "slot", "v6", "v6_live", "shared", "v10", "v11", "v12"
+                )}
+            )
+        )
+    lines.extend((
+        "",
+        "## 1-Minute Strategy Events (G entry windows and later trade events)",
+        "",
+        f"- Generic `Live Data Fetch (1min)`: **{_fno_eq_id_monitor_clean(timeline.get('generic_1m_state'))}**. G and the shared V10/V11/V12 session use their own candidate-scoped 1-minute evidence and do not depend on that generic card.",
+        f"- Shared runtime: `{_fno_eq_id_monitor_clean(timeline.get('shared_runtime'))}` / `{_fno_eq_id_monitor_clean(timeline.get('shared_phase'))}`.",
+        f"- Timeline evidence flags: `{int(timeline.get('active_hard_issue_count', timeline.get('hard_issue_count', 0)) or 0)}` active hard / `{int(timeline.get('closed_hard_issue_count', 0) or 0)}` closed historical gaps / `{int(timeline.get('watch_issue_count', 0) or 0)}` watch. Expected 09:15 opening and 09:20 rank warm-up states are excluded.",
+        "- G confirms at `09:26`, `09:31`, `09:36`, `09:41`, `09:46`, `09:51`, `09:56`, `10:01`, `11:21`. Its ten-minute entry windows and actual later paper/live entry and exit events are shown. Quiet minutes outside those windows are omitted; this is not a continuous MTM history.",
+        "- `REDUCED; no required symbols` means the chronological reducer advanced without fetching a union bar because no active candidate needed one. It does not mean a 1-minute fetch occurred.",
+        "- One-minute books use only causal entry/exit timestamps and realized P&L. Current ledger MTM appears only in the 5-minute cohort table because immutable historical per-minute MTM snapshots do not exist.",
+        "",
+        "| 1m end/event minute | Shared 1m source / reducer | V13-V10-G (paper) | G LIVE (Kite qty-1) | V10 | V11 | V12 |",
+        "|---|---|---|---|---|---|---|",
+    ))
+    minute_rows = timeline.get("one_minute_rows", [])
+    for row in minute_rows if isinstance(minute_rows, list) else []:
+        lines.append(
+            "| {minute} | {shared_source} | {v6} | {v6_live} | {v10} | {v11} | {v12} |".format(
+                **{key: _fno_eq_id_monitor_clean(row.get(key, ""), limit=320) for key in (
+                    "minute", "shared_source", "v6", "v6_live", "v10", "v11", "v12"
+                )}
+            )
+        )
+    lines.extend((
+        "",
+        "### Timeline state legend",
+        "",
+        "- `OFF WINDOW`: the frozen strategy has no 5-minute selection at that time.",
+        "- `NO SIGNAL` / `NO EVENT`: processing completed but no candidate or transition occurred.",
+        "- `WAIT` / `IN PROGRESS`: the causal completed-candle boundary or evidence deadline has not passed.",
+        "- `SKIPPED`, `BLOCKED`, `INCOMPLETE`, `MISMATCH`, or `CONFLICT`: explicit fail-visible evidence; no result is fabricated.",
+        "- `G LIVE (Kite qty-1)` is the real-order execution path at fixed quantity 1. G PAPER uses its configured strategy sizing. Both consume the same G signals, while broker fills and costs remain separately recorded.",
+        "- `NOT ARMED (...)`, `KILL SWITCH ON`, and `NO LIVE STATUS` are deliberate gates, not faults: LIVE needs an explicit same-day acknowledgement, so an unarmed session legitimately produces no fills. These states are excluded from the hard-issue count; `ARMED; MISSING LIVE LEDGER` is not.",
+    ))
+    return [_active_strategy_display(line) for line in lines]
+
+
+def _format_fno_eq_id_monitor(
+    items: Sequence[Dict[str, object]],
+    *,
+    now_ist: Optional[dt.datetime] = None,
+) -> tuple[str, Dict[str, str], Optional[str], int, bool]:
+    """Build one live, fail-visible monitor across the selected dashboard scope."""
+    current = now_ist or dt.datetime.now(IST)
+    current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
+    by_id = {str(item.get("id", "")): item for item in items}
+    strategy_timeline = _build_fno_eq_id_strategy_timelines(items, now_ist=current)
+    rows_by_group: list[tuple[str, list[dict[str, str]]]] = []
+    counts = {"OK": 0, "WATCH": 0, "PROBLEM": 0, "UNKNOWN": 0, "INACTIVE": 0}
+    unique_tasks: set[str] = set()
+    mtimes: list[str] = []
+
+    for group_name, card_ids in FNO_EQ_ID_MONITOR_GROUPS:
+        group_rows: list[dict[str, str]] = []
+        for card_id in card_ids:
+            item = by_id.get(card_id, {})
+            base_status = dict(item.get("status") or {}) if isinstance(item, dict) else {}
+            base_status = _apply_fno_v13_v10_g_identity(card_id, base_status)
+            base_status = _apply_fno_market_calendar(card_id, base_status, now_ist=current)
+            detail_path = _fno_eq_id_monitor_detail_path(card_id)
+            detail_status = parse_status_file(detail_path) if detail_path is not None else {}
+            activity_status: Dict[str, object] = dict(base_status)
+            # Granular files add slot/counter evidence; reconciled card state
+            # remains authoritative for health and scheduler eligibility.
+            for field, value in detail_status.items():
+                if field not in {"status", "scheduler_status", "scheduler_state"}:
+                    activity_status[field] = value
+            if card_id == "authentication_v2":
+                activity_status.update(
+                    _fno_eq_id_monitor_safe_auth_status(current.date().isoformat())
+                )
+            exists = bool(item.get("exists")) if isinstance(item, dict) else False
+            monitor, runtime, eligible = _fno_eq_id_monitor_state(base_status, exists=exists)
+            if not item:
+                monitor, runtime, eligible = "PROBLEM", "MISSING_CARD", True
+            if card_id == "authentication_v2" and eligible:
+                authenticated = _fno_eq_id_timeline_number(
+                    activity_status.get("authenticated_apps")
+                )
+                configured = _fno_eq_id_timeline_number(
+                    activity_status.get("configured_apps")
+                )
+                current_tokens = _fno_eq_id_timeline_number(
+                    activity_status.get("token_files_current")
+                )
+                auth_incomplete = bool(
+                    authenticated is not None
+                    and configured is not None
+                    and authenticated < configured
+                )
+                tokens_incomplete = bool(
+                    current_tokens is not None
+                    and configured is not None
+                    and current_tokens < configured
+                )
+                if auth_incomplete or tokens_incomplete:
+                    minimum_healthy = 7
+                    usable = min(
+                        value
+                        for value in (authenticated, current_tokens)
+                        if value is not None
+                    )
+                    monitor = "WATCH" if usable >= minimum_healthy else "PROBLEM"
+                    runtime = "PARTIAL_AUTH_ROSTER"
+            counts[monitor] = counts.get(monitor, 0) + 1
+            scheduler = _fno_eq_id_monitor_clean(
+                base_status.get("scheduler_status") or base_status.get("scheduler_state") or "UNMANAGED",
+                limit=32,
+            )
+            phase = _fno_eq_id_monitor_clean(
+                activity_status.get("phase") or activity_status.get("overall_state") or activity_status.get("state"),
+                limit=64,
+            )
+            slot = _fno_eq_id_monitor_clean(
+                activity_status.get("slot") or activity_status.get("slot_ist")
+                or activity_status.get("current_slot_ist")
+                or activity_status.get("last_processed_minute"),
+                limit=64,
+            )
+            phase_slot = phase
+            if slot and slot not in phase_slot:
+                phase_slot = f"{phase_slot}; slot={slot}" if phase_slot else f"slot={slot}"
+            updated = next(
+                (
+                    _fno_eq_id_monitor_clean(activity_status.get(field), limit=64)
+                    for field in ("updated_at_ist", "last_update_ist", "heartbeat_ts", "ts", "session_date_ist")
+                    if _fno_eq_id_monitor_clean(activity_status.get(field), limit=64)
+                ),
+                _fno_eq_id_monitor_clean(item.get("mtime", "") if isinstance(item, dict) else "", limit=64),
+            )
+            item_mtime = _fno_eq_id_monitor_clean(item.get("mtime", "") if isinstance(item, dict) else "", limit=64)
+            if item_mtime:
+                mtimes.append(item_mtime)
+            tasks = str(base_status.get("scheduler_tasks", "") or "")
+            unique_tasks.update(task.strip() for task in tasks.split(",") if task.strip())
+            evidence_name = _fno_eq_id_monitor_clean(
+                detail_path.name if detail_path is not None and detail_path.exists()
+                else (item.get("file_name", "") if isinstance(item, dict) else ""),
+                limit=80,
+            )
+            if card_id == "authentication_v2":
+                detail_value = (
+                    f"safe auth roster: {activity_status.get('authenticated_apps', '?')}/"
+                    f"{activity_status.get('configured_apps', '?')} apps; "
+                    f"{activity_status.get('token_files_current', '?')}/"
+                    f"{activity_status.get('configured_apps', '?')} current token files"
+                )
+            else:
+                detail_value = (
+                    base_status.get("derived_status") or base_status.get("message")
+                    or base_status.get("reason") or base_status.get("error") or ""
+                )
+            group_rows.append(
+                {
+                    "stage": FNO_EQ_ID_MONITOR_STAGE_LABELS.get(card_id, card_id),
+                    "session": FNO_EQ_ID_MONITOR_SESSION_LABELS.get(card_id, card_id),
+                    "eligible": "YES" if eligible else ("NO (not scheduled)" if runtime == "NOT_SCHEDULED" else "NO (disabled)"),
+                    "monitor": monitor,
+                    "runtime": runtime,
+                    "scheduler": scheduler,
+                    "phase_slot": phase_slot or "-",
+                    "activity": _fno_eq_id_monitor_activity(
+                        card_id, activity_status,
+                        item.get("tail", "") if isinstance(item, dict) else "",
+                    ),
+                    "updated": updated or "-",
+                    "evidence": evidence_name or "-",
+                    "detail": _fno_eq_id_monitor_clean(
+                        detail_value,
+                        limit=240,
+                    ),
+                }
+            )
+        rows_by_group.append((group_name, group_rows))
+
+    eligible_count = sum(counts[key] for key in ("OK", "WATCH", "PROBLEM", "UNKNOWN"))
+    configured_count = eligible_count + counts["INACTIVE"]
+    timeline_total_hard = int(strategy_timeline.get("hard_issue_count", 0) or 0)
+    timeline_hard = int(
+        strategy_timeline.get("active_hard_issue_count", timeline_total_hard) or 0
+    )
+    timeline_closed_hard = int(
+        strategy_timeline.get("closed_hard_issue_count", 0) or 0
+    )
+    timeline_watch = int(strategy_timeline.get("watch_issue_count", 0) or 0)
+    if counts["PROBLEM"] or timeline_hard:
+        overall, flow_state = "FAILED", "PROBLEM"
+    elif counts["WATCH"] or counts["UNKNOWN"] or timeline_watch or timeline_closed_hard:
+        overall, flow_state = "PARTIAL", "WATCH"
+    elif eligible_count:
+        any_running = any(
+            str((by_id.get(card_id, {}).get("status") or {}).get("status", "")).upper() == "RUNNING"
+            for _, card_ids in FNO_EQ_ID_MONITOR_GROUPS for card_id in card_ids
+        )
+        overall, flow_state = ("RUNNING" if any_running else "SUCCESS"), "OK"
+    else:
+        overall, flow_state = "DISABLED", "INACTIVE"
+
+    generated = current.isoformat(timespec="seconds")
+    lines = [
+        "# FnO EQ ID monitoring", "",
+        f"- Refreshed: `{generated}`",
+        f"- Overall: **{flow_state}**",
+        f"- Coverage: `{configured_count}` configured views / `{eligible_count}` eligible / `{counts['INACTIVE']}` intentionally disabled",
+        f"- Health: `{counts['OK']}` OK / `{counts['WATCH']}` watch / `{counts['PROBLEM']}` problem / `{counts['UNKNOWN']}` unknown",
+        f"- Strategy timeline evidence: `{timeline_hard}` active hard / `{timeline_closed_hard}` closed historical gaps / `{timeline_watch}` watch",
+        f"- Physical scheduled tasks covered: `{len(unique_tasks)}` (V10/V11/V12 profile rows share one task)",
+        "- Refresh contract: rebuilt from current task state, heartbeat/status, detailed fetch marker, report/log mtime and strategy ledger every dashboard refresh.",
+    ]
+    lines.extend(_format_fno_eq_id_strategy_timelines(strategy_timeline))
+    for group_name, group_rows in rows_by_group:
+        lines.extend((
+            "", f"## {group_name}", "",
+            "| Stage | Session | Eligible | Monitor | Runtime | Scheduler | Phase / slot | Latest activity | Updated | Evidence |",
+            "|---|---|---|---|---|---|---|---|---|---|",
+        ))
+        for row in group_rows:
+            lines.append(
+                "| {stage} | {session} | {eligible} | {monitor} | {runtime} | {scheduler} | {phase_slot} | {activity} | {updated} | {evidence} |".format(**row)
+            )
+
+    attention_rows = [
+        (group_name, row) for group_name, group_rows in rows_by_group for row in group_rows
+        if row["monitor"] in {"WATCH", "PROBLEM", "UNKNOWN"}
+    ]
+    lines.extend(("", "## Attention ledger", ""))
+    if attention_rows:
+        lines.extend((
+            "| Subheading | Session | Monitor | Runtime / phase | Exact evidence |",
+            "|---|---|---|---|---|",
+        ))
+        for group_name, row in attention_rows:
+            detail = row["detail"] or row["activity"]
+            lines.append(
+                f"| {_fno_eq_id_monitor_clean(group_name)} | {row['session']} | {row['monitor']} | {row['runtime']} / {row['phase_slot']} | {detail} |"
+            )
+    else:
+        lines.append("No eligible session currently needs attention.")
+    lines.extend((
+        "", "## Interpretation", "",
+        "- `NO (disabled)` is intentional inactivity and is excluded from alarm totals.",
+        "- `WATCH` preserves fail-closed, waiting, partial or degraded states without falsely calling them healthy.",
+        "- `PROBLEM` means an eligible card is failed, stale, missing or otherwise in a hard-failure state.",
+        "- Strategy profile rows expose selection, LONG/SHORT candidate, guard-rejection, fill, open/closed and net-P&L counters whenever their shared ledger publishes them.",
+    ))
+    latest_mtime = max(mtimes) if mtimes else None
+    scoped_ids = {
+        card_id for _, card_ids in FNO_EQ_ID_MONITOR_GROUPS for card_id in card_ids
+    }
+    monitor_exists = any(
+        bool(item.get("exists"))
+        for card_id, item in by_id.items()
+        if card_id in scoped_ids
+    )
+    status = {
+        "status": overall,
+        "session": "FnO EQ ID monitoring",
+        "phase": "LIVE_AGGREGATE",
+        "flow_status": flow_state,
+        "configured_views": str(configured_count),
+        "eligible_sessions": str(eligible_count),
+        "inactive_sessions": str(counts["INACTIVE"]),
+        "healthy_sessions": str(counts["OK"]),
+        "watch_sessions": str(counts["WATCH"]),
+        "problem_sessions": str(counts["PROBLEM"]),
+        "unknown_sessions": str(counts["UNKNOWN"]),
+        "physical_tasks": str(len(unique_tasks)),
+        "timeline_issues": str(strategy_timeline.get("issue_count", 0)),
+        "timeline_hard_issues": str(timeline_hard),
+        "timeline_total_hard_issues": str(timeline_total_hard),
+        "timeline_closed_hard_issues": str(timeline_closed_hard),
+        "timeline_watch_issues": str(timeline_watch),
+        "five_minute_rows": str(len(strategy_timeline.get("five_minute_rows", []))),
+        "one_minute_rows": str(len(strategy_timeline.get("one_minute_rows", []))),
+        "ts": generated,
+        "derived_status": (
+            f"coverage={configured_count}; eligible={eligible_count}; OK={counts['OK']}; "
+            f"watch={counts['WATCH']}; problem={counts['PROBLEM']}; disabled={counts['INACTIVE']}; "
+            f"timeline_active_hard={timeline_hard}; timeline_closed_hard={timeline_closed_hard}; "
+            f"timeline_watch={timeline_watch}"
+        ),
+    }
+    return "\n".join(lines).rstrip() + "\n", status, latest_mtime, configured_count, monitor_exists
+
+
+def _format_v7_live_5min_monitor(
+    today_ist: str,
+    task_snapshot: Dict[str, Dict[str, str]],
+) -> tuple[str, Dict[str, str]]:
+    date_key = today_ist.replace("-", "")
+    now_ist = dt.datetime.now(IST)
+    entry_root = runtime_dir("entry_engine_1min_v5_ID")
+    entry_audit_dir = entry_root / "audit"
+    latest_summary_path = entry_root / "latest" / "latest_summary.json"
+    latest_summary = _read_json_dict(latest_summary_path)
+    slots: dict[str, dict[str, Any]] = {}
+    setup_stats: dict[tuple[str, str], dict[str, Any]] = {}
+    detail_rows: list[dict[str, str]] = []
+
+    def _slot_rec(slot: str) -> dict[str, Any]:
+        rec = slots.setdefault(slot, {"slot": slot})
+        for set_field in (
+            "tickers",
+            "scan_raw_tickers",
+            "potential_tickers",
+            "scan_v11_rej_tickers",
+            "research_rej_tickers",
+            "entry_raw_tickers",
+            "entry_tickers",
+            "signal_tickers",
+            "signal_ids",
+            "paper_tickers",
+            "live_tickers",
+        ):
+            rec.setdefault(set_field, set())
+        for field in (
+            "scan_raw",
+            "potential",
+            "scan_v11_rej",
+            "research_rej",
+            "entry_raw",
+            "v11_rej",
+            "pre_rej",
+            "pre_pass",
+            "entries",
+            "signals",
+            "paper",
+            "target",
+            "sl",
+            "eod",
+            "skips",
+            "open",
+            "pnl",
+            "pnl_n",
+            "short_written",
+            "long_written",
+            "short_sig",
+            "long_sig",
+        ):
+            rec.setdefault(field, 0)
+        return rec
+
+    def _add_scanner_rows(path: Path, field: str) -> int:
+        rows = _read_csv_tail_rows(path, limit=50000)
+        for row in rows:
+            slot = _v7_monitor_slot_label(_pick_csv_value(row, ("scan_slot_ist", "signal_time_ist", "created_at_ist")))
+            if not slot:
+                continue
+            rec = _slot_rec(slot)
+            rec[field] = int(rec.get(field, 0) or 0) + 1
+            ticker = str(row.get("ticker", "")).upper().strip()
+            if ticker:
+                rec["tickers"].add(ticker)
+                rec[f"{field}_tickers"].add(ticker)
+            setup_field = {
+                "scan_raw": "raw",
+                "potential": "potential",
+                "scan_v11_rej": "v11_rej",
+                "research_rej": "research_rej",
+            }.get(field)
+            if setup_field:
+                _v7_monitor_add_setup_count(setup_stats, row, setup_field)
+        return len(rows)
+
+    raw_candidates_path = SIGNAL_DISCOVERY_V7_CSV_DIR / f"raw_candidate_tickers_{today_ist}.csv"
+    candidate_path = SIGNAL_DISCOVERY_V7_CSV_DIR / f"candidate_tickers_{today_ist}.csv"
+    scan_v11_rej_path = SIGNAL_DISCOVERY_V7_CSV_DIR / f"v11_overlay_rejected_candidate_tickers_{today_ist}.csv"
+    research_rej_path = SIGNAL_DISCOVERY_V7_CSV_DIR / f"research_filter_rejected_candidate_tickers_{today_ist}.csv"
+    raw_scan_total = _add_scanner_rows(raw_candidates_path, "scan_raw")
+    potential_total = _add_scanner_rows(candidate_path, "potential")
+    scan_v11_rej_total = _add_scanner_rows(scan_v11_rej_path, "scan_v11_rej")
+    research_rej_total = _add_scanner_rows(research_rej_path, "research_rej")
+    scanner_audit_paths = sorted(
+        (SIGNAL_DISCOVERY_V7_ROOT / "audit").glob(f"candidate_tickers_audit_{today_ist}*.csv"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0.0,
+    )
+    scanner_audit_rows: list[dict[str, str]] = []
+    for scanner_audit_path in scanner_audit_paths:
+        scanner_audit_rows.extend(_read_csv_tail_rows(scanner_audit_path, limit=5000))
+    for row in scanner_audit_rows:
+        slot = _v7_monitor_slot_label(row.get("slot_ist", ""))
+        if not slot:
+            continue
+        rec = _slot_rec(slot)
+        scan_sec = _to_float_or_nan(row.get("elapsed_sec", ""))
+        scan_lag = _v7_monitor_sec_between(row.get("slot_ist", ""), row.get("created_at_ist", ""))
+        if not math.isnan(scan_sec):
+            rec["scan_sec"] = float(scan_sec)
+        if not math.isnan(scan_lag):
+            rec["scan_lag_sec"] = float(scan_lag)
+        rec["scan_created"] = _extract_time_only(str(row.get("created_at_ist", "")))
+        rec["scanner_audit_seen"] = True
+        for source_key, target_key in (
+            ("candidate_count", "candidate_count"),
+            ("raw_candidate_count", "raw_candidate_count"),
+            ("v11_tier123_live_scan_elapsed_sec", "tier123_scan_sec"),
+        ):
+            value = _to_float_or_nan(str(row.get(source_key, "")))
+            if not math.isnan(value):
+                rec[target_key] = int(value) if source_key != "v11_tier123_live_scan_elapsed_sec" else float(value)
+
+    for marker_path in sorted(SLOT_READY_5M_DIR.glob(f"slot_{date_key}_*.json")):
+        marker = _read_json_dict(marker_path)
+        slot = _v7_monitor_slot_label(marker.get("slot_ist") or marker_path.stem)
+        if not slot:
+            path_match = re.search(r"_(\d{2})(\d{2})$", marker_path.stem)
+            slot = f"{path_match.group(1)}:{path_match.group(2)}" if path_match else ""
+        if not slot:
+            continue
+        rec = _slot_rec(slot)
+        rec["fetch_marker_seen"] = True
+        rec["fetch_complete"] = bool(marker.get("complete"))
+        fetch_failed = _to_float_or_nan(str(marker.get("tickers_failed", "0")))
+        verify_failed = _to_float_or_nan(str(marker.get("verification_failed_count", "0")))
+        rec["fetch_failed"] = 0 if math.isnan(fetch_failed) else int(fetch_failed)
+        rec["fetch_verify_failed"] = 0 if math.isnan(verify_failed) else int(verify_failed)
+        fetch_lag = _v7_monitor_sec_between(marker.get("slot_ist", ""), marker.get("published_at_ist", ""))
+        if not math.isnan(fetch_lag):
+            rec["fetch_lag_sec"] = float(fetch_lag)
+        duration_ms = _to_float_or_nan(str(marker.get("duration_ms", "")))
+        if not math.isnan(duration_ms):
+            rec["fetch_duration_sec"] = float(duration_ms) / 1000.0
+
+    audit_jsonl = entry_audit_dir / f"entry_engine_audit_{today_ist}.jsonl"
+    audit_slots = 0
+    pre_version_seen = ""
+    if audit_jsonl.exists():
+        try:
+            lines = audit_jsonl.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            slot = _v7_monitor_slot_label(payload.get("slot_ist") or payload.get("candidate_snapshot_slot_ist"))
+            if not slot:
+                continue
+            audit_slots += 1
+            rec = _slot_rec(slot)
+            rec["entry_audit_seen"] = True
+            rec["candidate_snapshot_ready"] = bool(payload.get("candidate_snapshot_ready"))
+            rec["pre_momentum_gate_enabled"] = bool(payload.get("pre_momentum_gate_enabled"))
+            rec["raw_fetch_failures"] = int(payload.get("raw_fetch_failures", 0) or 0)
+            for source_key, target_key in (
+                ("candidate_count", "candidate_count"),
+                ("tickers_requested", "tickers_requested"),
+                ("tickers_fetched", "tickers_fetched"),
+                ("raw_entry_rows", "entry_raw"),
+                ("v11_entry_rejected_rows", "v11_rej"),
+                ("pre_momentum_rejected_rows", "pre_rej"),
+                ("pre_momentum_filtered_entry_rows", "pre_pass"),
+                ("entry_rows", "entries"),
+                ("entry_rows", "entry_rows"),
+                ("short_written", "short_written"),
+                ("long_written", "long_written"),
+            ):
+                value = _to_float_or_nan(str(payload.get(source_key, "")))
+                if not math.isnan(value):
+                    rec[target_key] = int(value)
+            rec["signals"] = int(rec.get("short_written", 0) or 0) + int(rec.get("long_written", 0) or 0)
+            for source_key, target_key in (
+                ("elapsed_sec", "elapsed_sec"),
+                ("candidate_wait_sec", "candidate_wait_sec"),
+                ("candidate_load_elapsed_sec", "candidate_load_sec"),
+                ("raw_fetch_elapsed_sec", "raw_fetch_sec"),
+                ("entry_scan_elapsed_sec", "entry_scan_sec"),
+                ("entry_reject_audit_elapsed_sec", "entry_reject_sec"),
+                ("v11_entry_overlay_elapsed_sec", "v11_sec"),
+                ("pre_momentum_gate_elapsed_sec", "pre_gate_sec"),
+                ("entry_select_elapsed_sec", "select_sec"),
+                ("audit_csv_write_elapsed_sec", "audit_csv_sec"),
+                ("setup_exit_rules_write_elapsed_sec", "rules_csv_sec"),
+                ("live_signal_csv_write_elapsed_sec", "live_csv_sec"),
+                ("short_signal_write_elapsed_sec", "short_csv_sec"),
+                ("long_signal_write_elapsed_sec", "long_csv_sec"),
+            ):
+                value = _to_float_or_nan(str(payload.get(source_key, "")))
+                if not math.isnan(value):
+                    rec[target_key] = float(value)
+            rec["raw_fetch_mode"] = str(payload.get("raw_fetch_mode", rec.get("raw_fetch_mode", "")) or "")
+            if payload.get("pre_momentum_version"):
+                pre_version_seen = str(payload.get("pre_momentum_version", ""))
+                rec["pre_version"] = pre_version_seen
+
+    for path in sorted(entry_audit_dir.glob(f"entry_rows_raw_candidates_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "entry_raw", slots)
+        slot = _v7_monitor_slot_from_path(path, date_key)
+        rec = _slot_rec(slot) if slot else None
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "entry_raw")
+            ticker = str(row.get("ticker", "")).upper().strip()
+            if rec is not None and ticker:
+                rec["entry_raw_tickers"].add(ticker)
+    for path in sorted(entry_audit_dir.glob(f"entry_rejected_v11_overlay_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "v11_rej", slots)
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "v11_rej")
+    for path in sorted(entry_audit_dir.glob(f"entry_rejected_pre_momentum_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "pre_rej", slots)
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "pre_rej")
+    # P2-15: ADV cap and F&O ban reject counts surfaced in funnel card
+    for path in sorted(entry_audit_dir.glob(f"entry_rejected_adv_cap_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "adv_cap_rej", slots)
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "adv_cap_rej")
+    for path in sorted(entry_audit_dir.glob(f"entry_rejected_fno_ban_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "fno_ban_rej", slots)
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "fno_ban_rej")
+    for path in sorted(entry_audit_dir.glob(f"entry_rows_{date_key}_*.csv")):
+        rows = _v7_monitor_slot_rows(path, date_key, "entries", slots)
+        slot = _v7_monitor_slot_from_path(path, date_key)
+        rec = _slot_rec(slot) if slot else None
+        completed_at = _v7_monitor_mtime(path)
+        if rec is not None and completed_at is not None:
+            rec["entry_completed_at"] = completed_at
+        for row in rows:
+            _v7_monitor_add_setup_count(setup_stats, row, "entries")
+            _v7_monitor_add_setup_count(setup_stats, row, "pre_pass")
+            ticker = str(row.get("ticker", "")).upper().strip()
+            if rec is not None and ticker:
+                rec["entry_tickers"].add(ticker)
+            signal_time = _pick_csv_value(row, ("signal_time_ist", "bar_time_ist"))
+            raw_fetch_lag = _v7_monitor_raw_fetch_lag_sec(signal_time, row.get("ticker", ""))
+            detail_rows.append(
+                {
+                    "state": "ENTRY",
+                    "ticker": str(row.get("ticker", "")).upper(),
+                    "side": str(row.get("side", "")).upper(),
+                    "setup": str(row.get("setup", "")),
+                    "signal": _extract_time_only(signal_time),
+                    "entry": _fmt_price(_v7_monitor_num(row, ("entry_price", "v7_signal_entry_price"))),
+                    "sl": _fmt_price(_v7_monitor_num(row, ("sl_price", "v7_signal_stop_price"))),
+                    "target": _fmt_price(_v7_monitor_num(row, ("target_price", "v7_signal_target_price"))),
+                    "qty": _fmt_qty(_v7_monitor_num(row, ("quantity",))),
+                    "pnl": "",
+                    "outcome": "",
+                    "fetch_lag": _v7_monitor_fmt_sec(raw_fetch_lag),
+                    "csv_lag": "",
+                    "entry_lag": "",
+                    "dur": "",
+                }
+            )
+
+    signal_slot_counts: dict[str, int] = {}
+    for side in ("short", "long"):
+        signal_path = LIVE_SIGNAL_DIR / f"signals_{today_ist}_id_5min_v7_{side}.csv"
+        for row in _read_csv_tail_rows(signal_path, limit=5000):
+            slot = _v7_monitor_slot_label(
+                _pick_csv_value(row, ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist"))
+            )
+            if slot:
+                signal_slot_counts[slot] = int(signal_slot_counts.get(slot, 0) or 0) + 1
+                rec = _slot_rec(slot)
+                if side == "short":
+                    rec["short_sig"] = int(rec.get("short_sig", 0) or 0) + 1
+                else:
+                    rec["long_sig"] = int(rec.get("long_sig", 0) or 0) + 1
+                signal_lag = _v7_monitor_sec_between(
+                    _pick_csv_value(row, ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist")),
+                    _pick_csv_value(row, ("detected_time_ist", "logtime_ist", "received_time")),
+                )
+                if not math.isnan(signal_lag):
+                    rec["sig_csv_lag_sec"] = max(float(rec.get("sig_csv_lag_sec", 0.0) or 0.0), float(signal_lag))
+                signal_id = str(row.get("signal_id", "")).strip()
+                ticker = str(row.get("ticker", "")).upper().strip()
+                if signal_id:
+                    rec["signal_ids"].add(signal_id)
+                if ticker:
+                    rec["signal_tickers"].add(ticker)
+            _v7_monitor_add_setup_count(setup_stats, row, "signals")
+            signal_time = _pick_csv_value(row, ("signal_datetime", "signal_entry_datetime_ist"))
+            raw_fetch_lag = _v7_monitor_raw_fetch_lag_sec(signal_time, row.get("ticker", ""))
+            csv_lag = _v7_monitor_sec_between(
+                signal_time,
+                _pick_csv_value(row, ("detected_time_ist", "logtime_ist", "received_time")),
+            )
+            detail_rows.append(
+                {
+                    "state": "SIGNAL",
+                    "ticker": str(row.get("ticker", "")).upper(),
+                    "side": str(row.get("side", "")).upper(),
+                    "setup": str(row.get("setup", "")),
+                    "signal": _extract_time_only(signal_time),
+                    "entry": _fmt_price(_v7_monitor_num(row, ("entry_price",))),
+                    "sl": _fmt_price(_v7_monitor_num(row, ("stop_price", "_stop_price"))),
+                    "target": _fmt_price(_v7_monitor_num(row, ("target_price",))),
+                    "qty": _fmt_qty(_v7_monitor_num(row, ("quantity",))),
+                    "pnl": "",
+                    "outcome": "",
+                    "fetch_lag": _v7_monitor_fmt_sec(raw_fetch_lag),
+                    "csv_lag": _v7_monitor_fmt_sec(csv_lag),
+                    "entry_lag": "",
+                    "dur": "",
+                }
+            )
+    for slot, count in signal_slot_counts.items():
+        rec = _slot_rec(slot)
+        rec["signals"] = max(int(rec.get("signals", 0) or 0), count)
+
+    def _add_trade_row(row: dict[str, str], state: str) -> None:
+        signal_time = _pick_csv_value(row, ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist"))
+        slot = _v7_monitor_slot_label(signal_time or row.get("entry_time", ""))
+        if slot:
+            rec = _slot_rec(slot)
+            rec["paper"] = int(rec.get("paper", 0) or 0) + 1
+            entry_lag = _v7_monitor_sec_between(signal_time, row.get("entry_time", ""))
+            if not math.isnan(entry_lag):
+                rec["entry_lag_sec"] = max(float(rec.get("entry_lag_sec", 0.0) or 0.0), float(entry_lag))
+        outcome_key = _v7_monitor_outcome_bucket(row.get("outcome", state))
+        pnl = _v7_monitor_num(row, ("net_pnl_rs", "net_pnl", "pnl_rs", "pnl"))
+        if slot:
+            rec = _slot_rec(slot)
+            if outcome_key:
+                rec[outcome_key] = int(rec.get(outcome_key, 0) or 0) + 1
+            if not math.isnan(pnl):
+                rec["pnl"] = float(rec.get("pnl", 0.0) or 0.0) + float(pnl)
+                rec["pnl_n"] = int(rec.get("pnl_n", 0) or 0) + 1
+        _v7_monitor_add_setup_count(setup_stats, row, "paper")
+        setup_bucket = _v7_monitor_setup_bucket(setup_stats, row)
+        if setup_bucket is not None:
+            if outcome_key:
+                setup_bucket[outcome_key] = int(setup_bucket.get(outcome_key, 0) or 0) + 1
+            if not math.isnan(pnl):
+                setup_bucket["pnl"] = float(setup_bucket.get("pnl", 0.0) or 0.0) + float(pnl)
+                setup_bucket["pnl_n"] = int(setup_bucket.get("pnl_n", 0) or 0) + 1
+        detail_rows.append(
+            {
+                "state": state,
+                "ticker": str(row.get("ticker", "")).upper(),
+                "side": str(row.get("side", "")).upper(),
+                "setup": str(row.get("setup", "")),
+                "signal": _extract_time_only(signal_time),
+                "entry": _fmt_price(_v7_monitor_num(row, ("entry_price", "filled_price"))),
+                "sl": _fmt_price(_v7_monitor_num(row, ("stop_price",))),
+                "target": _fmt_price(_v7_monitor_num(row, ("target_price",))),
+                "qty": _fmt_qty(_v7_monitor_num(row, ("quantity",))),
+                "pnl": _fmt_rs(pnl) if not math.isnan(pnl) else "",
+                "outcome": str(row.get("outcome", "") or state),
+                "fetch_lag": _v7_monitor_fmt_sec(_v7_monitor_raw_fetch_lag_sec(signal_time, row.get("ticker", ""))),
+                "csv_lag": "",
+                "entry_lag": _v7_monitor_fmt_sec(_v7_monitor_sec_between(signal_time, row.get("entry_time", ""))),
+                "dur": _v7_monitor_fmt_duration(row.get("entry_time", ""), row.get("exit_time", ""), now=now_ist),
+            }
+        )
+
+    paper_path = LIVE_SIGNAL_DIR / f"paper_trades_{today_ist}_id_5min_v7.csv"
+    for row in _read_csv_tail_rows(paper_path, limit=5000):
+        _add_trade_row(row, str(row.get("outcome", "") or "PAPER").upper())
+
+    live_trade_path = LIVE_SIGNAL_DIR / f"live_trades_{today_ist}_id_5min_v7.csv"
+    for row in _read_csv_tail_rows(live_trade_path, limit=5000):
+        _add_trade_row(row, f"LIVE_{str(row.get('outcome', '') or 'TRADE').upper()}")
+
+    signal_rows = _read_signal_setup_map(today_ist)
+    state_payload = _read_json_dict(LIVE_SIGNAL_DIR / f"open_trades_state_{today_ist}_id_5min_v7.json")
+    latest_log_path = LIVE_SIGNAL_DIR / f"paper_trade_execution_{today_ist}_id_5min_v7.log"
+    latest_pnl = _parse_latest_live_pnl_line(latest_log_path)
+    ticker_pnl = latest_pnl.get("ticker_pnl", {}) if isinstance(latest_pnl.get("ticker_pnl", {}), dict) else {}
+    for trade in [r for r in state_payload.get("open_trades", []) if isinstance(r, dict)]:
+        signal_id = str(trade.get("signal_id", "")).strip()
+        signal = signal_rows.get(signal_id, {})
+        merged_row = {
+            "ticker": str(trade.get("ticker", "") or signal.get("ticker", "")),
+            "side": str(trade.get("side", "") or signal.get("side", "")),
+            "setup": str(signal.get("setup", "")),
+            "signal_datetime": str(signal.get("signal_datetime", "") or signal.get("signal_entry_datetime_ist", "")),
+            "entry_time": str(trade.get("entry_time", "")),
+            "entry_price": str(trade.get("entry_price", "")),
+            "stop_price": str(trade.get("stop_price", "")),
+            "target_price": str(trade.get("target_price", "")),
+            "quantity": str(trade.get("quantity", "")),
+            "outcome": "OPEN",
+        }
+        ticker = str(merged_row["ticker"]).upper().strip()
+        pnl = _to_float_or_nan(str(ticker_pnl.get(ticker, ""))) if ticker else float("nan")
+        if math.isnan(pnl):
+            pnl = _paper_open_pnl_from_state(trade)
+        if not math.isnan(pnl):
+            merged_row["pnl_rs"] = str(pnl)
+        _add_trade_row(merged_row, "OPEN")
+
+    paper_log_path = LIVE_SIGNAL_DIR / f"paper_trade_execution_{today_ist}_id_5min_v7.log"
+    live_log_path = LIVE_SIGNAL_DIR / f"live_trade_execution_{today_ist}_id_5min_v7.log"
+    paper_events, paper_failures = _v7_monitor_executor_events(paper_log_path, live=False)
+    live_events, live_failures = _v7_monitor_executor_events(live_log_path, live=True)
+    for trade in [r for r in state_payload.get("open_trades", []) if isinstance(r, dict)]:
+        signal_id = str(trade.get("signal_id", "")).strip()
+        if signal_id and _v7_monitor_find_signal_event(paper_events, signal_id) is None:
+            paper_events[signal_id] = {
+                "time": str(trade.get("entry_time", "")),
+                "ticker": str(trade.get("ticker", "")).upper(),
+                "line": "open_trades_state",
+            }
+
+    paper_task_status = _v7_monitor_status_for("paper_trade_id_5min_v7", task_snapshot)
+    live_task_status = _v7_monitor_status_for("kite_trade_id_5min_v7", task_snapshot)
+    paper_disabled = _v7_monitor_task_disabled(paper_task_status)
+    live_disabled = _v7_monitor_task_disabled(live_task_status)
+
+    flow_rows: list[dict[str, str]] = []
+    candidate_deadline_sec = 90.0
+    entry_audit_grace_sec = 5.0
+    for slot in sorted(slots):
+        rec = slots[slot]
+        slot_dt = _v7_monitor_slot_dt(today_ist, slot)
+        if slot_dt is None:
+            continue
+        entry_anchor = slot_dt + dt.timedelta(seconds=60)
+        due_fetch = now_ist >= slot_dt + dt.timedelta(seconds=60)
+        due_candidate = now_ist >= slot_dt + dt.timedelta(seconds=candidate_deadline_sec)
+        due_entry = now_ist >= slot_dt + dt.timedelta(
+            seconds=candidate_deadline_sec + entry_audit_grace_sec
+        )
+        reasons: list[str] = []
+
+        fetch_lag = _to_float_or_nan(str(rec.get("fetch_lag_sec", "")))
+        fetch_state, fetch_ok, fetch_reasons = _v7_monitor_fetch_verdict(
+            rec,
+            fetch_lag=fetch_lag,
+            due_fetch=due_fetch,
+        )
+        reasons.extend(fetch_reasons)
+
+        scan_lag = _to_float_or_nan(str(rec.get("scan_lag_sec", "")))
+        scan_sec = _to_float_or_nan(str(rec.get("scan_sec", "")))
+        scan_seen = bool(rec.get("scanner_audit_seen"))
+        if scan_seen and not math.isnan(scan_lag):
+            scan_state = "YES" if scan_lag <= candidate_deadline_sec else "LATE"
+            if scan_lag > candidate_deadline_sec:
+                reasons.append(f"candidate_late={scan_lag:.1f}s")
+        elif due_candidate:
+            scan_state = "NO"
+            reasons.append("candidate_snapshot_missing")
+        else:
+            scan_state = "WAIT"
+        # Small marker-ordering skew is noise; only a meaningfully-early scan is
+        # an ordering risk worth surfacing.
+        SCAN_BEFORE_FETCH_TOLERANCE_SEC = 10.0
+        if fetch_ok and scan_seen and scan_lag + SCAN_BEFORE_FETCH_TOLERANCE_SEC < fetch_lag:
+            reasons.append(f"scan_before_fetch={fetch_lag - scan_lag:.1f}s")
+
+        candidate_count = int(rec.get("candidate_count", rec.get("potential", 0)) or 0)
+        candidate_state = (
+            f"YES({candidate_count})"
+            if scan_seen and not math.isnan(scan_lag) and scan_lag <= candidate_deadline_sec
+            else f"LATE({candidate_count})" if scan_seen
+            else "NO"
+        )
+
+        entry_seen = bool(rec.get("entry_audit_seen"))
+        completed_at = rec.get("entry_completed_at")
+        entry_after_anchor = (
+            max(0.0, (completed_at - entry_anchor).total_seconds())
+            if isinstance(completed_at, dt.datetime)
+            else float("nan")
+        )
+        requested = int(rec.get("tickers_requested", 0) or 0)
+        fetched = int(rec.get("tickers_fetched", 0) or 0)
+        entries = int(rec.get("entries", 0) or 0)
+        signals = int(rec.get("signals", 0) or 0)
+        pre_enabled_for_slot = bool(rec.get("pre_momentum_gate_enabled"))
+        if entry_seen:
+            engine_state = "YES" if candidate_count else "YES/NO_CAND"
+            if not bool(rec.get("candidate_snapshot_ready")):
+                engine_state = "NO"
+                reasons.append("entry_snapshot_not_ready")
+            if requested != fetched or int(rec.get("raw_fetch_failures", 0) or 0):
+                engine_state = "NO"
+                reasons.append(
+                    f"1m_fetch={fetched}/{requested},fail={int(rec.get('raw_fetch_failures', 0) or 0)}"
+                )
+            if candidate_count and not pre_enabled_for_slot:
+                engine_state = "NO"
+                reasons.append("pre_momentum_disabled")
+            if entries != signals:
+                engine_state = "NO"
+                reasons.append(f"entry_signal_mismatch={entries}/{signals}")
+        elif due_entry:
+            engine_state = "NO"
+            reasons.append("entry_audit_missing")
+        else:
+            engine_state = "WAIT"
+
+        engine_path = "/".join(
+            (
+                "L:Y" if entry_seen and bool(rec.get("candidate_snapshot_ready")) else "L:N",
+                "F:Y" if entry_seen and requested == fetched and not int(rec.get("raw_fetch_failures", 0) or 0) else "F:N",
+                "S:Y" if entry_seen else "S:N",
+                "P:Y" if pre_enabled_for_slot else "P:N",
+                "C:Y" if entry_seen and entries == signals else "C:N",
+            )
+        )
+
+        signal_ids = sorted(str(value) for value in rec.get("signal_ids", set()))
+        paper_event_list = [
+            event for signal_id in signal_ids
+            if (event := _v7_monitor_find_signal_event(paper_events, signal_id)) is not None
+        ]
+        live_event_list = [
+            event for signal_id in signal_ids
+            if (event := _v7_monitor_find_signal_event(live_events, signal_id)) is not None
+        ]
+
+        def _executor_delay(events: list[dict[str, str]]) -> float:
+            values = [
+                max(0.0, (_v7_monitor_parse_dt(event.get("time")) - entry_anchor).total_seconds())
+                for event in events
+                if _v7_monitor_parse_dt(event.get("time")) is not None
+            ]
+            return max(values) if values else float("nan")
+
+        paper_delay = _executor_delay(paper_event_list)
+        live_delay = _executor_delay(live_event_list)
+        if not signal_ids:
+            paper_state = "N/A"
+            live_state = "OFF" if live_disabled else "N/A"
+        elif paper_disabled:
+            paper_state = "OFF"
+            reasons.append("PAPER_TRADE_TRUE task disabled")
+        elif len(paper_event_list) == len(signal_ids):
+            paper_state = "YES"
+        elif paper_event_list:
+            paper_state = "PART"
+            reasons.append(f"paper_partial={len(paper_event_list)}/{len(signal_ids)}")
+        else:
+            paper_state = "NO"
+            paper_reason = next(
+                (
+                    reason for signal_id in signal_ids
+                    for event_id, reason in paper_failures.items()
+                    if signal_id.startswith(event_id) or event_id.startswith(signal_id)
+                ),
+                "",
+            )
+            reasons.append(paper_reason or "paper_signal_not_consumed")
+
+        if signal_ids and live_disabled:
+            live_state = "OFF"
+        elif not signal_ids:
+            live_state = "N/A"
+        elif len(live_event_list) == len(signal_ids):
+            live_state = "YES"
+        elif live_event_list:
+            live_state = "PART"
+            reasons.append(f"live_partial={len(live_event_list)}/{len(signal_ids)}")
+        else:
+            live_state = "NO"
+            live_reason = next(
+                (
+                    reason for signal_id in signal_ids
+                    for event_id, reason in live_failures.items()
+                    if signal_id.startswith(event_id) or event_id.startswith(signal_id)
+                ),
+                "",
+            )
+            reasons.append(live_reason or "live_signal_not_consumed")
+
+        potential_tickers = sorted(rec.get("potential_tickers", set()))
+        entry_tickers = sorted(rec.get("entry_tickers", set()))
+        signal_tickers = sorted(rec.get("signal_tickers", set()))
+        paper_tickers = sorted(
+            {str(event.get("ticker", "")).upper() for event in paper_event_list if event.get("ticker")}
+        )
+        live_tickers = sorted(
+            {str(event.get("ticker", "")).upper() for event in live_event_list if event.get("ticker")}
+        )
+        ticker_flow = (
+            f"C:{','.join(potential_tickers) or '-'}>"
+            f"E:{','.join(entry_tickers) or '-'}>"
+            f"S:{','.join(signal_tickers) or '-'}>"
+            f"P:{','.join(paper_tickers) or '-'}>"
+            f"L:{','.join(live_tickers) or '-'}"
+        )
+        hard_failure = any(
+            state in {"NO", "LATE", "PART"}
+            for state in (fetch_state, scan_state, engine_state, paper_state, live_state)
+            if state not in {"OFF", "N/A", "YES/NO_CAND"}
+        )
+        waiting = any(state == "WAIT" for state in (fetch_state, scan_state, engine_state))
+        flow_state = (
+            "WAIT"
+            if waiting
+            else "BLOCKED"
+            if hard_failure
+            else "WARN"
+            if reasons
+            else "PASS"
+            if signal_ids
+            else "IDLE"
+        )
+        flow_rows.append(
+            {
+                "slot": slot,
+                "fetch5m": fetch_state,
+                "fetch_s": _v7_monitor_fmt_sec(fetch_lag),
+                "scan5m": scan_state,
+                "scan_s": _v7_monitor_fmt_sec(scan_sec),
+                "cand_print": candidate_state,
+                "cand_s": _v7_monitor_fmt_sec(scan_lag),
+                "engine1m": engine_state,
+                "eng_s+1m": _v7_monitor_fmt_sec(entry_after_anchor),
+                "L/F/S/P/C": engine_path,
+                "entries/sig": f"{entries}/{signals}",
+                "paper_T": paper_state,
+                "paper_s+1m": _v7_monitor_fmt_sec(paper_delay),
+                "paper_F": live_state,
+                "live_s+1m": _v7_monitor_fmt_sec(live_delay),
+                "flow": flow_state,
+                "blocker/reason": "; ".join(dict.fromkeys(reasons)) or "-",
+                "tickers C>E>S>P>L": ticker_flow,
+            }
+        )
+    flow_rows = flow_rows[-24:]
+
+    slot_rows: list[dict[str, str]] = []
+    for slot in sorted(slots):
+        rec = slots[slot]
+        tickers = rec.get("tickers")
+        ticker_count = len(tickers) if isinstance(tickers, set) else 0
+        pnl = float(rec.get("pnl", 0.0) or 0.0)
+        pnl_n = int(rec.get("pnl_n", 0) or 0)
+        elapsed = _to_float_or_nan(str(rec.get("elapsed_sec", "")))
+        raw_fetch = _to_float_or_nan(str(rec.get("raw_fetch_sec", "")))
+        wait = _to_float_or_nan(str(rec.get("candidate_wait_sec", "")))
+        load = _to_float_or_nan(str(rec.get("candidate_load_sec", "")))
+        entry_scan = _to_float_or_nan(str(rec.get("entry_scan_sec", "")))
+        audit_csv = _to_float_or_nan(str(rec.get("audit_csv_sec", "")))
+        live_csv = _to_float_or_nan(str(rec.get("live_csv_sec", "")))
+        scan_lag = _to_float_or_nan(str(rec.get("scan_lag_sec", "")))
+        scan_sec = _to_float_or_nan(str(rec.get("scan_sec", "")))
+        sig_lag = _to_float_or_nan(str(rec.get("sig_csv_lag_sec", "")))
+        entry_lag = _to_float_or_nan(str(rec.get("entry_lag_sec", "")))
+        slot_rows.append(
+            {
+                "slot": slot,
+                "tickers": str(ticker_count or rec.get("tickers_requested", "") or ""),
+                "scan_lag": _v7_monitor_fmt_sec(scan_lag),
+                "scan_sec": _v7_monitor_fmt_sec(scan_sec),
+                "scan_raw": str(int(rec.get("scan_raw", 0) or 0)),
+                "pot": str(int(rec.get("potential", 0) or rec.get("candidate_count", 0) or 0)),
+                "scan_v11rej": str(int(rec.get("scan_v11_rej", 0) or 0)),
+                "res_rej": str(int(rec.get("research_rej", 0) or 0)),
+                "entry_raw": str(int(rec.get("entry_raw", 0) or 0)),
+                "v11_rej": str(int(rec.get("v11_rej", 0) or 0)),
+                "pre_rej": str(int(rec.get("pre_rej", 0) or 0)),
+                "pre_pass": str(int(rec.get("pre_pass", 0) or 0)),
+                "entries": str(int(rec.get("entries", 0) or 0)),
+                "sig": str(int(rec.get("signals", 0) or 0)),
+                "short": str(int(rec.get("short_written", 0) or rec.get("short_sig", 0) or 0)),
+                "long": str(int(rec.get("long_written", 0) or rec.get("long_sig", 0) or 0)),
+                "paper": str(int(rec.get("paper", 0) or 0)),
+                "tgt": str(int(rec.get("target", 0) or 0)),
+                "sl": str(int(rec.get("sl", 0) or 0)),
+                "eod": str(int(rec.get("eod", 0) or 0)),
+                "open": str(int(rec.get("open", 0) or 0)),
+                "pnl": _fmt_rs(pnl) if pnl_n else "",
+                "entry_sec": _v7_monitor_fmt_sec(elapsed),
+                "load": _v7_monitor_fmt_sec(load if not math.isnan(load) else wait),
+                "fetch": _fmt_indian_number(raw_fetch, decimals=2) if not math.isnan(raw_fetch) else "",
+                "cand_wait": _v7_monitor_fmt_sec(wait),
+                "scan": _v7_monitor_fmt_sec(entry_scan),
+                "audit_csv": _v7_monitor_fmt_sec(audit_csv),
+                "live_csv": _v7_monitor_fmt_sec(live_csv),
+                "sig_lag": _v7_monitor_fmt_sec(sig_lag),
+                "entry_lag": _v7_monitor_fmt_sec(entry_lag),
+            }
+        )
+    slot_rows = slot_rows[-24:]
+
+    setup_rows: list[dict[str, str]] = []
+    for bucket in setup_stats.values():
+        pnl = float(bucket.get("pnl", 0.0) or 0.0)
+        pnl_n = int(bucket.get("pnl_n", 0) or 0)
+        setup_rows.append(
+            {
+                "side": str(bucket.get("side", "")),
+                "setup": str(bucket.get("setup", "")),
+                "raw": str(int(bucket.get("raw", 0) or 0)),
+                "pot": str(int(bucket.get("potential", 0) or 0)),
+                "entry_raw": str(int(bucket.get("entry_raw", 0) or 0)),
+                "pre_rej": str(int(bucket.get("pre_rej", 0) or 0)),
+                "adv_rej": str(int(bucket.get("adv_cap_rej", 0) or 0)),
+                "fno_rej": str(int(bucket.get("fno_ban_rej", 0) or 0)),
+                "pre_pass": str(int(bucket.get("pre_pass", 0) or 0)),
+                "entries": str(int(bucket.get("entries", 0) or 0)),
+                "sig": str(int(bucket.get("signals", 0) or 0)),
+                "paper": str(int(bucket.get("paper", 0) or 0)),
+                "T/SL/EOD": f"{int(bucket.get('target', 0) or 0)}/{int(bucket.get('sl', 0) or 0)}/{int(bucket.get('eod', 0) or 0)}",
+                "pnl": _fmt_rs(pnl) if pnl_n else "",
+                "q": _v7_monitor_fmt_avg(bucket, "q", decimals=1),
+                "rank": _v7_monitor_fmt_avg(bucket, "rank", decimals=3),
+                "rs": _v7_monitor_fmt_avg(bucket, "rs", decimals=2, signed=True),
+                "vol": _v7_monitor_fmt_avg(bucket, "vol", decimals=2),
+                "atr": _v7_monitor_fmt_avg(bucket, "atr", decimals=4),
+                "pre": _v7_monitor_fmt_avg(bucket, "pre", decimals=1),
+                "adx": _v7_monitor_fmt_avg(bucket, "adx", decimals=1),
+                "rsi": _v7_monitor_fmt_avg(bucket, "rsi", decimals=1),
+            }
+        )
+    setup_rows.sort(
+        key=lambda r: (
+            -_to_float_or_nan(r.get("entries", "0")),
+            -_to_float_or_nan(r.get("sig", "0")),
+            -_to_float_or_nan(r.get("pot", "0")),
+            r.get("side", ""),
+            r.get("setup", ""),
+        )
+    )
+    setup_rows = setup_rows[:18]
+    detail_rows = detail_rows[-30:]
+
+    session_rows: list[dict[str, str]] = []
+    for card_id, label in (
+        ("signal_discovery_v7_5min_id", "scanner"),
+        ("entry_engine_1min_v5_id", "entry"),
+        ("live_combined_csv_id_5min_v7_persistent", "legacy_scan"),
+        ("v7_research_layer", "research"),
+        ("daily_live_v7_research_session", "daily_research"),
+        ("v7_pre_momentum_filter_analyst", "pre_mom_analyst"),
+        ("paper_trade_id_5min_v7", "paper"),
+        ("kite_trade_id_5min_v7", "kite"),
+    ):
+        status = _v7_monitor_status_for(card_id, task_snapshot)
+        started = (
+            _parse_status_datetime(status.get("start_ts_utc"))
+            or _parse_status_datetime(status.get("start_ts"))
+            or _parse_status_datetime(status.get("worker_start_utc"))
+        )
+        runtime = _v7_monitor_fmt_duration(started.isoformat(), "", now=now_ist) if started else ""
+        heartbeat_age = str(status.get("heartbeat_idle_sec", "")).strip()
+        session_rows.append(
+            {
+                "session": label,
+                "status": str(status.get("status") or status.get("scheduler_status") or ""),
+                "phase": str(status.get("phase") or status.get("heartbeat_state") or ""),
+                "pid": str(status.get("pid", "")),
+                "runtime": runtime,
+                "hb_idle": heartbeat_age,
+                "slot": str(status.get("slot") or status.get("target_slot") or status.get("candidate_snapshot_slot_ist") or ""),
+                "next": str(status.get("scheduler_next_run", "")),
+            }
+        )
+
+    total_pnl = sum(float(rec.get("pnl", 0.0) or 0.0) for rec in slots.values())
+    total_pnl_n = sum(int(rec.get("pnl_n", 0) or 0) for rec in slots.values())
+    latest_slot = str(latest_summary.get("slot_ist") or latest_summary.get("candidate_snapshot_slot_ist") or "")
+    latest_slot_label = _v7_monitor_slot_label(latest_slot)
+    pre_version = str(
+        latest_summary.get("pre_momentum_version")
+        or latest_summary.get("pre_momentum_gate_version")
+        or pre_version_seen
+        or ""
+    )
+    pre_enabled = str(latest_summary.get("pre_momentum_gate_enabled", "")).strip()
+    v11_enabled = str(latest_summary.get("v11_entry_overlay_enabled", "")).strip()
+    status = {
+        "status": (
+            "READY" if slots or latest_summary
+            else (
+                "SCHEDULED"
+                if now_ist.hour < 9
+                or (now_ist.hour == 9 and now_ist.minute < 20)
+                or now_ist.hour >= 16
+                or (now_ist.hour == 15 and now_ist.minute >= 40)
+                else "WAITING_OUTPUT"
+            )
+        ),
+        "session": "V7 ID 5min live monitor",
+        "slot": latest_slot,
+        "scan_raw": str(raw_scan_total),
+        "potential": str(potential_total),
+        "pre_momentum_gate": "ON" if pre_enabled.lower() == "true" else pre_enabled,
+        "v11_entry_overlay": "ON" if v11_enabled.lower() == "true" else v11_enabled,
+        "flow_status": flow_rows[-1]["flow"] if flow_rows else "WAIT",
+    }
+
+    summary_lines = [
+        (
+            f"V7 ID 5min live monitor | date={today_ist} | latest_slot={latest_slot_label or 'n/a'} | "
+            f"scanner_raw={raw_scan_total} | potential={potential_total} | "
+            f"scan_v11_rej={scan_v11_rej_total} | research_rej={research_rej_total}"
+        ),
+        (
+            f"entry_audit_slots={audit_slots} | pre_momentum_gate={status['pre_momentum_gate'] or 'n/a'} | "
+            f"pre_version={pre_version or 'n/a'} | v11_entry_overlay={status['v11_entry_overlay'] or 'n/a'} | "
+            f"paper/live_pnl={_fmt_rs(total_pnl) if total_pnl_n else 'n/a'}"
+        ),
+        (
+            "timing_sec: scan_lag=slot_to_candidate_publish | scan_sec=scanner_elapsed | "
+            "entry_sec=1min_engine_total | load=candidate_load_or_wait | fetch=raw_1m_fetch | "
+            "scan=entry_row_scan | audit_csv=entry_audit_print | live_csv=short_long_signal_print | "
+            "sig_lag=signal_csv_write | entry_lag=paper/live_entry_after_signal"
+        ),
+    ]
+    flow_table = _format_fixed_table(
+        flow_rows,
+        (
+            "slot",
+            "fetch5m",
+            "fetch_s",
+            "scan5m",
+            "scan_s",
+            "cand_print",
+            "cand_s",
+            "engine1m",
+            "eng_s+1m",
+            "L/F/S/P/C",
+            "entries/sig",
+            "paper_T",
+            "paper_s+1m",
+            "paper_F",
+            "live_s+1m",
+            "flow",
+            "blocker/reason",
+            "tickers C>E>S>P>L",
+        ),
+        rows_meta=f"brief end-to-end flow rows_shown={len(flow_rows)} (latest 24 slots)",
+        summary_lines=(
+            "SLA: fetch <=60s; candidate handoff <=90s from 5m slot (T+1:30); engine/executors measured from slot+60s.",
+            "L/F/S/P/C = candidate load / raw 1m fetch / entry scan / pre-momentum / signal CSV.",
+            "OFF is intentional task disablement; N/A means no signal required that executor for the slot.",
+        ),
+        column_max_widths={
+            "blocker/reason": 72,
+            "tickers C>E>S>P>L": 110,
+        },
+    )
+    slot_table = _format_fixed_table(
+        slot_rows,
+        (
+            "slot",
+            "tickers",
+            "scan_lag",
+            "scan_sec",
+            "scan_raw",
+            "pot",
+            "scan_v11rej",
+            "res_rej",
+            "entry_raw",
+            "v11_rej",
+            "pre_rej",
+            "pre_pass",
+            "entries",
+            "sig",
+            "short",
+            "long",
+            "paper",
+            "tgt",
+            "sl",
+            "eod",
+            "open",
+            "pnl",
+            "entry_sec",
+            "load",
+            "fetch",
+            "cand_wait",
+            "scan",
+            "audit_csv",
+            "live_csv",
+            "sig_lag",
+            "entry_lag",
+        ),
+        rows_meta=f"5-min slot funnel rows_shown={len(slot_rows)} (latest 24 slots)",
+        summary_lines=summary_lines,
+    )
+    setup_table = _format_fixed_table(
+        setup_rows,
+        (
+            "side",
+            "setup",
+            "raw",
+            "pot",
+            "entry_raw",
+            "pre_rej",
+            "adv_rej",
+            "fno_rej",
+            "pre_pass",
+            "entries",
+            "sig",
+            "paper",
+            "T/SL/EOD",
+            "pnl",
+            "q",
+            "rank",
+            "rs",
+            "vol",
+            "atr",
+            "pre",
+            "adx",
+            "rsi",
+        ),
+        rows_meta=f"setup/indicator rows_shown={len(setup_rows)} (top by entries, signals, potential)",
+    )
+    detail_table = _format_fixed_table(
+        detail_rows,
+        (
+            "state",
+            "ticker",
+            "side",
+            "setup",
+            "signal",
+            "entry",
+            "sl",
+            "target",
+            "qty",
+            "pnl",
+            "outcome",
+            "fetch_lag",
+            "csv_lag",
+            "entry_lag",
+            "dur",
+        ),
+        rows_meta=f"latest entry/trade detail rows_shown={len(detail_rows)} (signals, entries, paper/live/open)",
+    )
+    session_table = _format_fixed_table(
+        session_rows,
+        ("session", "status", "phase", "pid", "runtime", "hb_idle", "slot", "next"),
+        rows_meta=f"active session timing rows_shown={len(session_rows)}",
+    )
+    return "\n\n".join((flow_table, slot_table, setup_table, detail_table, session_table)), status
+
+
+def _format_v7_id_papertrade_runner_view(log_path: Path, today_ist: str) -> str:
+    state_path = LIVE_SIGNAL_DIR / f"open_trades_state_{today_ist}_id_5min_v7.json"
+    paper_csv_path = LIVE_SIGNAL_DIR / f"paper_trades_{today_ist}_id_5min_v7.csv"
+    summary_path = LIVE_SIGNAL_DIR / "paper_trade_summary_id_5min_v7.json"
+
+    state_payload = _read_json_dict(state_path)
+    open_trades_raw = state_payload.get("open_trades", [])
+    open_trades = [r for r in open_trades_raw if isinstance(r, dict)]
+    signal_rows = _read_signal_setup_map(today_ist)
+    latest_pnl = _parse_latest_live_pnl_line(log_path)
+    ticker_pnl = latest_pnl.get("ticker_pnl", {})
+    if not isinstance(ticker_pnl, dict):
+        ticker_pnl = {}
+
+    rows: list[dict[str, str]] = []
+    open_pnl_values: list[tuple[str, float]] = []
+    for trade in open_trades:
+        ticker = str(trade.get("ticker", "")).upper().strip()
+        signal_id = str(trade.get("signal_id", "")).strip()
+        signal = signal_rows.get(signal_id, {})
+        qty = _to_float_or_nan(str(trade.get("quantity", "")))
+        entry = _to_float_or_nan(str(trade.get("entry_price", "")))
+        last_ltp = _to_float_or_nan(str(trade.get("last_ltp", "")))
+        pnl = _to_float_or_nan(str(ticker_pnl.get(ticker, ""))) if ticker else float("nan")
+        if math.isnan(pnl):
+            pnl = _paper_open_pnl_from_state(trade)
+        pnl_pct = _paper_pnl_pct(pnl, entry, qty)
+        if ticker and not math.isnan(pnl):
+            open_pnl_values.append((ticker, float(pnl)))
+        rows.append(
+            {
+                "state": "OPEN",
+                "ticker": ticker,
+                "side": str(trade.get("side", "")).upper(),
+                "setup": str(signal.get("setup", "")),
+                "qty": _fmt_qty(qty),
+                "entry": _fmt_price(entry),
+                "ltp_exit": _fmt_price(last_ltp),
+                "net_pnl": _fmt_rs(pnl) if not math.isnan(pnl) else "",
+                "pnl_pct": _fmt_pct(pnl_pct) if not math.isnan(pnl_pct) else "",
+                "sl": _fmt_price(_to_float_or_nan(str(trade.get("stop_price", "")))),
+                "tgt": _fmt_price(_to_float_or_nan(str(trade.get("target_price", "")))),
+                "time": _extract_time_only(str(trade.get("entry_time", ""))),
+                "update": _extract_time_only(str(trade.get("last_ltp_time", state_payload.get("updated_at", "")))),
+            }
+        )
+
+    closed_rows = _read_csv_tail_rows(paper_csv_path, limit=20)
+    closed_pnl_total = 0.0
+    closed_count_for_pnl = 0
+    wins = losses = skipped = 0
+    for row in closed_rows:
+        outcome = str(row.get("outcome", "")).upper().strip()
+        pnl = _to_float_or_nan(_pick_csv_value(row, ("net_pnl_rs", "net_pnl", "pnl_rs")))
+        if not math.isnan(pnl):
+            closed_pnl_total += float(pnl)
+            closed_count_for_pnl += 1
+            if pnl > 0:
+                wins += 1
+            elif pnl < 0:
+                losses += 1
+        if "SKIP" in outcome:
+            skipped += 1
+        rows.append(
+            {
+                "state": outcome or "CLOSED",
+                "ticker": str(row.get("ticker", "")).upper(),
+                "side": str(row.get("side", "")).upper(),
+                "setup": str(row.get("setup", "")),
+                "qty": _fmt_qty(_to_float_or_nan(row.get("quantity", ""))),
+                "entry": _fmt_price(_to_float_or_nan(row.get("entry_price", ""))),
+                "ltp_exit": _fmt_price(_to_float_or_nan(row.get("exit_price", ""))),
+                "net_pnl": _fmt_rs(pnl) if not math.isnan(pnl) else "",
+                "pnl_pct": _fmt_pct(_to_float_or_nan(_pick_csv_value(row, ("net_pnl_pct", "pnl_pct")))) if _pick_csv_value(row, ("net_pnl_pct", "pnl_pct")) else "",
+                "sl": _fmt_price(_to_float_or_nan(row.get("stop_price", ""))),
+                "tgt": _fmt_price(_to_float_or_nan(row.get("target_price", ""))),
+                "time": _extract_time_only(str(row.get("entry_time", ""))),
+                "update": _extract_time_only(str(row.get("exit_time", ""))),
+            }
+        )
+
+    def _state_rank(row: dict[str, str]) -> tuple[int, float, str]:
+        state = row.get("state", "")
+        pnl = _to_float_or_nan(row.get("net_pnl", ""))
+        pnl_sort = float(pnl) if not math.isnan(pnl) else 0.0
+        return (0 if state == "OPEN" else 1, pnl_sort, row.get("ticker", ""))
+
+    rows = sorted(rows, key=_state_rank)
+    columns = ("state", "ticker", "side", "setup", "qty", "entry", "ltp_exit", "net_pnl", "pnl_pct", "sl", "tgt", "time", "update")
+
+    unrealized = latest_pnl.get("unrealized")
+    if not isinstance(unrealized, (int, float)):
+        unrealized = sum(v for _, v in open_pnl_values)
+    realized = latest_pnl.get("realized")
+    total = latest_pnl.get("total")
+    deployed = latest_pnl.get("deployed_margin")
+    summary_payload = _read_json_dict(summary_path)
+    if not isinstance(realized, (int, float)):
+        realized = _to_float_or_nan(str(summary_payload.get("net_pnl_rs", summary_payload.get("total_pnl_rs", ""))))
+    if (
+        (not isinstance(realized, (int, float)) or math.isnan(float(realized)))
+        and closed_count_for_pnl
+    ):
+        realized = float(closed_pnl_total)
+    if not isinstance(total, (int, float)) and isinstance(unrealized, (int, float)) and isinstance(realized, (int, float)):
+        total = float(unrealized) + float(realized)
+    if (
+        isinstance(total, (int, float))
+        and math.isnan(float(total))
+        and isinstance(unrealized, (int, float))
+        and isinstance(realized, (int, float))
+    ):
+        total = float(unrealized) + float(realized)
+
+    best = max(open_pnl_values, key=lambda x: x[1], default=("", float("nan")))
+    worst = min(open_pnl_values, key=lambda x: x[1], default=("", float("nan")))
+    updated = str(latest_pnl.get("log_time") or state_payload.get("updated_at") or "").strip()
+    open_count = latest_pnl.get("open", len(open_trades))
+    summary_lines = [
+        (
+            f"V7 ID 5min Papertrade | updated={updated or 'n/a'} | "
+            f"open={open_count} | realized_net={_fmt_rs(float(realized)) if isinstance(realized, (int, float)) and not math.isnan(float(realized)) else 'n/a'} | "
+            f"unrealized_net={_fmt_rs(float(unrealized)) if isinstance(unrealized, (int, float)) and not math.isnan(float(unrealized)) else 'n/a'} | "
+            f"total_net={_fmt_rs(float(total)) if isinstance(total, (int, float)) and not math.isnan(float(total)) else 'n/a'}"
+        ),
+        (
+            f"deployed_margin={_fmt_rs_plain(float(deployed)) if isinstance(deployed, (int, float)) and not math.isnan(float(deployed)) else 'n/a'} | "
+            f"closed_rows={len(closed_rows)} | wins={wins} | losses={losses} | skipped={skipped} | "
+            f"closed_csv_net_pnl={_fmt_rs(closed_pnl_total) if closed_count_for_pnl else 'n/a'}"
+        ),
+    ]
+    if open_pnl_values:
+        summary_lines.append(
+            f"worst_open={worst[0]} {_fmt_rs(worst[1])} | best_open={best[0]} {_fmt_rs(best[1])}"
+        )
+
+    return _format_fixed_table(
+        rows,
+        columns,
+        rows_meta=f"rows_shown={len(rows)} (open first by PnL, then latest closed)",
+        summary_lines=summary_lines,
+    )
+
+
+def _format_preopen_scheduled_sessions() -> str:
+    """
+    Render the Preopen Healthcheck card body from the latest JSON report,
+    keeping active/scheduled session (task_*) checks visible. Each row is
+    bucketed into:
+      RAN_TODAY       - task ran today (latest run present)
+      WAITING_RUN     - enabled, first run pending OR scheduled later in session
+      NOT_RUN_TODAY   - enabled but no run today by expected time
+      FAILED          - task FAIL with other reason
+      DISABLED        - session intentionally off
+      NOT_FOUND       - schtasks query failed / task missing
+    """
+    json_path = LOG_DIR / "preopen_session_healthcheck_latest.json"
+    if not json_path.exists():
+        return "(preopen healthcheck JSON not found yet - run run_preopen_session_healthcheck.bat)"
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"(unable to read preopen healthcheck JSON: {exc})"
+
+    ts_ist = str(payload.get("ts_ist", "") or "").strip()
+    overall = str(payload.get("overall", "") or "").strip()
+    checks = payload.get("checks", []) or []
+
+    calendar_check = next((c for c in checks if isinstance(c, dict) and c.get("name") == "market_calendar"), None)
+    if calendar_check:
+        return f"{calendar_check.get('detail', '')}\nReport: {ts_ist} | overall={overall}"
+
+    task_checks = [
+        c for c in checks
+        if isinstance(c, dict) and str(c.get("name", "")).startswith("task_")
+    ]
+    if not task_checks:
+        return (
+            f"(no active/scheduled session (task_*) checks in latest report | "
+            f"ts={ts_ist} | overall={overall})"
+        )
+
+    def _bucket(status: str, detail_l: str) -> str:
+        if status == "PASS":
+            if "session not enabled" in detail_l:
+                return "DISABLED"
+            if "ran today" in detail_l:
+                return "RAN_TODAY"
+            if "first run pending" in detail_l:
+                return "WAITING_RUN"
+            if "enabled |" in detail_l or "scheduled later" in detail_l:
+                return "WAITING_RUN"
+            return "RAN_TODAY"
+        # FAIL / WARN
+        if "not found" in detail_l or "query failed" in detail_l:
+            return "NOT_FOUND"
+        if "not enabled" in detail_l:
+            return "DISABLED"
+        if "not run today" in detail_l or "not run today yet" in detail_l:
+            return "NOT_RUN_TODAY"
+        return "FAILED"
+
+    bucket_order = {
+        "FAILED": 0,
+        "NOT_RUN_TODAY": 1,
+        "NOT_FOUND": 2,
+        "WAITING_RUN": 3,
+        "RAN_TODAY": 4,
+        "DISABLED": 5,
+    }
+    counts: Dict[str, int] = {}
+    hidden_disabled = 0
+    rows: list[tuple[int, str, str, str]] = []
+    for check in task_checks:
+        status = str(check.get("status", "") or "").upper()
+        detail = str(check.get("detail", "") or "")
+        name = str(check.get("name", "") or "")
+        session = name[len("task_"):] if name.startswith("task_") else name
+        b = _bucket(status, detail.lower())
+        counts[b] = counts.get(b, 0) + 1
+        if b == "DISABLED":
+            hidden_disabled += 1
+            continue
+        rows.append((bucket_order.get(b, 99), b, session, detail))
+    rows.sort(key=lambda r: (r[0], r[2].lower()))
+
+    summary_parts = [f"{k}={counts.get(k, 0)}" for k in bucket_order if counts.get(k)]
+    summary = " | ".join(summary_parts) if summary_parts else "no sessions"
+
+    out: list[str] = []
+    out.append(f"preopen_healthcheck | ts_ist={ts_ist} | overall={overall}")
+    out.append(
+        f"active_or_scheduled_sessions={len(rows)} | "
+        f"total_task_checks={len(task_checks)} | hidden_disabled={hidden_disabled} | {summary}"
+    )
+    out.append(f"rows_shown={len(rows)} (active/scheduled only)")
+    if not rows:
+        out.append("(no active or scheduled sessions found in latest report)")
+        return "\n".join(out)
+
+    bucket_w = max(len(r[1]) for r in rows)
+    session_w = max(len(r[2]) for r in rows)
+    out.append(f"{'bucket':{bucket_w}s} | {'session':{session_w}s} | detail")
+    out.append(f"{'-' * bucket_w}-+-{'-' * session_w}-+-{'-' * 3}")
+    for _, bucket, session, detail in rows:
+        out.append(f"{bucket:{bucket_w}s} | {session:{session_w}s} | {detail}")
+    return "\n".join(out)
+
+
+def _compute_holdings_summary(path: Path) -> tuple[float, float, float, float, float, float]:
+    invested = 0.0
+    current = 0.0
+    day_pnl = 0.0
+    prev_close_value = 0.0
+
+    if not path.exists():
+        return (
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+        )
+
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                if not row:
+                    continue
+                qty = _to_float_or_nan(_pick_csv_value(row, ("quantity",)))
+                t1_qty = _to_float_or_nan(_pick_csv_value(row, ("t1_quantity",)))
+                avg = _to_float_or_nan(_pick_csv_value(row, ("average_price", "avg_price", "price")))
+                ltp = _to_float_or_nan(_pick_csv_value(row, ("last_price", "ltp", "close_price")))
+                close_price = _to_float_or_nan(_pick_csv_value(row, ("close_price",)))
+                day_change = _to_float_or_nan(_pick_csv_value(row, ("day_change",)))
+
+                q = 0.0
+                if not math.isnan(qty):
+                    q += float(qty)
+                if not math.isnan(t1_qty):
+                    q += float(t1_qty)
+
+                if q == 0.0:
+                    continue
+
+                if not math.isnan(avg):
+                    invested += q * float(avg)
+                if not math.isnan(ltp):
+                    current += q * float(ltp)
+                if not math.isnan(day_change):
+                    day_pnl += q * float(day_change)
+                elif not math.isnan(ltp) and not math.isnan(close_price):
+                    day_pnl += q * (float(ltp) - float(close_price))
+
+                if not math.isnan(close_price):
+                    prev_close_value += q * float(close_price)
+                elif not math.isnan(ltp) and not math.isnan(day_change):
+                    prev_close_value += q * (float(ltp) - float(day_change))
+    except (OSError, csv.Error):
+        return (
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+        )
+
+    pnl = current - invested
+    pnl_pct = (pnl * 100.0 / invested) if invested > 0 else float("nan")
+    day_pnl_pct = (day_pnl * 100.0 / prev_close_value) if prev_close_value > 0 else float("nan")
+    return invested, current, pnl, pnl_pct, day_pnl, day_pnl_pct
+
+
+def _read_kite_snapshot_meta(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _extract_funds_available(meta: dict[str, object]) -> float:
+    raw = meta.get("funds_available")
+    try:
+        if raw is None:
+            return float("nan")
+        return float(raw)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def iso_mtime(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    try:
+        return dt.datetime.fromtimestamp(path.stat().st_mtime).isoformat(sep=" ", timespec="seconds")
+    except OSError:
+        return None
+
+
+def _today_ist_str() -> str:
+    return dt.datetime.now(IST).date().isoformat()
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _kill_switch_scope_paths(scope: str, today_ist: str) -> tuple[Path, Path]:
+    if scope == "false_v5":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_LIVE_TRADES_STATE_PATTERN_V5.format(today_ist),
+            KILL_SWITCH_LIVE_FILE_V5,
+        )
+    if scope == "true_v5":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_PAPER_TRADES_STATE_PATTERN_V5.format(today_ist),
+            KILL_SWITCH_PAPER_FILE_V5,
+        )
+    if scope == "false_v7_sweep":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_LIVE_TRADES_STATE_PATTERN_V7_SWEEP.format(today_ist),
+            KILL_SWITCH_LIVE_FILE_V7_SWEEP,
+        )
+    if scope == "true_v7_sweep":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_PAPER_TRADES_STATE_PATTERN_V7_SWEEP.format(today_ist),
+            KILL_SWITCH_PAPER_FILE_V7_SWEEP,
+        )
+    if scope == "false_id_5min_v7":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_LIVE_TRADES_STATE_PATTERN_ID_5MIN_V7.format(today_ist),
+            KILL_SWITCH_LIVE_FILE_ID_5MIN_V7,
+        )
+    if scope == "true_id_5min_v7":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_PAPER_TRADES_STATE_PATTERN_ID_5MIN_V7.format(today_ist),
+            KILL_SWITCH_PAPER_FILE_ID_5MIN_V7,
+        )
+    if scope == "false_v15":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_LIVE_TRADES_STATE_PATTERN_V15.format(today_ist),
+            KILL_SWITCH_LIVE_FILE_V15,
+        )
+    if scope == "true_v15":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_PAPER_TRADES_STATE_PATTERN_V15.format(today_ist),
+            KILL_SWITCH_PAPER_FILE_V15,
+        )
+    if scope == "false_v16_5min":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_LIVE_TRADES_STATE_PATTERN_V16_5MIN.format(today_ist),
+            KILL_SWITCH_LIVE_FILE_V16_5MIN,
+        )
+    if scope == "true_v16_5min":
+        return (
+            LIVE_SIGNAL_DIR / OPEN_PAPER_TRADES_STATE_PATTERN_V16_5MIN.format(today_ist),
+            KILL_SWITCH_PAPER_FILE_V16_5MIN,
+        )
+    raise ValueError(f"Unknown kill-switch scope: {scope}")
+
+
+def _load_open_positions(state_path: Path, today_ist: str) -> list[dict[str, object]]:
+    if not state_path.exists():
+        return []
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    if str(payload.get("date", "")).strip() != today_ist:
+        return []
+    rows = payload.get("open_trades", [])
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    if not isinstance(rows, list):
+        return []
+
+    out: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        signal_id = str(row.get("signal_id", "")).strip()
+        ticker = str(row.get("ticker", "")).strip().upper()
+        if not signal_id or not ticker:
+            continue
+        out.append(
+            {
+                "signal_id": signal_id,
+                "trade_id": str(row.get("trade_id", "")).strip(),
+                "ticker": ticker,
+                "side": str(row.get("side", "")).strip().upper(),
+                "quantity": _safe_int(row.get("quantity", 0), 0),
+                "entry_price": _safe_float(row.get("filled_price", row.get("entry_price", 0.0)), 0.0),
+                "stop_price": _safe_float(row.get("stop_price", 0.0), 0.0),
+                "target_price": _safe_float(row.get("target_price", 0.0), 0.0),
+                "entry_time": str(row.get("entry_time", "")).strip(),
+                "updated_at": str(row.get("updated_at", "")).strip(),
+            }
+        )
+
+    out.sort(key=lambda r: (str(r.get("ticker", "")), str(r.get("signal_id", ""))))
+    return out
+
+
+def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + f".{os.getpid()}.{id(payload)}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, path)
+
+
+# Column projection specs for two-stage V16 5min CSV cards.
+_PENDING_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
+    ("added_at",     ("added_at",)),
+    ("ticker",       ("ticker",)),
+    ("side",         ("side",)),
+    ("status",       ("status",)),
+    ("setup",        ("setup",)),
+    ("trigger_iso",  ("trigger_bar_iso",)),
+    ("entry_ist",    ("signal_entry_datetime_ist",)),
+    ("expires_at",   ("expires_at",)),
+    ("entry_px",     ("entry_price",)),
+    ("stop_px",      ("stop_price", "sl_price")),
+    ("tgt_px",       ("target_price",)),
+]
+_DETECTED_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
+    ("detected_at",   ("detected_time",)),
+    ("ticker",        ("ticker",)),
+    ("side",          ("side",)),
+    ("setup",         ("setup",)),
+    ("entry_px",      ("entry_price",)),
+    ("stop_px",       ("stop_price", "sl_price")),
+    ("tgt_px",        ("target_price",)),
+    ("lag_bar_sec",   ("lag_from_signal_bar_sec", "lag_from_signal_sec")),
+    ("lag_entry_sec", ("lag_from_entry_slot_sec",)),
+]
+_LIVE_SIGNALS_V16_COLS: list[Tuple[str, Sequence[str]]] = [
+    ("signal_datetime", ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist", "created_ts_ist")),
+    ("detected_time_ist", ("detected_time_ist",)),
+    ("ticker", ("ticker",)),
+    ("side", ("side",)),
+    ("entry_px", ("entry_price",)),
+    ("stop_px", ("stop_price", "sl_price", "_stop_price")),
+    ("tgt_px", ("target_price",)),
+    ("quantity", ("quantity",)),
+]
+
+
+def _normalize_cli_auth_value(value: str) -> str:
+    text = (value or "").strip()
+    text = text.replace('\\"', '"')
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    return text
+
+
+class LogDashboardHandler(BaseHTTPRequestHandler):
+    server_version = "EQIDV2LogDashboard/1.0"
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if parsed.path == "/favicon.ico":
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            return
+
+        if not self._authorized(params):
+            self._unauthorized()
+            return
+
+        if parsed.path == "/":
+            self._send_html()
+            return
+        if parsed.path in ("/dashboard-flow", "/dashboard-flow/"):
+            self._send_flow_html()
+            return
+        if parsed.path == "/api/dashboard-flow/live":
+            from dashboard_flow_live import load_live_flow
+            from dashboard_flow_live_cache import get_cached_live_flow
+
+            if len(params.get("date", [])) > 1:
+                self._send_json({"error": "Specify one session date."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                session_date = (params.get("date") or [dt.datetime.now(IST).date().isoformat()])[0]
+                payload = get_cached_live_flow(FNO_OI_ROOT.parent, session_date, load_live_flow)
+            except ValueError:
+                self._send_json({"error": "Use a session date in YYYY-MM-DD format, no later than today."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error": "Saved intraday data is temporarily unavailable. Refresh to retry."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
+            return
+        if parsed.path == "/api/dashboard-flow":
+            from dashboard_flow import load_flow_data
+
+            if len(params.get("run", [])) > 1 or len(params.get("strategy", [])) > 1:
+                self._send_json({"error": "Specify one saved run or strategy."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                run_id = (params.get("run") or [None])[0]
+                strategy = (params.get("strategy") or [None])[0]
+                payload = load_flow_data(run_id, strategy) if strategy is not None else load_flow_data(run_id)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except (OSError, csv.Error):
+                self._send_json({"error": "Backtest files are temporarily unavailable. Please refresh."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
+            return
+        if parsed.path == "/api/snapshot":
+            lines = self._int_param(params, "lines", 80, 20, 400)
+            payload = self._snapshot(lines=lines)
+            self._send_json(payload)
+            return
+        if parsed.path == "/api/cockpit":
+            from dashboard_cockpit import load_cockpit_data
+
+            if any(len(params.get(key, [])) > 1 for key in ("date", "mode", "symbol")):
+                self._send_json({"error": "Specify one date, mode and symbol."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                payload = load_cockpit_data(
+                    FNO_OI_ROOT,
+                    (params.get("date") or [dt.datetime.now(IST).date().isoformat()])[0],
+                    (params.get("mode") or ["PAPER"])[0],
+                    (params.get("symbol") or [None])[0],
+                )
+            except ValueError:
+                self._send_json({"error": "Use a valid session date, PAPER or LIVE mode, and stock symbol."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error": "Trading evidence is temporarily unavailable. Refresh to retry."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
+            return
+        if parsed.path == "/api/fno-monitor":
+            dates = params.get("date") or [dt.datetime.now(IST).date().isoformat()]
+            if len(dates) != 1:
+                self._send_json({"error": "Specify one session date in YYYY-MM-DD format."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                payload = _fno_eq_id_stock_detail(dates[0])
+            except ValueError:
+                self._send_json({"error": "Use a valid session date in YYYY-MM-DD format."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error": "Stock monitoring evidence is temporarily unavailable."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
+            return
+        if parsed.path == "/api/log":
+            name = (params.get("name") or [""])[0]
+            if name not in LOG_IDS:
+                self._send_json({"error": "unknown log name"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            lines = self._int_param(params, "lines", 150, 20, 1000)
+            file_path, _ = resolve_log_target(name)
+            body = tail_text(file_path, lines=lines)
+            self._send_text(body)
+            return
+
+        self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if not self._authorized(params):
+            self._unauthorized()
+            return
+
+        if parsed.path == "/api/kill":
+            self._handle_kill_switch()
+            return
+        if parsed.path == "/api/restart":
+            self._handle_restart_session()
+            return
+
+        self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+
+    def log_message(self, fmt: str, *args) -> None:
+        # Redact ?token=... and ?...&token=... from access log lines so
+        # credentials never appear in plain-text log files.
+        import re as _re
+        sanitised = tuple(
+            _re.sub(r"([?&])token=[^&\s\"]*", r"\1token=REDACTED", str(a))
+            if isinstance(a, str) else a
+            for a in args
+        )
+        super().log_message(fmt, *sanitised)
+
+    def _authorized(self, params: Dict[str, list[str]]) -> bool:
+        api_token = getattr(self.server, "api_token", "") or ""
+        provided_token = _normalize_cli_auth_value((params.get("token") or [""])[0])
+        if api_token and provided_token and provided_token == api_token:
+            return True
+
+        username = self.server.username
+        password = self.server.password
+        if not username or not password:
+            return False
+
+        raw = self.headers.get("Authorization", "")
+        if not raw.startswith("Basic "):
+            return False
+        token = raw[6:].strip()
+        try:
+            decoded = base64.b64decode(token).decode("utf-8", errors="strict")
+        except Exception:
+            return False
+        if ":" not in decoded:
+            return False
+        user, pwd = decoded.split(":", 1)
+        return user == username and pwd == password
+
+    def _unauthorized(self) -> None:
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("WWW-Authenticate", 'Basic realm="EQIDV2 Logs"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Authentication required.")
+
+    def _read_json_body(self) -> Optional[dict[str, Any]]:
+        try:
+            raw_len = int(self.headers.get("Content-Length", "0") or "0")
+        except (TypeError, ValueError):
+            raw_len = 0
+        if raw_len <= 0:
+            return None
+        try:
+            body = self.rfile.read(raw_len)
+        except Exception:
+            return None
+        try:
+            parsed = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _handle_restart_session(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            self._send_json(
+                {"ok": False, "message": "Invalid JSON payload."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        card_id = str(payload.get("card_id", "")).strip()
+        if not card_id or card_id not in RESTARTABLE_CARDS:
+            self._send_json(
+                {"ok": False, "message": "Unknown or non-restartable session."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        result = _restart_card_session(card_id)
+        self._send_json(result)
+
+    def _handle_kill_switch(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            self._send_json(
+                {"ok": False, "message": "Invalid JSON payload."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        if not bool(payload.get("confirm", False)):
+            self._send_json(
+                {"ok": False, "message": "Confirmation checkbox is required."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        scope = str(payload.get("scope", "")).strip().lower()
+        mode = str(payload.get("mode", "")).strip().lower()
+        ticker = str(payload.get("ticker", "")).strip().upper()
+        allowed_scopes = {
+            "false_v5",
+            "true_v5",
+            "false_v7_sweep",
+            "true_v7_sweep",
+            "false_id_5min_v7",
+            "true_id_5min_v7",
+            "false_v15",
+            "true_v15",
+            "false_v16_5min",
+            "true_v16_5min",
+        }
+        if scope not in allowed_scopes:
+            self._send_json(
+                {
+                    "ok": False,
+                    "message": f"Invalid scope. Use one of: {', '.join(sorted(allowed_scopes))}.",
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if mode not in {"all", "ticker"}:
+            self._send_json(
+                {"ok": False, "message": "Invalid mode. Use all or ticker."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if mode == "ticker" and not ticker:
+            self._send_json(
+                {"ok": False, "message": "Ticker is required for ticker mode."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        today_ist = _today_ist_str()
+        try:
+            state_path, command_path = _kill_switch_scope_paths(scope, today_ist)
+        except ValueError:
+            self._send_json(
+                {"ok": False, "message": "Unknown scope."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        positions = _load_open_positions(state_path, today_ist)
+        if mode == "ticker":
+            positions = [p for p in positions if str(p.get("ticker", "")) == ticker]
+
+        target_signal_ids = sorted(
+            {
+                str(p.get("signal_id", "")).strip()
+                for p in positions
+                if str(p.get("signal_id", "")).strip()
+            }
+        )
+        target_tickers = sorted(
+            {
+                str(p.get("ticker", "")).strip().upper()
+                for p in positions
+                if str(p.get("ticker", "")).strip()
+            }
+        )
+
+        if not target_signal_ids:
+            label = ticker if ticker else "all symbols"
+            self._send_json(
+                {
+                    "ok": False,
+                    "message": f"No active trades found for {label} in {scope}.",
+                    "scope": scope,
+                    "mode": mode,
+                    "ticker": ticker,
+                }
+            )
+            return
+
+        now_ist = dt.datetime.now(IST)
+        command_id = f"KS-{scope}-{now_ist.strftime('%H%M%S%f')}"
+        command_payload: dict[str, object] = {
+            "date": today_ist,
+            "scope": scope,
+            "command_id": command_id,
+            "mode": mode,
+            "ticker": ticker,
+            "target_signal_ids": target_signal_ids,
+            "target_tickers": target_tickers,
+            "requested_at_ist": now_ist.strftime("%Y-%m-%d %H:%M:%S%z"),
+            "source": "dashboard",
+        }
+        try:
+            _atomic_write_json(command_path, command_payload)
+        except OSError as exc:
+            self._send_json(
+                {"ok": False, "message": f"Failed to write kill-switch command: {exc}"},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        target_label = ticker if (mode == "ticker" and ticker) else "ALL"
+        self._send_json(
+            {
+                "ok": True,
+                "message": (
+                    f"Kill switch queued for {len(target_signal_ids)} active trade(s) "
+                    f"({scope}, {target_label})."
+                ),
+                "scope": scope,
+                "mode": mode,
+                "ticker": ticker,
+                "command_id": command_id,
+                "target_signal_ids": target_signal_ids,
+                "target_tickers": target_tickers,
+            }
+        )
+
+    def _send_flow_html(self) -> None:
+        html = (BASE_DIR / "dashboard_flow.html").read_text(encoding="utf-8-sig")
+        html = html.replace("<style>__FLOW_CSS__</style>", "<style>" + (BASE_DIR / "dashboard_terminal.css").read_text(encoding="utf-8") + "</style><style>__FLOW_CSS__</style>")
+        html = html.replace("__FLOW_CSS__", (BASE_DIR / "dashboard_flow.css").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_JS__", (BASE_DIR / "dashboard_flow.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_CHART_JS__", (BASE_DIR / "dashboard_flow_chart.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_CORE_JS__", (BASE_DIR / "dashboard_flow_core.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_COMPARE_JS__", (BASE_DIR / "dashboard_flow_compare.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_LIVE_JS__", (BASE_DIR / "dashboard_flow_live.js").read_text(encoding="utf-8-sig"))
+        html = html.replace("__FLOW_LIVE_CSS__", (BASE_DIR / "dashboard_flow_live.css").read_text(encoding="utf-8-sig"))
+        token_json = json.dumps(getattr(self.server, "api_token", "") or "").replace("<", "\\u003c")
+        html = html.replace("__API_TOKEN_JSON__", token_json)
+        body = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self) -> None:
+        api_token_json = json.dumps(getattr(self.server, "api_token", "") or "").replace("<", "\\u003c")
+        html = """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EQIDV2 | Trading Terminal</title>
+  <meta name="referrer" content="no-referrer" />
+  <style>
+    :root {
+      --bg: #eef2f7;
+      --bg-soft: #f8fafc;
+      --surface: #ffffff;
+      --surface-strong: #f1f5f9;
+      --surface-muted: #e7edf5;
+      --card: #ffffff;
+      --line: #d8e0ea;
+      --line-strong: #b7c4d4;
+      --text: #172033;
+      --muted: #64748b;
+      --muted-strong: #475569;
+      --ok: #059669;
+      --bad: #dc2626;
+      --warn: #d97706;
+      --scheduled: #2563eb;
+      --disabled: #94a3b8;
+      --accent: #315a8c;
+      --accent-2: #0f766e;
+      --log-bg: #111827;
+      --log-text: #e5e7eb;
+      --log-head: #1f2937;
+      --shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+      --shadow-soft: 0 6px 18px rgba(15, 23, 42, 0.08);
+      --radius: 8px;
+    }
+
+    body[data-theme="dark"] {
+      --bg: #10141b;
+      --bg-soft: #141a23;
+      --surface: #171e28;
+      --surface-strong: #202a36;
+      --surface-muted: #1d2632;
+      --card: #171e28;
+      --line: #2f3a48;
+      --line-strong: #465467;
+      --text: #edf2f7;
+      --muted: #9aa8ba;
+      --muted-strong: #c2ccd8;
+      --ok: #10b981;
+      --bad: #ef4444;
+      --warn: #f59e0b;
+      --scheduled: #60a5fa;
+      --disabled: #64748b;
+      --accent: #7aa2d6;
+      --accent-2: #2dd4bf;
+      --log-bg: #0b1120;
+      --log-text: #e5e7eb;
+      --log-head: #162033;
+      --shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+      --shadow-soft: 0 8px 20px rgba(0, 0, 0, 0.2);
+    }
+
+    body[data-theme="dark"] .snapshot-value,
+    body[data-theme="dark"] .health-pill strong,
+    body[data-theme="dark"] .name,
+    body[data-theme="dark"] .timeline-time,
+    body[data-theme="dark"] .section-title,
+    body[data-theme="dark"] h1 {
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .snapshot-note,
+    body[data-theme="dark"] .compact-desc,
+    body[data-theme="dark"] .meta,
+    body[data-theme="dark"] .toolbar-note,
+    body[data-theme="dark"] .sub,
+    body[data-theme="dark"] .section-note,
+    body[data-theme="dark"] .timeline-note,
+    body[data-theme="dark"] .timeline-name,
+    body[data-theme="dark"] .timeline-status,
+    body[data-theme="dark"] .snapshot-label,
+    body[data-theme="dark"] .kill-meta {
+      color: #cbd5e1;
+    }
+
+    body[data-theme="dark"] .health-pill,
+    body[data-theme="dark"] .snapshot-tile,
+    body[data-theme="dark"] .filter-chip,
+    body[data-theme="dark"] .theme-toggle,
+    body[data-theme="dark"] .card-toggle,
+    body[data-theme="dark"] .section-note,
+    body[data-theme="dark"] .search-input {
+      background: #1d2632;
+      color: #d7e0ec;
+    }
+
+    body[data-theme="dark"] .search-input::placeholder {
+      color: #94a3b8;
+    }
+
+    body[data-theme="dark"] .filter-chip.is-active,
+    body[data-theme="dark"] .section-jump.is-active,
+    body[data-theme="dark"] .card-toggle.is-active,
+    body[data-theme="dark"] .pin-toggle.is-pinned {
+      border-color: #60a5fa;
+      background: #2563eb;
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .restart-btn,
+    body[data-theme="dark"] .section-jump,
+    body[data-theme="dark"] .theme-toggle,
+    body[data-theme="dark"] .filter-chip,
+    body[data-theme="dark"] .card-toggle {
+      border-color: #4b5b70;
+    }
+
+    body[data-theme="dark"] .mini-badge {
+      background: #202b38;
+      color: #dbeafe;
+      border-color: #3b4a5d;
+    }
+
+    body[data-theme="dark"] .mini-badge.ok {
+      color: #6ee7b7;
+      background: rgba(16, 185, 129, 0.16);
+    }
+
+    body[data-theme="dark"] .mini-badge.warn {
+      color: #fcd34d;
+      background: rgba(245, 158, 11, 0.16);
+    }
+
+    body[data-theme="dark"] .mini-badge.bad {
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.16);
+    }
+
+    body[data-theme="dark"] .log-table td {
+      color: #f8fafc;
+      background: #111a2b;
+    }
+
+    body[data-theme="dark"] .log-table th {
+      color: #ffffff;
+    }
+
+    /* keep semantic cell colours from being flattened by the dark td override */
+    body[data-theme="dark"] .log-table td.pos { color: #86efac; }
+    body[data-theme="dark"] .log-table td.neg { color: #fca5a5; }
+    body[data-theme="dark"] .log-table td.warnval { color: #fcd34d; }
+    body[data-theme="dark"] .log-table td.mutedval { color: #94a3b8; }
+
+    body[data-theme="dark"] .th-sort-btn {
+      color: #ffffff !important;
+    }
+
+    body[data-theme="dark"] .table-summary {
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .table-meta,
+    body[data-theme="dark"] .sort-mark {
+      color: #cbd5e1;
+    }
+
+    body[data-theme="dark"] pre {
+      color: #f8fafc;
+    }
+
+    body[data-theme="dark"] pre.log-empty {
+      color: #d1d9e6;
+    }
+
+    body[data-theme="dark"] .timeline-step {
+      background: #171e28;
+    }
+
+    body[data-theme="dark"] .timeline-step.is-now {
+      background: #243247;
+      box-shadow: inset 0 0 0 1px #4b5b70;
+    }
+
+    body[data-theme="dark"] .timeline-step.is-now .timeline-time,
+    body[data-theme="dark"] .timeline-step.is-now .timeline-name {
+      color: #ffffff;
+    }
+
+    body[data-theme="dark"] .timeline-step.is-now .timeline-status {
+      background: #111827;
+      color: #f8fafc;
+      border-color: #64748b;
+    }
+
+    body[data-theme="dark"] .card-head {
+      background: linear-gradient(180deg, #1d2632, #171e28);
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      overflow-x: hidden;
+      min-width: 0;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "Inter", "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      background:
+        linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(238, 242, 247, 0.96)),
+        var(--bg);
+    }
+
+    body[data-theme="dark"] {
+      background: linear-gradient(180deg, #111827, #10141b 42%, #0f141c);
+    }
+
+    body::after {
+      content: none;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(248, 250, 252, 0.94);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 6px 22px rgba(15, 23, 42, 0.07);
+    }
+
+    body[data-theme="dark"] header {
+      background: rgba(16, 20, 27, 0.94);
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .title-block {
+      min-width: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 21px;
+      font-weight: 800;
+      letter-spacing: 0;
+      line-height: 1.2;
+    }
+
+    .sub {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .refresh-notice {
+      margin: 12px 24px;
+      padding: 12px 16px;
+      border: 1px solid var(--warn);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+    }
+    .refresh-notice[hidden] { display: none; }
+    #autoRefreshBtn[aria-pressed="true"] { border-color: var(--warn); color: var(--text); }
+
+    .health-strip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+      max-width: 100%;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+
+    .health-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 5px 10px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .health-pill strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .health-pill.ok {
+      border-color: rgba(5, 150, 105, 0.28);
+      background: #ecfdf5;
+      color: #047857;
+    }
+
+    .health-pill.warn {
+      border-color: rgba(217, 119, 6, 0.28);
+      background: #fffbeb;
+      color: #b45309;
+    }
+
+    .health-pill.bad {
+      border-color: rgba(220, 38, 38, 0.28);
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+
+    .health-pill.neutral {
+      border-color: var(--line);
+      background: var(--surface);
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 11px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .mini-status-bar {
+      position: sticky;
+      top: 0;
+      z-index: 19;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 100%;
+      overflow-x: auto;
+      padding: 7px 16px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow-soft);
+      scrollbar-width: thin;
+    }
+
+    .mini-status-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--muted-strong);
+      font-size: 11px;
+      font-weight: 750;
+      padding: 4px 8px;
+    }
+
+    .mini-status-item strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    body[data-density="compact"] .snapshot-grid {
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 7px;
+    }
+
+    body[data-density="compact"] .snapshot-tile {
+      min-height: 52px;
+      padding: 7px 9px;
+    }
+
+    body[data-density="compact"] .snapshot-value {
+      font-size: 17px;
+    }
+
+    body[data-density="compact"] .wrap {
+      grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+      gap: 8px;
+      padding: 10px;
+    }
+
+    body[data-density="compact"] .card-head {
+      padding: 7px 9px;
+    }
+
+    body[data-density="compact"] .name {
+      font-size: 12px;
+    }
+
+    body[data-density="compact"] .mini-badge,
+    body[data-density="compact"] .compact-desc,
+    body[data-density="compact"] .card-toggle,
+    body[data-density="compact"] .restart-btn {
+      font-size: 10px;
+    }
+
+    body[data-density="compact"] pre,
+    body[data-density="compact"] .table-shell {
+      max-height: 140px;
+      font-size: 10px;
+    }
+
+    body[data-density="focus"] .card:not(.is-bad):not(.is-warn) {
+      display: none;
+    }
+
+    .toolbar-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .toolbar-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-note {
+      font-size: 11px;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 5px 10px;
+      background: var(--surface);
+    }
+
+    .theme-toggle {
+      min-width: 78px;
+      border-color: var(--line);
+      background: var(--surface);
+      color: var(--muted-strong);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .theme-toggle:hover {
+      border-color: var(--accent);
+      background: var(--surface-strong);
+    }
+
+    .search-input {
+      width: min(320px, 42vw);
+      min-width: 180px;
+      flex: 1 1 260px;
+      max-width: 420px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: none;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .search-input:focus {
+      border-color: rgba(37, 99, 235, 0.55);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.13);
+    }
+
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .filter-chip {
+      border: 1px solid var(--line);
+      color: var(--muted-strong);
+      background: var(--surface);
+      box-shadow: none;
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .filter-chip:hover {
+      transform: none;
+      box-shadow: none;
+      border-color: rgba(37, 99, 235, 0.42);
+      color: var(--text);
+    }
+
+    .filter-chip.is-active {
+      border-color: rgba(37, 99, 235, 0.55);
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .section-nav {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      max-width: 100%;
+      margin-top: 10px;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-width: thin;
+    }
+
+    .section-jump {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--muted-strong);
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 750;
+      box-shadow: none;
+      white-space: nowrap;
+    }
+
+    .section-jump:hover {
+      transform: none;
+      border-color: rgba(37, 99, 235, 0.42);
+      background: var(--surface-strong);
+      box-shadow: none;
+    }
+
+    .section-jump.is-active {
+      border-color: rgba(37, 99, 235, 0.55);
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .section-jump strong {
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .restart-all-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid rgba(220, 38, 38, 0.26);
+      background: color-mix(in srgb, var(--bad) 10%, var(--surface));
+      color: var(--bad);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      box-shadow: var(--shadow-soft);
+      transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+      user-select: none;
+    }
+
+    .restart-all-btn:hover {
+      border-color: rgba(220, 38, 38, 0.48);
+      background: color-mix(in srgb, var(--bad) 16%, var(--surface));
+      box-shadow: var(--shadow);
+      transform: translateY(-1px);
+    }
+
+    .restart-all-btn:active {
+      transform: translateY(0);
+      box-shadow: 0 3px 8px rgba(12, 58, 90, 0.4);
+    }
+
+    .restart-all-btn:disabled {
+      opacity: 0.72;
+      cursor: wait;
+      transform: none;
+    }
+
+    .restart-all-btn .restart-icon {
+      display: inline-block;
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    .restart-all-btn.is-busy .restart-icon {
+      animation: restart-spin 0.9s linear infinite;
+    }
+
+    .restart-all-btn.is-ok {
+      border-color: rgba(5, 150, 105, 0.45);
+      background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+      color: var(--ok);
+    }
+
+    .restart-all-btn.is-err {
+      border-color: rgba(220, 38, 38, 0.55);
+      background: color-mix(in srgb, var(--bad) 16%, var(--surface));
+      color: var(--bad);
+    }
+
+    button,
+    .dashboard-flow-link {
+      border: 1px solid rgba(37, 99, 235, 0.32);
+      color: #ffffff;
+      font-weight: 700;
+      background: var(--scheduled);
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      line-height: 1;
+      min-height: 34px;
+      cursor: pointer;
+      transition: transform 0.14s ease, box-shadow 0.14s ease;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .dashboard-flow-link {
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
+      white-space: nowrap;
+      background: #11754f;
+      border-color: #11754f;
+    }
+
+    button:hover,
+    .dashboard-flow-link:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow);
+    }
+
+    button:focus-visible,
+    .dashboard-flow-link:focus-visible,
+    .search-input:focus-visible,
+    select:focus-visible,
+    input:focus-visible {
+      outline: 0;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16), var(--shadow-soft);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.62;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .wrap {
+      max-width: 1600px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 14px 16px 18px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr));
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .snapshot-grid {
+      max-width: 1600px;
+      width: 100%;
+      margin: 12px auto 0;
+      padding: 0 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .snapshot-tile {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 11px 12px;
+      box-shadow: var(--shadow-soft);
+      min-height: 72px;
+    }
+
+    .snapshot-label {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .snapshot-value {
+      margin-top: 4px;
+      font-size: 20px;
+      font-weight: 850;
+      line-height: 1.1;
+      color: var(--text);
+    }
+
+    .snapshot-note {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .snapshot-tile.is-ok { border-left: 3px solid color-mix(in srgb, var(--ok) 70%, var(--line)); }
+    .snapshot-tile.is-warn { border-left: 3px solid color-mix(in srgb, var(--warn) 70%, var(--line)); }
+    .snapshot-tile.is-bad { border-left: 3px solid color-mix(in srgb, var(--bad) 70%, var(--line)); }
+    .snapshot-tile.is-info { border-left: 3px solid color-mix(in srgb, var(--scheduled) 55%, var(--line)); }
+
+    .timeline-panel {
+      width: 100%;
+      max-width: 100%;
+      margin-top: 12px;
+      border: 1px solid rgba(69, 196, 255, 0.22);
+      border-color: var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .timeline-panel.is-collapsed .timeline-track {
+      display: none;
+    }
+
+    .timeline-panel.is-collapsed .timeline-head {
+      border-bottom: 0;
+    }
+
+    .timeline-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      min-width: 0;
+    }
+
+    .timeline-title {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+
+    .timeline-note {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .timeline-track {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(136px, 1fr);
+      gap: 1px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      background: var(--line);
+      overscroll-behavior-x: contain;
+    }
+
+    .timeline-step {
+      position: relative;
+      min-height: 78px;
+      padding: 11px 11px 10px 12px;
+      background: var(--surface);
+      border-top: 2px solid var(--line-strong);
+    }
+
+    .timeline-step.ok { border-top-color: var(--ok); }
+    .timeline-step.warn { border-top-color: var(--warn); }
+    .timeline-step.bad { border-top-color: var(--bad); }
+    .timeline-step.disabled { opacity: 0.62; }
+    .timeline-step.is-now {
+      background: #eff6ff;
+    }
+
+    .timeline-time {
+      font-size: 11px;
+      font-weight: 800;
+      color: #1d4ed8;
+      white-space: nowrap;
+    }
+
+    .timeline-name {
+      margin-top: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+
+    .timeline-status {
+      margin-top: 6px;
+      display: inline-flex;
+      max-width: 100%;
+      border: 1px solid rgba(112, 145, 179, 0.25);
+      border-radius: var(--radius);
+      padding: 2px 7px;
+      color: var(--muted);
+      background: var(--surface-strong);
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .section-banner {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      position: relative;
+      padding: 10px 12px 10px 14px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      border-bottom-color: var(--line);
+      background: transparent;
+      box-shadow: none;
+      scroll-margin-top: 176px;
+    }
+
+    .section-banner::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 3px;
+      border-radius: 999px;
+      background: var(--section-accent, var(--line-strong));
+    }
+
+    .section-banner.is-disabled {
+      border-color: transparent;
+      border-bottom-color: var(--line);
+      background: transparent;
+      --section-accent: var(--disabled);
+    }
+
+    .section-banner.is-sub {
+      margin-left: 12px;
+      padding: 6px 10px 6px 12px;
+      border-bottom-color: transparent;
+    }
+
+    .section-banner.is-sub::before {
+      top: 5px;
+      bottom: 5px;
+      width: 2px;
+      opacity: 0.6;
+    }
+
+    .section-banner.is-sub .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      opacity: 0.82;
+    }
+
+    .section-banner.market { --section-accent: #2563eb; }
+    .section-banner.v7 { --section-accent: #059669; }
+    .section-banner.research { --section-accent: #7c3aed; }
+    .section-banner.v16 { --section-accent: #d97706; }
+    .section-banner.admin { --section-accent: #64748b; }
+    .section-banner.other { --section-accent: #0f766e; }
+    .section-left {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
+    .section-action {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 11px;
+      line-height: 1;
+      background: var(--surface);
+      border-color: var(--line);
+      color: var(--text);
+      box-shadow: none;
+    }
+    .section-action:hover {
+      box-shadow: 0 8px 16px rgba(1, 8, 15, 0.22);
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+
+    .section-note {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: normal;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 2px 7px;
+      max-width: 100%;
+    }
+
+    .card {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--card);
+      overflow: hidden;
+      box-shadow: var(--shadow-soft);
+      animation: cardIn 0.33s ease both;
+      transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+      min-height: 128px;
+      min-width: 0;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: var(--line-strong);
+      box-shadow: var(--shadow);
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      background: var(--line-strong);
+    }
+
+    .card.is-ok::before { background: var(--ok); }
+    .card.is-warn::before { background: var(--warn); }
+    .card.is-bad::before { background: var(--bad); }
+    .card.is-fullscreen::before { background: var(--accent); }
+    .card.is-disabled-compact {
+      opacity: 0.72;
+      box-shadow: none;
+    }
+    .card.is-disabled-compact:hover {
+      transform: none;
+    }
+    .card.is-disabled-compact .card-head {
+      border-bottom: 0;
+    }
+    .card.is-disabled-compact pre,
+    .card.is-disabled-compact .table-shell,
+    .card.is-disabled-compact .kill-shell {
+      display: none;
+    }
+    .card.is-disabled-compact.is-fullscreen {
+      opacity: 1;
+    }
+    .card.is-disabled-compact.is-fullscreen pre,
+    .card.is-disabled-compact.is-fullscreen .table-shell,
+    .card.is-disabled-compact.is-fullscreen .kill-shell {
+      display: block;
+    }
+    .card.is-disabled-compact.is-fullscreen .card-head {
+      border-bottom: 1px solid var(--line);
+    }
+    .card.is-log-hidden pre,
+    .card.is-log-hidden .table-shell {
+      display: none;
+    }
+    .card.is-log-hidden .card-head {
+      border-bottom: 0;
+    }
+
+    .card.is-log-hidden::after {
+      content: "Log collapsed";
+      display: block;
+      margin: -1px 12px 12px;
+      padding: 7px 10px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-strong);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .card.is-fullscreen.is-log-hidden pre,
+    .card.is-fullscreen.is-log-hidden .table-shell {
+      display: block;
+    }
+
+    .card.is-fullscreen.is-log-hidden::after {
+      display: none;
+    }
+
+    .card.is-disabled-compact.is-log-hidden::after {
+      display: none;
+    }
+
+    .card.is-expanded .card-head {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--surface), var(--bg-soft));
+    }
+
+    .card-head-left {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 5px;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .name {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      line-height: 1.25;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .meta {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+
+    .compact-desc {
+      width: 100%;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .mini-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 2px;
+    }
+
+    .mini-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      border: 1px solid rgba(112, 145, 179, 0.28);
+      border-radius: var(--radius);
+      padding: 2px 7px;
+      color: var(--muted);
+      background: var(--surface-strong);
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .mini-badge.ok {
+      border-color: rgba(5, 150, 105, 0.25);
+      color: var(--ok);
+      background: color-mix(in srgb, var(--ok) 11%, var(--surface));
+    }
+
+    .mini-badge.warn {
+      border-color: rgba(217, 119, 6, 0.25);
+      color: var(--warn);
+      background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+    }
+
+    .mini-badge.bad {
+      border-color: rgba(220, 38, 38, 0.25);
+      color: var(--bad);
+      background: color-mix(in srgb, var(--bad) 11%, var(--surface));
+    }
+
+    .pill {
+      font-size: 10px;
+      font-weight: 700;
+      border-radius: var(--radius);
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: var(--surface-strong);
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: #ffffff;
+      border-color: rgba(5, 150, 105, 0.35);
+      background: var(--ok);
+    }
+
+    .pill.warn {
+      color: #ffffff;
+      border-color: rgba(217, 119, 6, 0.35);
+      background: var(--warn);
+    }
+
+    .pill.info {
+      color: #ffffff;
+      border-color: color-mix(in srgb, var(--scheduled) 60%, var(--line));
+      background: var(--scheduled);
+    }
+
+    .pill.muted {
+      color: #ffffff;
+      border-color: color-mix(in srgb, var(--disabled) 60%, var(--line));
+      background: var(--disabled);
+    }
+
+    .pill.fail {
+      color: #ffffff;
+      border-color: rgba(220, 38, 38, 0.35);
+      background: var(--bad);
+    }
+
+    .card-head-right {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: 148px;
+    }
+
+    .card-toggle {
+      border: 1px solid var(--line-strong);
+      color: var(--muted-strong);
+      font-weight: 700;
+      background: var(--surface);
+      padding: 0 7px;
+      border-radius: var(--radius);
+      font-size: 11px;
+      min-width: 30px;
+      min-height: 28px;
+      cursor: pointer;
+      box-shadow: none;
+      transition: border-color 0.14s ease, background 0.14s ease;
+    }
+
+    .card-toggle:hover {
+      transform: none;
+      box-shadow: none;
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--scheduled) 10%, var(--surface));
+    }
+
+    .card-toggle.is-active {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--scheduled) 16%, var(--surface));
+      color: var(--scheduled);
+    }
+
+    .log-toggle.is-hidden {
+      border-color: rgba(112, 145, 179, 0.42);
+      color: var(--muted);
+      background: var(--surface-strong);
+    }
+
+    .pin-toggle.is-pinned {
+      border-color: rgba(217, 119, 6, 0.35);
+      background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+      color: var(--warn);
+    }
+
+    .restart-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      border: 1px solid rgba(37, 99, 235, 0.25);
+      background: color-mix(in srgb, var(--scheduled) 10%, var(--surface));
+      color: var(--scheduled);
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: 0;
+      min-width: 30px;
+      min-height: 28px;
+      padding: 0 7px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      box-shadow: none;
+      transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+      user-select: none;
+    }
+
+    .restart-btn:hover {
+      border-color: rgba(37, 99, 235, 0.45);
+      background: color-mix(in srgb, var(--scheduled) 16%, var(--surface));
+      box-shadow: var(--shadow-soft);
+      transform: translateY(-1px);
+    }
+
+    .restart-btn:active {
+      transform: translateY(0);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+
+    .restart-btn:disabled {
+      opacity: 0.72;
+      cursor: wait;
+      transform: none;
+    }
+
+    .restart-btn .restart-icon {
+      display: inline-block;
+      font-size: 13px;
+      line-height: 1;
+    }
+
+    .restart-btn .restart-label {
+      display: none;
+    }
+
+    .restart-btn.is-busy,
+    .restart-btn.is-ok,
+    .restart-btn.is-err {
+      min-width: 82px;
+      gap: 5px;
+      padding: 0 8px;
+    }
+
+    .restart-btn.is-busy .restart-label,
+    .restart-btn.is-ok .restart-label,
+    .restart-btn.is-err .restart-label {
+      display: inline;
+    }
+
+    .restart-btn.is-busy .restart-icon {
+      animation: restart-spin 0.9s linear infinite;
+    }
+
+    .restart-btn.is-ok {
+      border-color: rgba(5, 150, 105, 0.35);
+      background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+      color: var(--ok);
+    }
+
+    .restart-btn.is-err {
+      border-color: rgba(220, 38, 38, 0.35);
+      background: color-mix(in srgb, var(--bad) 16%, var(--surface));
+      color: var(--bad);
+    }
+
+    @keyframes restart-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .kill-shell {
+      margin: 8px 10px 4px;
+      padding: 8px;
+      border: 1px solid rgba(220, 38, 38, 0.25);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--bad) 8%, var(--surface));
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .kill-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .kill-confirm {
+      font-size: 11px;
+      color: var(--bad);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      user-select: none;
+    }
+
+    .kill-meta {
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    .kill-ticker {
+      min-width: 130px;
+      max-width: 220px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      padding: 4px 6px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .kill-btn {
+      border-radius: var(--radius);
+      font-size: 11px;
+      padding: 5px 8px;
+      box-shadow: none;
+      transform: none !important;
+    }
+
+    .kill-btn.kill-one {
+      border-color: rgba(217, 119, 6, 0.28);
+      background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+      color: var(--warn);
+    }
+
+    .kill-btn.kill-all {
+      border-color: rgba(220, 38, 38, 0.32);
+      background: color-mix(in srgb, var(--bad) 14%, var(--surface));
+      color: var(--bad);
+    }
+
+    .kill-btn:disabled,
+    .kill-ticker:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .kill-status {
+      font-size: 10px;
+      line-height: 1.25;
+      min-height: 1.2em;
+      color: var(--ok);
+      overflow-wrap: anywhere;
+    }
+
+    .kill-status.err {
+      color: var(--bad);
+    }
+
+    pre {
+      margin: 0;
+      padding: 10px 11px;
+      white-space: pre;
+      word-break: normal;
+      font-size: 11px;
+      line-height: 1.4;
+      max-height: 210px;
+      overflow-x: auto;
+      overflow-y: auto;
+      font-family: "Consolas", "Lucida Console", monospace;
+      background: var(--log-bg);
+      color: var(--log-text);
+      tab-size: 4;
+      scrollbar-gutter: stable both-edges;
+      border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    }
+
+    pre.log-empty {
+      color: #aab7c8;
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          color-mix(in srgb, var(--log-bg) 94%, #ffffff),
+          color-mix(in srgb, var(--log-bg) 94%, #ffffff) 10px,
+          var(--log-bg) 10px,
+          var(--log-bg) 20px
+        );
+      font-style: italic;
+    }
+
+    .empty-state {
+      display: grid;
+      place-items: center;
+      min-height: 74px;
+      color: #aab7c8;
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          color-mix(in srgb, var(--log-bg) 94%, #ffffff),
+          color-mix(in srgb, var(--log-bg) 94%, #ffffff) 10px,
+          var(--log-bg) 10px,
+          var(--log-bg) 20px
+        );
+      font-family: "Consolas", "Lucida Console", monospace;
+      font-size: 11px;
+      border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    }
+
+    .empty-state strong {
+      color: var(--log-text);
+      font-size: 12px;
+    }
+
+    .empty-state span {
+      display: block;
+      margin-top: 3px;
+      color: #94a3b8;
+      font-size: 10px;
+      text-align: center;
+    }
+
+    .table-shell {
+      margin: 0;
+      padding: 8px;
+      max-height: 210px;
+      overflow-x: auto;
+      overflow-y: auto;
+      font-family: "Consolas", "Lucida Console", monospace;
+      font-size: 10px;
+      line-height: 1.25;
+      background: var(--log-bg);
+      color: var(--log-text);
+      tab-size: 4;
+      scrollbar-gutter: stable both-edges;
+      border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    }
+
+    .table-summary,
+    .table-meta {
+      white-space: pre;
+      overflow-wrap: anywhere;
+    }
+
+    .table-summary {
+      display: grid;
+      gap: 2px;
+      color: #dbeafe;
+      margin-bottom: 6px;
+      padding: 6px 7px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: var(--radius);
+      background: rgba(15, 23, 42, 0.72);
+    }
+
+    .table-meta {
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .log-table {
+      border-collapse: collapse;
+      width: max-content;
+      min-width: max-content;
+      table-layout: auto;
+    }
+
+    .log-table th,
+    .log-table td {
+      border: 1px solid var(--line);
+      padding: 3px 6px;
+      white-space: nowrap;
+      text-align: left;
+      background: color-mix(in srgb, var(--log-bg) 88%, #ffffff);
+    }
+
+    .log-table tbody tr:nth-child(even) td {
+      background: color-mix(in srgb, var(--log-bg) 82%, #ffffff);
+    }
+
+    .log-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .log-table td.pos {
+      color: #86efac;
+      font-weight: 700;
+    }
+
+    .log-table td.neg {
+      color: #fca5a5;
+      font-weight: 700;
+    }
+
+    .log-table td.warnval {
+      color: #fcd34d;
+      font-weight: 700;
+    }
+
+    .log-table td.mutedval {
+      color: #94a3b8;
+    }
+
+    /* digit alignment without forcing text-align (the report declares its own) */
+    .log-table td.tabnum {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .log-table td.clip {
+      max-width: 22ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .log-table td.right,
+    .log-table th.right .th-sort-btn {
+      text-align: right;
+      justify-content: flex-end;
+    }
+
+    .log-table td.center {
+      text-align: center;
+    }
+
+    .cell-pill {
+      display: inline-block;
+      padding: 0 5px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      line-height: 1.55;
+      white-space: nowrap;
+    }
+
+    .cell-pill.ok    { color: #86efac; background: rgba(16, 185, 129, 0.18);  border-color: rgba(16, 185, 129, 0.38); }
+    .cell-pill.warn  { color: #fcd34d; background: rgba(245, 158, 11, 0.18);  border-color: rgba(245, 158, 11, 0.38); }
+    .cell-pill.bad   { color: #fca5a5; background: rgba(239, 68, 68, 0.18);   border-color: rgba(239, 68, 68, 0.38); }
+    .cell-pill.info  { color: #93c5fd; background: rgba(59, 130, 246, 0.18);  border-color: rgba(59, 130, 246, 0.38); }
+    .cell-pill.muted { color: #cbd5e1; background: rgba(148, 163, 184, 0.16); border-color: rgba(148, 163, 184, 0.32); }
+    .cell-pill.side-long  { color: #7dd3fc; background: rgba(14, 165, 233, 0.18);  border-color: rgba(14, 165, 233, 0.38); }
+    .cell-pill.side-short { color: #d8b4fe; background: rgba(168, 85, 247, 0.18);  border-color: rgba(168, 85, 247, 0.38); }
+
+    .cell-qty {
+      font-variant-numeric: tabular-nums;
+      margin-right: 4px;
+    }
+
+    /* markdown-report cards (FnO V13-V10-G sessions) */
+    .md-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+
+    .md-chip {
+      min-width: 0;
+      padding: 3px 6px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: var(--radius);
+      background: rgba(15, 23, 42, 0.72);
+    }
+
+    .md-chip .k {
+      display: block;
+      font-size: 8px;
+      line-height: 1.4;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .md-chip .v {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.35;
+      color: #e2e8f0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .md-notes {
+      margin-bottom: 6px;
+      color: #94a3b8;
+      font-size: 10px;
+    }
+
+    .md-notes > summary {
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    .md-notes > summary::-webkit-details-marker { display: none; }
+    .md-notes > summary::before { content: "\\25B8  "; }
+    .md-notes[open] > summary::before { content: "\\25BE  "; }
+
+    .md-notes ul {
+      margin: 4px 0 0;
+      padding-left: 15px;
+      color: #cbd5e1;
+      line-height: 1.4;
+    }
+
+    .md-note-line {
+      margin: 4px 0;
+      color: #cbd5e1;
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    .md-caption {
+      margin: 7px 0 3px;
+      color: #dbeafe;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .md-table-wrap {
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .md-rowcount {
+      margin: 3px 0 0;
+      color: #94a3b8;
+      font-size: 9.5px;
+    }
+
+    .md-report code {
+      font-family: inherit;
+      color: #bae6fd;
+    }
+
+    .log-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--log-head);
+      box-shadow: 0 1px 0 var(--line);
+    }
+
+    .th-sort-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      border: 0 !important;
+      color: #e5e7eb !important;
+      font-weight: 700;
+      background: transparent !important;
+      padding: 0 !important;
+      border-radius: 0 !important;
+      font-size: 11px !important;
+      cursor: pointer;
+      box-shadow: none !important;
+    }
+
+    .th-sort-btn:hover {
+      transform: none !important;
+      box-shadow: none !important;
+      color: #93c5fd !important;
+      text-decoration: underline;
+    }
+
+    .sort-mark {
+      color: #94a3b8;
+      font-size: 9px;
+      min-width: 1.7em;
+      text-align: right;
+    }
+
+    body.has-fullscreen {
+      overflow: hidden;
+    }
+
+    body.has-fullscreen header {
+      display: none;
+    }
+
+    body.has-fullscreen .wrap {
+      max-width: none;
+      padding: 0;
+      display: block;
+    }
+
+    body.has-fullscreen .card {
+      display: none;
+    }
+
+    body.has-fullscreen .card.is-fullscreen {
+      display: block;
+      position: fixed;
+      inset: 8px;
+      margin: 0;
+      z-index: 999;
+      border-radius: 12px;
+      border-color: var(--line-strong);
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.55);
+    }
+
+    body.has-fullscreen .card.is-fullscreen .card-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--surface);
+    }
+
+    body.has-fullscreen .card.is-fullscreen pre {
+      max-height: calc(100vh - 92px);
+      height: calc(100vh - 92px);
+      font-size: 12px;
+      padding: 12px;
+    }
+
+    body.has-fullscreen .card.is-fullscreen .table-shell {
+      max-height: calc(100vh - 92px);
+      height: calc(100vh - 92px);
+      font-size: 12px;
+      padding: 12px;
+    }
+
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 960px) {
+      .topbar {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+        width: 100%;
+        max-width: 100%;
+      }
+
+      .toolbar {
+        align-items: stretch;
+      }
+
+      .toolbar-main,
+      .toolbar-controls {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 720px) {
+      header {
+        padding: 12px 10px 10px;
+      }
+
+      h1 {
+        font-size: 18px;
+      }
+
+      .top-actions > button,
+      .top-actions > .dashboard-flow-link,
+      .top-actions .theme-toggle,
+      .top-actions .filter-chip {
+        width: 100%;
+        min-width: 0;
+        justify-content: center;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-height: 32px;
+        padding: 7px 8px;
+        font-size: 12px;
+      }
+
+      .top-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        overflow: visible;
+        gap: 6px;
+      }
+
+      .top-actions > .dashboard-flow-link {
+        grid-column: 1 / -1;
+      }
+
+      .restart-all-btn {
+        justify-content: center;
+      }
+
+      .health-strip,
+      .filter-bar,
+      .mini-status-bar {
+        display: flex;
+        flex-wrap: nowrap;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        gap: 6px;
+      }
+
+      .mini-status-bar {
+        position: static;
+        padding: 8px 10px;
+      }
+
+      .toolbar-main {
+        align-items: stretch;
+      }
+
+      .search-input {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        flex-basis: 100%;
+      }
+
+      .filter-chip,
+      .health-pill,
+      .mini-status-item {
+        width: auto;
+        flex: 0 0 auto;
+        justify-content: center;
+        min-height: 28px;
+        padding-left: 6px;
+        padding-right: 6px;
+      }
+
+      .section-nav {
+        margin-top: 8px;
+      }
+
+      .section-jump {
+        min-height: 28px;
+        padding: 5px 9px;
+      }
+
+      .timeline-head {
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+
+      .timeline-note {
+        white-space: normal;
+      }
+
+      .timeline-track {
+        grid-auto-columns: minmax(134px, 64vw);
+      }
+
+      .snapshot-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding: 0 10px;
+        gap: 8px;
+      }
+
+      .snapshot-tile {
+        min-height: 74px;
+        padding: 10px;
+      }
+
+      .wrap {
+        grid-template-columns: minmax(0, 1fr);
+        padding: 10px;
+        gap: 10px;
+      }
+
+      .section-banner {
+        flex-wrap: wrap;
+        align-items: flex-start;
+        padding: 10px 10px 10px 13px;
+      }
+
+      .card-head {
+        padding: 10px;
+      }
+
+      .card-head-right {
+        max-width: 112px;
+      }
+
+      .mini-badge {
+        white-space: normal;
+      }
+
+      pre {
+        max-height: 250px;
+        font-size: 10.5px;
+      }
+
+      .table-shell {
+        max-height: 250px;
+      }
+    }
+
+    @media (max-width: 360px) {
+      .snapshot-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .top-actions > button,
+      .top-actions .theme-toggle,
+      .top-actions .filter-chip {
+        grid-column: 1 / -1;
+      }
+
+      .health-strip,
+      .filter-bar,
+      .mini-status-bar {
+        gap: 5px;
+      }
+    }
+  </style>
+  <style>__TERMINAL_CSS__</style>
+  <style>__COCKPIT_CSS__</style>
+</head>
+<body class="terminal-main">
+  <header>
+    <div class="topbar">
+      <div class="title-block">
+        <span class="terminal-mark" aria-hidden="true">&#10035;</span>
+        <div><h1>EQIDV2 <span style="font-weight:400;color:var(--terminal-muted)">/ Trading Terminal</span></h1>
+        <div class="sub" id="info">Connecting to recorded strategy evidence...</div></div>
+      </div>
+      <div class="top-actions">
+        <a class="dashboard-flow-link" id="dashboardFlowLink" href="/dashboard-flow" target="_blank" rel="noopener noreferrer" title="Open Dashboard Flow in a new tab">Dashboard Flow &#8599;</a>
+        <button id="refreshBtn" onclick="loadNow()" title="Refresh dashboard now">Refresh</button>
+        <button type="button" id="autoRefreshBtn" title="Pause automatic refresh while reading" aria-pressed="false">Pause updates</button>
+        <button type="button" class="theme-toggle" id="themeToggle" title="Switch dashboard theme">Theme</button>
+      </div>
+    </div>
+    <nav class="terminal-nav" aria-label="Terminal workspace">
+      <button type="button" data-terminal-view="cockpit" aria-pressed="true" aria-controls="liveCockpit">Live &amp; Paper</button>
+      <button type="button" data-terminal-view="operations" aria-pressed="false" aria-controls="terminalOperations">Operations &amp; logs</button>
+      <span class="terminal-nav-note">V13-V10-G / RECORDED EVIDENCE / IST</span>
+    </nav>
+  </header>
+  <div class="refresh-notice" id="refreshNotice" role="status" hidden></div>
+  <main class="terminal-workspace">
+    <section id="liveCockpit" aria-label="V13-V10-G live and paper monitoring"><p>Loading trading evidence...</p></section>
+    <section id="terminalOperations" aria-label="Operations and logs" hidden>
+      <div class="operations-heading"><div><h2>Operations &amp; logs</h2><p>Worker health, data coverage and the existing session controls.</p></div><div class="operations-tools">
+        <button type="button" class="theme-toggle" id="timelineToggle" title="Show or hide timeline">Timeline</button>
+        <button type="button" class="theme-toggle" id="densityToggle" title="Switch dashboard density">Comfort</button>
+        <button type="button" class="filter-chip" id="problemsFirstBtn" title="Keep pinned and problem cards at the top">Problems First</button>
+        <button type="button" class="restart-all-btn" id="restartAllBtn"
+                title="Restart all managed sessions (sequential 3-step escalation per session)">
+          <span class="restart-icon" aria-hidden="true">&#x21BB;</span>
+          <span class="restart-all-label">Restart All</span>
+        </button>
+      </div></div>
+    <div class="health-strip" id="healthSummary"></div>
+    <div class="toolbar">
+      <div class="toolbar-main">
+        <input class="search-input" id="cardSearch" type="search" placeholder="Search session, ticker, status, file..." autocomplete="off" />
+        <div class="filter-bar" id="statusFilters"></div>
+      </div>
+      <div class="toolbar-controls">
+        <div class="toolbar-note" id="refreshStatus">Updates every 15s</div>
+      </div>
+    </div>
+    <div class="section-nav" id="sectionNav"></div>
+    <div class="timeline-panel" id="todayTimeline"></div>
+  <div class="wrap" id="cards"></div>
+    </section>
+  </main>
+  <footer class="terminal-footer"><span>EQIDV2 / Every observation has a source.</span><span>Session evidence &amp; order monitoring</span></footer>
+
+  <style>__FNO_MONITOR_CSS__</style>
+  <script>__FNO_MONITOR_JS__</script>
+  <script>__OPS_STATE_JS__</script>
+  <script>__COCKPIT_JS__</script>
+  <script>
+    const LOG_ORDER = [
+      "nifty_guard_fetch_v16_5min",
+      "eod_5min_data",
+      "kiteticker_5min_data",
+      "eod_1min_data",
+      "fno_oi_universe",
+      "fno_oi_fetch_5min_fast_production",
+      "fno_oi_fetch_5min",
+      "fno_oi_fetch_5min_fast_shadow",
+      "fno_options_atm_fetch_5min",
+      "fno_oi_feature_ranker",
+      "fno_v13_v10_g_scanner_5min",
+      "fno_v13_v10_g_equity_1min_feed",
+      "fno_v13_v10_g_confirmation_1min",
+      "fno_v13_v10_g_live_long",
+      "fno_v13_v10_g_live_short",
+      "fno_v13_v10_g_trade_logger",
+      "fno_v13_v10_g_net_result",
+      "live_signals_csv_fno_id_v13_v10_g_short",
+      "live_signals_csv_fno_id_v13_v10_g_long",
+      "live_kite_trades_csv_fno_id_v13_v10_g",
+      "kite_trade_fno_id_v13_v10_g",
+      "fno_v13_v10_g_options_live_long",
+      "fno_v13_v10_g_options_live_short",
+      "fno_v13_v10_g_options_trade_logger",
+      "fno_v13_v10_g_options_net_result",
+      "fno_v8_combined_paper",
+      "fno_v10_v11_v12_paper",
+      "fno_v10_paper",
+      "fno_v11_paper",
+      "fno_v12_paper",
+      "fno_oi_eod_qc",
+      "fundamental_price_action_v1",
+      "live_signals_csv_fpa_v1_short",
+      "live_signals_csv_fpa_v1_long",
+      "live_papertrade_result_csv_fpa_v1",
+      "paper_trade_fpa_v1",
+      "collect_filtered_stock_data",
+      "live_combined_csv_id_5min_v7_persistent",
+      "signal_discovery_v7_5min_id",
+      "candidate_tickers_v7_5min_id",
+      "entry_engine_1min_v5_id",
+      "v7_live_5min_monitor",
+      "v7_research_layer",
+      "daily_live_v7_research_session",
+      "v7_nse_id_cost",
+      "v7_walkforward_gate",
+      "v7_causality_audit",
+      "v7_gate_promotion",
+      "v7_qualification",
+      "v7_pre_momentum_filter_analyst",
+      "v7_full_pipeline_entry_research",
+      "v7_full_pipeline_entry_research_v2",
+      "v7_shadow_candidate_monitor",
+      "v11_lab_shadow_monitor",
+      "live_signals_csv_id_5min_v7_short",
+      "live_signals_csv_id_5min_v7_long",
+      "live_papertrade_result_csv_id_5min_v7",
+      "paper_trade_id_5min_v7",
+      "live_kite_trades_csv_id_5min_v7",
+      "kite_trade_id_5min_v7",
+      "data_for_backtesting",
+      "backtesting_result_v13_v10_g",
+      "fno_v13_v10_g_research_data_quality",
+      "fno_v13_v10_g_research_dataset",
+      "fno_v13_v10_g_research_baseline",
+      "fno_v13_v10_g_research_attribution",
+      "fno_v13_v10_g_research_regimes",
+      "fno_v13_v10_g_research_predictions",
+      "fno_v13_v10_g_research_walkforward",
+      "fno_v13_v10_g_research_shadow",
+      "fno_v13_v10_g_observability_market_regime",
+      "fno_v13_v10_g_observability_selection_funnel",
+      "fno_v13_v10_g_observability_entry_execution",
+      "fno_v13_v10_g_observability_live_finalized_drift",
+      "fno_v13_v10_g_observability_pnl_attribution",
+      "fno_v13_v10_g_observability_regime_profitability",
+      "fno_v13_v10_g_research_improvements",
+      "signal_early_engine_v16_5min",
+      "pending_signals_v16_5min",
+      "pending_data_fetcher_v16_5min",
+      "detection_engine_v16_5min",
+      "detected_signals_v16_5min",
+      "live_signals_csv_v16_5min_short",
+      "live_signals_csv_v16_5min_long",
+      "live_kite_trades_csv_v16_5min",
+      "kite_trade_v16_5min",
+      "paper_trade_v16_5min",
+      "live_papertrade_result_csv_v16_5min",
+      "live_combined_csv_v16_5min",
+      "eod_15min_data",
+      "nifty_guard_fetch_v15",
+      "live_combined_csv_v15_new_persistent",
+      "live_signals_csv_v15_new_short",
+      "live_signals_csv_v15_new_long",
+      "live_kite_trades_csv_v15",
+      "kite_trade_v15",
+      "paper_trade_v15",
+      "live_papertrade_result_csv_v15",
+      "kite_positions_day_today_csv",
+      "kite_holdings_today_csv",
+      "preopen_healthcheck",
+      "authentication_v2",
+      "eod_1540_update"
+    ];
+    const LOG_TITLES = {
+      "dashboard_flow_opening_observer": "G3 LIVE / PAPER opening-data observer",
+      "dashboard_flow_opening_history": "G3 BACKTEST opening-data recovery",
+      "signal_early_engine_v16_5min":  "V16 5min Signal Early Engine (SEE)",
+      "pending_signals_v16_5min":      "V16 5min Pending Pool CSV",
+      "pending_data_fetcher_v16_5min": "V16 5min Pending Data Fetcher",
+      "detection_engine_v16_5min":     "V16 5min Detection Engine (Confirmation)",
+      "detected_signals_v16_5min":     "V16 5min Detected Signals CSV",
+      "eod_5min_data": "Live Data Fetch (5mins)",
+      "kiteticker_5min_data": "Live Data kiteticker Fetch (5mins)",
+      "eod_1min_data": "Live Data Fetch (1min)",
+      "eod_15min_data": "Live Data Fetch (15mins)",
+      "fno_oi_universe": "FnO Near-Month Futures Universe",
+      "fno_oi_fetch_5min_fast_production": "FnO Live 5-Minute Futures OI Fetch (Fast Production)",
+      "fno_options_atm_fetch_5min": "FnO ATM CE/PE Options Fetch (5-Minute + 1-Minute)",
+      "fno_oi_fetch_5min": "FnO Live 5-Minute Futures OI Fetch (Old)",
+      "fno_oi_fetch_5min_fast_shadow": "FnO Fast Shadow OI Validator",
+      "fno_oi_feature_ranker": "FnO OI Gainers, Losers & Activity Rankings",
+      "fno_v13_v10_g_scanner_5min": "FnO V13-V10-G Equity 5-Minute + Futures OI Scanner",
+      "fno_v13_v10_g_equity_1min_feed": "FnO V13-V10-G Durable Completed Equity 1-Minute Feed",
+      "fno_v13_v10_g_confirmation_1min": "FnO V13-V10-G Candidate Equity 1-Minute Confirmation",
+      "fno_v13_v10_g_live_long": "FnO V13-V10-G LONG Paper Entry Session",
+      "fno_v13_v10_g_live_short": "FnO V13-V10-G SHORT Paper Entry Session",
+      "fno_v13_v10_g_trade_logger": "FnO V13-V10-G Continuous Paper Trade Log",
+      "fno_v13_v10_g_net_result": "FnO V13-V10-G Paper Net Result",
+      "live_signals_csv_fno_id_v13_v10_g_short": "FnO V13-V10-G Live Entries CSV Short",
+      "live_signals_csv_fno_id_v13_v10_g_long": "FnO V13-V10-G Live Entries CSV Long",
+      "live_kite_trades_csv_fno_id_v13_v10_g": "FnO V13-V10-G Live Kite Trades CSV",
+      "kite_trade_fno_id_v13_v10_g": "FnO V13-V10-G Live Trade Runner Log",
+      "fno_v13_v10_g_options_live_long": "Options V13-V10-G LONG ATM CE Buy Paper Entry Session",
+      "fno_v13_v10_g_options_live_short": "Options V13-V10-G SHORT ATM PE Buy Paper Entry Session",
+      "fno_v13_v10_g_options_trade_logger": "Options V13-V10-G Continuous Paper Trade Log",
+      "fno_v13_v10_g_options_net_result": "Options V13-V10-G Paper Net Result",
+      "fno_v8_combined_paper": "FnO V8-Combined Paper Shadow Session",
+      "fno_v10_v11_v12_paper": "FnO V10/V11/V12 Papertrade - Shared Session",
+      "fno_v10_paper": "FnO V10 Papertrade View",
+      "fno_v11_paper": "FnO V11 Papertrade View",
+      "fno_v12_paper": "FnO V12 Papertrade View",
+      "fno_oi_eod_qc": "FnO EOD Data Quality Control",
+      "live_combined_csv_v16_5min": "V16 5min Scanner (anti-exhaustion, 5min slots)",
+      "live_signals_csv_v16_5min_short": "V16 5min Signals SHORT",
+      "live_signals_csv_v16_5min_long": "V16 5min Signals LONG",
+      "live_papertrade_result_csv_v16_5min": "V16 5min Papertrade Results",
+      "live_kite_trades_csv_v16_5min": "V16 5min Live Kite Trades CSV",
+      "paper_trade_v16_5min": "V16 5min Papertrade Runner Log",
+      "kite_trade_v16_5min": "V16 5min Live Trade Runner Log",
+      "live_combined_csv_v15_new_persistent": "Live combined (short+long) V15 new persistent scanner",
+      "live_combined_csv_id_5min_v7_persistent": "Legacy V7 Scanner",
+      "signal_discovery_v7_5min_id": "Signal discovery v7 5mins ID",
+      "candidate_tickers_v7_5min_id": "Candidate tickers",
+      "entry_engine_1min_v5_id": "Entry engine 1min v7 ID",
+      "v7_live_5min_monitor": "FnO EQ ID monitoring",
+      "v7_research_layer": "Suggestions v7 live research",
+      "daily_live_v7_research_session": "Daily Live V7 Research",
+      "fundamental_price_action_v1": "fundamental_price_action_v1",
+      "live_signals_csv_fpa_v1_short": "Live Entries CSV FPA v1 Short",
+      "live_signals_csv_fpa_v1_long": "Live Entries CSV FPA v1 Long",
+      "live_papertrade_result_csv_fpa_v1": "V1 FPA Papertrade Results (Net)",
+      "paper_trade_fpa_v1": "V1 FPA Papertrade Runner Log (Net)",
+      "collect_filtered_stock_data": "Collect Filtered Stock Data (NSE)",
+      "v7_nse_id_cost": "V7 NSE ID Cost",
+      "v7_walkforward_gate": "V7 Walkforward Gate",
+      "v7_causality_audit": "V7 Causality Audit",
+      "v7_gate_promotion": "V7 Gate Promotion (P0-17)",
+      "v7_qualification": "V7 Qualification (P1-22)",
+      "v7_pre_momentum_filter_analyst": "v7 pre momentum filter analyst",
+      "v7_full_pipeline_entry_research": "V7 Full-Pipeline Entry Research",
+      "v7_full_pipeline_entry_research_v2": "V7 Full-Pipeline Entry Research v2",
+      "v7_shadow_candidate_monitor": "V7 Shadow Candidate Monitor",
+      "v11_lab_shadow_monitor": "V11 Lab Shadow Monitor",
+      "live_signals_csv_id_5min_v7_short": "Live Entries CSV ID 5mins v7 Short",
+      "live_signals_csv_id_5min_v7_long": "Live Entries CSV ID 5mins v7 Long",
+      "live_papertrade_result_csv_id_5min_v7": "V7 ID 5min Papertrade Results (Net)",
+      "paper_trade_id_5min_v7": "V7 ID 5min Papertrade Runner Log (Net)",
+      "live_kite_trades_csv_id_5min_v7": "V7 ID 5min Live Kite Trades CSV",
+      "kite_trade_id_5min_v7": "V7 ID 5min Live Trade Runner Log",
+      "data_for_backtesting": "Data for backtesting",
+      "backtesting_result_v13_v10_g": "Backtesting result v13-v10-G",
+      "v13_research_run_vintage": "V13 Research Run Vintage Gate",
+      "fno_v13_v10_g_research_data_quality": "V13-V10-G Research Data Quality",
+      "fno_v13_v10_g_research_dataset": "V13-V10-G Historical Research Dataset",
+      "fno_v13_v10_g_research_baseline": "V13-V10-G Frozen Baseline Replay",
+      "fno_v13_v10_g_research_attribution": "V13-V10-G Decision Attribution",
+      "fno_v13_v10_g_research_regimes": "V13-V10-G Market Regimes & Drift",
+      "fno_v13_v10_g_research_predictions": "V13-V10-G Prediction Quality & Calibration",
+      "fno_v13_v10_g_research_walkforward": "V13-V10-G Walk-Forward & Holdout Evaluation",
+      "fno_v13_v10_g_research_shadow": "V13-V10-G Prospective Shadow & Promotion Gate",
+      "fno_v13_v10_g_observability_market_regime": "V13-V10-G Market Regime",
+      "fno_v13_v10_g_observability_selection_funnel": "V13-V10-G Selection Funnel",
+      "fno_v13_v10_g_observability_entry_execution": "V13-V10-G Entry and Execution",
+      "fno_v13_v10_g_observability_live_finalized_drift": "V13-V10-G Live vs Finalized Drift",
+      "fno_v13_v10_g_observability_pnl_attribution": "V13-V10-G P&L Attribution",
+      "fno_v13_v10_g_observability_regime_profitability": "V13-V10-G Regime Profitability",
+      "fno_v13_v10_g_research_improvements": "V13 Evidence-Based Improvement Opportunities",
+      "nifty_guard_fetch_v15": "NIFTY Fetch V15",
+      "nifty_guard_fetch_v16_5min": "NIFTY Fetch 5min",
+      "live_signals_csv_v15_new_short": "Live Entries CSV V15 Short New",
+      "live_signals_csv_v15_new_long": "Live Entries CSV V15 Long",
+      "live_papertrade_result_csv_v15": "Live Papertrade Result CSV V15",
+      "live_kite_trades_csv_v15": "Live Kite Trades CSV V15",
+      "kite_holdings_today_csv": "Kite Holdings (Today)",
+      "kite_positions_day_today_csv": "Kite Positions (Daily, Today)",
+      "authentication_v2": "Auth_V2",
+      "paper_trade_v15": "Papertrade Runner View V15",
+      "preopen_healthcheck": "Preopen Healthcheck",
+      "kite_trade_v15": "Live Kite Trades Log V15",
+      "eod_1540_update": "Live EOD Data Fetch"
+    };
+    const ACTIVE_GROUPS = [
+      {
+        key: "market",
+        nav: "Live Market",
+        title: "Live Market Data",
+        accent: "market",
+        ids: [
+          "nifty_guard_fetch_v16_5min",
+          "eod_5min_data",
+          "kiteticker_5min_data",
+          "eod_1min_data"
+        ]
+      },
+      {
+        key: "fno",
+        nav: "FnO",
+        title: "FnO",
+        accent: "market",
+        ids: [
+          "v7_live_5min_monitor",
+          "fno_oi_universe",
+          "fno_oi_fetch_5min_fast_production",
+          "fno_oi_fetch_5min",
+          "fno_oi_fetch_5min_fast_shadow",
+          "fno_options_atm_fetch_5min",
+          "fno_oi_feature_ranker",
+          "fno_v13_v10_g_scanner_5min",
+          "fno_v13_v10_g_equity_1min_feed",
+          "fno_v13_v10_g_confirmation_1min",
+          "fno_v13_v10_g_live_long",
+          "fno_v13_v10_g_live_short",
+          "fno_v13_v10_g_trade_logger",
+          "fno_v13_v10_g_net_result",
+          "live_signals_csv_fno_id_v13_v10_g_short",
+          "live_signals_csv_fno_id_v13_v10_g_long",
+          "live_kite_trades_csv_fno_id_v13_v10_g",
+          "kite_trade_fno_id_v13_v10_g",
+          "fno_v13_v10_g_options_live_long",
+          "fno_v13_v10_g_options_live_short",
+          "fno_v13_v10_g_options_trade_logger",
+          "fno_v13_v10_g_options_net_result",
+          "fno_oi_eod_qc"
+        ],
+        subgroups: [
+          {
+            key: "fno-v13-v10-g-live-kite-qty1",
+            title: "FnO V13-V10-G Live Kite - Quantity 1",
+            note: "one task | fixed quantity 1 | SHORT | LONG | trades | runner log",
+            ids: [
+              "live_signals_csv_fno_id_v13_v10_g_short",
+              "live_signals_csv_fno_id_v13_v10_g_long",
+              "live_kite_trades_csv_fno_id_v13_v10_g",
+              "kite_trade_fno_id_v13_v10_g"
+            ]
+          },
+          {
+            key: "options-v13-v10-g-paper",
+            title: "Options V13-V10-G Paper Trading",
+            note: "underlying LONG buys ATM CE | underlying SHORT buys ATM PE | one exchange lot | SL 30% | target 40.4%",
+            ids: [
+              "fno_v13_v10_g_options_live_long",
+              "fno_v13_v10_g_options_live_short",
+              "fno_v13_v10_g_options_trade_logger",
+              "fno_v13_v10_g_options_net_result"
+            ]
+          }
+        ]
+      },
+      {
+        key: "forensic-positional",
+        nav: "Forensic",
+        title: "core forensic_and_intra_positional",
+        accent: "research",
+        ids: [
+          "fundamental_price_action_v1",
+          "live_signals_csv_fpa_v1_short",
+          "live_signals_csv_fpa_v1_long",
+          "live_papertrade_result_csv_fpa_v1",
+          "paper_trade_fpa_v1",
+          "collect_filtered_stock_data"
+        ]
+      },
+      {
+        key: "v7",
+        nav: "V7 Flow",
+        title: "Core V7 Live Flow",
+        accent: "v7",
+        ids: [
+          "signal_discovery_v7_5min_id",
+          "candidate_tickers_v7_5min_id",
+          "entry_engine_1min_v5_id",
+          "live_signals_csv_id_5min_v7_short",
+          "live_signals_csv_id_5min_v7_long",
+          "live_papertrade_result_csv_id_5min_v7",
+          "paper_trade_id_5min_v7",
+          "live_kite_trades_csv_id_5min_v7",
+          "kite_trade_id_5min_v7"
+        ]
+      },
+      {
+        key: "backtesting",
+        nav: "Backtesting",
+        title: "Data & Backtesting",
+        accent: "research",
+        ids: [
+          "data_for_backtesting",
+          "backtesting_result_v13_v10_g",
+          "v13_research_run_vintage"
+        ]
+      },
+      {
+        key: "opening-monitoring",
+        nav: "Opening data",
+        title: "G3 Opening Data Monitoring",
+        accent: "research",
+        ids: ["dashboard_flow_opening_observer", "dashboard_flow_opening_history"]
+      },
+      {
+        key: "research",
+        nav: "Research",
+        title: "Research & Suggestions",
+        accent: "research",
+        ids: [
+          "v7_gate_promotion",
+          "v7_qualification",
+          "v7_research_layer",
+          "daily_live_v7_research_session",
+          "v7_nse_id_cost",
+          "v7_walkforward_gate",
+          "v7_causality_audit",
+          "v7_pre_momentum_filter_analyst",
+          "v7_full_pipeline_entry_research",
+          "v7_full_pipeline_entry_research_v2",
+          "v7_shadow_candidate_monitor",
+          "v11_lab_shadow_monitor",
+          "fno_v13_v10_g_research_data_quality",
+          "fno_v13_v10_g_research_dataset",
+          "fno_v13_v10_g_research_baseline",
+          "fno_v13_v10_g_research_attribution",
+          "fno_v13_v10_g_research_regimes",
+          "fno_v13_v10_g_research_predictions",
+          "fno_v13_v10_g_research_walkforward",
+          "fno_v13_v10_g_research_shadow",
+          "fno_v13_v10_g_observability_market_regime",
+          "fno_v13_v10_g_observability_selection_funnel",
+          "fno_v13_v10_g_observability_entry_execution",
+          "fno_v13_v10_g_observability_live_finalized_drift",
+          "fno_v13_v10_g_observability_pnl_attribution",
+          "fno_v13_v10_g_observability_regime_profitability",
+          "fno_v13_v10_g_research_improvements"
+        ],
+        subgroups: [
+          {
+            key: "v13-v10-g-strategy-research-prediction",
+            title: "V13-V10-G Strategy Research & Prediction",
+            note: "8 read-only evidence views | frozen baseline unchanged | no trading controls",
+            ids: [
+              "fno_v13_v10_g_research_data_quality",
+              "fno_v13_v10_g_research_dataset",
+              "fno_v13_v10_g_research_baseline",
+              "fno_v13_v10_g_research_attribution",
+              "fno_v13_v10_g_research_regimes",
+              "fno_v13_v10_g_research_predictions",
+              "fno_v13_v10_g_research_walkforward",
+              "fno_v13_v10_g_research_shadow"
+            ]
+          },
+          {
+            key: "observability",
+            title: "Observability",
+            note: "6 read-only observability views | no trading controls",
+            ids: [
+              "fno_v13_v10_g_observability_market_regime",
+              "fno_v13_v10_g_observability_selection_funnel",
+              "fno_v13_v10_g_observability_entry_execution",
+              "fno_v13_v10_g_observability_live_finalized_drift",
+              "fno_v13_v10_g_observability_pnl_attribution",
+              "fno_v13_v10_g_observability_regime_profitability"
+            ]
+          },
+          {
+            key: "v13-improvement-opportunities",
+            title: "V13 Improvement Opportunities",
+            note: "Evidence, proposed experiments and validation requirements | read-only",
+            ids: [
+              "fno_v13_v10_g_research_improvements"
+            ]
+          }
+        ]
+      },
+      {
+        key: "v16",
+        nav: "V16",
+        title: "V16 / Parallel Strategy",
+        accent: "v16",
+        ids: [
+          "signal_early_engine_v16_5min",
+          "pending_signals_v16_5min",
+          "pending_data_fetcher_v16_5min",
+          "detection_engine_v16_5min",
+          "detected_signals_v16_5min",
+          "live_signals_csv_v16_5min_short",
+          "live_signals_csv_v16_5min_long",
+          "live_kite_trades_csv_v16_5min",
+          "kite_trade_v16_5min",
+          "paper_trade_v16_5min",
+          "live_papertrade_result_csv_v16_5min",
+          "live_combined_csv_v16_5min"
+        ]
+      },
+      {
+        key: "admin",
+        nav: "Admin",
+        title: "Admin & Exports",
+        accent: "admin",
+        ids: [
+          "eod_15min_data",
+          "kite_positions_day_today_csv",
+          "kite_holdings_today_csv",
+          "preopen_healthcheck",
+          "authentication_v2",
+          "eod_1540_update"
+        ]
+      }
+    ];
+    // Keep explicitly staged feeds and paper-shadow sessions in their
+    // operational section even while their scheduled tasks are disabled.
+    // Only the section assignment is locked; this does not make them runnable.
+    const SECTION_LOCKED_DISABLED_IDS = new Set([
+      "kiteticker_5min_data",
+      "eod_1min_data"
+    ]);
+    // Retired paper views remain available to the backend audit/monitoring
+    // code, but are intentionally absent from every dashboard UI surface.
+    const DASHBOARD_HIDDEN_IDS = new Set([
+      "fno_v8_combined_paper",
+      "fno_v10_v11_v12_paper",
+      "fno_v10_paper",
+      "fno_v11_paper",
+      "fno_v12_paper"
+    ]);
+    const SESSION_TIMELINE = [
+      { time: "08:50", id: "fno_oi_universe", label: "FnO Universe" },
+      { time: "08:30", id: "authentication_v2", label: "Auth" },
+      { time: "08:55", id: "dashboard_flow_opening_observer", label: "G3 LIVE / PAPER opening observer (reporting only)" },
+      { time: "09:00", id: "eod_5min_data", label: "Live Data Fetch 5min" },
+      { time: "09:00", id: "kiteticker_5min_data", label: "Live Data KiteTicker Fetch 5min (shadow monitoring)" },
+      { time: "09:05", id: "fno_oi_fetch_5min_fast_production", label: "FnO Futures OI Fetch (Fast Production)" },
+      { time: "09:07", id: "fno_options_atm_fetch_5min", label: "FnO ATM Options 5m + 1m Fetch" },
+      { time: "09:05", id: "fno_oi_fetch_5min", label: "FnO Futures OI Fetch (Old)" },
+      { time: "09:06", id: "fno_oi_fetch_5min_fast_shadow", label: "FnO Fast Shadow OI Validator" },
+      { time: "09:15", id: "fno_oi_feature_ranker", label: "FnO OI Rankings" },
+      { time: "09:15", id: "fno_v13_v10_g_scanner_5min", label: "FnO V13-V10-G 5m Scanner" },
+      { time: "09:15", id: "fno_v13_v10_g_equity_1min_feed", label: "FnO V13-V10-G Durable Completed 1m Feed" },
+      { time: "09:15", id: "fno_v13_v10_g_confirmation_1min", label: "FnO V13-V10-G 1m Confirmation" },
+      { time: "09:15", id: "fno_v13_v10_g_live_long", label: "FnO V13-V10-G LONG Paper Entries" },
+      { time: "09:15", id: "fno_v13_v10_g_live_short", label: "FnO V13-V10-G SHORT Paper Entries" },
+      { time: "09:15", id: "fno_v13_v10_g_trade_logger", label: "FnO V13-V10-G Paper Trade Log" },
+      { time: "09:15", id: "fno_v13_v10_g_net_result", label: "FnO V13-V10-G Paper Net Result" },
+      { time: "09:15", id: "kite_trade_fno_id_v13_v10_g", label: "FnO V13-V10-G Live Kite Qty 1" },
+      { time: "09:15", id: "fno_v13_v10_g_options_live_long", label: "Options V13-V10-G LONG ATM CE Paper Entries" },
+      { time: "09:15", id: "fno_v13_v10_g_options_live_short", label: "Options V13-V10-G SHORT ATM PE Paper Entries" },
+      { time: "09:15", id: "fno_v13_v10_g_options_trade_logger", label: "Options V13-V10-G Paper Trade Log" },
+      { time: "09:15", id: "fno_v13_v10_g_options_net_result", label: "Options V13-V10-G Paper Net Result" },
+      { time: "09:17", id: "eod_1min_data", label: "Live Data Fetch 1min" },
+      { time: "09:15", id: "nifty_guard_fetch_v16_5min", label: "NIFTY Fetch 5min" },
+      { time: "09:15", id: "fundamental_price_action_v1", label: "fundamental_price_action_v1" },
+      { time: "09:30", id: "collect_filtered_stock_data", label: "Collect Filtered Stock Data" },
+      { time: "09:17", id: "v7_research_layer", label: "V7 Research Layer" },
+      { time: "09:17", id: "daily_live_v7_research_session", label: "Daily Live V7 Research" },
+      { time: "09:17", id: "v7_pre_momentum_filter_analyst", label: "V7 Pre-Momentum Analyst" },
+      { time: "09:20", id: "signal_discovery_v7_5min_id", label: "Signal Discovery" },
+      { time: "09:21", id: "entry_engine_1min_v5_id", label: "Entry Engine" },
+      { time: "09:22", id: "paper_trade_id_5min_v7", label: "Papertrade TRUE" },
+      { time: "09:22", id: "kite_trade_id_5min_v7", label: "Live Trade FALSE" },
+      { time: "15:40", id: "fno_oi_eod_qc", label: "FnO EOD QC" },
+      { time: "15:45", id: "data_for_backtesting", label: "Data for Backtesting" },
+      { time: "16:20", id: "backtesting_result_v13_v10_g", label: "Backtesting result v13-v10-G" },
+      { time: "16:05", id: "v7_nse_id_cost", label: "V7 NSE ID Cost" },
+      { time: "16:05", id: "v7_causality_audit", label: "V7 Causality Audit" },
+      { time: "16:15", id: "v7_research_layer", label: "Suggestions v7 Research" },
+      { time: "16:20", id: "v7_walkforward_gate", label: "V7 Walkforward Gate" },
+      { time: "16:20", id: "v7_full_pipeline_entry_research", label: "Full-Pipeline Entry Research" },
+      { time: "16:25", id: "v7_gate_promotion", label: "V7 Gate Promotion" },
+      { time: "16:30", id: "v7_qualification", label: "V7 Qualification" },
+      { time: "16:30", id: "v7_full_pipeline_entry_research_v2", label: "Full-Pipeline Entry Research v2" },
+      { time: "16:45", id: "v7_shadow_candidate_monitor", label: "V7 Shadow Candidate Monitor" },
+      { time: "16:55", id: "v11_lab_shadow_monitor", label: "V11 Lab Shadow Monitor" },
+      { time: "17:00", id: "dashboard_flow_opening_history", label: "G3 BACKTEST opening recovery (reporting only)" },
+      { time: "17:00", id: "", label: "Dashboard Close" }
+    ];
+    const API_TOKEN = __API_TOKEN_JSON__;
+    let FULLSCREEN_ID = "";
+    let DISABLED_SECTION_MINIMIZED = localStorage.getItem("eqidv2_disabled_section_minimized") === "1";
+    let ACTIVE_FILTER = localStorage.getItem("eqidv2_dashboard_filter") || "all";
+    let SEARCH_QUERY = localStorage.getItem("eqidv2_dashboard_search") || "";
+    let PROBLEMS_FIRST = localStorage.getItem("eqidv2_problems_first") === "1";
+    let DASHBOARD_THEME = localStorage.getItem("eqidv2_dashboard_theme") || "light";
+    let TIMELINE_COLLAPSED = localStorage.getItem("eqidv2_timeline_collapsed") === "1";
+    let DASHBOARD_DENSITY = localStorage.getItem("eqidv2_dashboard_density") || "comfort";
+    let AUTO_REFRESH_PAUSED = sessionStorage.getItem("eqidv2_dashboard_paused") === "1";
+    let ACTIVE_SECTION = "";
+    let LAST_SUCCESSFUL_REFRESH = "";
+    function readJsonLocalStorage(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : fallback;
+      } catch (_) {
+        return fallback;
+      }
+    }
+    localStorage.removeItem("eqidv2_log_hidden_by_card");
+    let LOG_HIDDEN_BY_CARD = {};
+    let LOG_EXPANDED_BY_CARD = readJsonLocalStorage("eqidv2_log_expanded_by_card", {});
+    let PINNED_CARDS = readJsonLocalStorage("eqidv2_pinned_cards", {});
+    const FILTERS = [
+      { id: "all", label: "All" },
+      { id: "problem", label: "Problem" },
+      { id: "watch", label: "Watch" },
+      { id: "v7", label: "V7" },
+      { id: "v16", label: "V16" },
+      { id: "fno", label: "FnO" },
+      { id: "paper", label: "Paper" },
+      { id: "live", label: "Live" },
+      { id: "research", label: "Research" },
+      { id: "disabled", label: "Disabled" }
+    ];
+    const TABLE_SORT_STATE = {};
+    // Cards whose tail is a published markdown report: rendered as meta chips,
+    // collapsed invariant notes and real sortable tables instead of raw text.
+    const MD_REPORT_CARDS = new Set([
+      "fno_oi_fetch_5min_fast_production",
+      "fno_options_atm_fetch_5min",
+      "fno_oi_fetch_5min_fast_shadow",
+      "fno_v13_v10_g_scanner_5min",
+      "fno_v13_v10_g_equity_1min_feed",
+      "fno_v13_v10_g_confirmation_1min",
+      "fno_v13_v10_g_live_long",
+      "fno_v13_v10_g_live_short",
+      "fno_v13_v10_g_trade_logger",
+      "fno_v13_v10_g_net_result",
+      "fno_v13_v10_g_options_live_long",
+      "fno_v13_v10_g_options_live_short",
+      "fno_v13_v10_g_options_trade_logger",
+      "fno_v13_v10_g_options_net_result",
+      "fno_v8_combined_paper",
+      "fno_v10_v11_v12_paper",
+      "fno_v10_paper",
+      "fno_v11_paper",
+      "fno_v12_paper",
+      "v7_live_5min_monitor",
+      "v13_research_run_vintage",
+      "backtesting_result_v13_v10_g",
+      "fno_v13_v10_g_research_data_quality",
+      "fno_v13_v10_g_research_dataset",
+      "fno_v13_v10_g_research_baseline",
+      "fno_v13_v10_g_research_attribution",
+      "fno_v13_v10_g_research_regimes",
+      "fno_v13_v10_g_research_predictions",
+      "fno_v13_v10_g_research_walkforward",
+      "fno_v13_v10_g_research_shadow",
+      "fno_v13_v10_g_observability_market_regime",
+      "fno_v13_v10_g_observability_selection_funnel",
+      "fno_v13_v10_g_observability_entry_execution",
+      "fno_v13_v10_g_observability_live_finalized_drift",
+      "fno_v13_v10_g_observability_pnl_attribution",
+      "fno_v13_v10_g_observability_regime_profitability",
+      "fno_v13_v10_g_research_improvements"
+    ]);
+    const FNO_MULTI_PAPER_CARDS = new Set([
+      "fno_v10_v11_v12_paper",
+      "fno_v10_paper",
+      "fno_v11_paper",
+      "fno_v12_paper"
+    ]);
+    const RESTARTABLE_CARDS = new Set([
+      "backtesting_result_v13_v10_g",
+      "nifty_guard_fetch_v16_5min",
+      "eod_5min_data",
+      "eod_1min_data",
+      "fno_oi_fetch_5min_fast_production",
+      "fno_options_atm_fetch_5min",
+      "fno_oi_fetch_5min",
+      "fno_oi_fetch_5min_fast_shadow",
+      "fno_oi_feature_ranker",
+      "fno_v13_v10_g_scanner_5min",
+      "fno_v13_v10_g_equity_1min_feed",
+      "fno_v13_v10_g_confirmation_1min",
+      "fno_v13_v10_g_live_long",
+      "fno_v13_v10_g_live_short",
+      "fno_v13_v10_g_trade_logger",
+      "fno_v13_v10_g_net_result",
+      "fno_v13_v10_g_options_live_long",
+      "fno_v13_v10_g_options_live_short",
+      "fno_v13_v10_g_options_trade_logger",
+      "fno_v13_v10_g_options_net_result",
+      "fno_v10_v11_v12_paper",
+      "signal_early_engine_v16_5min",
+      "detection_engine_v16_5min",
+      "pending_data_fetcher_v16_5min",
+      "signal_discovery_v7_5min_id",
+      "entry_engine_1min_v5_id",
+      "paper_trade_id_5min_v7",
+      "v7_research_layer",
+      "daily_live_v7_research_session",
+      "v7_nse_id_cost",
+      "v7_walkforward_gate",
+      "v7_causality_audit",
+      "v7_gate_promotion",
+      "v7_qualification",
+      "v7_pre_momentum_filter_analyst",
+      "v7_full_pipeline_entry_research",
+      "v7_full_pipeline_entry_research_v2",
+      "v7_shadow_candidate_monitor",
+      "v11_lab_shadow_monitor",
+      "fundamental_price_action_v1",
+      "paper_trade_fpa_v1",
+      "kite_positions_day_today_csv",
+      "kite_holdings_today_csv",
+      "authentication_v2",
+      "preopen_healthcheck"
+    ]);
+    let ENABLED_RESTARTABLE_CARDS = new Set(RESTARTABLE_CARDS);
+    const KILL_CARD_SCOPE = {
+      "kite_trade_v16_5min": "false_v16_5min",
+      "live_kite_trades_csv_v16_5min": "false_v16_5min",
+      "kite_trade_id_5min_v7": "false_id_5min_v7",
+      "live_kite_trades_csv_id_5min_v7": "false_id_5min_v7",
+      "paper_trade_id_5min_v7": "true_id_5min_v7",
+      "live_papertrade_result_csv_id_5min_v7": "true_id_5min_v7",
+      "paper_trade_v16_5min": "true_v16_5min",
+      "live_papertrade_result_csv_v16_5min": "true_v16_5min",
+      "kite_trade_v15": "false_v15",
+      "live_kite_trades_csv_v15": "false_v15",
+      "paper_trade_v15": "true_v15",
+      "live_papertrade_result_csv_v15": "true_v15"
+    };
+
+    function applyTheme() {
+      const theme = DASHBOARD_THEME === "dark" ? "dark" : "light";
+      document.body.setAttribute("data-theme", theme);
+      const btn = document.getElementById("themeToggle");
+      if (btn) btn.textContent = theme === "dark" ? "Light" : "Dark";
+    }
+
+    function applyDensity() {
+      const allowed = new Set(["comfort", "compact", "focus"]);
+      const density = allowed.has(DASHBOARD_DENSITY) ? DASHBOARD_DENSITY : "comfort";
+      document.body.setAttribute("data-density", density);
+      const btn = document.getElementById("densityToggle");
+      if (btn) btn.textContent = density === "comfort" ? "Comfort" : (density === "compact" ? "Compact" : "Focus");
+    }
+
+    function esc(s) {
+      return (s === null || s === undefined ? "" : String(s))
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function apiUrl(path) {
+      if (!API_TOKEN) return path;
+      const sep = path.includes('?') ? '&' : '?';
+      return `${path}${sep}token=${encodeURIComponent(API_TOKEN)}`;
+    }
+
+    document.getElementById("dashboardFlowLink").href = apiUrl("/dashboard-flow");
+
+    const cockpit = window.DashboardCockpit.mount({host: document.getElementById("liveCockpit"), apiUrl});
+    cockpit.setPaused(AUTO_REFRESH_PAUSED);
+    function setTerminalView(view) {
+      const operations = view === "operations";
+      document.getElementById("liveCockpit").hidden = operations;
+      document.getElementById("terminalOperations").hidden = !operations;
+      document.querySelectorAll("[data-terminal-view]").forEach(button => {
+        button.setAttribute("aria-pressed", String(button.dataset.terminalView === (operations ? "operations" : "cockpit")));
+      });
+      sessionStorage.setItem("eqidv2_terminal_view", operations ? "operations" : "cockpit");
+      window.dispatchEvent(new Event("resize"));
+    }
+    document.querySelectorAll("[data-terminal-view]").forEach(button => button.addEventListener("click", () => setTerminalView(button.dataset.terminalView)));
+    setTerminalView(sessionStorage.getItem("eqidv2_terminal_view") || "cockpit");
+
+    function displayName(id) {
+      return LOG_TITLES[id] || id;
+    }
+
+    function normalizeText(s) {
+      return String(s || "").toLowerCase();
+    }
+
+    function rowsShownFromTail(tail) {
+      const match = String(tail || "").match(/rows_shown=(\\d+)/);
+      return match ? Number(match[1] || 0) : 0;
+    }
+
+    function isPinned(cardId) {
+      return !!PINNED_CARDS[cardId];
+    }
+
+    function setPinned(cardId, pinned) {
+      if (!cardId) return;
+      if (pinned) {
+        PINNED_CARDS[cardId] = true;
+      } else {
+        delete PINNED_CARDS[cardId];
+      }
+      localStorage.setItem("eqidv2_pinned_cards", JSON.stringify(PINNED_CARDS));
+    }
+
+    function isFailClosedWatch(status, phase) {
+      const s = String(status || "").toUpperCase();
+      const p = String(phase || "").toUpperCase();
+      return s === "BLOCKED" && ["INCOMPLETE_BY_DEADLINE", "UPSTREAM_BLOCKED"].includes(p);
+    }
+
+    function statusBadge(status, phase) {
+      const s = String(status || "").toUpperCase();
+      if (!s) return '<span class="pill">UNKNOWN</span>';
+      if (s === "SUCCESS" || s === "RUNNING") return `<span class="pill ok">${esc(s)}</span>`;
+      if (s === "STALE_HB_RUNNING") return `<span class="pill warn" title="Heartbeat stale — process may be dead">${esc(s)}</span>`;
+      if (isFailClosedWatch(s, phase) || ["RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return `<span class="pill warn">${esc(s)}</span>`;
+      if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return `<span class="pill warn">${esc(s)}</span>`;
+      if (s === "MISSING_OUTPUT") return `<span class="pill fail">${esc(s)}</span>`;
+      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return `<span class="pill info">${esc(s)}</span>`;
+      if (s === "DISABLED" || s === "NOT_SCHEDULED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "STOPPED" || s === "DONE") return `<span class="pill muted">${esc(s)}</span>`;
+      return `<span class="pill fail">${esc(s)}</span>`;
+    }
+
+    function statusBucket(status, phase) {
+      const s = String(status || "").toUpperCase();
+      if (s === "DISABLED") return "disabled";
+      if (s === "SUCCESS" || s === "RUNNING") return "ok";
+      if (isFailClosedWatch(s, phase)) return "warn";
+      if (["STALE_HB_RUNNING", "RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return "warn";
+      if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "warn";
+      if (s === "MISSING_OUTPUT") return "bad";
+      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED") return "scheduled";
+      if (s === "NOT_SCHEDULED" || s === "SKIPPED_CUTOFF" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "STOPPED" || s === "DONE") return "scheduled";
+      if (!s) return "unknown";
+      return "bad";
+    }
+
+    function isReadOnlyProfileView(item) {
+      const scope = String(item && item.status && item.status.view_scope || "").toUpperCase();
+      return item.card_kind === "view" || scope === "PROFILE" || scope === "ARTIFACT";
+    }
+
+    function renderHealthSummary(items) {
+      const counts = { ok: 0, scheduled: 0, warn: 0, bad: 0, disabled: 0, unknown: 0 };
+      let views = 0, fresh = 0, monitored = 0, liveRows = 0, paperRows = 0;
+      for (const item of (items || [])) {
+        const id = String(item.id || "");
+        if (id.includes("papertrade") || id.includes("paper_trade")) paperRows += rowsShownFromTail(item.tail);
+        if (id.includes("kite_trades") || id.includes("live_kite") || id.includes("live_signals")) liveRows += rowsShownFromTail(item.tail);
+        if (isReadOnlyProfileView(item)) { views += 1; continue; }
+        const status = item.status || {};
+        const bucket = statusBucket(status.status, status.phase);
+        counts[bucket] = (counts[bucket] || 0) + 1;
+        const age = outputFreshness(item, item.mtime);
+        if (age.monitored) { monitored += 1; if (age.cls === "ok") fresh += 1; }
+      }
+      const total = Object.values(counts).reduce((acc, n) => acc + n, 0);
+      const pill = (cls, label, value, title = "") => (
+        `<span class="health-pill ${cls}" title="${esc(title)}"><strong>${esc(String(value))}</strong>${esc(label)}</span>`
+      );
+      const html = [
+        pill("neutral", "Processes", total, "Managed processes; report and data views are counted separately"),
+        pill("neutral", "Views", views, "Read-only report, profile and data views; excluded from process health"),
+        pill("ok", "Healthy", counts.ok),
+        pill("neutral", "Scheduled / idle", counts.scheduled),
+        pill("warn", "Watch", counts.warn),
+        pill("bad", "Problem", counts.bad),
+        pill("neutral", "Disabled", counts.disabled),
+        ...(counts.unknown ? [pill("neutral", "Unknown", counts.unknown)] : []),
+        pill(fresh < monitored ? "warn" : "neutral", "Current outputs", `${fresh}/${monitored}`, "Output age for processes currently expected to update. Disabled, scheduled, completed and closed sessions are excluded."),
+        pill("neutral", "Live snippet rows", liveRows, "Rows shown in dashboard previews, including signals; these are not executed-trade counts and may overlap"),
+        pill("neutral", "Paper snippet rows", paperRows, "Rows shown in dashboard previews; these are not executed-trade counts and may overlap")
+      ].join("");
+      const el = document.getElementById("healthSummary");
+      if (el) el.innerHTML = html;
+    }
+
+    function nowHHMM() {
+      const d = new Date();
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      return `${hh}:${mm}`;
+    }
+
+    function statusClassForBucket(bucket) {
+      if (bucket === "ok") return "ok";
+      if (bucket === "warn") return "warn";
+      if (bucket === "bad") return "bad";
+      if (bucket === "disabled") return "disabled";
+      return "";
+    }
+
+    function renderTodayTimeline(itemsById) {
+      const now = nowHHMM();
+      // Disabled steps are dropped entirely: a disabled task is not part of
+      // today's session, so it should neither occupy a slot nor count toward
+      // the "steps reached" progress.
+      const visible = SESSION_TIMELINE.map((step) => {
+        const item = step.id ? (itemsById[step.id] || { status: {} }) : { status: { status: "SCHEDULED" } };
+        const rawStatus = step.id ? String((item.status && item.status.status) || "UNKNOWN").toUpperCase() : "SCHEDULED";
+        const bucket = statusBucket(rawStatus, item.status && item.status.phase);
+        return { step, rawStatus, bucket };
+      }).filter((entry) => entry.bucket !== "disabled");
+      let activeIdx = -1;
+      for (let i = 0; i < visible.length; i += 1) {
+        if (visible[i].step.time <= now) activeIdx = i;
+      }
+      const steps = visible.map((entry, idx) => {
+        const cls = [statusClassForBucket(entry.bucket), idx === activeIdx ? "is-now" : ""].filter(Boolean).join(" ");
+        const label = entry.step.label || (entry.step.id ? displayName(entry.step.id) : "Step");
+        return `
+          <div class="timeline-step ${cls}">
+            <div class="timeline-time">${esc(entry.step.time)}</div>
+            <div class="timeline-name">${esc(label)}</div>
+            <div class="timeline-status">${esc(entry.rawStatus)}</div>
+          </div>
+        `;
+      }).join("");
+      const completed = Math.max(0, activeIdx + 1);
+      const el = document.getElementById("todayTimeline");
+      if (!el) return;
+      el.classList.toggle("is-collapsed", TIMELINE_COLLAPSED);
+      el.innerHTML = `
+        <div class="timeline-head">
+          <div class="timeline-title">Today Timeline</div>
+          <div class="timeline-note">${esc(completed)} / ${esc(String(visible.length))} steps reached</div>
+        </div>
+        <div class="timeline-track">${steps}</div>
+      `;
+    }
+
+    function isLogHidden(cardId, item) {
+      if (!cardId) return false;
+      if (LOG_HIDDEN_BY_CARD[cardId]) return true;
+      if (LOG_EXPANDED_BY_CARD[cardId]) return false;
+      return false;
+    }
+
+    function setLogHidden(cardId, hidden) {
+      if (!cardId) return;
+      if (hidden) {
+        LOG_HIDDEN_BY_CARD[cardId] = true;
+        delete LOG_EXPANDED_BY_CARD[cardId];
+      } else {
+        delete LOG_HIDDEN_BY_CARD[cardId];
+        LOG_EXPANDED_BY_CARD[cardId] = true;
+      }
+      localStorage.setItem("eqidv2_log_hidden_by_card", JSON.stringify(LOG_HIDDEN_BY_CARD));
+      localStorage.setItem("eqidv2_log_expanded_by_card", JSON.stringify(LOG_EXPANDED_BY_CARD));
+    }
+
+    function sectionDomId(key) {
+      return `section-${String(key || "other").replace(/[^a-z0-9_-]/gi, "-").toLowerCase()}`;
+    }
+
+    function renderSectionNav(items) {
+      const el = document.getElementById("sectionNav");
+      if (!el) return;
+      const visible = (items || []).filter((it) => it && it.count > 0);
+      if (!visible.length) {
+        el.innerHTML = "";
+        return;
+      }
+      if (!visible.some(it => sectionDomId(it.key) === ACTIVE_SECTION)) ACTIVE_SECTION = sectionDomId(visible[0].key);
+      el.innerHTML = visible.map((it, idx) => `
+        <button type="button" class="section-jump${sectionDomId(it.key) === ACTIVE_SECTION ? " is-active" : ""}" data-section-target="${esc(sectionDomId(it.key))}" aria-pressed="${sectionDomId(it.key) === ACTIVE_SECTION}">
+          ${esc(it.label)} <strong>${esc(String(it.count))}</strong>
+        </button>
+      `).join("");
+    }
+
+    function wireSectionNav() {
+      const buttons = document.querySelectorAll("#sectionNav .section-jump");
+      buttons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.getAttribute("data-section-target") || "";
+          const target = id ? document.getElementById(id) : null;
+          if (!target) return;
+          ACTIVE_SECTION = id;
+          buttons.forEach((b) => { b.classList.remove("is-active"); b.setAttribute("aria-pressed", "false"); });
+          btn.classList.add("is-active");
+          btn.setAttribute("aria-pressed", "true");
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+    }
+
+    function cardMatchesFilter(id, item, requestedFilter) {
+      const rawFilter = requestedFilter || ACTIVE_FILTER;
+      const filter = FILTERS.some((f) => f.id === rawFilter) ? rawFilter : "all";
+      const status = item && item.status ? item.status.status : "";
+      const bucket = statusBucket(status, item && item.status ? item.status.phase : "");
+      const title = `${id} ${displayName(id)}`.toLowerCase();
+      const query = normalizeText(SEARCH_QUERY).trim();
+      if (query) {
+        const fileName = normalizeText(item && item.file_name ? item.file_name : "");
+        const derived = normalizeText(item && item.status && item.status.derived_status ? item.status.derived_status : "");
+        const haystack = `${title} ${fileName} ${normalizeText(status)} ${derived}`;
+        const terms = query.split(/\\s+/).filter(Boolean);
+        if (!terms.every((term) => haystack.includes(term))) return false;
+      }
+      if (DASHBOARD_DENSITY === "focus" && bucket !== "bad" && bucket !== "warn") return false;
+      if (filter === "all") return true;
+      if (filter === "problem") return bucket === "bad";
+      if (filter === "watch") return bucket === "warn";
+      if (filter === "disabled") return bucket === "disabled";
+      if (filter === "v7") {
+        return title.includes("v7") || title.includes("id_5min") || title.includes("5mins id");
+      }
+      if (filter === "v16") return title.includes("v16");
+      if (filter === "fno") return id.startsWith("fno_") || id === "v7_live_5min_monitor";
+      if (filter === "paper") return title.includes("paper");
+      if (filter === "live") return title.includes("live") || title.includes("kite");
+      if (filter === "research") {
+        return id.startsWith("fno_v13_v10_g_research_")
+          || id.startsWith("fno_v13_v10_g_observability_")
+          || id === "v7_research_layer"
+          || id === "daily_live_v7_research_session"
+          || id === "v7_nse_id_cost"
+          || id === "v7_walkforward_gate"
+          || id === "v7_causality_audit"
+          || id === "v7_gate_promotion"
+          || id === "v7_qualification"
+          || id === "v7_pre_momentum_filter_analyst"
+          || id === "backtesting_result_v13_v10_g"
+          || id === "data_for_backtesting";
+      }
+      return true;
+    }
+
+    function renderStatusFilters(itemsById, orderedIds) {
+      const counts = {};
+      for (const filter of FILTERS) counts[filter.id] = 0;
+      for (const id of orderedIds) {
+        const item = itemsById[id] || { status: {} };
+        for (const filter of FILTERS) {
+          if (cardMatchesFilter(id, item, filter.id)) counts[filter.id] += 1;
+        }
+      }
+      const el = document.getElementById("statusFilters");
+      if (!el) return;
+      el.innerHTML = FILTERS.map((filter) => {
+        const active = filter.id === ACTIVE_FILTER ? " is-active" : "";
+        return `<button type="button" class="filter-chip${active}" data-filter-id="${esc(filter.id)}">${esc(filter.label)} ${esc(String(counts[filter.id] || 0))}</button>`;
+      }).join("");
+    }
+
+    function wireStatusFilters() {
+      const buttons = document.querySelectorAll('#statusFilters .filter-chip[data-filter-id]');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+          const filter = ev.currentTarget.getAttribute('data-filter-id') || "all";
+          ACTIVE_FILTER = FILTERS.some((f) => f.id === filter) ? filter : "all";
+          localStorage.setItem("eqidv2_dashboard_filter", ACTIVE_FILTER);
+          loadNow();
+        });
+      });
+    }
+
+    function wireSearchControl() {
+      const input = document.getElementById('cardSearch');
+      if (!input || input.dataset.wired === '1') return;
+      input.dataset.wired = '1';
+      input.value = SEARCH_QUERY;
+      input.addEventListener('input', () => {
+        SEARCH_QUERY = String(input.value || "");
+        localStorage.setItem("eqidv2_dashboard_search", SEARCH_QUERY);
+        loadNow();
+      });
+    }
+
+    function wireProblemsFirstControl() {
+      const btn = document.getElementById('problemsFirstBtn');
+      if (!btn) return;
+      btn.classList.toggle('is-active', PROBLEMS_FIRST);
+      if (btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        PROBLEMS_FIRST = !PROBLEMS_FIRST;
+        localStorage.setItem("eqidv2_problems_first", PROBLEMS_FIRST ? "1" : "0");
+        btn.classList.toggle('is-active', PROBLEMS_FIRST);
+        loadNow();
+      });
+    }
+
+    function wireThemeControl() {
+      applyTheme();
+      const btn = document.getElementById('themeToggle');
+      if (!btn || btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        DASHBOARD_THEME = DASHBOARD_THEME === "dark" ? "light" : "dark";
+        localStorage.setItem("eqidv2_dashboard_theme", DASHBOARD_THEME);
+        applyTheme();
+      });
+    }
+
+    window.addEventListener("storage", (event) => {
+      if (event.key === "eqidv2_dashboard_theme") {
+        DASHBOARD_THEME = event.newValue === "dark" ? "dark" : "light";
+        applyTheme();
+      }
+    });
+
+    function refreshStatusText() {
+      const text = AUTO_REFRESH_PAUSED ? "Automatic updates paused" : "Updates every 15s";
+      document.getElementById("refreshStatus").textContent = text;
+      document.getElementById("info").textContent = LAST_SUCCESSFUL_REFRESH ? `Last updated ${LAST_SUCCESSFUL_REFRESH} | ${text.toLowerCase()}` : "Loading dashboard…";
+      const button = document.getElementById("autoRefreshBtn");
+      button.textContent = AUTO_REFRESH_PAUSED ? "Resume updates" : "Pause updates";
+      button.setAttribute("aria-pressed", String(AUTO_REFRESH_PAUSED));
+      button.title = AUTO_REFRESH_PAUSED ? "Resume automatic refresh every 15 seconds" : "Pause automatic refresh while reading";
+    }
+
+    function wireAutoRefreshControl() {
+      refreshStatusText();
+      document.getElementById("autoRefreshBtn").addEventListener("click", () => {
+        AUTO_REFRESH_PAUSED = !AUTO_REFRESH_PAUSED;
+        cockpit.setPaused(AUTO_REFRESH_PAUSED);
+        sessionStorage.setItem("eqidv2_dashboard_paused", AUTO_REFRESH_PAUSED ? "1" : "0");
+        refreshStatusText();
+        if (!AUTO_REFRESH_PAUSED) loadNow();
+      });
+    }
+
+    function wireTimelineControl() {
+      const btn = document.getElementById('timelineToggle');
+      if (!btn) return;
+      btn.textContent = TIMELINE_COLLAPSED ? "Timeline +" : "Timeline -";
+      if (btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        TIMELINE_COLLAPSED = !TIMELINE_COLLAPSED;
+        localStorage.setItem("eqidv2_timeline_collapsed", TIMELINE_COLLAPSED ? "1" : "0");
+        btn.textContent = TIMELINE_COLLAPSED ? "Timeline +" : "Timeline -";
+        const panel = document.getElementById("todayTimeline");
+        if (panel) panel.classList.toggle("is-collapsed", TIMELINE_COLLAPSED);
+      });
+    }
+
+    function wireDensityControl() {
+      applyDensity();
+      const btn = document.getElementById('densityToggle');
+      if (!btn || btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        const order = ["comfort", "compact", "focus"];
+        const idx = order.indexOf(DASHBOARD_DENSITY);
+        DASHBOARD_DENSITY = order[(idx + 1 + order.length) % order.length];
+        localStorage.setItem("eqidv2_dashboard_density", DASHBOARD_DENSITY);
+        applyDensity();
+      });
+    }
+
+    function parseLocalDate(raw) {
+      const text = String(raw || "").trim();
+      if (!text || text === "-") return null;
+      const date = new Date(text.replace(" ", "T"));
+      return Number.isFinite(date.getTime()) ? date : null;
+    }
+
+    function formatAge(rawMtime) {
+      const date = parseLocalDate(rawMtime);
+      if (!date) return { label: "output: none", cls: "bad" };
+      const ageMin = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
+      if (ageMin < 1) return { label: "output: now", cls: "ok" };
+      if (ageMin < 60) return { label: `output: ${ageMin}m`, cls: ageMin <= 20 ? "ok" : "warn" };
+      const ageHr = Math.round(ageMin / 60);
+      if (ageHr < 24) return { label: `output: ${ageHr}h`, cls: "warn" };
+      const ageDay = Math.round(ageHr / 24);
+      return { label: `output: ${ageDay}d`, cls: "bad" };
+    }
+
+    function outputFreshness(item, rawMtime) {
+      const status = item.status || {};
+      const state = String(status.status || "").toUpperCase();
+      const phase = String(status.phase || "").toUpperCase();
+      const scheduler = String(status.scheduler_state || "").toUpperCase();
+      const age = formatAge(rawMtime);
+      const active = ["RUNNING", "STALE_HB_RUNNING", "RESTARTING", "RECOVERED", "PARTIAL", "WAITING_OUTPUT", "EMPTY_OUTPUT", "STALE_OUTPUT", "MISSING_OUTPUT"].includes(state);
+      const closed = /(?:MARKET_CLOSED|NON_TRADING_DAY|AFTER_CUTOFF|END_TIME|SESSION_CLOSED|SESSION_COMPLETED|SESSION_DONE)/.test(phase);
+      const monitored = !isReadOnlyProfileView(item) && scheduler !== "DISABLED" && state !== "DISABLED" && active && !closed;
+      if (monitored) return { ...age, monitored: true };
+      const reason = isReadOnlyProfileView(item) ? "view" : (state === "DISABLED" || scheduler === "DISABLED" ? "disabled" : (closed ? "session closed" : "not running"));
+      return { label: `${age.label} · ${reason}`, cls: "", monitored: false };
+    }
+
+    function compactNextRun(rawNextRun) {
+      const text = String(rawNextRun || "").trim();
+      if (!text) return "";
+      const parts = text.split(/\\s+/);
+      if (parts.length >= 2) return `${parts[0]} ${parts[1]}`;
+      return text;
+    }
+
+    function compactFileName(rawFileName) {
+      const text = String(rawFileName || "").trim();
+      if (!text) return "-";
+      const parts = text.split(/[\\\\/]/).filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : text;
+    }
+
+    function renderMiniBadges(item, mtime, size) {
+      const age = outputFreshness(item, mtime);
+      const badges = [`<span class="mini-badge">${isReadOnlyProfileView(item) ? "View" : "Process"}</span>`, `<span class="mini-badge ${age.cls}">${esc(age.label)}</span>`];
+      badges.push(`<span class="mini-badge">size: ${esc(String(size || 0))}b</span>`);
+      if (
+        FNO_MULTI_PAPER_CARDS.has(String(item && item.id || ""))
+        && item && item.status
+        && Object.prototype.hasOwnProperty.call(item.status, "app_pool_state")
+      ) {
+        const runtime = item && item.status ? item.status : {};
+        const healthy = String(runtime.healthy_app_count || "0");
+        const preferred = String(runtime.preferred_app_count || "8");
+        const poolState = String(runtime.app_pool_state || "NOT_CHECKED").toUpperCase();
+        const poolClass = poolState === "HEALTHY" ? "ok" : (
+          poolState === "DEGRADED_HEALTHY" ? "warn" : (
+            poolState === "NOT_CHECKED" ? "" : "bad"
+          )
+        );
+        const retries = String(runtime.last_app_retry_count || "0");
+        const failures = String(runtime.last_app_failure_count || "0");
+        const attemptClass = Number(failures) > 0 ? "warn" : "ok";
+        badges.push(
+          `<span class="mini-badge ${poolClass}" title="${esc(poolState)}">apps: ${esc(healthy)}/${esc(preferred)}</span>`
+        );
+        badges.push(
+          `<span class="mini-badge ${attemptClass}" title="${esc(String(runtime.last_app_usage || "last completed union minute"))}">retry/error: ${esc(retries)}/${esc(failures)}</span>`
+        );
+      }
+      return `<div class="mini-badges">${badges.join("")}</div>`;
+    }
+
+    function cardStatusClass(status, phase) {
+      const s = String(status || "").toUpperCase();
+      if (s === "SUCCESS" || s === "RUNNING") return "card is-ok";
+      if (isFailClosedWatch(s, phase)) return "card is-warn";
+      if (["STALE_HB_RUNNING", "RESTARTING", "COOLDOWN", "RECOVERED", "WAITING", "PARTIAL", "BLOCKED_STALE_ACTIVATION"].includes(s)) return "card is-warn";
+      if (s === "WAITING_OUTPUT" || s === "EMPTY_OUTPUT" || s === "STALE_OUTPUT") return "card is-warn";
+      if (s === "SCHEDULED" || s === "READY" || s === "ENABLED" || s === "DISABLED" || s === "NOT_SCHEDULED" || s === "STOPPED" || s === "STOPPED_AFTER_CUTOFF" || s === "SKIPPED_CUTOFF" || s === "SKIPPED_NON_TRADING_DAY" || s === "DONE") return "card";
+      if (s) return "card is-bad";
+      return "card";
+    }
+
+    function killScopeForCard(cardId) {
+      return KILL_CARD_SCOPE[cardId] || "";
+    }
+
+    function renderRestartButton(cardId, isDisabled) {
+      if (!RESTARTABLE_CARDS.has(cardId) || isDisabled) return "";
+      return `
+        <button type="button" class="restart-btn" data-restart-id="${esc(cardId)}"
+                title="Restart session (1: scheduler restart, 2: graceful stop, 3: force stop)"
+                aria-label="Restart session">
+          <span class="restart-icon" aria-hidden="true">&#x21BB;</span>
+          <span class="restart-label">Restart</span>
+        </button>
+      `;
+    }
+
+    function renderPinButton(cardId) {
+      const pinned = isPinned(cardId);
+      const label = pinned ? "★" : "☆";
+      const cls = pinned ? "card-toggle pin-toggle is-pinned" : "card-toggle pin-toggle";
+      return `<button type="button" class="${cls}" data-pin-id="${esc(cardId)}" title="${pinned ? "Unpin" : "Pin"} card">${label}</button>`;
+    }
+
+    function uniqueSorted(arr) {
+      const seen = new Set();
+      const out = [];
+      for (const raw of (arr || [])) {
+        const v = String(raw || "").trim();
+        if (!v || seen.has(v)) continue;
+        seen.add(v);
+        out.push(v);
+      }
+      out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+      return out;
+    }
+
+    function renderKillControls(cardId, killSnapshot) {
+      const scope = killScopeForCard(cardId);
+      if (!scope) return "";
+      const scopeSnap = (killSnapshot && killSnapshot[scope]) ? killSnapshot[scope] : {};
+      const positions = Array.isArray(scopeSnap.positions) ? scopeSnap.positions : [];
+      const tickers = uniqueSorted(positions.map((p) => String((p && p.ticker) || "").toUpperCase()));
+      const noActive = positions.length === 0;
+      const options = tickers.length
+        ? tickers.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("")
+        : `<option value="">no active ticker</option>`;
+      const lastCmd = (scopeSnap && scopeSnap.last_command) ? scopeSnap.last_command : {};
+      const lastCmdId = String((lastCmd && lastCmd.command_id) || "").trim();
+      const lastCmdTs = String((lastCmd && lastCmd.requested_at_ist) || "").trim();
+      const lastCmdMeta = lastCmdId
+        ? `last_cmd=${lastCmdId}${lastCmdTs ? ` @ ${lastCmdTs}` : ""}`
+        : "last_cmd=none";
+      return `
+        <div class="kill-shell" data-kill-scope="${esc(scope)}" data-kill-card="${esc(cardId)}">
+          <div class="kill-row">
+            <label class="kill-confirm">
+              <input type="checkbox" class="kill-confirm-box" />
+              Confirm kill action
+            </label>
+            <span class="kill-meta">active=${positions.length} | ${esc(lastCmdMeta)}</span>
+          </div>
+          <div class="kill-row">
+            <select class="kill-ticker" ${noActive ? "disabled" : ""}>${options}</select>
+            <button type="button" class="kill-btn kill-one" ${tickers.length ? "" : "disabled"}>Kill Ticker</button>
+            <button type="button" class="kill-btn kill-all" ${noActive ? "disabled" : ""}>Kill All</button>
+          </div>
+          <div class="kill-status"></div>
+        </div>
+      `;
+    }
+
+    function parseNumberish(value) {
+      const s = String(value || "").trim();
+      if (!s) return NaN;
+      const cleaned = s
+        .replace(/,/g, "")
+        .replace(/^Rs\\./i, "")
+        .replace(/%/g, "")
+        .replace(/\\s+/g, "");
+      const n = Number.parseFloat(cleaned);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
+    function isTickerColumn(header) {
+      return String(header || "").trim().toLowerCase() === "ticker";
+    }
+
+    function tableCellClass(header, value) {
+      const h = String(header || "").toLowerCase();
+      const text = String(value ?? "").trim();
+      const numeric = Number.isFinite(parseNumberish(text)) && !isTickerColumn(header);
+      const cls = [];
+      if (numeric) cls.push("num");
+      if (numeric && (/^[+-]/.test(text) || /(pnl|chg|change|pct|%|return)/i.test(h))) {
+        const n = parseNumberish(text);
+        if (n > 0) cls.push("pos");
+        if (n < 0) cls.push("neg");
+      }
+      return cls.join(" ");
+    }
+
+    function parseTabularTail(tailText) {
+      const lines = String(tailText || "").split(/\\r?\\n/);
+      const rowsMetaIdx = lines.findIndex((ln) => ln.startsWith("rows_shown="));
+      if (rowsMetaIdx < 0 || rowsMetaIdx + 2 >= lines.length) return null;
+
+      const headerLine = lines[rowsMetaIdx + 1] || "";
+      const sepLine = lines[rowsMetaIdx + 2] || "";
+      if (!headerLine.includes(" | ") || !sepLine.includes("-+-")) return null;
+
+      const headers = headerLine.split(" | ").map((h) => h.trim());
+      if (!headers.length) return null;
+
+      const dataLines = lines.slice(rowsMetaIdx + 3).filter((ln) => String(ln || "").trim().length > 0);
+      const rows = dataLines.map((ln) => {
+        const parts = ln.split(" | ").map((p) => String(p || "").trim());
+        while (parts.length < headers.length) parts.push("");
+        if (parts.length > headers.length) return parts.slice(0, headers.length);
+        return parts;
+      });
+
+      return {
+        rowsMeta: lines[rowsMetaIdx] || "",
+        summaryLines: lines.slice(0, rowsMetaIdx).filter((ln) => String(ln || "").trim().length > 0),
+        headers,
+        rows
+      };
+    }
+
+    function sortMark(header, stateKey, colIdx) {
+      const st = TABLE_SORT_STATE[stateKey];
+      if (!st || st.colIdx !== colIdx) return "sort";
+      if (isTickerColumn(header)) return st.dir === "asc" ? "A-Z" : "Z-A";
+      return st.dir === "asc" ? "asc" : "desc";
+    }
+
+    function sortedRows(parsed, stateKey) {
+      const st = TABLE_SORT_STATE[stateKey];
+      const indexed = parsed.rows.map((cells, idx) => ({ cells, idx }));
+      if (!st || st.colIdx < 0) return indexed.map((r) => r.cells);
+
+      const colIdx = st.colIdx;
+      const dirMul = st.dir === "asc" ? 1 : -1;
+      const header = parsed.headers[colIdx] || "";
+
+      indexed.sort((a, b) => {
+        const av = String((a.cells[colIdx] ?? "")).trim();
+        const bv = String((b.cells[colIdx] ?? "")).trim();
+        const aEmpty = !av;
+        const bEmpty = !bv;
+        if (aEmpty && bEmpty) return a.idx - b.idx;
+        if (aEmpty) return 1;
+        if (bEmpty) return -1;
+
+        let cmp = 0;
+        if (!isTickerColumn(header)) {
+          const an = parseNumberish(av);
+          const bn = parseNumberish(bv);
+          if (Number.isFinite(an) && Number.isFinite(bn)) {
+            cmp = an - bn;
+          }
+        }
+        if (cmp === 0) {
+          cmp = av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" });
+        }
+        if (cmp === 0) return a.idx - b.idx;
+        return cmp * dirMul;
+      });
+
+      return indexed.map((r) => r.cells);
+    }
+
+    function renderSortableTable(stateKey, hostEl, parsed) {
+      const rows = sortedRows(parsed, stateKey);
+
+      const summaryHtml = parsed.summaryLines.length
+        ? `<div class="table-summary">${parsed.summaryLines.map((ln) => esc(ln)).join("<br>")}</div>`
+        : "";
+      const metaHtml = parsed.rowsMeta ? `<div class="table-meta">${esc(parsed.rowsMeta)}</div>` : "";
+      const headHtml = parsed.headers.map((h, i) => `
+        <th>
+          <button type="button" class="th-sort-btn" data-col="${i}">
+            <span>${esc(h)}</span>
+            <span class="sort-mark">${esc(sortMark(h, stateKey, i))}</span>
+          </button>
+        </th>
+      `).join("");
+      const bodyHtml = rows.map((cells) => `
+        <tr>${parsed.headers.map((h, i) => `<td class="${esc(tableCellClass(h, cells[i]))}">${esc(cells[i] ?? "")}</td>`).join("")}</tr>
+      `).join("");
+
+      hostEl.innerHTML = `
+        ${summaryHtml}
+        ${metaHtml}
+        <table class="log-table">
+          <thead><tr>${headHtml}</tr></thead>
+          <tbody>${bodyHtml}</tbody>
+        </table>
+      `;
+
+      hostEl.querySelectorAll(".th-sort-btn").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          const colIdx = Number((ev.currentTarget && ev.currentTarget.getAttribute("data-col")) || "-1");
+          if (!Number.isInteger(colIdx) || colIdx < 0) return;
+          const prev = TABLE_SORT_STATE[stateKey] || { colIdx: -1, dir: "asc" };
+          const nextDir = prev.colIdx === colIdx && prev.dir === "asc" ? "desc" : "asc";
+          TABLE_SORT_STATE[stateKey] = { colIdx, dir: nextDir };
+          renderSortableTable(stateKey, hostEl, parsed);
+        });
+      });
+    }
+
+    function mdInline(text) {
+      const s = String(text === null || text === undefined ? "" : text);
+      const re = /\\*\\*([^*]+)\\*\\*|`([^`]+)`|\\[([^\\]\\n]+)\\]\\((#card-([A-Za-z0-9_-]+))\\)/g;
+      let out = "";
+      let last = 0;
+      let m;
+      while ((m = re.exec(s)) !== null) {
+        out += esc(s.slice(last, m.index));
+        if (m[1] !== undefined) {
+          out += `<strong>${esc(m[1])}</strong>`;
+        } else if (m[2] !== undefined) {
+          out += `<code>${esc(m[2])}</code>`;
+        } else if (LOG_ORDER.includes(m[5])) {
+          out += `<a href="${esc(m[4])}">${esc(m[3])}</a>`;
+        } else {
+          out += esc(m[0]);
+        }
+        last = m.index + m[0].length;
+      }
+      return out + esc(s.slice(last));
+    }
+
+    function mdStripMarkers(text) {
+      return String(text === null || text === undefined ? "" : text)
+        .replace(/\\*\\*/g, "")
+        .replace(/`/g, "")
+        .trim();
+    }
+
+    function splitMdRow(line) {
+      let s = String(line || "").trim();
+      if (s.startsWith("|")) s = s.slice(1);
+      if (s.endsWith("|")) s = s.slice(0, -1);
+      return s.split("|").map((c) => c.trim());
+    }
+
+    function isMdSeparatorLine(line) {
+      const s = String(line || "").trim();
+      if (!s.includes("|") || !s.includes("-")) return false;
+      const cells = splitMdRow(s);
+      if (cells.length < 2) return false;
+      return cells.every((c) => /^:?-{2,}:?$/.test(c));
+    }
+
+    // Parses the markdown reports the FnO G sessions publish (title, key: value
+    // preamble, invariant notes, one or more pipe tables) into render blocks.
+    function parseMarkdownReport(tailText) {
+      const lines = String(tailText || "").split(/\\r?\\n/);
+      const blocks = [];
+      let tableCount = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const trimmed = String(lines[i] || "").trim();
+        if (!trimmed) continue;
+
+        const head = /^(#{1,6})\\s+(.*)$/.exec(trimmed);
+        if (head) {
+          blocks.push({ kind: "heading", level: head[1].length, text: head[2].trim() });
+          continue;
+        }
+
+        if (trimmed.includes("|") && isMdSeparatorLine(lines[i + 1])) {
+          const headers = splitMdRow(trimmed);
+          const aligns = splitMdRow(lines[i + 1]).map((c) => {
+            if (!c.endsWith(":")) return "";
+            return c.startsWith(":") ? "center" : "right";
+          });
+          const rows = [];
+          let j = i + 2;
+          for (; j < lines.length; j++) {
+            const cur = String(lines[j] || "").trim();
+            if (!cur || !cur.includes("|")) break;
+            const cells = splitMdRow(cur);
+            while (cells.length < headers.length) cells.push("");
+            rows.push(cells.slice(0, headers.length));
+          }
+          blocks.push({ kind: "table", headers, aligns, rows, tableIdx: tableCount++ });
+          i = j - 1;
+          continue;
+        }
+
+        const bullet = /^[-*]\\s+(.*)$/.exec(trimmed);
+        if (bullet) {
+          blocks.push({ kind: "note", text: bullet[1].trim() });
+          continue;
+        }
+
+        const meta = /^([A-Za-z][A-Za-z0-9 ()/_.-]{0,38}):\\s*(.+)$/.exec(trimmed);
+        if (meta) {
+          const value = meta[2].trim();
+          const isCodeValue = value.startsWith("`") && value.endsWith("`");
+          const shortEnough = value.length <= 48 && meta[1].trim().split(/\\s+/).length <= 4;
+          if (isCodeValue || shortEnough) {
+            blocks.push({ kind: "meta", label: meta[1].trim(), value });
+            continue;
+          }
+        }
+
+        blocks.push({ kind: "note", text: trimmed });
+      }
+
+      if (!blocks.some((b) => b.kind === "table")) return null;
+      return blocks;
+    }
+
+    const MD_PILL_OK = new Set(["SUCCESS", "READY", "COMPLETE", "COMPLETED", "TARGET", "FILLED", "LIVE_LOT_SIZED", "ARMED", "OK"]);
+    const MD_PILL_BAD = new Set(["STOP", "FAILED", "FAIL", "ERROR", "REJECTED", "NO_SESSION_ROWS", "INVALID", "MISSING"]);
+    const MD_PILL_WARN = new Set(["PENDING", "WAITING", "PARTIAL", "NO_FILL", "NOFILL", "CANCELLED", "CANCELED", "TIMEOUT", "EOD"]);
+    const MD_PILL_INFO = new Set(["OPEN", "ACTIVE", "LIVE", "TRIGGERED", "NEUTRAL"]);
+
+    function mdPillClass(token) {
+      const t = String(token || "").toUpperCase();
+      if (!t) return "";
+      if (MD_PILL_OK.has(t)) return "ok";
+      if (MD_PILL_BAD.has(t)) return "bad";
+      if (MD_PILL_WARN.has(t)) return "warn";
+      if (MD_PILL_INFO.has(t)) return "info";
+      if (t === "LONG" || t.startsWith("LONG_")) return "side-long";
+      if (t === "SHORT" || t.startsWith("SHORT_")) return "side-short";
+      if (t.startsWith("BLOCKED") || t.startsWith("STALE") || t.startsWith("SKIPPED") || t.startsWith("UNVERIFIED")) return "warn";
+      if (t.startsWith("FAILED") || t.startsWith("ERROR") || t.startsWith("INVALID")) return "bad";
+      if (t === "PAPER" || t === "CLOSED" || t === "DONE" || t === "DISABLED") return "muted";
+      return "";
+    }
+
+    function isPillColumn(header) {
+      return /(state|status|side|mode|reason|class|action|outcome)/i.test(String(header || ""));
+    }
+
+    function isProblemCountColumn(header) {
+      return /(error|fail|invalid|missing|unverified|unexpected|ineligible|blocked|cancelled|canceled|no fill|nofill|stale|skip)/i.test(String(header || ""));
+    }
+
+    function isCoverageRatioColumn(header) {
+      return /(written|valid|complete|coverage|fetched|filled|evaluated)/i.test(String(header || ""));
+    }
+
+    // Returns { cls, html, title } for one markdown table cell.
+    function mdCell(header, rawValue, align, sessionDate) {
+      const raw = String(rawValue === null || rawValue === undefined ? "" : rawValue).trim();
+      const plain = mdStripMarkers(raw);
+      const cls = [];
+      if (align === "right") cls.push("right");
+      if (align === "center") cls.push("center");
+
+      if (!plain) return { cls: cls.join(" "), html: "" };
+
+      // Same-day ISO timestamps: drop the repeated date and the microseconds,
+      // keep the full value in the tooltip.
+      const iso = /^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}:\\d{2})(?:\\.\\d+)?(.*)$/.exec(plain);
+      if (iso) {
+        cls.push("tabnum");
+        const sameDay = sessionDate && iso[1] === sessionDate;
+        return {
+          cls: cls.join(" "),
+          html: esc(sameDay ? iso[2] : `${iso[1]} ${iso[2]}`),
+          title: plain
+        };
+      }
+
+      if (isPillColumn(header)) {
+        const combo = /^(\\d+)\\/([A-Za-z][A-Za-z0-9_]*)$/.exec(plain);
+        if (combo) {
+          const pc = mdPillClass(combo[2]);
+          return {
+            cls: cls.join(" "),
+            html: `<span class="cell-qty">${esc(combo[1])}</span><span class="cell-pill ${pc}">${esc(combo[2])}</span>`
+          };
+        }
+        if (/^[A-Za-z][A-Za-z0-9_]*$/.test(plain)) {
+          const pc = mdPillClass(plain);
+          if (pc) return { cls: cls.join(" "), html: `<span class="cell-pill ${pc}">${esc(plain)}</span>` };
+        }
+      }
+
+      const ratio = /^(\\d+)\\/(\\d+)$/.exec(plain);
+      if (ratio) {
+        cls.push("tabnum");
+        if (isCoverageRatioColumn(header) && Number(ratio[1]) < Number(ratio[2])) cls.push("warnval");
+        return { cls: cls.join(" "), html: esc(plain) };
+      }
+
+      const num = parseNumberish(plain);
+      if (Number.isFinite(num) && !isTickerColumn(header)) {
+        cls.push("tabnum");
+        if (isProblemCountColumn(header)) {
+          if (num !== 0) cls.push("warnval");
+          else cls.push("mutedval");
+        } else if (/^[+-]/.test(plain) || /(pnl|p&l|chg|change|pct|%|return|net|roc)/i.test(String(header || ""))) {
+          if (num > 0) cls.push("pos");
+          if (num < 0) cls.push("neg");
+        }
+      }
+
+      if (plain.length > 24) {
+        cls.push("clip");
+        return { cls: cls.join(" "), html: mdInline(raw), title: plain };
+      }
+
+      return { cls: cls.join(" "), html: mdInline(raw) };
+    }
+
+    function renderMdTable(stateKey, hostEl, table, sessionDate) {
+      const parsed = { headers: table.headers, rows: table.rows };
+      const rows = sortedRows(parsed, stateKey);
+      const headHtml = table.headers.map((h, i) => `
+        <th class="${table.aligns[i] === "right" ? "right" : ""}">
+          <button type="button" class="th-sort-btn" data-col="${i}">
+            <span>${esc(h)}</span>
+            <span class="sort-mark">${esc(sortMark(h, stateKey, i))}</span>
+          </button>
+        </th>
+      `).join("");
+      const bodyHtml = rows.map((cells) => `
+        <tr>${table.headers.map((h, i) => {
+          const cell = mdCell(h, cells[i], table.aligns[i], sessionDate);
+          const titleAttr = cell.title ? ` title="${esc(cell.title)}"` : "";
+          return `<td class="${esc(cell.cls)}"${titleAttr}>${cell.html}</td>`;
+        }).join("")}</tr>
+      `).join("");
+
+      hostEl.innerHTML = `
+        <table class="log-table">
+          <thead><tr>${headHtml}</tr></thead>
+          <tbody>${bodyHtml}</tbody>
+        </table>
+      `;
+
+      hostEl.querySelectorAll(".th-sort-btn").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          const colIdx = Number((ev.currentTarget && ev.currentTarget.getAttribute("data-col")) || "-1");
+          if (!Number.isInteger(colIdx) || colIdx < 0) return;
+          const prev = TABLE_SORT_STATE[stateKey] || { colIdx: -1, dir: "asc" };
+          const nextDir = prev.colIdx === colIdx && prev.dir === "asc" ? "desc" : "asc";
+          TABLE_SORT_STATE[stateKey] = { colIdx, dir: nextDir };
+          renderMdTable(stateKey, hostEl, table, sessionDate);
+        });
+      });
+    }
+
+    function renderMarkdownReport(cardId, hostEl, blocks) {
+      const firstTableAt = blocks.findIndex((b) => b.kind === "table");
+      const tableCount = blocks.filter((b) => b.kind === "table").length;
+      const preamble = blocks.slice(0, firstTableAt);
+      const rest = blocks.slice(firstTableAt);
+
+      const metas = preamble.filter((b) => b.kind === "meta");
+      const notes = preamble.filter((b) => b.kind === "note");
+      const sessionMeta = metas.find((m) => /^session( date)?$/i.test(m.label));
+      const sessionDate = sessionMeta && /^\\d{4}-\\d{2}-\\d{2}$/.test(mdStripMarkers(sessionMeta.value))
+        ? mdStripMarkers(sessionMeta.value)
+        : "";
+
+      const chipsHtml = metas.length
+        ? `<div class="md-meta-grid">${metas.map((m) => {
+            const plain = mdStripMarkers(m.value);
+            const pc = /^[A-Za-z][A-Za-z0-9_]*$/.test(plain) ? mdPillClass(plain) : "";
+            const valueHtml = pc
+              ? `<span class="cell-pill ${pc}">${esc(plain)}</span>`
+              : mdInline(m.value);
+            return `<div class="md-chip" title="${esc(m.label + ": " + plain)}">
+              <span class="k">${esc(m.label)}</span>
+              <span class="v">${valueHtml}</span>
+            </div>`;
+          }).join("")}</div>`
+        : "";
+
+      const notesHtml = notes.length
+        ? `<details class="md-notes"><summary>Notes &amp; invariants (${notes.length})</summary>
+             <ul>${notes.map((n) => `<li>${mdInline(n.text)}</li>`).join("")}</ul>
+           </details>`
+        : "";
+
+      const bodyParts = [];
+      const tableSlots = [];
+      rest.forEach((b) => {
+        if (b.kind === "heading") {
+          if (b.level >= 2) bodyParts.push(`<div class="md-caption">${mdInline(b.text)}</div>`);
+          return;
+        }
+        if (b.kind === "meta") {
+          bodyParts.push(`<div class="md-note-line"><strong>${esc(b.label)}:</strong> ${mdInline(b.value)}</div>`);
+          return;
+        }
+        if (b.kind === "note") {
+          bodyParts.push(`<div class="md-note-line">${mdInline(b.text)}</div>`);
+          return;
+        }
+        const slotId = `mdtbl-${bodyParts.length}`;
+        tableSlots.push({ slotId, table: b });
+        const wrapCls = tableCount > 1 ? "md-table-wrap" : "";
+        bodyParts.push(`<div class="${wrapCls}" data-md-slot="${slotId}"></div>`);
+        // Only worth stating when the table is empty, or long enough that some
+        // rows sit below the fold of the log pane.
+        if (!b.rows.length) {
+          bodyParts.push(`<div class="md-rowcount">no rows yet</div>`);
+        } else if (b.rows.length > 5) {
+          bodyParts.push(`<div class="md-rowcount">${b.rows.length} rows</div>`);
+        }
+      });
+
+      hostEl.innerHTML = chipsHtml + notesHtml + bodyParts.join("");
+
+      tableSlots.forEach(({ slotId, table }) => {
+        const slot = hostEl.querySelector(`[data-md-slot="${slotId}"]`);
+        if (slot) renderMdTable(`${cardId}#${table.tableIdx}`, slot, table, sessionDate);
+      });
+    }
+
+    function enhanceSortableTables() {
+      const cards = document.querySelectorAll("#cards .card");
+      cards.forEach((card) => {
+        const cardId = card.getAttribute("data-id") || "";
+        const preEl = card.querySelector("pre");
+        if (!preEl) return;
+        const text = preEl.textContent || "";
+
+        const parsed = parseTabularTail(text);
+        if (parsed) {
+          const host = document.createElement("div");
+          host.className = "table-shell";
+          preEl.replaceWith(host);
+          renderSortableTable(cardId, host, parsed);
+          return;
+        }
+
+        if (!MD_REPORT_CARDS.has(cardId)) return;
+        const blocks = parseMarkdownReport(text);
+        if (!blocks) return;
+        const host = document.createElement("div");
+        host.className = "table-shell md-report";
+        preEl.replaceWith(host);
+        renderMarkdownReport(cardId, host, blocks);
+      });
+    }
+
+    function applyFullscreenState() {
+      const cards = document.getElementById('cards');
+      const all = cards.querySelectorAll('.card');
+      all.forEach((card) => {
+        const cardId = card.getAttribute('data-id') || "";
+        card.classList.toggle('is-fullscreen', FULLSCREEN_ID && cardId === FULLSCREEN_ID);
+      });
+      document.body.classList.toggle('has-fullscreen', !!FULLSCREEN_ID);
+    }
+
+    function toggleFullscreen(id) {
+      if (!id) return;
+      FULLSCREEN_ID = (FULLSCREEN_ID === id) ? "" : id;
+      applyFullscreenState();
+    }
+
+    function wireCardControls() {
+      const buttons = document.querySelectorAll('#cards .card-toggle[data-toggle-id]');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+          const id = ev.currentTarget.getAttribute('data-toggle-id') || "";
+          toggleFullscreen(id);
+        });
+      });
+    }
+
+    function wirePinControls() {
+      const buttons = document.querySelectorAll('#cards .pin-toggle[data-pin-id]');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const id = ev.currentTarget.getAttribute('data-pin-id') || "";
+          if (!id) return;
+          setPinned(id, !isPinned(id));
+          loadNow();
+        });
+      });
+    }
+
+    function wireLogToggleControls() {
+      const buttons = document.querySelectorAll('#cards .log-toggle[data-log-id]');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+          const id = ev.currentTarget.getAttribute('data-log-id') || "";
+          if (!id) return;
+          setLogHidden(id, !isLogHidden(id));
+          loadNow();
+        });
+      });
+    }
+
+    function wireDisabledSectionControls() {
+      const btn = document.getElementById('disabledSectionToggle');
+      if (!btn || btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => {
+        DISABLED_SECTION_MINIMIZED = !DISABLED_SECTION_MINIMIZED;
+        localStorage.setItem("eqidv2_disabled_section_minimized", DISABLED_SECTION_MINIMIZED ? "1" : "0");
+        loadNow();
+      });
+    }
+
+    function wireRestartAllControl() {
+      const btn = document.getElementById('restartAllBtn');
+      if (!btn || btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
+      const labelEl = btn.querySelector('.restart-all-label');
+      const origLabel = labelEl ? labelEl.textContent : "Restart All";
+      btn.addEventListener('click', async () => {
+        if (btn.disabled) return;
+        const eligibleIds = Array.from(ENABLED_RESTARTABLE_CARDS);
+        if (!eligibleIds.length) {
+          btn.title = "No enabled managed sessions are restartable.";
+          return;
+        }
+        if (!window.confirm(`Restart all ${eligibleIds.length} enabled managed sessions?`)) return;
+        btn.disabled = true;
+        btn.classList.remove('is-ok', 'is-err');
+        btn.classList.add('is-busy');
+        const ids = eligibleIds;
+        const total = ids.length;
+        let done = 0;
+        let failed = 0;
+        const updateLabel = () => {
+          if (labelEl) labelEl.textContent = `Restarting ${done}/${total}`;
+        };
+        updateLabel();
+        const results = await Promise.all(ids.map(async (cardId) => {
+          try {
+            const res = await fetch(apiUrl('/api/restart'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
+              body: JSON.stringify({ card_id: cardId })
+            });
+            const data = await res.json().catch(() => ({}));
+            const ok = !!(res.ok && data && data.ok);
+            if (!ok) failed += 1;
+            return { cardId, ok, step: data && data.step, message: data && data.message };
+          } catch (err) {
+            failed += 1;
+            return { cardId, ok: false, message: String((err && err.message) || err) };
+          } finally {
+            done += 1;
+            updateLabel();
+          }
+        }));
+        btn.classList.remove('is-busy');
+        if (failed === 0) {
+          btn.classList.add('is-ok');
+          if (labelEl) labelEl.textContent = `OK ${total}/${total}`;
+          btn.title = results.map(r => `${r.cardId}: step ${r.step}`).join(' | ');
+        } else {
+          btn.classList.add('is-err');
+          if (labelEl) labelEl.textContent = `${total - failed}/${total} OK, ${failed} failed`;
+          btn.title = results
+            .filter(r => !r.ok)
+            .map(r => `${r.cardId}: ${r.message || 'failed'}`)
+            .join(' | ');
+        }
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.classList.remove('is-ok', 'is-err');
+          if (labelEl) labelEl.textContent = origLabel;
+          btn.title = "Restart all managed sessions (sequential 3-step escalation per session)";
+          loadNow();
+        }, 3200);
+      });
+    }
+
+    function wireRestartControls() {
+      const buttons = document.querySelectorAll('#cards .restart-btn');
+      buttons.forEach((btn) => {
+        btn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const target = ev.currentTarget;
+          const cardId = target.getAttribute('data-restart-id') || "";
+          if (!cardId || target.disabled) return;
+          const sessionName = displayName(cardId);
+          if (!window.confirm(`Restart session "${sessionName}"?\n\nEscalation: (1) scheduler restart, (2) graceful stop + start, (3) force stop + start.`)) return;
+          const labelEl = target.querySelector('.restart-label');
+          const origLabel = labelEl ? labelEl.textContent : "Restart";
+          target.disabled = true;
+          target.classList.remove('is-ok', 'is-err');
+          target.classList.add('is-busy');
+          if (labelEl) labelEl.textContent = "Restarting...";
+          try {
+            const res = await fetch(apiUrl('/api/restart'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
+              body: JSON.stringify({ card_id: cardId })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data && data.ok) {
+              target.classList.add('is-ok');
+              const step = data.step || "?";
+              if (labelEl) labelEl.textContent = `OK (step ${step})`;
+            } else {
+              target.classList.add('is-err');
+              if (labelEl) labelEl.textContent = "Failed";
+              const msg = (data && data.message) ? data.message : `HTTP ${res.status}`;
+              target.title = `Restart failed: ${msg}`;
+            }
+          } catch (err) {
+            target.classList.add('is-err');
+            if (labelEl) labelEl.textContent = "Error";
+            const msg = (err && err.message) ? err.message : String(err);
+            target.title = `Restart error: ${msg}`;
+          } finally {
+            target.classList.remove('is-busy');
+            setTimeout(() => {
+              target.disabled = false;
+              target.classList.remove('is-ok', 'is-err');
+              if (labelEl) labelEl.textContent = origLabel;
+              target.title = "Restart session (1: scheduler restart, 2: graceful stop, 3: force stop)";
+              loadNow();
+            }, 2400);
+          }
+        });
+      });
+    }
+
+    function wireKillSwitchControls() {
+      const roots = document.querySelectorAll('#cards .kill-shell');
+      roots.forEach((root) => {
+        const scope = root.getAttribute('data-kill-scope') || "";
+        const confirmBox = root.querySelector('.kill-confirm-box');
+        const tickerSel = root.querySelector('.kill-ticker');
+        const btnTicker = root.querySelector('.kill-one');
+        const btnAll = root.querySelector('.kill-all');
+        const statusEl = root.querySelector('.kill-status');
+        if (!scope || !confirmBox || !tickerSel || !btnTicker || !btnAll || !statusEl) return;
+
+        const setStatus = (msg, isErr) => {
+          statusEl.textContent = String(msg || "");
+          statusEl.classList.toggle('err', !!isErr);
+        };
+
+        const setBusy = (busy) => {
+          const on = !!busy;
+          btnTicker.disabled = on || btnTicker.hasAttribute('data-init-disabled');
+          btnAll.disabled = on || btnAll.hasAttribute('data-init-disabled');
+        };
+        if (btnTicker.disabled) btnTicker.setAttribute('data-init-disabled', '1');
+        if (btnAll.disabled) btnAll.setAttribute('data-init-disabled', '1');
+
+        async function fireKill(mode) {
+          if (!confirmBox.checked) {
+            setStatus("Tick confirmation checkbox first.", true);
+            return;
+          }
+          const ticker = mode === "ticker" ? String(tickerSel.value || "").trim().toUpperCase() : "";
+          if (mode === "ticker" && !ticker) {
+            setStatus("Select ticker first.", true);
+            return;
+          }
+          setBusy(true);
+          setStatus("Submitting kill switch...");
+          try {
+            const res = await fetch(apiUrl('/api/kill'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
+              body: JSON.stringify({
+                scope,
+                mode,
+                ticker,
+                confirm: true
+              })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data || !data.ok) {
+              const msg = (data && data.message) ? data.message : `HTTP ${res.status}`;
+              setStatus(msg, true);
+              return;
+            }
+            setStatus((data && data.message) ? data.message : "Kill switch queued.", false);
+            confirmBox.checked = false;
+            setTimeout(() => { loadNow(); }, 450);
+          } catch (err) {
+            const msg = (err && err.message) ? err.message : String(err);
+            setStatus(`Kill request failed: ${msg}`, true);
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        btnTicker.addEventListener('click', () => fireKill("ticker"));
+        btnAll.addEventListener('click', () => fireKill("all"));
+      });
+    }
+
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === "Escape" && FULLSCREEN_ID) {
+        FULLSCREEN_ID = "";
+        applyFullscreenState();
+      }
+    });
+
+    let SNAPSHOT_LOAD_IN_FLIGHT = false;
+    async function loadNow(refreshCockpit = true) {
+      if (SNAPSHOT_LOAD_IN_FLIGHT) return;
+      SNAPSHOT_LOAD_IN_FLIGHT = true;
+      if (refreshCockpit) cockpit.refresh(true);
+      try {
+        const res = await fetch(apiUrl('/api/snapshot?lines=80'), { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!Array.isArray(data.items)) throw new Error("Invalid dashboard response");
+        const prevY = window.scrollY;
+        const readingState = DashboardOps.capture(document.getElementById("cards"), document);
+        const headerFocus = document.activeElement;
+        const focusedFilter = headerFocus && headerFocus.getAttribute("data-filter-id");
+        const focusedSection = headerFocus && headerFocus.getAttribute("data-section-target");
+        const dashboardItems = (data.items || []).filter((item) => !DASHBOARD_HIDDEN_IDS.has(item.id));
+        renderHealthSummary(dashboardItems);
+
+        const byId = {};
+        for (const item of dashboardItems) byId[item.id] = item;
+        ENABLED_RESTARTABLE_CARDS = new Set(
+          Array.from(RESTARTABLE_CARDS).filter((id) => {
+            const it = byId[id] || { status: {} };
+            const status = String((it.status && it.status.status) || "").toUpperCase();
+            const schedulerState = String(
+              (it.status && it.status.scheduler_state) || ""
+            ).toUpperCase();
+            return status !== "DISABLED" && schedulerState !== "DISABLED";
+          })
+        );
+        renderTodayTimeline(byId);
+        const killSnapshot = data.kill_switch || {};
+        const orderedBase = LOG_ORDER
+          .concat(Object.keys(byId).filter((id) => !LOG_ORDER.includes(id)))
+          .filter((id) => !DASHBOARD_HIDDEN_IDS.has(id));
+        const ordered = DashboardOps.orderIds(orderedBase, byId, PINNED_CARDS, PROBLEMS_FIRST, statusBucket);
+
+        const activeOrdered = ordered.filter((id) => {
+          const it = byId[id] || { status: {} };
+          const status = String((it.status && it.status.status) || "").toUpperCase();
+          return status !== "DISABLED" || SECTION_LOCKED_DISABLED_IDS.has(id);
+        });
+        const disabledOrdered = ordered.filter((id) => !activeOrdered.includes(id));
+        renderStatusFilters(byId, ordered);
+        const visibleActiveOrdered = activeOrdered.filter((id) => cardMatchesFilter(id, byId[id] || { status: {} }));
+        const visibleDisabledOrdered = disabledOrdered.filter((id) => cardMatchesFilter(id, byId[id] || { status: {} }));
+
+        function renderSectionBanner(title, note, disabled, accent, sectionKey) {
+          const cls = ["section-banner", disabled ? "is-disabled" : "", accent || ""].filter(Boolean).join(" ");
+          const action = disabled
+            ? `<button type="button" class="section-action" id="disabledSectionToggle">${DISABLED_SECTION_MINIMIZED ? "Show disabled" : "Hide disabled"}</button>`
+            : "";
+          return `
+            <div class="${cls}" id="${esc(sectionDomId(sectionKey || title))}">
+              <div class="section-left">
+                <div class="section-title">${esc(title)}</div>
+                <div class="section-note">${esc(note)}</div>
+              </div>
+              ${action}
+            </div>
+          `;
+        }
+
+        // Nested heading for strategy views. It intentionally has no section
+        // action button: only the top-level Disabled banner may own that DOM id.
+        function renderSubBanner(title, note, accent, sectionKey, disabled) {
+          const cls = ["section-banner", disabled ? "is-disabled" : "", "is-sub", accent || ""].filter(Boolean).join(" ");
+          return `
+            <div class="${cls}" id="${esc(sectionDomId("sub-" + (sectionKey || title)))}">
+              <div class="section-left">
+                <div class="section-title">${esc(title)}</div>
+                <div class="section-note">${esc(note)}</div>
+              </div>
+            </div>
+          `;
+        }
+
+        function renderDisabledSubBanner(title, count, accent, sectionKey) {
+          return renderSubBanner(title, String(count) + " disabled", accent, "disabled-" + (sectionKey || title), true);
+        }
+
+        function renderCard(id, idx, nameOverride = "") {
+          const it = byId[id] || {id,exists:false,tail:""};
+          const status = it.status && it.status.status ? it.status.status : "";
+          const statusUpper = String(status || "").toUpperCase();
+          const isDisabled = statusUpper === "DISABLED";
+          const mtime = it.mtime || "-";
+          const size = it.size_bytes || 0;
+          const nextRun = it.status && it.status.scheduler_next_run ? compactNextRun(it.status.scheduler_next_run) : "";
+          const compactDesc = [
+            `file: ${compactFileName(it.file_name || "-")}`,
+            nextRun ? `next: ${nextRun}` : "",
+            it.status && it.status.derived_status ? String(it.status.derived_status).split(";")[0].trim() : ""
+          ].filter(Boolean).join(" | ");
+          const miniBadges = renderMiniBadges(it, mtime, size);
+          const phase = it.status && it.status.phase ? it.status.phase : "";
+          const cardCls = cardStatusClass(status, phase);
+          const isFs = FULLSCREEN_ID === id ? " is-fullscreen" : "";
+          const disabledCompact = isDisabled && FULLSCREEN_ID !== id ? " is-disabled-compact" : "";
+          const logHidden = isLogHidden(id, it);
+          const logHiddenClass = logHidden ? " is-log-hidden" : "";
+          const expandedClass = logHidden ? "" : " is-expanded";
+          const toggleLabel = FULLSCREEN_ID === id ? "▣" : "□";
+          const toggleCls = FULLSCREEN_ID === id ? "card-toggle is-active" : "card-toggle";
+          const logToggleLabel = logHidden ? "▾" : "▴";
+          const logToggleCls = logHidden ? "card-toggle log-toggle is-hidden" : "card-toggle log-toggle";
+          const killControls = renderKillControls(it.id, killSnapshot);
+          const logText = it.tail || (it.exists ? "(empty)" : "(log file not found yet)");
+          const isEmptyLog = !String(logText || "").includes(" | ") && /\\((empty|no rows yet|log file not found yet)\\)/i.test(String(logText).trim());
+          const emptyLabel = it.exists ? "No rows yet" : "Log file not found";
+          const emptyHint = it.exists ? "Waiting for the next write" : "Waiting for this session to create output";
+          return `
+            <div class="${cardCls}${isFs}${disabledCompact}${logHiddenClass}${expandedClass}" id="card-${esc(id)}" data-id="${esc(id)}" style="animation-delay:${Math.min(idx * 0.05, 0.55)}s">
+              <div class="card-head">
+                <div class="card-head-left">
+                  <div class="name">${esc(nameOverride || displayName(it.id))}</div>
+                  ${miniBadges}
+                  <div class="compact-desc" title="${esc(compactDesc)}">${esc(compactDesc)}</div>
+                </div>
+                <div class="card-head-right">
+                  ${renderPinButton(it.id)}
+                  <button type="button" class="${toggleCls}" data-toggle-id="${esc(id)}" title="${FULLSCREEN_ID === id ? "Exit fullscreen" : "Maximize"}">${toggleLabel}</button>
+                  <button type="button" class="${logToggleCls}" data-log-id="${esc(id)}" title="${logHidden ? "Show log" : "Hide log"}">${logToggleLabel}</button>
+                  ${renderRestartButton(it.id, isDisabled)}
+                  <div>${statusBadge(status, phase)}</div>
+                </div>
+              </div>
+              ${killControls}
+              ${["dashboard_flow_opening_observer", "dashboard_flow_opening_history"].includes(id) ? `<div class="compact-desc"><a href="${esc(apiUrl('/dashboard-flow') + '#live')}" target="_blank" rel="noopener noreferrer">Open opening-data analysis in Dashboard Flow &#8599;</a> &middot; Reporting only</div>` : ""}
+              ${id === "v7_live_5min_monitor" ? '<section id="fno-stock-monitor" class="fno-detail-panel" data-read-only="true" aria-label="Stock-level 5-minute and 1-minute monitoring"></section>' : ""}
+              ${isEmptyLog ? `<div class="empty-state"><div><strong>${esc(emptyLabel)}</strong><span>${esc(emptyHint)}</span></div></div>` : `<pre>${esc(logText)}</pre>`}
+            </div>
+          `;
+        }
+
+        const sections = [];
+        const navItems = [];
+        let renderIdx = 0;
+        if (visibleActiveOrdered.length) {
+          const used = new Set();
+          for (const group of ACTIVE_GROUPS) {
+            const groupIds = DashboardOps.inOrder(visibleActiveOrdered, group.ids);
+            if (!groupIds.length) continue;
+            groupIds.forEach((id) => used.add(id));
+            navItems.push({ key: group.key, label: group.nav || group.title, count: groupIds.length });
+            const viewCount = groupIds.filter(id => isReadOnlyProfileView(byId[id] || {})).length;
+            sections.push(renderSectionBanner(group.title, `${groupIds.length - viewCount} processes / ${viewCount} views`, false, group.accent, group.key));
+            const subgroups = Array.isArray(group.subgroups) ? group.subgroups : [];
+            const nestedIds = new Set(subgroups.flatMap((subgroup) => subgroup.ids || []));
+            const directIds = groupIds.filter((id) => !nestedIds.has(id));
+            if (directIds.length) {
+              sections.push(directIds.map((id) => renderCard(id, renderIdx++)).join(''));
+            }
+            for (const subgroup of subgroups) {
+              const subgroupIds = DashboardOps.inOrder(groupIds, subgroup.ids || []);
+              if (!subgroupIds.length) continue;
+              const subgroupNote = subgroup.note || `${subgroupIds.length} view(s)`;
+              sections.push(renderSubBanner(subgroup.title, subgroupNote, group.accent, subgroup.key, false));
+              sections.push(subgroupIds.map((id) => renderCard(id, renderIdx++)).join(''));
+            }
+          }
+          const otherActive = visibleActiveOrdered.filter((id) => !used.has(id));
+          if (otherActive.length) {
+            navItems.push({ key: "other", label: "Other Active", count: otherActive.length });
+            sections.push(renderSectionBanner("Other Active", `${otherActive.length} cards`, false, "other", "other"));
+            sections.push(otherActive.map((id) => renderCard(
+              id,
+              renderIdx++,
+              displayName(id).replaceAll("_", " ").toUpperCase()
+            )).join(''));
+          }
+        }
+        if (visibleDisabledOrdered.length) {
+          const forceShowDisabled = ACTIVE_FILTER === "disabled";
+          const note = (DISABLED_SECTION_MINIMIZED && !forceShowDisabled)
+            ? `${visibleDisabledOrdered.length} card(s) hidden`
+            : `${visibleDisabledOrdered.length} card(s)`;
+          navItems.push({ key: "disabled", label: "Disabled", count: visibleDisabledOrdered.length });
+          sections.push(renderSectionBanner("Disabled", note, true, "admin", "disabled"));
+          if (forceShowDisabled || !DISABLED_SECTION_MINIMIZED) {
+            const usedDisabled = new Set();
+            for (const group of ACTIVE_GROUPS) {
+              const groupIds = DashboardOps.inOrder(visibleDisabledOrdered, group.ids);
+              if (!groupIds.length) continue;
+              groupIds.forEach((id) => usedDisabled.add(id));
+              sections.push(renderDisabledSubBanner(group.title, groupIds.length, group.accent, group.key));
+              sections.push(groupIds.map((id) => renderCard(id, renderIdx++)).join(''));
+            }
+            const otherDisabled = visibleDisabledOrdered.filter((id) => !usedDisabled.has(id));
+            if (otherDisabled.length) {
+              sections.push(renderDisabledSubBanner("Other", otherDisabled.length, "other", "other"));
+              sections.push(otherDisabled.map((id) => renderCard(id, renderIdx++)).join(''));
+            }
+          }
+        }
+        if (!sections.length) {
+          sections.push(`
+            <div class="section-banner">
+              <div class="section-left">
+                <div class="section-title">No matching sessions</div>
+                <div class="section-note">Change the filter chip above to view more cards.</div>
+              </div>
+            </div>
+          `);
+        }
+
+        const html = sections.join('');
+        renderSectionNav(navItems);
+        wireSectionNav();
+
+        const cards = document.getElementById('cards');
+        if (window.FnoMonitor) window.FnoMonitor.beforeRefresh();
+        cards.innerHTML = html;
+        wireCardControls();
+        wirePinControls();
+        wireLogToggleControls();
+        wireStatusFilters();
+        wireDisabledSectionControls();
+        wireRestartControls();
+        wireKillSwitchControls();
+        enhanceSortableTables();
+        if (window.FnoMonitor) window.FnoMonitor.mount(document.getElementById("fno-stock-monitor"), API_TOKEN);
+        applyFullscreenState();
+        DashboardOps.restore(cards, readingState, document);
+        const replacementFocus = focusedFilter ? document.querySelector(`[data-filter-id="${CSS.escape(focusedFilter)}"]`) : (focusedSection ? document.querySelector(`[data-section-target="${CSS.escape(focusedSection)}"]`) : null);
+        if (replacementFocus) replacementFocus.focus({ preventScroll: true });
+        if (!FULLSCREEN_ID) window.scrollTo(0, prevY);
+        LAST_SUCCESSFUL_REFRESH = String(data.server_time || new Date().toLocaleTimeString());
+        refreshStatusText();
+        document.getElementById("refreshNotice").hidden = true;
+      } catch (err) {
+        const msg = (err && err.message) ? err.message : String(err);
+        const notice = document.getElementById("refreshNotice");
+        notice.textContent = LAST_SUCCESSFUL_REFRESH
+          ? `Updates unavailable (${msg}). Showing the last successful snapshot from ${LAST_SUCCESSFUL_REFRESH}. Use Refresh to retry.`
+          : `Dashboard unavailable (${msg}). Use Refresh to retry.`;
+        notice.hidden = false;
+        if (!LAST_SUCCESSFUL_REFRESH) document.getElementById("info").textContent = "Waiting for the first dashboard snapshot";
+      } finally {
+        SNAPSHOT_LOAD_IN_FLIGHT = false;
+      }
+    }
+
+    applyTheme();
+    applyDensity();
+    wireThemeControl();
+    wireTimelineControl();
+    wireDensityControl();
+    wireSearchControl();
+    wireProblemsFirstControl();
+    wireRestartAllControl();
+    wireAutoRefreshControl();
+    loadNow(false);
+    setInterval(() => { if (!AUTO_REFRESH_PAUSED) { cockpit.refresh(); loadNow(false); } }, 15000);
+  </script>
+</body>
+</html>"""
+        html = html.replace("__API_TOKEN_JSON__", api_token_json)
+        html = html.replace("__FNO_MONITOR_CSS__", (BASE_DIR / "dashboard_fno_monitor.css").read_text(encoding="utf-8"))
+        html = html.replace("__FNO_MONITOR_JS__", (BASE_DIR / "dashboard_fno_monitor.js").read_text(encoding="utf-8"))
+        html = html.replace("__OPS_STATE_JS__", (BASE_DIR / "dashboard_ops_state.js").read_text(encoding="utf-8"))
+        html = html.replace("__TERMINAL_CSS__", (BASE_DIR / "dashboard_terminal.css").read_text(encoding="utf-8"))
+        html = html.replace("__COCKPIT_CSS__", (BASE_DIR / "dashboard_cockpit.css").read_text(encoding="utf-8"))
+        html = html.replace("__COCKPIT_JS__", (BASE_DIR / "dashboard_cockpit.js").read_text(encoding="utf-8"))
+        html = _active_strategy_display(html) if "terminal-main" in html or "EQIDV2 Live Logs" in html else html
+        body = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _snapshot(self, lines: int) -> Dict[str, object]:
+        items = []
+        task_snapshot = load_task_scheduler_snapshot()
+        today_ist = dt.datetime.now(IST).date().isoformat()
+        for key in LOG_IDS:
+            path, file_name = resolve_log_target(key)
+            if key in V13_V10_G_ARTIFACT_CARD_REPORTS:
+                status = _research_artifact_status(path)
+            elif key in FNO_MULTI_PAPER_CARD_PROFILES:
+                status = _load_fno_multi_paper_runtime_status(key)
+            else:
+                status_path = _runtime_status_path_for_card(key)
+                status = parse_status_file(status_path) if status_path is not None else {}
+                _hb_path2 = _runtime_heartbeat_path_for_card(key)
+                heartbeat = parse_status_file(_hb_path2) if _hb_path2 else {}
+                if heartbeat and _hb_path2 is not None:
+                    try:
+                        heartbeat["_file_age_sec"] = (
+                            dt.datetime.now(dt.timezone.utc).timestamp() - _hb_path2.stat().st_mtime
+                        )
+                    except OSError:
+                        pass
+                    status = merge_runtime_status(status, heartbeat)
+            if key not in V13_V10_G_ARTIFACT_CARD_REPORTS:
+                status = infer_scanner_runtime_status(key, path, status)
+                status = reconcile_fno_worker_recovery(key, status)
+                status = apply_scheduler_status(key, status, task_snapshot)
+                status = infer_pid_session_provenance(key, status)
+            if key == "authentication_v2":
+                status = reconcile_authentication_status(status)
+            try:
+                size = path.stat().st_size if path.exists() else 0
+            except OSError:
+                size = 0
+            if key == "pending_signals_v16_5min":
+                tail = _format_csv_projection(
+                    path, _PENDING_SIGNALS_V16_COLS,
+                    limit_rows=5000,
+                    time_only_cols={"added_at", "trigger_iso", "entry_ist", "expires_at"},
+                )
+            elif key == "detected_signals_v16_5min":
+                tail = _format_csv_projection(
+                    path, _DETECTED_SIGNALS_V16_COLS,
+                    limit_rows=5000,
+                    time_only_cols={"detected_at"},
+                )
+            elif key == "preopen_healthcheck":
+                tail = _format_preopen_scheduled_sessions()
+            elif key in LIVE_FETCH_STATUS_JSON_FILES:
+                tail = _format_live_data_fetch_console_view(key, path, lines=lines)
+            elif key == "entry_engine_1min_v5_id":
+                entry_rows = runtime_dir("entry_engine_1min_v5_ID") / "latest" / "latest_entry_engine_rows.csv"
+                entry_cols: list[Tuple[str, Sequence[str]]] = [
+                    ("entry_time", ("entry_time_ist",)),
+                    ("ticker", ("ticker",)),
+                    ("side", ("side",)),
+                    ("setup", ("setup",)),
+                    ("entry_price", ("entry_price",)),
+                    ("sl_price", ("sl_price",)),
+                    ("target_price", ("target_price",)),
+                    ("sl_pct", ("sl_pct",)),
+                    ("target_pct", ("target_pct",)),
+                    ("exit_rule", ("exit_rule_source",)),
+                    ("score", ("score",)),
+                ]
+                projected = _format_csv_projection(
+                    entry_rows,
+                    entry_cols,
+                    limit_rows=5000,
+                    time_only_cols={"entry_time"},
+                    sort_numeric_desc_by_keys=("score",),
+                )
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_research_layer":
+                report = V7_RESEARCH_LAYER_LATEST_DIR / "latest_multi_window_suggestions.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "daily_live_v7_research_session":
+                report = DAILY_LIVE_V7_RESEARCH_LATEST_DIR / "latest_daily_live_v7_research.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_nse_id_cost":
+                report = V7_NSE_ID_COST_LATEST_DIR / "latest_v7_nse_id_cost.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_walkforward_gate":
+                report = V7_WALKFORWARD_GATE_LATEST_DIR / "latest_v7_walkforward_gate.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_causality_audit":
+                report = V7_CAUSALITY_AUDIT_LATEST_DIR / "v7_causality_audit.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_gate_promotion":
+                report = V7_GATE_PROMOTION_LATEST_DIR / "latest_v7_gate_promotion.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_qualification":
+                report = V7_QUALIFICATION_LATEST_DIR / "latest_v7_qualification.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "v7_pre_momentum_filter_analyst":
+                report = V7_PRE_MOMENTUM_FILTER_ANALYST_LATEST_DIR / "latest_v7_pre_momentum_filter_analyst.md"
+                projected = tail_text(report, lines=lines)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key == "data_for_backtesting":
+                today_ist = dt.datetime.now(IST).date().isoformat()
+                tail = _format_data_for_backtesting_live_view(today_ist)
+            elif key == "backtesting_result_v13_v10_g":
+                today_ist = dt.datetime.now(IST).date().isoformat()
+                path, file_name, tail = _backtesting_v13_v10_g_view(
+                    status, today_ist=today_ist, lines=lines,
+                )
+                try:
+                    size = path.stat().st_size if path.is_file() else 0
+                except OSError:
+                    size = 0
+            elif key == "paper_trade_id_5min_v7":
+                today_ist = dt.datetime.now(IST).date().isoformat()
+                projected = _format_v7_id_papertrade_runner_view(path, today_ist)
+                tail = projected if projected else tail_text(path, lines=lines)
+            elif key in ("signal_early_engine_v16_5min", "pending_data_fetcher_v16_5min", "detection_engine_v16_5min"):
+                tail = _shift_bar_slots_in_text(tail_text(path, lines=lines))
+            elif key in V13_V10_G_ARTIFACT_CARD_REPORTS:
+                tail = report_text(path, lines=lines)
+            elif key in FNO_OI_CARD_REPORTS and path.suffix.lower() == ".md":
+                tail = report_text(path, lines=lines)
+            else:
+                tail = tail_text(path, lines=lines)
+            items.append(
+                {
+                    "id": key,
+                    "file_name": file_name,
+                    "exists": path.exists(),
+                    "mtime": iso_mtime(path),
+                    "size_bytes": size,
+                    "status": status,
+                    "tail": tail,
+                }
+            )
+
+        # V13 research results are displayed only through their newest complete
+        # manifest. Hash or vintage failure is fail-closed and never falls back
+        # to an older green run.
+        if (
+            _build_v13_vintage_status is not None
+            and _render_v13_vintage_markdown is not None
+            and _V13_VINTAGE_FAMILIES is not None
+        ):
+            try:
+                vintage_payload = _build_v13_vintage_status(_V13_VINTAGE_FAMILIES)
+                vintage_tail = _render_v13_vintage_markdown(vintage_payload)
+                vintage_state = str(vintage_payload.get("status", "BLOCKED_UNKNOWN"))
+                vintage_mtime = str(vintage_payload.get("generated_at_ist", "")) or None
+                vintage_status = {
+                    "status": vintage_state,
+                    "phase": "manifest_hash_and_data_vintage_gate",
+                    "coherent_data_through": str(
+                        vintage_payload.get("coherent_data_through") or ""
+                    ),
+                }
+            except Exception as exc:
+                vintage_state = "BLOCKED_VALIDATION_ERROR"
+                vintage_mtime = None
+                vintage_status = {
+                    "status": vintage_state,
+                    "phase": "manifest_hash_and_data_vintage_gate",
+                    "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+                }
+                vintage_tail = (
+                    "# V13 Research Run Vintage Gate\n\n"
+                    f"- Gate: **{vintage_state}**\n"
+                    f"- Error: `{vintage_status['error']}`\n"
+                )
+        else:
+            vintage_state = "BLOCKED_VALIDATOR_UNAVAILABLE"
+            vintage_mtime = None
+            vintage_status = {"status": vintage_state, "phase": "import_gate"}
+            vintage_tail = "# V13 Research Run Vintage Gate\n\n- Gate: **BLOCKED_VALIDATOR_UNAVAILABLE**\n"
+        items.append(
+            {
+                "id": "v13_research_run_vintage",
+                "file_name": "newest validated V13 run manifests",
+                "exists": vintage_state == "READY",
+                "mtime": vintage_mtime,
+                "size_bytes": len(vintage_tail.encode("utf-8")),
+                "status": vintage_status,
+                "tail": vintage_tail,
+            }
+        )
+
+        # Output session directly after "Signal discovery v7 5mins ID":
+        # signal-candle candidate tickers only; no entry candle/entry price.
+        candidate_latest_csv = SIGNAL_DISCOVERY_V7_LATEST_DIR / "latest_candidate_tickers.csv"
+        candidate_latest_json = SIGNAL_DISCOVERY_V7_LATEST_DIR / "latest_candidate_tickers.json"
+        try:
+            candidate_size = candidate_latest_csv.stat().st_size if candidate_latest_csv.exists() else 0
+        except OSError:
+            candidate_size = 0
+        candidate_status: Dict[str, str] = {}
+        if candidate_latest_json.exists():
+            try:
+                payload = json.loads(candidate_latest_json.read_text(encoding="utf-8", errors="replace"))
+                total_candidates = int(payload.get("total_candidates", 0) or 0)
+                candidate_status = {
+                    "status": "READY" if total_candidates > 0 else "EMPTY_OUTPUT",
+                    "session": str(payload.get("session", "Signal discovery v7 5mins ID")),
+                    "slot": str(payload.get("slot_ist", "")),
+                    "total_candidates": str(total_candidates),
+                    "long_candidates": str(payload.get("long_candidates", 0)),
+                    "short_candidates": str(payload.get("short_candidates", 0)),
+                    "json_file": str(Path("signal_discovery_v7_5mins_ID") / "latest" / candidate_latest_json.name),
+                }
+            except (OSError, json.JSONDecodeError, ValueError):
+                candidate_status = {"status": "BAD_JSON"}
+        elif candidate_latest_csv.exists():
+            candidate_status = {"status": "READY", "derived_status": "latest_csv_exists_json_missing"}
+        else:
+            candidate_status = {"status": "MISSING_OUTPUT"}
+
+        candidate_cols: list[Tuple[str, Sequence[str]]] = [
+            ("signal_time", ("signal_time_ist",)),
+            ("ticker", ("ticker",)),
+            ("side", ("side",)),
+            ("setup", ("setup",)),
+            ("signal_close", ("signal_close",)),
+            ("quality_score", ("quality_score",)),
+            ("rs_pct", ("rs_pct",)),
+            ("vol_ratio", ("vol_ratio",)),
+            ("reason", ("reason",)),
+            ("status", ("status",)),
+        ]
+        candidate_tail = _format_csv_projection(
+            candidate_latest_csv,
+            candidate_cols,
+            limit_rows=5000,
+            time_only_cols={"signal_time"},
+            sort_numeric_desc_by_keys=("quality_score",),
+        )
+        items.append(
+            {
+                "id": "candidate_tickers_v7_5min_id",
+                "file_name": str(Path("signal_discovery_v7_5mins_ID") / "latest" / candidate_latest_csv.name),
+                "exists": candidate_latest_csv.exists(),
+                "mtime": iso_mtime(candidate_latest_csv),
+                "size_bytes": candidate_size,
+                "status": candidate_status,
+                "tail": candidate_tail,
+            }
+        )
+
+        # FnO G quantity-1 live execution publishes isolated entry and trade
+        # sheets.  Add these before building the aggregate FnO monitor so the
+        # monitor sees the same four views that are rendered in its subgroup.
+        fno_v13_v10_g_live_kite_status = _v7_monitor_status_for(
+            "kite_trade_fno_id_v13_v10_g", task_snapshot
+        )
+        fno_v13_v10_g_live_kite_payload = _json_status_scalars(
+            _read_json_dict(FNO_V6_LIVE_KITE_ROOT / "status.json")
+        )
+        if fno_v13_v10_g_live_kite_payload:
+            fno_v13_v10_g_live_kite_payload["execution_state"] = (
+                fno_v13_v10_g_live_kite_payload.pop("state", "")
+            )
+            fno_v13_v10_g_live_kite_status.update(fno_v13_v10_g_live_kite_payload)
+            for existing_item in items:
+                if existing_item.get("id") == "kite_trade_fno_id_v13_v10_g":
+                    existing_item.setdefault("status", {}).update(
+                        fno_v13_v10_g_live_kite_payload
+                    )
+                    break
+        fno_v13_v10_g_live_entry_cols = FNO_V13_V10_G_LIVE_ENTRY_COLUMNS
+        for fno_v13_v10_g_side in ("short", "long"):
+            fno_v13_v10_g_signal_name = (
+                f"signals_{today_ist}_fno_id_{FNO_ACTIVE_PROFILE.slug}_{fno_v13_v10_g_side}.csv"
+            )
+            fno_v13_v10_g_signal_path = FNO_V6_LIVE_KITE_ROOT / fno_v13_v10_g_signal_name
+            try:
+                fno_v13_v10_g_signal_size = (
+                    fno_v13_v10_g_signal_path.stat().st_size
+                    if fno_v13_v10_g_signal_path.exists()
+                    else 0
+                )
+            except OSError:
+                fno_v13_v10_g_signal_size = 0
+            items.append(
+                {
+                    "id": f"live_signals_csv_fno_id_v13_v10_g_{fno_v13_v10_g_side}",
+                    "file_name": str(
+                        Path("fno_oi")
+                        / FNO_ACTIVE_PROFILE.live_dir
+                        / "live_kite"
+                        / fno_v13_v10_g_signal_name
+                    ),
+                    "exists": fno_v13_v10_g_signal_path.exists(),
+                    "mtime": iso_mtime(fno_v13_v10_g_signal_path),
+                    "size_bytes": fno_v13_v10_g_signal_size,
+                    "status": dict(fno_v13_v10_g_live_kite_status),
+                    "tail": _format_csv_projection(
+                        fno_v13_v10_g_signal_path,
+                        fno_v13_v10_g_live_entry_cols,
+                        limit_rows=5000,
+                        time_only_cols={"signal_datetime", "detected_time_ist"},
+                    ),
+                }
+            )
+
+        fno_v13_v10_g_live_trade_name = f"live_trades_{today_ist}_fno_id_{FNO_ACTIVE_PROFILE.slug}.csv"
+        fno_v13_v10_g_live_trade_path = FNO_V6_LIVE_KITE_ROOT / fno_v13_v10_g_live_trade_name
+        try:
+            fno_v13_v10_g_live_trade_size = (
+                fno_v13_v10_g_live_trade_path.stat().st_size
+                if fno_v13_v10_g_live_trade_path.exists()
+                else 0
+            )
+        except OSError:
+            fno_v13_v10_g_live_trade_size = 0
+        fno_v13_v10_g_live_trade_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("ticker", "tradingsymbol")),
+            ("entry_time", ("entry_time", "entry_at_ist")),
+            ("exit_time", ("exit_time", "exit_at_ist")),
+            ("side", ("side",)),
+            ("outcome", ("outcome", "status", "exit_reason")),
+            ("quantity", ("quantity",)),
+            ("entry", ("filled_price", "entry_price")),
+            ("exit", ("exit_price",)),
+            ("pnl_rs", ("pnl_rs", "net_pnl_rs")),
+        ]
+        items.append(
+            {
+                "id": "live_kite_trades_csv_fno_id_v13_v10_g",
+                "file_name": str(
+                    Path("fno_oi")
+                    / FNO_ACTIVE_PROFILE.live_dir
+                    / "live_kite"
+                    / fno_v13_v10_g_live_trade_name
+                ),
+                "exists": fno_v13_v10_g_live_trade_path.exists(),
+                "mtime": iso_mtime(fno_v13_v10_g_live_trade_path),
+                "size_bytes": fno_v13_v10_g_live_trade_size,
+                "status": dict(fno_v13_v10_g_live_kite_status),
+                "tail": _format_csv_projection(
+                    fno_v13_v10_g_live_trade_path,
+                    fno_v13_v10_g_live_trade_cols,
+                    limit_rows=5000,
+                    time_only_cols={"entry_time", "exit_time"},
+                ),
+            }
+        )
+
+        (
+            monitor_tail,
+            monitor_status,
+            monitor_mtime,
+            _monitor_configured_count,
+            monitor_exists,
+        ) = _format_fno_eq_id_monitor(items)
+        monitor_size = len(monitor_tail.encode("utf-8", errors="replace"))
+        items.append(
+            {
+                "id": FNO_EQ_ID_MONITOR_CARD_ID,
+                "file_name": "virtual/fno_eq_id_monitoring.md",
+                "exists": monitor_exists,
+                "mtime": monitor_mtime,
+                "size_bytes": monitor_size,
+                "status": monitor_status,
+                "tail": monitor_tail,
+            }
+        )
+
+        # Dynamic cards: today's live signal CSV(s) used by trade execution.
+        entry_engine_status_for_live_csv = next(
+            (
+                dict(item.get("status") or {})
+                for item in items
+                if item.get("id") == "entry_engine_1min_v5_id"
+            ),
+            {},
+        )
+        live_entries_cols: list[Tuple[str, Sequence[str]]] = [
+            ("signal_datetime", ("signal_datetime", "signal_entry_datetime_ist", "signal_bar_time_ist", "created_ts_ist")),
+            ("detected_time_ist", ("detected_time_ist",)),
+            ("ticker", ("ticker",)),
+            ("side", ("side",)),
+            ("entry_price", ("entry_price",)),
+            ("target_price", ("target_price",)),
+            ("stop_price", ("stop_price", "_stop_price")),
+            ("quantity", ("quantity",)),
+        ]
+
+        # Dynamic card: today's live signal CSV V5 short.
+        live_csv_name_v5_short = f"signals_{today_ist}_v5_short.csv"
+        live_csv_path_v5_short = LIVE_SIGNAL_DIR / live_csv_name_v5_short
+        try:
+            live_size_v5_short = live_csv_path_v5_short.stat().st_size if live_csv_path_v5_short.exists() else 0
+        except OSError:
+            live_size_v5_short = 0
+        live_entries_tail_v5_short = _format_csv_projection(
+            live_csv_path_v5_short,
+            live_entries_cols,
+            # Show full intraday signal sheet instead of a tiny tail window.
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v5_short",
+                "file_name": str(Path("live_signals") / live_csv_name_v5_short),
+                "exists": live_csv_path_v5_short.exists(),
+                "mtime": iso_mtime(live_csv_path_v5_short),
+                "size_bytes": live_size_v5_short,
+                "status": {},
+                "tail": live_entries_tail_v5_short,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV V5 long.
+        live_csv_name_v5_long = f"signals_{today_ist}_v5_long.csv"
+        live_csv_path_v5_long = LIVE_SIGNAL_DIR / live_csv_name_v5_long
+        try:
+            live_size_v5_long = live_csv_path_v5_long.stat().st_size if live_csv_path_v5_long.exists() else 0
+        except OSError:
+            live_size_v5_long = 0
+        live_entries_tail_v5_long = _format_csv_projection(
+            live_csv_path_v5_long,
+            live_entries_cols,
+            # Show full intraday signal sheet instead of a tiny tail window.
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v5_long",
+                "file_name": str(Path("live_signals") / live_csv_name_v5_long),
+                "exists": live_csv_path_v5_long.exists(),
+                "mtime": iso_mtime(live_csv_path_v5_long),
+                "size_bytes": live_size_v5_long,
+                "status": {},
+                "tail": live_entries_tail_v5_long,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV V7 sweep short.
+        live_csv_name_v7_sweep_short = f"signals_{today_ist}_v7_sweep_short.csv"
+        live_csv_path_v7_sweep_short = LIVE_SIGNAL_DIR / live_csv_name_v7_sweep_short
+        try:
+            live_size_v7_sweep_short = (
+                live_csv_path_v7_sweep_short.stat().st_size if live_csv_path_v7_sweep_short.exists() else 0
+            )
+        except OSError:
+            live_size_v7_sweep_short = 0
+        live_entries_tail_v7_sweep_short = _format_csv_projection(
+            live_csv_path_v7_sweep_short,
+            live_entries_cols,
+            # Show full intraday signal sheet instead of a tiny tail window.
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v7_sweep_short",
+                "file_name": str(Path("live_signals") / live_csv_name_v7_sweep_short),
+                "exists": live_csv_path_v7_sweep_short.exists(),
+                "mtime": iso_mtime(live_csv_path_v7_sweep_short),
+                "size_bytes": live_size_v7_sweep_short,
+                "status": {},
+                "tail": live_entries_tail_v7_sweep_short,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV V7 sweep long.
+        live_csv_name_v7_sweep_long = f"signals_{today_ist}_v7_sweep_long.csv"
+        live_csv_path_v7_sweep_long = LIVE_SIGNAL_DIR / live_csv_name_v7_sweep_long
+        try:
+            live_size_v7_sweep_long = (
+                live_csv_path_v7_sweep_long.stat().st_size if live_csv_path_v7_sweep_long.exists() else 0
+            )
+        except OSError:
+            live_size_v7_sweep_long = 0
+        live_entries_tail_v7_sweep_long = _format_csv_projection(
+            live_csv_path_v7_sweep_long,
+            live_entries_cols,
+            # Show full intraday signal sheet instead of a tiny tail window.
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v7_sweep_long",
+                "file_name": str(Path("live_signals") / live_csv_name_v7_sweep_long),
+                "exists": live_csv_path_v7_sweep_long.exists(),
+                "mtime": iso_mtime(live_csv_path_v7_sweep_long),
+                "size_bytes": live_size_v7_sweep_long,
+                "status": {},
+                "tail": live_entries_tail_v7_sweep_long,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV V15_NEW short.
+        live_csv_name_v15_new_short = f"signals_{today_ist}_v15_new_short.csv"
+        live_csv_path_v15_new_short = LIVE_SIGNAL_DIR / live_csv_name_v15_new_short
+        try:
+            live_size_v15_new_short = (
+                live_csv_path_v15_new_short.stat().st_size if live_csv_path_v15_new_short.exists() else 0
+            )
+        except OSError:
+            live_size_v15_new_short = 0
+        live_entries_tail_v15_new_short = _format_csv_projection(
+            live_csv_path_v15_new_short,
+            live_entries_cols,
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v15_new_short",
+                "file_name": str(Path("live_signals") / live_csv_name_v15_new_short),
+                "exists": live_csv_path_v15_new_short.exists(),
+                "mtime": iso_mtime(live_csv_path_v15_new_short),
+                "size_bytes": live_size_v15_new_short,
+                "status": {},
+                "tail": live_entries_tail_v15_new_short,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV V15_NEW long.
+        live_csv_name_v15_new_long = f"signals_{today_ist}_v15_new_long.csv"
+        live_csv_path_v15_new_long = LIVE_SIGNAL_DIR / live_csv_name_v15_new_long
+        try:
+            live_size_v15_new_long = (
+                live_csv_path_v15_new_long.stat().st_size if live_csv_path_v15_new_long.exists() else 0
+            )
+        except OSError:
+            live_size_v15_new_long = 0
+        live_entries_tail_v15_new_long = _format_csv_projection(
+            live_csv_path_v15_new_long,
+            live_entries_cols,
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v15_new_long",
+                "file_name": str(Path("live_signals") / live_csv_name_v15_new_long),
+                "exists": live_csv_path_v15_new_long.exists(),
+                "mtime": iso_mtime(live_csv_path_v15_new_long),
+                "size_bytes": live_size_v15_new_long,
+                "status": {},
+                "tail": live_entries_tail_v15_new_long,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV ID 5min v7 short.
+        live_csv_name_id_5min_v7_short = f"signals_{today_ist}_id_5min_v7_short.csv"
+        live_csv_path_id_5min_v7_short = LIVE_SIGNAL_DIR / live_csv_name_id_5min_v7_short
+        try:
+            live_size_id_5min_v7_short = (
+                live_csv_path_id_5min_v7_short.stat().st_size if live_csv_path_id_5min_v7_short.exists() else 0
+            )
+        except OSError:
+            live_size_id_5min_v7_short = 0
+        live_entries_tail_id_5min_v7_short = _format_csv_projection(
+            live_csv_path_id_5min_v7_short,
+            live_entries_cols,
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_id_5min_v7_short",
+                "file_name": str(Path("live_signals") / live_csv_name_id_5min_v7_short),
+                "exists": live_csv_path_id_5min_v7_short.exists(),
+                "mtime": iso_mtime(live_csv_path_id_5min_v7_short),
+                "size_bytes": live_size_id_5min_v7_short,
+                "status": dict(entry_engine_status_for_live_csv),
+                "tail": live_entries_tail_id_5min_v7_short,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV ID 5min v7 long.
+        live_csv_name_id_5min_v7_long = f"signals_{today_ist}_id_5min_v7_long.csv"
+        live_csv_path_id_5min_v7_long = LIVE_SIGNAL_DIR / live_csv_name_id_5min_v7_long
+        try:
+            live_size_id_5min_v7_long = (
+                live_csv_path_id_5min_v7_long.stat().st_size if live_csv_path_id_5min_v7_long.exists() else 0
+            )
+        except OSError:
+            live_size_id_5min_v7_long = 0
+        live_entries_tail_id_5min_v7_long = _format_csv_projection(
+            live_csv_path_id_5min_v7_long,
+            live_entries_cols,
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_id_5min_v7_long",
+                "file_name": str(Path("live_signals") / live_csv_name_id_5min_v7_long),
+                "exists": live_csv_path_id_5min_v7_long.exists(),
+                "mtime": iso_mtime(live_csv_path_id_5min_v7_long),
+                "size_bytes": live_size_id_5min_v7_long,
+                "status": dict(entry_engine_status_for_live_csv),
+                "tail": live_entries_tail_id_5min_v7_long,
+            }
+        )
+
+        # Dynamic cards: today's FPA v1 entry sheets, one per side. The FPA
+        # session publishes these with the same column contract as the v7 pair.
+        fpa_entry_status = _v7_monitor_status_for("fundamental_price_action_v1", task_snapshot)
+        for fpa_side in ("short", "long"):
+            fpa_csv_name = f"signals_{today_ist}_fpa_v1_{fpa_side}.csv"
+            fpa_csv_path = LIVE_SIGNAL_DIR / fpa_csv_name
+            try:
+                fpa_size = fpa_csv_path.stat().st_size if fpa_csv_path.exists() else 0
+            except OSError:
+                fpa_size = 0
+            items.append(
+                {
+                    "id": f"live_signals_csv_fpa_v1_{fpa_side}",
+                    "file_name": str(Path("live_signals") / fpa_csv_name),
+                    "exists": fpa_csv_path.exists(),
+                    "mtime": iso_mtime(fpa_csv_path),
+                    "size_bytes": fpa_size,
+                    "status": dict(fpa_entry_status),
+                    "tail": _format_csv_projection(
+                        fpa_csv_path,
+                        live_entries_cols,
+                        limit_rows=5000,
+                        time_only_cols={"signal_datetime", "detected_time_ist"},
+                    ),
+                }
+            )
+
+        detected_csv_path_v16_5min, _detected_csv_name_v16_5min = resolve_log_target(
+            "detected_signals_v16_5min"
+        )
+
+        # Dynamic card: today's live signal CSV V16_5MIN short.
+        live_csv_name_v16_5min_short = f"signals_{today_ist}_v16_5min_short.csv"
+        live_csv_path_v16_5min_short = LIVE_SIGNAL_DIR / live_csv_name_v16_5min_short
+        try:
+            live_size_v16_5min_short = (
+                live_csv_path_v16_5min_short.stat().st_size if live_csv_path_v16_5min_short.exists() else 0
+            )
+        except OSError:
+            live_size_v16_5min_short = 0
+        live_status_v16_5min_short = infer_v16_side_output_status(
+            live_csv_path_v16_5min_short,
+            "SHORT",
+            detected_csv_path_v16_5min,
+        )
+        live_entries_tail_v16_5min_short = _format_csv_projection(
+            live_csv_path_v16_5min_short,
+            _LIVE_SIGNALS_V16_COLS,
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+            time_shift_5min_cols={"signal_datetime"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v16_5min_short",
+                "file_name": str(Path("live_signals") / live_csv_name_v16_5min_short),
+                "exists": live_csv_path_v16_5min_short.exists(),
+                "mtime": iso_mtime(live_csv_path_v16_5min_short),
+                "size_bytes": live_size_v16_5min_short,
+                "status": live_status_v16_5min_short,
+                "tail": live_entries_tail_v16_5min_short,
+            }
+        )
+
+        # Dynamic card: today's live signal CSV V16_5MIN long.
+        live_csv_name_v16_5min_long = f"signals_{today_ist}_v16_5min_long.csv"
+        live_csv_path_v16_5min_long = LIVE_SIGNAL_DIR / live_csv_name_v16_5min_long
+        try:
+            live_size_v16_5min_long = (
+                live_csv_path_v16_5min_long.stat().st_size if live_csv_path_v16_5min_long.exists() else 0
+            )
+        except OSError:
+            live_size_v16_5min_long = 0
+        live_status_v16_5min_long = infer_v16_side_output_status(
+            live_csv_path_v16_5min_long,
+            "LONG",
+            detected_csv_path_v16_5min,
+        )
+        live_entries_tail_v16_5min_long = _format_csv_projection(
+            live_csv_path_v16_5min_long,
+            _LIVE_SIGNALS_V16_COLS,
+            limit_rows=5000,
+            time_only_cols={"signal_datetime", "detected_time_ist"},
+            time_shift_5min_cols={"signal_datetime"},
+        )
+        items.append(
+            {
+                "id": "live_signals_csv_v16_5min_long",
+                "file_name": str(Path("live_signals") / live_csv_name_v16_5min_long),
+                "exists": live_csv_path_v16_5min_long.exists(),
+                "mtime": iso_mtime(live_csv_path_v16_5min_long),
+                "size_bytes": live_size_v16_5min_long,
+                "status": live_status_v16_5min_long,
+                "tail": live_entries_tail_v16_5min_long,
+            }
+        )
+
+        # Dynamic cards: today's paper trade results CSV(s).
+        paper_trade_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("ticker",)),
+            ("exit_time", ("exit_time",)),
+            ("side", ("side",)),
+            ("outcome", ("outcome",)),
+            ("pnl_rs", ("pnl_rs",)),
+            ("pnl_pct", ("pnl_pct",)),
+        ]
+        paper_trade_cols_id_5min_v7: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("ticker",)),
+            ("exit_time", ("exit_time",)),
+            ("side", ("side",)),
+            ("outcome", ("outcome",)),
+            ("net_pnl_rs", ("net_pnl_rs", "net_pnl", "pnl_rs")),
+            ("gross_pnl_rs", ("gross_pnl_rs", "gross_pnl")),
+            ("total_cost_rs", ("total_cost_rs", "total_cost")),
+            ("net_pnl_pct", ("net_pnl_pct", "pnl_pct")),
+        ]
+
+        # Dynamic card: today's paper trade results CSV V5 unified.
+        paper_trade_csv_name_v5 = f"paper_trades_{today_ist}_v5.csv"
+        paper_trade_csv_path_v5 = LIVE_SIGNAL_DIR / paper_trade_csv_name_v5
+        try:
+            paper_trade_size_v5 = paper_trade_csv_path_v5.stat().st_size if paper_trade_csv_path_v5.exists() else 0
+        except OSError:
+            paper_trade_size_v5 = 0
+        paper_trade_tail_v5 = _format_csv_projection(
+            paper_trade_csv_path_v5,
+            paper_trade_cols,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_v5",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_v5),
+                "exists": paper_trade_csv_path_v5.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_v5),
+                "size_bytes": paper_trade_size_v5,
+                "status": {},
+                "tail": paper_trade_tail_v5,
+            }
+        )
+
+        # Dynamic card: today's paper trade results CSV V7 sweep.
+        paper_trade_csv_name_v7_sweep = f"paper_trades_{today_ist}_v7_sweep.csv"
+        paper_trade_csv_path_v7_sweep = LIVE_SIGNAL_DIR / paper_trade_csv_name_v7_sweep
+        try:
+            paper_trade_size_v7_sweep = (
+                paper_trade_csv_path_v7_sweep.stat().st_size if paper_trade_csv_path_v7_sweep.exists() else 0
+            )
+        except OSError:
+            paper_trade_size_v7_sweep = 0
+        paper_trade_tail_v7_sweep = _format_csv_projection(
+            paper_trade_csv_path_v7_sweep,
+            paper_trade_cols,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_v7_sweep",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_v7_sweep),
+                "exists": paper_trade_csv_path_v7_sweep.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_v7_sweep),
+                "size_bytes": paper_trade_size_v7_sweep,
+                "status": {},
+                "tail": paper_trade_tail_v7_sweep,
+            }
+        )
+
+        # Dynamic card: today's paper trade results CSV V15.
+        paper_trade_csv_name_v15 = f"paper_trades_{today_ist}_v15_new.csv"
+        paper_trade_csv_path_v15 = LIVE_SIGNAL_DIR / paper_trade_csv_name_v15
+        try:
+            paper_trade_size_v15 = (
+                paper_trade_csv_path_v15.stat().st_size if paper_trade_csv_path_v15.exists() else 0
+            )
+        except OSError:
+            paper_trade_size_v15 = 0
+        paper_trade_tail_v15 = _format_csv_projection(
+            paper_trade_csv_path_v15,
+            paper_trade_cols,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_v15",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_v15),
+                "exists": paper_trade_csv_path_v15.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_v15),
+                "size_bytes": paper_trade_size_v15,
+                "status": {},
+                "tail": paper_trade_tail_v15,
+            }
+        )
+
+        # Dynamic card: today's paper trade results CSV V16_5MIN.
+        paper_trade_csv_name_v16_5min = f"paper_trades_{today_ist}_v16_5min.csv"
+        paper_trade_csv_path_v16_5min = LIVE_SIGNAL_DIR / paper_trade_csv_name_v16_5min
+        try:
+            paper_trade_size_v16_5min = (
+                paper_trade_csv_path_v16_5min.stat().st_size if paper_trade_csv_path_v16_5min.exists() else 0
+            )
+        except OSError:
+            paper_trade_size_v16_5min = 0
+        paper_trade_tail_v16_5min = _format_csv_projection(
+            paper_trade_csv_path_v16_5min,
+            paper_trade_cols,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_v16_5min",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_v16_5min),
+                "exists": paper_trade_csv_path_v16_5min.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_v16_5min),
+                "size_bytes": paper_trade_size_v16_5min,
+                "status": {},
+                "tail": paper_trade_tail_v16_5min,
+            }
+        )
+
+        # Dynamic card: today's paper trade results CSV ID 5min v7.
+        paper_trade_csv_name_id_5min_v7 = f"paper_trades_{today_ist}_id_5min_v7.csv"
+        paper_trade_csv_path_id_5min_v7 = LIVE_SIGNAL_DIR / paper_trade_csv_name_id_5min_v7
+        try:
+            paper_trade_size_id_5min_v7 = (
+                paper_trade_csv_path_id_5min_v7.stat().st_size
+                if paper_trade_csv_path_id_5min_v7.exists()
+                else 0
+            )
+        except OSError:
+            paper_trade_size_id_5min_v7 = 0
+        paper_trade_tail_id_5min_v7 = _format_csv_projection(
+            paper_trade_csv_path_id_5min_v7,
+            paper_trade_cols_id_5min_v7,
+            limit_rows=max(5, min(40, lines // 2)),
+            time_only_cols={"exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_id_5min_v7",
+                "file_name": str(Path("live_signals") / paper_trade_csv_name_id_5min_v7),
+                "exists": paper_trade_csv_path_id_5min_v7.exists(),
+                "mtime": iso_mtime(paper_trade_csv_path_id_5min_v7),
+                "size_bytes": paper_trade_size_id_5min_v7,
+                "status": {},
+                "tail": paper_trade_tail_id_5min_v7,
+            }
+        )
+
+        # Dynamic card: today's FPA v1 paper trade results (net of costs).
+        # Intraday MIS runs 5x leverage on Rs 10,000 of capital per trade, so
+        # the card carries return-on-capital next to the raw price move.
+        fpa_paper_trade_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("ticker",)),
+            ("exit_time", ("exit_time",)),
+            ("side", ("side",)),
+            ("outcome", ("outcome",)),
+            ("qty", ("quantity",)),
+            ("exposure_rs", ("exposure_rs",)),
+            ("net_pnl_rs", ("net_pnl_rs",)),
+            ("total_cost_rs", ("total_cost_rs",)),
+            ("net_pnl_pct", ("net_pnl_pct",)),
+            ("roc_pct", ("return_on_capital_pct",)),
+        ]
+        fpa_paper_csv_name = f"paper_trades_{today_ist}_fpa_v1.csv"
+        fpa_paper_csv_path = LIVE_SIGNAL_DIR / fpa_paper_csv_name
+        try:
+            fpa_paper_size = (
+                fpa_paper_csv_path.stat().st_size if fpa_paper_csv_path.exists() else 0
+            )
+        except OSError:
+            fpa_paper_size = 0
+        items.append(
+            {
+                "id": "live_papertrade_result_csv_fpa_v1",
+                "file_name": str(Path("live_signals") / fpa_paper_csv_name),
+                "exists": fpa_paper_csv_path.exists(),
+                "mtime": iso_mtime(fpa_paper_csv_path),
+                "size_bytes": fpa_paper_size,
+                "status": _v7_monitor_status_for("paper_trade_fpa_v1", task_snapshot),
+                "tail": _format_csv_projection(
+                    fpa_paper_csv_path,
+                    fpa_paper_trade_cols,
+                    limit_rows=max(5, min(40, lines // 2)),
+                    time_only_cols={"exit_time"},
+                ),
+            }
+        )
+
+        # Dynamic card: today's live Kite trades CSV.
+        # V5 live executor writes live_trades_YYYY-MM-DD_v5.csv.
+        live_kite_trade_csv_name_v5 = f"live_trades_{today_ist}_v5.csv"
+        live_kite_trade_csv_name_legacy = f"live_trades_{today_ist}.csv"
+        live_kite_trade_csv_path_v5 = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_v5
+        live_kite_trade_csv_path_legacy = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_legacy
+        if live_kite_trade_csv_path_v5.exists() or (not live_kite_trade_csv_path_legacy.exists()):
+            live_kite_trade_csv_name = live_kite_trade_csv_name_v5
+            live_kite_trade_csv_path = live_kite_trade_csv_path_v5
+        else:
+            live_kite_trade_csv_name = live_kite_trade_csv_name_legacy
+            live_kite_trade_csv_path = live_kite_trade_csv_path_legacy
+        try:
+            live_kite_trade_size = (
+                live_kite_trade_csv_path.stat().st_size if live_kite_trade_csv_path.exists() else 0
+            )
+        except OSError:
+            live_kite_trade_size = 0
+        live_kite_trade_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("ticker",)),
+            ("entry_time", ("entry_time",)),
+            ("exit_time", ("exit_time",)),
+            ("side", ("side",)),
+            ("outcome", ("outcome",)),
+            ("entry", ("filled_price", "entry_price")),
+            ("exit", ("exit_price",)),
+            ("pnl_rs", ("pnl_rs",)),
+        ]
+        live_kite_trade_tail = _format_csv_projection(
+            live_kite_trade_csv_path,
+            live_kite_trade_cols,
+            # Show full intraday live-trade sheet instead of a small tail window.
+            limit_rows=5000,
+            time_only_cols={"entry_time", "exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_kite_trades_csv",
+                "file_name": str(Path("live_signals") / live_kite_trade_csv_name),
+                "exists": live_kite_trade_csv_path.exists(),
+                "mtime": iso_mtime(live_kite_trade_csv_path),
+                "size_bytes": live_kite_trade_size,
+                "status": {},
+                "tail": live_kite_trade_tail,
+            }
+        )
+
+        # Dynamic card: today's live Kite trades CSV V7 sweep.
+        live_kite_trade_csv_name_v7_sweep = f"live_trades_{today_ist}_v7_sweep.csv"
+        live_kite_trade_csv_path_v7_sweep = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_v7_sweep
+        try:
+            live_kite_trade_size_v7_sweep = (
+                live_kite_trade_csv_path_v7_sweep.stat().st_size if live_kite_trade_csv_path_v7_sweep.exists() else 0
+            )
+        except OSError:
+            live_kite_trade_size_v7_sweep = 0
+        live_kite_trade_tail_v7_sweep = _format_csv_projection(
+            live_kite_trade_csv_path_v7_sweep,
+            live_kite_trade_cols,
+            # Show full intraday live-trade sheet instead of a small tail window.
+            limit_rows=5000,
+            time_only_cols={"entry_time", "exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_kite_trades_csv_v7_sweep",
+                "file_name": str(Path("live_signals") / live_kite_trade_csv_name_v7_sweep),
+                "exists": live_kite_trade_csv_path_v7_sweep.exists(),
+                "mtime": iso_mtime(live_kite_trade_csv_path_v7_sweep),
+                "size_bytes": live_kite_trade_size_v7_sweep,
+                "status": {},
+                "tail": live_kite_trade_tail_v7_sweep,
+            }
+        )
+
+        # Dynamic card: today's live Kite trades CSV V15.
+        live_kite_trade_csv_name_v15 = f"live_trades_{today_ist}_v15_new.csv"
+        live_kite_trade_csv_path_v15 = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_v15
+        try:
+            live_kite_trade_size_v15 = (
+                live_kite_trade_csv_path_v15.stat().st_size if live_kite_trade_csv_path_v15.exists() else 0
+            )
+        except OSError:
+            live_kite_trade_size_v15 = 0
+        live_kite_trade_tail_v15 = _format_csv_projection(
+            live_kite_trade_csv_path_v15,
+            live_kite_trade_cols,
+            limit_rows=5000,
+            time_only_cols={"entry_time", "exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_kite_trades_csv_v15",
+                "file_name": str(Path("live_signals") / live_kite_trade_csv_name_v15),
+                "exists": live_kite_trade_csv_path_v15.exists(),
+                "mtime": iso_mtime(live_kite_trade_csv_path_v15),
+                "size_bytes": live_kite_trade_size_v15,
+                "status": {},
+                "tail": live_kite_trade_tail_v15,
+            }
+        )
+
+        # Dynamic card: today's live Kite trades CSV V16_5MIN.
+        live_kite_trade_csv_name_v16_5min = f"live_trades_{today_ist}_v16_5min.csv"
+        live_kite_trade_csv_path_v16_5min = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_v16_5min
+        try:
+            live_kite_trade_size_v16_5min = (
+                live_kite_trade_csv_path_v16_5min.stat().st_size if live_kite_trade_csv_path_v16_5min.exists() else 0
+            )
+        except OSError:
+            live_kite_trade_size_v16_5min = 0
+        live_kite_trade_tail_v16_5min = _format_csv_projection(
+            live_kite_trade_csv_path_v16_5min,
+            live_kite_trade_cols,
+            limit_rows=5000,
+            time_only_cols={"entry_time", "exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_kite_trades_csv_v16_5min",
+                "file_name": str(Path("live_signals") / live_kite_trade_csv_name_v16_5min),
+                "exists": live_kite_trade_csv_path_v16_5min.exists(),
+                "mtime": iso_mtime(live_kite_trade_csv_path_v16_5min),
+                "size_bytes": live_kite_trade_size_v16_5min,
+                "status": {},
+                "tail": live_kite_trade_tail_v16_5min,
+            }
+        )
+
+        # Dynamic card: today's live Kite trades CSV ID 5min v7.
+        live_kite_trade_csv_name_id_5min_v7 = f"live_trades_{today_ist}_id_5min_v7.csv"
+        live_kite_trade_csv_path_id_5min_v7 = LIVE_SIGNAL_DIR / live_kite_trade_csv_name_id_5min_v7
+        try:
+            live_kite_trade_size_id_5min_v7 = (
+                live_kite_trade_csv_path_id_5min_v7.stat().st_size
+                if live_kite_trade_csv_path_id_5min_v7.exists()
+                else 0
+            )
+        except OSError:
+            live_kite_trade_size_id_5min_v7 = 0
+        live_kite_trade_tail_id_5min_v7 = _format_csv_projection(
+            live_kite_trade_csv_path_id_5min_v7,
+            live_kite_trade_cols,
+            limit_rows=5000,
+            time_only_cols={"entry_time", "exit_time"},
+        )
+        items.append(
+            {
+                "id": "live_kite_trades_csv_id_5min_v7",
+                "file_name": str(Path("live_signals") / live_kite_trade_csv_name_id_5min_v7),
+                "exists": live_kite_trade_csv_path_id_5min_v7.exists(),
+                "mtime": iso_mtime(live_kite_trade_csv_path_id_5min_v7),
+                "size_bytes": live_kite_trade_size_id_5min_v7,
+                "status": {},
+                "tail": live_kite_trade_tail_id_5min_v7,
+            }
+        )
+
+        # Dynamic cards: today's Kite holdings / day positions exported by zerodha_kite_export.py
+        today_ymd = dt.datetime.now(IST).strftime("%Y%m%d")
+        kite_meta = _read_kite_snapshot_meta(KITE_EXPORT_DIR / "kite_snapshot_meta.json")
+        funds_available = _extract_funds_available(kite_meta)
+        funds_available_text = _fmt_rs(funds_available) if not math.isnan(funds_available) else "n/a"
+
+        holdings_candidates = [
+            KITE_EXPORT_DIR / f"holdings_{today_ymd}.csv",
+            KITE_EXPORT_DIR / "kite_holdings_today.csv",
+        ]
+        holdings_path = next((p for p in holdings_candidates if p.exists()), holdings_candidates[-1])
+        try:
+            holdings_size = holdings_path.stat().st_size if holdings_path.exists() else 0
+        except OSError:
+            holdings_size = 0
+        holdings_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("tradingsymbol", "symbol", "ticker")),
+            ("exchange", ("exchange",)),
+            ("qty", ("quantity", "qty")),
+            ("avg_price", ("average_price", "avg_price")),
+            ("last_price", ("last_price", "ltp")),
+            ("pnl", ("pnl", "unrealised", "unrealized")),
+            ("%total_pnl", ()),
+            ("day_chg_pct", ("day_change_percentage", "day_change_pct")),
+        ]
+        holdings_tail = _format_csv_projection(
+            holdings_path,
+            holdings_cols,
+            limit_rows=max(200, lines),
+            sort_numeric_desc_by_keys=("%total_pnl", "pnl", "unrealised", "unrealized"),
+            indian_numeric_cols={"avg_price", "last_price", "pnl"},
+            indian_int_cols={"qty"},
+            percent_cols={"%total_pnl", "day_chg_pct"},
+            signed_numeric_cols={"pnl", "%total_pnl", "day_chg_pct"},
+            computed_cols={"%total_pnl": _compute_holding_total_pnl_pct},
+        )
+        invested_amt, current_amt, total_pnl, total_pnl_pct, day_pnl, day_pnl_pct = _compute_holdings_summary(
+            holdings_path
+        )
+        total_current_with_funds = (
+            current_amt + funds_available
+            if (not math.isnan(current_amt) and not math.isnan(funds_available))
+            else float("nan")
+        )
+        total_invested_with_funds = (
+            invested_amt + funds_available
+            if (not math.isnan(invested_amt) and not math.isnan(funds_available))
+            else float("nan")
+        )
+        holdings_summary_lines = [
+            f"invested_amount={_fmt_rs(invested_amt) if not math.isnan(invested_amt) else 'n/a'}",
+            f"current_amount={_fmt_rs(current_amt) if not math.isnan(current_amt) else 'n/a'}",
+            f"total_pnl={_fmt_rs(total_pnl) if not math.isnan(total_pnl) else 'n/a'}",
+            f"total_pnl_pct={_fmt_pct(total_pnl_pct) if not math.isnan(total_pnl_pct) else 'n/a'}",
+            f"day_pnl={_fmt_rs(day_pnl) if not math.isnan(day_pnl) else 'n/a'}",
+            f"day_pnl_pct={_fmt_pct(day_pnl_pct) if not math.isnan(day_pnl_pct) else 'n/a'}",
+            f"funds_available={funds_available_text}",
+            f"TOTAL(invested)={_fmt_rs(total_invested_with_funds) if not math.isnan(total_invested_with_funds) else 'n/a'}",
+            f"TOTAL(current)={_fmt_rs(total_current_with_funds) if not math.isnan(total_current_with_funds) else 'n/a'}",
+        ]
+        holdings_tail = "\n".join(holdings_summary_lines + [holdings_tail])
+        items.append(
+            {
+                "id": "kite_holdings_today_csv",
+                "file_name": str(Path("kite_exports") / holdings_path.name),
+                "exists": holdings_path.exists(),
+                "mtime": iso_mtime(holdings_path),
+                "size_bytes": holdings_size,
+                "status": {},
+                "tail": holdings_tail,
+            }
+        )
+
+        positions_day_candidates = [
+            KITE_EXPORT_DIR / f"positions_day_{today_ymd}.csv",
+            KITE_EXPORT_DIR / "kite_positions_day_today.csv",
+        ]
+        positions_day_path = next((p for p in positions_day_candidates if p.exists()), positions_day_candidates[-1])
+        try:
+            positions_day_size = positions_day_path.stat().st_size if positions_day_path.exists() else 0
+        except OSError:
+            positions_day_size = 0
+        positions_day_cols: list[Tuple[str, Sequence[str]]] = [
+            ("ticker", ("tradingsymbol", "symbol", "ticker")),
+            ("exchange", ("exchange",)),
+            ("product", ("product",)),
+            ("qty", ("quantity", "qty")),
+            ("buy_qty", ("buy_quantity",)),
+            ("sell_qty", ("sell_quantity",)),
+            ("avg_price", ("average_price", "avg_price")),
+            ("last_price", ("last_price", "ltp")),
+            ("pnl", ("pnl", "unrealised", "unrealized")),
+        ]
+        positions_day_tail = _format_csv_projection(
+            positions_day_path,
+            positions_day_cols,
+            limit_rows=max(200, lines),
+            total_numeric_by_keys=("pnl", "unrealised", "unrealized"),
+            total_numeric_label="total_pnl_ongoing",
+            total_numeric_first=True,
+            indian_numeric_cols={"avg_price", "last_price", "pnl"},
+            indian_int_cols={"qty", "buy_qty", "sell_qty"},
+            signed_numeric_cols={"pnl"},
+        )
+        positions_day_tail = "\n".join([f"funds_available={funds_available_text}", positions_day_tail])
+        items.append(
+            {
+                "id": "kite_positions_day_today_csv",
+                "file_name": str(Path("kite_exports") / positions_day_path.name),
+                "exists": positions_day_path.exists(),
+                "mtime": iso_mtime(positions_day_path),
+                "size_bytes": positions_day_size,
+                "status": {},
+                "tail": positions_day_tail,
+            }
+        )
+
+        kill_switch: dict[str, object] = {}
+        for scope in (
+            "false_v5",
+            "true_v5",
+            "false_v7_sweep",
+            "true_v7_sweep",
+            "false_id_5min_v7",
+            "true_id_5min_v7",
+            "false_v15",
+            "true_v15",
+            "false_v16_5min",
+            "true_v16_5min",
+        ):
+            state_path, command_path = _kill_switch_scope_paths(scope, today_ist)
+            positions = _load_open_positions(state_path, today_ist)
+            command_meta: dict[str, object] = {}
+            if command_path.exists():
+                try:
+                    raw_cmd = json.loads(command_path.read_text(encoding="utf-8", errors="replace"))
+                    if isinstance(raw_cmd, dict):
+                        command_meta = {
+                            "command_id": str(raw_cmd.get("command_id", "")).strip(),
+                            "mode": str(raw_cmd.get("mode", "")).strip().lower(),
+                            "ticker": str(raw_cmd.get("ticker", "")).strip().upper(),
+                            "requested_at_ist": str(raw_cmd.get("requested_at_ist", "")).strip(),
+                        }
+                except (OSError, json.JSONDecodeError):
+                    command_meta = {}
+
+            kill_switch[scope] = {
+                "state_file": str(Path("live_signals") / state_path.name),
+                "state_mtime": iso_mtime(state_path),
+                "positions": positions,
+                "positions_count": len(positions),
+                "command_file": str(Path("live_signals") / command_path.name),
+                "command_mtime": iso_mtime(command_path),
+                "last_command": command_meta,
+            }
+
+        items.extend(opening_observer_session_items(runtime_dir()))
+        for item in items:
+            item["status"] = apply_scheduler_status(str(item.get("id", "")), item.get("status", {}), task_snapshot)
+            item["status"] = _apply_fno_v13_v10_g_identity(str(item.get("id", "")), item["status"])
+            item["status"] = _apply_fno_market_calendar(str(item.get("id", "")), item["status"])
+            card_id = str(item.get("id", ""))
+            scope = str(item["status"].get("view_scope", "")).upper()
+            # A report/profile may share a scheduler with its producer. Count
+            # the producer once; viewing its CSV does not create a process.
+            is_process = (
+                scope not in {"PROFILE", "ARTIFACT"}
+                and "csv" not in card_id
+                and (card_id in STATUS_FILES or card_id in RESTARTABLE_CARDS or scope == "SESSION")
+            )
+            item["card_kind"] = "process" if is_process else "view"
+
+        items = [item for item in items if str(item.get("id", "")) not in HIDDEN_CARD_IDS]
+
+        return {
+            "server_time": dt.datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "active_strategy": {"profile": FNO_ACTIVE_PROFILE.name, "label": FNO_ACTIVE_PROFILE.label,
+                                "version": FNO_ACTIVE_PROFILE.version, "fingerprint": expected_fingerprint(),
+                                "deployment_stage": deployment_state().get("deployment_stage"),
+                                "live_activation_authorized": deployment_state().get("live_activation_authorized") is True,
+                                "live_execution_policy": g3_execution_metadata() if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" else None},
+            "log_dir": str(LOG_DIR),
+            "items": items,
+            "kill_switch": kill_switch,
+        }
+
+    def _send_json(self, payload: Dict[str, object], status: HTTPStatus = HTTPStatus.OK, *, compress: bool = False) -> None:
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":") if compress else None).encode("utf-8")
+        use_gzip = False
+        if compress and len(data) >= 1024:
+            for encoding in self.headers.get("Accept-Encoding", "").split(","):
+                parts = [part.strip().lower() for part in encoding.split(";")]
+                if parts[0] != "gzip":
+                    continue
+                try:
+                    quality = next((float(part[2:]) for part in parts[1:] if part.startswith("q=")), 1.0)
+                except ValueError:
+                    quality = 0.0
+                use_gzip = 0 < quality <= 1
+                break
+        if use_gzip:
+            data = gzip.compress(data, compresslevel=1, mtime=0)
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        if compress:
+            self.send_header("Vary", "Accept-Encoding")
+        if use_gzip:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_text(self, text: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+        data = text.encode("utf-8", errors="replace")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    @staticmethod
+    def _int_param(params, name: str, default: int, lo: int, hi: int) -> int:
+        try:
+            raw = (params.get(name) or [str(default)])[0]
+            num = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, num))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="EQIDV2 log dashboard server")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8787, help="Bind port (default: 8787)")
+    parser.add_argument("--username", default=os.environ.get("LOG_DASH_USER", ""), help="Basic auth username")
+    parser.add_argument("--password", default=os.environ.get("LOG_DASH_PASS", ""), help="Basic auth password")
+    parser.add_argument("--api-token", default=os.environ.get("LOG_DASH_TOKEN", ""), help="Optional API token fallback")
+    args = parser.parse_args()
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    httpd = ThreadingHTTPServer((args.host, args.port), LogDashboardHandler)
+    httpd.username = _normalize_cli_auth_value(args.username)
+    httpd.password = _normalize_cli_auth_value(args.password)
+    httpd.api_token = _normalize_cli_auth_value(args.api_token)
+
+    mode = "NO AUTH"
+    if args.username and args.password:
+        mode = "BASIC AUTH ENABLED"
+    if args.api_token:
+        mode = mode + " + API TOKEN"
+    if mode == "NO AUTH":
+        print("[ERROR] Dashboard refused to start: no authentication configured.")
+        print("[ERROR] Set LOG_DASH_PASS in the BAT or as a User env var before starting.")
+        httpd.server_close()
+        return 1
+
+    source_path = Path(__file__).resolve()
+    started_at_utc = dt.datetime.now(dt.timezone.utc)
+    identity_path = DASHBOARD_RUNTIME_IDENTITY_PATH
+    if str(args.host) != "127.0.0.1" or int(args.port) != 8787:
+        safe_host = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(args.host)) or "unknown"
+        identity_path = RUNTIME_STATUS_DIR / (
+            f"log_dashboard_server.{safe_host}.{int(args.port)}.runtime.json"
+        )
+    runtime_identity = {
+        "schema_version": DASHBOARD_RUNTIME_IDENTITY_SCHEMA_VERSION,
+        "pid": os.getpid(),
+        "source_path": str(source_path),
+        "source_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "started_at_utc": started_at_utc.isoformat(),
+        "started_at_ist": started_at_utc.astimezone(IST).isoformat(),
+        "host": str(args.host),
+        "port": int(args.port),
+    }
+    identity_stop = threading.Event()
+
+    def _publish_runtime_heartbeat() -> None:
+        while not identity_stop.is_set():
+            payload = dict(runtime_identity)
+            heartbeat_at_utc = dt.datetime.now(dt.timezone.utc)
+            payload["heartbeat_at_utc"] = heartbeat_at_utc.isoformat()
+            payload["heartbeat_at_ist"] = heartbeat_at_utc.astimezone(IST).isoformat()
+            try:
+                _atomic_write_json(identity_path, payload)
+            except OSError as exc:
+                print(f"[ERROR] Dashboard runtime identity heartbeat failed: {exc}")
+            identity_stop.wait(5.0)
+
+    try:
+        initial_identity = dict(runtime_identity)
+        initial_identity["heartbeat_at_utc"] = started_at_utc.isoformat()
+        initial_identity["heartbeat_at_ist"] = started_at_utc.astimezone(IST).isoformat()
+        _atomic_write_json(identity_path, initial_identity)
+    except OSError as exc:
+        print(f"[ERROR] Dashboard runtime identity publication failed: {exc}")
+        httpd.server_close()
+        return 1
+    print(f"[INFO] Serving EQIDV2 dashboard on http://{args.host}:{args.port} ({mode})")
+    print(f"[INFO] Reading logs from: {LOG_DIR}")
+    identity_thread = threading.Thread(
+        target=_publish_runtime_heartbeat,
+        name="dashboard-runtime-identity",
+        daemon=True,
+    )
+    identity_thread.start()
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        identity_stop.set()
+        identity_thread.join(timeout=2.0)
+        httpd.server_close()
+        try:
+            current = json.loads(
+                identity_path.read_text(encoding="utf-8")
+            )
+            if (
+                isinstance(current, dict)
+                and int(current.get("pid", -1)) == os.getpid()
+                and str(current.get("source_sha256", ""))
+                == str(runtime_identity["source_sha256"])
+            ):
+                identity_path.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

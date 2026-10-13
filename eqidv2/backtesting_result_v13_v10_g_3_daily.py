@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import pandas as pd
 
-import fno_v13_v10_g_3_contract as contract
+from research.g3_backtest_profile import contract
 import fno_v13_v10_g_3_daily_replay as replay
 
 SESSION = "backtesting_result_v13_v10_g_3"
@@ -421,9 +421,16 @@ def run_history(through: date, output_root: Path = DEFAULT_OUTPUT_ROOT, *, roots
             sealed_days = sorted(day for day in bundle["days"] if day <= through)
             if not sealed_days:
                 raise ValueError("No eligible sealed sessions through requested date")
+            history_start = sealed_days[0]
             sealed_dir = run_dir / "sealed_input_replay"
-            sealed = replay.replay_sealed_days(bundle, sealed_days, sealed_dir)
-            members = [(sealed_dir, sealed)]
+            if "09:20" in contract.SIGNAL_TO_CONFIRMATION and not bundle.get("opening_0920_complete"):
+                # Old pre-quota sources predate the promoted opening setup.
+                # Rebuild those days too; never label an incomplete book V3.
+                sealed_days = []
+                members = []
+            else:
+                sealed = replay.replay_sealed_days(bundle, sealed_days, sealed_dir)
+                members = [(sealed_dir, sealed)]
             excluded = []
             available = set()
             for path in roots.universe.glob("near_month_*.parquet"):
@@ -431,7 +438,7 @@ def run_history(through: date, output_root: Path = DEFAULT_OUTPUT_ROOT, *, roots
                     day = date.fromisoformat(path.stem.removeprefix("near_month_"))
                 except ValueError:
                     continue
-                if sealed_days[0] <= day <= through:
+                if history_start <= day <= through:
                     available.add(day)
             pending = []
             def retain(day, child_dir, child):
@@ -466,7 +473,7 @@ def run_history(through: date, output_root: Path = DEFAULT_OUTPUT_ROOT, *, roots
             members.sort(key=lambda member: member[1]["days"][0])
             for row in bundle["eligibility"].to_dict("records"):
                 day = date.fromisoformat(str(row["day"]))
-                if sealed_days[0] <= day <= through and str(row["eligible"]).lower() != "true" and day not in available:
+                if history_start <= day <= through and day not in available and day not in sealed_days:
                     excluded.append(dict(day=str(day), state="BLOCKED_SOURCE_INELIGIBLE",
                         source="VERIFIED_SEALED_SOURCE_ELIGIBILITY", blocking_problems=[dict(reason=row.get("reason"))]))
             excluded.sort(key=lambda row: row["day"])
@@ -491,6 +498,8 @@ def run_history(through: date, output_root: Path = DEFAULT_OUTPUT_ROOT, *, roots
                 members=[dict(run_dir=str(directory), manifest_sha256=replay.sha256(directory / "run_manifest.json"),
                               days=item["days"], source_kind=item["source_kind"]) for directory, item in members],
                 sealed_source_eligibility=bundle["eligibility"].to_dict("records"))
+            if not days:
+                raise ValueError("No complete G3 sessions; prior history pointer is preserved")
             result = replay._finish(run_dir, days=days, role="cumulative_history", source_kind=provenance["source_kind"],
                 frames={name: combine(name) for name in ("candidate_signals", "selected_orders", "selection_audit", "feature_ledger")},
                 provenance=provenance, coverage=dict(eligible_days=[str(d) for d in days],

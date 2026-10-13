@@ -4,7 +4,7 @@
   const PAGE_SIZE = 50;
   const state = {host: null, token: "", date: "", stock: "", slot: "", side: "", result: "", stage: "5m",
     page: 0, expanded: "", data: null, error: "", loading: false, request: 0, loadedAt: 0, controller: null,
-    focus: null, scroll: 0, detailScroll: 0};
+    focus: null, scroll: 0, detailScroll: 0, visibilityObserver: null};
   const esc = (value) => String(value == null ? "" : value).replace(/[&<>"']/g, (c) =>
     ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const label = (name) => String(name).replace(/_/g, " ");
@@ -96,7 +96,7 @@
     const slots = [...new Set(rows().map((row) => row.signal_time).filter(Boolean))].sort();
     host.querySelector("[data-zone=controls]").innerHTML = `
       <label>Session date (IST)<input aria-label="Monitoring session date" data-filter="date" type="date" value="${esc(state.date)}"></label>
-      <label>Stage<select aria-label="Monitoring stage" data-filter="stage">${selectOptions([["5m", "5-minute signals"], ["1m", "1-minute confirmations & entry events"]], state.stage)}</select></label>
+      <label>Stage<select aria-label="Monitoring stage" data-filter="stage">${selectOptions([["5m", "5-minute candidates & filters"], ["1m", "1-minute confirmations & entry events"]], state.stage)}</select></label>
       <label>Stock<input aria-label="Monitoring stock" data-filter="stock" type="search" placeholder="e.g. BHEL" value="${esc(state.stock)}"></label>
       <label>5m signal slot<select aria-label="Monitoring signal slot" data-filter="slot">${selectOptions([["", "All signal slots"], ...slots.map((slot) => [slot, slot])], state.slot)}</select></label>
       <label>Side<select aria-label="Monitoring side" data-filter="side">${selectOptions([["", "Both sides"], ["LONG", "LONG"], ["SHORT", "SHORT"]], state.side)}</select></label>
@@ -163,6 +163,21 @@
     host.querySelector("[data-zone=warnings]").innerHTML = warnings.length ?
       `<details class="fno-detail-warnings"><summary>Evidence warnings (${warnings.length})</summary><ul>${warnings.map((warning) => `<li>${esc(valueText(warning))}</li>`).join("")}</ul></details>` : "";
     const coverage = data && Array.isArray(data.coverage) ? data.coverage : [];
+    const selectionRows = coverage.map((row) => {
+      const selection = row.selection || {}, scanner = row.scanner || {};
+      const pair = (longs, shorts) => Number.isInteger(longs) && Number.isInteger(shorts) ? `L${longs} / S${shorts}` : "Unavailable";
+      const outcomes = {NO_FINAL_SELECTION: "No final selection: completed evaluation", NO_5M_CANDIDATES: "No 5m candidates",
+        SELECTED: "Final selection recorded", SCANNER_NOT_DUE: "Not due", CONFIRMATION_NOT_DUE: "Awaiting confirmation"};
+      const reasonText = (selection.reasons || []).map((item) => `${label(item.reason)}: ${item.count}`).join("; ");
+      const excluded = scanner.opening_excluded ? `Opening OI excluded: ${scanner.opening_excluded}. ` : "";
+      return `<tr><td>${esc(row.slot)}</td><td>${esc(pair(selection.long_candidates, selection.short_candidates))}</td>
+        <td>${esc(row.confirmation_time)}</td><td>${esc(pair(selection.selected_long, selection.selected_short))}</td>
+        <td class="fno-reasons">${esc(outcomes[selection.outcome] || label(selection.outcome || "UNAVAILABLE"))}</td>
+        <td class="fno-reasons">${esc(excluded + reasonText || "See stock checks and slot coverage.")}</td></tr>`;
+    }).join("");
+    host.querySelector("[data-zone=selections]").innerHTML = coverage.length ? `<h4>5m candidates and final 1m selections</h4>
+      <p class="fno-detail-note">A 09:20 signal is confirmed at 09:21; 09:25 at 09:26; 09:30 at 09:31. Zero final selections after a completed evaluation means no order was selected. Missing evidence is shown separately. Rejection counts show the worker's primary reason per candidate; stock details show every failed check.</p>
+      <div class="fno-detail-grid"><table><thead><tr>${["5m signal IST", "5m candidates", "1m confirm IST", "Final selections", "Outcome", "Recorded reasons"].map((text) => `<th>${esc(text)}</th>`).join("")}</tr></thead><tbody>${selectionRows}</tbody></table></div>` : "";
     const keys = ["Signal", "Scanner", "5m feature rows", "Missing / no-candle", "Confirmation", "1m feature rows", "Durable feed", "Written / candidates", "Feed published (IST)", "Feed deadline (IST)"];
     const coverageCells = (row) => {
       const scanner = row.scanner || {}, confirmation = row.confirmation || {}, feed = confirmation.durable_feed || {};
@@ -175,6 +190,7 @@
       <thead><tr>${keys.map((key) => `<th>${esc(key)}</th>`).join("")}</tr></thead><tbody>${coverage.map((row) => `<tr>${coverageCells(row).map((value) => `<td>${esc(valueText(value))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>` : "";
   }
   async function load(force) {
+    if (!monitorVisible()) return;
     if (state.loading && !force) return;
     if (!force && state.data && state.data.session_date === state.date && Date.now() - state.loadedAt < 10000) return;
     if (state.controller) state.controller.abort();
@@ -216,14 +232,42 @@
       state.detailScroll = host.querySelector("[data-zone=detail]").scrollTop;
     }
   }
+  function monitorVisible() {
+    const host = state.host;
+    if (!host || !host.isConnected || host.closest(".is-log-hidden")) return false;
+    const operations = host.closest("#terminalOperations");
+    return !operations || !operations.hidden;
+  }
+  function stopHiddenRequest() {
+    if (!state.loading) return;
+    state.request++;
+    if (state.controller) state.controller.abort();
+    state.controller = null;
+    state.loading = false;
+  }
+  function observeVisibility() {
+    if (state.visibilityObserver) state.visibilityObserver.disconnect();
+    state.visibilityObserver = null;
+    const operations = state.host && state.host.closest("#terminalOperations");
+    if (!operations || typeof MutationObserver === "undefined") return;
+    state.visibilityObserver = new MutationObserver(() => {
+      if (monitorVisible()) load(false);
+      else stopHiddenRequest();
+    });
+    state.visibilityObserver.observe(operations, {attributes: true, attributeFilter: ["hidden"]});
+  }
   function mount(host, token) {
-    if (!host) { state.host = null; return; }
+    if (state.visibilityObserver) state.visibilityObserver.disconnect();
+    state.visibilityObserver = null;
+    if (!host) { stopHiddenRequest(); state.host = null; return; }
     state.host = host; state.token = token || "";
+    if (!monitorVisible()) stopHiddenRequest();
+    observeVisibility();
     if (!state.date) state.date = new Intl.DateTimeFormat("en-CA", {timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date());
     host.innerHTML = `<div class="fno-detail-heading"><h3>Stock-level signals, confirmations & guards</h3><span class="fno-readonly">READ ONLY · V13-V10-G</span></div>
       <p class="fno-detail-note">Recorded live evidence, not a replay or a strategy change. Click a stock for actual indicator values, required thresholds, gate results and source details. A passed filter is not a selected order or a fill.</p>
       <div class="fno-detail-controls" data-zone="controls"></div><div class="fno-detail-note" data-zone="status" role="status" aria-live="polite"></div>
-      <div data-zone="warnings"></div><div class="fno-detail-summary" data-zone="summary"></div><div class="fno-detail-grid" data-zone="rows"></div>
+      <div data-zone="warnings"></div><div data-zone="selections"></div><div class="fno-detail-summary" data-zone="summary"></div><div class="fno-detail-grid" data-zone="rows"></div>
       <div class="fno-detail-pager" data-zone="pager"></div><div class="fno-detail-expanded" data-zone="detail" hidden></div><div data-zone="coverage"></div>
       <p class="fno-detail-note">PASS / FAIL are recorded checks; UNKNOWN means evidence is unavailable. NOT EVALUATED is a later stage, not rejection. Entry events are only the published events—not continuous one-minute mark-to-market history. Times are IST.</p>`;
     renderControls(); renderStatus(); renderRows();
@@ -255,7 +299,7 @@
       else if (action === "close") { state.expanded = ""; renderDetail(null); }
       else if (action === "previous" || action === "next") { state.page += action === "next" ? 1 : -1; state.expanded = ""; renderRows(); }
     });
-    if (!host.closest(".is-log-hidden")) load(false);
+    load(false);
   }
   window.FnoMonitor = {mount, beforeRefresh};
 })();

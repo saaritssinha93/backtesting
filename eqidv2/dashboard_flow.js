@@ -29,7 +29,7 @@
       button.onclick=()=>{$('show-archives').checked=false;$('follow-latest').checked=true;load(null,family);};return button;
     }));
     const familyRuns=data.runs.filter(run=>run.strategy===selected?.strategy);
-    const visible=$('show-archives').checked?familyRuns:familyRuns.filter((run,index)=>index===0||run.kind==='research_variant'||run.id===selected?.id);
+    const visible=$('show-archives').checked?familyRuns:familyRuns.filter((run,index)=>index===0||run.kind==='research_variant'||run.strategy_matches_backtest===true||run.strategy_matches_active===true||run.id===selected?.id);
     $('run-select').replaceChildren(...visible.map(run=>{const index=familyRuns.indexOf(run);const option=el('option','',FlowCore.runLabel(run,index===0,index));option.value=run.id;option.title=FlowCore.runLabel(run,index===0,index);return option;}));
     if(selected)$('run-select').value=selected.id;
     if(!data.runs.length)$('run-select').append(el('option','','No saved runs'));

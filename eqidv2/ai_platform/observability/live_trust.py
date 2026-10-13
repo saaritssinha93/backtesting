@@ -194,7 +194,8 @@ def _freshness_detail(
 
 
 def _scanner_schedule_detail(
-    heartbeat: Mapping[str, str], *, now: datetime, session_date: date
+    heartbeat: Mapping[str, str], *, now: datetime, session_date: date,
+    slots: tuple[str, ...] = EXPECTED_SCANNER_SLOTS
 ) -> tuple[bool, str] | None:
     """Evaluate the slot-driven scanner without inventing continuous heartbeats.
 
@@ -212,7 +213,7 @@ def _scanner_schedule_detail(
 
     slot_datetimes = [
         datetime.combine(session_date, day_time.fromisoformat(value), tzinfo=IST)
-        for value in EXPECTED_SCANNER_SLOTS
+        for value in slots
     ]
     due = [value for value in slot_datetimes if value <= now]
     if not due:
@@ -224,15 +225,18 @@ def _scanner_schedule_detail(
     completed_state = state in {"SUCCESS", "DONE"}
     completed_phase = str(heartbeat.get("phase", ""))
     if (
-        latest_label == EXPECTED_SCANNER_SLOTS[-1]
+        latest_label == slots[-1]
         and state == "DONE"
         and completed_phase == "ALL_V6_WINDOWS_DONE"
+        and (slots == EXPECTED_SCANNER_SLOTS or str(heartbeat.get("processed_slots")) == str(len(slots)))
     ):
         return True, "all frozen scanner slots are complete"
     if (
         completed_label == latest_label
         and completed_state
         and completed_phase in {"SLOT_DONE", "ALL_V6_WINDOWS_DONE"}
+        and (completed_phase != "ALL_V6_WINDOWS_DONE" or slots == EXPECTED_SCANNER_SLOTS
+             or str(heartbeat.get("processed_slots")) == str(len(slots)))
     ):
         return True, f"latest due scanner slot {latest_label} is complete"
     grace_deadline = latest_due + timedelta(seconds=SCANNER_SLOT_COMPLETION_GRACE_SECONDS)
@@ -249,7 +253,8 @@ def _scanner_schedule_detail(
 
 
 def _confirmation_completion_detail(
-    heartbeat: Mapping[str, str], *, now: datetime, session_date: date
+    heartbeat: Mapping[str, str], *, now: datetime, session_date: date,
+    slots: tuple[str, ...] = EXPECTED_SCANNER_SLOTS
 ) -> tuple[bool, str] | None:
     """Accept a stopped confirmation worker only with complete terminal proof."""
 
@@ -266,19 +271,20 @@ def _confirmation_completion_detail(
         processed_slots = -1
     complete = (
         heartbeat.get("phase") == "ALL_V6_WINDOWS_DONE"
-        and processed_slots == len(EXPECTED_SCANNER_SLOTS)
+        and processed_slots == len(slots)
     )
     if complete:
         return True, "all frozen confirmation slots are complete"
     return False, (
         "confirmation DONE lacks terminal proof; "
         f"phase={heartbeat.get('phase')!r} processed_slots={processed_slots!r} "
-        f"expected={len(EXPECTED_SCANNER_SLOTS)}"
+        f"expected={len(slots)}"
     )
 
 
 def _equity_feed_completion_detail(
-    heartbeat: Mapping[str, str], *, now: datetime, session_date: date
+    heartbeat: Mapping[str, str], *, now: datetime, session_date: date,
+    slots: tuple[str, ...] = EXPECTED_SCANNER_SLOTS
 ) -> tuple[bool, str] | None:
     """Accept the bounded equity feed after every frozen slot is processed."""
 
@@ -293,11 +299,11 @@ def _equity_feed_completion_detail(
         processed_slots = int(str(heartbeat.get("processed_slots", "")))
     except ValueError:
         processed_slots = -1
-    if processed_slots == len(EXPECTED_SCANNER_SLOTS):
+    if processed_slots == len(slots):
         return True, "all frozen equity-feed slots are complete"
     return False, (
         "equity feed DONE lacks terminal proof; "
-        f"processed_slots={processed_slots!r} expected={len(EXPECTED_SCANNER_SLOTS)}"
+        f"processed_slots={processed_slots!r} expected={len(slots)}"
     )
 
 
@@ -321,6 +327,10 @@ def evaluate_live_trust(
     if expected_strategy_profile not in PROFILES:
         raise ValueError("Unsupported strategy profile")
     profile = PROFILES[expected_strategy_profile]
+    scanner_slots = EXPECTED_SCANNER_SLOTS
+    if expected_strategy_profile == "V13_V10_G_3":
+        from fno_v13_v10_g_3_contract import SIGNAL_TO_CONFIRMATION
+        scanner_slots = tuple(SIGNAL_TO_CONFIRMATION)
     session_prefix = "fno_" + profile.slug
 
     if any(
@@ -517,12 +527,12 @@ def evaluate_live_trust(
         heartbeat = heartbeat or {}
         terminal_completion = (
             _confirmation_completion_detail(
-                heartbeat, now=now, session_date=expected_session_date
+                heartbeat, now=now, session_date=expected_session_date, slots=scanner_slots
             )
             if label == "confirmation"
             else (
                 _equity_feed_completion_detail(
-                    heartbeat, now=now, session_date=expected_session_date
+                    heartbeat, now=now, session_date=expected_session_date, slots=scanner_slots
                 )
                 if label == "equity_1m_feed"
                 else None
@@ -552,7 +562,7 @@ def evaluate_live_trust(
         )
         if label == "scanner" and identity_ok:
             scheduled = _scanner_schedule_detail(
-                heartbeat, now=now, session_date=expected_session_date
+                heartbeat, now=now, session_date=expected_session_date, slots=scanner_slots
             )
             if scheduled is not None:
                 heartbeat_fresh, heartbeat_fresh_detail = scheduled

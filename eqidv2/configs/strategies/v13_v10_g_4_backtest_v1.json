@@ -1,0 +1,40 @@
+{
+  "variant_id": "V13-V10-G-4-BACKTEST-LATE-SLOTS-V1",
+  "scope": "BACKTEST_ONLY",
+  "base_strategy": "V13-V10-G-3-PRODUCTION-V2",
+  "base_g3_run_relative": "backtests/runs/2026-10-12/20261012T185109507457_a9213404_0950_long_t075",
+  "base_g3_manifest_sha256": "cc4760fbd58bf76cc6042d1a5b0e14f930c2ea5cc3d85b3a7f42c7e6913d3015",
+  "execution_authority": false,
+  "preserve_g3_setups": true,
+  "signal_ends": ["10:05", "10:10", "10:15", "10:20", "10:25", "10:30"],
+  "sides": ["LONG", "SHORT"],
+  "confirmation_offset_minutes": 1,
+  "max_entries_per_setup_day": 1,
+  "picker": "max_liquidity",
+  "initial_stop_pct": 1.25,
+  "tightened_stop_pct": 1.0,
+  "tighten_after_minutes": 120,
+  "target_pct_by_side": {"LONG": 0.75, "SHORT": 0.93},
+  "round_trip_cost_bps": 5.0,
+  "training_sessions": 38,
+  "holdout_sessions": 11,
+  "minimum_training_fills": 5,
+  "minimum_holdout_fills_for_validation": 3,
+  "required_win_rate_pct_per_setup": 70.0,
+  "levels": {
+    "LONG": [
+      {"price_change_pct": 0.10, "oi_change_pct": 0.05, "five_minute_volume_ratio_min": 1.30, "one_minute_body_ratio_min": 0.50, "one_minute_wick_ratio_max": 0.50, "one_minute_volume_ratio_min": 0.60},
+      {"price_change_pct": 0.15, "oi_change_pct": 0.07, "five_minute_volume_ratio_min": 1.40, "one_minute_body_ratio_min": 0.55, "one_minute_wick_ratio_max": 0.45, "one_minute_volume_ratio_min": 0.80},
+      {"price_change_pct": 0.20, "oi_change_pct": 0.10, "five_minute_volume_ratio_min": 1.60, "one_minute_body_ratio_min": 0.60, "one_minute_wick_ratio_max": 0.40, "one_minute_volume_ratio_min": 1.00},
+      {"price_change_pct": 0.30, "oi_change_pct": 0.15, "five_minute_volume_ratio_min": 1.80, "one_minute_body_ratio_min": 0.65, "one_minute_wick_ratio_max": 0.35, "one_minute_volume_ratio_min": 1.20},
+      {"price_change_pct": 0.40, "oi_change_pct": 0.20, "five_minute_volume_ratio_min": 2.00, "one_minute_body_ratio_min": 0.70, "one_minute_wick_ratio_max": 0.30, "one_minute_volume_ratio_min": 1.40}
+    ],
+    "SHORT": [
+      {"price_change_pct": 0.13, "oi_change_pct": 0.05, "five_minute_volume_ratio_min": 1.00, "one_minute_body_ratio_min": 0.40, "one_minute_wick_ratio_max": 0.60, "one_minute_volume_ratio_min": 1.20},
+      {"price_change_pct": 0.18, "oi_change_pct": 0.07, "five_minute_volume_ratio_min": 1.20, "one_minute_body_ratio_min": 0.50, "one_minute_wick_ratio_max": 0.50, "one_minute_volume_ratio_min": 1.30},
+      {"price_change_pct": 0.25, "oi_change_pct": 0.10, "five_minute_volume_ratio_min": 1.40, "one_minute_body_ratio_min": 0.55, "one_minute_wick_ratio_max": 0.45, "one_minute_volume_ratio_min": 1.40},
+      {"price_change_pct": 0.35, "oi_change_pct": 0.15, "five_minute_volume_ratio_min": 1.60, "one_minute_body_ratio_min": 0.60, "one_minute_wick_ratio_max": 0.40, "one_minute_volume_ratio_min": 1.50},
+      {"price_change_pct": 0.45, "oi_change_pct": 0.20, "five_minute_volume_ratio_min": 1.80, "one_minute_body_ratio_min": 0.65, "one_minute_wick_ratio_max": 0.35, "one_minute_volume_ratio_min": 1.60}
+    ]
+  }
+}

@@ -30,6 +30,50 @@ def make_run(root, name="20261008T164833"):
     return root / "backtesting_result_v13_v10_g" / "runs" / "2026-10-08" / name
 
 
+@pytest.mark.parametrize("has_full_history", [True, False])
+def test_newer_daily_history_does_not_displace_current_full_backtest(data_root, monkeypatch, has_full_history):
+    monkeypatch.setattr(flow, "active_profile_name", lambda: "V13_V10_G_3")
+    full_path = data_root / "full/daily_results.csv"
+    daily_path = data_root / "daily/daily_results.csv"
+    archived_path = data_root / "archived/daily_results.csv"
+    write_csv(full_path, [dict(day=day, variant_fills=0, variant_wins=0, variant_net_pnl_rs=0)
+                          for day in ("2026-07-29", "2026-10-12")])
+    write_csv(daily_path, [dict(day=day, trades=0, wins=0, losses=0, net_pnl=0)
+                           for day in ("2026-10-12", "2026-10-13")])
+    write_csv(archived_path, [dict(day="2026-10-14", trades=0, wins=0, losses=0, net_pnl=0)])
+    base = dict(strategy="V13-V10-G-3", verified=True, strategy_matches_active=True,
+                period_end="2026-10-12", sessions=2, run_name="20261013_current")
+    full = dict(base, id="full", kind="research_variant", role="backtest_history",
+                current_full_strategy=True, period_start="2026-07-29")
+    daily = dict(base, id="daily", kind="production_history", role="cumulative_history",
+                 period_start="2026-10-12", period_end="2026-10-13",
+                 coverage=dict(history_scope="CURRENT_STRATEGY_REVISION_DAILY_SESSIONS",
+                               requested_calendar_coverage_complete=False))
+    archived = dict(daily, id="archived", strategy_matches_active=False,
+                    strategy_version="old-revision", period_end="2026-10-14")
+    monkeypatch.setattr(flow, "_verified_g3_current_backtest", lambda: [(full, full_path)] if has_full_history else [])
+    monkeypatch.setattr(flow, "_verified_g3_runs", lambda: [(archived, archived_path), (daily, daily_path)])
+    for name in ("_verified_g3_0920_long_backtest", "_verified_g3_0920_daily", "_verified_g3_research_runs"):
+        monkeypatch.setattr(flow, name, lambda: [])
+
+    for strategy in (None, "V13-V10-G-3"):
+        payload = flow.load_flow_data(strategy=strategy)
+        assert payload["selected_run"]["id"] == ("full" if has_full_history else "daily")
+        assert payload["runs"][0]["id"] == payload["selected_run"]["id"]
+        assert payload["runs"][-1]["id"] == "archived"
+        if has_full_history:
+            assert payload["summary"]["period_start"] == "2026-07-29"
+            assert not any("cumulative daily history starts" in warning for warning in payload["warnings"])
+
+    # Daily evidence remains independently selectable and never loses its
+    # truthful scope warning just because a full historical run also exists.
+    selected_daily = flow.load_flow_data(run_id="daily")
+    assert selected_daily["summary"]["sessions"] == 2
+    assert selected_daily["summary"]["period_start"] == "2026-10-12"
+    assert any("cumulative daily history starts" in warning for warning in selected_daily["warnings"])
+    assert flow.load_flow_data(run_id="archived")["selected_run"]["id"] == "archived"
+
+
 def test_aggregates_real_daily_totals_and_net_trade_profit_factor(data_root):
     run = make_run(data_root)
     write_csv(run / "daily_results.csv", [

@@ -1,0 +1,17 @@
+{
+  "variant_id": "V13-V10-G-3-BT-0920-LONG-T300-V1",
+  "scope": "BACKTEST_ONLY",
+  "base_strategy": "V13-V10-G-3-PRODUCTION-V2",
+  "signal_end": "09:20",
+  "confirmation_end": "09:21",
+  "side": "LONG",
+  "short_0920_enabled": false,
+  "entry_profile": "5m_reference_5m__1m_volume_180",
+  "target_pct": 3.0,
+  "initial_stop_pct": 1.25,
+  "tightened_stop_pct": 1.0,
+  "tighten_after_minutes": 120,
+  "square_off": "15:15",
+  "preserve_existing_g3_trades": true,
+  "execution_authority": false
+}

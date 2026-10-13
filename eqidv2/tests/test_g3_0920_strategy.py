@@ -6,7 +6,7 @@ from dataclasses import asdict, replace
 import pandas as pd
 import pytest
 
-import fno_v13_v10_g_3_contract as contract
+from research import g3_v2_contract as contract
 from research.g3_0920_strategy import (
     OI_SOURCE,
     reference_profile,

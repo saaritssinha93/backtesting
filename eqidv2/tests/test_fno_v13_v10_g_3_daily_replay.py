@@ -41,7 +41,7 @@ def _minute_frame(day, *, move=True):
 
 @pytest.fixture
 def raw(tmp_path):
-    roots = replay.DataRoots(tmp_path / "universe", tmp_path / "equity", tmp_path / "futures")
+    roots = replay.DataRoots(tmp_path / "universe", tmp_path / "equity", tmp_path / "futures", tmp_path / "opening")
     for root in (roots.universe, roots.equity_1m, roots.futures_5m):
         root.mkdir()
     expiry = date(2030, 1, 29)
@@ -66,7 +66,12 @@ def raw(tmp_path):
     future = pd.DataFrame(dict(timestamp=future_stamps, open=100., high=100.1, low=99.8,
                                close=99.9, volume=1000., oi=100000 * np.power(1.001, np.arange(len(future_stamps)))))
     for row in rows:
-        future.to_parquet(roots.futures_5m / f"{row['tradingsymbol']}_5minute.parquet", index=False)
+        future.assign(tradingsymbol=row["tradingsymbol"], expiry=expiry).to_parquet(roots.futures_5m / f"{row['tradingsymbol']}_5minute.parquet", index=False)
+    opening = source.opening_inputs.minute_path(roots.opening_observer, DAY, "EXAMPLE30JANFUT")
+    opening.parent.mkdir(parents=True)
+    opening.write_text(json.dumps(dict(session_date=str(DAY), symbol="EXAMPLE", contract="EXAMPLE30JANFUT",
+        source="KITE_HISTORICAL_MINUTE", acquired_at=f"{DAY}T16:00:00+05:30", candles=[dict(
+            candle_start=f"{DAY}T09:15:00+05:30", candle_end=f"{DAY}T09:16:00+05:30", oi=100000.)])))
     return roots, equity_path, universe
 
 
@@ -152,6 +157,21 @@ def test_closed_session_gate_is_after_close_only():
     publisher._require_closed(DAY, pd.Timestamp(f"{DAY} 15:35", tz="Asia/Kolkata").to_pydatetime())
 
 
+def test_legacy_sealed_input_cannot_publish_current_book_without_opening_evidence(tmp_path):
+    with pytest.raises(ValueError, match="lacks verified 09:20"):
+        replay.replay_sealed_days(dict(days=[DAY], opening_0920_complete=False), [DAY], tmp_path / "invalid")
+    assert not (tmp_path / "invalid").exists()
+
+
+def test_all_missing_opening_inputs_block_instead_of_publishing_zero_0920_trades(raw, tmp_path):
+    roots, _, _ = raw
+    source.opening_inputs.minute_path(roots.opening_observer, DAY, "EXAMPLE30JANFUT").unlink()
+    result = replay.replay_day(DAY, tmp_path / "missing-opening", roots=roots)
+    assert result["state"] == "BLOCKED_INCOMPLETE_DATA"
+    assert result["coverage"]["opening_0920_exclusions"][0]["symbol"] == "EXAMPLE"
+    assert any(p["reason"] == "NO_VALID_0920_OPENING_INPUTS" for p in result["coverage"]["blocking_problems"])
+
+
 def test_sealed_pool_must_include_below_legacy_threshold_before_ranking(raw, tmp_path):
     roots, equity, _ = raw
     frame = pd.read_parquet(equity)
@@ -177,7 +197,7 @@ def test_sealed_pool_must_include_below_legacy_threshold_before_ranking(raw, tmp
         replay.atomic_json(sealed / "dataset_manifest.json", dict(days=[str(DAY)],
             output_sha256={name: replay.sha256(sealed / name) for name in names}))
     reseal()
-    assert replay.load_sealed_source(sealed)["provenance"]["long_candidates_below_legacy_120"] == 1
+    assert replay.load_sealed_source(sealed)["provenance"]["long_candidates_below_legacy_120"] == int((signals.side.eq("LONG") & signals.v9_1m_volume_ratio.lt(1.2)).sum())
     # Even an internally consistent rehashed narrowed pool must be rejected.
     signals.loc[signals.v9_1m_volume_ratio.ge(1.2)].to_parquet(sealed / "signals.parquet", index=False)
     reseal()
@@ -196,7 +216,7 @@ def test_new_publisher_lock_cannot_be_stolen(tmp_path):
 def test_history_excludes_blocked_session_and_preserves_zero_session(raw, tmp_path, monkeypatch):
     roots, _, _ = raw
     prior = DAY - timedelta(days=3)
-    bundle = dict(days=[prior], eligibility=pd.DataFrame([dict(day=str(prior), eligible=True)]))
+    bundle = dict(days=[prior], opening_0920_complete=True, eligibility=pd.DataFrame([dict(day=str(prior), eligible=True)]))
     monkeypatch.setattr(publisher, "_require_closed", lambda day: None)
     monkeypatch.setattr(replay, "load_sealed_source", lambda root: bundle)
     def member(directory, days, complete):

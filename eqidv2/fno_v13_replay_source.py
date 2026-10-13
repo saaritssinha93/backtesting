@@ -23,6 +23,7 @@ import fno_oi_hybrid_data as hybrid
 import fno_oi_backtest_provenance as provenance
 import fno_v13_v9_data as features
 import fno_v13_v10_g_3_contract as config
+import fno_v13_v10_g_3_opening_inputs as opening_inputs
 SNAPSHOT_SCHEMA_VERSION = "fno_v13_input_snapshot_v1"
 SNAPSHOT_COPY_ATTEMPTS = 3
 EXCLUDABLE_COVERAGE_REASONS = {"MISSING_SIGNAL_OR_PRIOR_FUTURES_OI_BAR"}
@@ -44,6 +45,7 @@ class DataRoots:
     universe: Path = field(default_factory=lambda: common.UNIVERSE_DIR)
     equity_1m: Path = field(default_factory=lambda: hybrid.DEFAULT_BACKTEST_EQUITY_1M_DIR)
     futures_5m: Path = field(default_factory=lambda: common.RAW_CONTRACT_DIR)
+    opening_observer: Path = field(default_factory=lambda: opening_inputs.DEFAULT_ROOT)
 
 
 @dataclass(frozen=True)
@@ -248,6 +250,7 @@ def create_input_snapshot(
         staging / "universe",
         staging / "equity_1m",
         staging / "futures_5m",
+        staging / "opening_observer",
     )
     for directory in (staged_roots.universe, staged_roots.equity_1m, staged_roots.futures_5m):
         directory.mkdir(parents=True, exist_ok=True)
@@ -318,6 +321,10 @@ def create_input_snapshot(
                     staged_roots.futures_5m / future_name,
                     "STOCK_FUTURES_OI",
                 )
+                opening_contract = str(contract["futures_tradingsymbol"])
+                capture(opening_inputs.minute_path(original.opening_observer, day, opening_contract),
+                        opening_inputs.minute_path(staged_roots.opening_observer, day, opening_contract),
+                        "OPENING_0916_FUTURES_OI")
         except (OSError, ValueError, KeyError, TypeError) as exc:
             problems.append({
                 "symbol": "UNIVERSE",
@@ -351,6 +358,7 @@ def create_input_snapshot(
             final_root / "universe",
             final_root / "equity_1m",
             final_root / "futures_5m",
+            final_root / "opening_observer",
         )
         return InputSnapshot(
             root=final_root,
@@ -373,13 +381,17 @@ def _cutoff(day: date) -> pd.Timestamp:
     return pd.Timestamp(slot_datetime(day, config.SQUARE_OFF))
 
 
-def _slot_times(day: date) -> tuple[pd.DatetimeIndex, pd.DatetimeIndex, pd.DatetimeIndex]:
-    signal = pd.DatetimeIndex([slot_datetime(day, clock) for clock in config.SIGNAL_TO_CONFIRMATION])
+def _slot_times(day: date, signal_clocks=None) -> tuple[pd.DatetimeIndex, pd.DatetimeIndex, pd.DatetimeIndex]:
+    signal = pd.DatetimeIndex([slot_datetime(day, clock) for clock in
+                              (config.SIGNAL_TO_CONFIRMATION if signal_clocks is None else signal_clocks)])
     minute = set([_cutoff(day)])
     oi = set()
     for stamp in signal:
         minute.update(pd.date_range(stamp - pd.Timedelta(minutes=4), stamp + pd.Timedelta(minutes=1), freq="min"))
-        oi.update([stamp - pd.Timedelta(minutes=5), stamp])
+        oi.add(stamp)
+        # 09:20 has a separately verified 09:16 baseline, not a 09:15 5m bar.
+        if stamp.strftime("%H:%M") != "09:20":
+            oi.add(stamp - pd.Timedelta(minutes=5))
     return signal, pd.DatetimeIndex(sorted(minute)), pd.DatetimeIndex(sorted(oi))
 
 
@@ -417,8 +429,8 @@ def _load_future(path: Path, day: date, problems: list, symbol: str) -> pd.DataF
 
 
 def _coverage(minute: pd.DataFrame, future: pd.DataFrame, day: date,
-              symbol: str, problems: list) -> dict:
-    signal_times, _, required_oi = _slot_times(day)
+              symbol: str, problems: list, *, signal_clocks=None) -> dict:
+    signal_times, _, required_oi = _slot_times(day, signal_clocks)
     required_minutes = pd.date_range(slot_datetime(day, "09:16"), _cutoff(day), freq="min")
     missing_minute = required_minutes.difference(pd.DatetimeIndex(minute.ts))
     missing_oi = required_oi.difference(pd.DatetimeIndex(future.ts))
@@ -493,7 +505,8 @@ def _strict_signals(pool: pd.DataFrame, nifty_return: float) -> pd.DataFrame:
 
 def _observed_pool(minute: pd.DataFrame, future: pd.DataFrame, *, day: date,
                    symbol: str, future_symbol: str, month: str,
-                   observability_errors: list[dict[str, Any]] | None = None) -> pd.DataFrame:
+                   observability_errors: list[dict[str, Any]] | None = None,
+                   signal_clocks=None) -> pd.DataFrame:
     """Only retained G's consumed features, using native arithmetic/history.
 
     The general research builder also computes VWAP, RSI-like contexts and
@@ -504,7 +517,7 @@ def _observed_pool(minute: pd.DataFrame, future: pd.DataFrame, *, day: date,
     if equity_five.empty:
         return pd.DataFrame()
     five = hybrid.join_equity_price_with_futures_oi(equity_five, future)
-    signal_times, _, _ = _slot_times(day)
+    signal_times, _, _ = _slot_times(day, signal_clocks)
     five = five.loc[five.ts.isin(signal_times)].copy()
     if five.empty:
         return five
@@ -561,12 +574,12 @@ def _assert_day(frame: pd.DataFrame, day: date) -> None:
         raise ValueError("Replay frame contains dates outside the requested session")
 
 
-def build_day_features(day: date, *, roots: DataRoots) -> dict:
+def build_day_features(day: date, *, roots: DataRoots, signal_clocks=None) -> dict:
     """Rebuild the complete pre-quota pool from one sealed dated universe."""
     problems, coverage, excluded, observed, pools, minutes = [], [], [], [], [], {}
     result = dict(day=day, problems=problems, coverage_rows=coverage,
                   excluded_stocks=excluded, signals=_empty_signals(),
-                  feature_ledger=pd.DataFrame(), minutes=minutes, universe_count=0)
+                  opening_0920_exclusions=[], feature_ledger=pd.DataFrame(), minutes=minutes, universe_count=0)
     try:
         universe_path = roots.universe / f"near_month_{day}.parquet"
         full = pd.read_parquet(universe_path)
@@ -600,17 +613,29 @@ def build_day_features(day: date, *, roots: DataRoots) -> dict:
             minute = _load_minute(hybrid.equity_one_minute_path(symbol, roots.equity_1m), day, problems, symbol)
             future = _load_future(roots.futures_5m / f"{common.safe_contract_stem(future_symbol)}_5minute.parquet", day, problems, symbol)
             start = len(problems)
-            coverage.append(_coverage(minute, future, day, symbol, problems))
+            coverage.append(_coverage(minute, future, day, symbol, problems, signal_clocks=signal_clocks))
             reasons = {p["reason"] for p in problems[start:]}
             if reasons & EXCLUDABLE_COVERAGE_REASONS:
                 excluded.append(dict(symbol=symbol, reasons=sorted(reasons & EXCLUDABLE_COVERAGE_REASONS)))
                 continue
             minutes[symbol] = minute.loc[minute.ts.dt.date.eq(day)].copy()
-            pool = _observed_pool(minute, future, day=day, symbol=symbol, future_symbol=future_symbol, month=month)
-            if len(pool) != len(config.SIGNAL_TO_CONFIRMATION):
+            pool = _observed_pool(minute, future, day=day, symbol=symbol, future_symbol=future_symbol,
+                                  month=month, signal_clocks=signal_clocks)
+            if len(pool) != len(config.SIGNAL_TO_CONFIRMATION if signal_clocks is None else signal_clocks):
                 _problem(problems, symbol, "INCOMPLETE_REQUIRED_FIVE_MINUTE_BAR_CONSTRUCTION", observed=len(pool))
             if pool.empty:
                 continue
+            opening_mask = pool.signal_ts.dt.strftime("%H:%M").eq("09:20")
+            if opening_mask.any():
+                opening = opening_inputs.build_opening_features(pool.loc[opening_mask].iloc[0], future,
+                    day=day, symbol=symbol, contract=future_symbol, expiry=expiry[0], root=roots.opening_observer)
+                for key, value in opening.items():
+                    if key not in pool:
+                        pool[key] = None
+                    pool.loc[opening_mask, key] = value
+                if opening["opening_0920_status"] != "VALID":
+                    result["opening_0920_exclusions"].append(dict(symbol=symbol,
+                        reason="MISSING_OR_INVALID_0920_OPENING_OI", setup_id="0921_LONG"))
             pool["instrument_token"] = int(contract["equity_instrument_token"])
             pool["futures_instrument_token"] = int(contract["futures_instrument_token"])
             pool["exchange"] = "NSE"
@@ -627,6 +652,9 @@ def build_day_features(day: date, *, roots: DataRoots) -> dict:
         _assert_day(signals, day)
         result["signals"] = signals
     result["feature_ledger"] = pd.concat(observed, ignore_index=True) if observed else pd.DataFrame(columns=["day", "signal_ts", "tradingsymbol"])
+    ledger = result["feature_ledger"]
+    if "opening_0920_status" not in ledger or not ledger.opening_0920_status.eq("VALID").any():
+        _problem(problems, "UNIVERSE", "NO_VALID_0920_OPENING_INPUTS")
     return result
 
 

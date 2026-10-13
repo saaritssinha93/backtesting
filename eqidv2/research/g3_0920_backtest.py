@@ -20,7 +20,7 @@ import pandas as pd
 
 import fno_v13_replay_source as source
 import fno_v13_v10_g_2_backtest as simulator
-import fno_v13_v10_g_3_contract as contract
+from research import g3_v2_contract as contract
 import fno_oi_common as common
 import fno_oi_backtest_provenance as provenance
 import fno_oi_hybrid_data as hybrid

@@ -200,6 +200,49 @@ def test_active_g3_does_not_fall_back_to_legacy_g_orders(tmp_path, empty_detail,
     assert result["evidence"]["state"] == "NO_EVIDENCE"
 
 
+def test_g3_fingerprint_is_evaluated_once_per_request_and_stale_evidence_is_rejected(tmp_path, empty_detail, monkeypatch):
+    profile = PROFILES["V13_V10_G_3"]
+    monkeypatch.setattr(cockpit, "ACTIVE_PROFILE", profile)
+    monkeypatch.setattr(cockpit, "STRATEGY_VERSION", profile.version)
+    current = ["current-fingerprint"]
+    calls = []
+
+    def fingerprint(profile_name):
+        calls.append(profile_name)
+        return current[0]
+
+    monkeypatch.setattr(cockpit, "expected_fingerprint", fingerprint)
+    root = tmp_path / profile.live_dir
+    orders = root / "orders" / "PAPER" / DAY
+    orders.mkdir(parents=True)
+    (orders / "valid.json").write_text(json.dumps(state(strategy_version=profile.version,
+        strategy_fingerprint=current[0])), encoding="utf-8")
+    (orders / "stale.json").write_text(json.dumps(state(strategy_version=profile.version,
+        strategy_fingerprint="old-fingerprint", signal_id="stale-signal")), encoding="utf-8")
+    events = root / "order_events" / "PAPER"
+    events.mkdir(parents=True)
+    context = dict(mode="PAPER", session_date=DAY, strategy_version=profile.version,
+                   strategy_fingerprint=current[0], signal_id="signal-1")
+    rows = [dict(timestamp_utc=f"{DAY}T04:29:30+00:00", event_type="transition",
+                 context=context, data=dict(tradingsymbol="TEST", reason=str(index))) for index in range(6)]
+    rows.append({**rows[0], "context": {**context, "strategy_fingerprint": "old-fingerprint"}})
+    (events / f"{DAY}.jsonl").write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    (root / "strategy_manifest.json").write_text(json.dumps(dict(strategy_version=profile.version,
+        strategy_fingerprint=current[0])), encoding="utf-8")
+
+    first = load(tmp_path)
+    assert calls == [profile.name]
+    assert len(first["orders"]) == 1
+    assert len(first["events"]) == 6
+    assert first["identity"]["state"] == "RECORDED"
+
+    current[0] = "new-fingerprint"
+    second = load(tmp_path)
+    assert calls == [profile.name, profile.name]
+    assert second["orders"] == second["events"] == []
+    assert second["identity"]["state"] == "NO_EVIDENCE"
+
+
 def test_large_event_archive_reads_bounded_tail(tmp_path, empty_detail, monkeypatch):
     monkeypatch.setattr(cockpit, "MAX_EVENT_BYTES", 2048)
     directory = tmp_path / "v13_v10_g_live" / "order_events" / "PAPER"

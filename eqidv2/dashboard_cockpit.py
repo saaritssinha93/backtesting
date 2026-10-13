@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import re
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta
 from itertools import islice
 from pathlib import Path
@@ -31,12 +32,18 @@ FRESH_SECONDS = 120
 SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,39}\Z")
 OPEN_STATES = {"OPEN", "SQUARE_OFF_PENDING"}
 KNOWN_STATES = OPEN_STATES | {"PENDING_ENTRY", "CLOSED", "NO_FILL", "ENTRY_REJECTED", "BLOCKED_SIZING", "BLOCKED_PORTFOLIO", "CANCELLED", "FAILED"}
+_REQUEST_FINGERPRINT: ContextVar[tuple[str, str] | None] = ContextVar("cockpit_request_fingerprint", default=None)
 
 
 def _active_fingerprint_valid(record: dict) -> bool:
     value = record.get("strategy_fingerprint")
-    return (isinstance(value, str) and 0 < len(value) <= 128
-            and (ACTIVE_PROFILE.name != "V13_V10_G_3" or value == expected_fingerprint(ACTIVE_PROFILE.name)))
+    if not isinstance(value, str) or not 0 < len(value) <= 128:
+        return False
+    if ACTIVE_PROFILE.name != "V13_V10_G_3":
+        return True
+    cached = _REQUEST_FINGERPRINT.get()
+    expected = cached[1] if cached is not None and cached[0] == ACTIVE_PROFILE.name else expected_fingerprint(ACTIVE_PROFILE.name)
+    return value == expected
 
 
 def _text(value: Any, limit: int = 250) -> str:
@@ -409,6 +416,17 @@ def load_cockpit_data(fno_root: Path | str, session_date: str, mode: str = "PAPE
     if now.tzinfo is None:
         raise ValueError("now_ist must be timezone-aware")
     now = now.astimezone(IST)
+    # Each HTTP request gets its own strategy identity. Event archives can hold
+    # thousands of records; hashing the contract for every record stalls the UI.
+    expected = expected_fingerprint(ACTIVE_PROFILE.name) if ACTIVE_PROFILE.name == "V13_V10_G_3" else ""
+    token = _REQUEST_FINGERPRINT.set((ACTIVE_PROFILE.name, expected))
+    try:
+        return _load_cockpit_data(fno_root, session_date, session_day, mode, symbol, now)
+    finally:
+        _REQUEST_FINGERPRINT.reset(token)
+
+
+def _load_cockpit_data(fno_root: Path | str, session_date: str, session_day: date, mode: str, symbol: str | None, now: datetime) -> dict[str, Any]:
     clock_phase = ("WEEKEND" if session_day.weekday() >= 5 else "HISTORICAL_SESSION" if session_day < now.date()
                    else "FUTURE_SESSION" if session_day > now.date() else "PREOPEN" if now.strftime("%H:%M") < "09:15"
                    else "AFTER_SESSION" if now.strftime("%H:%M") >= "15:30" else "IN_SESSION_WINDOW")

@@ -14,7 +14,14 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from fno_v13_v10_g_3_contract import IST, STRATEGY_VERSION, strategy_fingerprint, supported_identity
+from research.g3_backtest_profile import contract as backtest_contract
+IST = backtest_contract.IST
+STRATEGY_VERSION = backtest_contract.STRATEGY_VERSION
+strategy_fingerprint = backtest_contract.strategy_fingerprint
+def supported_identity(version, fingerprint, *, allow_legacy=False):
+    from fno_v13_v10_g_3_contract import supported_identity as production_identity
+    return (backtest_contract.supported_identity(version, fingerprint, allow_legacy=allow_legacy)
+            or production_identity(version, fingerprint, allow_legacy=allow_legacy))
 from ai_platform.observability.strategy_research import (
     classify_regime, performance, point_in_time_audit,
 )
@@ -104,7 +111,8 @@ def _atomic(path: Path, content: str) -> None:
     os.replace(temp, path)
 
 
-def read_g3_execution_diagnostics(root: Path | None, *, source_run: Path, source_sha256: str) -> dict:
+def read_g3_execution_diagnostics(root: Path | None, *, source_run: Path, source_sha256: str,
+                                  version=None, fingerprint=None) -> dict:
     """Consume one committed G3 diagnostic package; never borrow G calibration."""
     pending = dict(state="AWAITING_G3_EXECUTION_DIAGNOSTICS", verified=False,
                    calibrated=False, execution_authority=False, safe_for_live_selection=False,
@@ -129,8 +137,9 @@ def read_g3_execution_diagnostics(root: Path | None, *, source_run: Path, source
             raise ValueError("Execution latest and immutable manifests differ")
         if (value.get("schema_version") != "eqidv2.v13_v10_g_3.execution_research.v1"
                 or value.get("strategy_profile") != "V13_V10_G_3"
-                or value.get("strategy_version") != STRATEGY_VERSION
-                or value.get("strategy_fingerprint") != strategy_fingerprint()
+                or not supported_identity(value.get("strategy_version"), value.get("strategy_fingerprint"))
+                or version is not None and value.get("strategy_version") != version
+                or fingerprint is not None and value.get("strategy_fingerprint") != fingerprint
                 or value.get("mode") != "READ_ONLY_EXECUTION_DIAGNOSTICS"
                 or value.get("source_role") != "cumulative_history"
                 or any(value.get(key) is not False for key in
@@ -177,9 +186,10 @@ def read_g3_execution_diagnostics(root: Path | None, *, source_run: Path, source
 def generate_g3_analysis(*, source_root: Path, output_root: Path,
                          execution_research_root: Path | None = None) -> dict:
     run, manifest, paths = verified_package(source_root)
+    version, fingerprint = manifest["strategy_version"], manifest["strategy_fingerprint"]
     rows, daily = _rows(paths["portfolio_trades"]), _rows(paths["daily_results"])
     for row in rows:
-        if row.get("strategy_version") != STRATEGY_VERSION or row.get("strategy_fingerprint") != strategy_fingerprint():
+        if row.get("strategy_version") != version or row.get("strategy_fingerprint") != fingerprint:
             raise ValueError("G3 ledger row identity mismatch")
         row.update(classify_regime(row))
     baseline = performance(rows)
@@ -200,7 +210,7 @@ def generate_g3_analysis(*, source_root: Path, output_root: Path,
     audit = point_in_time_audit(rows)
     exclusions = manifest.get("coverage", {}).get("excluded_sessions", [])
     execution = read_g3_execution_diagnostics(execution_research_root, source_run=run,
-                                              source_sha256=_sha(run / "run_manifest.json"))
+        source_sha256=_sha(run / "run_manifest.json"), version=version, fingerprint=fingerprint)
     execution_section = ("\n\n## G3 execution validation gate\n\n"
         f"- Diagnostic state: **{execution['state']}**\n"
         f"- Current-history package verified: `{str(execution['verified']).lower()}`\n"
@@ -212,7 +222,7 @@ def generate_g3_analysis(*, source_root: Path, output_root: Path,
         + " Counts describe observed terminal G3 PAPER states, not reconciled complete sessions. "
           "Quote-distance observations do not establish broker slippage or LIVE readiness.\n")
     generated = datetime.now(IST).isoformat()
-    header = (f"- Strategy: `{STRATEGY_VERSION}`\n- Fingerprint: `{strategy_fingerprint()}`\n"
+    header = (f"- Strategy: `{version}`\n- Fingerprint: `{fingerprint}`\n"
               f"- Generated: `{generated}`\n- Source run: `{run}`\n"
               f"- Through: `{manifest.get('session_date')}`\n- Eligible sessions: `{len(daily)}`\n"
               f"- Excluded source sessions: `{len(exclusions)}`\n- Execution authority: `false`\n\n")
@@ -237,7 +247,7 @@ def generate_g3_analysis(*, source_root: Path, output_root: Path,
     report("observability_selection_funnel", "Selection Funnel", f"- Audit rows: `{len(audit_rows)}`\n- Selected orders: `{baseline['selected_orders']}`\n- Filled orders: `{baseline['filled_orders']}`\n- Portfolio executions: `{baseline['executed_trades']}`\n\n" + _table([{"reason": k, "rows": v} for k, v in sorted(reasons.items())], ["reason", "rows"]))
     exits = Counter(row.get("exit_reason") or "UNKNOWN" for row in rows)
     report("observability_entry_execution", "Historical Entry and Exit Evidence", _table([{"exit_reason": k, "orders": v} for k, v in sorted(exits.items())], ["exit_reason", "orders"]) +
-           f"\n\nPoint-in-time violations: `{audit['violation_count']}`. Missing timestamp counts: `{json.dumps(audit['missing_timestamps'], sort_keys=True)}`.\n\nG3 uses strict 09:25 and 15 setups, including 09:50 LONG with a 0.75% target and 0.60 confirmation volume minimum. Other LONG/SHORT confirmation volume minima remain 1.10/1.20. All use the exact next minute, staged 1.25% to 1.00% stop at 120 minutes, and 15:15 square-off. Runtime stop timing starts at actual fill; historical replay uses the accepted candle clock."
+           f"\n\nPoint-in-time violations: `{audit['violation_count']}`. Missing timestamp counts: `{json.dumps(audit['missing_timestamps'], sort_keys=True)}`.\n\nG3 uses the setup inventory, targets and setup-specific confirmation thresholds recorded in this run's source contract. All use the exact next minute, staged 1.25% to 1.00% stop at 120 minutes, and 15:15 square-off. Runtime stop timing starts at actual fill; historical replay uses the accepted candle clock."
            + execution_section, execution["state"])
     report("research_walkforward", "Chronological Historical Review", "The accepted parameters are held fixed across these sessions. This daily review is descriptive; it is not a newly trained walk-forward model or new out-of-sample validation.\n\n" + _table(daily, [key for key in ("day", "trades", "wins", "losses", "net_pnl", "net_profit_rupees", "net_pnl_rupees") if daily and key in daily[0]]))
     pending = "A separate G3 prospective cohort must accumulate under this exact fingerprint. Prior G model, calibration, and live/PAPER evidence cannot establish G3 readiness. No simulated prospective observations are created."
@@ -254,7 +264,7 @@ def generate_g3_analysis(*, source_root: Path, output_root: Path,
         _atomic(out / name, body)
         report_files[name] = {"path": name, "sha256": _sha(out / name)}
     payload = dict(schema_version="g3_read_only_analysis_v1", state="READY", generated_at=generated,
-                   strategy_version=STRATEGY_VERSION, strategy_fingerprint=strategy_fingerprint(),
+                   strategy_version=version, strategy_fingerprint=fingerprint,
                    source_run=str(run), source_manifest_sha256=_sha(run / "run_manifest.json"),
                    execution_authority=False, baseline=baseline, groups=groups, point_in_time_audit=audit,
                    excluded_sessions=exclusions, execution_diagnostics=execution,

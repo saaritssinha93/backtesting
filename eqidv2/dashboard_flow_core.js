@@ -39,6 +39,11 @@
     const shortDate = value => value ? new Date(value + 'T12:00:00').toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'}) : 'date unavailable';
     const match = run.run_name.match(/(?:^run_|^)(\d{4})(\d{2})(\d{2})/);
     const saved = match ? shortDate(`${match[1]}-${match[2]}-${match[3]}`) : '';
+    const coverage = `${shortDate(run.period_start)} to ${shortDate(run.period_end)} · ${run.sessions} sessions`;
+    if (run.current_full_strategy) return `${shortStrategy(run.strategy)} · ${latest ? 'Latest full historical backtest' : 'Full historical backtest'} · ${coverage}`;
+    if (run.kind === 'production_history') return `${shortStrategy(run.strategy)} · ${run.strategy_matches_active === false && !run.strategy_matches_backtest ? 'Archived revision' : 'Daily replay history'} · ${coverage}`;
+    if (run.kind === 'production_daily') return `${shortStrategy(run.strategy)} · ${run.strategy_matches_active === false && !run.strategy_matches_backtest ? 'Archived revision daily replay' : 'Daily replay'} · ${shortDate(run.period_end)}`;
+    if (run.short_0920_enabled === false) return `${shortStrategy(run.strategy)} · 09:20 LONG comparison · Target ${run.target_pct}% · Through ${shortDate(run.period_end)}`;
     if (run.kind === 'research_variant') return `${shortStrategy(run.strategy)} · ${run.role === 'backtest_history' ? 'Latest backtest' : 'Backtest-only'} 09:50 LONG · Target ${run.target_pct}% · Through ${shortDate(run.period_end)}`;
     const kind = run.kind === 'daily' ? 'Daily replay' : run.kind === 'full_history' ? 'Full history' : 'Backtest';
     return `${shortStrategy(run.strategy)} · ${latest ? 'Latest' : 'Archive ' + index} · Through ${shortDate(run.period_end)}${latest ? '' : saved ? ' · Saved ' + saved : ''}${run.kind === 'daily' ? ' · ' + kind : ''}`;

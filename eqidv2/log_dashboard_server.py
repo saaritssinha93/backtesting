@@ -16,7 +16,7 @@ import re
 import subprocess
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -61,6 +61,66 @@ FNO_ACTIVE_PROFILE = active_profile()
 LOG_DIR = BASE_DIR / "logs"
 DASHBOARD_RUNTIME_IDENTITY_SCHEMA_VERSION = "eqidv2_log_dashboard_runtime_identity_v1"
 DASHBOARD_RUNTIME_IDENTITY_PATH = RUNTIME_STATUS_DIR / "log_dashboard_server.runtime.json"
+_DASH_SNAPSHOT_TTL_SEC = 1.0
+_DASH_COCKPIT_TTL_SEC = 15.0
+_DASH_READ_MAX_ENTRIES = 8
+_DASH_READ_LOCK = threading.Lock()
+_DASH_READ_CACHE: OrderedDict[tuple[object, ...], tuple[float, float, dict]] = OrderedDict()
+_DASH_READ_INFLIGHT: dict[tuple[object, ...], "_DashboardReadFlight"] = {}
+
+
+class _DashboardReadFlight:
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.value: dict | None = None
+        self.error: BaseException | None = None
+
+
+def _cached_dashboard_read(key: tuple[object, ...], reader: Callable[[], dict], *, ttl: float) -> dict:
+    """Share one bounded read per endpoint/key across concurrent HTTP clients."""
+    with _DASH_READ_LOCK:
+        now = time.monotonic()
+        for expired, (completed, duration, _) in list(_DASH_READ_CACHE.items()):
+            if now - completed >= duration:
+                del _DASH_READ_CACHE[expired]
+        cached = _DASH_READ_CACHE.get(key)
+        if cached is not None:
+            _DASH_READ_CACHE.move_to_end(key)
+            return cached[2]
+        flight = _DASH_READ_INFLIGHT.get(key)
+        leader = flight is None
+        if leader:
+            flight = _DashboardReadFlight()
+            _DASH_READ_INFLIGHT[key] = flight
+
+    if not leader:
+        if not flight.done.wait(timeout=22.0):
+            raise TimeoutError("Dashboard read is still in progress")
+        if flight.error is not None:
+            raise flight.error
+        return flight.value
+
+    started = time.monotonic()
+    print(f"[DASH_READ] start {key[0]}", flush=True)
+    try:
+        value = reader()
+    except BaseException as exc:
+        print(f"[DASH_READ] failed {key[0]} after {time.monotonic() - started:.1f}s ({type(exc).__name__})", flush=True)
+        with _DASH_READ_LOCK:
+            flight.error = exc
+            _DASH_READ_INFLIGHT.pop(key, None)
+            flight.done.set()
+        raise
+    with _DASH_READ_LOCK:
+        _DASH_READ_CACHE[key] = (time.monotonic(), ttl, value)
+        _DASH_READ_CACHE.move_to_end(key)
+        while len(_DASH_READ_CACHE) > _DASH_READ_MAX_ENTRIES:
+            _DASH_READ_CACHE.popitem(last=False)
+        flight.value = value
+        _DASH_READ_INFLIGHT.pop(key, None)
+        flight.done.set()
+    print(f"[DASH_READ] complete {key[0]} in {time.monotonic() - started:.1f}s", flush=True)
+    return value
 
 
 def _resolve_status_path(filename: str) -> Path:
@@ -183,6 +243,9 @@ FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL: Dict[str, str] = {
     "10:00": "10:01",
     "11:20": "11:21",
 }
+if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
+    from fno_v13_v10_g_3_contract import SIGNAL_TO_CONFIRMATION as _G3_SIGNAL_CLOCKS
+    FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL = dict(_G3_SIGNAL_CLOCKS)
 FNO_V13_V10_G_SIGNAL_SLOTS: Tuple[str, ...] = tuple(FNO_EQ_ID_V6_CONFIRMATION_BY_SIGNAL)
 FNO_V13_V10_G_CARD_IDS: Tuple[str, ...] = (
     "fno_v13_v10_g_scanner_5min", "fno_v13_v10_g_equity_1min_feed",
@@ -241,7 +304,7 @@ def _fno_eq_id_stock_detail(session_date: str, *, now_ist=None) -> dict:
     key = (str(FNO_OI_ROOT.resolve()), session_date)
     with _FNO_MONITOR_DETAIL_LOCK:
         cached = _FNO_MONITOR_DETAIL_CACHE.get(key)
-        if cached is not None and time.monotonic() - cached[0] < 5.0:
+        if cached is not None and time.monotonic() - cached[0] < 20.0:
             return cached[1]
         payload = _build_fno_eq_id_stock_detail(
             FNO_OI_ROOT, session_date, now_ist=now_ist or dt.datetime.now(IST))
@@ -4978,7 +5041,7 @@ def _build_fno_eq_id_strategy_timelines(
         if slot == "09:15":
             purpose = "OPEN SNAPSHOT"
         elif slot == "09:20":
-            purpose = "DATA/OI WARMUP"
+            purpose = "G-3 LONG SELECTION (09:21 CONFIRM)" if slot in FNO_V13_V10_G_SIGNAL_SLOTS else "DATA/OI WARMUP"
         elif slot in FNO_V13_V10_G_SIGNAL_SLOTS and slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
             purpose = "G STRATEGY SELECTION"
         else:
@@ -5009,6 +5072,9 @@ def _build_fno_eq_id_strategy_timelines(
                     long_count = int(_fno_eq_id_timeline_number(scanner.get("long_candidates")) or 0)
                     short_count = int(_fno_eq_id_timeline_number(scanner.get("short_candidates")) or 0)
                     selection_text = f"SEL L{long_count}/S{short_count}"
+                    opening_exclusions = scanner.get("opening_0920_exclusions", [])
+                    if slot == "09:20" and isinstance(opening_exclusions, list) and opening_exclusions:
+                        selection_text += f"; opening OI excluded {len(opening_exclusions)}"
                     if scanner_state not in {"SUCCESS", "COMPLETE"}:
                         v6_cell = f"{selection_text}; {scanner_state or 'INCOMPLETE'}"
                     else:
@@ -5552,10 +5618,10 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         ]
     lines = [
         "",
-        "## 5-Minute Market Readiness (G selection slots through 11:20 IST)",
+        f"## 5-Minute Market Readiness (G selection slots through {max(FNO_V13_V10_G_SIGNAL_SLOTS)} IST)",
         "",
         f"- Session date: `{_fno_eq_id_monitor_clean(timeline.get('session_date'))}`; every label is a completed-candle end in IST.",
-        "- `09:15` is the opening snapshot and `09:20` is data/OI warm-up. G uses nine signal times: `09:25`, `09:30`, `09:35`, `09:40`, `09:45`, `09:50`, `09:55`, `10:00`, `11:20`. The separate shared V10/V11/V12 session keeps its `09:25-09:45` windows.",
+        "- `09:15` is the opening snapshot. Active G-family signal times: " + ", ".join(f"`{slot}`" for slot in FNO_V13_V10_G_SIGNAL_SLOTS) + ". G-3 includes 09:20 LONG with exact 09:21 confirmation and verified opening OI. The separate shared V10/V11/V12 session keeps its `09:25-09:45` windows.",
         "",
         "| 5m end | Purpose | Equity 5m | Futures OI | OI ranker |",
         "|---|---|---|---|---|",
@@ -7389,7 +7455,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/snapshot":
             lines = self._int_param(params, "lines", 80, 20, 400)
-            payload = self._snapshot(lines=lines)
+            day = dt.datetime.now(IST).date().isoformat()
+            try:
+                payload = _cached_dashboard_read(
+                    ("snapshot", day, lines), lambda: self._snapshot(lines=lines), ttl=_DASH_SNAPSHOT_TTL_SEC)
+            except TimeoutError:
+                self._send_json({"error": "Dashboard refresh is still in progress. Retry shortly."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
             self._send_json(payload)
             return
         if parsed.path == "/api/cockpit":
@@ -7399,12 +7471,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Specify one date, mode and symbol."}, status=HTTPStatus.BAD_REQUEST)
                 return
             try:
-                payload = load_cockpit_data(
-                    FNO_OI_ROOT,
-                    (params.get("date") or [dt.datetime.now(IST).date().isoformat()])[0],
-                    (params.get("mode") or ["PAPER"])[0],
-                    (params.get("symbol") or [None])[0],
-                )
+                session_date = (params.get("date") or [dt.datetime.now(IST).date().isoformat()])[0]
+                mode = (params.get("mode") or ["PAPER"])[0]
+                symbol = (params.get("symbol") or [None])[0]
+                payload = _cached_dashboard_read(
+                    ("cockpit", str(FNO_OI_ROOT), session_date, mode, symbol),
+                    lambda: load_cockpit_data(FNO_OI_ROOT, session_date, mode, symbol),
+                    ttl=_DASH_COCKPIT_TTL_SEC)
             except ValueError:
                 self._send_json({"error": "Use a valid session date, PAPER or LIVE mode, and stock symbol."}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -10181,7 +10254,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       { time: "09:22", id: "kite_trade_id_5min_v7", label: "Live Trade FALSE" },
       { time: "15:40", id: "fno_oi_eod_qc", label: "FnO EOD QC" },
       { time: "15:45", id: "data_for_backtesting", label: "Data for Backtesting" },
-      { time: "16:20", id: "backtesting_result_v13_v10_g", label: "Backtesting result v13-v10-G" },
+      { time: "__G_BACKTEST_TIME__", id: "backtesting_result_v13_v10_g", label: "Backtesting result v13-v10-G" },
       { time: "16:05", id: "v7_nse_id_cost", label: "V7 NSE ID Cost" },
       { time: "16:05", id: "v7_causality_audit", label: "V7 Causality Audit" },
       { time: "16:15", id: "v7_research_layer", label: "Suggestions v7 Research" },
@@ -11924,6 +11997,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 </body>
 </html>"""
         html = html.replace("__API_TOKEN_JSON__", api_token_json)
+        html = html.replace("__G_BACKTEST_TIME__", "17:15" if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" else "16:20")
         html = html.replace("__FNO_MONITOR_CSS__", (BASE_DIR / "dashboard_fno_monitor.css").read_text(encoding="utf-8"))
         html = html.replace("__FNO_MONITOR_JS__", (BASE_DIR / "dashboard_fno_monitor.js").read_text(encoding="utf-8"))
         html = html.replace("__OPS_STATE_JS__", (BASE_DIR / "dashboard_ops_state.js").read_text(encoding="utf-8"))

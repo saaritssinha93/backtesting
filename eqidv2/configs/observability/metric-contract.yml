@@ -150,6 +150,10 @@ implementation_status:
     collector_metric: trading_pipeline_schedule_overdue
     pipeline: v13_v10_g_scanner
     frozen_slots_ist: ["09:25", "09:30", "09:35", "09:40", "09:45", "09:50", "09:55", "10:00", "11:20"]
+    g3_slots_source: fno_v13_v10_g_3_contract.SIGNAL_TO_CONFIRMATION
+    g3_pipeline: v13_v10_g_3_scanner
+    g3_signal_clock_count: 22
+    g3_last_signal_ist: "11:25"
     completion_grace_seconds: 180
     semantics: Zero means the latest due slot is complete or still inside grace; one means current-session completion proof is missing after grace, including when the scanner heartbeat itself is absent.
     alert: TradingPipelineScheduleOverdue fires only during market hours and outside declared maintenance.

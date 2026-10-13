@@ -1,10 +1,10 @@
 {
   "schema_version": "fno_active_strategy_deployment_v1",
   "profile": "V13_V10_G_3",
-  "strategy_version": "V13-V10-G-3-PRODUCTION-V2",
-  "strategy_fingerprint": "8d4d62d7f3e4aff5f39905e4f1cd2297a50b74af7c8fa83ee7b69aa855cc2aa6",
-  "accepted_variant": "G3_W1_V1p1_0950_LONG_T075",
-  "production_config": "configs/strategies/v13_v10_g_3_production_v2.json",
+  "strategy_version": "V13-V10-G-3-PRODUCTION-V5",
+  "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
+  "accepted_variant": "G3_W1_V1p1_0950_LONG_T075_0920_LONG_T300_LATE_SIX_SELECTED_TEN",
+  "production_config": "configs/strategies/v13_v10_g_3_production_v5.json",
   "deployment_stage": "PAPER_VALIDATION",
   "live_activation_authorized": false,
   "live_execution_policy": {
@@ -16,9 +16,12 @@
     "leverage": 5.0,
     "target_exposure_rs": 50000.0
   },
-  "migration_date": "2026-10-12",
-  "migration_plan": "docs/V13_V10_G3_MIGRATION_PLAN_2026-10-11.md",
-  "historical_profiles_preserved": ["V13_V10_G", "V13_V10_G_2"],
+  "migration_date": "2026-10-13",
+  "migration_plan": "docs/G3_SELECTED_TEN_PRODUCTION_2026-10-13.md",
+  "historical_profiles_preserved": [
+    "V13_V10_G",
+    "V13_V10_G_2"
+  ],
   "live_readiness_requires": [
     "Three successful G3 PAPER sessions with reconciled decisions and fills",
     "Broker position and open-order reconciliation",

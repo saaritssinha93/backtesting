@@ -2,7 +2,8 @@
 
 This module deliberately uses only the Python standard library.  It reads the
 same immutable/status artifacts that the trading processes already publish;
-it never imports a strategy module, calls a broker, or changes trading state.
+it reads the pure G3 decision clocks, but never imports a trading engine,
+calls a broker, or changes trading state.
 
 The registry in :mod:`ai_platform.observability.metrics` owns HELP/TYPE lines.
 This collector therefore returns sample lines only.  ``merge_prometheus_samples``
@@ -841,11 +842,15 @@ class RuntimeMetricsCollector:
         """
 
         labels = {"pipeline": self.profile.slug + "_scanner", "mode": "live"}
+        slots = _V13_SCANNER_SLOTS
+        if self.profile.name == "V13_V10_G_3":
+            from fno_v13_v10_g_3_contract import SIGNAL_TO_CONFIRMATION
+            slots = tuple(SIGNAL_TO_CONFIRMATION)
         slot_datetimes = [
             datetime.combine(
                 now.date(), day_time.fromisoformat(value), tzinfo=IST
             )
-            for value in _V13_SCANNER_SLOTS
+            for value in slots
         ]
         due = [slot for slot in slot_datetimes if slot <= now]
         if not self._is_trading_date(now.date()) or not due:
@@ -884,7 +889,7 @@ class RuntimeMetricsCollector:
             and completed_label == latest_label
             and phase in {"SLOT_DONE", "WAIT_FETCH", "WAIT_NEXT_SLOT"}
         )
-        if latest_label == _V13_SCANNER_SLOTS[-1] and stamp_is_current:
+        if latest_label == slots[-1] and stamp_is_current:
             try:
                 processed_slots = int(str(heartbeat.get("processed_slots", "")))
             except ValueError:
@@ -892,7 +897,7 @@ class RuntimeMetricsCollector:
             completed = completed or (
                 state == "DONE"
                 and phase == "ALL_V6_WINDOWS_DONE"
-                and processed_slots == len(_V13_SCANNER_SLOTS)
+                and processed_slots == len(slots)
             )
         samples.add(
             "trading_pipeline_schedule_overdue", 0 if completed else 1, labels

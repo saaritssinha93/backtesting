@@ -24,7 +24,7 @@ def test_reporting_cards_share_one_live_paper_worker_without_invented_execution(
     assert len(items) == 2
     assert all(item["status"]["execution_mode"] == "REPORTING_ONLY" for item in items)
     assert all(item["status"]["status"] == "NOT_SCHEDULED" for item in items)
-    assert items[0]["status"]["consumers"] == "G3 LIVE and PAPER analysis (one shared data worker)"
+    assert items[0]["status"]["consumers"] == "G3 LIVE and PAPER 09:20 inputs and flow analysis (one shared data worker)"
     assert all(item["dashboard_flow_path"] == "/dashboard-flow#live" for item in items)
     assert set(CARD_TASK_NAMES) == set(SESSION_SPECS)
 

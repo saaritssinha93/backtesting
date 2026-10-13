@@ -17,16 +17,16 @@ SESSION_SPECS = {
         "task": r"\EQIDV2_dashboard_flow_observer_0855",
         "status_file": "opening_observer.json",
         "schedule": "Monday-Friday 08:55 IST; collect until 09:21; no late catch-up",
-        "contexts": "G3 LIVE and PAPER analysis (one shared data worker)",
+        "contexts": "G3 LIVE and PAPER 09:20 inputs and flow analysis (one shared data worker)",
         "note": "Waits for the existing authentication job and dated universe before collecting. Does not refresh tokens or submit orders.",
     },
     "dashboard_flow_opening_history": {
         "title": "G3 BACKTEST opening-data recovery",
         "task": r"\EQIDV2_dashboard_flow_observer_history_1700",
         "status_file": "opening_history.json",
-        "schedule": "Monday-Friday 17:00 IST; after production/EOD collection",
-        "contexts": "G3 BACKTEST historical opening context",
-        "note": "Recovers reporting evidence into observer storage. Does not rerun backtests or overwrite production history. If the dashboard is closed at 17:00, results appear at its next start.",
+        "schedule": "Monday-Friday 17:00 IST; G3 daily backtest also recovers at 17:15 IST",
+        "contexts": "G3 BACKTEST 09:20 input evidence and historical opening context",
+        "note": "Recovers evidence into observer storage. The 17:15 daily launcher then snapshots it for G3 V5; this standalone retry does not rerun backtests or overwrite market bars.",
     },
 }
 CARD_TASK_NAMES = {key: (value["task"],) for key, value in SESSION_SPECS.items()}
@@ -77,7 +77,7 @@ def session_items(data_root: Path | str, *, now_ist: datetime | None = None) -> 
             "reporting_only": "true",
             "consumers": spec["contexts"],
             "configured_schedule": spec["schedule"],
-            "derived_status": error or "Opening data for analysis; no trading controls",
+            "derived_status": error or "Opening evidence for G3 09:20 and analysis; collector cannot place orders",
         }
         if info is None and spec["task"].lstrip("\\") in installed_tasks:
             status.update(status="SCHEDULED", phase="WAITING_FIRST_RUN",

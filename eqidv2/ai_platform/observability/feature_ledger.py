@@ -406,6 +406,11 @@ def evaluate_v13_v10_g_base_row(
                 if math.isfinite(numeric["v9_1m_volume_ratio"]) else None
             ),
         )
+    for name in ("opening_0920_status", "price_change_basis", "oi_change_source", "oi_change_from",
+                 "oi_change_to", "availability", "opening_evidence_sha256", "feature_available_at_ist"):
+        value = row.get(name)
+        if isinstance(value, str):
+            result[name] = value
     result["ledger_row_sha256"] = canonical_row_sha256(result)
     return result
 

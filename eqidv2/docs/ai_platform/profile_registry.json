@@ -67,8 +67,8 @@
     },
     "V13_V10_G_3": {
       "label": "V13-V10-G-3",
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V2",
-      "strategy_fingerprint": "8d4d62d7f3e4aff5f39905e4f1cd2297a50b74af7c8fa83ee7b69aa855cc2aa6",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V5",
+      "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
       "live_generation": "v6",
       "frozen_config_path": "C:/TradingData/eqidv2/fno_oi/strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1/frozen_config.json",
       "frozen_config_sha256": "788fbb3dbda6cf86d3f0f26a9db777e7462ba64c7906368cca077e983f72552a",
@@ -82,7 +82,20 @@
         },
         "window_minutes": 1,
         "minimum_volume_by_setup": {
-          "0951_LONG": 0.6
+          "0921_LONG": 1.8,
+          "0951_LONG": 0.6,
+          "1006_LONG": 0.6,
+          "1016_LONG": 0.6,
+          "1036_LONG": 0.6,
+          "1036_SHORT": 0.4,
+          "1041_LONG": 0.6,
+          "1046_LONG": 0.6,
+          "1046_SHORT": 0.8,
+          "1051_LONG": 0.4,
+          "1056_SHORT": 0.8,
+          "1111_LONG": 0.6,
+          "1111_SHORT": 0.8,
+          "1126_SHORT": 0.4
         }
       },
       "execution_profiles": [
@@ -90,9 +103,34 @@
         "V13_V10_G_3_EQUITY_PAPER_EXPOSURE",
         "V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4"
       ],
-      "evidence_class": "ACCEPTED_G3_BASELINE_PLUS_0950_LONG_T075_REUSED_HISTORY_WITH_VERSIONED_PRODUCTION_CONTRACT",
-      "production_config_relative_path": "configs/strategies/v13_v10_g_3_production_v2.json",
-      "execution_authority": false
+      "evidence_class": "G3_32_SETUP_PROMOTION_OF_RESEARCHED_HISTORY_NOT_UNTOUCHED_VALIDATION",
+      "production_config_relative_path": "configs/strategies/v13_v10_g_3_production_v5.json",
+      "execution_authority": false,
+      "active_setup_count": 32,
+      "signal_to_confirmation": {
+        "09:20": "09:21",
+        "09:25": "09:26",
+        "09:30": "09:31",
+        "09:35": "09:36",
+        "09:40": "09:41",
+        "09:45": "09:46",
+        "09:50": "09:51",
+        "09:55": "09:56",
+        "10:00": "10:01",
+        "10:05": "10:06",
+        "10:10": "10:11",
+        "10:15": "10:16",
+        "10:25": "10:26",
+        "10:30": "10:31",
+        "10:35": "10:36",
+        "10:40": "10:41",
+        "10:45": "10:46",
+        "10:50": "10:51",
+        "10:55": "10:56",
+        "11:10": "11:11",
+        "11:20": "11:21",
+        "11:25": "11:26"
+      }
     },
     "V13_V10_G_3_EQUITY_LIVE_10K_5X": {
       "asset": "EQUITY",
@@ -105,8 +143,8 @@
       "capital_per_trade_rs": 10000.0,
       "leverage": 5.0,
       "target_exposure_rs": 50000.0,
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V2",
-      "strategy_fingerprint": "8d4d62d7f3e4aff5f39905e4f1cd2297a50b74af7c8fa83ee7b69aa855cc2aa6",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V5",
+      "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
       "source_id": "g3_equity_live_orders"
     },
     "V13_V10_G_3_EQUITY_PAPER_EXPOSURE": {
@@ -115,15 +153,15 @@
       "quantity_policy": "STRATEGY_SIZED",
       "capital_per_entry_rs": 100000.0,
       "leverage": 5.0,
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V2",
-      "strategy_fingerprint": "8d4d62d7f3e4aff5f39905e4f1cd2297a50b74af7c8fa83ee7b69aa855cc2aa6",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V5",
+      "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
       "source_id": "g3_equity_paper_orders"
     },
     "V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4": {
       "label": "V13-V10-G-3 options: one lot ATM, 30% stop, 40.4% target",
       "strategy_version": "FNO_V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4_20261011",
-      "equity_strategy_version": "V13-V10-G-3-PRODUCTION-V2",
-      "strategy_fingerprint": "8d4d62d7f3e4aff5f39905e4f1cd2297a50b74af7c8fa83ee7b69aa855cc2aa6",
+      "equity_strategy_version": "V13-V10-G-3-PRODUCTION-V5",
+      "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
       "mode": "PAPER",
       "lots": 1,
       "execution_sources": [

@@ -21,6 +21,13 @@ def explicit_legacy_fixture_profile(monkeypatch):
     profile = PROFILES["V13_V10_G"]
     monkeypatch.setattr(detail, "ACTIVE_PROFILE", profile)
     monkeypatch.setattr(detail, "STRATEGY_VERSION", profile.version)
+    monkeypatch.setattr(detail, "SLOTS", ("09:25", "09:30", "09:35", "09:40", "09:45", "09:50", "09:55", "10:00", "11:20"))
+    # Numeric display fixtures explicitly attest their test bundle. Production
+    # archive pins remain unchanged when the shared feature writer evolves.
+    monkeypatch.setattr(detail, "PINNED_RULE_SOURCES", {
+        name: hashlib.sha256((detail.Path(detail.__file__).parent / name).read_bytes()).hexdigest()
+        for name in detail.PINNED_RULE_SOURCES
+    })
 
 
 def feature(**changes):
@@ -73,6 +80,82 @@ def test_scanner_does_not_claim_confirmation_rejection_or_selection(tmp_path):
     assert all(item["name"] != "gate_confirmation_present" for item in row["checks"])
     assert check(row, "confirmation_stage")["status"] == "NOT_EVALUATED"
     assert check(row, "gate_ema_short")["status"] == "NOT_APPLICABLE"
+
+
+@pytest.mark.parametrize("slot,setup,side,minimum", [
+    ("09:20", "0921_LONG", "LONG", 1.8), ("09:25", "0926_LONG", "LONG", 1.1),
+    ("09:30", "0931_SHORT", "SHORT", 1.2), ("09:50", "0951_LONG", "LONG", .6),
+    ("10:05", "1006_LONG", "LONG", .6), ("10:15", "1016_LONG", "LONG", .6),
+])
+@pytest.mark.parametrize("recorded", [True, False])
+def test_g3_monitor_uses_setup_confirmation_volume(monkeypatch, slot, setup, side, minimum, recorded):
+    monkeypatch.setattr(detail, "ACTIVE_PROFILE", PROFILES["V13_V10_G_3"])
+    raw = feature(signal_end=slot, setup_id=setup, base_side=side, v9_1m_volume_ratio=.7,
+                  gate_confirmation_volume=.7 >= minimum, margin_confirmation_volume_ratio=.7-minimum)
+    if recorded:
+        raw["minimum_confirmation_volume_ratio"] = minimum
+    gate = detail._gate(raw, "gate_confirmation_volume", "1m", pinned=True)
+    assert gate["required_text"].startswith(f">= {minimum:.2f}")
+    assert "disagrees" not in gate["evidence_note"]
+    assert gate["margin"] == pytest.approx(.7-minimum)
+    if recorded:
+        assert gate["threshold_source"] == "RECORDED: minimum_confirmation_volume_ratio"
+
+
+@pytest.mark.parametrize("source", ["PROVISIONAL_FULL_QUOTE", "FIRST_MINUTE_0916_TO_COMPLETED_0920_FUTURES_4M"])
+@pytest.mark.parametrize("fault", [None, "missing_hash", "other_quality_error", "invalid_identity", "missing_opening"])
+def test_opening_monitor_does_not_require_0915_futures_candle(tmp_path, monkeypatch, source, fault):
+    profile = PROFILES["V13_V10_G_3"]
+    monkeypatch.setattr(detail, "ACTIVE_PROFILE", profile)
+    monkeypatch.setattr(detail, "STRATEGY_VERSION", profile.version)
+    fingerprint = detail.expected_fingerprint(profile.name)
+    raw = feature(strategy_fingerprint=fingerprint, signal_ts=f"{DAY}T09:20:00+05:30",
+        confirmation_ts=f"{DAY}T09:21:00+05:30", signal_end="09:20", confirmation_end="09:21",
+        setup_id="0921_LONG", futures_tradingsymbol="TEST26OCTFUT", opening_0920_status="VALID",
+        availability="LIVE_AS_OF_VERIFIED", price_change_basis="09:15_CASH_OPEN_TO_09:20_CASH_CLOSE",
+        oi_change_source=source, opening_evidence_sha256="a"*64, oi_change_from=f"{DAY}T09:16:04+05:30",
+        oi_change_to=f"{DAY}T09:20:00+05:30", feature_available_at_ist=f"{DAY}T09:20:30+05:30")
+    quality = dict(symbol="TEST26OCTFUT", source="NFO_FUTURE_5M_LIVE", session_date=DAY,
+        signal_end="09:20", usable=False, status="BLOCKED", timestamp_max=f"{DAY}T09:20:00+05:30",
+        missing_timestamps=[f"{DAY}T09:15:00+05:30"], issues=[dict(code="MISSING_EXPECTED_TIMESTAMPS")])
+    if fault == "missing_hash": raw.pop("opening_evidence_sha256")
+    if fault == "missing_opening": raw.pop("opening_0920_status")
+    if fault == "invalid_identity": raw["strategy_fingerprint"] = "bad"
+    if fault == "other_quality_error": quality["issues"].append(dict(code="INVALID_OHLCV"))
+    value = payload([raw], strategy_fingerprint=fingerprint, signal_end="09:20", confirmation_end="09:21",
+        published_at_ist=f"{DAY}T09:20:53+05:30", raw_data_quality=[quality], long_candidates=1, short_candidates=0,
+        opening_0920_exclusions=[dict(equity_symbol="EXCLUDED", futures_tradingsymbol="EXCLUDED26OCTFUT",
+            reason="missing_or_late_0916_opening_oi_evidence")])
+    root = tmp_path / profile.live_dir
+    path = root / "scanner_5m" / DAY / "slot_0920.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(value))
+    rows, coverage, _ = detail._read_phase(root, DAY, "09:20", "5m", NOW, [])
+    gate = check(rows[0], "futures_oi_source_quality")
+    assert gate["status"] == ("NOT_APPLICABLE" if fault is None else "UNKNOWN" if fault == "invalid_identity" else "FAIL")
+    assert gate["recorded_status"] == ("UNKNOWN" if fault == "invalid_identity" else "FAIL")
+    assert check(rows[0], "opening_oi_source_quality")["status"] == ("PASS" if fault in (None, "other_quality_error") else "UNKNOWN")
+    assert rows[-1]["symbol"] == "EXCLUDED" and rows[-1]["decision"] == "OPENING_OI_EXCLUDED"
+    assert coverage["candidates"] == 1 and coverage["opening_excluded"] == 1
+
+
+@pytest.mark.parametrize("conf_state,outcome", [("RECORDED", "NO_FINAL_SELECTION"),
+    ("MISSING", "CONFIRMATION_MISSING"), ("BLOCKED", "CONFIRMATION_BLOCKED"),
+    ("CHECKSUM_MISMATCH", "CONFIRMATION_CHECKSUM_MISMATCH")])
+def test_zero_selection_is_not_missing_evidence(conf_state, outcome):
+    scanner = dict(state="RECORDED", candidates=10, long_candidates=10, short_candidates=0)
+    confirmation = dict(state=conf_state, candidates=10, confirmation_bars=10, ineligible_no_candle=0,
+        selected_long=0, selected_short=0, durable_feed=dict(state="RECORDED"),
+        rejection_counts=[dict(reason="direction_rejected", count=10)])
+    summary = detail._selection_summary(scanner, confirmation)
+    assert summary["outcome"] == outcome and summary["candidates"] == 10
+    assert summary["selected_long"] == (0 if conf_state == "RECORDED" else None)
+    confirmation["candidates"] = 9
+    if conf_state == "RECORDED":
+        assert detail._selection_summary(scanner, confirmation)["outcome"] == "INCOMPLETE_COUNTS"
+        confirmation["candidates"] = 10
+        confirmation["durable_feed"]["state"] = "MISSING"
+        assert detail._selection_summary(scanner, confirmation)["selected_long"] is None
 
 
 def test_explicit_false_and_missing_gate_differ(tmp_path):
@@ -255,6 +338,19 @@ def test_date_path_validation(tmp_path, day):
 def test_naive_clock_rejected(tmp_path):
     with pytest.raises(ValueError):
         detail.build_monitor_detail(tmp_path, DAY, now_ist=datetime(2026, 10, 7, 10))
+
+
+def test_strategy_fingerprint_is_resolved_once_per_build_and_never_reused_across_builds(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(detail, "expected_fingerprint", lambda profile: calls.append(profile) or "pinned")
+    write_phase(tmp_path, payload([feature(), feature(tradingsymbol="SECOND")]))
+    build(tmp_path)
+    assert len(calls) == 1 and detail._BUILD_IDENTITY.get() is None
+    build(tmp_path)
+    assert len(calls) == 2 and detail._BUILD_IDENTITY.get() is None
+    with pytest.raises(ValueError):
+        detail.build_monitor_detail(tmp_path, "invalid")
+    assert detail._BUILD_IDENTITY.get() is None
 
 
 def test_source_quality_cannot_pass_with_wrong_latest_clock(tmp_path):

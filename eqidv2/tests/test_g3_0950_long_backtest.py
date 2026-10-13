@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-import fno_v13_v10_g_3_contract as contract
+from research import g3_v2_contract as contract
 from research import g3_0950_long_backtest as backtest
 from research.g3_0950_long_backtest import DEFAULT_CONFIG, PREFERRED_CONFIG, backtest_setup, configuration, normalize_signals
 

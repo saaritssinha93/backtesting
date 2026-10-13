@@ -833,14 +833,35 @@ def run_entry(args: argparse.Namespace, session_date: date, side: str) -> int:
 
 
 def run_reporting(args: argparse.Namespace, session_date: date, role: str) -> int:
+    write_failures = 0
     while True:
         now = common.now_ist()
-        states = load_states(session_date)
-        output = publish_consolidated(session_date)
-        common.atomic_write_text(report_path(role), render_report(role, session_date))
+        finished = args.once or now.date() != session_date or now.time() >= SESSION_END
+        try:
+            states = load_states(session_date)
+            output = publish_consolidated(session_date)
+            common.atomic_write_text(report_path(role), render_report(role, session_date))
+        except OSError as exc:
+            # Atomic replacement already retries briefly. A dashboard/AV reader
+            # can hold a Windows handle longer; keep this reporting-only worker
+            # alive and retry the next cycle, preserving the last complete file.
+            if not isinstance(exc, PermissionError) and getattr(exc, "winerror", None) not in {5, 32, 33}:
+                raise
+            write_failures += 1
+            exhausted = finished and write_failures >= 3
+            _publish(role, "FAILED" if exhausted else "DEGRADED", session_date_ist=session_date,
+                     phase="REPORT_PUBLISH_BLOCKED" if exhausted else "REPORT_PUBLISH_RETRY",
+                     report_write_failures=write_failures,
+                     reason=f"{type(exc).__name__}: {exc}")
+            if exhausted:
+                return 2
+            time.sleep(max(.1, args.reporting_poll_sec))
+            continue
         summary = net_summary(states)
-        state_name = "DONE" if args.once or now.date() != session_date or now.time() >= SESSION_END else "RUNNING"
-        _publish(role, state_name, session_date_ist=session_date, output=output, **summary)
+        state_name = "DONE" if finished else "RUNNING"
+        _publish(role, state_name, session_date_ist=session_date, output=output,
+                 report_write_retries=write_failures, **summary)
+        write_failures = 0
         if state_name == "DONE":
             return 0
         time.sleep(args.reporting_poll_sec)

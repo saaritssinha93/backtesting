@@ -15,12 +15,12 @@ import numpy as np
 import pandas as pd
 
 import fno_v13_replay_source as source
-import fno_v13_v10_g_3_contract as contract
+from research.g3_backtest_profile import contract, CONFIG_PATH
 from eqidv2_runtime_paths import runtime_dir
 
 STRATEGY = "V13-V10-G-3"
 SCHEMA_VERSION = "fno_g3_production_run_v1"
-PRODUCTION_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "strategies" / "v13_v10_g_3_production_v2.json"
+PRODUCTION_CONFIG_PATH = CONFIG_PATH
 DEFAULT_SEALED_SOURCE = runtime_dir("fno_oi", "strategy_research", "v13_v10_g_full_history",
     "run_20260925_cutoff_corrected_through_20260923", "dataset")
 DataRoots = source.DataRoots
@@ -59,7 +59,9 @@ def _csv(run_dir: Path, name: str, frame: pd.DataFrame) -> dict:
 
 def _code_provenance() -> list[dict]:
     import fno_v13_v10_g_2_backtest as simulator
-    modules = [Path(__file__), Path(source.__file__), Path(contract.__file__),
+    modules = [Path(__file__), Path(source.__file__), Path(contract.__file__), Path(contract.late_setups.__file__), Path(contract.selected_setups.__file__),
+               Path(__file__).resolve().parent / "research/g3_backtest_profile.py",
+               Path(source.opening_inputs.__file__), Path(__file__).with_name("fno_v13_v10_g_3_opening_oi.py"),
                Path(simulator.__file__), Path(simulator.g.v9.__file__),
                Path(simulator.g.v9.v5.__file__), Path(simulator.g.v9.v6.__file__),
                Path(simulator.g.r.__file__), Path(source.hybrid.__file__), Path(source.provenance.__file__),
@@ -171,7 +173,7 @@ def replay_day(day: date, output_dir: Path, *, roots: DataRoots | None = None,
     if (output / "run_manifest.json").exists():
         raise FileExistsError("A sealed production run cannot be overwritten")
     snapshot = source.create_input_snapshot(day, snapshot_root or output / "input_snapshots", roots=roots)
-    dataset = source.build_day_features(day, roots=snapshot.roots)
+    dataset = source.build_day_features(day, roots=snapshot.roots, signal_clocks=contract.SIGNAL_TO_CONFIRMATION)
     dataset["problems"][:0] = list(snapshot.problems)
     # The pure decision contract is causal. Stock-day OI exclusions above are
     # explicit retrospective data eligibility, never morning/live entry guards.
@@ -191,6 +193,8 @@ def replay_day(day: date, output_dir: Path, *, roots: DataRoots | None = None,
             complete = False
             blockers.append(dict(reason="INCOMPLETE_SELECTED_EXECUTION_PATH", detail=str(exc)))
     coverage = dict(problems=dataset["problems"], blocking_problems=blockers,
+        opening_0920_exclusions=dataset.get("opening_0920_exclusions", []),
+        opening_0920_policy="EXCLUDE_STOCK_FROM_0920_ONLY_AND_DISCLOSE; NO_OI_PROXY",
         excluded_stocks=dataset["excluded_stocks"], universe_count=dataset["universe_count"], included_stocks=included,
         eligibility_method="AFTER_CLOSE_STOCK_DAY_INPUT_ELIGIBILITY",
         missing_required_futures_oi_policy="EXCLUDE_ENTIRE_STOCK_DAY_AND_DISCLOSE_NOT_A_LIVE_CAUSAL_GATE")
@@ -227,6 +231,10 @@ def load_sealed_source(root: Path = DEFAULT_SEALED_SOURCE) -> dict:
     if not set(days).issubset(set(pd.to_datetime(eligible.day).dt.date)):
         raise ValueError("Sealed manifest contains an ineligible session")
     clocks = {int(clock.replace(":", "")) for clock in contract.SIGNAL_TO_CONFIRMATION}
+    if "opening_0920_status" not in raw:
+        # Validate an old source against the slots it actually supported.
+        # It can supply eligibility/provenance, never the full V3 replay.
+        clocks.discard(920)
     raw = raw.loc[raw.hhmm_int.isin(clocks)].copy()
     raw["day"] = pd.to_datetime(raw.day).dt.date
     signals["day"] = pd.to_datetime(signals.day).dt.date
@@ -245,7 +253,12 @@ def load_sealed_source(root: Path = DEFAULT_SEALED_SOURCE) -> dict:
         checks.append(dict(day=day.isoformat(), reconstructed_strict_candidates=len(expected), sealed_candidates=len(observed)))
     if signals.sid.duplicated().any():
         raise ValueError("Sealed source contains duplicate native path IDs")
+    opening_rows = raw.loc[raw.hhmm_int.eq(920)]
+    opening_complete = (bool(len(opening_rows)) and "opening_0920_status" in opening_rows
+        and opening_rows.opening_0920_status.eq("VALID").all()
+        and set(opening_rows.day) == set(days))
     return dict(root=root, signals=signals, days=days, eligibility=eligibility,
+        opening_0920_complete=opening_complete,
         provenance=dict(source_kind="HASH_VERIFIED_SEALED_PRE_SELECTION_FEATURES", manifest_path=str(manifest_path),
             manifest_sha256=sha256(manifest_path), verified_artifacts=verified, pool_completeness_checks=checks,
             long_candidates_below_legacy_120=int(((signals.side == "LONG") & (signals.v9_1m_volume_ratio < 1.2)).sum()),
@@ -253,6 +266,8 @@ def load_sealed_source(root: Path = DEFAULT_SEALED_SOURCE) -> dict:
 
 
 def replay_sealed_days(bundle: dict, days: list[date], output_dir: Path) -> dict:
+    if "09:20" in contract.SIGNAL_TO_CONFIRMATION and not bundle.get("opening_0920_complete"):
+        raise ValueError("Sealed source lacks verified 09:20 opening inputs; reconstruct raw sessions for current G3")
     if not set(days).issubset(bundle["days"]):
         raise ValueError("Session not eligible in verified sealed source")
     signals = bundle["signals"].loc[bundle["signals"].day.isin(days)].copy()

@@ -65,13 +65,19 @@ def _summary(values: list[float]) -> dict:
                 maximum=max(values) if values else None)
 
 
-def collect_g3_paper_calibration(paper_root: Path | None, *, now: datetime | None = None) -> dict:
+def collect_g3_paper_calibration(paper_root: Path | None, *, now: datetime | None = None, profile=None) -> dict:
     """Describe identity-verified terminal states from already closed sessions.
 
     Missing, mixed-profile, invalid and nonterminal records never become zero
     latency or fills. Contradictory duplicate identities fail the whole report.
     The source hashes record the exact observed order-state bytes.
     """
+    import fno_v13_v10_g_3_contract as production
+    profile = profile or production
+    STRATEGY_VERSION = profile.STRATEGY_VERSION
+    strategy_fingerprint = profile.strategy_fingerprint
+    setup_for = profile.setup_for
+    canonical_signal_id = profile.canonical_signal_id
     clock = now or datetime.now(IST)
     if clock.tzinfo is None:
         raise ValueError("now must be timezone-aware")
@@ -184,8 +190,8 @@ def generate_g3_execution_analysis(*, source_root: Path, paper_root: Path | None
     run, manifest, paths = verified_package(source_root)
     with paths["portfolio_trades"].open(encoding="utf-8-sig", newline="") as stream:
         ledger = list(csv.DictReader(stream))
-    fingerprint = strategy_fingerprint()
-    if any(row.get("strategy_version") != STRATEGY_VERSION or row.get("strategy_fingerprint") != fingerprint for row in ledger):
+    version, fingerprint = manifest["strategy_version"], manifest["strategy_fingerprint"]
+    if any(row.get("strategy_version") != version or row.get("strategy_fingerprint") != fingerprint for row in ledger):
         raise ValueError("G3 historical ledger identity mismatch")
     baseline = performance(ledger)
     metrics = manifest["metrics"]
@@ -194,12 +200,14 @@ def generate_g3_execution_analysis(*, source_root: Path, paper_root: Path | None
         raise ValueError("G3 execution baseline P&L differs from its sealed manifest")
     if baseline["executed_trades"] != int(metrics.get("trades", metrics.get("fills", -1))):
         raise ValueError("G3 execution baseline count differs from its sealed manifest")
-    paper = collect_g3_paper_calibration(paper_root, now=now)
+    from research.g3_backtest_profile import contract as offline
+    profile = offline if offline.supported_identity(version, fingerprint) else None
+    paper = collect_g3_paper_calibration(paper_root, now=now, profile=profile)
     overlap = len(set(paper["filled_signal_ids"]) & {row.get("signal_id") for row in ledger})
     state = "INSUFFICIENT_G3_PATH_STRESS_EVIDENCE" if paper["fills"] else "AWAITING_G3_PAPER_CALIBRATION"
     generated = (now or datetime.now(IST)).astimezone(IST).isoformat()
     payload = dict(schema_version=SCHEMA_VERSION, strategy_profile=STRATEGY_PROFILE,
-        strategy_version=STRATEGY_VERSION, strategy_fingerprint=fingerprint, state=state,
+        strategy_version=version, strategy_fingerprint=fingerprint, state=state,
         mode="READ_ONLY_EXECUTION_DIAGNOSTICS", execution_authority=False, broker_access=False,
         safe_for_live_selection=False, live_configuration_changed=False, calibrated=False,
         conclusion="INSUFFICIENT_EVIDENCE_FOR_LIVE_CHANGE", generated_at_ist=generated,
@@ -213,7 +221,7 @@ def generate_g3_execution_analysis(*, source_root: Path, paper_root: Path | None
     report = f"""# V13-V10-G-3 Execution Realism
 
 - State: **{state}**
-- Strategy: `{STRATEGY_VERSION}`
+- Strategy: `{version}`
 - Fingerprint: `{fingerprint}`
 - Generated: `{generated}`
 - Source run: `{run}`

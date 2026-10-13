@@ -36,3 +36,24 @@ test('promoted historical target is labelled as the latest G-3 backtest', () => 
   assert.match(label,/Latest backtest 09:50 LONG/);
   assert.match(label,/Target 0\.75%/);
 });
+
+test('full current history and daily replay labels identify their actual scope', () => {
+  const base = {strategy:'V13-V10-G-3',run_name:'20261013_current',period_end:'2026-10-12'};
+  const full = runLabel({...base,kind:'research_variant',role:'backtest_history',current_full_strategy:true,
+    period_start:'2026-07-29',sessions:49},true);
+  assert.match(full,/Latest full historical backtest.*29 Jul 2026 to 12 Oct 2026.*49 sessions/);
+  assert.doesNotMatch(full,/09:50|undefined|Target/);
+  const daily = runLabel({...base,kind:'production_history',strategy_matches_active:true,
+    period_start:'2026-10-12',period_end:'2026-10-13',sessions:2},false);
+  assert.match(daily,/Daily replay history.*12 Oct 2026 to 13 Oct 2026.*2 sessions/);
+  assert.doesNotMatch(daily,/Archive|Full historical/);
+  const opening = runLabel({...base,kind:'research_variant',short_0920_enabled:false,target_pct:3},false);
+  assert.match(opening,/09:20 LONG comparison.*Target 3%/);
+});
+
+test('current backtest profile stays current when PAPER uses a different profile', () => {
+  const base = {strategy:'V13-V10-G-3',run_name:'selected_ten',strategy_matches_active:false,
+    strategy_matches_backtest:true,period_start:'2026-10-13',period_end:'2026-10-13',sessions:1};
+  assert.doesNotMatch(runLabel({...base,kind:'production_daily'},false),/Archived/);
+  assert.doesNotMatch(runLabel({...base,kind:'production_history'},false),/Archived/);
+});

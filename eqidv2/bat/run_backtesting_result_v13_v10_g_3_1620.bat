@@ -44,7 +44,18 @@ set "LOG_FILE=%LOG_DIR%\backtesting_result_v13_v10_g_3_%TARGET_DAY%.log"
 
 cd /d "%BASE_DIR%"
 echo [%DATE% %TIME%] START Backtesting result v13-v10-G-3 ^(session date=%TARGET_DAY% IST^)>>"%LOG_FILE%"
+rem Recover the exact 09:15-09:16 futures candle before snapshotting G3 V5.
+rem The separate 17:00 task remains a retry; writes stay in observer storage.
+"%PYTHON_EXE%" -u "%BASE_DIR%\dashboard_flow_observer_history.py" --from-date "%TARGET_DAY%" --to-date "%TARGET_DAY%" --fetch --import-local >>"%LOG_FILE%" 2>&1
+if errorlevel 1 echo [WARN] Opening recovery failed; replay coverage will block any incomplete result.>>"%LOG_FILE%"
 "%PYTHON_EXE%" -u "%SCRIPT_PATH%" --date "%TARGET_DAY%" --wait-for-data >>"%LOG_FILE%" 2>&1
+set "EXIT_CODE=%ERRORLEVEL%"
+if not "%EXIT_CODE%"=="0" goto FINALIZE
+
+rem Extend the verified full historical backtest through this completed day.
+rem Publish only after all same-contract sessions and accounting reconcile.
+echo [%DATE% %TIME%] START G3 full historical backtest refresh>>"%LOG_FILE%"
+"%PYTHON_EXE%" -u "%BASE_DIR%\fno_v13_v10_g_3_backtest.py" --through "%TARGET_DAY%" >>"%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" goto FINALIZE
 
@@ -64,6 +75,8 @@ if not "%STRATEGY_ANALYSIS_EXIT%"=="0" (
     echo [ERROR] G3 strategy analysis failed; exit=%STRATEGY_ANALYSIS_EXIT%>>"%LOG_FILE%"
     set "EXIT_CODE=%STRATEGY_ANALYSIS_EXIT%"
 )
+
+rem G3 V5 includes 09:20 LONG natively. No duplicate sidecar replay.
 
 :FINALIZE
 echo [%DATE% %TIME%] END G3 production backtest (exit=%EXIT_CODE%)>>"%LOG_FILE%"

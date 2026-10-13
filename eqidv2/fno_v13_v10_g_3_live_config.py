@@ -31,12 +31,14 @@ REPORT_PREFIX = "fno_v13_v10_g_3"
 CONTROL_ROOT_NAME = "v13_v10_g_3_live"
 LEGACY_EMERGENCY_CONTROL_ROOT_NAME = "v6_live"
 SESSION_END = "15:32"
-PIPELINE_DEADLINE = "11:23"
-SELECTED_OBJECTIVE = "G3_W1_LONG110_SHORT120_CORE_FIRST_0950_LONG060_TARGET075"
+# Latest exact confirmation plus its 90-second publication grace, rounded up.
+PIPELINE_DEADLINE = (datetime.strptime(max(SIGNAL_TO_CONFIRMATION.values()), "%H:%M")
+    + timedelta(seconds=ENTRY_ACTIVATION_GRACE_SEC + 59)).strftime("%H:%M")
+SELECTED_OBJECTIVE = "G3_W1_LONG110_SHORT120_CORE_FIRST_0950_LONG060_TARGET075_0920_LONG180_TARGET300_LATE_SIX_SELECTED_TEN"
 LIVE_ACK_ENV = "FNO_V13_V10_G_3_LIVE_ACK"
 LIVE_ACK = "I_UNDERSTAND_REAL_FNO_V13_V10_G_3_EQUITY_ORDERS"
 ORDER_TAG_PREFIX = "FVG3"
-CONFIG_PATH = Path(__file__).resolve().parent / "configs/strategies/v13_v10_g_3_production_v2.json"
+CONFIG_PATH = Path(__file__).resolve().parent / "configs/strategies/v13_v10_g_3_production_v5.json"
 CONFIG_SHA256 = hashlib.sha256((json.dumps(contract.strategy_payload(), indent=2, sort_keys=True) + "\n").encode()).hexdigest()
 FROZEN_ROOT = (Path(os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2")) / "fno_oi/strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1")
 FROZEN_CONFIG_PATH = FROZEN_ROOT / "frozen_config.json"
@@ -48,7 +50,7 @@ CAPABILITIES = dict(exact_minute_confirmation=True, confirmation_volume_warmup=T
     paper_portfolio_lock=True, staged_stops=True, strict_0925_long=True,
     profile_scoped_identity=True, isolated_controls=True, live_quantity_one=False,
     separate_live_execution_policy=True, live_exposure_sizing=True,
-    setup_specific_confirmation_volume=True, long_0950_target075=True)
+    setup_specific_confirmation_volume=True, long_0950_target075=True, long_0920_target300=True, opening_oi_asof_required=True, six_late_setups=True, selected_ten_setups=True)
 FNO_FETCH_SLOT_SCHEMA_VERSION = "fno_oi_fetch_slot_v2"
 FNO_READINESS_POLICY = "verified_stock_no_candle_skip_v1"
 MIN_STOCK_FUTURES_COVERAGE = .99
@@ -86,7 +88,7 @@ def validate_strategy() -> None:
     if hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest() != CONFIG_SHA256:
         raise ValueError("G3 production configuration bytes changed")
     if (STRATEGY_PROFILE, STRATEGY_VERSION, LIVE_ROOT_NAME, CONTROL_ROOT_NAME, LIVE_QUANTITY_CAP,
-            ARMED, EXECUTION_AUTHORITY) != ("V13_V10_G_3", "V13-V10-G-3-PRODUCTION-V2",
+            ARMED, EXECUTION_AUTHORITY) != ("V13_V10_G_3", "V13-V10-G-3-PRODUCTION-V5",
             "v13_v10_g_3_live", "v13_v10_g_3_live", 1, False, False):
         raise ValueError("G3 runtime identity, controls or accepted decision contract changed")
     live_execution_policy.validate_policy()

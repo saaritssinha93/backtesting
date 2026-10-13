@@ -64,6 +64,21 @@ async function app(data, hash = '') {
 }
 const values = app => app.get('session-values-body').children.map(row=>row.children.map(cell=>cell.textContent));
 
+test('current daily replay remains selectable beside full history without showing archives', async () => {
+  const data = fixture();
+  data.selected_run = {...data.selected_run,current_full_strategy:true,kind:'research_variant',
+    period_start:'2026-07-29',sessions:49};
+  const daily = {...data.selected_run,id:'daily',current_full_strategy:false,kind:'production_history',
+    strategy_matches_active:false,strategy_matches_backtest:true,period_start:'2026-10-12',period_end:'2026-10-13',sessions:2};
+  const archive = {...daily,id:'old',strategy_matches_active:false,strategy_matches_backtest:false};
+  data.runs = [data.selected_run,daily,archive];
+  const ui = await app(data);
+  const options = ui.get('run-select').children;
+  assert.deepEqual(options.map(option=>option.value),['g3-fixture','daily']);
+  assert.match(options[0].textContent,/Full historical backtest|full historical backtest/);
+  assert.match(options[1].textContent,/Daily replay history/);
+});
+
 test('live deep link defers backtest loading until a research tab is selected', async () => {
   const ui = await app(fixture(), '#live');
   assert.equal(ui.live.activated, 1);

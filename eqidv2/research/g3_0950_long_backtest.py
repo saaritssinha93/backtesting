@@ -20,7 +20,7 @@ import pandas as pd
 
 import fno_v13_replay_source as source
 import fno_v13_v10_g_2_extend_results as ext
-import fno_v13_v10_g_3_contract as contract
+from research import g3_v2_contract as contract
 import fno_v13_v10_g_3_daily_replay as replay
 from research.g3_freeze import DEFAULT_FROZEN
 from research.g3_six_confirmation_variants import _extension_pool
@@ -256,6 +256,20 @@ def frozen_parity(ledger: pd.DataFrame) -> None:
         raise RuntimeError("Accepted G3 baseline P&L drift")
 
 
+def _simulate_reference(orders, paths, days):
+    # This archived study selects with the pinned V2 contract. The shared
+    # simulator's execution constants must remain identical before reusing it.
+    names = ("CAPITAL_PER_ENTRY_RS", "LEVERAGE", "PORTFOLIO_CAPITAL_RS", "MAX_POSITIONS",
+             "ROUND_TRIP_COST_BPS", "ENTRY_EXPIRY_MINUTES", "SQUARE_OFF",
+             "INITIAL_STOP_PCT", "TIGHTENED_STOP_PCT", "TIGHTEN_AFTER_MINUTES")
+    if any(getattr(contract, name) != getattr(replay.contract, name) for name in names):
+        raise ValueError("Archived V2 simulation requires its original execution constants")
+    ledger, metrics = replay.simulate(orders, paths, days)
+    ledger["strategy_version"] = contract.STRATEGY_VERSION
+    ledger["strategy_fingerprint"] = contract.strategy_fingerprint()
+    return ledger, metrics
+
+
 def run(config_path: Path,output_dir: Path,history_provenance: Path,
         recent_provenance: Path,october12_run: Path) -> dict:
     config = configuration(config_path)
@@ -283,11 +297,11 @@ def run(config_path: Path,output_dir: Path,history_provenance: Path,
         raise RuntimeError("Variant introduced duplicate order identities")
     paths = selected_paths(all_orders,sources)
     print(f"Verified minute execution paths for {len(all_orders)} orders",flush=True)
-    baseline,_ = replay.simulate(baseline_orders,paths,days)
+    baseline,_ = _simulate_reference(baseline_orders,paths,days)
     frozen_parity(baseline.loc[pd.to_datetime(baseline.day).dt.date.isin(days[:46])])
     print("Frozen 46-session baseline trade parity passed",flush=True)
     with backtest_setup(config):
-        variant,_ = replay.simulate(all_orders,paths,days)
+        variant,_ = _simulate_reference(all_orders,paths,days)
     old = variant.loc[variant.sid.isin(baseline_orders.sid)]
     comparison = old.set_index("sid").sort_index()
     original = baseline.set_index("sid").sort_index()

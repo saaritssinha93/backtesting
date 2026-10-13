@@ -32,6 +32,9 @@ def candidate(symbol="A", *, side="LONG", signal="09:30", **changes):
         ema9=101. if side == "LONG" else 99., ema20=100., ema50=99. if side == "LONG" else 101.,
         body_ratio=.65, wick_ratio=.2, traded_value=1e6, v9_1m_volume_ratio=1.1 if side == "LONG" else 1.2,
         confirmed=True, nifty_first_bar_return_pct=-.05)
+    if signal == "09:20":
+        row.update(opening_0920_status="VALID", price_change_basis="09:15_CASH_OPEN_TO_09:20_CASH_CLOSE",
+                   oi_change_source="FIRST_MINUTE_0916_TO_COMPLETED_0920_FUTURES_4M")
     row.update(changes)
     return row
 
@@ -39,7 +42,7 @@ def candidate(symbol="A", *, side="LONG", signal="09:30", **changes):
 def test_normalized_effective_book_and_frozen_metadata_are_distinct():
     config.validate_strategy()
     assert config.strategy_fingerprint() == contract.config_fingerprint()
-    assert len(config.ACTIVE_SETUPS) == 15
+    assert len(config.ACTIVE_SETUPS) == 32
     assert config.setup_for("09:50", "LONG").target_pct == .75
     assert config.setup_for("09:55", "SHORT") is None
     assert config.setup_for("10:00", "SHORT") is None
@@ -61,7 +64,7 @@ def test_promoted_setup_matches_research_without_changing_existing_rules():
     current = contract.strategy_payload()
     for family in ("core_setups", "active_setups"):
         retained = [{**asdict(s), "source_version": contract.LEGACY_STRATEGY_VERSION}
-                    for s in getattr(contract, family.upper()) if s.setup_id != "0951_LONG"]
+                    for s in getattr(contract, family.upper()) if s.setup_id not in {"0921_LONG", "0951_LONG", *contract.late_setups.SETUP_IDS, *contract.selected_setups.SETUP_IDS}]
         assert retained == prior[family]
     setup = contract.setup_for("09:50", "LONG")
     for key in ("signal_end", "confirmation_end", "side", "mode", "max_entries", "picker",
@@ -123,6 +126,32 @@ def test_short_core_precedes_better_ranked_expansion_and_ties_are_stable():
         selected=config.rank_candidates(rows,setup)
         assert [r["tradingsymbol"] for r in selected] == ["CORE","A"]
         assert [r["v10_g_f_core"] for r in selected] == [True,False]
+
+
+def test_v4_preserves_all_sixteen_v3_setups_and_adds_only_requested_six():
+    prior = json.loads((ROOT / "configs/strategies/v13_v10_g_3_production_v3.json").read_text())
+    requested = {("10:05", "LONG"), ("10:10", "SHORT"), ("10:15", "LONG"),
+                 ("10:15", "SHORT"), ("10:25", "SHORT"), ("10:30", "SHORT")}
+    for family in ("core_setups", "active_setups"):
+        current = contract.strategy_payload()[family]
+        added = [s for s in current if (s["signal_end"], s["side"]) in requested]
+        retained = [{**s, "source_version": prior["strategy_version"]}
+                    for s in current if (s["signal_end"], s["side"]) not in requested
+                    and s["confirmation_end"].replace(":", "") + "_" + s["side"] not in contract.selected_setups.SETUP_IDS]
+        assert len(added) == 6 and retained == prior[family]
+    for clock in ("10:05", "10:10", "10:15", "10:20", "10:25", "10:30"):
+        for side in ("LONG", "SHORT"):
+            assert (contract.setup_for(clock, side) is not None) == ((clock, side) in requested)
+    assert contract.supported_identity(prior["strategy_version"], "0119d67996b0f801dcfe55057d76e82482d10bec40898dab017262b09506a811", allow_legacy=True)
+    assert not contract.supported_identity(prior["strategy_version"], "0119d67996b0f801dcfe55057d76e82482d10bec40898dab017262b09506a811")
+
+
+def test_late_short_ranks_liquidity_without_legacy_core_preference():
+    setup = config.setup_for("10:10", "SHORT")
+    liquid = candidate("LIQUID", side="SHORT", signal="10:10", price_change_pct=-.13, traded_value=1e8)
+    larger_move = candidate("MOVE", side="SHORT", signal="10:10", price_change_pct=-.2, traded_value=1e5)
+    assert [r["tradingsymbol"] for r in config.rank_candidates([larger_move, liquid], setup)] == ["LIQUID"]
+    assert not config.passes_selected_filters({**liquid, "price_change_pct": -.129999}, setup)
 
 
 @pytest.mark.parametrize("field,value", [
@@ -244,7 +273,7 @@ work=x.copy()
 work.loc[work.side.eq("LONG"),"v9_1m_volume_ratio"]*=1.2/1.1
 old=g.select_orders(work,g.v9.V9Config(),g.SelectionChange(**settings["selection_change"]),core_first=True)
 new=c.select_orders(x)
-new=new.loc[new.setup_id.ne("0951_LONG")]
+new=new.loc[~new.setup_id.isin({"0921_LONG", "0951_LONG", *c.late_setups.SETUP_IDS, *c.selected_setups.SETUP_IDS})]
 keys=lambda z:set(zip(z.sid.astype(int),z.setup_id))
 assert keys(old)==keys(new),(keys(old)-keys(new),keys(new)-keys(old))
 assert len(old)==len(new)==88
