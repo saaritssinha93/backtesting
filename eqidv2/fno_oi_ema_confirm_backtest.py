@@ -85,7 +85,7 @@ def load_five_minute(symbol: str) -> pd.DataFrame:
     path = common.raw_contract_path(symbol)
     if not path.exists():
         return pd.DataFrame()
-    frame = pd.read_parquet(
+    frame = common.read_parquet_snapshot(
         path, columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
     )
     frame["ts"] = pd.to_datetime(frame["timestamp"], utc=True).dt.tz_convert(common.IST)

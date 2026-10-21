@@ -14,11 +14,13 @@ $plan = @($roles | ForEach-Object {
     [pscustomobject]@{ OldTask = "EQIDV2_fno_v13_v10_g_${_}_0915";
         NewTask = "EQIDV2_fno_v13_v10_g_3_${_}_0915";
         Launcher = Join-Path $PSScriptRoot "run_fno_v13_v10_g_3_$_.bat";
-        Enable = ($_ -ne 'live_kite_qty1') }
+        Enable = ($_ -ne 'live_kite_qty1');
+        PipelineRecovery = ($_ -in @('scanner_5min','equity_1min_feed','confirmation_1min')) }
 })
 $plan += [pscustomobject]@{ OldTask = 'EQIDV2_backtesting_result_v13_v10_g_1620';
     NewTask = 'EQIDV2_backtesting_result_v13_v10_g_3_1620';
-    Launcher = Join-Path $PSScriptRoot 'run_backtesting_result_v13_v10_g_3_1620.bat'; Enable = $true }
+    Launcher = Join-Path $PSScriptRoot 'run_backtesting_result_v13_v10_g_3_1620.bat';
+    Enable = $true; PipelineRecovery = $false }
 if (-not $Apply) {
     [pscustomobject]@{ Mode = 'DRY_RUN'; StartsTasks = $false; ArmsLive = $false;
         DisableLegacy = $true; Tasks = $plan } | ConvertTo-Json -Depth 5
@@ -49,7 +51,11 @@ $converted = @{}
 # source definition cannot leave a partially-created replacement task set.
 foreach ($item in $plan) {
     $source = Get-Content -LiteralPath (Join-Path $RollbackDirectory ($item.OldTask + '.xml')) -Raw
-    $converted[$item.NewTask] = ConvertTo-G3ScheduledTaskXml -SourceXml $source -NewTaskName $item.NewTask -Launcher $item.Launcher
+    $converted[$item.NewTask] = ConvertTo-G3ScheduledTaskXml `
+        -SourceXml $source `
+        -NewTaskName $item.NewTask `
+        -Launcher $item.Launcher `
+        -PipelineRecovery:$item.PipelineRecovery
 }
 try {
     foreach ($item in $plan) {

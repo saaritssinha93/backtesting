@@ -1,4 +1,4 @@
-"""Target-only sweeps for frozen G4 morning and midday configurations.
+"""Target-only sweeps for frozen G4 morning, midday and afternoon configurations.
 
 Every target uses the native minute simulator and a fresh capital allocation.
 Historical best targets are explicitly separated from training-only choices.
@@ -29,6 +29,10 @@ VERSION = "V13-V10-G-4-1035-1130-TARGET-SWEEP-V1"
 DEFAULT_CONFIG = ROOT / "configs/strategies/v13_v10_g_4_target_sweep_v1.json"
 MIDDAY_VERSION = "V13-V10-G-4-1135-1230-TARGET-SWEEP-V2"
 MIDDAY_CONFIG = ROOT / "configs/strategies/v13_v10_g_4_target_sweep_1135_1230_v2.json"
+AFTERNOON_VERSION = "V13-V10-G-4-1235-1330-TARGET-SWEEP-V3"
+AFTERNOON_CONFIG = ROOT / "configs/strategies/v13_v10_g_4_target_sweep_1235_1330_v3.json"
+AFTERNOON_CLOCKS = ("12:35", "12:40", "12:45", "12:50", "12:55", "13:00",
+                    "13:05", "13:10", "13:15", "13:20", "13:25", "13:30")
 PROFILES = {
     VERSION: dict(reference_version=REFERENCE_VERSION, setups=22, orders=278, fills=245,
         ledger="all_22_diagnostic_trades.csv", require_additions=False,
@@ -36,6 +40,9 @@ PROFILES = {
     MIDDAY_VERSION: dict(reference_version="V13-V10-G-4-BACKTEST-1135-1230-V4",
         setups=24, orders=345, fills=287, ledger="all_24_diagnostic_trades.csv", require_additions=True,
         entry_policy="FREEZE_ALL_24_PREVIOUSLY_SELECTED_FILTERS_AND_345_ORDERS"),
+    AFTERNOON_VERSION: dict(reference_version="V13-V10-G-4-BACKTEST-1235-1330-V6",
+        setups=24, ledger="all_24_diagnostic_trades.csv", require_additions=True,
+        entry_policy="FREEZE_ALL_24_PREVIOUSLY_SELECTED_FILTERS_AND_PINNED_ORDERS"),
 }
 RAW_COLUMNS = ["sid", "day", "signal_id", "setup_id", "signal_end", "side", "tradingsymbol",
     "confirmation_ts", "signal_ts", "hhmm_int", "picker", "traded_value", "volume_ratio",
@@ -69,6 +76,60 @@ def configuration(path=DEFAULT_CONFIG):
         raise ValueError("Targets must include 1%, exceed modeled cost, use 0.01% steps and remain <=10%")
     value["targets_pct"] = [n / 100 for n in range(round(numbers[0] * 100), round(numbers[1] * 100) + 1)]
     return value
+
+
+def validate_afternoon_cohort(summary, selected_config, orders, saved, baseline, days):
+    """Validate the new cohort against its hash-pinned entry-study artifacts.
+
+    Empty individual setups remain part of the 24-setup experiment. Counts are
+    attested by the entry manifest rather than invented before that run exists.
+    """
+    version = PROFILES[AFTERNOON_VERSION]["reference_version"]
+    expected = dict(variant_id=version, scope="BACKTEST_ONLY", execution_authority=False,
+        sessions=49, training_sessions=38, holdout_sessions=11, new_setups=24,
+        first_date="2026-07-29", last_date="2026-10-12", signal_ends=list(AFTERNOON_CLOCKS))
+    if any(summary.get(k) != v for k, v in expected.items()):
+        raise ValueError("Frozen afternoon reference metadata changed")
+    if (selected_config.get("variant_id") != version
+            or selected_config.get("scope") != "BACKTEST_ONLY"
+            or selected_config.get("execution_authority") is not False):
+        raise ValueError("Frozen afternoon entry configuration identity changed")
+    expected_setups = {f"{clock[:2]}{int(clock[-2:]) + 1:02d}_{side}": (clock, side)
+        for clock in AFTERNOON_CLOCKS for side in ("LONG", "SHORT")}
+    setups = selected_config.get("setups", [])
+    if len(setups) != 24 or {s.get("setup_id") for s in setups} != set(expected_setups):
+        raise ValueError("Frozen afternoon setup membership changed")
+    labels = {}
+    for setup in setups:
+        clock, side = expected_setups[setup["setup_id"]]
+        expected_rule = dict(signal_end=clock, side=side,
+            confirmation_end=f"{clock[:2]}:{int(clock[-2:]) + 1:02d}", target_pct=1.,
+            initial_stop_pct=1.25, tightened_stop_pct=1., tighten_after_minutes=120,
+            max_entries=1, picker="max_liquidity")
+        if any(setup.get(k) != v for k, v in expected_rule.items()):
+            raise ValueError("Frozen afternoon reference rule changed")
+        labels[setup["setup_id"]] = f"{clock}_{side}"
+    if (len(days) != 49 or days[0] != "2026-07-29" or days[-1] != "2026-10-12"
+            or "2026-10-01" in days or len(set(days)) != 49
+            or not set(orders.day).issubset(days) or not set(orders.setup_id).issubset(labels)
+            or orders.sid.duplicated().any() or orders.signal_id.duplicated().any()
+            or orders.sid.isna().any() or orders.signal_id.isna().any()
+            or set(orders.sid) & set(baseline.sid)
+            or saved.sid.duplicated().any() or set(saved.sid) != set(orders.sid) | set(baseline.sid)):
+        raise ValueError("Frozen afternoon orders or session cohort changed")
+    counts = (summary.get("selected_orders"), summary.get("potential_fills"))
+    if (any(type(n) is not int or n < 0 for n in counts)
+            or counts[0] != len(orders) or not len(orders)
+            or counts[1] > counts[0]
+            or counts[1] != int(saved.loc[saved.sid.isin(orders.sid), "filled"].eq(True).sum())):
+        raise ValueError("Frozen afternoon order/fill counts changed")
+    for setup_id, frame in orders.groupby("setup_id"):
+        clock, side = expected_setups[setup_id]
+        if (not frame.signal_end.eq(clock).all() or not frame.side.eq(side).all()
+                or not frame.native_target_pct.eq(1.).all()
+                or not frame.initial_stop_pct.eq(1.25).all()):
+            raise ValueError("Frozen afternoon order policy changed")
+    return labels, counts[1]
 
 
 def choose(rows, period, minimum, *, required=70.):
@@ -121,7 +182,9 @@ def decisions_for(rows, setup_ids, config):
         fit = choose(trials, "all", config["minimum_historical_fills"])
         train = choose(trials, "train", config["minimum_training_fills"])
         reference = next(r for r in trials if r["target_pct"] == 1.)
-        best_rate = max(trials, key=lambda r: (r["all_win_rate_pct"], r["all_net_pnl_rs"], -r["target_pct"]))
+        observed = [r for r in trials if r["all_win_rate_pct"] is not None]
+        best_rate = max(observed, key=lambda r: (r["all_win_rate_pct"], r["all_net_pnl_rs"],
+            -r["target_pct"])) if observed else None
         later_pass = (eligible_period(train, "holdout", config["minimum_later_fills"])
                       and eligible_period(train, "all", config["minimum_historical_fills"]))
         if fit:
@@ -136,8 +199,8 @@ def decisions_for(rows, setup_ids, config):
             historical_pass=fit is not None, historical_target_pct=fit["target_pct"] if fit else None,
             training_pass=train is not None, training_target_pct=train["target_pct"] if train else None,
             chronological_check_pass=later_pass, small_sample=reference["all_fills"] < 10,
-            best_observed_win_rate_pct=best_rate["all_win_rate_pct"],
-            target_at_best_observed_win_rate_pct=best_rate["target_pct"])
+            best_observed_win_rate_pct=best_rate["all_win_rate_pct"] if best_rate else None,
+            target_at_best_observed_win_rate_pct=best_rate["target_pct"] if best_rate else None)
         for label, selected in (("historical", fit), ("training", train)):
             for period in ("train", "holdout", "all"):
                 for field in ("fills", "wins", "win_rate_pct", "net_pnl_rs", "max_drawdown_rs"):
@@ -146,17 +209,20 @@ def decisions_for(rows, setup_ids, config):
     return pd.DataFrame(decisions), historical, training, chronological
 
 
-def _worker_init(orders, paths, baseline, reference, days):
+def _worker_init(orders, paths, baseline, reference, days, setup_labels=None):
+    labels = setup_labels or {setup_id: f"{frame.signal_end.iloc[0]}_{frame.side.iloc[0]}"
+        for setup_id, frame in orders.groupby("setup_id", sort=True)}
     _WORKER.update(orders=orders, paths=paths, baseline=baseline, reference=reference,
-                   periods=dict(train=days[:38], holdout=days[38:], all=days))
+                   periods=dict(train=days[:38], holdout=days[38:], all=days), setup_labels=labels)
 
 
 def _trial(target):
     raw = replay_target(_WORKER["orders"], _WORKER["paths"], target)
     assert_same_entries(raw, _WORKER["reference"])
     rows = []
-    for setup_id, frame in raw.groupby("setup_id", sort=True):
-        row = dict(setup=f"{frame.signal_end.iloc[0]}_{frame.side.iloc[0]}", setup_id=setup_id, target_pct=target)
+    for setup_id, label in sorted(_WORKER["setup_labels"].items()):
+        frame = raw.loc[raw.setup_id.eq(setup_id)]
+        row = dict(setup=label, setup_id=setup_id, target_pct=target)
         for period, days in _WORKER["periods"].items():
             row.update({f"{period}_{k}": v for k, v in raw_stats(frame, days).items()})
         rows.append(row)
@@ -174,6 +240,33 @@ def _trial(target):
 def mix_cached(raw_by_target, targets, reference):
     parts = [raw_by_target[target].loc[raw_by_target[target].setup_id.eq(setup)] for setup, target in sorted(targets.items())]
     return pd.concat(parts, ignore_index=True) if parts else reference.iloc[:0].copy()
+
+
+def portfolio_qualified_subset(raw_by_target, targets, baseline, reference, days, *, minimum=5):
+    """Remove failing setups and reallocate until every retained setup qualifies.
+
+    This deterministic historical screen is descriptive, not a global optimum.
+    Removing positions may admit different fills, so a single pruning pass is
+    insufficient. Every removal and its actual allocated statistics is recorded.
+    """
+    retained, removals = dict(targets), []
+    for iteration in range(len(targets) + 1):
+        raw = mix_cached(raw_by_target, retained, reference)
+        ledger = allocate(pd.concat((baseline, raw), ignore_index=True, sort=False))
+        added = ledger.loc[ledger.sid.isin(raw.sid)]
+        failed = []
+        for setup_id, target in sorted(retained.items()):
+            stats = _stats(added.loc[added.setup_id.eq(setup_id)], days)
+            if (stats["executed_trades"] < minimum or stats["win_rate_pct"] is None
+                    or stats["win_rate_pct"] < 70 or stats["net_pnl_rs"] <= 0):
+                failed.append(setup_id)
+                removals.append(dict(iteration=iteration + 1, setup_id=setup_id,
+                    target_pct=target, **stats))
+        if not failed:
+            return retained, removals
+        for setup_id in failed:
+            retained.pop(setup_id)
+    raise RuntimeError("Portfolio qualification did not converge")
 
 
 def write_report(output, summary, decisions, portfolio, scenario_setups):
@@ -208,6 +301,9 @@ def write_report(output, summary, decisions, portfolio, scenario_setups):
         page += f'<h2>{html.escape(title)}</h2><div class=scroll>{frame.to_html(index=False,border=0,na_rep="—",float_format=lambda v:f"{v:,.2f}")}</div>'
     page += f"<p>Baseline: {html.escape(summary['baseline_description'])}. The entry study excluded {summary['reference_source_rejections']} malformed liquidity inputs before selection; those exclusions remain fixed. Best tested scenario with 70% in both the new trades and combined book: {html.escape(str(summary['best_tested_portfolio70_scenario']))}. Best tested scenario with every included new setup also passing 70% after allocation: {html.escape(str(summary['best_tested_every_setup70_scenario']))}.</p>"
     page += '<p>Configurations without a qualifying target remain at 1% only in the explicitly named all-setup diagnostic scenarios; the qualifying-only scenarios exclude them. The chronological-check subset uses later outcomes for membership. A common target may meet portfolio-wide 70% while individual setups fail it.</p>'
+    if summary.get("portfolio_requalification"):
+        page += '<p>The historical_portfolio_qualified70_only scenario repeatedly removes every setup failing the minimum fills, 70% wins or positive net P&amp;L requirement after capital allocation, then reallocates until all remaining setups pass. Membership uses the full historical period. It is a deterministic descriptive subset, not a global optimum. Empty setups remain visible in the all-setup diagnostics.</p>'
+    page += '<p>Entry filters were selected sequentially at the original 1% target and then frozen. This experiment optimizes targets within those fixed entries; it does not jointly search every entry-filter and target combination.</p>'
     page += f'<p>Historical qualifying setups: {summary["historical_70_setup_count"]}/{summary["setups"]}. Training-qualified setups: {summary["training_70_setup_count"]}/{summary["setups"]}. Standalone chronological-screen passes: {summary["chronological_check_count"]}/{summary["setups"]}.</p>'
     page += '<p>' + ' · '.join(f'<a href="{p}">{p}</a>' for p in ("best_targets.csv", "scenario_comparison.csv", "target_sweep.csv", "common_target_sweep.csv", "daily_results.csv", "monthly_results.csv", "scenario_setup_results.csv", "scenario_configs.json", "summary.json", "manifest.json")) + '</p></body></html>'
     (output / "report.html").write_text(page, encoding="utf-8")
@@ -233,12 +329,20 @@ def run(config_path=DEFAULT_CONFIG, output_dir=None, *, workers=3):
     if not required_artifacts.issubset(reference_manifest["files"]):
         raise ValueError("Frozen reference manifest does not attest required input artifacts")
     summary_source = json.loads((reference_dir / "summary.json").read_text(encoding="utf-8"))
+    previous_config = json.loads((reference_dir / "selected_config.json").read_text(encoding="utf-8"))
     orders = read_frozen_csv(reference_dir / "selected_orders.csv")
     saved = read_frozen_csv(reference_dir / profile["ledger"])
     baseline_saved = read_frozen_csv(reference_dir / "baseline_g4_trades.csv")
     days = sorted(pd.read_csv(reference_dir / "daily_results.csv").day.unique())
-    if len(days) != 49 or len(orders) != profile["orders"] or orders.setup_id.nunique() != count_setups:
-        raise ValueError("Frozen setup cohort changed")
+    if version == AFTERNOON_VERSION:
+        setup_labels, expected_fills = validate_afternoon_cohort(
+            summary_source, previous_config, orders, saved, baseline_saved, days)
+    else:
+        if len(days) != 49 or len(orders) != profile["orders"] or orders.setup_id.nunique() != count_setups:
+            raise ValueError("Frozen setup cohort changed")
+        setup_labels = {setup_id: f"{frame.signal_end.iloc[0]}_{frame.side.iloc[0]}"
+            for setup_id, frame in orders.groupby("setup_id", sort=True)}
+        expected_fills = profile["fills"]
     for name in ("signal_ts", "confirmation_ts", "v9_1m_feature_ts"):
         orders[name] = pd.to_datetime(orders[name], utc=True).dt.tz_convert(contract.IST)
     paths, path_proof = load_paths(orders, summary_source)
@@ -248,14 +352,20 @@ def run(config_path=DEFAULT_CONFIG, output_dir=None, *, workers=3):
     baseline = checked_allocate(baseline_saved, baseline_saved)
     combined_reference = allocate(pd.concat((baseline, reference), ignore_index=True))
     checked_allocate(combined_reference, saved)
-    if int(reference.filled.sum()) != profile["fills"]:
+    if int(reference.filled.sum()) != expected_fills:
         raise ValueError("Reference fill count changed")
+    modules = [Path(__file__), Path(simulator.__file__), Path(simulator.g.v9.v5.__file__), Path(simulator.g.v9.v6.__file__),
+        Path(contract.__file__), ROOT / "research/g4_extended_slot_backtest.py", ROOT / "research/g4_late_slot_source.py",
+        ROOT / "research/g3_g4_late_target_sweep.py", ROOT / "research/g3_g4_late_combined_backtest.py",
+        ROOT / "research/g3_0920_target_sweep.py", ROOT / "research/g3_0920_backtest.py"]
+    initial_code_hashes = {str(p.relative_to(ROOT)): sha256(p) for p in modules}
+    initial_config_hash = sha256(config_path)
     output.mkdir(parents=True)
     print(f"Verified 1% reference: {len(orders)} orders / {int(reference.filled.sum())} fills, {count_setups} setups. Output: {output}", flush=True)
     rows, common_rows, raw_by_target = [], [], {}
     targets = config["targets_pct"]
     with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init,
-            initargs=(orders, paths, baseline, reference, days)) as executor:
+            initargs=(orders, paths, baseline, reference, days, setup_labels)) as executor:
         pending = [executor.submit(_trial, target) for target in targets]
         for count, future in enumerate(as_completed(pending), 1):
             target, raw, stats, common = future.result()
@@ -270,9 +380,9 @@ def run(config_path=DEFAULT_CONFIG, output_dir=None, *, workers=3):
     common_table.to_csv(output / "common_target_sweep.csv", index=False)
     pd.concat([raw_by_target[t] for t in sorted(raw_by_target)], ignore_index=True).to_parquet(
         output / "minute_replay_all_targets.parquet", index=False)
-    decisions, historical, training, chronological = decisions_for(rows, orders.setup_id.unique(), config)
+    decisions, historical, training, chronological = decisions_for(rows, setup_labels, config)
     decisions.to_csv(output / "best_targets.csv", index=False)
-    original_map = {s: 1. for s in orders.setup_id.unique()}
+    original_map = {s: 1. for s in setup_labels}
     common_historical = [r for r in common_rows if common_eligible(r, "all", require_additions=profile["require_additions"])]
     common_best = max(common_historical, key=lambda r: (round(r["all_net_pnl_rs"], 6),
         -round(r["all_max_drawdown_rs"], 6), -r["target_pct"])) if common_historical else None
@@ -288,6 +398,14 @@ def run(config_path=DEFAULT_CONFIG, output_dir=None, *, workers=3):
         plans["historical_common_target_best70"] = {s: common_best["target_pct"] for s in original_map}
     if common_train_best:
         plans["training_common_target_best70"] = {s: common_train_best["target_pct"] for s in original_map}
+    portfolio_requalification = {}
+    if version == AFTERNOON_VERSION:
+        qualified, removals = portfolio_qualified_subset(raw_by_target, historical,
+            baseline, reference, days, minimum=config["minimum_historical_fills"])
+        plans["historical_portfolio_qualified70_only"] = qualified
+        portfolio_requalification = dict(method="ITERATIVELY_REMOVE_EVERY_FAILING_SETUP_THEN_REALLOCATE",
+            starting_targets=historical, retained_targets=qualified, removals=removals,
+            historical_selection_is_in_sample=True, global_optimum=False)
     scenario_rows, setup_rows, daily, monthly, impacts = [], [], [], [], []
     periods = dict(train=days[:38], holdout=days[38:], all=days)
     ledgers = {}
@@ -342,7 +460,6 @@ def run(config_path=DEFAULT_CONFIG, output_dir=None, *, workers=3):
                          ("daily_results", pd.DataFrame(daily)), ("monthly_results", pd.DataFrame(monthly)),
                          ("portfolio_impacts", pd.DataFrame(impacts, columns=["scenario", "sid", "day", "symbol", "setup_id", "before_pnl_rs", "after_pnl_rs"]))):
         frame.to_csv(output / f"{file}.csv", index=False)
-    previous_config = json.loads((reference_dir / "selected_config.json").read_text(encoding="utf-8"))
     portable = {name: [{**setup, "target_pct": target_map[setup["setup_id"]],
         "prior_entry_training_pass": setup["training_pass"], "prior_entry_chronological_check_pass": setup["chronological_check_pass"]}
         for setup in previous_config["setups"] if setup["setup_id"] in target_map] for name, target_map in plans.items()}
@@ -364,24 +481,26 @@ def run(config_path=DEFAULT_CONFIG, output_dir=None, *, workers=3):
         baseline_description=summary_source.get("baseline_description", "Original 27-setup G4 baseline"),
         reference_source_rejections=summary_source.get("rejected_source_candidates", 0),
         historical_70_setup_count=len(historical), training_70_setup_count=len(training), chronological_check_count=len(chronological),
+        portfolio_requalification=portfolio_requalification,
         historical_targets=historical, training_targets=training, chronological_check_targets=chronological,
         common_best=common_best, common_training_best=common_train_best,
         selected_upper_boundary_setups=[s for s,t in historical.items() if t == max(targets)],
-        source=proof, minute_path_evidence=path_proof, config_path=str(Path(config_path).resolve()), config_sha256=sha256(config_path),
+        source=proof, minute_path_evidence=path_proof, config_path=str(Path(config_path).resolve()), config_sha256=initial_config_hash,
         fixed_exit=dict(initial_stop_pct=1.25, tightened_stop_pct=1., tighten_after_minutes=120,
                         cost_bps=5., square_off="15:15"),
         reference_replay_parity=True, entry_parity_all_targets=True, final_scenarios_replayed_independently=True,
         historical_selection_is_in_sample=True, later_period_previously_used=True, untouched_out_of_sample=False,
+        entry_optimization_scope="FROZEN_SEQUENTIAL_ENTRY_SELECTION_AT_1_PERCENT_THEN_TARGET_ONLY_GRID",
         optimum_scope="EXHAUSTIVE_PER_SETUP_AND_COMMON_TARGET_GRID; INDEPENDENT_TARGET_MAP_RECHECKED_IN_PORTFOLIO; NOT_GLOBAL_COMBINATORIAL_OPTIMUM",
         all_scenarios=json.loads(portfolio.to_json(orient="records")),
         baseline=_stats(baseline, days), excluded_session=summary_source["excluded_session"])
     (output / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     write_report(output, summary, decisions, portfolio, setup_results)
-    modules = [Path(__file__), Path(simulator.__file__), Path(simulator.g.v9.v5.__file__), Path(simulator.g.v9.v6.__file__),
-        ROOT / "research/g3_g4_late_target_sweep.py", ROOT / "research/g3_g4_late_combined_backtest.py",
-        ROOT / "research/g3_0920_target_sweep.py", ROOT / "research/g3_0920_backtest.py"]
+    final_code_hashes = {str(p.relative_to(ROOT)): sha256(p) for p in modules}
+    if initial_code_hashes != final_code_hashes or initial_config_hash != sha256(config_path):
+        raise ValueError("Target-sweep code or configuration changed during execution")
     manifest = dict(variant_id=version, scope="BACKTEST_ONLY", execution_authority=False,
-        code_sha256={str(p.relative_to(ROOT)): sha256(p) for p in modules},
+        code_sha256=initial_code_hashes,
         files={p.name: sha256(p) for p in output.iterdir() if p.is_file()})
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(decisions[["setup", "historical_target_pct", "historical_all_fills", "historical_all_win_rate_pct", "historical_all_net_pnl_rs", "chronological_check_pass"]].to_string(index=False), flush=True)

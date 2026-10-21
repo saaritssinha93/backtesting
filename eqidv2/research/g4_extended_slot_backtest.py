@@ -1,4 +1,4 @@
-"""G4 morning and midday additions: strict, relaxed 1m, then relaxed 5m.
+"""G4 morning, midday and afternoon additions: strict, relaxed 1m, then relaxed 5m.
 
 Select on training data only, before examining the chronological check.
 All source and execution code is shared with the original G4 study. The
@@ -39,6 +39,11 @@ MIDDAY_CLOCKS = ("11:35", "11:40", "11:45", "11:50", "11:55", "12:00",
                  "12:05", "12:10", "12:15", "12:20", "12:25", "12:30")
 MIDDAY_CONFIG = ROOT / "configs/strategies/v13_v10_g_4_backtest_1135_1230_v4.json"
 MIDDAY_CACHE = BACKTEST_ROOT / "source_cache/1135_1230_v4"
+AFTERNOON_VERSION = "V13-V10-G-4-BACKTEST-1235-1330-V6"
+AFTERNOON_CLOCKS = ("12:35", "12:40", "12:45", "12:50", "12:55", "13:00",
+                    "13:05", "13:10", "13:15", "13:20", "13:25", "13:30")
+AFTERNOON_CONFIG = ROOT / "configs/strategies/v13_v10_g_4_backtest_1235_1330_v6.json"
+AFTERNOON_CACHE = BACKTEST_ROOT / "source_cache/1235_1330_v6"
 PROFILES = {
     VERSION: dict(clocks=CLOCKS, sid_base=5_000_000, cache=DEFAULT_CACHE,
         baseline_version="V13-V10-G-4-BACKTEST-LATE-SLOTS-V1",
@@ -48,6 +53,10 @@ PROFILES = {
         baseline_version="V13-V10-G-4-SELECTED-TEN-V3",
         baseline_ledger="combined_trades.csv", baseline_setups=37,
         baseline_description="Selected G4 V3: original 27 setups and ten selected 10:35-11:25 additions"),
+    AFTERNOON_VERSION: dict(clocks=AFTERNOON_CLOCKS, sid_base=7_000_000, cache=AFTERNOON_CACHE,
+        baseline_version="V13-V10-G-4-SELECTED-MIDDAY-TWELVE-V5",
+        baseline_ledger="combined_trades.csv", baseline_setups=49,
+        baseline_description="Selected G4 V5: existing 37 setups and twelve approved 11:35-12:30 additions"),
 }
 
 
@@ -340,7 +349,7 @@ def run(config_path, output_dir, *, cache=None):
     if (previous_summary["sessions"] != len(days) or previous_summary["first_date"] != str(days[0])
             or previous_summary["last_date"] != str(days[-1])):
         raise ValueError("Pinned G4 baseline and new source cohorts differ")
-    saved = pd.read_csv(prior / profile["baseline_ledger"])
+    saved = pd.read_csv(prior / profile["baseline_ledger"], float_precision="round_trip")
     baseline = checked_allocate(saved, saved)
     if set(candidates.sid) & set(baseline.sid):
         raise ValueError("New candidate IDs overlap preserved G4 orders")
@@ -461,6 +470,7 @@ def run(config_path, output_dir, *, cache=None):
         sessions=len(days), training_sessions=38, holdout_sessions=11, new_setups=setup_count,
         source_candidates=source_count, eligible_source_candidates=len(candidates),
         rejected_source_candidates=len(source_rejections),
+        selected_orders=len(orders), potential_fills=int(actual.filled.sum()),
         signal_ends=config["signal_ends"], baseline_setups=profile["baseline_setups"],
         baseline_description=profile["baseline_description"],
         excluded_session="2026-10-01: incomplete immutable input", source_evidence=evidence,

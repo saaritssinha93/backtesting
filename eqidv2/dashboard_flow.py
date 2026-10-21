@@ -1,6 +1,6 @@
 """Read-only, standard-library data adapter for Dashboard Flow.
 
-Only retained V13-V10-G, G-2 and G-3 backtest CSV files are eligible. Public
+Only retained V13-V10-G, G-2, G-3 and verified G-4 backtest files are eligible. Public
 run IDs resolve through discovery; callers cannot supply a filesystem path.
 """
 
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from fno_strategy_registry import active_profile_name, g3_live_activation_authorized, PROFILES
 from fno_v13_v10_g_3_contract import confirmation_volume_minimum, setup_for, supported_identity
-from research.g3_backtest_profile import contract as backtest_contract
+from research.g3_backtest_profile import contract as backtest_contract, production as production_contract
 
 
 DATA_ROOT = Path(r"C:\TradingData\eqidv2")
@@ -32,7 +32,7 @@ _G3_RESEARCH_TARGETS = {
     "V13-V10-G-3-BT-0950-LONG-V1": 1.0,
     "V13-V10-G-3-BT-0950-LONG-T075-V1": 0.75,
 }
-_STRATEGIES = {"V13-V10-G-3", "V13-V10-G-2", "V13-V10-G"}
+_STRATEGIES = {"V13-V10-G-4", "V13-V10-G-3", "V13-V10-G-2", "V13-V10-G"}
 
 
 def _uses_current_g3_0950_rules(config: dict) -> bool:
@@ -61,7 +61,7 @@ def _checked_research_code(path: Path, expected: str) -> bool:
     return _checked_hash(path, expected) or _checked_hash(archive / path.name, expected)
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=8192)
 def _artifact_hash(path: str, size: int, modified_ns: int) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -312,6 +312,26 @@ def _verified_g3_0950_runs(root: Path, manifests, *, current: bool = False) -> l
     return found
 
 
+def _g3_backtest_scope(version, fingerprint) -> dict:
+    """Describe the saved package's profile, including archived V8 evidence."""
+    profile = backtest_contract.contract_for_identity(version, fingerprint)
+    if profile is None:
+        return {}
+    count = len(profile.ACTIVE_SETUPS)
+    disabled = len(profile.strategy_payload().get("disabled_setups", []))
+    exceptions = [s for s in profile.ACTIVE_SETUPS if s.target_pct <= .75]
+    labels = ', '.join(f'{s.signal_end} {s.side} ({s.target_pct:g}%)' for s in exceptions)
+    rule = (f'target >0.75% plus {len(exceptions)} restored setups' if exceptions else 'target >0.75%')
+    description = (f'This saved backtest enables targets >0.75% plus {labels}; {disabled} other setups with targets <=0.75% remain disabled.'
+        if exceptions else f'This saved backtest disables all {disabled} setups with targets <=0.75%.')
+    if profile is backtest_contract:
+        description += ' The 09:26 LONG setup requires five-minute setup volume of at least 1.20x; PAPER/LIVE use the same threshold.'
+        description += ' The 09:40 LONG setup requires a 09:41 one-minute confirmation volume ratio of at least 0.80x.'
+        description += ' The 09:20 SHORT and 10:10 LONG setups each use a 1.50% target.'
+    return dict(active_setup_count=count, disabled_setup_count=disabled, backtest_rule_label=rule,
+                backtest_scope_text=description)
+
+
 def _verified_g3_research_runs() -> list[tuple[dict, Path]]:
     root = DATA_ROOT / _G3_RESEARCH_ROOT
     return _verified_g3_0950_runs(root, root.glob("run_*/manifest.json"))
@@ -323,7 +343,7 @@ def _verified_g3_current_backtest() -> list[tuple[dict, Path]]:
     try:
         pointer = json.loads(pointer_path.read_text(encoding="utf-8-sig"))
         relative = Path(pointer["run_dir"])
-        if (pointer.get("schema_version") not in {"fno_g3_current_backtest_v1", "fno_g3_current_backtest_v2", "fno_g3_current_backtest_v3"}
+        if (pointer.get("schema_version") not in {"fno_g3_current_backtest_v1", "fno_g3_current_backtest_v2", "fno_g3_current_backtest_v3", "fno_g3_target_cutoff_backtest_v1"}
                 or pointer.get("role") != "backtest_history"
                 or pointer.get("execution_authority") is not False
                 or relative.is_absolute() or relative.parts[:2] != ("backtests", "runs")
@@ -333,22 +353,30 @@ def _verified_g3_current_backtest() -> list[tuple[dict, Path]]:
         manifest_path = run / "manifest.json"
         if not _inside(run, root) or not _checked_hash(manifest_path, pointer["manifest_sha256"]):
             return []
-        if pointer["schema_version"] == "fno_g3_current_backtest_v3":
-            from research.g3_current_history import verified_package
+        if pointer["schema_version"] in {"fno_g3_current_backtest_v3", "fno_g3_target_cutoff_backtest_v1"}:
+            target_cutoff = pointer["schema_version"] == "fno_g3_target_cutoff_backtest_v1"
+            if target_cutoff:
+                from research.g3_target_cutoff_backtest import verified_package
+            else:
+                from research.g3_current_history import verified_package
             summary, _ = verified_package(run, root)
             if any(pointer.get(key) != summary.get(key) for key in ("strategy_version", "strategy_fingerprint")) or pointer["session_date"] != summary["last_date"]:
                 return []
+            scope = _g3_backtest_scope(summary["strategy_version"], summary["strategy_fingerprint"]) if target_cutoff else {}
             return [({"id": "g3b-" + hashlib.sha256(relative.as_posix().encode()).hexdigest()[:16],
-                "label": "V13-V10-G-3 current full historical backtest", "strategy": "V13-V10-G-3",
-                "run_name": run.name, "source_label": "G-3 full historical backtest with completed daily replays",
+                "label": (f"V13-V10-G-3 backtest: {summary['active_setup_count']} setups, {scope.get('backtest_rule_label', 'saved configuration')}" if target_cutoff
+                          else "V13-V10-G-3 current full historical backtest"), "strategy": "V13-V10-G-3",
+                "run_name": run.name, "source_label": (f"G-3 {summary['active_setup_count']}-setup full historical backtest; PAPER/LIVE retain {len(production_contract.ACTIVE_SETUPS)} setups"
+                    if target_cutoff else "G-3 full historical backtest with completed daily replays"),
                 "kind": "backtest", "role": "backtest_history", "verified": True,
                 "integrity_verified": True, "current_full_strategy": True,
                 "strategy_matches_active": supported_identity(summary["strategy_version"], summary["strategy_fingerprint"]),
-                "strategy_matches_backtest": True,
+                "strategy_matches_backtest": backtest_contract.supported_identity(summary["strategy_version"], summary["strategy_fingerprint"]),
+                "backtest_only_target_cutoff": target_cutoff,
                 "strategy_version": summary["strategy_version"], "strategy_fingerprint": summary["strategy_fingerprint"],
                 "active_setup_count": summary["active_setup_count"], "coverage": summary["coverage"],
                 "period_start": summary["first_date"], "period_end": summary["last_date"], "sessions": summary["sessions"],
-                "created_at_ist": summary["created_at_ist"], "_run_dir": str(run), "_ledger": "portfolio_trades.csv"},
+                "created_at_ist": summary["created_at_ist"], "_run_dir": str(run), "_ledger": "portfolio_trades.csv", **scope},
                 run / "daily_results.csv")]
         if pointer["schema_version"] == "fno_g3_current_backtest_v2":
             from research.g3_current_backtest import verified_package, VARIANT
@@ -539,10 +567,125 @@ def _verified_g3_0920_daily() -> list[tuple[dict, Path]]:
         return []
 
 
+@lru_cache(maxsize=8)
+def _g4_verified_accounting(run: str, manifest_digest: str) -> dict:
+    """Reuse accounting only after callers recheck every manifest member hash."""
+    from research import g4_g3_mirror_backtest as mirror
+    return mirror.verify(Path(run))
+
+
+@lru_cache(maxsize=8)
+def _g4_complete_inventory_accounting(run: str, manifest_digest: str) -> dict:
+    from research import g4_complete_inventory_backtest as complete
+    return complete.verify(Path(run))
+
+
+def _verified_g4_complete_inventory(root: Path, pointer: dict) -> list[tuple[dict, Path]]:
+    """Use only the new combined portfolio, never sum it with its control."""
+    from research import g4_complete_inventory_backtest as complete
+    from research import g4_g3_mirror_backtest as mirror
+    relative=Path(pointer['run_dir'])
+    if (pointer.get('execution_authority') is not False or pointer.get('variant_id')!=complete.VERSION
+            or relative.is_absolute() or '..' in relative.parts
+            or len(relative.parts)!=3 or relative.parts[0]!='runs'):
+        return []
+    run=root/relative
+    if not _inside(run,root) or not _checked_hash(run/'manifest.json',pointer['manifest_sha256']):
+        return []
+    manifest=json.loads((run/'manifest.json').read_text(encoding='utf-8'))
+    required={'summary.json','config.json','g4_bounded_exit/daily_results.csv','g4_bounded_exit/portfolio_trades.csv'}
+    if not required.issubset(manifest['files']):
+        return []
+    for name,digest in manifest['files'].items():
+        member=Path(name)
+        if member.is_absolute() or '..' in member.parts or not _inside(run/member,run) or not _checked_hash(run/member,digest):
+            return []
+    summary=_g4_complete_inventory_accounting(str(run.resolve()),pointer['manifest_sha256'])
+    config=complete.configuration(run/'config.json')
+    if (summary.get('variant_id')!=pointer['variant_id'] or summary.get('last_date')!=pointer['session_date']
+            or summary.get('execution_authority') is not False or summary.get('active_setups')!=51
+            or summary.get('primary_policy')!='g4_bounded_exit'):
+        return []
+    folder=run/'g4_bounded_exit'
+    meta=dict(id='g4b-'+hashlib.sha256((relative.as_posix()+'/g4_bounded_exit').encode()).hexdigest()[:16],
+        label='V13-V10-G-4 backtest: 51 setups, bounded exits',strategy='V13-V10-G-4',run_name=run.name,
+        source_label='G-4 verified historical backtest: 51 setups; SL 1.20% to 1.00% after 120 minutes',
+        kind='backtest',role='backtest_history',verified=True,integrity_verified=True,
+        current_full_strategy=True,strategy_matches_backtest=True,strategy_matches_active=False,
+        strategy_version=complete.VERSION,strategy_fingerprint=mirror.fingerprint(config),
+        active_setup_count=51,additional_atr_guards=10,scenario='g4_bounded_exit',
+        scope='BACKTEST_ONLY',execution_authority=False,period_start=summary['first_date'],
+        period_end=summary['last_date'],sessions=summary['sessions'],_run_dir=str(folder),_ledger='portfolio_trades.csv')
+    return [(meta,folder/'daily_results.csv')]
+
+
+def _verified_g4_current_backtest() -> list[tuple[dict, Path]]:
+    """Expose only the pinned primary G4 scenario, never aggregate its trials."""
+    root = DATA_ROOT / 'backtesting_result_v13_v10_g_4'
+    try:
+        from research import g4_complete_inventory_backtest as complete
+        bounded_pointer=root/'latest/bounded_exit.json'
+        if bounded_pointer.is_file():
+            current=json.loads(bounded_pointer.read_text(encoding='utf-8-sig'))
+            if current.get('variant_id')==complete.VERSION:
+                return _verified_g4_complete_inventory(root,current)
+        from research import g4_g3_mirror_backtest as mirror
+        pointer = json.loads((root/'latest/g3_mirror.json').read_text(encoding='utf-8-sig'))
+        relative = Path(pointer['run_dir'])
+        if (pointer.get('execution_authority') is not False
+                or pointer.get('variant_id') not in {mirror.VERSION, mirror.LEGACY_VERSION}
+                or relative.is_absolute() or '..' in relative.parts
+                or len(relative.parts) != 3 or relative.parts[0] != 'runs'
+                or relative.parts[1] != pointer.get('session_date')):
+            return []
+        run = root/relative
+        if not _inside(run, root) or not _checked_hash(run/'manifest.json', pointer['manifest_sha256']):
+            return []
+        manifest = json.loads((run/'manifest.json').read_text(encoding='utf-8-sig'))
+        for name, digest in manifest['files'].items():
+            member = Path(name)
+            if member.is_absolute() or '..' in member.parts or not _inside(run/member, run) or not _checked_hash(run/member, digest):
+                return []
+        if not {'summary.json', 'config.json'}.issubset(manifest['files']):
+            return []
+        summary = _g4_verified_accounting(str(run.resolve()), pointer['manifest_sha256'])
+        config = json.loads((run/'config.json').read_text(encoding='utf-8-sig'))
+        if (summary.get('variant_id') != pointer['variant_id']
+                or config.get('variant_id') != pointer['variant_id']
+                or summary.get('execution_authority') is not False
+                or config.get('execution_authority') is not False
+                or summary.get('last_date') != pointer['session_date']):
+            return []
+        scenario = summary['primary_scenario']
+        if scenario != config.get('primary_scenario') or scenario not in config['scenarios'] or Path(scenario).name != scenario:
+            return []
+        required = {scenario+'/'+name for name in ('daily_results.csv','portfolio_trades.csv','config.json')}
+        if not required.issubset(manifest['files']):
+            return []
+        folder = run/scenario
+        payload = json.loads((folder/'config.json').read_text(encoding='utf-8-sig'))
+        if payload.get('execution_authority') is not False or payload.get('accepted_variant') != scenario:
+            return []
+        guards = len(config['scenarios'][scenario])
+        meta = dict(id='g4b-'+hashlib.sha256((relative.as_posix()+'/'+scenario).encode()).hexdigest()[:16],
+            label=f'V13-V10-G-4 backtest: {summary["active_setups"]} setups, {guards} additional ATR guards',
+            strategy='V13-V10-G-4',run_name=run.name,source_label=f'G-4 verified historical backtest: {scenario.replace("_", " ")}',
+            kind='backtest',role='backtest_history',verified=True,integrity_verified=True,
+            current_full_strategy=True,strategy_matches_backtest=True,strategy_matches_active=False,
+            strategy_version=payload['strategy_version'],strategy_fingerprint=mirror.fingerprint(payload),
+            active_setup_count=summary['active_setups'],additional_atr_guards=guards,scenario=scenario,
+            scope='BACKTEST_ONLY',execution_authority=False,coverage=summary.get('coverage',{}),
+            period_start=summary['first_date'],period_end=summary['last_date'],sessions=summary['sessions'],
+            _run_dir=str(folder),_ledger='portfolio_trades.csv')
+        return [(meta, folder/'daily_results.csv')]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, AssertionError):
+        return []
+
+
 def _discover() -> list[tuple[dict, Path]]:
     found = (_verified_g3_runs() + _verified_g3_current_backtest()
              + _verified_g3_0920_long_backtest() + _verified_g3_0920_daily()
-             + _verified_g3_research_runs())
+             + _verified_g3_research_runs() + _verified_g4_current_backtest())
     for prefix, strategy, source_label, relative, pattern in _SOURCES:
         root = DATA_ROOT / relative
         if not _inside(root, DATA_ROOT):
@@ -579,7 +722,7 @@ def _discover() -> list[tuple[dict, Path]]:
     # The normal full-strategy history and the post-promotion daily aggregate
     # have different coverage. A newer daily cutoff must not displace the
     # current normal historical backtest (or restore an archived revision).
-    family_order = {"V13-V10-G-3": 3, "V13-V10-G-2": 2, "V13-V10-G": 1}
+    family_order = {"V13-V10-G-3": 4, "V13-V10-G-4": 3, "V13-V10-G-2": 2, "V13-V10-G": 1}
     found.sort(key=lambda entry: (family_order[entry[0]["strategy"]],
         -1 if entry[0].get("strategy_matches_active") is False and not entry[0].get("strategy_matches_backtest") else
         5 if entry[0].get("current_full_strategy") and entry[0].get("verified") else
@@ -778,8 +921,20 @@ def load_flow_data(run_id: str | None = None, strategy: str | None = None) -> di
         if excluded_sessions:
             warnings.append(f"{len(excluded_sessions)} source sessions were excluded from this backtest. See the coverage report for dates and reasons; these are not zero-trade days.")
         coverage = metadata.get("coverage", {})
-        if metadata.get("current_full_strategy"):
-            warnings.append(f"Current G-3 historical backtest: {metadata.get('active_setup_count', 32)} setups. Historical, daily, paper and live share the same 32-setup decision configuration; live sizing and activation gates remain separate. Historical targets were fitted after inspecting the base sessions. Opening OI is retrospective. Later sessions use the same backtest configuration with source exclusions disclosed.")
+        if metadata['strategy'] == 'V13-V10-G-4':
+            warnings.append(f"G-4 historical research: {metadata['active_setup_count']} setups with {metadata['additional_atr_guards']} additional one-minute ATR guards. Only the primary scenario is shown; comparison trials are not combined. G-3, PAPER and LIVE configurations remain separate. These dates informed parameter selection and are not untouched validation.")
+        elif metadata.get("current_full_strategy"):
+            setup_count = metadata.get("active_setup_count", len(backtest_contract.ACTIVE_SETUPS))
+            details = metadata.get("backtest_scope_text") or _g3_backtest_scope(metadata.get("strategy_version"), metadata.get("strategy_fingerprint")).get("backtest_scope_text")
+            scope = ((details or f"This saved backtest contains {setup_count} enabled setups.") + f" PAPER/LIVE retain their separate {len(production_contract.ACTIVE_SETUPS)}-setup production configuration."
+                if metadata.get("backtest_only_target_cutoff") or (metadata.get("strategy_matches_backtest") and metadata.get("strategy_matches_active") is False)
+                else f"Historical, daily, paper and live share the same {setup_count}-setup decision configuration; live sizing and activation gates remain separate.")
+            warnings.append(f"Current G-3 historical backtest: {setup_count} setups. {scope} Historical targets were fitted after inspecting the base sessions. Opening OI is retrospective. Later sessions use the same backtest configuration with source exclusions disclosed.")
+        elif metadata.get("strategy_matches_backtest") and metadata.get("strategy_matches_active") is False:
+            scope = _g3_backtest_scope(metadata.get("strategy_version"), metadata.get("strategy_fingerprint"))
+            setup_count = scope.get("active_setup_count", len(backtest_contract.ACTIVE_SETUPS))
+            details = scope.get("backtest_scope_text", "Its saved configuration defines the enabled setups.")
+            warnings.append(f"G-3 daily backtesting uses {setup_count} setups. {details} PAPER/LIVE retain their separate {len(production_contract.ACTIVE_SETUPS)}-setup production configuration.")
         if (metadata.get("kind") == "production_history"
                 and coverage.get("history_scope") == "CURRENT_STRATEGY_REVISION_DAILY_SESSIONS"
                 and not coverage.get("requested_calendar_coverage_complete")):
@@ -805,7 +960,7 @@ def load_flow_data(run_id: str | None = None, strategy: str | None = None) -> di
                               "LIVE order execution is currently disabled.")
                 warnings.append("This saved historical simulation uses the 09:50 LONG / 0.75% target rules configured in G-3 V2 for PAPER, daily backtesting, and the LIVE rule book. Its modeled fills are not PAPER or broker orders; the saved run cannot place orders. " + live_state)
             elif metadata.get("short_0920_enabled") is False:
-                warnings.append("This saved 09:20 LONG 3% comparison uses retrospective opening OI; it does not prove live availability. Current G-3 production includes the same LONG selection and target in daily replay, PAPER and the LIVE rule book, with received-on-time OI required at runtime. 09:20 SHORT stays disabled. Broker execution remains subject to the deployment and dated arming gates.")
+                warnings.append("This saved 09:20 LONG 3% comparison uses retrospective opening OI; it does not prove live availability. Current G-3 production includes the same LONG selection and target in daily replay, PAPER and the LIVE rule book, with received-on-time OI required at runtime. This saved comparison excludes 09:20 SHORT; current G-3 also enables that SHORT setup with a 1.5% target. Broker execution remains subject to the deployment and dated arming gates.")
             else:
                 warnings.append("This saved G-3 research backtest has no order execution authority. Its results are preserved for review.")
         else:
@@ -830,5 +985,5 @@ def load_flow_data(run_id: str | None = None, strategy: str | None = None) -> di
         "summary": summary,
         "warnings": list(dict.fromkeys(warnings)),
         "currency": "INR",
-        "data_mode": "Verified G-3 backtest" if metadata and metadata.get("verified") else "Historical backtest",
+        "data_mode": ("Verified " + metadata['strategy'].replace('V13-V10-', '') + " backtest") if metadata and metadata.get("verified") else "Historical backtest",
     }

@@ -16,10 +16,10 @@ from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from fno_strategy_registry import active_profile, expected_fingerprint
+from fno_strategy_registry import DisplayIdentity, active_profile, display_identity, expected_fingerprint
 from fno_v13_v10_g_3_live_execution_policy import (
-    validate_order_sizing as validate_g3_order_sizing,
-    validate_execution_metadata as validate_g3_execution_metadata,
+    validate_existing_order_sizing as validate_g3_order_sizing,
+    validate_existing_execution_metadata as validate_g3_execution_metadata,
 )
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -41,7 +41,7 @@ MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_FEATURE_ROWS = 2000
 MAX_ORDER_FILES = 1000
 MAX_EVENT_ROWS = 10000
-_BUILD_IDENTITY: ContextVar[tuple[str, str] | None] = ContextVar("monitor_build_identity", default=None)
+_BUILD_IDENTITY: ContextVar[DisplayIdentity | None] = ContextVar("monitor_build_identity", default=None)
 BASE_GATES = (
     "gate_session_date", "gate_values_finite", "gate_oi_pair_positive", "gate_oi_increasing",
     "gate_base_oi_min", "gate_base_oi_max", "gate_base_volume", "gate_ema_long",
@@ -52,6 +52,14 @@ CONFIRMATION_GATES = (
     "gate_confirmation_volume", "gate_setup_exists", "gate_exact_confirmation_clock",
     "gate_setup_price", "gate_setup_oi", "gate_setup_volume", "gate_setup_body",
     "gate_setup_wick", "gate_setup_liquidity",
+)
+SETUP_DEPENDENT_GATES = (
+    "gate_exact_confirmation_clock", "gate_setup_price", "gate_setup_oi",
+    "gate_setup_volume", "gate_setup_body", "gate_setup_wick", "gate_setup_liquidity",
+)
+SETUP_THRESHOLD_FIELDS = (
+    "required_price_change_pct", "required_oi_change_pct", "required_volume_ratio",
+    "required_body_ratio", "maximum_wick_ratio", "minimum_traded_value",
 )
 FEATURES = (
     "price_change_basis", "oi_change_source", "oi_change_from", "oi_change_to",
@@ -74,7 +82,7 @@ GATE_LABELS = {
     "gate_base_oi_min": "Base OI minimum", "gate_base_oi_max": "Base OI maximum",
     "gate_base_volume": "Base 5m volume", "gate_ema_long": "LONG EMA alignment",
     "gate_ema_short": "SHORT EMA alignment", "gate_price_long": "LONG 5m price change",
-    "gate_price_short": "SHORT 5m price change", "gate_nifty_0925_short": "09:25 SHORT NIFTY guard",
+    "gate_price_short": "SHORT 5m price change", "gate_nifty_0925_short": "Opening SHORT NIFTY guard",
     "gate_confirmation_present": "Exact 1m candle available", "gate_confirmation_range": "1m OHLC validity",
     "gate_confirmation_direction": "1m directional confirmation", "gate_confirmation_volume": "1m confirmation volume",
     "gate_setup_exists": "Configured setup", "gate_exact_confirmation_clock": "Exact confirmation clock",
@@ -134,11 +142,30 @@ def _pinned_sources_available(row: dict) -> bool:
 
 
 def _valid_identity(row: dict) -> bool:
-    if row.get("strategy_version") != STRATEGY_VERSION or not row.get("strategy_fingerprint"):
-        return False
     identity = _BUILD_IDENTITY.get()
-    expected = identity[1] if identity is not None and identity[0] == ACTIVE_PROFILE.name else expected_fingerprint(ACTIVE_PROFILE.name)
+    selected = identity is not None and identity.profile == ACTIVE_PROFILE.name
+    version = identity.version if selected else STRATEGY_VERSION
+    if row.get("strategy_version") != version or not row.get("strategy_fingerprint"):
+        return False
+    expected = identity.fingerprint if selected else expected_fingerprint(ACTIVE_PROFILE.name)
     return not expected or row.get("strategy_fingerprint") == expected
+
+
+def _display_configuration() -> dict:
+    identity = _BUILD_IDENTITY.get()
+    if identity is not None and identity.profile == ACTIVE_PROFILE.name:
+        return identity.configuration
+    if ACTIVE_PROFILE.name == "V13_V10_G_3":
+        from fno_v13_v10_g_3_contract import strategy_payload
+        return strategy_payload()
+    return {}
+
+
+def _display_nifty_slots() -> tuple[str, ...]:
+    policy = _display_configuration().get("nifty_gate", {})
+    if "signals" in policy:
+        return tuple(policy["signals"])
+    return (policy.get("signal", "09:25"),)
 
 
 def _confirmation_threshold(row: dict) -> float | None:
@@ -147,6 +174,21 @@ def _confirmation_threshold(row: dict) -> float | None:
         return value if value is not None and value > 0 else None
     side = str(row.get("base_side") or row.get("side") or "").upper()
     if ACTIVE_PROFILE.name == "V13_V10_G_3":
+        identity = _BUILD_IDENTITY.get()
+        if identity is not None and identity.previous_session:
+            payload = identity.configuration
+            setup_id = row.get("setup_id") or None
+            if row.get("signal_end") is not None:
+                setup = next((item for item in payload["active_setups"]
+                    if item["signal_end"] == row["signal_end"] and item["side"] == side), None)
+                expected_id = f"{setup['confirmation_end'].replace(':', '')}_{side}" if setup else None
+                if setup_id is not None and setup_id != expected_id:
+                    return None
+                setup_id = expected_id
+            if setup_id is not None and not setup_id.endswith("_" + side):
+                return None
+            return payload["minimum_confirmation_1m_volume_ratio_by_setup"].get(
+                setup_id, payload["minimum_confirmation_1m_volume_ratio"].get(side))
         from fno_v13_v10_g_3_contract import confirmation_volume_minimum
         try:
             return confirmation_volume_minimum(side, signal_end=row.get("signal_end"), setup_id=row.get("setup_id") or None)
@@ -156,6 +198,9 @@ def _confirmation_threshold(row: dict) -> float | None:
 
 
 def _source_reference(symbol: str) -> str:
+    identity = _BUILD_IDENTITY.get()
+    if identity is not None and identity.previous_session:
+        return f"G3_ARCHIVED_CONTRACT {identity.version}: {symbol}"
     return f"{'G3_SHARED_CONTRACT' if ACTIVE_PROFILE.name == 'V13_V10_G_3' else 'PINNED_G_SOURCE'}: {symbol}"
 
 
@@ -485,14 +530,18 @@ def _gate(row: dict, name: str, phase: str, *, pinned: bool | None = None) -> di
     relaxed = _flag(row.get("relaxed_0925_long_base_branch")) is True
     status = _status(row.get(name))
     reason = "Recorded gate flag; no trading rule is re-executed."
+    nifty_slots = _display_nifty_slots()
+    nifty_applies = _flag(row.get("nifty_short_guard_applies"))
+    if nifty_applies is None:
+        nifty_applies = row.get("signal_end") in nifty_slots
     # Base rows expose both branches. A non-applicable branch is not a failure
     # of the selected side, nor should a bypass be presented as indicator pass.
     if side == "LONG" and name in {"gate_ema_short", "gate_price_short", "gate_nifty_0925_short"}:
         status, reason = "NOT_APPLICABLE", "SHORT branch is not applicable to this LONG candidate."
     elif side == "SHORT" and name in {"gate_ema_long", "gate_price_long"}:
         status, reason = "NOT_APPLICABLE", "LONG branch is not applicable to this SHORT candidate."
-    elif name == "gate_nifty_0925_short" and row.get("signal_end") != "09:25":
-        status, reason = "NOT_APPLICABLE", "NIFTY opening guard applies only to 09:25 SHORT."
+    elif name == "gate_nifty_0925_short" and not nifty_applies:
+        status, reason = "NOT_APPLICABLE", "NIFTY opening guard applies only to " + ", ".join(nifty_slots) + " SHORT."
     elif name == "gate_ema_long" and _flag(row.get("ema_alignment_bypassed")) is True:
         status, reason = "NOT_APPLICABLE", "Recorded dated-policy EMA bypass; alignment is not claimed to pass."
     rules: dict[str, tuple[Any, str, Any]] = {
@@ -533,9 +582,43 @@ def _gate(row: dict, name: str, phase: str, *, pinned: bool | None = None) -> di
 
 
 def _invalidate_check(check: dict, reason: str) -> dict:
+    if check.get("threshold_source") == "RECORDED: gate_setup_exists":
+        check = {**check, "actual_text": _display(check.get("actual")),
+                 "rule": "Unavailable (invalid evidence)", "required_text": "Unavailable (invalid evidence)",
+                 "threshold_source": "UNAVAILABLE"}
     return {**check, "status": "UNKNOWN", "reason": reason,
             "margin_text": "Unavailable (invalid evidence)", "margin_source": "UNAVAILABLE",
             "comparisons": [], "evidence_note": "Evidence validation failed; numeric observations are unverified and no shortfall is asserted."}
+
+
+def _explain_unconfigured_setup(raw: dict, checks: list[dict]) -> str:
+    """Explain recorded prerequisite failures without inventing missing evidence."""
+    side, slot = _text(raw.get("base_side")).upper(), _text(raw.get("signal_end"))
+    if (side not in {"LONG", "SHORT"} or not slot
+            or _flag(raw.get("gate_setup_exists")) is not False
+            or _text(raw.get("setup_id")).strip()
+            or _flag(raw.get("setup_filter_pass")) is not False
+            or any(raw.get(field) is not None for field in SETUP_THRESHOLD_FIELDS)
+            or any(_flag(raw.get(name)) is True for name in SETUP_DEPENDENT_GATES)):
+        return ""
+    reason = f"No {side} setup configured for {slot}."
+    for check in checks:
+        if check["name"] == "gate_setup_exists":
+            check.update(actual_text=reason, reason=reason, margin_text="Not applicable",
+                         rule=f"Configured {side} setup for {slot}",
+                         required_text=f"Configured {side} setup for {slot}",
+                         threshold_source="RECORDED: gate_setup_exists")
+        elif check["name"] in SETUP_DEPENDENT_GATES and check["status"] == "FAIL":
+            # The writer records False for each `setup and ...` condition when
+            # setup is absent. Keep that flag; do not count it as a separate
+            # threshold/clock failure or hide an UNKNOWN/missing gate.
+            check.update(status="NOT_APPLICABLE", reason=reason,
+                         rule="Not applicable: no configured setup",
+                         required_text="Not applicable: no configured setup",
+                         margin_text="Not applicable", margin_source="NOT_APPLICABLE",
+                         threshold_source="RECORDED: gate_setup_exists", comparisons=[],
+                         evidence_note="Recorded FAIL is caused by the missing setup prerequisite; this is not an independent check failure.")
+    return reason
 
 
 def _feature_row(raw: dict, parent: dict, day: str, slot: str, phase: str, source: str, parent_state: str, index: int) -> dict:
@@ -578,6 +661,9 @@ def _feature_row(raw: dict, parent: dict, day: str, slot: str, phase: str, sourc
         elif setup_pass is False:
             decision = "CONFIRMATION_OR_SETUP_REJECTED"
         checks.append(_check("final_selection", "PASS" if selected and parent_state == "RECORDED" else "NOT_EVALUATED" if parent_state == "BLOCKED" else "FAIL" if isinstance(ids, list) else "UNKNOWN", actual=selected if isinstance(ids, list) else None, rule="Recorded selected_signal_ids, not inferred from indicator gates", reason="Filter pass alone does not guarantee ranking/quota selection; exact exclusion reason is not recorded." if decision == "FILTER_PASS_NOT_SELECTED" else ""))
+    setup_reason = (_explain_unconfigured_setup(raw, checks)
+                    if usable and phase == "1m" and decision in
+                    {"CONFIRMATION_OR_SETUP_REJECTED", "BLOCKED_INCOMPLETE_SLOT"} else "")
     # The frontend uses the compact display fields. Exact feature values already
     # live in indicators; do not resend the internal compound-comparison tree
     # for every one of tens of thousands of checks on each dashboard refresh.
@@ -588,6 +674,8 @@ def _feature_row(raw: dict, parent: dict, day: str, slot: str, phase: str, sourc
                 symbol=symbol, side=side, setup_id=_text(raw.get("setup_id")), signal_time=slot,
                 minute=minute, stage="5M_BASE_FILTERS" if phase == "5m" else "1M_CONFIRMATION_SETUP",
                 decision=decision, evidence_state=parent_state if usable and parent_state == "BLOCKED" else state,
+                setup_status="NOT_CONFIGURED" if setup_reason else "",
+                decision_reason=setup_reason,
                 source=source, indicators={name: _scalar(raw.get(name)) for name in FEATURES if name in raw},
                 checks=checks, first_failed_gate=_text(raw.get("first_failed_gate")) if phase == "1m" else next((gate for gate in _failed(raw) if gate in BASE_GATES), ""),
                 failed_gates=[gate for gate in _failed(raw) if gate in (BASE_GATES if phase == "5m" else CONFIRMATION_GATES)],
@@ -741,14 +829,21 @@ def _read_phase(root: Path, day: str, slot: str, phase: str, now: datetime, warn
                              checks=[_check("futures_oi_available", "FAIL", False, "Exact futures OI candle required", reason=_text(item.get("reason")))]))
     exclusions = payload.get("opening_0920_exclusions", [])
     if phase == "5m" and slot == "09:20" and isinstance(exclusions, list) and state in {"RECORDED", "BLOCKED"}:
+        opening_setups = [dict(s, setup_id=f"{s['confirmation_end'].replace(':', '')}_{s['side']}")
+            for s in _display_configuration().get("active_setups", []) if s["signal_end"] == slot]
         for i, item in enumerate(exclusions[:MAX_FEATURE_ROWS]):
             if not isinstance(item, dict):
                 continue
-            rows.append(dict(id=f"g:5m:{slot}:opening-excluded:{i}", strategy=ACTIVE_PROFILE.label, session_date=day,
-                             symbol=_text(item.get("equity_symbol"), 100), side="LONG", setup_id="0921_LONG", signal_time=slot, minute=clock,
-                             stage="DATA_COVERAGE", decision="OPENING_OI_EXCLUDED", evidence_state="UNAVAILABLE", source=str(path.relative_to(root)),
-                             indicators={"futures_tradingsymbol": _scalar(item.get("futures_tradingsymbol"))},
-                             checks=[_check("opening_oi_available", "FAIL", False, "Timely 09:16 opening OI baseline required", reason=_text(item.get("reason")))]))
+            recorded_ids = item.get("setup_ids")
+            if not isinstance(recorded_ids, list):
+                recorded_ids = [item["setup_id"]] if item.get("setup_id") else None
+            affected_setups = [s for s in opening_setups if recorded_ids is None or s["setup_id"] in recorded_ids]
+            for setup in affected_setups:
+                rows.append(dict(id=f"g:5m:{slot}:opening-excluded:{i}:{setup['setup_id']}", strategy=ACTIVE_PROFILE.label, session_date=day,
+                                 symbol=_text(item.get("equity_symbol") or item.get("symbol"), 100), side=setup["side"], setup_id=setup["setup_id"], signal_time=slot, minute=clock,
+                                 stage="DATA_COVERAGE", decision="OPENING_OI_EXCLUDED", evidence_state="UNAVAILABLE", source=str(path.relative_to(root)),
+                                 indicators={"futures_tradingsymbol": _scalar(item.get("futures_tradingsymbol"))},
+                                 checks=[_check("opening_oi_available", "FAIL", False, "Timely 09:16 opening OI baseline required", reason=_text(item.get("reason")))]))
     return rows, coverage, payload
 
 
@@ -874,7 +969,9 @@ def build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetime
     # The contract is constant within one response. Hashing all its setups for
     # every row made refreshes grow with the intraday event log. Context-local
     # reuse is thread-safe and revalidates the contract on every new build.
-    token = _BUILD_IDENTITY.set((ACTIVE_PROFILE.name, expected_fingerprint(ACTIVE_PROFILE.name)))
+    identity = display_identity(session_date, ACTIVE_PROFILE.name,
+                                current_fingerprint=expected_fingerprint(ACTIVE_PROFILE.name))
+    token = _BUILD_IDENTITY.set(identity)
     try:
         return _build_monitor_detail(fno_root, session_date, now_ist=now_ist)
     finally:
@@ -892,7 +989,9 @@ def _build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetim
     root = Path(fno_root) / ACTIVE_PROFILE.live_dir
     warnings: list[str] = []
     coverage, rows_5m, rows_1m = [], [], []
-    for slot in SLOTS:
+    identity = _BUILD_IDENTITY.get()
+    slots = tuple(identity.configuration["signal_to_confirmation"]) if identity and identity.previous_session else SLOTS
+    for slot in slots:
         scanner, scan_coverage, scan = _read_phase(root, session_date, slot, "5m", now, warnings)
         confirmation, conf_coverage, conf = _read_phase(root, session_date, slot, "1m", now, warnings)
         conf_coverage["durable_feed"] = _feed_evidence(Path(fno_root), session_date, slot, scan, conf, confirmation, now, warnings)
@@ -900,7 +999,7 @@ def _build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetim
             warnings.append(f"{slot}: scanner and confirmation fingerprints differ")
             conf_coverage["state"] = "INVALID_STRATEGY"
             for row in confirmation:
-                row.update(evidence_state="INVALID_STRATEGY", decision="UNKNOWN")
+                row.update(evidence_state="INVALID_STRATEGY", decision="UNKNOWN", setup_status="", decision_reason="")
                 row["checks"] = [_invalidate_check(check, "Scanner/confirmation strategy identity mismatch") for check in row["checks"]]
         rows_5m.extend(scanner)
         rows_1m.extend(confirmation)
@@ -910,9 +1009,13 @@ def _build_monitor_detail(fno_root: Path, session_date: str, *, now_ist: datetim
     rows_1m.extend(_order_rows(root, session_date, now, warnings))
     warnings.append("Order evidence is recorded transitions/latest snapshots, not a complete tick-by-tick or per-minute guard history. Missing checks remain UNKNOWN.")
     warnings.append("Recorded flags determine PASS/FAIL. Recorded setup thresholds take priority; numeric base defaults require matching strategy/source SHA256 pins. Display arithmetic explains margins, never re-executes or changes trading decisions. Positive displayed margin may not clear an upstream prerequisite.")
+    warnings.append("When recorded evidence has no configured setup, dependent failures are shown as NOT_APPLICABLE. Original recorded flags remain available in stock details.")
     due_states = [item[key] for item in coverage for key in ("scanner_state", "confirmation_state") if item[key] != "NOT_DUE"]
     state = "RECORDED" if due_states and all(item == "RECORDED" for item in due_states) else "PARTIAL" if rows_5m or rows_1m else "NO_EVIDENCE"
+    provenance = ({**identity.metadata(), "source": "VERIFIED_STRATEGY_CONFIGURATION"}
+                  if identity and ACTIVE_PROFILE.name == "V13_V10_G_3" else
+                  {"strategy_fingerprint": PINNED_RULE_FINGERPRINT, "source_sha256": PINNED_RULE_SOURCES})
     return dict(schema_version="fno_eq_id_monitor_detail_v1", session_date=session_date, generated_at_ist=now.isoformat(), state=state,
-                rule_reference_provenance={"strategy_fingerprint": PINNED_RULE_FINGERPRINT, "source_sha256": PINNED_RULE_SOURCES},
+                identity=identity.metadata() if identity else {}, rule_reference_provenance=provenance,
                 warnings=list(dict.fromkeys(warnings))[:100], coverage=coverage, rows_5m=rows_5m,
                 rows_1m=sorted(rows_1m, key=lambda row: (row["minute"], row["stage"], row["symbol"], row["id"])))

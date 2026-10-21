@@ -1,0 +1,53 @@
+{
+  "version": "G3-OI-EXIT-PROTOCOL-V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "configuration_promoted": false,
+  "frozen_before_new_oi_outcome_scoring": true,
+  "history_status": "REUSED_STRATEGY_SELECTED_HISTORY_NOT_FRESH_HOLDOUT",
+  "source_search_run": "C:/TradingData/eqidv2/v13_v10_g_3_trade_monitor_parameter_search/runs/2026-10-13/20261014T145433758171_89c0adfa_bounded_walkforward",
+  "cash_guard": {
+    "minimum_completed_post_entry_bars": 6,
+    "minimum_adverse_close_changes": 3,
+    "maximum_signed_five_minute_return_pct": -0.15,
+    "maximum_signed_entry_return_pct": -0.30
+  },
+  "oi_rules": {
+    "exact_same_contract_lookback_minutes": 10,
+    "require_exact_midpoint_minutes": 5,
+    "expansion_thresholds_pct": [0.5, 1.0],
+    "contraction_thresholds_pct": [-0.5, -1.0],
+    "absolute_activity_thresholds_pct": [0.5, 1.0],
+    "require_signed_futures_return_over_same_interval_below_zero": true,
+    "same_contract_and_session": true,
+    "positive_finite_oi_only": true,
+    "no_synthetic_or_forward_filled_oi": true
+  },
+  "controls": ["baseline", "price_guard_only", "futures_price_guard_only"],
+  "primary_model": "PAIRED_ORIGINAL_BASELINE_EXECUTIONS_NO_NEW_ENTRIES",
+  "secondary_model": "ORIGINAL_TEN_SLOT_PORTFOLIO_REALLOCATION",
+  "original_native_stops_targets_retained": true,
+  "stop_loss_widening": false,
+  "primary_oi_availability": "ASSUMED_COMPLETED_BAR_END_PLUS_ONE_MINUTE_NOT_PROVEN_LIVE_RECEIPT",
+  "lag_sensitivity_minutes": [0, 1, 5],
+  "receipt_time_sensitivity": "USE_RECORDED_RECEIPT_TIMES_IF_AVAILABLE_WITHOUT_ASSUMING_FIRST_OBSERVATION",
+  "maximum_bar_age_minutes": "availability_lag_plus_five",
+  "missing_or_invalid_oi": "NO_OI_EXIT_RETAIN_ORIGINAL_TRADE_DO_NOT_DROP_COHORT",
+  "execution": "COMPLETED_CASH_BAR_DECISION_NEXT_AVAILABLE_CASH_MINUTE_OPEN_FULL_FILL_BAR_CAPITAL_RESERVATION",
+  "native_exit_priority": "ORIGINAL_EXIT_AT_OR_BEFORE_MONITOR_OPEN",
+  "base_round_trip_cost_bps": 5,
+  "additional_advisory_exit_cost_bps": 10,
+  "symmetric_additional_round_trip_cost_bps": [0, 5, 10, 20],
+  "development_lock": {"calibration_sessions": 25, "validation_sessions": 10, "evaluation_sessions": 15},
+  "rolling": {"initial_development_sessions": 20, "validation_sessions": 5, "test_sessions": 5},
+  "selection": "EXISTING_NET_DELTA_LOSS_REDUCTION_WIN_RATE_DRAWDOWN_EVENT_COUNT_GATES_WITH_BASELINE_FALLBACK",
+  "bootstrap": {"samples": 5000, "block_sessions": 5, "seed": 20261014, "interpretation": "DESCRIPTIVE_REUSED_HISTORY_ONLY"},
+  "success_requires": [
+    "positive_net_delta_after_additional_exit_costs",
+    "less_total_realized_loss_not_merely_fewer_exits_labelled_STOP",
+    "benefit_over_matched_futures_price_confirmation_control",
+    "chronological_consistency_and_adequate_trigger_count",
+    "data_coverage_and_availability_disclosed",
+    "fresh_forward_evidence_before_promotion"
+  ]
+}

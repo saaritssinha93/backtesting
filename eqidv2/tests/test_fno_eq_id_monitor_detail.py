@@ -189,6 +189,107 @@ def test_selected_id_does_not_turn_failed_indicator_into_pass(tmp_path):
     assert check(row, "gate_confirmation_volume")["status"] == "FAIL"
 
 
+@pytest.fixture
+def no_setup_evidence(monkeypatch):
+    profile = PROFILES["V13_V10_G_3"]
+    monkeypatch.setattr(detail, "ACTIVE_PROFILE", profile)
+    monkeypatch.setattr(detail, "STRATEGY_VERSION", profile.version)
+    fingerprint = detail.expected_fingerprint(profile.name)
+    dependent = ("gate_exact_confirmation_clock", "gate_setup_price", "gate_setup_oi",
+                 "gate_setup_volume", "gate_setup_body", "gate_setup_wick", "gate_setup_liquidity")
+    raw = feature(strategy_fingerprint=fingerprint, tradingsymbol="RELIANCE",
+        signal_ts=f"{DAY}T10:10:00+05:30", confirmation_ts=f"{DAY}T10:11:00+05:30",
+        signal_end="10:10", confirmation_end="10:11", setup_id="", setup_filter_pass=False,
+        gate_setup_exists=False, gate_confirmation_present=True, gate_confirmation_range=True,
+        body_ratio=.17647, wick_ratio=.52941, v9_1m_volume_ratio=2.1952,
+        minimum_confirmation_volume_ratio=1.1,
+        first_failed_gate="gate_setup_exists", failed_gates=json.dumps(["gate_setup_exists", *dependent]),
+        **dict.fromkeys(dependent, False))
+    raw.pop("required_volume_ratio")
+    raw.pop("margin_volume_ratio")
+    parent = payload([raw], strategy_fingerprint=fingerprint, signal_end="10:10", confirmation_end="10:11",
+                     published_at_ist=f"{DAY}T10:11:07+05:30")
+    return raw, parent, dependent
+
+
+def read_no_setup(tmp_path, evidence):
+    _, parent, _ = evidence
+    root = tmp_path / detail.ACTIVE_PROFILE.live_dir
+    path = root / "confirmation_1m" / DAY / "slot_1011.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(parent), encoding="utf-8")
+    rows, _, _ = detail._read_phase(root, DAY, "10:10", "1m",
+                                   datetime.fromisoformat(f"{DAY}T10:12:00+05:30"), [])
+    return rows[0]
+
+
+def test_absent_setup_explains_one_failure_and_preserves_original_flags(tmp_path, no_setup_evidence):
+    raw, _, dependent = no_setup_evidence
+    before = json.dumps(raw, sort_keys=True)
+    row = read_no_setup(tmp_path, no_setup_evidence)
+    assert row["setup_status"] == "NOT_CONFIGURED"
+    assert row["decision_reason"] == "No LONG setup configured for 10:10."
+    assert row["decision"] == "CONFIRMATION_OR_SETUP_REJECTED"
+    assert check(row, "gate_setup_exists")["status"] == "FAIL"
+    assert check(row, "gate_setup_exists")["actual_text"] == row["decision_reason"]
+    assert row["failed_gates"] == json.loads(raw["failed_gates"])
+    for name in dependent:
+        gate = check(row, name)
+        assert gate["status"] == "NOT_APPLICABLE" and gate["recorded_status"] == "FAIL"
+        assert "Unavailable" not in gate["required_text"]
+        assert gate["margin_text"] == "Not applicable" and not gate.get("comparisons")
+    assert check(row, "gate_confirmation_volume")["status"] == "PASS"
+    assert row["indicators"]["body_ratio"] == .17647
+    assert row["indicators"]["wick_ratio"] == .52941
+    assert json.dumps(raw, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("fault", ["missing_flag", "numeric_flag", "setup_id", "setup_pass",
+    "dependent_pass", "threshold_present", "selected", "bad_checksum", "bad_identity"])
+def test_missing_or_contradictory_evidence_cannot_claim_no_setup(tmp_path, no_setup_evidence, fault):
+    raw, parent, _ = no_setup_evidence
+    if fault == "missing_flag": raw.pop("gate_setup_exists")
+    if fault == "numeric_flag": raw["gate_setup_exists"] = 0
+    if fault == "setup_id": raw["setup_id"] = "1011_LONG"
+    if fault == "setup_pass": raw["setup_filter_pass"] = True
+    if fault == "dependent_pass": raw["gate_setup_body"] = True
+    if fault == "threshold_present": raw["required_body_ratio"] = .4
+    if fault == "selected": parent["selected_signal_ids"] = ["20261007_1011_LONG_RELIANCE_hash"]
+    if fault == "bad_checksum": parent["feature_evaluations_sha256"] = "wrong"
+    if fault == "bad_identity": raw["strategy_fingerprint"] = "wrong"
+    row = read_no_setup(tmp_path, no_setup_evidence)
+    assert not row["setup_status"] and not row["decision_reason"]
+    assert all(gate["status"] != "NOT_APPLICABLE" for gate in row["checks"])
+    if fault == "selected": assert row["decision"] == "SELECTED"
+    if fault in {"bad_checksum", "bad_identity"}:
+        assert row["decision"] == "UNKNOWN"
+        assert all(gate["status"] == "UNKNOWN" for gate in row["checks"])
+
+
+def test_no_setup_does_not_hide_missing_candle_or_incomplete_slot(tmp_path, no_setup_evidence):
+    raw, parent, _ = no_setup_evidence
+    raw["gate_confirmation_present"] = False
+    raw.pop("gate_setup_body")
+    parent["state"] = "BLOCKED_INCOMPLETE_DATA"
+    row = read_no_setup(tmp_path, no_setup_evidence)
+    assert row["decision"] == "BLOCKED_INCOMPLETE_SLOT"
+    assert row["setup_status"] == "NOT_CONFIGURED"
+    assert check(row, "gate_confirmation_present")["status"] == "FAIL"
+    assert check(row, "gate_setup_body")["status"] == "UNKNOWN"
+    assert check(row, "slot_complete")["status"] == "FAIL"
+    assert check(row, "final_selection")["status"] == "NOT_EVALUATED"
+
+
+def test_later_invalidation_removes_no_setup_display_claims(tmp_path, no_setup_evidence):
+    row = read_no_setup(tmp_path, no_setup_evidence)
+    for name in ("gate_setup_exists", *no_setup_evidence[2]):
+        gate = detail._invalidate_check(check(row, name), "Scanner/confirmation strategy identity mismatch")
+        assert gate["status"] == "UNKNOWN"
+        assert "No LONG setup" not in gate["actual_text"]
+        assert "no configured setup" not in gate["required_text"]
+        assert gate["threshold_source"] == "UNAVAILABLE"
+
+
 def test_blocked_slot_never_claims_selection(tmp_path):
     write_phase(tmp_path, payload(state="BLOCKED_INCOMPLETE_DATA", selected_signal_ids=["20261007_0926_LONG_TEST_hash"]), "1m")
     row = build(tmp_path)["rows_1m"][0]

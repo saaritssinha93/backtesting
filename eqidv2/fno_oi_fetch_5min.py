@@ -412,6 +412,11 @@ def _render_fetch_report(marker: dict[str, Any], outcomes: list[dict[str, Any]])
         f"Cash feed at FnO publication: {marker['cash_marker_state']}",
         f"Duration: {marker['duration_sec']:.1f}s",
     ]
+    if marker.get("strategy_required_index_underlyings"):
+        lines.extend([
+            f"Opening SHORT index context: {marker['strategy_required_index_state']}",
+            "Required NIFTY uses the existing bounded slot retries; missing context keeps SHORT blocked.",
+        ])
     failures = [item for item in outcomes if item["state"] in {"FAILED", "INVALID_DATA"}]
     if failures:
         lines.extend(["", "Exceptions / invalid rows:", "", "Contract | State | Detail", "--- | --- | ---"])
@@ -449,12 +454,13 @@ def _render_fetch_report(marker: dict[str, Any], outcomes: list[dict[str, Any]])
     excluded_unverified_symbols = sorted(
         set(marker.get("unverified_no_candle_symbols") or [])
         - set(stock_unverified_no_candle_symbols)
+        - set(marker.get("strategy_required_index_symbols") or [])
     )
     if excluded_unverified_symbols:
         lines.extend(
             [
                 "",
-                "Optional index contracts with no exact-slot candle (not retried; stock readiness unaffected):",
+                "Optional index contracts with no exact-slot candle (do not independently delay stock readiness):",
                 "",
                 ", ".join(f"`{symbol}`" for symbol in excluded_unverified_symbols),
             ]
@@ -489,6 +495,20 @@ def _is_index_universe_row(row: dict[str, Any]) -> bool:
         or str(row.get("underlying", "")).strip().upper()
         in common.INDEX_UNDERLYINGS
     )
+
+
+def _strategy_required_opening_indexes(slot_end: datetime) -> set[str]:
+    """Only the configured opening SHORT needs an index in this exact slot."""
+    if slot_end.astimezone(common.IST).strftime("%H:%M") != "09:20":
+        return set()
+    from fno_strategy_registry import active_profile_name
+    if active_profile_name() != "V13_V10_G_3":
+        return set()
+    from fno_v13_v10_g_3_contract import NIFTY_SHORT_SIGNAL_ENDS, setup_for
+    if ("09:20" in NIFTY_SHORT_SIGNAL_ENDS
+            and setup_for("09:20", "SHORT", session_date=slot_end.date()) is not None):
+        return {"NIFTY"}
+    return set()
 
 
 def run_slot(
@@ -527,6 +547,12 @@ def run_slot(
         for row in universe_rows
         if not _is_index_universe_row(row)
     }
+    required_index_underlyings = _strategy_required_opening_indexes(slot_end)
+    required_index_symbols = {
+        str(row.get("tradingsymbol", "")).strip().upper()
+        for row in universe_rows
+        if str(row.get("underlying", "")).strip().upper() in required_index_underlyings
+    }
     outcomes = fetch_impl(
         universe,
         runtimes,
@@ -558,12 +584,14 @@ def run_slot(
         }
         if not unresolved_symbols:
             break
-        # This producer serves an exact stock-FnO consumer.  Once every stock
-        # outcome is complete, do not hold its marker behind repeated queries
-        # for an excluded index future.  Index accounting remains explicit in
-        # the final marker via global_complete/index_no_candle_symbols.
-        if not (unresolved_symbols & stock_symbols):
+        # Opening G3 SHORT consumes this exact NIFTY bar immediately. Give it
+        # the existing bounded retry budget even when stocks are already ready.
+        # Other excluded index futures still do not hold stock publication.
+        unresolved_stocks = unresolved_symbols & stock_symbols
+        if not (unresolved_stocks or unresolved_symbols & required_index_symbols):
             break
+        if not unresolved_stocks:
+            unresolved_symbols &= required_index_symbols
         retries_used = retry_number
         time.sleep(max(0.0, float(args.slot_retry_delay_sec)))
         retry_universe = universe.loc[
@@ -635,6 +663,12 @@ def run_slot(
     stock_verified_no_candle_symbols = verified_no_candle_symbols & stock_symbols
     index_written_symbols = written_symbols & index_symbols
     index_no_candle_symbols = no_candle_symbols & index_symbols
+    required_index_missing_symbols = required_index_symbols - written_symbols
+    required_index_state = (
+        "NOT_REQUIRED" if not required_index_underlyings else
+        "MISSING_UNIVERSE" if len(required_index_symbols) != len(required_index_underlyings) else
+        "MISSING_AFTER_BOUNDED_RETRIES" if required_index_missing_symbols else "READY"
+    )
     observed_symbols = {
         str(item["tradingsymbol"]).strip().upper() for item in outcomes
     }
@@ -747,6 +781,10 @@ def run_slot(
         "index_contracts_written": len(index_written_symbols),
         "index_no_candle_count": len(index_no_candle_symbols),
         "index_no_candle_symbols": sorted(index_no_candle_symbols),
+        "strategy_required_index_underlyings": sorted(required_index_underlyings),
+        "strategy_required_index_symbols": sorted(required_index_symbols),
+        "strategy_required_index_missing_symbols": sorted(required_index_missing_symbols),
+        "strategy_required_index_state": required_index_state,
         "invalid_data_count": invalid,
         "failed_count": failed,
         "coverage_ratio": coverage,

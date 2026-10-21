@@ -9,7 +9,8 @@ set "START_SCHEDULED_BAT=%BAT_DIR%\run_log_dashboard_public_link_scheduled.bat"
 set "STOP_BAT=%BAT_DIR%\run_log_dashboard_stop.bat"
 
 set "TASK_START=EQIDV2_log_dashboard_start_0855"
-set "TASK_STOP=EQIDV2_log_dashboard_stop_1700"
+set "TASK_STOP=EQIDV2_log_dashboard_stop_0000"
+set "OLD_TASK_STOP=EQIDV2_log_dashboard_stop_1700"
 
 if "%LOG_DASH_USER%"=="" set "LOG_DASH_USER=eqidv2"
 if "%LOG_DASH_PASS%"=="" (
@@ -36,8 +37,8 @@ if errorlevel 1 (
   endlocal & exit /b 1
 )
 
-echo [INFO] Creating weekday dashboard STOP task at 17:00 ...
-schtasks /Create /F /TN "%TASK_STOP%" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 17:00 /TR "%TR_STOP%"
+echo [INFO] Creating dashboard STOP task at 00:00 daily ...
+schtasks /Create /F /TN "%TASK_STOP%" /SC DAILY /ST 00:00 /TR "%TR_STOP%"
 if errorlevel 1 (
   echo [ERROR] Failed to create %TASK_STOP%
   endlocal & exit /b 1
@@ -48,8 +49,12 @@ if errorlevel 1 (
   endlocal & exit /b 1
 )
 
+rem Remove the old 17:00 stop only after the midnight task is ready.
+schtasks /Query /TN "%OLD_TASK_STOP%" >nul 2>&1
+if not errorlevel 1 schtasks /Delete /F /TN "%OLD_TASK_STOP%"
+
 echo [INFO] Tasks created/updated successfully:
 echo        %TASK_START%  (Mon-Fri 08:55)
-echo        %TASK_STOP%   (Mon-Fri 17:00)
+echo        %TASK_STOP%   (daily 00:00)
 
 endlocal & exit /b 0

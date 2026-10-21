@@ -1,0 +1,23 @@
+{
+  "variant_id": "V13-V10-G-4-BOUNDED-EXIT-V11",
+  "strategy": "V13-V10-G-4",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "donor_g4_variant": "V13-V10-G-4-G3-MIRROR-GUARD-RESEARCH-V9",
+  "donor_g4_primary_scenario": "guard_all_ten_volume_0925_long_120",
+  "donor_g4_run": "runs/2026-10-15/20261015T150117806347_ec1b84fc_late_slots",
+  "donor_g4_manifest_sha256": "94d4edb50fb1f1854ed9b87873a50d256133238a4818f7fc394f4b6470e706f9",
+  "active_setup_count": 49,
+  "initial_stop_pct": 1.2,
+  "tightened_stop_pct": 1.0,
+  "tighten_after_minutes": 120,
+  "target_floor_pct": 0.6,
+  "target_cap_pct": 2.0,
+  "target_rule": "clip each retained G4 setup target to 0.60 through 2.00 percent",
+  "selection_rule": "retain verified G4 V9 selections through 2026-10-14 and reselect guarded candidates on each subsequent closed day before quota",
+  "exit_rule": "full one-minute OHLC replay, stop first on ambiguous bars, observed-open gap fills, 15:15 square-off",
+  "model_cost_bps_round_trip": 5.0,
+  "capital_per_entry_rs": 100000.0,
+  "leverage": 5.0,
+  "portfolio_capital_rs": 1000000.0
+}

@@ -9,7 +9,11 @@ import dashboard_cockpit as cockpit
 import fno_eq_id_monitor_detail as monitor
 import fno_strategy_registry as registry
 import log_dashboard_server as dashboard
-from fno_v13_v10_g_3_live_execution_policy import execution_metadata, policy_fingerprint
+from fno_v13_v10_g_3_live_execution_policy import (
+    execution_metadata,
+    policy_fingerprint,
+    previous_capped_execution_metadata,
+)
 
 DAY = "2026-10-12"
 NOW = datetime.fromisoformat(f"{DAY}T10:00:00+05:30")
@@ -35,11 +39,11 @@ def order(profile, mode="LIVE"):
                 updated_at_ist=f"{DAY}T09:59:30+05:30", **execution_metadata())
 
 
-def test_deployment_metadata_does_not_enable_live(g3):
+def test_deployment_metadata_reflects_explicit_live_approval(g3):
     state = registry.deployment_state()
     assert state["live_execution_policy"] == execution_metadata()
-    assert state["deployment_stage"] == "PAPER_VALIDATION"
-    assert state["live_activation_authorized"] is False
+    assert state["deployment_stage"] == "LIVE_APPROVED"
+    assert state["live_activation_authorized"] is True
 
 
 def test_display_updates_labels_preserves_transport_and_legacy(monkeypatch, g3):
@@ -83,6 +87,20 @@ def test_both_readers_reject_wrong_live_sizing(tmp_path, g3, corruption):
     assert incomplete == (corruption is not None)
 
 
+def test_both_readers_keep_exact_previous_policy_rows_visible(tmp_path, g3):
+    row = order(g3)
+    row.update(previous_capped_execution_metadata())
+    root = tmp_path / g3.live_dir
+    path = root / "orders/LIVE/live_kite_qty1" / DAY / "test.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(row), encoding="utf-8")
+    warnings = []
+    rows, incomplete = cockpit._order_rows(root, DAY, "LIVE", NOW, warnings)
+    monitor_rows = monitor._order_rows(root, DAY, NOW, [])
+    assert len(rows) == len(monitor_rows) == 1
+    assert incomplete is False
+
+
 def test_paper_history_does_not_require_new_live_policy(tmp_path, g3):
     row = order(g3, mode="PAPER")
     for key in execution_metadata():
@@ -101,6 +119,11 @@ def test_empty_live_cockpit_reports_configured_budget_without_inventing_orders(t
     data = cockpit.load_cockpit_data(tmp_path, DAY, mode="LIVE", now_ist=NOW)
     assert data["sizing"]["capital_per_entry_rs"] == 10000
     assert data["sizing"]["target_exposure_rs"] == 50000
+    assert data["sizing"]["max_reserved_open_positions"] is None
+    assert data["sizing"]["max_daily_entries"] is None
+    assert data["sizing"]["max_reserved_gross_exposure_rs"] is None
+    assert "portfolio-admission caps are disabled" in data["sizing"]["details"]
+    assert "unlimited" in data["sizing"]["details"]
     assert data["identity"]["configured_live_execution_policy"]["live_execution_policy_fingerprint"] == policy_fingerprint()
     assert data["summary"]["orders"] == 0 and data["summary"]["total_pnl_rs"] is None
 

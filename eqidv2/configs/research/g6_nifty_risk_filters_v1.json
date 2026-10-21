@@ -1,0 +1,21 @@
+{
+  "version": "G6-NIFTY-RISK-FILTERS-V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "source_run": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_4/research/20261021T133113_nifty_direction_v1",
+  "source_manifest_sha256": "e45305bf70a9fec1133dba45e0abe5962439360959fd8bbab43728b49e8ea8ad",
+  "variants": ["control", "slot_candle", "session_open", "both_counter_skip", "session_counter_half", "persistent_counter_skip", "persistent_counter_half", "daily_1r_half", "daily_2r_halt", "combined_persistent_daily_half", "uniform_half"],
+  "primary_candidate": "combined_persistent_daily_half",
+  "persistent_session_move_pct": 0.15,
+  "persistent_each_candle_move_pct": 0.05,
+  "risk_unit_rs": 6250.0,
+  "risk_unit_basis": "100000 capital x 5 exposure x (1.20% stop + 0.05% cost); held fixed in cost stress",
+  "daily_trigger": "Latch after cumulative realised net P&L reaches -1R for half sizing, or -2R for halting new orders. Reset every session. Only exits strictly before confirmation count. Pending earlier orders keep their accepted size; existing positions retain native exits.",
+  "persistent_rule": "Last two consecutive completed 5m Nifty candle bodies each oppose trade by at least 0.05%, and latest close opposes session open by at least 0.15%. Before two candles or if previous bar is unavailable, do not apply this extra filter; record that status.",
+  "combination_rule": "Minimum of persistent half-size and daily 1R half-size; never quarter size",
+  "cost_bps_round_trip": [5.0, 10.0],
+  "chronological_first_period_sessions": 30,
+  "bootstrap": {"repetitions": 5000, "block_sessions": 3, "seed": 20261021},
+  "historical_screen": {"minimum_net_retention": 0.95, "minimum_original_winner_profit_retention": 0.95, "minimum_loss_day_amount_reduction": 0.10, "minimum_losing_day_count_reduction": 1},
+  "protocol": "Small fixed catalogue, saved before new G6 outcomes. No threshold optimisation or per-setup tuning. All 54 sessions were previously inspected: chronological slices and bootstrap are diagnostics, not untouched validation. Do not promote from this run alone."
+}

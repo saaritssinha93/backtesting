@@ -1,0 +1,5 @@
+# These verified configuration artifacts have byte-level SHA256 pins.
+v13_v10_g_3_production_v9.json text eol=lf
+v13_v10_g_3_production_v10.json text eol=lf
+v13_v10_g_3_backtest_target_gt075_restored3_v11.json text eol=lf
+v13_v10_g_3_backtest_target_gt075_restored3_v12.json text eol=lf

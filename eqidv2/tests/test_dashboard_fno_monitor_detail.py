@@ -726,3 +726,64 @@ def test_monitor_renders_actual_backend_comparison_payload():
         assert "&gt;= 1.20×" in rendered
         assert "0.50×" in rendered
         assert "shortfall" in rendered.lower()
+
+
+def test_monitor_explains_unconfigured_setup_from_backend_without_eight_failures():
+    import fno_eq_id_monitor_detail as detail
+
+    day = "2026-10-15"
+    raw = dict(session_date=day, strategy_version=detail.STRATEGY_VERSION,
+        strategy_fingerprint=detail.expected_fingerprint(detail.ACTIVE_PROFILE.name),
+        signal_end="10:10", confirmation_end="10:11", signal_ts=f"{day}T10:10:00+05:30",
+        confirmation_ts=f"{day}T10:11:00+05:30", tradingsymbol="RELIANCE", base_side="LONG",
+        setup_id="", setup_filter_pass=False, gate_setup_exists=False,
+        gate_confirmation_present=True, gate_confirmation_range=True,
+        gate_confirmation_direction=True, gate_confirmation_volume=True,
+        gate_exact_confirmation_clock=False, gate_setup_price=False, gate_setup_oi=False,
+        gate_setup_volume=False, gate_setup_body=False, gate_setup_wick=False, gate_setup_liquidity=False,
+        v9_1m_volume_ratio=2.1952, minimum_confirmation_volume_ratio=1.1,
+        body_ratio=.17647, wick_ratio=.52941, price_change_pct=.5894, oi_change_pct=.0762,
+        volume_ratio=2.1614, traded_value=552614458.5, confirmation_open=1194.7,
+        confirmation_high=1195.9, confirmation_low=1194.2, confirmation_close=1195., signal_close=1194.7)
+    parent = {**raw, "state": "SUCCESS", "selected_signal_ids": []}
+    row = detail._feature_row(raw, parent, day, "10:10", "1m", "test.json", "RECORDED", 0)
+    scenario = """
+      const row = __ROW__;
+      global.fetch = async url => ({ok: true, json: async () => ({session_date: url.searchParams.get('date'),
+        rows_5m: [], rows_1m: [row], warnings: [], coverage: []})});
+      const host = fakeHost(); window.FnoMonitor.mount(host, ''); await flush(); await flush();
+      host.listeners.change({target: {dataset: {filter: 'stage'}, value: '1m'}});
+      host.listeners.change({target: {dataset: {filter: 'result'}, value: 'FAIL'}});
+      const rendered = host.zones.rows.innerHTML;
+      click(host, {rowIndex: '0'});
+      process.stdout.write(JSON.stringify({rendered, details: host.zones.detail.innerHTML}));
+    """.replace("__ROW__", json.dumps(row))
+    result = _run_monitor_browser_scenario(scenario)
+    rendered, expanded = result["rendered"], result["details"]
+    assert "No configured setup" in rendered
+    assert "No LONG setup configured for 10:10." in rendered
+    assert "Failed (1)" in rendered and "Failed (8)" not in rendered
+    assert "Not applicable (7)" in rendered
+    assert "CONFIRMATION_OR_SETUP_REJECTED" in rendered
+    assert "Not selected (separate from filter checks)" in rendered
+    assert "numeric threshold not recorded/verified" not in rendered
+    assert "Missing / unverified evidence" not in rendered
+    assert "2.1952" in rendered and "0.17647" in rendered and "0.52941" in rendered
+    assert expanded.count("Recorded: FAIL") == 7
+    assert "NOT_APPLICABLE" in expanded
+    assert "17.65%" in expanded and "52.94%" in expanded
+
+
+def test_monitor_escapes_setup_explanation():
+    result = _run_monitor_browser_scenario("""
+      const row = {id: 'unsafe', symbol: 'TEST', setup_status: 'NOT_CONFIGURED',
+        decision_reason: '<img src=x onerror=bad()>', checks: []};
+      global.fetch = async url => ({ok: true, json: async () => ({session_date: url.searchParams.get('date'),
+        rows_5m: [row], rows_1m: []})});
+      const host = fakeHost(); window.FnoMonitor.mount(host, ''); await flush(); await flush();
+      click(host, {rowIndex: '0'});
+      process.stdout.write(JSON.stringify({rendered: host.zones.rows.innerHTML, details: host.zones.detail.innerHTML}));
+    """)
+    for html in result.values():
+        assert "<img" not in html
+        assert "&lt;img src=x onerror=bad()&gt;" in html

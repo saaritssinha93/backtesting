@@ -23,16 +23,20 @@ if TYPE_CHECKING:
 from fno_v13_v10_g_identity import canonical_signal_id
 import fno_v13_v10_g_3_late_setups as late_setups
 import fno_v13_v10_g_3_selected_setups as selected_setups
+import fno_v13_v10_g_3_midday_setups as midday_setups
+import fno_v13_v10_g_3_afternoon_setups as afternoon_setups
+from g3_one_minute_extension import extension_atr
 
 IST = ZoneInfo("Asia/Kolkata")
 STRATEGY_PROFILE = "V13_V10_G_3"
-STRATEGY_VERSION = selected_setups.VERSION
-PREVIOUS_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V4"
-PREVIOUS_STRATEGY_FINGERPRINT = "181c37b6a43291311525b0b6970ea0019d5237bce172735913418cba623fb6b9"
+STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V11"
+PREVIOUS_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V10"
+PREVIOUS_STRATEGY_FINGERPRINT = "04697846e334466cf902d7977cefe186c04cfafdb66b4a6582d250405f7b9e7d"
 LEGACY_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V1"
 LEGACY_STRATEGY_FINGERPRINT = "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275"
 SIGNAL_ID_SCHEMA_VERSION = "eqidv2.v13_v10_g_3.signal_id.v1"
-ACCEPTED_VARIANT = selected_setups.ACCEPTED_VARIANT
+ACCEPTED_VARIANT = afternoon_setups.ACCEPTED_VARIANT + "_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120"
+ADDED_SETUP_IDS = frozenset({"0921_SHORT", "1011_LONG"})
 FROZEN_ACCEPTED_VARIANT = "G3_W1_V1p1"
 FROZEN_VERSION = "V13-V10-G-3-FROZEN-LONG110-NEXTMINUTE-V1"
 FROZEN_CONFIG_SHA256 = "788fbb3dbda6cf86d3f0f26a9db777e7462ba64c7906368cca077e983f72552a"
@@ -42,11 +46,14 @@ BASE_OI_CHANGE_PCT = .05
 BASE_VOLUME_RATIO = .80
 MAX_OI_CHANGE_PCT = 1.
 MIN_CONFIRMATION_VOLUME_BY_SIDE = {"LONG": 1.10, "SHORT": 1.20}
-MIN_CONFIRMATION_VOLUME_BY_SETUP = {"0921_LONG": 1.80, "0951_LONG": .60,
-    **late_setups.CONFIRMATION_VOLUME, **selected_setups.CONFIRMATION_VOLUME}
+MIN_CONFIRMATION_VOLUME_BY_SETUP = {"0921_LONG": 1.80, "0921_SHORT": 1.20, "0941_LONG": .80, "0951_LONG": .60, "1011_LONG": .60,
+    **late_setups.CONFIRMATION_VOLUME, **selected_setups.CONFIRMATION_VOLUME,
+    **midday_setups.CONFIRMATION_VOLUME, **afternoon_setups.CONFIRMATION_VOLUME}
 CONFIRMATION_VOLUME_LOOKBACK = 20
 CONFIRMATION_VOLUME_MIN_PERIODS = 5
 CONFIRMATION_VOLUME_POLICY = "previous_20_observed_completed_1m_min5_excluding_current_v1"
+MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP = {"1036_LONG": 3.0, "1036_SHORT": 3.0}
+CONFIRMATION_EXTENSION_POLICY = "completed_1m_close_vs_ema20_over_sma_true_range14_v1"
 LIVE_CONFIRMATION_VOLUME_REQUIRED_PRIOR = 20
 LIVE_CONFIRMATION_HISTORY_DAYS = 7
 LIVE_CONFIRMATION_HISTORY_FALLBACK_DAYS = 35
@@ -54,6 +61,7 @@ LIVE_CONFIRMATION_FIRST_MINUTE_END = "09:16"
 LIVE_CONFIRMATION_LAST_MINUTE_END = "15:30"
 NIFTY_FIRST_BAR_END = "09:20"
 NIFTY_FIRST_BAR_MAX_RETURN_PCT = -.05
+NIFTY_SHORT_SIGNAL_ENDS = ("09:20", "09:25")
 INITIAL_STOP_PCT = 1.25
 TIGHTENED_STOP_PCT = 1.
 TIGHTEN_AFTER_MINUTES = 120
@@ -112,7 +120,9 @@ class PositionSize:
 # are effective exit.setups targets, NOT donor setup_rules targets/stops.
 _SETUP_ROWS = (
     ("09:20", "LONG", 1, "max_liquidity", .30, .10, 3., .75, .35, 3.),
-    ("09:25", "LONG", 1, "max_liquidity", .30, .10, 3., .60, .60, .97),
+    # User-enabled slots: donor entry filters retained; targets set to 1.50%.
+    ("09:20", "SHORT", 2, "max_volume", .20, .05, 1.5, .40, .60, 1.50),
+    ("09:25", "LONG", 1, "max_liquidity", .30, .10, 1.2, .60, .60, .97),
     ("09:25", "SHORT", 2, "max_volume", .20, .05, 1.5, .40, .60, 2.67),
     ("09:30", "LONG", 1, "max_move", .65, .10, 1., .50, .60, 2.),
     ("09:30", "SHORT", 1, "max_move", .20, .125, 1., .40, .60, 2.),
@@ -126,9 +136,12 @@ _SETUP_ROWS = (
     ("09:50", "SHORT", 1, "max_liquidity", .20, .05, 1., .40, .60, .93),
     ("09:55", "LONG", 1, "max_liquidity", .20, .10, 1., .40, .60, .90),
     ("10:00", "LONG", 1, "max_liquidity", .40, .05, 1., .40, .60, 3.),
+    ("10:10", "LONG", 1, "max_liquidity", .10, .05, 1.3, .50, .50, 1.50),
     ("11:20", "SHORT", 1, "max_liquidity", .20, .05, 1., .40, .60, 2.),
     *late_setups.ROWS,
     *selected_setups.ROWS,
+    *midday_setups.ROWS,
+    *afternoon_setups.ROWS,
 )
 
 
@@ -143,7 +156,7 @@ CORE_SETUPS = tuple(_make_setup(row) for row in _SETUP_ROWS)
 # Late G4 thresholds are already effective, with identical core/expanded pools.
 ACTIVE_SETUPS = tuple(replace(s, price_change_pct=max(BASE_PRICE_CHANGE_PCT,
                      s.price_change_pct * (.65 if s.side == "SHORT" and s.setup_id not in
-                         (late_setups.SETUP_IDS | selected_setups.SETUP_IDS) else 1.))) for s in CORE_SETUPS)
+                         (late_setups.SETUP_IDS | selected_setups.SETUP_IDS | midday_setups.SETUP_IDS | afternoon_setups.SETUP_IDS) else 1.))) for s in CORE_SETUPS)
 SIGNAL_TO_CONFIRMATION = dict(sorted({s.signal_end: s.confirmation_end for s in ACTIVE_SETUPS}.items()))
 _CORE_BY_ID = {s.setup_id: s for s in CORE_SETUPS}
 _ACTIVE_BY_ID = {s.setup_id: s for s in ACTIVE_SETUPS}
@@ -234,8 +247,8 @@ def base_signal_side(row: Mapping[str, Any], signal_end: str = "", nifty_first_b
         return None
     if vals["ema9"] > vals["ema20"] > vals["ema50"] and vals["price_change_pct"] >= BASE_PRICE_CHANGE_PCT:
         return "LONG"
-    if signal_end != "09:20" and vals["ema9"] < vals["ema20"] < vals["ema50"] and vals["price_change_pct"] <= -BASE_PRICE_CHANGE_PCT:
-        if signal_end == "09:25":
+    if vals["ema9"] < vals["ema20"] < vals["ema50"] and vals["price_change_pct"] <= -BASE_PRICE_CHANGE_PCT:
+        if signal_end in NIFTY_SHORT_SIGNAL_ENDS:
             context = _number(nifty_first_bar_return_pct if nifty_first_bar_return_pct is not None
                               else row.get("nifty_first_bar_return_pct"))
             if not math.isfinite(context) or context > NIFTY_FIRST_BAR_MAX_RETURN_PCT:
@@ -296,6 +309,11 @@ def passes_selected_filters(candidate: Mapping[str, Any], setup: SetupSpec, *,
     if not all(math.isfinite(v) for v in vals.values()):
         return False
     price = vals["price_change_pct"] * (1 if setup.side == "LONG" else -1)
+    if setup.setup_id in MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP:
+        extension = extension_atr(row.get("confirm_close"), row.get("v9_1m_ema20"),
+                                  row.get("v9_1m_atr14"), setup.side)
+        if not math.isfinite(extension) or extension > MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP[setup.setup_id]:
+            return False
     return (price >= setup.price_change_pct and vals["oi_change_pct"] >= setup.oi_change_pct
             and vals["volume_ratio"] >= setup.volume_ratio
             and setup.body_ratio <= vals["body_ratio"] <= 1.
@@ -380,6 +398,9 @@ def selection_audit(signals: pd.DataFrame) -> pd.DataFrame:
                    confirmation_ts=confirmation_stamp,
                    hhmm=stamp.strftime("%H%M"), hhmm_int=int(stamp.strftime("%H%M")),
                    sid=row.get("sid", index))
+        if setup.setup_id in MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP:
+            row["v9_1m_extension_atr"] = extension_atr(row.get("confirm_close"),
+                row.get("v9_1m_ema20"), row.get("v9_1m_atr14"), side)
         pools.setdefault((day, setup.setup_id), []).append(row)
     parts = []
     fingerprint = strategy_fingerprint()
@@ -429,7 +450,7 @@ def strategy_payload() -> dict[str, Any]:
         frozen_baseline=dict(version=FROZEN_VERSION, config_sha256=FROZEN_CONFIG_SHA256,
                              execution_authority=False),
         core_first=True, strict_0925_long=True, morning_slots=False, two_bar_continuation=False,
-        opening_0920=dict(side="LONG", short_enabled=False, price_basis="09:15_CASH_OPEN_TO_09:20_CASH_CLOSE",
+        opening_0920=dict(sides=["LONG", "SHORT"], short_enabled=True, price_basis="09:15_CASH_OPEN_TO_09:20_CASH_CLOSE",
             historical_oi_baseline="VERIFIED_DATED_FUTURES_0915_0916_MINUTE",
             live_oi_baseline="VERIFIED_MINUTE_OR_TIMELY_PROVISIONAL_QUOTE",
             baseline_received_before="09:20", quote_window_seconds=15, maximum_quote_receipt_lag_seconds=15,
@@ -443,11 +464,13 @@ def strategy_payload() -> dict[str, Any]:
         minimum_confirmation_1m_volume_ratio=dict(MIN_CONFIRMATION_VOLUME_BY_SIDE),
         minimum_confirmation_1m_volume_ratio_by_setup=dict(MIN_CONFIRMATION_VOLUME_BY_SETUP),
         confirmation_volume_policy=CONFIRMATION_VOLUME_POLICY,
+        confirmation_extension_policy=CONFIRMATION_EXTENSION_POLICY,
+        maximum_confirmation_extension_atr_by_setup=dict(MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP),
         live_confirmation_volume_warmup=dict(required_prior_observations=LIVE_CONFIRMATION_VOLUME_REQUIRED_PRIOR,
             initial_history_days=LIVE_CONFIRMATION_HISTORY_DAYS, fallback_history_days=LIVE_CONFIRMATION_HISTORY_FALLBACK_DAYS,
             first_minute_end=LIVE_CONFIRMATION_FIRST_MINUTE_END, last_minute_end=LIVE_CONFIRMATION_LAST_MINUTE_END,
             research_min_periods=CONFIRMATION_VOLUME_MIN_PERIODS, insufficient_history_action="FAIL_CLOSED"),
-        nifty_gate=dict(signal="09:25", side="SHORT", first_bar_end=NIFTY_FIRST_BAR_END,
+        nifty_gate=dict(signals=list(NIFTY_SHORT_SIGNAL_ENDS), side="SHORT", first_bar_end=NIFTY_FIRST_BAR_END,
                         instrument="DATED_NEAR_MONTH_NIFTY_FUTURE", maximum_return_pct=NIFTY_FIRST_BAR_MAX_RETURN_PCT),
         exit=dict(setups={s.setup_id: dict(stop_pct=s.stop_pct, target_pct=s.target_pct) for s in ACTIVE_SETUPS},
                   initial_stop_pct=INITIAL_STOP_PCT, tightened_stop_pct=TIGHTENED_STOP_PCT,
@@ -469,13 +492,19 @@ config_fingerprint = strategy_fingerprint
 
 
 def supported_identity(version: str, fingerprint: str, *, allow_legacy: bool = False) -> bool:
-    """Archived readers may opt into prior identities; execution requires V5."""
+    """Archived readers may opt into prior identities; execution requires current."""
     return ((version, fingerprint) == (STRATEGY_VERSION, strategy_fingerprint()) or
             allow_legacy and (version, fingerprint) in {
                 (LEGACY_STRATEGY_VERSION, LEGACY_STRATEGY_FINGERPRINT),
                 ("V13-V10-G-3-PRODUCTION-V2", "8d4d62d7f3e4aff5f39905e4f1cd2297a50b74af7c8fa83ee7b69aa855cc2aa6"),
                 ("V13-V10-G-3-PRODUCTION-V3", "0119d67996b0f801dcfe55057d76e82482d10bec40898dab017262b09506a811"),
+                ("V13-V10-G-3-PRODUCTION-V4", "181c37b6a43291311525b0b6970ea0019d5237bce172735913418cba623fb6b9"),
                 ("V13-V10-G-3-BACKTEST-SELECTED-TEN-V5", "494ca2cc653ca5c58f297040b43e33355a3c38351d9a9ac00b592b1ac6e44eb0"),
+                ("V13-V10-G-3-PRODUCTION-V5", "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea"),
+                ("V13-V10-G-3-PRODUCTION-V6", "7d01e80f60cc874e7c7b94a894785d134b70df71b27be98fdf3c302a96f44b4a"),
+                ("V13-V10-G-3-PRODUCTION-V7", "68e842bb99002c950304cc40a41aa40e93a6394b131199ade872ec5e852a281f"),
+                ("V13-V10-G-3-PRODUCTION-V8", "5a2f8949d6cea0f13d18c8b7cd2cf9aecf856ddf350b97553be40ac137b6dd61"),
+                ("V13-V10-G-3-PRODUCTION-V9", "d65237ffc1e5caf932258fc91b15c487951d1b6b75d32614e4fd0cbe88fa61b5"),
                 (PREVIOUS_STRATEGY_VERSION, PREVIOUS_STRATEGY_FINGERPRINT)})
 
 
@@ -488,25 +517,37 @@ def load_contract(path: Path | str | None = None) -> dict[str, Any]:
 def validate_contract(value: dict[str, Any] | None = None) -> None:
     if value is not None and value != strategy_payload():
         raise ValueError("G3 production configuration differs from the accepted normalized contract")
-    if len(ACTIVE_SETUPS) != 32 or len(_ACTIVE_BY_ID) != 32:
-        raise ValueError("G3 V5 requires exactly 32 effective setups")
+    if len(ACTIVE_SETUPS) != 61 or len(_ACTIVE_BY_ID) != 61:
+        raise ValueError("G3 V11 requires exactly 61 effective setups")
     if MIN_CONFIRMATION_VOLUME_BY_SIDE != {"LONG": 1.1, "SHORT": 1.2}:
         raise ValueError("G3 side confirmation thresholds changed")
-    if MIN_CONFIRMATION_VOLUME_BY_SETUP != {"0921_LONG": 1.8, "0951_LONG": .6,
-            **late_setups.CONFIRMATION_VOLUME, **selected_setups.CONFIRMATION_VOLUME}:
+    if MIN_CONFIRMATION_VOLUME_BY_SETUP != {"0921_LONG": 1.8, "0921_SHORT": 1.2, "0941_LONG": .8, "0951_LONG": .6, "1011_LONG": .6,
+            **late_setups.CONFIRMATION_VOLUME, **selected_setups.CONFIRMATION_VOLUME,
+            **midday_setups.CONFIRMATION_VOLUME, **afternoon_setups.CONFIRMATION_VOLUME}:
         raise ValueError("G3 setup confirmation thresholds changed")
-    for row in (*late_setups.ROWS, *selected_setups.ROWS):
+    if MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP != {"1036_LONG": 3.0, "1036_SHORT": 3.0}:
+        raise ValueError("G3 10:35 one-minute extension guard changed")
+    for row in (*late_setups.ROWS, *selected_setups.ROWS, *midday_setups.ROWS, *afternoon_setups.ROWS):
         expected = _make_setup(row)
         if _ACTIVE_BY_ID.get(expected.setup_id) != expected or _CORE_BY_ID.get(expected.setup_id) != expected:
             raise ValueError("G3 approved late setup differs from historical rules")
-    if setup_for("09:20", "LONG") != _make_setup(("09:20", "LONG", 1, "max_liquidity", .30, .10, 3., .75, .35, 3.)) or setup_for("09:20", "SHORT") is not None:
+    if setup_for("09:20", "LONG") != _make_setup(("09:20", "LONG", 1, "max_liquidity", .30, .10, 3., .75, .35, 3.)):
         raise ValueError("G3 09:20 LONG production setup changed")
+    if setup_for("09:25", "LONG") != _make_setup(("09:25", "LONG", 1, "max_liquidity", .30, .10, 1.2, .60, .60, .97)):
+        raise ValueError("G3 09:26 LONG five-minute volume must be 1.2x")
+    for new_id, donor_id in (("0921_SHORT", "0926_SHORT"), ("1011_LONG", "0951_LONG")):
+        for family in (_CORE_BY_ID, _ACTIVE_BY_ID):
+            new, donor = family[new_id], family[donor_id]
+            if new != replace(donor, signal_end=new.signal_end, confirmation_end=new.confirmation_end, target_pct=1.5):
+                raise ValueError("G3 new slots must retain donor entry filters and 1.5% targets")
+    if NIFTY_SHORT_SIGNAL_ENDS != ("09:20", "09:25"):
+        raise ValueError("G3 opening SHORT must retain the donor NIFTY gate")
     new = setup_for("09:50", "LONG")
     if new != _make_setup(("09:50", "LONG", 1, "max_liquidity", .10, .05, 1.3, .50, .50, .75)):
         raise ValueError("G3 09:50 LONG production setup changed")
     if (INITIAL_STOP_PCT, TIGHTENED_STOP_PCT, TIGHTEN_AFTER_MINUTES) != (1.25, 1., 120):
         raise ValueError("G3 scheduled stops changed")
-    if any(s.stop_pct != 1.25 or not 0 < s.target_pct <= 4.20 for s in ACTIVE_SETUPS):
+    if any(s.stop_pct != 1.25 or not 0 < s.target_pct <= 7.15 for s in ACTIVE_SETUPS):
         raise ValueError("G3 effective exits changed")
     if (CAPITAL_PER_ENTRY_RS, LEVERAGE, PORTFOLIO_CAPITAL_RS, MAX_POSITIONS, ENTRY_EXPIRY_MINUTES,
             LIVE_QUANTITY_CAP, ARMED, EXECUTION_AUTHORITY) != (100_000., 5., 1_000_000., None, 10, 1, False, False):
@@ -526,7 +567,7 @@ def verify_frozen_config(path: Path | str) -> dict[str, Any]:
     for family, setups in (("core", CORE_SETUPS), ("expanded", ACTIVE_SETUPS)):
         # The archived oracle covers the original fourteen setups only.
         setups = tuple(s for s in setups if s.setup_id not in
-            {"0921_LONG", "0951_LONG", *late_setups.SETUP_IDS, *selected_setups.SETUP_IDS})
+            {"0921_LONG", "0951_LONG", *ADDED_SETUP_IDS, *late_setups.SETUP_IDS, *selected_setups.SETUP_IDS, *midday_setups.SETUP_IDS, *afternoon_setups.SETUP_IDS})
         actual = {f"{row[family]['confirmation_end'].replace(':', '')}_{row[family]['side']}": row[family]
                   for row in frozen["setup_rules"]}
         if set(actual) != {s.setup_id for s in setups}:
@@ -535,6 +576,8 @@ def verify_frozen_config(path: Path | str) -> dict[str, Any]:
             expected = asdict(setup)
             for key in ("stop_pct", "target_pct", "source_version"):
                 expected.pop(key)
+            if setup.setup_id == "0926_LONG":
+                expected["volume_ratio"] = 3.0  # Frozen oracle predates the approved 1.2x change.
             if any(actual[setup.setup_id][key] != value for key, value in expected.items()):
                 raise ValueError(f"Frozen G3 selection mismatch: {setup.setup_id}")
             if frozen["exit"]["setups"][setup.setup_id] != dict(stop_pct=setup.stop_pct, target_pct=setup.target_pct):

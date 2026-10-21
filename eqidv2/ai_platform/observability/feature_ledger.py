@@ -209,8 +209,9 @@ def evaluate_v13_v10_g_base_row(
     price_long = finite and numeric["price_change_pct"] >= minimum_price
     price_short = finite and numeric["price_change_pct"] <= -config.BASE_PRICE_CHANGE_PCT
     nifty_context = numeric["nifty_first_bar_return_pct"]
+    nifty_short_slots = getattr(config, "NIFTY_SHORT_SIGNAL_ENDS", ("09:25",))
     nifty_short = (
-        signal_end != "09:25"
+        signal_end not in nifty_short_slots
         or (
             math.isfinite(nifty_context)
             and nifty_context <= config.NIFTY_FIRST_BAR_MAX_RETURN_PCT
@@ -373,6 +374,7 @@ def evaluate_v13_v10_g_base_row(
         "maximum_base_oi_change_pct": maximum_oi,
         "base_long_pass": _gate_result(base_long),
         "base_short_pass": _gate_result(base_short),
+        "nifty_short_guard_applies": signal_end in nifty_short_slots,
         "strict_signal_pass": _gate_result(strict_signal),
         "setup_filter_pass": _gate_result(setup_filter_pass),
         "setup_id": setup.setup_id if setup else "",

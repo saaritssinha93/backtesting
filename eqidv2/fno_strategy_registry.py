@@ -6,9 +6,11 @@ the operational dashboard, current consumers and approved deployment routing.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from fno_v13_v10_g_3_contract import STRATEGY_VERSION as G3_STRATEGY_VERSION
@@ -88,6 +90,60 @@ def expected_fingerprint(profile: str | None = None) -> str:
     return ""
 
 
+@dataclass(frozen=True)
+class DisplayIdentity:
+    """One verified session's read-only identity; never execution authority."""
+
+    profile: str
+    version: str
+    fingerprint: str
+    configuration: dict
+    previous_session: bool = False
+
+    def metadata(self) -> dict:
+        return dict(profile=self.profile, strategy_version=self.version,
+                    strategy_fingerprint=self.fingerprint,
+                    scope="PREVIOUS_SESSION_READ_ONLY" if self.previous_session else "CURRENT_CONFIGURATION")
+
+
+def display_identity(session_date: str, profile: str | None = None, *, current_fingerprint: str | None = None) -> DisplayIdentity:
+    """Permit the explicitly pinned migration date to display its saved rules.
+
+    This does not change active_profile(), expected_fingerprint(), or any
+    execution validator. A previous date is an exact match, never a range.
+    """
+    if not isinstance(session_date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session_date):
+        raise ValueError("session_date must be YYYY-MM-DD")
+    date.fromisoformat(session_date)
+    name = profile or active_profile_name()
+    fingerprint = expected_fingerprint(name) if current_fingerprint is None else current_fingerprint
+    if name != "V13_V10_G_3":
+        return DisplayIdentity(name, PROFILES[name].version, fingerprint, {})
+    from fno_v13_v10_g_3_contract import strategy_payload
+    current = DisplayIdentity(name, PROFILES[name].version, fingerprint, strategy_payload())
+    state = deployment_state()
+    previous = state.get("previous_session_identity")
+    if (state.get("profile") != name or not isinstance(previous, dict)
+            or previous.get("through_session") != session_date):
+        return current
+    # These immutable pins preserve the 2026-10-15 V9 session during the staged V11 handoff.
+    # A deployment JSON cannot authorize an arbitrary legacy contract or date.
+    version = "V13-V10-G-3-PRODUCTION-V9"
+    digest = "d65237ffc1e5caf932258fc91b15c487951d1b6b75d32614e4fd0cbe88fa61b5"
+    if (session_date != "2026-10-15" or previous.get("strategy_version") != version
+            or previous.get("strategy_fingerprint") != digest):
+        raise ValueError("Previous G3 display identity does not match the pinned migration session")
+    path = WORKSPACE / "configs/strategies/v13_v10_g_3_production_v9.json"
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != "b5daa113a81f1027be6fe1fedef7103076600b056fb6fa483018ed9f08687373":
+        raise ValueError("Previous G3 display configuration file changed")
+    value = json.loads(raw.decode("utf-8"))
+    canonical = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    if canonical != digest or value.get("strategy_version") != version:
+        raise ValueError("Previous G3 display configuration fingerprint changed")
+    return DisplayIdentity(name, version, digest, value, previous_session=True)
+
+
 def g3_live_activation_authorized() -> bool:
     state = deployment_state()
     return (state.get("profile") == "V13_V10_G_3"
@@ -95,4 +151,5 @@ def g3_live_activation_authorized() -> bool:
             and state.get("live_activation_authorized") is True)
 
 
-__all__ = ["StrategyProfile", "PROFILES", "active_profile", "active_profile_name", "deployment_state", "expected_fingerprint", "g3_live_activation_authorized"]
+__all__ = ["StrategyProfile", "DisplayIdentity", "PROFILES", "active_profile", "active_profile_name",
+           "deployment_state", "expected_fingerprint", "display_identity", "g3_live_activation_authorized"]

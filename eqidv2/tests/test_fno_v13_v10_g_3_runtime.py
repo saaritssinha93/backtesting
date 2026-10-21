@@ -5,7 +5,7 @@ import importlib.util
 import json
 import sys
 from dataclasses import asdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +18,24 @@ import fno_live_entry_guard as guard
 
 ROOT = Path(__file__).resolve().parents[1]
 DAY = date(2026, 10, 12)
+MIDDAY_PROMOTED_CASES = [
+    ("11:35", "LONG", 7.15, 1.0), ("11:35", "SHORT", .87, .4),
+    ("11:40", "LONG", 4.03, 0.), ("11:40", "SHORT", 1.19, 1.2),
+    ("11:45", "SHORT", 4.95, 0.), ("12:05", "LONG", 1.4, .6),
+    ("12:10", "SHORT", .79, 0.), ("12:15", "LONG", 1.24, 1.0),
+    ("12:15", "SHORT", 3.49, 0.), ("12:25", "SHORT", 2.13, 0.),
+    ("12:30", "LONG", 2.53, .6), ("12:30", "SHORT", 1.85, .4),
+]
+AFTERNOON_PROMOTED_CASES = [
+    ("12:35", "LONG", .37, .2), ("12:35", "SHORT", 1.24, 0.),
+    ("12:45", "LONG", .23, 0.), ("12:45", "SHORT", .49, .8),
+    ("12:50", "LONG", .26, .6), ("12:50", "SHORT", .14, .8),
+    ("12:55", "SHORT", .14, .4), ("13:00", "SHORT", .88, .8),
+    ("13:05", "LONG", .18, 0.), ("13:15", "LONG", .17, .6),
+    ("13:15", "SHORT", .33, 1.3), ("13:20", "SHORT", 1.01, 0.),
+    ("13:25", "LONG", .41, .2), ("13:25", "SHORT", .76, 1.2),
+    ("13:30", "LONG", 1.17, .8),
+]
 
 
 def isolated(name, filename):
@@ -106,6 +124,87 @@ def test_runtime_profile_selection_identity_and_quantity(runtime):
     assert signal["signal_id"] == config.canonical_signal_id(config.STRATEGY_VERSION, DAY, "09:30", "09:31", "LONG", "TEST")
 
 
+def test_late_live_activation_blocks_recent_pre_start_signal_before_broker_pool(
+    runtime, monkeypatch
+):
+    now = datetime.fromisoformat("2026-10-12T09:32:00+05:30")
+    signal = runtime.select_entry_signals(
+        [candidate()], DAY, "09:30", capital_rs=100000.0, leverage=5.0
+    )[0]
+    # This signal is still inside its normal ten-minute trigger window, but it
+    # was committed before both the approval and this coordinator start.
+    signal["published_at_ist"] = "2026-10-12T09:31:20+05:30"
+    common.atomic_write_json(
+        runtime.LIVE_ARM_PATH,
+        {
+            "enabled": True,
+            "session_date": DAY.isoformat(),
+            "entry_not_before_ist": "2026-10-12T09:31:30+05:30",
+        },
+    )
+    monkeypatch.setenv(
+        runtime.G3_LIVE_ACTIVATION_EPOCH_ENV,
+        "2026-10-12T09:31:45+05:30",
+    )
+    monkeypatch.setattr(runtime.common, "now_ist", lambda: now)
+    monkeypatch.setattr(runtime, "load_signals", lambda *_args, **_kwargs: [signal])
+    monkeypatch.setattr(runtime, "_blocking_pipeline_issue", lambda *_args: None)
+    monkeypatch.setattr(runtime, "_render_worker_report", lambda *_args: "offline")
+    monkeypatch.setattr(runtime, "_publish", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        runtime,
+        "KitePool",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Pre-activation signal constructed a broker pool"
+        ),
+    )
+    args = SimpleNamespace(
+        execution_mode="LIVE",
+        live_quantity=None,
+        max_apps=1,
+        timeout_sec=0.1,
+        once=True,
+    )
+
+    assert runtime.run_worker(args, DAY, "LONG") == 0
+    stored = json.loads(
+        runtime._order_path(DAY, "LIVE", signal["signal_id"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stored["status"] == "CANCELLED"
+    assert stored["status_reason"] == "PRE_ACTIVATION_SIGNAL_BLOCKED"
+    assert stored["entry_order_id"] == ""
+    assert stored["entry_submission_attempt_count"] == 0
+
+
+def test_live_activation_epoch_allows_only_signal_published_after_start(
+    runtime, monkeypatch
+):
+    now = datetime.fromisoformat("2026-10-12T09:32:00+05:30")
+    signal = runtime.select_entry_signals(
+        [candidate()], DAY, "09:30", capital_rs=100000.0, leverage=5.0
+    )[0]
+    signal["published_at_ist"] = "2026-10-12T09:31:50+05:30"
+    common.atomic_write_json(
+        runtime.LIVE_ARM_PATH,
+        {
+            "enabled": True,
+            "session_date": DAY.isoformat(),
+            "entry_not_before_ist": "2026-10-12T09:31:30+05:30",
+        },
+    )
+    monkeypatch.setenv(
+        runtime.G3_LIVE_ACTIVATION_EPOCH_ENV,
+        "2026-10-12T09:31:45+05:30",
+    )
+    state = runtime.create_order_state(signal, "LIVE")
+
+    assert runtime._block_pre_activation_g3_entry(signal, state, now) is False
+    assert state["status"] == "PENDING_ENTRY"
+    assert state["live_entry_not_before_ist"] == "2026-10-12T09:31:45+05:30"
+
+
 def test_runtime_side_thresholds_and_strict_0925(runtime):
     assert runtime.select_entry_signals([candidate(ratio=1.099)], DAY, "09:30", capital_rs=100000., leverage=5.) == []
     assert runtime.select_entry_signals([candidate("SHORT", 1.199)], DAY, "09:30", capital_rs=100000., leverage=5.) == []
@@ -116,7 +215,8 @@ def test_runtime_side_thresholds_and_strict_0925(runtime):
 
 @pytest.mark.parametrize("clock,side", [("09:25","LONG"),("09:25","SHORT"),("09:30","LONG"),("09:30","SHORT"),("09:50","LONG"),("09:50","SHORT"), ("10:35","LONG"), ("10:35","SHORT"), ("10:40","LONG"),
     ("10:45","LONG"), ("10:45","SHORT"), ("10:50","LONG"), ("10:55","SHORT"),
-    ("11:10","LONG"), ("11:10","SHORT"), ("11:25","SHORT")])
+    ("11:10","LONG"), ("11:10","SHORT"), ("11:25","SHORT")]
+    + [(clock, side) for clock, side, _, _ in MIDDAY_PROMOTED_CASES + AFTERNOON_PROMOTED_CASES])
 def test_scanner_adapts_exact_join_timestamp_to_g3_contract(runtime,monkeypatch,clock,side):
     # The real equity/futures join returns `ts`, not either of the decision
     # contract's signal timestamp keys. A missing adapter silently rejects all
@@ -167,6 +267,118 @@ def test_scanner_restart_preserves_completed_slots_and_waits_for_future(runtime,
     assert heartbeats[-1]["next_slot"] == "09:35"
     assert heartbeats[-1]["processed_slots"] == 3
     assert all(path.read_bytes() == before for path,before in saved.items())
+
+
+def test_scanner_restart_prioritizes_live_slot_and_tombstones_expired_backlog(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(
+        runtime.config,
+        "SIGNAL_TO_CONFIRMATION",
+        {"09:20": "09:21", "09:25": "09:26", "09:30": "09:31"},
+    )
+    universe = pd.DataFrame([{"futures_tradingsymbol": "TEST26OCTFUT"}])
+    monkeypatch.setattr(runtime, "_load_universe", lambda *_a: universe)
+    monkeypatch.setattr(runtime, "_render_scanner_report", lambda *_a: "fixture")
+    monkeypatch.setattr(runtime, "_slot_marker_ready", lambda *_a: (True, "ready"))
+    monkeypatch.setattr(
+        runtime, "_verified_no_candle_symbols_for_slot", lambda *_a: set()
+    )
+    now = config.slot_datetime(DAY, "09:26") + timedelta(seconds=30)
+    monkeypatch.setattr(runtime.common, "now_ist", lambda: now)
+    scanned: list[str] = []
+
+    def scan(_universe, _day, signal_end, **_kwargs):
+        scanned.append(signal_end)
+        return {
+            "state": "SUCCESS",
+            "long_candidates": 0,
+            "short_candidates": 0,
+            "contracts_evaluated": 1,
+            "candidates": [],
+            "raw_data_quality": [],
+        }
+
+    monkeypatch.setattr(runtime, "scan_five_minute_slot", scan)
+    monkeypatch.setattr(runtime, "_publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(runtime, "_heartbeat", lambda *_a, **_k: None)
+
+    class StopPolling(Exception):
+        pass
+
+    monkeypatch.setattr(
+        runtime.time, "sleep", lambda *_a: (_ for _ in ()).throw(StopPolling())
+    )
+    args = SimpleNamespace(
+        once=False,
+        boundary_buffer_sec=3.0,
+        confirmation_max_wait_sec=90.0,
+        poll_sec=1.0,
+        ignore_fetch_marker=False,
+    )
+
+    with pytest.raises(StopPolling):
+        runtime.run_scanner(args, DAY)
+
+    assert scanned == ["09:25"]
+    stale = json.loads(runtime.scanner_slot_path(DAY, "09:20").read_text())
+    current = json.loads(runtime.scanner_slot_path(DAY, "09:25").read_text())
+    assert stale["state"] == "BLOCKED_STALE_ACTIVATION"
+    assert stale["candidates"] == []
+    assert stale["scanner_complete"] is False
+    assert current["state"] == "SUCCESS"
+
+
+def test_scanner_discards_candidates_when_scan_finishes_after_deadline(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(
+        runtime.config, "SIGNAL_TO_CONFIRMATION", {"09:20": "09:21"}
+    )
+    universe = pd.DataFrame([{"futures_tradingsymbol": "TEST26OCTFUT"}])
+    monkeypatch.setattr(runtime, "_load_universe", lambda *_a: universe)
+    monkeypatch.setattr(runtime, "_render_scanner_report", lambda *_a: "fixture")
+    monkeypatch.setattr(runtime, "_slot_marker_ready", lambda *_a: (True, "ready"))
+    monkeypatch.setattr(
+        runtime, "_verified_no_candle_symbols_for_slot", lambda *_a: set()
+    )
+    before = config.slot_datetime(DAY, "09:21") + timedelta(seconds=90)
+    after = before + timedelta(microseconds=1)
+    calls = 0
+
+    def clock():
+        nonlocal calls
+        calls += 1
+        return before if calls <= 3 else after
+
+    monkeypatch.setattr(runtime.common, "now_ist", clock)
+    monkeypatch.setattr(
+        runtime,
+        "scan_five_minute_slot",
+        lambda *_a, **_k: {
+            "state": "SUCCESS",
+            "long_candidates": 1,
+            "short_candidates": 0,
+            "contracts_evaluated": 1,
+            "candidates": [{"side": "LONG"}],
+            "raw_data_quality": [],
+        },
+    )
+    monkeypatch.setattr(runtime, "_publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(runtime, "_heartbeat", lambda *_a, **_k: None)
+    args = SimpleNamespace(
+        once=False,
+        boundary_buffer_sec=3.0,
+        confirmation_max_wait_sec=90.0,
+        poll_sec=1.0,
+        ignore_fetch_marker=False,
+    )
+
+    assert runtime.run_scanner(args, DAY) == 2
+    stored = json.loads(runtime.scanner_slot_path(DAY, "09:20").read_text())
+    assert stored["state"] == "BLOCKED_STALE_ACTIVATION"
+    assert stored["candidates"] == []
+    assert "completed after" in stored["stale_reason"]
 
 
 @pytest.mark.parametrize("clock,expected_count,usable", [("09:20", 1, True), ("09:25", 2, False)])
@@ -259,6 +471,7 @@ def test_0920_long_runtime_confirmation_entry_and_live_sizing_are_shared(runtime
 
 
 @pytest.mark.parametrize("clock,side,target,ratio", [
+    ("09:20", "SHORT", 1.5, 1.2), ("10:10", "LONG", 1.5, .6),
     ("10:05", "LONG", .56, .6), ("10:10", "SHORT", 1.56, 1.2),
     ("10:15", "LONG", .96, .6), ("10:15", "SHORT", .68, 1.2),
     ("10:25", "SHORT", 2.85, 1.2), ("10:30", "SHORT", 1.66, 1.2),
@@ -266,12 +479,22 @@ def test_0920_long_runtime_confirmation_entry_and_live_sizing_are_shared(runtime
     ("10:40", "LONG", 1.71, .6), ("10:45", "LONG", .79, .6),
     ("10:45", "SHORT", 1.01, .8), ("10:50", "LONG", .77, .4),
     ("10:55", "SHORT", 1.53, .8), ("11:10", "LONG", 1.76, .6),
-    ("11:10", "SHORT", 1.84, .8), ("11:25", "SHORT", 4.20, .4)])
+    ("11:10", "SHORT", 1.84, .8), ("11:25", "SHORT", 4.20, .4)] + MIDDAY_PROMOTED_CASES + AFTERNOON_PROMOTED_CASES)
 def test_promoted_confirmation_paper_fill_and_live_order_configuration(runtime, clock, side, target, ratio):
     row = candidate(side=side, clock=clock, ratio=ratio)
+    if clock == "09:20":
+        row.update(opening_0920_status="VALID", price_change_basis="09:15_CASH_OPEN_TO_09:20_CASH_CLOSE",
+                   oi_change_source="FIRST_MINUTE_0916_TO_COMPLETED_0920_FUTURES_4M")
+    setup = config.setup_for(clock, side)
+    row["body_ratio"] = max(row["body_ratio"], setup.body_ratio)
+    if setup.setup_id in config.contract.midday_setups.SETUP_IDS | config.contract.afternoon_setups.SETUP_IDS:
+        row["price_change_pct"] = setup.price_change_pct * (1 if side == "LONG" else -1)
+        row["volume_ratio"] = setup.volume_ratio
     bar = dict(timestamp=row["confirmation_timestamp"], open=100., high=102. if side == "LONG" else 100.1,
         low=99.9 if side == "LONG" else 98., close=101.8 if side == "LONG" else 98.2,
         volume=ratio*100, v9_1m_volume_ratio=ratio, v9_1m_feature_ts=row["v9_1m_feature_ts"])
+    if clock == "10:35":
+        bar.update(v9_1m_ema20=100., v9_1m_atr14=1.)
     confirmed = runtime.confirmation_metrics(row, bar)
     assert confirmed["confirmed"] and confirmed["minimum_confirmation_volume_ratio"] == ratio
     signals = runtime.select_entry_signals([confirmed], DAY, clock, capital_rs=100000., leverage=5.)
@@ -289,6 +512,32 @@ def test_promoted_confirmation_paper_fill_and_live_order_configuration(runtime, 
     assert opened["status"] == "OPEN"
     assert opened["target_price"] == config.bracket_levels(signal["trigger"], side, 1.25, target, .05)[1]
     assert not runtime.confirmation_metrics(row, {**bar, "v9_1m_volume_ratio": ratio - .000001})["confirmed"]
+    assert not runtime.confirmation_metrics(row, {**bar, "v9_1m_volume_ratio": None})["confirmed"]
+
+
+@pytest.mark.parametrize("clock,side", [(clock, side) for clock, side, _, ratio in MIDDAY_PROMOTED_CASES + AFTERNOON_PROMOTED_CASES if ratio == 0.])
+@pytest.mark.parametrize("prior_count", [19, 20])
+def test_zero_volume_minimum_keeps_live_feed_warmup(runtime, monkeypatch, clock, side, prior_count):
+    import fno_equity_fetch_1min as feed
+    row = candidate(side=side, clock=clock, ratio=0.)
+    row["strategy_profile"] = config.STRATEGY_PROFILE
+    start = config.slot_datetime(DAY, clock)
+    end = start + timedelta(minutes=1)
+    records = [dict(date=stamp, open=100., high=101., low=99., close=100., volume=100.)
+        for stamp in pd.date_range(start-timedelta(minutes=prior_count), periods=prior_count, freq="min")]
+    records.append(dict(date=start, open=100., high=102. if side == "LONG" else 100.1,
+        low=99.9 if side == "LONG" else 98., close=101.8 if side == "LONG" else 98.2, volume=0.))
+    provider = SimpleNamespace(client=SimpleNamespace(historical_data=lambda *a, **kw: records), pace=lambda: None)
+    monkeypatch.setattr(feed, "_persist_bar", lambda candidate, bar, *args: bar)
+    result = feed._fetch_one(provider, row, start, end)
+    assert result["state"] == "WRITTEN"
+    bar = result["bar"]
+    assert bar["confirmation_history_complete"] is (prior_count == 20)
+    assert bar["v9_1m_volume_ratio"] == (0. if prior_count == 20 else None)
+    assert feed._g_volume_snapshot_valid(bar, end, config)
+    confirmed = runtime.confirmation_metrics(row, bar)
+    assert confirmed["minimum_confirmation_volume_ratio"] == 0.
+    assert confirmed["confirmed"] is (prior_count == 20)
 
 
 def test_0920_scanner_keeps_receipt_metadata_and_fails_closed_without_baseline(runtime, monkeypatch):
@@ -401,6 +650,13 @@ def test_coordinator_g3_names_pins_and_no_autoarm(runtime, monkeypatch):
     assert "fno_v13_v10_g_3_live.py" in coordinator.worker_command(DAY, "LONG")[2]
     assert "--live-quantity" not in coordinator.worker_command(DAY, "LONG")
     assert coordinator.worker_environment()["FNO_V6_STRATEGY_PROFILE"] == config.STRATEGY_PROFILE
+    activation_epoch = "2026-10-12T09:15:00.123456+05:30"
+    assert (
+        coordinator.worker_environment(activation_epoch)[
+            coordinator.G3_LIVE_ACTIVATION_EPOCH_ENV
+        ]
+        == activation_epoch
+    )
     assert coordinator.worker_session_id("SHORT") == "fno_v13_v10_g_3_live_kite_qty1_short"
     with pytest.raises(ValueError, match="auto-arm is disabled"):
         coordinator._auto_arm_session(DAY)
@@ -459,8 +715,12 @@ def test_preflight_reports_promoted_configuration_without_runtime_mutations():
     from fno_v13_v10_g_3_preflight import inspect_deployment
     report = inspect_deployment(verify_frozen=False)
     assert report["ready"] is True
-    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V5"
-    assert report["active_setup_count"] == 32
+    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V11"
+    assert report["active_setup_count"] == 61
+    assert len(report["promoted_afternoon_fifteen"]) == 15
+    assert {s["setup_id"] for s in report["promoted_afternoon_fifteen"]} == config.contract.afternoon_setups.SETUP_IDS
+    assert len(report["promoted_midday_twelve"]) == 12
+    assert {s["setup_id"] for s in report["promoted_midday_twelve"]} == config.contract.midday_setups.SETUP_IDS
     assert report["promoted_0950_long_setup"]["target_pct"] == .75
     assert report["promoted_0950_long_setup"]["minimum_confirmation_volume_ratio"] == .6
     assert report["workers_started"] is report["broker_requests"] is report["arm_files_written"] is False
@@ -493,9 +753,9 @@ def test_launcher_preflight_is_disarmed_and_daily_is_production():
 
 
 def test_pipeline_covers_last_exact_confirmation_and_publication_grace(runtime):
-    assert config.SIGNAL_TO_CONFIRMATION["11:25"] == "11:26"
-    assert config.PIPELINE_DEADLINE == "11:28"
-    assert runtime.PIPELINE_DEADLINE.isoformat() == "11:28:00"
+    assert config.SIGNAL_TO_CONFIRMATION["13:30"] == "13:31"
+    assert config.PIPELINE_DEADLINE == "13:33"
+    assert runtime.PIPELINE_DEADLINE.isoformat() == "13:33:00"
     deadline = config.slot_datetime(DAY, config.PIPELINE_DEADLINE)
-    assert deadline > config.confirmation_deadline(DAY, "11:26")
+    assert deadline > config.confirmation_deadline(DAY, "13:31")
     assert config.SESSION_END > "15:15"

@@ -1,4 +1,4 @@
-"""Greedy portfolio refinement of the frozen midday historical target choices.
+"""Greedy portfolio refinement of frozen midday or afternoon target choices.
 
 Only whole setups may be removed. Entry filters, selected orders, targets and
 stops remain fixed; every candidate is reallocated with the existing baseline.
@@ -28,6 +28,8 @@ from research.g4_late_slot_source import sha256
 
 
 VERSION = "V13-V10-G-4-1135-1230-TARGET-PORTFOLIO-REFINED-V1"
+AFTERNOON_VERSION = "V13-V10-G-4-1235-1330-TARGET-PORTFOLIO-REFINED-V2"
+AFTERNOON_SOURCE_VERSION = "V13-V10-G-4-1235-1330-TARGET-SWEEP-V3"
 DEFAULT_SOURCE = BACKTEST_ROOT / "target_sweeps/2026-10-13/20261013_midday_1135_1230_targets_10pct_v2"
 DEFAULT_OUTPUT = BACKTEST_ROOT / "target_sweeps/2026-10-13/20261013_midday_targets_portfolio_refined_v1"
 
@@ -84,7 +86,8 @@ def greedy_refine(target_map, evaluate):
 def _write_report(output, summary, results, setup_results, trials):
     page = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>G4 midday target portfolio refinement</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;margin:30px;background:#f4f6fa;color:#172a3d}h1,h2{line-height:1.2}p{max-width:1100px}.notice{background:#fff0ce;padding:16px;border-left:4px solid #b98105}.scroll{overflow:auto;margin-bottom:28px}table{border-collapse:collapse;background:white;width:100%}td,th{padding:8px;border-bottom:1px solid #d9e0e8;white-space:nowrap;text-align:right}th{background:#213c57;color:white}td:first-child,th:first-child{text-align:left}a{color:#065dbc}</style></head><body><h1>G4 midday: portfolio refinement</h1>'''
-    page += (f"<p>Started with {summary['initial_setups']} qualifying target configurations from the 11:35–12:30 study. "
+    page = page.replace("midday", summary.get("slot_label", "midday"))
+    page += (f"<p>Started with {summary['initial_setups']} qualifying target configurations from the {summary.get('slot_label', '11:35–12:30')} study. "
              f"Reallocated each whole-setup removal with the existing baseline, retaining {summary['final_setups']} setups "
              f"after {summary['deletion_trials']} tested removals. Every retained setup has at least five executed trades, "
              "70% net wins and positive net profit in the full historical period.</p>")
@@ -112,21 +115,40 @@ def run(source=DEFAULT_SOURCE, output=DEFAULT_OUTPUT, *, source_manifest_sha256)
         raise ValueError("Target source path or pinned manifest changed")
     if not output.is_relative_to(BACKTEST_ROOT.resolve()) or (output.exists() and any(output.iterdir())):
         raise ValueError("Refinement output must be new and within the G4 backtest root")
-    proof = verified_run(source, MIDDAY_VERSION)
+    modules = [Path(__file__), ROOT / "research/g4_extended_target_sweep.py",
+        ROOT / "research/g3_g4_late_target_sweep.py", ROOT / "research/g3_g4_late_combined_backtest.py",
+        ROOT / "research/g3_0920_backtest.py", Path(simulator.__file__),
+        Path(simulator.g.v9.v5.__file__), Path(simulator.g.v9.v6.__file__)]
+    initial_code_hashes = {str(path.relative_to(ROOT)): sha256(path) for path in modules}
     summary_source = json.loads((source / "summary.json").read_text(encoding="utf-8"))
-    if (summary_source["setups"], summary_source["selected_orders"], summary_source["potential_fills"],
-            summary_source["target_min_pct"], summary_source["target_max_pct"], summary_source["target_levels"]) != (24, 345, 287, .06, 10., 995):
+    source_version = summary_source.get("variant_id")
+    if source_version not in (MIDDAY_VERSION, AFTERNOON_SOURCE_VERSION):
+        raise ValueError("Unknown frozen target study")
+    afternoon = source_version == AFTERNOON_SOURCE_VERSION
+    version = AFTERNOON_VERSION if afternoon else VERSION
+    proof = verified_run(source, source_version)
+    if (summary_source["setups"], summary_source["target_min_pct"],
+            summary_source["target_max_pct"], summary_source["target_levels"]) != (24, .06, 10., 995):
         raise ValueError("Expected the completed 24-setup exhaustive 0.06%-10% study")
+    if not afternoon and (summary_source["selected_orders"], summary_source["potential_fills"]) != (345, 287):
+        raise ValueError("Frozen midday order/fill cohort changed")
     reference = Path(summary_source["source"]["run_dir"])
     if sha256(reference / "manifest.json") != summary_source["source"]["manifest_sha256"]:
         raise ValueError("Frozen entry study changed")
-    entry_proof = verified_run(reference, "V13-V10-G-4-BACKTEST-1135-1230-V4")
-    target_map = summary_source["historical_targets"]
+    entry_proof = verified_run(reference, "V13-V10-G-4-BACKTEST-1235-1330-V6" if afternoon
+                               else "V13-V10-G-4-BACKTEST-1135-1230-V4")
+    initial_scenario = (summary_source["best_tested_every_setup70_scenario"] if afternoon
+                        else "historical_profitable70_only")
+    if not initial_scenario:
+        raise ValueError("No target-study scenario qualifies for portfolio refinement")
+    source_configs = json.loads((source / "scenario_configs.json").read_text(encoding="utf-8"))
+    target_map = {setup["setup_id"]: setup["target_pct"]
+                  for setup in source_configs["scenarios"][initial_scenario]}
     orders = read_frozen_csv(reference / "selected_orders.csv")
     baseline_saved = read_frozen_csv(reference / "baseline_g4_trades.csv")
     baseline = checked_allocate(baseline_saved, baseline_saved)
-    full_saved = read_frozen_csv(source / "historical_profitable70_only_trades.csv")
-    full_raw = read_frozen_csv(source / "historical_profitable70_only_added_raw_trades.csv")
+    full_saved = read_frozen_csv(source / f"{initial_scenario}_trades.csv")
+    full_raw = read_frozen_csv(source / f"{initial_scenario}_added_raw_trades.csv")
     cache = pd.read_parquet(source / "minute_replay_all_targets.parquet",
                            filters=[("target_pct", "in", sorted(set(target_map.values())))])
     cached = pd.concat([cache.loc[cache.setup_id.eq(setup) & cache.target_pct.eq(target)]
@@ -170,7 +192,7 @@ def run(source=DEFAULT_SOURCE, output=DEFAULT_OUTPUT, *, source_manifest_sha256)
     refined_cached = cached.loc[cached.setup_id.isin(refined_map)]
     same_raw(fresh_raw, refined_cached)
     assert_same_entries(fresh_raw, refined_cached)
-    fresh_raw["research_exit_variant"] = VERSION
+    fresh_raw["research_exit_variant"] = version
     refined = allocate(pd.concat([baseline, fresh_raw], ignore_index=True))
     added_refined = refined.loc[refined.sid.isin(fresh_raw.sid)]
     if not qualifies(refined, added_refined):
@@ -218,16 +240,16 @@ def run(source=DEFAULT_SOURCE, output=DEFAULT_OUTPUT, *, source_manifest_sha256)
                             ("refinement_trials", trials), ("daily_results", pd.DataFrame(daily_rows)),
                             ("monthly_results", pd.DataFrame(monthly_rows))):
         frame.to_csv(output / f"{filename}.csv", index=False)
-    source_configs = json.loads((source / "scenario_configs.json").read_text(encoding="utf-8"))
-    portable = [setup for setup in source_configs["scenarios"]["historical_profitable70_only"]
+    portable = [setup for setup in source_configs["scenarios"][initial_scenario]
                 if setup["setup_id"] in refined_map]
     if {setup["setup_id"]: setup["target_pct"] for setup in portable} != refined_map:
         raise ValueError("Portable refinement config changed targets or membership")
-    (output / "refined_config.json").write_text(json.dumps(dict(variant_id=VERSION, scope="BACKTEST_ONLY",
+    (output / "refined_config.json").write_text(json.dumps(dict(variant_id=version, scope="BACKTEST_ONLY",
         execution_authority=False, source=proof, fixed_policy=source_configs["fixed_policy"],
         setups=portable, selection_policy="GREEDY_WHOLE_SETUP_DELETION_MAX_COMBINED_NET_PNL_EVERY_SETUP_70"),
         indent=2) + "\n", encoding="utf-8")
-    summary = dict(variant_id=VERSION, scope="BACKTEST_ONLY", execution_authority=False,
+    summary = dict(variant_id=version, scope="BACKTEST_ONLY", execution_authority=False,
+        initial_scenario=initial_scenario, slot_label="12:35–13:30" if afternoon else "11:35–12:30",
         created_at_ist=datetime.now(contract.IST).isoformat(), source=proof, entry_source=entry_proof,
         sessions=49, training_sessions=38, later_sessions=11, first_date=days[0], last_date=days[-1],
         initial_setups=len(target_map), final_setups=len(refined_map), deletion_trials=len(trial_rows)-1,
@@ -243,12 +265,10 @@ def run(source=DEFAULT_SOURCE, output=DEFAULT_OUTPUT, *, source_manifest_sha256)
         all_scenarios=json.loads(results.to_json(orient="records")))
     (output / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     _write_report(output, summary, results, setups, trials)
-    modules = [Path(__file__), ROOT / "research/g4_extended_target_sweep.py",
-        ROOT / "research/g3_g4_late_target_sweep.py", ROOT / "research/g3_g4_late_combined_backtest.py",
-        ROOT / "research/g3_0920_backtest.py", Path(simulator.__file__),
-        Path(simulator.g.v9.v5.__file__), Path(simulator.g.v9.v6.__file__)]
-    manifest = dict(variant_id=VERSION, scope="BACKTEST_ONLY", execution_authority=False,
-        source=proof, code_sha256={str(path.relative_to(ROOT)): sha256(path) for path in modules},
+    if initial_code_hashes != {str(path.relative_to(ROOT)): sha256(path) for path in modules}:
+        raise ValueError("Portfolio-refinement code changed during execution")
+    manifest = dict(variant_id=version, scope="BACKTEST_ONLY", execution_authority=False,
+        source=proof, code_sha256=initial_code_hashes,
         files={path.name: sha256(path) for path in output.iterdir() if path.is_file()})
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({key: summary[key] for key in ("removed_setups", "net_pnl_improvement_rs", "initial", "final")}, indent=2), flush=True)

@@ -253,7 +253,7 @@ def _load_slot(slot: dict, root: Path, data_root: Path, day: str, clock: str, no
     if scanner is not None or confirmation is not None:
         slot["state"] = "RECORDED" if scanner and scanner.get("state") == "SUCCESS" else "PARTIAL_EVIDENCE"
         if (scanner or confirmation)["strategy_version"] != STRATEGY_VERSION:
-            slot["notes"].append("Recorded G-3 V1 decisions are historical; V2 retrospective backtest evidence is separate.")
+            slot["notes"].append("These recorded G-3 decisions use an earlier strategy revision; the current backtest is separate.")
 
 
 def _load_orders(slots: dict, root: Path, data_root: Path, day: str, now: datetime,

@@ -1,6 +1,7 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 title Backtesting result v13-v10-G-3
+rem The installed weekday trigger is 17:15; _1620 is the historical filename.
 
 set "BASE_DIR=C:\Users\Saarit\OneDrive\Desktop\Trading\backtesting\eqidv2\backtesting\eqidv2"
 set "PYTHON_EXE=C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe"
@@ -44,7 +45,7 @@ set "LOG_FILE=%LOG_DIR%\backtesting_result_v13_v10_g_3_%TARGET_DAY%.log"
 
 cd /d "%BASE_DIR%"
 echo [%DATE% %TIME%] START Backtesting result v13-v10-G-3 ^(session date=%TARGET_DAY% IST^)>>"%LOG_FILE%"
-rem Recover the exact 09:15-09:16 futures candle before snapshotting G3 V5.
+rem Recover the exact 09:15-09:16 futures candle before snapshotting current G3.
 rem The separate 17:00 task remains a retry; writes stay in observer storage.
 "%PYTHON_EXE%" -u "%BASE_DIR%\dashboard_flow_observer_history.py" --from-date "%TARGET_DAY%" --to-date "%TARGET_DAY%" --fetch --import-local >>"%LOG_FILE%" 2>&1
 if errorlevel 1 echo [WARN] Opening recovery failed; replay coverage will block any incomplete result.>>"%LOG_FILE%"
@@ -76,7 +77,10 @@ if not "%STRATEGY_ANALYSIS_EXIT%"=="0" (
     set "EXIT_CODE=%STRATEGY_ANALYSIS_EXIT%"
 )
 
-rem G3 V5 includes 09:20 LONG natively. No duplicate sidecar replay.
+rem G3 daily/historical backtests use V12: 51 setups, target above 0.75%% plus three restored exceptions.
+rem Restored: 09:50 LONG 0.75%%, 10:05 LONG 0.56%%, 10:15 SHORT 0.68%%; ten other low-target setups remain disabled.
+rem The 10:35 LONG/SHORT confirmations reject 1m EMA20 extension above 3x ATR14.
+rem PAPER/LIVE retain their separately versioned 61-setup production V10 profile with the same 10:35 guard.
 
 :FINALIZE
 echo [%DATE% %TIME%] END G3 production backtest (exit=%EXIT_CODE%)>>"%LOG_FILE%"

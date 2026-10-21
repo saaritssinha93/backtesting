@@ -159,11 +159,22 @@ def number(value):
         return None
 
 
-def inspect_app(app, *, root=ROOT, proposed_order=None, client_factory=ReadOnlyKite, delay=.35, timeout=10):
+def positive_number(value):
+    result = number(value)
+    if result is None or result <= 0:
+        raise argparse.ArgumentTypeError("value must be finite and positive")
+    return result
+
+
+def inspect_app(app, *, root=ROOT, proposed_order=None, minimum_live_balance=None,
+                client_factory=ReadOnlyKite, delay=.35, timeout=10):
     suffix = "" if app == "app1" else app[3:]
     key_path, token_path = root / f"api_key{suffix}.txt", root / f"access_token{suffix}.txt"
     record = dict(app=app, credential_files_present=key_path.is_file() and token_path.is_file(),
                   state="CREDENTIALS_MISSING", checks={}, order_acceptance="NOT_TESTED", orders_submitted=0)
+    if minimum_live_balance is not None:
+        record.update(minimum_live_balance_rupees=minimum_live_balance,
+                      live_balance_covers_minimum=None)
     if not record["credential_files_present"]:
         return record
     try:
@@ -207,6 +218,9 @@ def inspect_app(app, *, root=ROOT, proposed_order=None, client_factory=ReadOnlyK
     balance = number(available.get("live_balance")) if isinstance(available, dict) else None
     record["equity_segment_enabled"] = margins.get("enabled") is True
     record["funds_positive"] = balance > 0 if balance is not None else None
+    if minimum_live_balance is not None:
+        record["live_balance_covers_minimum"] = (
+            balance >= minimum_live_balance if balance is not None else None)
     if "orders" in responses:
         orders = responses["orders"]
         record["existing_orders_today"] = len(orders)
@@ -246,6 +260,8 @@ def build_parser():
     parser.add_argument("--order-type", choices=["MARKET", "LIMIT", "SL", "SL-M"], default="LIMIT")
     parser.add_argument("--price", type=float)
     parser.add_argument("--trigger-price", type=float)
+    parser.add_argument("--minimum-live-balance", type=positive_number,
+                        help="Require this available live balance without persisting the actual balance.")
     return parser
 
 
@@ -297,14 +313,23 @@ def main(argv=None):
     now = datetime.now(IST)
     results = []
     for app in apps:
-        result = inspect_app(app, proposed_order=order)
+        result = inspect_app(app, proposed_order=order,
+                             minimum_live_balance=args.minimum_live_balance)
         results.append(result)
         print(f"{app}: {result['state']}", flush=True)
     healthy = [row["app"] for row in results if row["state"] == "READ_ACCESS_CONFIRMED"]
+    all_readable = len(healthy) == len(apps)
+    balance_ready = (args.minimum_live_balance is None or all(
+        row.get("live_balance_covers_minimum") is True for row in results))
+    complete = all_readable and balance_ready
+    report_state = ("READ_ACCESS_CONFIRMED" if complete else
+                    "MINIMUM_LIVE_BALANCE_NOT_MET" if all_readable else
+                    "PARTIAL_READ_ACCESS" if healthy else "NO_FULL_READ_ACCESS")
     report = dict(schema_version="kite_order_readiness_validation_only_v1", checked_at_ist=now.isoformat(),
                   completed_at_ist=datetime.now(IST).isoformat(), mode="VALIDATE_ONLY", orders_submitted=0,
                   order_mutations_available=False, strategy_controls_changed=False,
-                  state="READ_ACCESS_CONFIRMED" if healthy else "NO_FULL_READ_ACCESS",
+                  minimum_live_balance_rupees=args.minimum_live_balance,
+                  state=report_state,
                   readable_apps=healthy, apps=results, proposed_order=order,
                   market=market_schedule(now), g3_deployment=deployment_gate(),
                   order_acceptance="NOT_TESTED", static_ip_order_permission="NOT_VERIFIED",
@@ -321,7 +346,7 @@ def main(argv=None):
     print(f"G3 deployment: {report['g3_deployment']['state']}")
     print("Order acceptance: NOT_TESTED. Orders submitted: 0.")
     print(f"Report: {saved}")
-    return 0 if healthy else 2
+    return 0 if complete else 2
 
 
 if __name__ == "__main__":

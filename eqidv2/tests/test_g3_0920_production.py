@@ -101,15 +101,15 @@ def test_duplicate_and_wrong_expiry_fail_closed(evidence):
     assert build(evidence, as_of="2026-10-12T09:20:10+05:30")["opening_0920_status"] != "VALID"
 
 
-def test_contract_promotes_only_0920_long_and_keeps_every_v2_rule():
+def test_contract_preserves_0920_long_and_every_v2_rule():
     from pathlib import Path
     old = json.loads((Path(__file__).resolve().parents[1] / "configs/strategies/v13_v10_g_3_production_v2.json").read_text())
     for family in ("core_setups", "active_setups"):
         retained = [{**item, "source_version": old["strategy_version"]}
                     for item in contract.strategy_payload()[family] if item["signal_end"] != "09:20" and item["signal_end"] not in {"10:05", "10:10", "10:15", "10:25", "10:30"}
-                    and item["confirmation_end"].replace(":", "") + "_" + item["side"] not in contract.selected_setups.SETUP_IDS]
+                    and item["confirmation_end"].replace(":", "") + "_" + item["side"] not in (contract.selected_setups.SETUP_IDS | contract.midday_setups.SETUP_IDS | contract.afternoon_setups.SETUP_IDS)]
         assert retained == old[family]
-    assert contract.setup_for("09:20", "SHORT") is None
+    assert contract.setup_for("09:20", "SHORT").target_pct == 1.5
     setup = contract.setup_for("09:20", "LONG")
     assert (setup.target_pct, setup.stop_pct, setup.max_entries, setup.body_ratio, setup.max_wick_ratio) == (3., 1.25, 1, .75, .35)
     assert contract.confirmation_volume_minimum("LONG", signal_end="09:20") == 1.8

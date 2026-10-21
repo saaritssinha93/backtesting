@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import hashlib
+import io
 import json
 import os
 import re
@@ -50,6 +52,8 @@ MAX_VERIFIED_NO_CANDLE_STOCKS = 2
 MIN_NO_CANDLE_FETCH_ATTEMPTS = 3
 ATOMIC_REPLACE_ATTEMPTS = 8
 ATOMIC_REPLACE_BACKOFF_SEC = 0.05
+PARQUET_READ_ATTEMPTS = 8
+PARQUET_READ_BACKOFF_SEC = 0.05
 _PATH_LOCKS: dict[str, threading.RLock] = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 INDEX_UNDERLYINGS = {
@@ -213,6 +217,44 @@ def atomic_write_parquet(frame: pd.DataFrame, path: Path) -> None:
         frame.to_parquet(temp_path, index=False, engine="pyarrow")
 
     _atomic_replace_bytes(path, _write)
+
+
+def _transient_file_access_error(exc: OSError) -> bool:
+    """Return whether a Windows file-sharing/access error is worth retrying."""
+    return (
+        isinstance(exc, PermissionError)
+        or getattr(exc, "errno", None) in {errno.EACCES, errno.EPERM}
+        or getattr(exc, "winerror", None) in {5, 32, 33}
+    )
+
+
+def read_parquet_snapshot(
+    path: Path | str,
+    *,
+    attempts: int = PARQUET_READ_ATTEMPTS,
+    backoff_sec: float = PARQUET_READ_BACKOFF_SEC,
+    **kwargs: Any,
+) -> pd.DataFrame:
+    """Read an in-memory parquet snapshot across brief sharing conflicts.
+
+    The writer publishes with ``os.replace``.  Antivirus, indexing, or another
+    process opening the destination can nevertheless produce a short-lived
+    access-denied/share-violation on Windows.  Retry only that narrow class of
+    errors; missing or corrupt evidence remains fail-closed immediately.
+    """
+    source = Path(path)
+    read_attempts = max(1, int(attempts))
+    for attempt in range(read_attempts):
+        try:
+            payload = source.read_bytes()
+            break
+        except OSError as exc:
+            if not _transient_file_access_error(exc) or attempt + 1 >= read_attempts:
+                raise
+            time_module.sleep(max(0.0, float(backoff_sec)) * (attempt + 1))
+    # Decode only after the filesystem handle is closed.  Parser/schema errors
+    # are evidence failures, not transient sharing errors, and are never retried.
+    return pd.read_parquet(io.BytesIO(payload), **kwargs)
 
 
 def atomic_write_csv(frame: pd.DataFrame, path: Path) -> None:

@@ -16,10 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from fno_eq_id_monitor_detail import ACTIVE_PROFILE, IST, STRATEGY_VERSION, build_monitor_detail
-from fno_strategy_registry import expected_fingerprint
+from fno_strategy_registry import DisplayIdentity, display_identity, expected_fingerprint
 from fno_v13_v10_g_3_live_execution_policy import (
-    execution_metadata as g3_execution_metadata, validate_order_sizing as validate_g3_order_sizing,
-    validate_execution_metadata as validate_g3_execution_metadata,
+    execution_metadata as g3_execution_metadata,
+    validate_existing_order_sizing as validate_g3_order_sizing,
+    validate_existing_execution_metadata as validate_g3_execution_metadata,
 )
 
 MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -32,7 +33,12 @@ FRESH_SECONDS = 120
 SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,39}\Z")
 OPEN_STATES = {"OPEN", "SQUARE_OFF_PENDING"}
 KNOWN_STATES = OPEN_STATES | {"PENDING_ENTRY", "CLOSED", "NO_FILL", "ENTRY_REJECTED", "BLOCKED_SIZING", "BLOCKED_PORTFOLIO", "CANCELLED", "FAILED"}
-_REQUEST_FINGERPRINT: ContextVar[tuple[str, str] | None] = ContextVar("cockpit_request_fingerprint", default=None)
+_REQUEST_FINGERPRINT: ContextVar[DisplayIdentity | None] = ContextVar("cockpit_request_fingerprint", default=None)
+
+
+def _request_version() -> str:
+    identity = _REQUEST_FINGERPRINT.get()
+    return identity.version if identity is not None and identity.profile == ACTIVE_PROFILE.name else STRATEGY_VERSION
 
 
 def _active_fingerprint_valid(record: dict) -> bool:
@@ -42,7 +48,7 @@ def _active_fingerprint_valid(record: dict) -> bool:
     if ACTIVE_PROFILE.name != "V13_V10_G_3":
         return True
     cached = _REQUEST_FINGERPRINT.get()
-    expected = cached[1] if cached is not None and cached[0] == ACTIVE_PROFILE.name else expected_fingerprint(ACTIVE_PROFILE.name)
+    expected = cached.fingerprint if cached is not None and cached.profile == ACTIVE_PROFILE.name else expected_fingerprint(ACTIVE_PROFILE.name)
     return value == expected
 
 
@@ -125,7 +131,7 @@ def _order_rows(root: Path, day: str, mode: str, now: datetime, warnings: list[s
             symbol = _text(raw.get("tradingsymbol"), 40)
             signal_id = _text(raw.get("signal_id"), 160)
             valid = (raw.get("mode") == mode and raw.get("session_date") == day
-                     and raw.get("strategy_version") == STRATEGY_VERSION
+                     and raw.get("strategy_version") == _request_version()
                      and _active_fingerprint_valid(raw)
                      and bool(signal_id) and bool(SYMBOL.fullmatch(symbol))
                      and stamp is not None and stamp.date().isoformat() == day
@@ -234,7 +240,7 @@ def _events(root: Path, day: str, mode: str, now: datetime, warnings: list[str])
                 if not isinstance(context, dict) or not isinstance(data, dict):
                     raise ValueError("event object")
                 if (context.get("mode", "").upper() != mode or context.get("session_date") != day
-                        or context.get("strategy_version") != STRATEGY_VERSION
+                        or context.get("strategy_version") != _request_version()
                         or not _active_fingerprint_valid(context)
                         or stamp is None or stamp.date().isoformat() != day or stamp > now + timedelta(seconds=5)):
                     raise ValueError("event identity/time")
@@ -419,7 +425,8 @@ def load_cockpit_data(fno_root: Path | str, session_date: str, mode: str = "PAPE
     # Each HTTP request gets its own strategy identity. Event archives can hold
     # thousands of records; hashing the contract for every record stalls the UI.
     expected = expected_fingerprint(ACTIVE_PROFILE.name) if ACTIVE_PROFILE.name == "V13_V10_G_3" else ""
-    token = _REQUEST_FINGERPRINT.set((ACTIVE_PROFILE.name, expected))
+    selected_identity = display_identity(session_date, ACTIVE_PROFILE.name, current_fingerprint=expected)
+    token = _REQUEST_FINGERPRINT.set(selected_identity)
     try:
         return _load_cockpit_data(fno_root, session_date, session_day, mode, symbol, now)
     finally:
@@ -433,10 +440,8 @@ def _load_cockpit_data(fno_root: Path | str, session_date: str, session_day: dat
     fno_root = Path(fno_root)
     root = fno_root / ACTIVE_PROFILE.live_dir
     warnings: list[str] = []
-    detail = build_monitor_detail(fno_root, session_date, now_ist=now)
-    # The detail reader also inspects order events for its own screen. Our
-    # selected-mode bounded tail reader is the authority for this stream.
-    warnings.extend(w for w in detail["warnings"] if "order events exceed safe read limit" not in w)
+    # Capture moving worker snapshots against the request clock before the
+    # slower full-universe detail scan; later writes are not future evidence.
     items, incomplete = _order_rows(root, session_date, mode, now, warnings)
     other_mode = "LIVE" if mode == "PAPER" else "PAPER"
     other_items, comparison_incomplete = _order_rows(root, session_date, other_mode, now, warnings)
@@ -444,8 +449,12 @@ def _load_cockpit_data(fno_root: Path | str, session_date: str, session_day: dat
     comparison = _comparison(items, other_items, mode, warnings)
     orders = sorted((_project_order(item, session_date, mode, now) for item in items), key=lambda row: (row["updated_at_ist"], row["id"]))
     events = _events(root, session_date, mode, now, warnings)
+    detail = build_monitor_detail(fno_root, session_date, now_ist=now)
+    # The detail reader also inspects order events for its own screen. Our
+    # selected-mode bounded tail reader is the authority for this stream.
+    warnings.extend(w for w in detail["warnings"] if "order events exceed safe read limit" not in w)
     manifest = _read(root / "strategy_manifest.json", root, warnings)
-    if (manifest.get("strategy_version") != STRATEGY_VERSION
+    if (manifest.get("strategy_version") != _request_version()
             or not _active_fingerprint_valid(manifest)):
         manifest = {}
     fingerprints = {item["raw"]["strategy_fingerprint"] for item in items}
@@ -458,11 +467,14 @@ def _load_cockpit_data(fno_root: Path | str, session_date: str, session_day: dat
     policy = manifest.get("scheduled_promotion")
     policy = policy if isinstance(policy, dict) and _text(policy.get("effective_from")) <= session_date else {}
     policy_fields = {name: policy.get(name) for name in ("revision", "effective_from", "initial_stop_pct", "tightened_stop_pct", "tighten_after_minutes", "relaxed_0925_long") if isinstance(policy.get(name), (str, int, float, bool))}
-    identity = dict(profile=ACTIVE_PROFILE.name, label=ACTIVE_PROFILE.label, version=STRATEGY_VERSION,
+    identity = dict(profile=ACTIVE_PROFILE.name, label=ACTIVE_PROFILE.label, version=_request_version(),
                     fingerprint=next(iter(fingerprints)) if len(fingerprints) == 1 else manifest.get("strategy_fingerprint"),
                     state="MISMATCH" if incompatible else "RECORDED" if fingerprints else "CONFIGURED" if manifest else "NO_EVIDENCE", policy=policy_fields)
     if ACTIVE_PROFILE.name == "V13_V10_G_3":
         identity["configured_live_execution_policy"] = g3_execution_metadata()
+        selected_identity = _REQUEST_FINGERPRINT.get()
+        if selected_identity is not None:
+            identity["display_reference"] = selected_identity.metadata()
     phase_5m = detail["rows_5m"]
     phase_1m = [row for row in detail["rows_1m"] if not row["stage"].endswith(("ORDER_SNAPSHOT", "ORDER_EVENT"))]
     symbols = sorted({row["symbol"] for row in [*orders, *phase_5m, *phase_1m] if SYMBOL.fullmatch(row.get("symbol", ""))})
@@ -515,9 +527,12 @@ def _load_cockpit_data(fno_root: Path | str, session_date: str, session_day: dat
     if mode == "LIVE" and ACTIVE_PROFILE.name == "V13_V10_G_3":
         live_policy = g3_execution_metadata()
         sizing.update(label="₹10,000 capital × 5 · ₹50,000 target exposure",
-                      details="Configured whole shares = floor(₹50,000 / signal trigger price); quantities can be reduced. Broker margin checks still apply. Filled exposure can differ with execution price. PAPER sizing is independent.",
+                      details="Configured whole shares = floor(₹50,000 / signal trigger price); quantities can be reduced. Local LIVE portfolio-admission caps are disabled: reserved/open entries, daily admissions, and aggregate reserved gross exposure are unlimited. The ₹10,000 per-trade capital, ₹50,000 target exposure, strategy setup selection, stop/target protections, and broker funds/margin/exchange checks still apply. Filled exposure can differ with execution price. PAPER sizing is independent.",
                       capital_per_entry_rs=live_policy["capital_per_trade_rs"], leverage=live_policy["leverage"],
                       target_exposure_rs=live_policy["target_exposure_rs"],
+                      max_reserved_open_positions=live_policy["max_reserved_open_positions"],
+                      max_daily_entries=live_policy["max_daily_entries"],
+                      max_reserved_gross_exposure_rs=live_policy["max_reserved_gross_exposure_rs"],
                       portfolio_capital_rs=None, configured_execution_policy=live_policy)
     return dict(schema_version="fno_strategy_cockpit_v1", session_date=session_date, mode=mode,
                 generated_at_ist=now.isoformat(), identity=identity, policy=policy_fields,

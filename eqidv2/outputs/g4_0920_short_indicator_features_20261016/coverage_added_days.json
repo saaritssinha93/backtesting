@@ -1,0 +1,113 @@
+[
+  {
+    "schema": "g3_0920_research_features_v1",
+    "session_date": "2026-10-13",
+    "universe": {
+      "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-13.parquet",
+      "master_date": "2026-10-13",
+      "rows": 219,
+      "file_sha256": "508b4fca7a3967e3461405aea734a91006832cb75bdf1d51f3b761a58f6c730a",
+      "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+      "contract_month_filter": "26OCT",
+      "selected_contracts": 219,
+      "mapped_stock_futures": 213,
+      "excluded_index_futures": 6,
+      "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+      "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+      "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+    },
+    "stock_rows": 213,
+    "cash_first_bars": 213,
+    "real_0921_confirmations": 213,
+    "valid_0916_oi_changes": 201,
+    "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+    "signal_inputs_received_by_0921": 0,
+    "complete_decision_evidence_by_0922": 0,
+    "missing_reason_counts": {
+      "INVALID_ZERO_FIRST_MINUTE_OI": 11,
+      "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+      "MISSING_OR_INVALID_FIRST_MINUTE_OI": 1
+    },
+    "semantics": {
+      "price_first_5m_pct": "Completed 09:15-09:20 cash candle close/open - 1",
+      "price_vs_previous_completed_5m_pct": "G3 native previous completed cash 5m bar, usually prior session at the open; not first-bar movement or verified PDC",
+      "oi_change_pct": "Valid same dated futures contract 09:16 minute OI to completed 09:20 OI; four minutes, retrospective unless acquisition proved timely",
+      "confirmation_0921": "Real next minute, unavailable at 09:20; its source receipt is recorded separately"
+    },
+    "trading_logic_changed": false
+  },
+  {
+    "schema": "g3_0920_research_features_v1",
+    "session_date": "2026-10-14",
+    "universe": {
+      "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-14.parquet",
+      "master_date": "2026-10-14",
+      "rows": 219,
+      "file_sha256": "29865ccf6f91d72d4b33bc719b73e290109f4329a204e8fbc97d84c660a671d0",
+      "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+      "contract_month_filter": "26OCT",
+      "selected_contracts": 219,
+      "mapped_stock_futures": 213,
+      "excluded_index_futures": 6,
+      "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+      "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+      "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+    },
+    "stock_rows": 213,
+    "cash_first_bars": 213,
+    "real_0921_confirmations": 213,
+    "valid_0916_oi_changes": 207,
+    "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+    "signal_inputs_received_by_0921": 0,
+    "complete_decision_evidence_by_0922": 0,
+    "missing_reason_counts": {
+      "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+      "MISSING_OR_INVALID_FIRST_MINUTE_OI": 1,
+      "INVALID_ZERO_FIRST_MINUTE_OI": 5
+    },
+    "semantics": {
+      "price_first_5m_pct": "Completed 09:15-09:20 cash candle close/open - 1",
+      "price_vs_previous_completed_5m_pct": "G3 native previous completed cash 5m bar, usually prior session at the open; not first-bar movement or verified PDC",
+      "oi_change_pct": "Valid same dated futures contract 09:16 minute OI to completed 09:20 OI; four minutes, retrospective unless acquisition proved timely",
+      "confirmation_0921": "Real next minute, unavailable at 09:20; its source receipt is recorded separately"
+    },
+    "trading_logic_changed": false
+  },
+  {
+    "schema": "g3_0920_research_features_v1",
+    "session_date": "2026-10-15",
+    "universe": {
+      "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-15.parquet",
+      "master_date": "2026-10-15",
+      "rows": 219,
+      "file_sha256": "c17df45b296c96eb261066858ccad67a445af6eb60a4af4ae4ea1d178aab5717",
+      "universe_sha256": "1bbd8924016655b4d26346971643ff09075c707cc58a52ac684cc8b9dc322488",
+      "contract_month_filter": "26OCT",
+      "selected_contracts": 219,
+      "mapped_stock_futures": 213,
+      "excluded_index_futures": 6,
+      "mapping_source": "PERSISTED_DATED_UNIVERSE_ONLY",
+      "mapped_universe_sha256": "ac20a64452161dbd7b9f83377074ceaa894a48a07b429a60fcd5daf06fedfae7",
+      "mapped_symbol_set_sha256": "c2c93e00e4283ba06252e80574da582edb7a3c294193525cc5244b312e67422d"
+    },
+    "stock_rows": 213,
+    "cash_first_bars": 213,
+    "real_0921_confirmations": 213,
+    "valid_0916_oi_changes": 206,
+    "nifty_first_bar_status": "VALID_COMPLETED_NIFTY_FIRST_BAR",
+    "signal_inputs_received_by_0921": 0,
+    "complete_decision_evidence_by_0922": 0,
+    "missing_reason_counts": {
+      "INVALID_ZERO_FIRST_MINUTE_OI": 5,
+      "MISSING_OR_DUPLICATE_FUTURES_0920": 1,
+      "MISSING_OR_INVALID_FIRST_MINUTE_OI": 2
+    },
+    "semantics": {
+      "price_first_5m_pct": "Completed 09:15-09:20 cash candle close/open - 1",
+      "price_vs_previous_completed_5m_pct": "G3 native previous completed cash 5m bar, usually prior session at the open; not first-bar movement or verified PDC",
+      "oi_change_pct": "Valid same dated futures contract 09:16 minute OI to completed 09:20 OI; four minutes, retrospective unless acquisition proved timely",
+      "confirmation_0921": "Real next minute, unavailable at 09:20; its source receipt is recorded separately"
+    },
+    "trading_logic_changed": false
+  }
+]

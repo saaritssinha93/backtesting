@@ -67,8 +67,8 @@
     },
     "V13_V10_G_3": {
       "label": "V13-V10-G-3",
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V5",
-      "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
+      "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
       "live_generation": "v6",
       "frozen_config_path": "C:/TradingData/eqidv2/fno_oi/strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1/frozen_config.json",
       "frozen_config_sha256": "788fbb3dbda6cf86d3f0f26a9db777e7462ba64c7906368cca077e983f72552a",
@@ -83,8 +83,11 @@
         "window_minutes": 1,
         "minimum_volume_by_setup": {
           "0921_LONG": 1.8,
+          "0921_SHORT": 1.2,
+          "0941_LONG": 0.8,
           "0951_LONG": 0.6,
           "1006_LONG": 0.6,
+          "1011_LONG": 0.6,
           "1016_LONG": 0.6,
           "1036_LONG": 0.6,
           "1036_SHORT": 0.4,
@@ -95,7 +98,38 @@
           "1056_SHORT": 0.8,
           "1111_LONG": 0.6,
           "1111_SHORT": 0.8,
-          "1126_SHORT": 0.4
+          "1126_SHORT": 0.4,
+          "1136_LONG": 1.0,
+          "1136_SHORT": 0.4,
+          "1141_LONG": 0.0,
+          "1141_SHORT": 1.2,
+          "1146_SHORT": 0.0,
+          "1206_LONG": 0.6,
+          "1211_SHORT": 0.0,
+          "1216_LONG": 1.0,
+          "1216_SHORT": 0.0,
+          "1226_SHORT": 0.0,
+          "1231_LONG": 0.6,
+          "1231_SHORT": 0.4,
+          "1236_LONG": 0.2,
+          "1236_SHORT": 0.0,
+          "1246_LONG": 0.0,
+          "1246_SHORT": 0.8,
+          "1251_LONG": 0.6,
+          "1251_SHORT": 0.8,
+          "1256_SHORT": 0.4,
+          "1301_SHORT": 0.8,
+          "1306_LONG": 0.0,
+          "1316_LONG": 0.6,
+          "1316_SHORT": 1.3,
+          "1321_SHORT": 0.0,
+          "1326_LONG": 0.2,
+          "1326_SHORT": 1.2,
+          "1331_LONG": 0.8
+        },
+        "maximum_extension_atr_by_setup": {
+          "1036_LONG": 3.0,
+          "1036_SHORT": 3.0
         }
       },
       "execution_profiles": [
@@ -103,10 +137,13 @@
         "V13_V10_G_3_EQUITY_PAPER_EXPOSURE",
         "V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4"
       ],
-      "evidence_class": "G3_32_SETUP_PROMOTION_OF_RESEARCHED_HISTORY_NOT_UNTOUCHED_VALIDATION",
-      "production_config_relative_path": "configs/strategies/v13_v10_g_3_production_v5.json",
+      "evidence_class": "G3_61_SETUP_PROMOTION_WITH_0926_LONG_VOLUME120_REUSED_HISTORY_NOT_UNTOUCHED_VALIDATION",
+      "production_config_relative_path": "configs/strategies/v13_v10_g_3_production_v11.json",
+      "five_minute_volume_ratio_min_by_setup": {
+        "0926_LONG": 1.2
+      },
       "execution_authority": false,
-      "active_setup_count": 32,
+      "active_setup_count": 61,
       "signal_to_confirmation": {
         "09:20": "09:21",
         "09:25": "09:26",
@@ -129,8 +166,27 @@
         "10:55": "10:56",
         "11:10": "11:11",
         "11:20": "11:21",
-        "11:25": "11:26"
-      }
+        "11:25": "11:26",
+        "11:35": "11:36",
+        "11:40": "11:41",
+        "11:45": "11:46",
+        "12:05": "12:06",
+        "12:10": "12:11",
+        "12:15": "12:16",
+        "12:25": "12:26",
+        "12:30": "12:31",
+        "12:35": "12:36",
+        "12:45": "12:46",
+        "12:50": "12:51",
+        "12:55": "12:56",
+        "13:00": "13:01",
+        "13:05": "13:06",
+        "13:15": "13:16",
+        "13:20": "13:21",
+        "13:25": "13:26",
+        "13:30": "13:31"
+      },
+      "pipeline_deadline": "13:33"
     },
     "V13_V10_G_3_EQUITY_LIVE_10K_5X": {
       "asset": "EQUITY",
@@ -139,12 +195,15 @@
       "execution_profile": "live_kite_qty1",
       "live_execution_profile": "G3_LIVE_10K_5X",
       "live_execution_policy_schema_version": "g3_live_execution_policy_v1",
-      "live_execution_policy_fingerprint": "ec621fc330b7f31bb82964387987822ef44e2923a8b03deb24cad643fe23c702",
+      "live_execution_policy_fingerprint": "cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e",
       "capital_per_trade_rs": 10000.0,
       "leverage": 5.0,
       "target_exposure_rs": 50000.0,
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V5",
-      "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
+      "max_reserved_open_positions": null,
+      "max_daily_entries": null,
+      "max_reserved_gross_exposure_rs": null,
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
+      "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
       "source_id": "g3_equity_live_orders"
     },
     "V13_V10_G_3_EQUITY_PAPER_EXPOSURE": {
@@ -153,15 +212,15 @@
       "quantity_policy": "STRATEGY_SIZED",
       "capital_per_entry_rs": 100000.0,
       "leverage": 5.0,
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V5",
-      "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
+      "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
       "source_id": "g3_equity_paper_orders"
     },
     "V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4": {
       "label": "V13-V10-G-3 options: one lot ATM, 30% stop, 40.4% target",
       "strategy_version": "FNO_V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4_20261011",
-      "equity_strategy_version": "V13-V10-G-3-PRODUCTION-V5",
-      "strategy_fingerprint": "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea",
+      "equity_strategy_version": "V13-V10-G-3-PRODUCTION-V11",
+      "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
       "mode": "PAPER",
       "lots": 1,
       "execution_sources": [

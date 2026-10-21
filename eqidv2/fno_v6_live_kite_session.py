@@ -44,6 +44,11 @@ EXECUTION_PROFILE = "live_kite_qty1"
 EXECUTION_MODE = "LIVE"
 EXECUTION_QUANTITY = None if is_g3_config(config) else 1
 QUANTITY_POLICY = (config.live_execution_policy.QUANTITY_POLICY if is_g3_config(config) else "FIXED_ONE_SHARE")
+G3_LIVE_ACTIVATION_EPOCH_ENV = "FNO_V6_G3_LIVE_ACTIVATION_EPOCH_IST"
+G3_READ_ONLY_TERMINAL_STATES = frozenset({
+    "CLOSED", "NO_FILL", "ENTRY_REJECTED", "BLOCKED_SIZING",
+    "BLOCKED_PORTFOLIO", "CANCELLED",
+})
 
 
 def _execution_metadata() -> dict[str, Any]:
@@ -316,7 +321,24 @@ def load_profile_order_states(
             "quantity": EXECUTION_QUANTITY,
         }
         if is_g3_config(config):
-            config.live_execution_policy.validate_order_sizing(state)
+            state_policy_fingerprint = (
+                config.live_execution_policy.validate_existing_order_sizing(state)
+            )
+            if (state_policy_fingerprint
+                    == config.live_execution_policy.previous_capped_policy_fingerprint()):
+                has_broker_evidence = (
+                    bool(state.get("entry_order_id"))
+                    or state.get("entry_submission_uncertain") is True
+                    or int(state.get("entry_submission_attempt_count", 0) or 0) > 0
+                )
+                is_terminal = (
+                    str(state.get("status", "")).upper()
+                    in G3_READ_ONLY_TERMINAL_STATES
+                )
+                if not (has_broker_evidence or is_terminal):
+                    raise ValueError(
+                        "Superseded G3 LIVE pending state has no broker evidence"
+                    )
             signal = _read_json(SIGNAL_ROOT / session_date.isoformat() / f"{signal_id}.json")
             config.live_execution_policy.validate_signal_sizing(signal)
             if state.get("sizing_reference_price") != signal.get("trigger_price") or state.get("lot_size") != signal.get("lot_size"):
@@ -635,7 +657,7 @@ def worker_command(session_date: date, side: str) -> list[str]:
     return command
 
 
-def worker_environment() -> dict[str, str]:
+def worker_environment(live_activation_epoch_ist: str = "") -> dict[str, str]:
     env = dict(os.environ)
     env["FNO_LIVE_GENERATION"] = "v6"
     env["FNO_V6_EXECUTION_MODE"] = EXECUTION_MODE
@@ -655,6 +677,13 @@ def worker_environment() -> dict[str, str]:
         env["FNO_V6_STRATEGY_PROFILE"] = config.STRATEGY_PROFILE
     else:
         env.pop("FNO_V6_STRATEGY_PROFILE", None)
+    if is_g3_config(config) and live_activation_epoch_ist:
+        # This timestamp is created only after the dated LIVE authorization
+        # checks above have passed. Entry workers reject otherwise-valid
+        # signals that were already published before this coordinator run.
+        env[G3_LIVE_ACTIVATION_EPOCH_ENV] = live_activation_epoch_ist
+    else:
+        env.pop(G3_LIVE_ACTIVATION_EPOCH_ENV, None)
     return env
 
 
@@ -829,7 +858,8 @@ def run(args: argparse.Namespace) -> int:
         arm_path = _auto_arm_session(session_date)
         print(f"[{SESSION_ID}] auto-armed LIVE quantity 1 for {session_date}: {arm_path}")
 
-    env = worker_environment()
+    live_activation_epoch_ist = common.now_ist().isoformat(timespec="microseconds")
+    env = worker_environment(live_activation_epoch_ist)
     children: dict[str, subprocess.Popen[Any]] = {}
     final_state = "STOPPED"
     try:

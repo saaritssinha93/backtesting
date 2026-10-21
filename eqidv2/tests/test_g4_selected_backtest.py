@@ -106,16 +106,16 @@ def test_metrics_exclude_capital_rejected_profit_and_include_empty_days():
     assert result["profit_factor"] == 3. and result["flat_sessions"] == 1
 
 
-def test_default_cli_uses_selected_profile_without_running_a_new_sweep(monkeypatch, tmp_path):
+def test_explicit_earlier_cli_uses_selected_profile_without_running_a_new_sweep(monkeypatch, tmp_path):
     called = []
     monkeypatch.setattr(cli, "BACKTEST_ROOT", tmp_path)
-    monkeypatch.setattr(sys, "argv", ["g4"])
+    monkeypatch.setattr(sys, "argv", ["g4", "--config", str(study.DEFAULT_CONFIG)])
     def run_selected(config, output, *, cache):
         called.append((config, output, cache))
         return {key: 0 for key in ("sessions", "added_setups", "total_setups", "baseline_g4",
             "selected_additions", "combined_g4", "incremental_net_pnl_rs", "baseline_trades_changed")}
     def forbidden(*args, **kwargs):
-        pytest.fail("The default command must not run an earlier research sweep")
+        pytest.fail("The explicit selected-ten command must not run an earlier research sweep")
     monkeypatch.setattr(cli, "run_selected", run_selected)
     monkeypatch.setattr(cli, "run_extended", forbidden)
     monkeypatch.setattr(cli, "run_original", forbidden)

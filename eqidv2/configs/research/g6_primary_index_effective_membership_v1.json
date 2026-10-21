@@ -1,0 +1,64 @@
+{
+  "version": "G6-PRIMARY-INDEX-EFFECTIVE-MEMBERSHIP-V1",
+  "scope": "BACKTEST_ONLY",
+  "current_snapshot": {
+    "as_of": "2026-10-21",
+    "workbook": "outputs/fno_index_mapping_20261021/nse_fno_stock_index_mapping_2026-10-21.xlsx",
+    "workbook_sha256": "dc9afcfd00e69be53a81de6948cec537995167d06034368b81fc21e90ec1f3c5",
+    "stock_count": 213,
+    "primary_counts": {
+      "Nifty 50": 50,
+      "Nifty Next 50": 47,
+      "Nifty Midcap 150": 92,
+      "Nifty Smallcap 250": 23,
+      "Nifty Microcap 250": 1
+    }
+  },
+  "validated_backtest_range": {
+    "from": "2026-07-29",
+    "through": "2026-10-19"
+  },
+  "regimes": [
+    {
+      "regime": "before_2026_09_30_reconstitution",
+      "effective_from": "2026-07-29",
+      "effective_through": "2026-09-29",
+      "basis": "Reverse the official 2026-09-30 size-index reconstitution from the 2026-10-21 snapshot."
+    },
+    {
+      "regime": "from_2026_09_30_reconstitution",
+      "effective_from": "2026-09-30",
+      "effective_through": "2026-10-19",
+      "basis": "Use the 2026-10-21 snapshot; the audited 2026-10-13 event has no mapped-F&O impact."
+    }
+  ],
+  "reconstitution_notice": {
+    "published": "2026-08-10",
+    "effective": "2026-09-30",
+    "url": "https://nsearchives.nseindia.com/web/pressrelease/2026-08/ind_prs10082026_20260810200030.pdf",
+    "sha256": "56a3d162e4aabd8767686010afb01eb8dd21dc089d5cf8995a8a34091eef9bff"
+  },
+  "primary_index_transitions": [
+    {"symbol": "BSE", "before": "Nifty Midcap 150", "from_2026_09_30": "Nifty 50"},
+    {"symbol": "WIPRO", "before": "Nifty 50", "from_2026_09_30": "Nifty Next 50"},
+    {"symbol": "INDHOTEL", "before": "Nifty Next 50", "from_2026_09_30": "Nifty Midcap 150"},
+    {"symbol": "LODHA", "before": "Nifty Next 50", "from_2026_09_30": "Nifty Midcap 150"},
+    {"symbol": "RECLTD", "before": "Nifty Next 50", "from_2026_09_30": "Nifty Midcap 150"},
+    {"symbol": "SHREECEM", "before": "Nifty Next 50", "from_2026_09_30": "Nifty Midcap 150"},
+    {"symbol": "UNITDSPR", "before": "Nifty Next 50", "from_2026_09_30": "Nifty Midcap 150"},
+    {"symbol": "IDEA", "before": "Nifty Midcap 150", "from_2026_09_30": "Nifty Next 50"},
+    {"symbol": "POLYCAB", "before": "Nifty Midcap 150", "from_2026_09_30": "Nifty Next 50"},
+    {"symbol": "POWERINDIA", "before": "Nifty Midcap 150", "from_2026_09_30": "Nifty Next 50"},
+    {"symbol": "KPITTECH", "before": "Nifty Midcap 150", "from_2026_09_30": "Nifty Smallcap 250"},
+    {"symbol": "TATAELXSI", "before": "Nifty Midcap 150", "from_2026_09_30": "Nifty Smallcap 250"}
+  ],
+  "subsequent_event_audit": {
+    "published": "2026-10-12",
+    "effective": "2026-10-13",
+    "url": "https://niftyindices.com/Press_Release/ind_prs12102026.pdf",
+    "primary_index_affected": "Nifty Microcap 250",
+    "changes": ["CCAVENUE removed", "PFIZER added"],
+    "mapped_fno_impact": false,
+    "reason": "CCAVENUE and PFIZER are absent from the 213-stock F&O mapping; UJJIVANSFB remains the only mapped Microcap-250 stock."
+  }
+}

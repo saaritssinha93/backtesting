@@ -47,6 +47,7 @@ import json
 import re
 import argparse
 import logging
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1120,7 +1121,17 @@ def _finalize_and_save(df: pd.DataFrame, out_path: str):
 
     if ext == ".parquet":
         _ensure_parquet_engine()
-        df.to_parquet(out_path, engine="pyarrow", index=False, compression="snappy")
+        # Readers replay historical minutes while this updater runs. Publishing a
+        # Parquet file in place exposes an incomplete footer to those readers.
+        fd, temporary = tempfile.mkstemp(prefix=f".{Path(out_path).stem}.", suffix=".parquet.tmp",
+                                         dir=Path(out_path).parent)
+        os.close(fd)
+        try:
+            df.to_parquet(temporary, engine="pyarrow", index=False, compression="snappy")
+            os.replace(temporary, out_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         return
 
     df.to_csv(out_path, index=False)

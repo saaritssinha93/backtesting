@@ -42,9 +42,9 @@ def _read_order(
     )
     g3_live = expected_mode == "LIVE" and str(row.get("strategy_version", "")).startswith("V13-V10-G-3-PRODUCTION-")
     if g3_live:
-        from fno_v13_v10_g_3_live_execution_policy import validate_order_sizing
+        from fno_v13_v10_g_3_live_execution_policy import validate_existing_order_sizing
         try:
-            validate_order_sizing(row)
+            validate_existing_order_sizing(row)
         except (TypeError, ValueError) as exc:
             raise ArtifactError(f"G3 LIVE execution sizing is invalid in {source}: {exc}") from exc
     status = str(row.get("status", "UNKNOWN")).upper()

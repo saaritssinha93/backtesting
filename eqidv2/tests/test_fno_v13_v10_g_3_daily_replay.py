@@ -316,7 +316,7 @@ def test_production_spec_drift_fails_before_input_capture(raw, tmp_path, monkeyp
     assert not (tmp_path / "never_created").exists()
 
 
-def test_daily_promoted_0950_long_uses_slot_volume_and_target(raw, tmp_path):
+def test_daily_restores_0950_long_with_original_target_volume_and_stop(raw, tmp_path):
     roots, equity, _ = raw
     frame = pd.read_parquet(equity)
     frame = frame.loc[frame.date.dt.date.ne(DAY)]
@@ -338,12 +338,20 @@ def test_daily_promoted_0950_long_uses_slot_volume_and_target(raw, tmp_path):
     ledger = pd.read_csv(tmp_path / "promoted" / "portfolio_trades.csv")
     added = ledger.loc[ledger.setup_id.eq("0951_LONG")]
     assert len(added) == 1
+    assert added.filled.iloc[0] and added.portfolio_executed.iloc[0]
+    assert added.native_target_pct.iloc[0] == .75
+    assert added.native_stop_pct.iloc[0] == 1.25
+    assert added.v9_1m_volume_ratio.iloc[0] == pytest.approx(.6)
+    assert added.strategy_version.iloc[0] == replay.contract.STRATEGY_VERSION
+    import fno_v13_v10_g_3_contract as production
+    candidates = pd.read_csv(tmp_path / "promoted" / "candidate_signals.csv")
+    original = production.select_orders(candidates)
+    added = original.loc[original.setup_id.eq("0951_LONG")]
+    assert len(added) == 1
     assert added.v9_1m_volume_ratio.iloc[0] == pytest.approx(.6)
     assert added.native_target_pct.iloc[0] == .75
     assert added.native_stop_pct.iloc[0] == 1.25
-    assert added.filled.iloc[0]
-    assert added.gross_return_pct.iloc[0] == pytest.approx(.75)
-    assert added.strategy_version.iloc[0] == replay.contract.STRATEGY_VERSION
+    assert added.strategy_version.iloc[0] == production.STRATEGY_VERSION
     daily = pd.read_csv(tmp_path / "promoted" / "daily_results.csv")
     assert daily.strategy_fingerprint.eq(replay.contract.strategy_fingerprint()).all()
 
@@ -404,4 +412,74 @@ def test_aggregate_refuses_old_revision_ledger(raw, tmp_path):
     with pytest.raises(ValueError, match="another production strategy revision"):
         replay._finish(tmp_path / "mixed", days=[DAY], role="cumulative_history", source_kind="TEST_SOURCE",
             frames={}, provenance={}, coverage={}, complete=True, ledger=ledger)
+
+
+@pytest.mark.parametrize("clock,side,confirmation_volume,target", [
+    ("11:45", "SHORT", 12.5, 4.95),
+    ("12:30", "LONG", 75., 2.53),
+    ("12:30", "SHORT", 50., 1.85),
+])
+def test_raw_midday_replay_keeps_relaxed_confirmation_and_final_clock(
+        raw, tmp_path, clock, side, confirmation_volume, target):
+    roots, equity, _ = raw
+    previous = pd.read_parquet(equity)
+    previous = previous.loc[previous.date.dt.date.ne(DAY)]
+    today = _minute_frame(DAY, move=False)
+    signal = pd.Timestamp(f"{DAY} {clock}", tz="Asia/Kolkata")
+    confirmation = signal + pd.Timedelta(minutes=1)
+    direction = 1. if side == "LONG" else -1.
+    # Ensure an established causal EMA trend, then a qualifying five-minute
+    # move. Exact confirmation volume remains below the legacy side minimum.
+    base = 100 + direction * np.arange(len(today)) * .001
+    today[["open", "high", "low", "close"]] = np.column_stack(
+        [base - direction * .0005, base + .01, base - .01, base])
+    for offset, price in enumerate(100 + direction * np.array([1.2, 1.4, 1.6, 1.8, 2.])):
+        stamp = signal - pd.Timedelta(minutes=4-offset)
+        today.loc[today.date.eq(stamp), ["open", "high", "low", "close", "volume"]] = (
+            [price-.2, price+.05, price-.21, price, 200.] if side == "LONG"
+            else [price+.2, price+.21, price-.05, price, 200.])
+    today.loc[today.date.eq(confirmation), ["open", "high", "low", "close", "volume"]] = (
+        [102., 102.25, 101.99, 102.2, confirmation_volume] if side == "LONG"
+        else [98.02, 98.04, 97.97, 97.99, confirmation_volume])
+    after = today.date.gt(confirmation)
+    today.loc[after, ["open", "high", "low", "close", "volume"]] = (
+        [102.3, 102.4, 102.3, 102.35, 100.] if side == "LONG"
+        else [97.91, 97.94, 97.85, 97.90, 100.])
+    target_path = today.date.gt(confirmation + pd.Timedelta(minutes=1))
+    today.loc[target_path, ["open", "high", "low", "close"]] = (
+        [107., 107.2, 107., 107.1] if side == "LONG" else [91., 91.2, 90.9, 91.1])
+    pd.concat([previous, today], ignore_index=True).to_parquet(equity, index=False)
+
+    directory = tmp_path / f"midday-{clock.replace(':', '')}-{side}"
+    result = replay.replay_day(DAY, directory, roots=roots)
+    assert result["complete"], result["coverage"]
+    ledger = pd.read_csv(directory / "portfolio_trades.csv")
+    setup_id = confirmation.strftime("%H%M") + "_" + side
+    added = ledger.loc[ledger.setup_id.eq(setup_id)]
+    assert len(added) == 1
+    row = added.iloc[0]
+    assert row.v9_1m_volume_ratio == pytest.approx(confirmation_volume / 125.)
+    assert row.v9_1m_volume_ratio < replay.contract.MIN_CONFIRMATION_VOLUME_BY_SIDE[side]
+    assert row.native_target_pct == target
+    assert row.native_stop_pct == 1.25
+    assert row.filled and row.portfolio_executed
+    assert row.gross_return_pct == pytest.approx(target)
+    assert pd.Timestamp(row.confirmation_ts) == confirmation
+    assert pd.Timestamp(row.entry_ts) > confirmation
+    provenance = json.loads((directory / "source_manifest.json").read_text())
+    assert any(Path(item["path"]).name == "fno_v13_v10_g_3_midday_setups.py"
+               for item in provenance["code"])
+
+
+def test_missing_last_midday_oi_excludes_stock_instead_of_truncating_clocks(raw, tmp_path):
+    roots, _, _ = raw
+    path = roots.futures_5m / "EXAMPLE30JANFUT_5minute.parquet"
+    frame = pd.read_parquet(path)
+    frame = frame.loc[~frame.timestamp.eq(pd.Timestamp(f"{DAY} 12:30", tz="Asia/Kolkata"))]
+    frame.to_parquet(path, index=False)
+    result = replay.replay_day(DAY, tmp_path / "missing-midday-oi", roots=roots)
+    assert result["state"] == "BLOCKED_INCOMPLETE_DATA"
+    assert result["metrics"] is None
+    assert result["coverage"]["excluded_stocks"][0]["symbol"] == "EXAMPLE"
+    assert any(row["reason"] == "NO_ELIGIBLE_STOCKS" for row in result["coverage"]["blocking_problems"])
 

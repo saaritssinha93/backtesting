@@ -3,6 +3,7 @@
   'use strict';
   const FAMILIES = [
     {strategy:'V13-V10-G-3',label:'G-3',color:'var(--family-g3, #087553)'},
+    {strategy:'V13-V10-G-4',label:'G-4',color:'var(--family-g4, #7854a6)'},
     {strategy:'V13-V10-G-2',label:'G-2',color:'var(--family-g2, #385f9b)'},
     {strategy:'V13-V10-G',label:'G',color:'var(--family-g, #a54661)'},
   ];
@@ -124,7 +125,7 @@
 
   function draw(container,state) {
     const model=prepare(state.entries,state.mode);
-    const header=element('div','compare-header'),heading=element('div');heading.append(element('h2','','Compare versions'),element('p','','Latest saved G-3, G-2 and G results, with the calendar made explicit.'));
+    const header=element('div','compare-header'),heading=element('div');heading.append(element('h2','','Compare versions'),element('p','','Latest saved G-3, G-4, G-2 and G results, with the calendar made explicit.'));
     const controls=element('div','compare-controls'),label=element('label','','Session scope'),select=element('select');select.id='comparison-mode';label.htmlFor=select.id;
     [['common','Common recorded sessions'],['full','Full recorded history']].forEach(([value,text])=>{const option=element('option','',text);option.value=value;select.append(option);});select.value=state.mode;
     select.addEventListener('change',()=>{state.mode=select.value;draw(container,state);container.querySelector('#comparison-mode')?.focus();});
@@ -136,8 +137,8 @@
       coverage.append(card);
     });
     const notice=element('div','compare-notice');notice.setAttribute('role','status');
-    if(!model.allAvailable&&state.mode==='common')notice.textContent='Common-session comparison is unavailable until all three versions have valid recorded calendars. Refresh to retry, or inspect available full histories.';
-    else if(state.mode==='common')notice.textContent=model.common.length?`${model.common.length} sessions shared by all three versions · ${dateLabel(model.common[0])} – ${dateLabel(model.common.at(-1))}. Metrics and curves use only these dates and begin from zero.`:'These versions have no recorded sessions in common. Use Full recorded history to inspect each available version.';
+    if(!model.allAvailable&&state.mode==='common')notice.textContent='Common-session comparison is unavailable until all four versions have valid recorded calendars. Refresh to retry, or inspect available full histories.';
+    else if(state.mode==='common')notice.textContent=model.common.length?`${model.common.length} sessions shared by all four versions · ${dateLabel(model.common[0])} – ${dateLabel(model.common.at(-1))}. Metrics and curves use only these dates and begin from zero.`:'These versions have no recorded sessions in common. Use Full recorded history to inspect each available version.';
     else notice.textContent='Each version uses its own recorded calendar. Totals may cover different sessions; lines break at missing dates. Missing dates are never treated as zero-profit days.';
     const exclusions=element('details','compare-exclusions'),excludedCount=model.union.filter(date=>!model.common.includes(date)).length;
     exclusions.append(element('summary','',model.allAvailable?`${excludedCount} date${excludedCount===1?'':'s'} outside the shared calendar · inspect coverage`:'Inspect available session coverage'));
@@ -167,7 +168,7 @@
     if(state?.controller)state.controller.abort();
     const controller=new AbortController();
     state={key,mode:state?.mode||'common',runs,api,controller,entries:null};states.set(container,state);
-    container.setAttribute('aria-busy','true');const loading=element('div','empty-state','Reading the latest three saved histories…');loading.setAttribute('role','status');container.replaceChildren(loading);
+    container.setAttribute('aria-busy','true');const loading=element('div','empty-state','Reading the latest four saved histories…');loading.setAttribute('role','status');container.replaceChildren(loading);
     const timeout=setTimeout(()=>controller.abort(),20000);
     try {
       const entries=await Promise.all(selected.map(async family=>{

@@ -251,9 +251,9 @@ def load_equity_entries(
             if str(row.get("mode", "")).upper() != source_mode:
                 continue
             if source_mode == "LIVE" and equity_config.STRATEGY_PROFILE == "V13_V10_G_3":
-                from fno_v13_v10_g_3_live_execution_policy import validate_order_sizing
+                from fno_v13_v10_g_3_live_execution_policy import validate_existing_order_sizing
                 try:
-                    validate_order_sizing(row)
+                    validate_existing_order_sizing(row)
                     if (str(row.get("status", "")).upper() in {"OPEN", "CLOSED"}
                             and float(row["quantity"]) <= 0):
                         raise ValueError("Filled G3 LIVE equity source has no positive quantity")

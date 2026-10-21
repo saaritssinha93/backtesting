@@ -1,8 +1,11 @@
 """Publish current G3 historical backtesting from the start through the cutoff.
 
-The default verifies the complete V4 historical simulation and extends it with
-same-contract completed daily minute replays. Legacy studies are explicit
-modes. A verified normal run publishes the current historical pointer.
+The default replays the current backtest profile: targets >0.75% plus restored
+09:50 LONG, 10:05 LONG and 10:15 SHORT. The 09:20 SHORT and 10:10 LONG
+setups each target 1.50%. It extends matching completed daily minute replays.
+PAPER/LIVE keep their full production
+configuration. Legacy studies are explicit modes; a verified normal run
+publishes the current historical pointer.
 """
 from __future__ import annotations
 
@@ -136,7 +139,7 @@ def main() -> None:
               f"{len(data['trades'])} selected; {int(data['trades'].portfolio_executed.sum())} executed")
         print(data["path"])
         return
-    from research.g3_current_history import build, publish
+    from research.g3_target_cutoff_backtest import build, publish
     now = datetime.now(IST)
     through = args.through or now.date()
     output = args.output_dir or (BACKTEST_ROOT / "backtests" / "runs" / str(through) /

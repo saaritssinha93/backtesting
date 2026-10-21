@@ -766,6 +766,27 @@ def test_live_pool_recovers_protected_market_normalized_to_limit(runtime):
     assert pool.last_operation == "place_order_reconciled"
 
 
+@pytest.mark.parametrize(
+    "expected,observed,protected,matches",
+    [
+        ("MARKET", "LIMIT", True, True),
+        ("SL-M", "SL", True, True),
+        ("SL-M", "LIMIT", True, True),
+        ("SL-M", "SL", False, False),
+        ("MARKET", "SL", True, False),
+    ],
+)
+def test_broker_order_type_matching_handles_only_protected_normalizations(
+    runtime, expected, observed, protected, matches
+):
+    assert (
+        runtime._broker_order_type_matches(
+            expected, observed, protected=protected
+        )
+        is matches
+    )
+
+
 def test_live_pool_never_retries_ambiguous_submission_without_broker_evidence(runtime):
     secondary_place_calls = []
 

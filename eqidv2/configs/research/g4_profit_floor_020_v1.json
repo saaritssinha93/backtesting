@@ -1,0 +1,13 @@
+{
+  "variant_id": "G4-PROFIT-FLOOR-020-V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "initial_stop_pct": 1.2,
+  "tighten_after_minutes": 120,
+  "tightened_stop_pct": 1.0,
+  "activation_floor_pct": 0.4,
+  "activation_target_fraction": 0.9,
+  "protected_profit_pct": 0.2,
+  "cost_bps_round_trip": 5.0,
+  "description": "After a fully completed post-entry one-minute close reaches max(0.40%, 90% of the native target), arm a fixed +0.20% gross-profit stop for the following candle. The stop never loosens."
+}

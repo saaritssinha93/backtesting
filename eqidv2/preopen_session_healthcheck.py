@@ -715,7 +715,8 @@ def check_recovery_schedule_contracts(*, v8_positively_disabled: bool) -> List[C
             check_recovery_schedule_contract(
                 task_name,
                 start_time=dt.time(9, 15),
-                duration_minutes=130,
+                duration_minutes=260,
+                require_restart=True,
             )
             for task_name in (
                 FNO_V6_SCANNER_TASK,

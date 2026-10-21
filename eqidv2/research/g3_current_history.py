@@ -1,19 +1,19 @@
-"""Extend the current G3 historical simulation with verified completed replays.
+"""Current replay compatibility API and read-only verification of V7 history.
 
-The retained historical cohort is immutable. Later sessions use the same
-contract and minute simulator, with raw after-close eligibility disclosed.
-No PAPER order files or earlier strategy revisions enter this result.
+New builds always reconstruct candidates using the current backtest builder.
+Saved V7 packages retain their archived contract and provenance verification.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from research.g3_backtest_profile import contract
+from research.g3_backtest_profile import production as contract
+from research.archived_g3_v7 import contract as archived_contract
 import fno_v13_v10_g_3_daily_replay as replay
 from research.g3_0920_backtest import _stats
 
@@ -23,7 +23,7 @@ FILES = LEGACY_FILES | {"setup_results.csv", "monthly_results.csv", "period_resu
 
 
 def verify_base(directory):
-    from research.g3_selected_backtest import verified_package as verify_selected
+    from research.g3_afternoon_backtest import verified_package as verify_selected
     return verify_selected(directory)
 
 
@@ -46,13 +46,14 @@ def _source(root, directory, name):
                 manifest_name=name, manifest_sha256=replay.sha256(directory / name))
 
 
-def _validate_ledger(ledger, days):
+def _validate_ledger(ledger, days, *, profile=None):
+    profile = contract if profile is None else profile
     if ledger.signal_id.isna().any() or ledger.signal_id.duplicated().any():
         raise ValueError("Duplicate or missing historical signal identity")
     if not set(ledger.day.astype(str)).issubset(days):
         raise ValueError("Trade outside verified session calendar")
-    for key, expected in (("strategy_version", contract.STRATEGY_VERSION),
-                          ("strategy_fingerprint", contract.strategy_fingerprint())):
+    for key, expected in (("strategy_version", profile.STRATEGY_VERSION),
+                          ("strategy_fingerprint", profile.strategy_fingerprint())):
         if not ledger[key].eq(expected).all():
             raise ValueError("Historical ledger mixes strategy revisions")
     amounts = {}
@@ -77,7 +78,8 @@ def _daily_table(ledger, days):
     return frame
 
 
-def verified_package(directory, root):
+def verified_legacy_package(directory, root):
+    """Verify an immutable V7 extension without applying the current profile."""
     directory, root = Path(directory).resolve(), Path(root).resolve()
     manifest = _read(directory / "manifest.json")
     if (manifest.get("schema_version") != SCHEMA or manifest.get("execution_authority") is not False
@@ -87,10 +89,11 @@ def verified_package(directory, root):
         if replay.sha256(directory / name) != digest:
             raise ValueError("Extended history artifact changed")
     summary = _read(directory / "summary.json")
-    if (_read(directory / "config.json") != contract.strategy_payload()
-            or not contract.supported_identity(summary.get("strategy_version"), summary.get("strategy_fingerprint"))
+    if (_read(directory / "config.json") != archived_contract.strategy_payload()
+            or not archived_contract.supported_identity(summary.get("strategy_version"), summary.get("strategy_fingerprint"))
+            or summary.get("active_setup_count") != len(archived_contract.ACTIVE_SETUPS)
             or summary.get("execution_authority") is not False):
-        raise ValueError("Extended history differs from current configuration")
+        raise ValueError("Extended history differs from its archived V7 configuration")
     days = summary["days"]
     if (not days or days != sorted(set(days)) or summary["sessions"] != len(days)
             or summary["first_date"] != days[0] or summary["last_date"] != days[-1]):
@@ -107,7 +110,7 @@ def verified_package(directory, root):
     for record in summary["daily_sources"]:
         member = _checked_source(root, record)
         payload = _read(member / "run_manifest.json")
-        _validate_package(root, member, payload, role="production_daily", require_complete=True)
+        _validate_package(root, member, payload, role="production_daily", require_complete=True, allow_legacy=True)
         for artifact in payload["artifacts"].values():
             path = (member / artifact["path"]).resolve()
             if not path.is_relative_to(member) or replay.sha256(path) != artifact["sha256"]:
@@ -129,7 +132,7 @@ def verified_package(directory, root):
     ledger = pd.read_csv(directory / "portfolio_trades.csv")
     expected = pd.concat(source_frames, ignore_index=True, sort=False)
     pd.testing.assert_frame_equal(ledger, expected, check_dtype=False, check_exact=False, atol=1e-8, rtol=1e-12)
-    _validate_ledger(ledger, days)
+    _validate_ledger(ledger, days, profile=archived_contract)
     daily = pd.read_csv(directory / "daily_results.csv")
     pd.testing.assert_frame_equal(daily, _daily_table(ledger, days), check_dtype=False, atol=1e-6, rtol=1e-12)
     stats = _stats(ledger, [date.fromisoformat(day) for day in days])
@@ -142,105 +145,40 @@ def verified_package(directory, root):
     return summary, manifest
 
 
+def verified_package(directory, root):
+    """Dispatch by saved schema; archived evidence never becomes a current run."""
+    from research import g3_target_cutoff_backtest as current
+    manifest = _read(Path(directory) / "manifest.json")
+    if manifest.get("schema_version") == current.SCHEMA:
+        return current.verified_package(directory, root)
+    if manifest.get("schema_version") == SCHEMA:
+        return verified_legacy_package(directory, root)
+    if manifest.get("variant_id") == archived_contract.STRATEGY_VERSION:
+        return verify_base(directory)
+    raise ValueError("Unrecognized G3 historical package schema")
+
+
 def current_base(root):
+    """Resolve a verified saved run without generating or migrating old orders."""
+    root = Path(root).resolve()
     pointer = _read(root / "latest/current_backtest.json")
     directory = _checked_source(root, {**pointer, "manifest_name": "manifest.json"})
-    if pointer.get("strategy_version") != contract.STRATEGY_VERSION:
-        from research.g3_backtest_profile import production
-        if not production.supported_identity(pointer.get("strategy_version"), pointer.get("strategy_fingerprint"), allow_legacy=True):
-            raise ValueError("Cannot migrate an unrecognized G3 historical profile")
-        from research.g3_selected_backtest import run
-        name = datetime.now(contract.IST).strftime("%Y%m%dT%H%M%S%f") + "_selected_ten_base"
-        base = root / "backtests/runs/2026-10-12" / name
-        run(base)
-        return base
-    if pointer["schema_version"] == SCHEMA:
-        summary, _ = verified_package(directory, root)
+    summary, manifest = verified_package(directory, root)
+    if any(pointer.get(key) != summary.get(key)
+           for key in ("strategy_version", "strategy_fingerprint")):
+        raise ValueError("Current G3 historical pointer differs from its package")
+    if manifest.get("schema_version") == SCHEMA:
         return _checked_source(root, summary["base_source"])
-    if pointer["schema_version"] != "fno_g3_current_backtest_v2":
-        raise ValueError("Current full G3 history must exist before extending it")
-    verify_base(directory)
     return directory
 
 
 def build(root, output, through, *, base=None, roots=None):
-    """Reuse verified full-cohort evidence and replay any missing later day."""
-    from backtesting_result_v13_v10_g_3_daily import _verified_daily, _run_id, _session_coverage
-    root, output = Path(root).resolve(), Path(output).resolve()
-    replay.require_closed_session(through)
-    if output.exists():
-        raise FileExistsError("Extended history requires a new output directory")
-    base = Path(base).resolve() if base is not None else current_base(root)
-    base_summary, _ = verify_base(base)
-    days = pd.read_csv(base / "daily_results.csv").day.astype(str).tolist()
-    if through < date.fromisoformat(days[-1]):
-        raise ValueError("Requested cutoff precedes current historical base")
-    roots = roots or replay.DataRoots()
-    available = sorted(path.stem.removeprefix("near_month_") for path in roots.universe.glob("near_month_*.parquet")
-                       if days[-1] < path.stem.removeprefix("near_month_") <= str(through))
-    if str(through) != days[-1] and (not available or available[-1] != str(through)):
-        raise ValueError("Requested cutoff has no dated market universe; history was not advanced")
-    frames = [pd.read_csv(base / "variant_trades.csv")]
-    members, coverage = [], []
-    for day in available:
-        member = _verified_daily(root, date.fromisoformat(day))
-        if member is None:
-            directory = root / "production/runs" / day / _run_id()
-            print(f"[G3 full history] replaying {day} from raw inputs", flush=True)
-            payload = replay.replay_day(date.fromisoformat(day), directory, roots=roots)
-            if not payload["complete"]:
-                raise ValueError(f"Incomplete replay for {day}; full history was not published")
-            member = (directory, payload)
-        directory, payload = member
-        print(f"[G3 full history] verified completed replay {day}", flush=True)
-        frames.append(pd.read_csv(directory / payload["artifacts"]["portfolio_trades"]["path"]))
-        members.append(_source(root, directory, "run_manifest.json"))
-        coverage.extend(_session_coverage(root, directory, payload))
-    days += available
-    ledger = pd.concat(frames, ignore_index=True, sort=False)
-    _validate_ledger(ledger, days)
-    stats = _stats(ledger, [date.fromisoformat(day) for day in days])
-    summary = dict(schema_version=SCHEMA, execution_authority=False,
-        strategy_version=contract.STRATEGY_VERSION, strategy_fingerprint=contract.strategy_fingerprint(),
-        active_setup_count=len(contract.ACTIVE_SETUPS), created_at_ist=datetime.now(contract.IST).isoformat(),
-        first_date=days[0], last_date=days[-1], sessions=len(days), days=days, current_g3=stats,
-        base_source=_source(root, base, "manifest.json"), daily_sources=members,
-        historical_base_through=base_summary["last_date"],
-        coverage=dict(excluded_sessions=[dict(day="2026-10-01", reason="Incomplete immutable historical input")],
-            session_coverage=coverage, historical_method="Verified 32-setup G3 historical simulation; retrospective opening OI",
-            extension_method="Same-contract raw after-close replay; stock-day exclusions disclosed",
-            history_scope="FULL_CURRENT_STRATEGY_HISTORY_WITH_DAILY_EXTENSIONS"))
-    output.mkdir(parents=True)
-    daily = _daily_table(ledger, days)
-    ledger.to_csv(output / "portfolio_trades.csv", index=False)
-    daily.to_csv(output / "daily_results.csv", index=False)
-    replay.atomic_json(output / "config.json", contract.strategy_payload())
-    replay.atomic_json(output / "summary.json", summary)
-    from research.g3_backtest_report import write
-    write(output, summary, ledger, daily)
-    replay.atomic_json(output / "manifest.json", dict(schema_version=SCHEMA, execution_authority=False,
-        files={name: replay.sha256(output / name) for name in sorted(FILES)}))
-    verified_package(output, root)
-    return summary
+    """Use the full current candidate reconstruction, including newly enabled slots."""
+    from research.g3_target_cutoff_backtest import build as build_current
+    return build_current(root, output, through, base=base, roots=roots)
 
 
 def publish(root, directory):
-    root, directory = Path(root).resolve(), Path(directory).resolve()
-    summary, _ = verified_package(directory, root)
-    relative = directory.relative_to(root)
-    if relative.parts[:2] != ("backtests", "runs") or len(relative.parts) != 4 or relative.parts[2] != summary["last_date"]:
-        raise ValueError("Extended history is outside its canonical destination")
-    current = root / "latest/current_backtest.json"
-    if current.exists():
-        prior = _read(current)
-        if (prior.get("strategy_fingerprint") == summary["strategy_fingerprint"]
-                and prior.get("session_date", "") > summary["last_date"]):
-            raise ValueError("An older replay cannot replace the latest full history")
-        if prior.get("strategy_fingerprint") != summary["strategy_fingerprint"]:
-            replay.atomic_json(root / "latest/archived" / prior["strategy_version"] / "current_backtest.json", prior)
-    pointer = dict(schema_version=SCHEMA, role="backtest_history", execution_authority=False,
-        run_dir=relative.as_posix(), manifest_sha256=replay.sha256(directory / "manifest.json"),
-        strategy_version=summary["strategy_version"], strategy_fingerprint=summary["strategy_fingerprint"],
-        session_date=summary["last_date"], created_at_ist=summary["created_at_ist"])
-    replay.atomic_json(root / "latest/current_backtest.json", pointer)
-    return pointer
+    """Publish only the current backtest profile through its guarded publisher."""
+    from research.g3_target_cutoff_backtest import publish as publish_current
+    return publish_current(root, directory)

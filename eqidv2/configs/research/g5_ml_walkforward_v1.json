@@ -1,0 +1,49 @@
+{
+  "variant_id": "V13-V10-G-5-ML-WALKFORWARD-V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "ml_enabled": true,
+  "initial_train_sessions": 30,
+  "test_block_sessions": 5,
+  "minimum_training_fills": 100,
+  "minimum_training_losses": 20,
+  "ridge_alphas": [1.0, 10.0, 100.0],
+  "inner_validation_blocks": 2,
+  "decision_threshold_net_r": 0.0,
+  "initial_stop_pct": 1.2,
+  "tightened_stop_pct": 1.0,
+  "tighten_after_minutes": 120,
+  "capital_per_entry_rs": 100000.0,
+  "leverage": 5.0,
+  "portfolio_capital_rs": 1000000.0,
+  "max_positions": 10,
+  "cost_bps": [5.0, 10.0, 15.0],
+  "latency_stress_delay_bars": 1,
+  "exit_catalogue": ["baseline", "protective", "percentage_trail"],
+  "percentage_trail": {
+    "initial_stop_pct": 1.2,
+    "tightened_stop_pct": 1.0,
+    "tighten_after_minutes": 120,
+    "activation_floor_pct": 0.6,
+    "activation_target_fraction": 0.5,
+    "trail_distance_pct": 0.5,
+    "protected_profit_pct": 0.05
+  },
+  "exit_selection": {
+    "minimum_changed_trades": 3,
+    "minimum_original_winner_profit_retention": 0.95,
+    "require_net_improvement": true,
+    "require_loss_amount_reduction": true,
+    "require_no_worse_daily_drawdown": true
+  },
+  "bootstrap": {"repetitions": 5000, "block_sessions": 3, "seed": 20261018},
+  "acceptance": {
+    "growth_minimum_net_ratio": 1.05,
+    "growth_maximum_loss_amount_ratio": 0.9,
+    "growth_maximum_drawdown_ratio": 1.0,
+    "defensive_minimum_net_ratio": 0.95,
+    "defensive_maximum_drawdown_ratio": 0.8
+  },
+  "forward_review_minimum_sessions": 30,
+  "forward_review_minimum_completed_fills": 200
+}

@@ -31,7 +31,7 @@ import fno_oi_fetch_5min_fast_shadow as fast_core
 
 
 SESSION = "fno_oi_fetch_5min_fast_production"
-ENGINE_VERSION = "fno_oi_fast_production_engine_v1"
+ENGINE_VERSION = "fno_oi_fast_production_engine_v2_cache_repair"
 DEFAULT_WORKERS_PER_APP = 2
 DEFAULT_WRITER_WORKERS = 8
 ARCHIVE_VERIFY_FIELDS = (
@@ -136,6 +136,42 @@ def _verify_archived_row(
     ]
     if mismatches:
         raise ValueError(f"Archive exact-slot readback differs: {mismatches}")
+
+
+def _cached_exact_slot_outcome(
+    archive_cache: "CanonicalArchiveCache",
+    contract: Mapping[str, Any],
+    target: pd.Timestamp,
+) -> dict[str, Any] | None:
+    """Reuse only strictly valid durable evidence for this contract and slot."""
+    symbol = str(contract.get("tradingsymbol", "")).strip().upper()
+    frame = archive_cache.frames.get(symbol)
+    if not isinstance(frame, pd.DataFrame) or frame.empty or "timestamp" not in frame:
+        return None
+    try:
+        matching = frame.loc[common._to_ist(frame["timestamp"]).eq(target)]
+        if len(matching) != 1:
+            return None
+        row = matching.iloc[0]
+        if fast_core._oi_row_error(row, contract, target):
+            return None
+        expected_underlying = str(contract.get("underlying", "")).strip().upper()
+        archived_underlying = str(row.get("underlying", "")).strip().upper()
+        if expected_underlying and archived_underlying != expected_underlying:
+            return None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    return {
+        "tradingsymbol": symbol,
+        "underlying": str(contract.get("underlying", "")),
+        "app": "archive_cache",
+        "state": "WRITTEN",
+        "rows": 1,
+        "valid_rows": 1,
+        "elapsed_sec": 0.0,
+        "error": "",
+        "archive_cache_reused": True,
+    }
 
 
 @dataclass
@@ -487,6 +523,26 @@ def fetch_contracts_fast(
         engine=ENGINE_VERSION,
     )
     contracts = ordered.to_dict("records")
+    cached_outcomes: list[dict[str, Any]] = []
+    if archive_cache is not None:
+        contracts_to_fetch: list[Mapping[str, Any]] = []
+        for contract in contracts:
+            cached = _cached_exact_slot_outcome(archive_cache, contract, target)
+            if cached is None:
+                contracts_to_fetch.append(contract)
+            else:
+                cached_outcomes.append(cached)
+        contracts = contracts_to_fetch
+        common.publish_heartbeat(
+            session,
+            "RUNNING",
+            phase=f"{phase}_CACHE_REUSE",
+            slot=target.isoformat(),
+            contracts_expected=len(ordered),
+            contracts_reused=len(cached_outcomes),
+            contracts_to_fetch=len(contracts),
+            engine=ENGINE_VERSION,
+        )
     attempt_history = (
         attempted_apps_by_symbol
         if attempted_apps_by_symbol is not None
@@ -505,7 +561,7 @@ def fetch_contracts_fast(
                     ),
                 )
             )
-    return _stream_fetch_and_persist(
+    fetched_outcomes = _stream_fetch_and_persist(
         contracts,
         runtimes,
         target,
@@ -516,6 +572,10 @@ def fetch_contracts_fast(
         phase=phase,
         assignments=assignments,
         archive_cache=archive_cache,
+    )
+    return sorted(
+        cached_outcomes + fetched_outcomes,
+        key=lambda item: str(item.get("tradingsymbol", "")),
     )
 
 

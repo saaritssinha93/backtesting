@@ -60,7 +60,9 @@ def _csv(run_dir: Path, name: str, frame: pd.DataFrame) -> dict:
 def _code_provenance() -> list[dict]:
     import fno_v13_v10_g_2_backtest as simulator
     modules = [Path(__file__), Path(source.__file__), Path(contract.__file__), Path(contract.late_setups.__file__), Path(contract.selected_setups.__file__),
+               Path(contract.midday_setups.__file__), Path(contract.afternoon_setups.__file__),
                Path(__file__).resolve().parent / "research/g3_backtest_profile.py",
+               Path(__file__).resolve().parent / "fno_v13_v10_g_3_contract.py",
                Path(source.opening_inputs.__file__), Path(__file__).with_name("fno_v13_v10_g_3_opening_oi.py"),
                Path(simulator.__file__), Path(simulator.g.v9.__file__),
                Path(simulator.g.v9.v5.__file__), Path(simulator.g.v9.v6.__file__),

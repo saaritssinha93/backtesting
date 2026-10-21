@@ -20,6 +20,7 @@
     return `<span class="fno-detail-pill ${cls}">${esc(name)}</span>`;
   }
   function checks(row) { return Array.isArray(row.checks) ? row.checks : []; }
+  function setupText(row) { return row.setup_id || (row.setup_status === "NOT_CONFIGURED" ? "No configured setup" : "Not assigned"); }
   const stageChecks = ["confirmation_stage", "final_selection"];
   const checkStatus = (check) => String(check.status || "UNKNOWN").toUpperCase();
   const checkLabel = (check) => check.label || label(check.name || "Check");
@@ -49,6 +50,10 @@
     }).filter(Boolean);
     if (!sections.length) sections.push(`<span class="fno-check-note">${relevant.length ?
       "No recorded filter failures or missing checks." : "No per-check evidence recorded."}</span>`);
+    if (row.setup_status === "NOT_CONFIGURED") {
+      const skipped = relevant.filter((check) => checkStatus(check) === "NOT_APPLICABLE" && check.recorded_status === "FAIL");
+      if (skipped.length) sections.push(`<div class="fno-check-stage">Not applicable (${skipped.length}): setup clock and threshold checks require a configured setup. See stock details.</div>`);
+    }
     const later = checks(row).filter((check) => stageChecks.includes(check.name) &&
       !["PASS", "NOT_APPLICABLE"].includes(checkStatus(check)));
     if (later.length) sections.push(`<div class="fno-check-stage">${later.map((check) =>
@@ -115,15 +120,18 @@
     const checkRows = checks(row).map((check) => {
       const provenance = [check.reason, check.threshold_source ? `Threshold source: ${check.threshold_source}` : "",
         check.margin_source ? `Margin source: ${check.margin_source}` : "", check.evidence_note].filter(Boolean);
-      return `<tr><td>${esc(checkLabel(check))}</td><td>${pill(check.status)}</td>
+      const recorded = check.recorded_status && check.recorded_status !== check.status ?
+        `<span class="fno-check-note">Recorded: ${esc(check.recorded_status)}</span>` : "";
+      return `<tr><td>${esc(checkLabel(check))}</td><td>${pill(check.status)}${recorded}</td>
         <td>${esc(checkText(check, "actual_text", "actual"))}</td><td>${esc(checkText(check, "required_text", "rule"))}</td>
         <td>${esc(checkMargin(check) || "Not recorded / not applicable")}</td><td>${provenance.map((text) => `<div>${esc(text)}</div>`).join("")}</td></tr>`;
     }).join("");
-    host.innerHTML = `<div class="fno-detail-heading"><h4>${esc(row.symbol)} · ${esc(row.side)} · ${esc(row.setup_id)} · ${esc(row.minute || row.signal_time)} IST</h4>
+    host.innerHTML = `<div class="fno-detail-heading"><h4>${esc(row.symbol)} · ${esc(row.side)} · ${esc(setupText(row))} · ${esc(row.minute || row.signal_time)} IST</h4>
       <button type="button" data-action="close">Close details</button></div>
       <p class="fno-detail-note">${esc(row.stage)} · Decision: ${esc(row.decision)} · Evidence: ${esc(valueText(row.evidence_state))}<br>Source: ${esc(valueText(row.source))}</p>
+      ${row.decision_reason ? `<p class="fno-detail-note">${esc(row.decision_reason)}</p>` : ""}
       <div class="fno-detail-indicators">${indicatorRows || "No indicator values recorded for this event."}</div>
-      <table><thead><tr><th>Indicator / guard / filter</th><th>Recorded result</th><th>Observed value</th><th>Required rule</th><th>Shortfall / margin</th><th>Reason / provenance</th></tr></thead>
+      <table><thead><tr><th>Indicator / guard / filter</th><th>Check result / recorded flag</th><th>Observed value</th><th>Required rule</th><th>Shortfall / margin</th><th>Reason / provenance</th></tr></thead>
       <tbody>${checkRows || '<tr><td colspan="6">No per-check evidence was recorded. This does not mean the guards passed.</td></tr>'}</tbody></table>`;
   }
   function renderRows() {
@@ -143,8 +151,8 @@
       const metrics = mode ? [metric(row, ["price_change_pct", "price change pct", "price change %"]), metric(row, ["oi_change_pct", "oi change pct", "oi change %"]), metric(row, ["volume_ratio", "5m_volume_ratio", "5m volume ratio"])] :
         [metric(row, ["v9_1m_volume_ratio", "one_minute_volume_ratio", "confirmation_volume_ratio", "1m volume ratio"]), metric(row, ["body_ratio", "v9_1m_body_ratio", "body ratio"]), metric(row, ["wick_ratio", "v9_1m_upper_wick_ratio", "v9_1m_lower_wick_ratio", "wick ratio"])];
       return `<tr><td><button type="button" data-row-index="${start + idx}" aria-label="Inspect ${esc(row.symbol)} ${esc(row.side)} ${esc(row.minute || row.signal_time)}">${esc(row.symbol || "Unknown")}</button></td>
-        <td>${esc(row.minute || row.signal_time)}</td><td>${esc(row.side || "Unassigned")}</td><td>${esc(row.setup_id || "Not assigned")}</td><td>${esc(row.stage)}</td>
-        <td>${pill(outcome(row))}</td><td class="fno-reasons">${esc(row.decision)}</td>${metrics.map((value) => `<td>${esc(value)}</td>`).join("")}
+        <td>${esc(row.minute || row.signal_time)}</td><td>${esc(row.side || "Unassigned")}</td><td>${esc(setupText(row))}</td><td>${esc(row.stage)}</td>
+        <td>${pill(outcome(row))}</td><td class="fno-reasons">${row.decision_reason ? `<strong>${esc(row.decision_reason)}</strong><br>` : ""}${esc(row.decision)}</td>${metrics.map((value) => `<td>${esc(value)}</td>`).join("")}
         <td class="fno-reasons fno-check-issues">${renderCheckIssues(row)}</td></tr>`;
     }).join("");
     state.host.querySelector("[data-zone=rows]").innerHTML = selected.length ?

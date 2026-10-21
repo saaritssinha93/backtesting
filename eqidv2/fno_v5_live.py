@@ -55,6 +55,11 @@ import fno_oi_hybrid_data as hybrid
 from fno_live_profile import config_for_generation, is_modern_config, is_g3_config
 from fno_v13_v10_g_identity import canonical_signal_id
 import fno_v13_v10_g_policy as g_policy
+from g3_live_risk import (
+    LiveRiskIntegrityError,
+    LiveRiskLimitError,
+    admit_live_entry,
+)
 LIVE_GENERATION = os.getenv("FNO_LIVE_GENERATION", "v5").strip().lower()
 if LIVE_GENERATION not in {"v5", "v6"}:
     raise RuntimeError(f"Unsupported FnO live generation: {LIVE_GENERATION}")
@@ -134,6 +139,7 @@ LIVE_ACK_ENV = getattr(config, "LIVE_ACK_ENV", f"FNO_{LIVE_LABEL}_LIVE_ACK")
 LIVE_ACK = getattr(
     config, "LIVE_ACK", f"I_UNDERSTAND_REAL_FNO_{LIVE_LABEL}_EQUITY_ORDERS"
 )
+G3_LIVE_ACTIVATION_EPOCH_ENV = "FNO_V6_G3_LIVE_ACTIVATION_EPOCH_IST"
 ORDER_TAG_PREFIX = getattr(config, "ORDER_TAG_PREFIX", f"F{LIVE_LABEL}")
 AUTO_MARKET_PROTECTION = -1
 ORDER_ROLE_TAG_SUFFIX = {
@@ -750,7 +756,7 @@ def scan_five_minute_slot(
     invalid = 0
     nifty_context: dict[str, Any] = {}
     g_strategy_fingerprint = config.strategy_fingerprint() if is_modern_config(config) else ""
-    if is_modern_config(config) and signal_end == "09:25":
+    if is_modern_config(config) and signal_end in getattr(config, "NIFTY_SHORT_SIGNAL_ENDS", ("09:25",)):
         nifty_context = _g_nifty_first_bar_context(session_date)
     for contract in universe.to_dict("records"):
         futures_symbol = str(contract["futures_tradingsymbol"])
@@ -892,6 +898,8 @@ def scan_five_minute_slot(
             if opening_feature["opening_0920_status"] != "VALID":
                 opening_exclusions.append(dict(state="EXCLUDED_0920_ONLY", futures_tradingsymbol=futures_symbol,
                     equity_symbol=equity_symbol, signal_end=signal_end,
+                    setup_ids=[s.setup_id for s in config.ACTIVE_SETUPS if s.signal_end == signal_end],
+                    sides=[s.side for s in config.ACTIVE_SETUPS if s.signal_end == signal_end],
                     reason="missing_or_late_0916_opening_oi_evidence"))
                 continue
             row = row.copy()
@@ -1247,13 +1255,21 @@ def _broker_order_type_matches(
     *,
     protected: bool = False,
 ) -> bool:
-    """Match Kite order types, including protected-market normalization."""
+    """Match Kite order types, including protected-market normalization.
+
+    Kite can expose an accepted market-protected ``MARKET`` as ``LIMIT`` and
+    a market-protected ``SL-M`` as ``SL`` (with a broker-calculated limit
+    price).  These are the same protected order intents, not identity drift.
+    """
 
     expected_type = str(expected or "").strip().upper()
     observed_type = str(observed or "").strip().upper()
     if expected_type == observed_type:
         return True
-    return protected and expected_type in {"MARKET", "SL-M"} and observed_type == "LIMIT"
+    return protected and (
+        (expected_type == "MARKET" and observed_type == "LIMIT")
+        or (expected_type == "SL-M" and observed_type in {"SL", "LIMIT"})
+    )
 
 
 def _kite_place_order_compat(client: Any, payload: dict[str, Any]) -> Any:
@@ -2668,6 +2684,9 @@ def _validate_order_state(
 ) -> None:
     execution_mode = mode.upper()
     g3_live = execution_mode == "LIVE" and is_g3_config(config)
+    previous_capped_protective = (
+        g3_live and _previous_capped_g3_protective_state(state)
+    )
     legacy_protective = g3_live and _legacy_g3_protective_state(state)
     if g3_live and not legacy_protective:
         config.live_execution_policy.validate_signal_sizing(signal)
@@ -2701,7 +2720,7 @@ def _validate_order_state(
         "target_pct": signal["target_pct"],
         "round_trip_cost_bps": config.ROUND_TRIP_COST_BPS,
     }
-    if g3_live and not legacy_protective:
+    if g3_live and (not legacy_protective or previous_capped_protective):
         expected_fields.update(capital_rs=config.live_execution_policy.CAPITAL_PER_TRADE_RS,
                                leverage=config.live_execution_policy.LEVERAGE,
                                target_exposure_rs=config.live_execution_policy.TARGET_EXPOSURE_RS)
@@ -2719,9 +2738,18 @@ def _validate_order_state(
     sizing_key = "live_sizing" if execution_mode == "LIVE" else "paper_sizing"
     expected_quantity = int(signal[sizing_key]["quantity"])
     if g3_live:
-        expected_quantity = 1 if legacy_protective else config.live_execution_policy.requested_quantity(
-            signal["trigger_price"], signal["lot_size"], live_quantity)
-        if legacy_protective:
+        expected_quantity = (
+            _safe_int(state.get("requested_quantity"), -1)
+            if previous_capped_protective else
+            1 if legacy_protective else
+            config.live_execution_policy.requested_quantity(
+                signal["trigger_price"], signal["lot_size"], live_quantity)
+        )
+        if previous_capped_protective:
+            state["live_execution_policy_mismatch"] = (
+                "PREVIOUS_CAPPED_POLICY_PROTECTIVE_MANAGEMENT_ONLY"
+            )
+        elif legacy_protective:
             state["live_execution_policy_mismatch"] = "LEGACY_QUANTITY_ONE_PROTECTIVE_MANAGEMENT_ONLY"
     elif execution_mode == "LIVE" and live_quantity is not None:
         if int(live_quantity) <= 0:
@@ -2761,23 +2789,48 @@ def _validate_order_state(
         )
 
 
+def _has_g3_entry_broker_evidence(state: dict[str, Any]) -> bool:
+    return (bool(state.get("entry_order_id"))
+            or bool(state.get("entry_submission_uncertain"))
+            or _safe_int(state.get("entry_submission_attempt_count"), 0) > 0)
+
+
+def _previous_capped_g3_protective_state(state: dict[str, Any]) -> bool:
+    """Recognize exact prior states for protection or terminal read-only use.
+
+    A pristine prior-policy ``PENDING_ENTRY`` remains unrecognized, so it can
+    never be submitted under a superseded approval.  Terminal states may be
+    loaded/exported without degrading a restarted worker.
+    """
+    protective_or_terminal = (
+        _has_g3_entry_broker_evidence(state)
+        or str(state.get("status", "")).upper() in TERMINAL_STATES
+    )
+    if not is_g3_config(config) or not protective_or_terminal:
+        return False
+    try:
+        fingerprint = config.live_execution_policy.validate_existing_order_sizing(state)
+    except (TypeError, ValueError):
+        return False
+    return fingerprint == config.live_execution_policy.previous_capped_policy_fingerprint()
+
+
 def _legacy_g3_protective_state(state: dict[str, Any]) -> bool:
-    """Recognize the previous exact qty-one state only to manage its broker order.
+    """Recognize exact superseded states only to manage their broker orders.
 
     No policy metadata is invented for this state. New submissions still pass
     the current policy validator, so recovery can reconcile/cancel/protect an
     existing order but cannot turn an old approval into a new entry.
     """
-    return (is_g3_config(config) and (bool(state.get("entry_order_id"))
-            or bool(state.get("entry_submission_uncertain"))
-            or _safe_int(state.get("entry_submission_attempt_count"), 0) > 0)
+    return (_previous_capped_g3_protective_state(state)
+            or (is_g3_config(config) and _has_g3_entry_broker_evidence(state)
             and not state.get("live_execution_policy_fingerprint")
             and state.get("execution_profile") == "live_kite_qty1"
             and state.get("quantity_policy") == "FIXED_ONE_SHARE"
             and state.get("execution_quantity_override") == 1
             and state.get("strategy_sized_quantity") == 1
             and state.get("quantity") in (0, 1)
-            and state.get("lot_size") == 1)
+            and state.get("lot_size") == 1))
 
 
 def _close_state(
@@ -2976,6 +3029,91 @@ def _live_arm_state(session_date: date) -> tuple[bool, str]:
     if is_g3_config(config) and arm.get("live_execution_policy_fingerprint") != config.live_execution_policy.policy_fingerprint():
         return False, "LIVE_ARM_EXECUTION_POLICY_MISMATCH"
     return True, "LIVE_ARMED"
+
+
+def _g3_live_entry_epoch(
+    session_date: date, now: datetime
+) -> tuple[datetime | None, str]:
+    """Return the conservative entry boundary for this approved LIVE run.
+
+    The dated arm protects the operator-approval boundary.  The coordinator
+    epoch protects a late or restarted worker from replaying a signal that was
+    already present before that coordinator run.  Requiring both timestamps is
+    intentionally fail-closed; broker reconciliation/protective management do
+    not use this helper.
+    """
+    if not is_g3_config(config):
+        return None, ""
+    arm = _read_json(LIVE_ARM_PATH)
+    raw_values = (
+        str(arm.get("entry_not_before_ist", "")).strip(),
+        os.getenv(G3_LIVE_ACTIVATION_EPOCH_ENV, "").strip(),
+    )
+    if any(not value for value in raw_values):
+        return None, "LIVE_ACTIVATION_EPOCH_MISSING"
+    try:
+        epochs = [_to_ist_datetime(value) for value in raw_values]
+    except (TypeError, ValueError, OverflowError):
+        return None, "LIVE_ACTIVATION_EPOCH_INVALID"
+    if any(epoch.date() != session_date or epoch > now for epoch in epochs):
+        return None, "LIVE_ACTIVATION_EPOCH_INVALID"
+    return max(epochs), ""
+
+
+def _block_pre_activation_g3_entry(
+    signal: dict[str, Any], state: dict[str, Any], now: datetime
+) -> bool:
+    """Terminally block a pristine G3 entry that predates this LIVE run.
+
+    States with broker-submission evidence are deliberately excluded: those
+    must proceed through order recovery/reconciliation and protective
+    management, never be relabelled as an unsubmitted signal.
+    """
+    if (
+        not is_g3_config(config)
+        or str(state.get("mode", "")).upper() != "LIVE"
+        or str(state.get("status", "")) != "PENDING_ENTRY"
+        or state.get("entry_order_id")
+        or bool(state.get("entry_submission_uncertain"))
+        or _safe_int(state.get("entry_submission_attempt_count"), 0) > 0
+    ):
+        return False
+    try:
+        session_date = date.fromisoformat(str(state["session_date"]))
+    except (KeyError, TypeError, ValueError):
+        session_date = None
+        reason = "LIVE_ACTIVATION_EPOCH_INVALID"
+        entry_epoch = None
+    else:
+        entry_epoch, reason = _g3_live_entry_epoch(session_date, now)
+    try:
+        published_at = _to_ist_datetime(signal.get("published_at_ist"))
+    except (TypeError, ValueError, OverflowError):
+        published_at = None
+        reason = "SIGNAL_PUBLICATION_TIME_INVALID"
+    if published_at is not None and session_date is not None and (
+        published_at.date() != session_date or published_at > now
+    ):
+        reason = "SIGNAL_PUBLICATION_TIME_INVALID"
+    if not reason and entry_epoch is not None and published_at is not None:
+        if published_at >= entry_epoch:
+            state["live_entry_not_before_ist"] = entry_epoch.isoformat()
+            state["signal_published_at_ist"] = published_at.isoformat()
+            return False
+        reason = "PRE_ACTIVATION_SIGNAL_BLOCKED"
+    state.update(
+        status="CANCELLED",
+        status_reason=reason or "LIVE_ACTIVATION_EPOCH_INVALID",
+        entry_terminal_cause=reason or "LIVE_ACTIVATION_EPOCH_INVALID",
+        live_entry_not_before_ist=(
+            entry_epoch.isoformat() if entry_epoch is not None else ""
+        ),
+        signal_published_at_ist=(
+            published_at.isoformat() if published_at is not None else ""
+        ),
+        updated_at_ist=now.isoformat(timespec="seconds"),
+    )
+    return True
 
 
 def _broker_order(client: Any, order_id: str) -> dict[str, Any]:
@@ -3363,16 +3501,18 @@ def _place_live_entry_order(
     order_type: str,
     reason: str,
 ) -> str:
-    if is_g3_config(config):
+    g3_live = is_g3_config(config)
+    if g3_live:
         if state.get("strategy_fingerprint") != config.strategy_fingerprint() or state.get("strategy_version") != config.STRATEGY_VERSION:
             raise ValueError("G3 LIVE entry strategy identity does not match the accepted contract")
         config.live_execution_policy.validate_order_sizing(state, require_pending_quantity=True)
-    _record_entry_submission_attempt(
-        state,
-        order_type=order_type,
-        reason=reason,
-        now=now,
-    )
+    else:
+        _record_entry_submission_attempt(
+            state,
+            order_type=order_type,
+            reason=reason,
+            now=now,
+        )
     payload: dict[str, Any] = {
         "variety": "regular",
         "exchange": str(state["exchange"]),
@@ -3390,8 +3530,42 @@ def _place_live_entry_order(
         if is_modern_config(config):
             from fno_live_entry_guard import entry_owner_lock
             with entry_owner_lock(common.FNO_ROOT / "control", config.STRATEGY_PROFILE):
-                # The lock protects the authority check and broker submission.
+                # The lock protects the authority check, shared G3 portfolio
+                # reservation, durable write, and broker submission as one
+                # admission sequence across LONG/SHORT workers.
+                if g3_live:
+                    try:
+                        admit_live_entry(
+                            state,
+                            book_root=ORDER_ROOT / "LIVE",
+                            state_path=_order_path(
+                                date.fromisoformat(str(state["session_date"])),
+                                "LIVE",
+                                str(state["signal_id"]),
+                            ),
+                            now=now,
+                            policy=config.live_execution_policy,
+                            terminal_states=TERMINAL_STATES,
+                        )
+                    except LiveRiskLimitError:
+                        # A reviewed cap rejection is terminal evidence.  It
+                        # must be durable while the admission lock is held.
+                        _write_order_state(state)
+                        raise
+                    _record_entry_submission_attempt(
+                        state,
+                        order_type=order_type,
+                        reason=reason,
+                        now=now,
+                    )
+                    # Crash recovery and the next worker must see the reserved
+                    # capacity before the broker can possibly accept an order.
+                    _write_order_state(state)
                 return _broker_place(client, **payload)
+        if g3_live:
+            raise LiveRiskIntegrityError(
+                "G3 LIVE entry requires the modern entry-owner lock"
+            )
         return _broker_place(client, **payload)
     except BrokerMutationUncertain as exc:
         state.update(
@@ -3868,6 +4042,8 @@ def advance_live_order(
                     order_type=order_type,
                     reason=submission_reason,
                 )
+            except LiveRiskLimitError:
+                return state
             except Exception as exc:
                 if order_type == "SL-M" and _is_stop_trigger_relation_rejection(exc):
                     state.update(
@@ -3895,6 +4071,8 @@ def advance_live_order(
                                 order_type="MARKET",
                                 reason="TRIGGER_CROSSED_DURING_STOP_SUBMISSION",
                             )
+                        except LiveRiskLimitError:
+                            return state
                         except Exception as market_exc:
                             if _is_explicit_broker_rejection(market_exc):
                                 _reject_live_entry(state, market_exc, now)
@@ -4240,6 +4418,11 @@ def _write_order_state(state: dict[str, Any]) -> None:
         "exit_reason",
         "first_execution_error_type",
         "entry_terminal_cause",
+        "live_risk_decision",
+        "live_risk_admitted_at_ist",
+        "live_risk_reserved_exposure_rs",
+        "live_risk_blocked_at_ist",
+        "live_risk_block_reason",
     )
     changed = [name for name in significant if previous.get(name) != state.get(name)]
     if changed or not previous:
@@ -4746,6 +4929,50 @@ def _continuous_state(now: datetime, session_date: date, once: bool) -> str:
     return "RUNNING"
 
 
+def _scanner_slot_deadline(
+    args: argparse.Namespace, session_date: date, signal_end: str
+) -> datetime:
+    confirmation_end = config.SIGNAL_TO_CONFIRMATION[signal_end]
+    if hasattr(config, "confirmation_deadline"):
+        return config.confirmation_deadline(session_date, confirmation_end)
+    return config.slot_datetime(session_date, confirmation_end) + timedelta(
+        seconds=float(getattr(args, "confirmation_max_wait_sec", 90.0))
+    )
+
+
+def _blocked_stale_scanner(
+    session_date: date,
+    signal_end: str,
+    universe: pd.DataFrame,
+    reason: str,
+) -> dict[str, Any]:
+    """Persist a terminal, empty decision when live publication is too late."""
+    return {
+        "schema_version": f"{LIVE_SCHEMA_PREFIX}_scanner_5m_hybrid_v3",
+        "run_id": RUN_ID,
+        "strategy_version": config.STRATEGY_VERSION,
+        "strategy_fingerprint": config.strategy_fingerprint(),
+        "session_date": session_date.isoformat(),
+        "signal_end": signal_end,
+        "confirmation_end": config.SIGNAL_TO_CONFIRMATION[signal_end],
+        "published_at_ist": _iso_now(),
+        "contracts_expected": int(len(universe)),
+        "contracts_evaluated": 0,
+        "contracts_skipped_no_candle": 0,
+        "contracts_missing_slot": 0,
+        "contracts_unexpected_missing": 0,
+        "long_candidates": 0,
+        "short_candidates": 0,
+        "candidates": [],
+        "missing_contracts": [],
+        "opening_0920_exclusions": [],
+        "data_contract": hybrid.DATA_CONTRACT_VERSION,
+        "scanner_complete": False,
+        "stale_reason": reason,
+        "state": "BLOCKED_STALE_ACTIVATION",
+    }
+
+
 def run_scanner(args: argparse.Namespace, session_date: date) -> int:
     common.atomic_write_text(
         report_path("scanner-5m"), _render_scanner_report(session_date)
@@ -4784,23 +5011,68 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 )
                 return 2
             time.sleep(args.poll_sec)
-    processed = {
-        signal_end
-        for signal_end in config.SIGNAL_TO_CONFIRMATION
-        if _current_slot_snapshot(
-            scanner_slot_path(session_date, signal_end), session_date, signal_end
-        )
-    }
+    processed: set[str] = set()
+    blocked: set[str] = set()
+    for signal_end in config.SIGNAL_TO_CONFIRMATION:
+        path = scanner_slot_path(session_date, signal_end)
+        if not _current_slot_snapshot(path, session_date, signal_end):
+            continue
+        processed.add(signal_end)
+        if str(_read_json(path).get("state", "")) != "SUCCESS":
+            blocked.add(signal_end)
     while len(processed) < len(config.SIGNAL_TO_CONFIRMATION):
         now = common.now_ist()
         made_progress = False
-        for signal_end in config.SIGNAL_TO_CONFIRMATION:
-            if signal_end in processed:
-                continue
+        pending = [
+            signal_end
+            for signal_end in config.SIGNAL_TO_CONFIRMATION
+            if signal_end not in processed
+        ]
+        # A restart may have a large expired backlog.  Preserve the one live
+        # recovery window before writing terminal tombstones for older slots.
+        active = [
+            signal_end
+            for signal_end in pending
+            if config.slot_datetime(session_date, signal_end)
+            + timedelta(seconds=args.boundary_buffer_sec)
+            <= now
+            <= _scanner_slot_deadline(args, session_date, signal_end)
+        ]
+        slot_order = active + [slot for slot in pending if slot not in active]
+        for signal_end in slot_order:
+            slot_now = common.now_ist()
             due = config.slot_datetime(session_date, signal_end) + timedelta(
                 seconds=args.boundary_buffer_sec
             )
-            if now < due and not args.once:
+            if slot_now < due and not args.once:
+                continue
+            slot_deadline = _scanner_slot_deadline(args, session_date, signal_end)
+            if slot_now > slot_deadline:
+                snapshot = _blocked_stale_scanner(
+                    session_date,
+                    signal_end,
+                    universe,
+                    "Scanner restart reached the slot after its live activation window.",
+                )
+                _write_scanner_snapshot(session_date, signal_end, snapshot)
+                processed.add(signal_end)
+                blocked.add(signal_end)
+                made_progress = True
+                _heartbeat(
+                    "scanner-5m",
+                    "RUNNING",
+                    phase="STALE_SLOT_BLOCKED",
+                    slot=signal_end,
+                    deadline_ist=slot_deadline.isoformat(),
+                    processed_slots=len(processed),
+                    blocked_slots=sorted(blocked),
+                )
+                if args.once:
+                    common.atomic_write_text(
+                        report_path("scanner-5m"),
+                        _render_scanner_report(session_date),
+                    )
+                    return 2
                 continue
             ready, reason = _slot_marker_ready(session_date, signal_end, universe)
             if not ready and not args.ignore_fetch_marker:
@@ -4830,6 +5102,35 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 if ready
                 else set()
             )
+            scan_started_at = common.now_ist()
+            if scan_started_at > slot_deadline:
+                snapshot = _blocked_stale_scanner(
+                    session_date,
+                    signal_end,
+                    universe,
+                    "Scanner inputs became ready after the live activation window.",
+                )
+                _write_scanner_snapshot(session_date, signal_end, snapshot)
+                processed.add(signal_end)
+                blocked.add(signal_end)
+                made_progress = True
+                _heartbeat(
+                    "scanner-5m",
+                    "RUNNING",
+                    phase="STALE_SLOT_BLOCKED",
+                    slot=signal_end,
+                    deadline_ist=slot_deadline.isoformat(),
+                    completed_at_ist=scan_started_at.isoformat(),
+                    processed_slots=len(processed),
+                    blocked_slots=sorted(blocked),
+                )
+                if args.once:
+                    common.atomic_write_text(
+                        report_path("scanner-5m"),
+                        _render_scanner_report(session_date),
+                    )
+                    return 2
+                continue
             stage_started = time.perf_counter()
             snapshot = scan_five_minute_slot(
                 universe,
@@ -4837,8 +5138,36 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 signal_end,
                 verified_no_candle_symbols=verified_skips,
             )
-            _write_scanner_snapshot(session_date, signal_end, snapshot)
             completed_at = common.now_ist()
+            if completed_at > slot_deadline:
+                snapshot = _blocked_stale_scanner(
+                    session_date,
+                    signal_end,
+                    universe,
+                    "Scanner work completed after the live activation window.",
+                )
+                _write_scanner_snapshot(session_date, signal_end, snapshot)
+                processed.add(signal_end)
+                blocked.add(signal_end)
+                made_progress = True
+                _heartbeat(
+                    "scanner-5m",
+                    "RUNNING",
+                    phase="LATE_SCAN_DISCARDED",
+                    slot=signal_end,
+                    deadline_ist=slot_deadline.isoformat(),
+                    completed_at_ist=completed_at.isoformat(),
+                    processed_slots=len(processed),
+                    blocked_slots=sorted(blocked),
+                )
+                if args.once:
+                    common.atomic_write_text(
+                        report_path("scanner-5m"),
+                        _render_scanner_report(session_date),
+                    )
+                    return 2
+                continue
+            _write_scanner_snapshot(session_date, signal_end, snapshot)
             raw_anomalies = [
                 {
                     "source": str(report.get("source", "unknown")),
@@ -4855,6 +5184,8 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 snapshot.get("short_candidates"), 0
             )
             processed.add(signal_end)
+            if str(snapshot.get("state", "")) != "SUCCESS":
+                blocked.add(signal_end)
             made_progress = True
             common.atomic_write_text(report_path("scanner-5m"), _render_scanner_report(session_date))
             _publish(
@@ -4885,6 +5216,7 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                     "BLOCKED",
                     phase="INCOMPLETE_BY_DEADLINE",
                     processed_slots=len(processed),
+                    blocked_slots=sorted(blocked),
                 )
                 common.atomic_write_text(
                     report_path("scanner-5m"), _render_scanner_report(session_date)
@@ -4900,8 +5232,21 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 next_slot=remaining[0] if remaining else "",
                 last_completed_slot=max(processed) if processed else "",
                 processed_slots=len(processed),
+                blocked_slots=sorted(blocked),
             )
             time.sleep(args.poll_sec)
+    if blocked:
+        _publish(
+            "scanner-5m",
+            "BLOCKED",
+            phase="SLOTS_BLOCKED",
+            processed_slots=len(processed),
+            blocked_slots=sorted(blocked),
+        )
+        common.atomic_write_text(
+            report_path("scanner-5m"), _render_scanner_report(session_date)
+        )
+        return 2
     _publish(
         "scanner-5m",
         "DONE",
@@ -5160,6 +5505,15 @@ def run_worker(
                     state["entry_order_activated_at_ist"] = now.isoformat(
                         timespec="seconds"
                     )
+            if (
+                mode == "LIVE"
+                and is_g3_config(config)
+                and _block_pre_activation_g3_entry(signal, state, now)
+            ):
+                # Persist the boundary decision before broker-pool creation.
+                # A dashboard/restart must see the terminal evidence even if
+                # authentication or quote access fails later in this pass.
+                _write_order_state(state)
             states.append(state)
         if mode == "PAPER" and is_modern_config(config):
             # Persist pending expiries even if authentication or quotes fail next.
@@ -5213,6 +5567,7 @@ def run_worker(
             # error merely because no KitePool was constructed.
             if mode == "LIVE" and state.get("status") in TERMINAL_STATES:
                 continue
+            persist_after_advance = True
             try:
                 if mode == "PAPER":
                     price = prices.get(str(state["tradingsymbol"]))
@@ -5270,8 +5625,12 @@ def run_worker(
                         "message": str(exc),
                     }
                 )
-                _write_order_state(state)
-            if mode != "PAPER" or not is_modern_config(config):
+                # Never overwrite malformed or ambiguous risk-book evidence.
+                # An operator must reconcile it before any new entry can pass.
+                persist_after_advance = not isinstance(exc, LiveRiskIntegrityError)
+                if persist_after_advance:
+                    _write_order_state(state)
+            if persist_after_advance and (mode != "PAPER" or not is_modern_config(config)):
                 _write_order_state(state)
         common.atomic_write_text(report_path(role), _render_worker_report(session_date, side, mode))
         counts = {name: sum(state.get("status") == name for state in states) for name in (
@@ -5893,6 +6252,27 @@ def run(args: argparse.Namespace) -> int:
             selected = match
             # Requested-slot runs replace only this generation's live snapshot.
             universe = _load_universe(session_date)
+            slot_deadline = _scanner_slot_deadline(args, session_date, selected)
+            observed_at = common.now_ist()
+            if observed_at > slot_deadline:
+                snapshot = _blocked_stale_scanner(
+                    session_date,
+                    selected,
+                    universe,
+                    "Requested scanner slot is outside the live activation window.",
+                )
+                _write_scanner_snapshot(session_date, selected, snapshot)
+                common.atomic_write_text(
+                    report_path(role), _render_scanner_report(session_date)
+                )
+                _publish(
+                    role,
+                    "BLOCKED",
+                    phase="STALE_SLOT_BLOCKED",
+                    slot=selected,
+                    deadline_ist=slot_deadline.isoformat(),
+                )
+                return 2
             ready, reason = _slot_marker_ready(session_date, selected, universe)
             if not ready and not args.ignore_fetch_marker:
                 _publish(role, "WAITING", phase="WAIT_FETCH", slot=selected, reason=reason)
@@ -5904,12 +6284,53 @@ def run(args: argparse.Namespace) -> int:
                 if ready
                 else set()
             )
+            observed_at = common.now_ist()
+            if observed_at > slot_deadline:
+                snapshot = _blocked_stale_scanner(
+                    session_date,
+                    selected,
+                    universe,
+                    "Requested scanner inputs became ready after the live activation window.",
+                )
+                _write_scanner_snapshot(session_date, selected, snapshot)
+                common.atomic_write_text(
+                    report_path(role), _render_scanner_report(session_date)
+                )
+                _publish(
+                    role,
+                    "BLOCKED",
+                    phase="STALE_SLOT_BLOCKED",
+                    slot=selected,
+                    deadline_ist=slot_deadline.isoformat(),
+                )
+                return 2
             snapshot = scan_five_minute_slot(
                 universe,
                 session_date,
                 selected,
                 verified_no_candle_symbols=verified_skips,
             )
+            completed_at = common.now_ist()
+            if completed_at > slot_deadline:
+                snapshot = _blocked_stale_scanner(
+                    session_date,
+                    selected,
+                    universe,
+                    "Requested scanner work completed after the live activation window.",
+                )
+                _write_scanner_snapshot(session_date, selected, snapshot)
+                common.atomic_write_text(
+                    report_path(role), _render_scanner_report(session_date)
+                )
+                _publish(
+                    role,
+                    "BLOCKED",
+                    phase="LATE_SCAN_DISCARDED",
+                    slot=selected,
+                    deadline_ist=slot_deadline.isoformat(),
+                    completed_at_ist=completed_at.isoformat(),
+                )
+                return 2
             _write_scanner_snapshot(session_date, selected, snapshot)
             common.atomic_write_text(report_path(role), _render_scanner_report(session_date))
             return 0

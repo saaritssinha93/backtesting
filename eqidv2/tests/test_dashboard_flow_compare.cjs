@@ -8,17 +8,18 @@ const family = (label,rows) => ({label,data:{daily:rows}});
 test('common sessions exclude absent dates rather than inserting zero results', () => {
   const entries=[
     family('G-3',[row('2026-09-30',10),row('2026-10-02',-5)]),
+    family('G-4',[row('2026-09-30',10),row('2026-10-02',-5)]),
     family('G-2',[row('2026-09-30',20),row('2026-10-01',100),row('2026-10-02',-10)]),
     family('G',[row('2026-09-30',30),row('2026-10-01',200),row('2026-10-02',-15)]),
   ];
   const common=prepare(entries);
   assert.deepEqual(common.common,['2026-09-30','2026-10-02']);
-  assert.deepEqual(common.families.map(f=>f.summary.net_pnl),[5,10,15]);
+  assert.deepEqual(common.families.map(f=>f.summary.net_pnl),[5,5,10,15]);
   assert.deepEqual(common.families[0].missing,['2026-10-01']);
-  assert.deepEqual(common.families[1].excluded,['2026-10-01']);
+  assert.deepEqual(common.families[2].excluded,['2026-10-01']);
   const full=prepare(entries,'full');
-  assert.deepEqual(full.families.map(f=>f.summary.sessions),[2,3,3]);
-  assert.deepEqual(full.families.map(f=>f.summary.net_pnl),[5,110,215]);
+  assert.deepEqual(full.families.map(f=>f.summary.sessions),[2,2,3,3]);
+  assert.deepEqual(full.families.map(f=>f.summary.net_pnl),[5,5,110,215]);
 });
 
 test('daily drawdown includes loss from a zero starting balance', () => {
@@ -40,13 +41,13 @@ test('monthly aggregation isolates unavailable months and never treats null or i
 
 test('invalid or unavailable calendars prevent a misleading partial common comparison', () => {
   const shared=[row('2026-10-01',0)];
-  const failed=prepare([family('G-3',shared),family('G-2',shared),{label:'G',error:'offline'}]);
+  const failed=prepare([family('G-3',shared),family('G-4',shared),family('G-2',shared),{label:'G',error:'offline'}]);
   assert.equal(failed.allAvailable,false);
   assert.deepEqual(failed.common,[]);
   assert.equal(failed.families[0].summary.net_pnl,null);
-  const duplicates=prepare([family('G-3',[...shared,...shared]),family('G-2',shared),family('G',shared)]);
+  const duplicates=prepare([family('G-3',[...shared,...shared]),family('G-4',shared),family('G-2',shared),family('G',shared)]);
   assert.match(duplicates.families[0].error,/duplicate/);
-  const invalid=prepare([family('G-3',[row('2026-02-30',10)]),family('G-2',shared),family('G',shared)]);
+  const invalid=prepare([family('G-3',[row('2026-02-30',10)]),family('G-4',shared),family('G-2',shared),family('G',shared)]);
   assert.match(invalid.families[0].error,/invalid/);
 });
 
@@ -54,9 +55,10 @@ test('latest run selection retains supplied family and full-history priority', (
   const result=latestRuns([
     {id:'g-full-latest',strategy:'V13-V10-G'},
     {id:'g-daily-newer',strategy:'V13-V10-G'},
+    {id:'g4-latest',strategy:'V13-V10-G-4'},
     {id:'g2-latest',strategy:'V13-V10-G-2'},
     {id:'g3-latest',strategy:'V13-V10-G-3'},
     {id:'g3-archived',strategy:'V13-V10-G-3'},
   ]);
-  assert.deepEqual(result.map(f=>f.run.id),['g3-latest','g2-latest','g-full-latest']);
+  assert.deepEqual(result.map(f=>f.run.id),['g3-latest','g4-latest','g2-latest','g-full-latest']);
 });

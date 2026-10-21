@@ -17,9 +17,9 @@ $tasks = @(
     @{ Name = "EQIDV2_fno_oi_universe_0850"; Time = "08:50"; Runner = "run_fno_oi_universe.bat" }
     @{ Name = "EQIDV2_fno_oi_fetch_5min_fast_production_0905"; Time = "09:05"; Runner = "run_fno_oi_fetch_5min_fast_production.bat"; RepeatMinutes = 5; RepeatDuration = "06:30"; RestartCount = 3 }
     @{ Name = "EQIDV2_fno_oi_feature_ranker_0915"; Time = "09:15"; Runner = "run_fno_oi_feature_ranker.bat" }
-    @{ Name = "EQIDV2_fno_v13_v10_g_scanner_5min_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_scanner_5min.bat"; RepeatMinutes = 5; RepeatDuration = "02:10" }
-    @{ Name = "EQIDV2_fno_v13_v10_g_equity_1min_feed_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_equity_1min_feed.bat"; RepeatMinutes = 5; RepeatDuration = "02:10" }
-    @{ Name = "EQIDV2_fno_v13_v10_g_confirmation_1min_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_confirmation_1min.bat"; RepeatMinutes = 5; RepeatDuration = "02:10" }
+    @{ Name = "EQIDV2_fno_v13_v10_g_scanner_5min_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_scanner_5min.bat"; RepeatMinutes = 5; RepeatDuration = "04:20"; RestartCount = 3 }
+    @{ Name = "EQIDV2_fno_v13_v10_g_equity_1min_feed_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_equity_1min_feed.bat"; RepeatMinutes = 5; RepeatDuration = "04:20"; RestartCount = 3 }
+    @{ Name = "EQIDV2_fno_v13_v10_g_confirmation_1min_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_confirmation_1min.bat"; RepeatMinutes = 5; RepeatDuration = "04:20"; RestartCount = 3 }
     @{ Name = "EQIDV2_fno_v13_v10_g_live_long_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_live_long.bat" }
     @{ Name = "EQIDV2_fno_v13_v10_g_live_short_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_live_short.bat" }
     @{ Name = "EQIDV2_fno_v13_v10_g_trade_logger_0915"; Time = "09:15"; Runner = "run_fno_v13_v10_g_trade_logger.bat" }

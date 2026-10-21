@@ -279,8 +279,9 @@ def _g_completed_volume_history(records: list[dict[str, Any]], expected_end: dat
         volume = float(record.get("volume", float("nan")))
         if not math.isfinite(volume) or volume < 0:
             raise ValueError("Invalid completed volume in G confirmation history")
-        history.append({"timestamp": stamp.isoformat(), "volume": volume})
-    return pd.DataFrame(history, columns=["timestamp", "volume"]).drop_duplicates("timestamp", keep="last")
+        history.append({"timestamp": stamp.isoformat(), "volume": volume,
+                        **{name: record.get(name) for name in ("open", "high", "low", "close")}})
+    return pd.DataFrame(history, columns=["timestamp", "volume", "open", "high", "low", "close"]).drop_duplicates("timestamp", keep="last")
 
 
 def _g_volume_snapshot_valid(bar: dict[str, Any], expected_end: datetime, config: Any) -> bool:
@@ -298,6 +299,11 @@ def _g_volume_snapshot_valid(bar: dict[str, Any], expected_end: datetime, config
             return False
         if not bool(bar.get("confirmation_history_complete", False)):
             return pd.isna(bar.get("v9_1m_volume_ratio"))
+        if (getattr(config, "MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP", None)
+                and pd.Timestamp(expected_end).strftime("%H:%M") == "10:36"):
+            ema20, atr14 = float(bar["v9_1m_ema20"]), float(bar["v9_1m_atr14"])
+            if not (math.isfinite(ema20) and math.isfinite(atr14) and ema20 > 0 and atr14 > 0):
+                return False
         mean = float(bar["confirmation_prior_volume_mean"])
         ratio = float(bar["v9_1m_volume_ratio"])
         return (count == config.CONFIRMATION_VOLUME_LOOKBACK and math.isfinite(mean) and mean > 0

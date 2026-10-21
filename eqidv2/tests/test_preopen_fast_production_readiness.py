@@ -65,12 +65,31 @@ def test_recovery_schedule_contract_accepts_installed_producer_and_g_pattern() -
     g_consumer = preopen.check_recovery_schedule_contract(
         preopen.FNO_V6_SCANNER_TASK,
         start_time=dt.time(9, 15),
-        duration_minutes=130,
-        task_xml=_recovery_task_xml(start="09:15:00", duration="PT130M", restart=False),
+        duration_minutes=260,
+        require_restart=True,
+        task_xml=_recovery_task_xml(start="09:15:00", duration="PT4H20M"),
     )
     assert producer.status == "PASS"
     assert g_consumer.status == "PASS"
     assert list(autofix._iter_actions_for_fail(producer.name)) == []
+
+
+def test_g_recovery_contract_rejects_old_window_and_missing_restart() -> None:
+    base = dict(
+        task_name=preopen.FNO_V6_SCANNER_TASK,
+        start_time=dt.time(9, 15),
+        duration_minutes=260,
+        require_restart=True,
+    )
+    for xml in (
+        _recovery_task_xml(start="09:15:00", duration="PT2H10M"),
+        _recovery_task_xml(
+            start="09:15:00", duration="PT4H20M", restart=False
+        ),
+    ):
+        assert preopen.check_recovery_schedule_contract(
+            **base, task_xml=xml
+        ).status == "FAIL"
 
 
 def test_recovery_schedule_contract_fails_closed_on_drift() -> None:
@@ -268,8 +287,8 @@ def test_first_slot_requires_current_stock_complete_marker_within_60_seconds(
 def test_active_omissions_and_v8_live_exclusivity_are_covered() -> None:
     assert preopen.FNO_FAST_PRODUCTION_TASK in preopen.DASHBOARD_SESSION_TASKS
     assert "EQIDV2_fno_v10_v11_v12_paper_0915" in preopen.DASHBOARD_SESSION_TASKS
-    assert "EQIDV2_fno_v13_v10_g_live_kite_qty1_0915" in preopen.DASHBOARD_SESSION_TASKS
-    assert "EQIDV2_fno_v13_v10_g_live_kite_qty1_0915" in preopen.FNO_V6_CUTOVER_DOWNSTREAM_TASKS
+    assert preopen.FNO_V6_LIVE_KITE_TASK in preopen.DASHBOARD_SESSION_TASKS
+    assert preopen.FNO_V6_LIVE_KITE_TASK in preopen.FNO_V6_CUTOVER_DOWNSTREAM_TASKS
 
 
 def test_fast_autofix_uses_only_scheduler_ignore_new_path() -> None:

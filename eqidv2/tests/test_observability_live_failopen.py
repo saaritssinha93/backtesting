@@ -423,7 +423,9 @@ def test_scoped_broker_position_reconciliation_persists_complete_mismatch(
                     "exchange": "NSE",
                     "product": "MIS",
                     "transaction_type": "SELL",
-                    "order_type": "SL-M",
+                    # Kite reports a market-protected SL-M as SL after it
+                    # calculates the protective limit price.
+                    "order_type": "SL",
                     "quantity": 5,
                 },
                 {

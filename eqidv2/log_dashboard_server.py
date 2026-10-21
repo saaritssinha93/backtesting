@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 from nse_market_calendar import market_closed_reason
 from dashboard_flow_observer_sessions import CARD_TASK_NAMES as OPENING_OBSERVER_TASK_NAMES
 from dashboard_flow_observer_sessions import session_items as opening_observer_session_items
-from fno_strategy_registry import active_profile, expected_fingerprint, deployment_state
+from fno_strategy_registry import DisplayIdentity, active_profile, display_identity, expected_fingerprint, deployment_state
 from fno_v13_v10_g_3_live_execution_policy import execution_metadata as g3_execution_metadata
 from fno_v13_v10_g_3_live_execution_policy import validate_execution_metadata as validate_g3_execution_metadata
 from fno_v13_v10_g_3_live_execution_policy import size_position as size_g3_live_position
@@ -3089,8 +3089,55 @@ def _g3_execution_scalar_evidence(record: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("capital_per_trade_rs", "leverage", "target_exposure_rs"):
         if isinstance(evidence.get(key), str):
             evidence[key] = float(evidence[key])
+    optional_limits = {
+        "max_reserved_open_positions": int,
+        "max_daily_entries": int,
+        "max_reserved_gross_exposure_rs": float,
+    }
+    for key, converter in optional_limits.items():
+        value = evidence.get(key)
+        if isinstance(value, str):
+            evidence[key] = (None if value.strip().lower() in {"", "none", "null"}
+                             else converter(value))
     validate_g3_execution_metadata(evidence)
     return evidence
+
+
+def _fno_g_display_identity(session_date: Any) -> DisplayIdentity:
+    """Resolve a dated read-only reference without accepting arbitrary old status."""
+    fingerprint = expected_fingerprint(FNO_ACTIVE_PROFILE.name)
+    current = DisplayIdentity(FNO_ACTIVE_PROFILE.name, FNO_V13_V10_G_STRATEGY_VERSION, fingerprint, {})
+    if FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or not isinstance(session_date, str):
+        return current
+    try:
+        return display_identity(session_date, FNO_ACTIVE_PROFILE.name, current_fingerprint=fingerprint)
+    except (OSError, ValueError, TypeError):
+        # A malformed migration reference cannot make old evidence valid.
+        return current
+
+
+def _fno_g_status_session_date(status: Dict[str, Any]) -> str | None:
+    """Read the status publisher's explicit date or timezone-aware timestamp."""
+    days = set()
+    for key in ("session_date", "session_date_ist"):
+        value = status.get(key)
+        if value is not None:
+            try:
+                if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                    return None
+                days.add(dt.date.fromisoformat(value).isoformat())
+            except ValueError:
+                return None
+    stamp = status.get("ts") or status.get("updated_at_ist")
+    if stamp:
+        try:
+            parsed = dt.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return None
+            days.add(parsed.astimezone(IST).date().isoformat())
+        except (ValueError, TypeError):
+            return None
+    return next(iter(days)) if len(days) == 1 else None
 
 
 def _apply_g3_options_paper_identity(card_id: str, status: Dict[str, Any]) -> Dict[str, Any]:
@@ -3100,11 +3147,13 @@ def _apply_g3_options_paper_identity(card_id: str, status: Dict[str, Any]) -> Di
     states contain it. Keep that absence explicitly unverified, not mismatched.
     """
     result = dict(status)
-    version = FNO_V13_V10_G_STRATEGY_VERSION
+    session_date = _fno_g_status_session_date(status)
+    identity = _fno_g_display_identity(session_date)
+    version = identity.version
     option_version = f"FNO_V13_V10_G_3_OPTIONS_ONE_LOT_ATM_{FNO_OPTIONS_PROFILE_LABEL}_20261011"
     role = dict(zip(FNO_V13_V10_G_OPTIONS_PAPER_CARD_IDS,
                     ("long-entry", "short-entry", "trade-logger", "net-result")))[card_id]
-    fingerprint = expected_fingerprint(FNO_ACTIVE_PROFILE.name)
+    fingerprint = identity.fingerprint
     observed_fingerprint = str(status.get("strategy_fingerprint", "") or "").strip()
     mismatches = [key for key, value in (
         ("strategy_version", version), ("options_strategy_version", option_version),
@@ -3126,12 +3175,17 @@ def _apply_g3_options_paper_identity(card_id: str, status: Dict[str, Any]) -> Di
                   expected_strategy_fingerprint=fingerprint, active_strategy_profile=FNO_ACTIVE_PROFILE.name,
                   fingerprint_evidence=fingerprint_state,
                   strategy_identity_scope="OPTIONS_PAPER_STATUS_CONTRACT")
+    if identity.previous_session:
+        result.update(display_identity=identity.metadata(),
+                      configured_strategy_version=FNO_V13_V10_G_STRATEGY_VERSION)
     if not mismatches:
         result["strategy_identity_state"] = "MATCH" if fingerprint_state == "MATCH" else "DECLARED_MATCH"
         result["strategy_identity_detail"] = (
             "G3 options PAPER versions, role and premium stop/target match. "
             + ("Equity strategy fingerprint matches." if fingerprint_state == "MATCH" else
                "This status publisher did not include a fingerprint; checksum identity is unverified."))
+        if identity.previous_session:
+            result["strategy_identity_detail"] += f" Recorded {session_date} session uses {version}; configured next-session strategy is {FNO_V13_V10_G_STRATEGY_VERSION}."
         if fingerprint_state == "NOT_PUBLISHED":
             previous = str(status.get("derived_status", "") or "").strip()
             result["derived_status"] = result["strategy_identity_detail"] + (f" {previous}" if previous else "")
@@ -3156,13 +3210,22 @@ def _apply_fno_v13_v10_g_identity(card_id: str, status: Dict[str, Any]) -> Dict[
         return _apply_g3_options_paper_identity(card_id, status)
     result = dict(status)
     observed = str(status.get("strategy_version", "") or "").strip()
-    result["expected_strategy_version"] = FNO_V13_V10_G_STRATEGY_VERSION
-    expected = expected_fingerprint(FNO_ACTIVE_PROFILE.name)
+    session_date = _fno_g_status_session_date(status)
+    identity = _fno_g_display_identity(session_date)
+    result["expected_strategy_version"] = identity.version
+    expected = identity.fingerprint
     observed_fingerprint = str(status.get("strategy_fingerprint", "") or "")
     result["expected_strategy_fingerprint"] = expected
     result["active_strategy_profile"] = FNO_ACTIVE_PROFILE.name
-    if observed == FNO_V13_V10_G_STRATEGY_VERSION and (not expected or observed_fingerprint == expected):
+    if identity.previous_session:
+        result.update(display_identity=identity.metadata(),
+                      configured_strategy_version=FNO_V13_V10_G_STRATEGY_VERSION)
+    if observed == identity.version and (not expected or observed_fingerprint == expected):
         result["strategy_identity_state"] = "MATCH"
+        if identity.previous_session:
+            result["strategy_identity_scope"] = "PREVIOUS_SESSION_READ_ONLY"
+            result["strategy_identity_detail"] = (f"Recorded {session_date} session matches {identity.version}. "
+                f"Configured next-session strategy is {FNO_V13_V10_G_STRATEGY_VERSION}.")
         if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" and card_id in FNO_V13_V10_G_CARD_IDS[-4:]:
             result["configured_live_execution_policy"] = g3_execution_metadata()
             try:
@@ -3199,7 +3262,7 @@ def _apply_fno_v13_v10_g_identity(card_id: str, status: Dict[str, Any]) -> Dict[
         return result
     result["strategy_identity_state"] = "MISMATCH" if observed else "AWAITING_G_RUNTIME"
     result["strategy_identity_detail"] = (
-        f"Expected {FNO_ACTIVE_PROFILE.label} with its current configuration; observed {observed}. Awaiting matching runtime evidence."
+        f"Expected {FNO_ACTIVE_PROFILE.label} {identity.version} for this session; observed {observed}. Awaiting matching runtime evidence."
         if observed else f"Awaiting {FNO_ACTIVE_PROFILE.label} runtime evidence in its isolated data directory."
     )
     previous_detail = str(status.get("derived_status", "") or "").strip()
@@ -4766,7 +4829,9 @@ def _fno_eq_id_timeline_v6_confirmation_valid(
     session_date: str,
     signal_slot: str,
     confirmation_slot: str,
+    expected_identity: DisplayIdentity | None = None,
 ) -> bool:
+    identity = expected_identity or _fno_g_display_identity(session_date)
     candidate_count = _fno_eq_id_timeline_number(payload.get("candidate_count"))
     confirmation_bars = _fno_eq_id_timeline_number(payload.get("confirmation_bars"))
     no_candle = _fno_eq_id_timeline_number(payload.get("ineligible_no_candle_count", 0))
@@ -4784,8 +4849,8 @@ def _fno_eq_id_timeline_v6_confirmation_valid(
         return False
     return bool(
         payload.get("session_date") == session_date
-        and payload.get("strategy_version") == FNO_V13_V10_G_STRATEGY_VERSION
-        and (FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or payload.get("strategy_fingerprint") == expected_fingerprint())
+        and payload.get("strategy_version") == identity.version
+        and (FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or payload.get("strategy_fingerprint") == identity.fingerprint)
         and payload.get("signal_end") == signal_slot
         and payload.get("confirmation_end") == confirmation_slot
         and str(payload.get("state", "") or "").strip().upper() in {"SUCCESS", "COMPLETE"}
@@ -4821,11 +4886,13 @@ def _fno_v13_v10_g_timeline_minutes(
     return tuple(sorted(minutes))
 
 
-def _g3_live_timeline_evidence_valid(record: Dict[str, Any], *, trade: bool = False) -> bool:
+def _g3_live_timeline_evidence_valid(record: Dict[str, Any], *, trade: bool = False,
+                                   expected_identity: DisplayIdentity | None = None) -> bool:
     try:
         _g3_execution_scalar_evidence(record)
-        if (record.get("strategy_version") != FNO_V13_V10_G_STRATEGY_VERSION
-                or record.get("strategy_fingerprint") != expected_fingerprint(FNO_ACTIVE_PROFILE.name)):
+        identity = expected_identity or _fno_g_display_identity(_fno_g_status_session_date(record))
+        if (record.get("strategy_version") != identity.version
+                or record.get("strategy_fingerprint") != identity.fingerprint):
             return False
         if trade:
             quantity = _fno_eq_id_timeline_number(record.get("quantity"))
@@ -4849,6 +4916,7 @@ def _build_fno_eq_id_strategy_timelines(
     current = now_ist or dt.datetime.now(IST)
     current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
     session_date = current.date().isoformat()
+    timeline_identity = _fno_g_display_identity(session_date)
     closed_reason = market_closed_reason(current.date())
     if closed_reason:
         return {
@@ -4890,8 +4958,8 @@ def _build_fno_eq_id_strategy_timelines(
         v6_live_status = {}
     v6_live_policy_invalid = False
     if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3":
-        v6_live_policy_invalid = bool(v6_live_status) and not _g3_live_timeline_evidence_valid(v6_live_status)
-        v6_live_policy_invalid |= any(not _g3_live_timeline_evidence_valid(row, trade=True) for row in v6_live_trade_rows)
+        v6_live_policy_invalid = bool(v6_live_status) and not _g3_live_timeline_evidence_valid(v6_live_status, expected_identity=timeline_identity)
+        v6_live_policy_invalid |= any(not _g3_live_timeline_evidence_valid(row, trade=True, expected_identity=timeline_identity) for row in v6_live_trade_rows)
         if v6_live_policy_invalid:
             # An invalid ledger must not become a believable zero-fill day.
             v6_live_status, v6_live_trade_rows = {}, []
@@ -5041,7 +5109,8 @@ def _build_fno_eq_id_strategy_timelines(
         if slot == "09:15":
             purpose = "OPEN SNAPSHOT"
         elif slot == "09:20":
-            purpose = "G-3 LONG SELECTION (09:21 CONFIRM)" if slot in FNO_V13_V10_G_SIGNAL_SLOTS else "DATA/OI WARMUP"
+            opening_sides = "/".join(s["side"] for s in timeline_identity.configuration.get("active_setups", []) if s["signal_end"] == slot) or "LONG"
+            purpose = f"G-3 {opening_sides} SELECTION (09:21 CONFIRM)" if slot in FNO_V13_V10_G_SIGNAL_SLOTS else "DATA/OI WARMUP"
         elif slot in FNO_V13_V10_G_SIGNAL_SLOTS and slot not in FNO_EQ_ID_STRATEGY_SIGNAL_SLOTS:
             purpose = "G STRATEGY SELECTION"
         else:
@@ -5061,8 +5130,8 @@ def _build_fno_eq_id_strategy_timelines(
                 valid_scanner = (
                     str(scanner.get("session_date", "") or "") == session_date
                     and str(scanner.get("signal_end", "") or "") == slot
-                    and scanner.get("strategy_version") == FNO_V13_V10_G_STRATEGY_VERSION
-                    and (FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or scanner.get("strategy_fingerprint") == expected_fingerprint())
+                    and scanner.get("strategy_version") == timeline_identity.version
+                    and (FNO_ACTIVE_PROFILE.name != "V13_V10_G_3" or scanner.get("strategy_fingerprint") == timeline_identity.fingerprint)
                 )
                 if not valid_scanner:
                     v6_cell = "EVIDENCE MISMATCH"
@@ -5090,6 +5159,7 @@ def _build_fno_eq_id_strategy_timelines(
                                 session_date=session_date,
                                 signal_slot=slot,
                                 confirmation_slot=confirmation_slot,
+                                expected_identity=timeline_identity,
                             )
                             if not valid_confirmation:
                                 confirmation_text = (
@@ -5594,6 +5664,7 @@ def _build_fno_eq_id_strategy_timelines(
     return {
         "session_date": session_date,
         "generated_at_ist": current.isoformat(timespec="seconds"),
+        "display_identity": timeline_identity.metadata(),
         "five_minute_rows": five_minute_rows,
         "one_minute_rows": one_minute_rows,
         "generic_1m_state": generic_1m_state,
@@ -5621,7 +5692,8 @@ def _format_fno_eq_id_strategy_timelines(timeline: Dict[str, Any]) -> list[str]:
         f"## 5-Minute Market Readiness (G selection slots through {max(FNO_V13_V10_G_SIGNAL_SLOTS)} IST)",
         "",
         f"- Session date: `{_fno_eq_id_monitor_clean(timeline.get('session_date'))}`; every label is a completed-candle end in IST.",
-        "- `09:15` is the opening snapshot. Active G-family signal times: " + ", ".join(f"`{slot}`" for slot in FNO_V13_V10_G_SIGNAL_SLOTS) + ". G-3 includes 09:20 LONG with exact 09:21 confirmation and verified opening OI. The separate shared V10/V11/V12 session keeps its `09:25-09:45` windows.",
+        "- `09:15` is the opening snapshot. Active G-family signal times: " + ", ".join(f"`{slot}`" for slot in FNO_V13_V10_G_SIGNAL_SLOTS) + ". G-3 opening setups use exact 09:21 confirmation and verified opening OI. The separate shared V10/V11/V12 session keeps its `09:25-09:45` windows.",
+        "- Displayed session strategy: " + _fno_eq_id_monitor_clean(timeline.get("display_identity", {}).get("strategy_version", FNO_V13_V10_G_STRATEGY_VERSION)) + ".",
         "",
         "| 5m end | Purpose | Equity 5m | Futures OI | OI ranker |",
         "|---|---|---|---|---|",
@@ -7500,6 +7572,64 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Stock monitoring evidence is temporarily unavailable."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             self._send_json(payload, compress=True)
+            return
+        if parsed.path == "/api/g3-trade-monitor":
+            from dashboard_g3_trade_monitor import session_date, load_snapshot
+            if len(params.get("date", [])) > 1:
+                self._send_json({"error": "Specify one monitoring session date."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                day = session_date((params.get("date") or [None])[0]).isoformat()
+            except ValueError:
+                self._send_json({"error": "Use a valid date in YYYY-MM-DD format, no later than today."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                payload = _cached_dashboard_read(("g3-trade-monitor", day), lambda: load_snapshot(day), ttl=2.)
+            except Exception:
+                self._send_json({"error": "Read-only trade monitoring is temporarily unavailable. Refresh to retry."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
+            return
+        if parsed.path == "/api/g3-trade-monitor/backtest":
+            from dashboard_g3_trade_monitor import load_backtest_payload
+            try:
+                payload = _cached_dashboard_read(("g3-trade-monitor-backtest",), load_backtest_payload, ttl=15.)
+            except Exception:
+                self._send_json({"error": "Verified monitor research is temporarily unavailable."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json(payload, compress=True)
+            return
+        if parsed.path.startswith("/g3-trade-monitor-backtest/"):
+            from dashboard_g3_trade_monitor import backtest_artifact
+            name = parsed.path.removeprefix("/g3-trade-monitor-backtest/")
+            try:
+                body, mime_type = backtest_artifact(name)
+            except ValueError:
+                self._send_json({"error": "Unknown or unverified monitor research artifact."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            except Exception:
+                self._send_json({"error": "Verified monitor research is temporarily unavailable."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            if name == "report.html":
+                from html import escape
+                from urllib.parse import urlencode
+                from dashboard_g3_trade_monitor import ARTIFACTS
+                token = (params.get("token") or [""])[0]
+                page = body.decode("utf-8")
+                for artifact in ARTIFACTS:
+                    link = "/g3-trade-monitor-backtest/" + artifact
+                    if token:
+                        link += "?" + urlencode({"token": token})
+                    page = page.replace('href="' + artifact + '"', 'href="' + escape(link, quote=True) + '"')
+                body = page.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if parsed.path == "/api/log":
             name = (params.get("name") or [""])[0]
@@ -9724,6 +9854,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
     </div>
     <nav class="terminal-nav" aria-label="Terminal workspace">
       <button type="button" data-terminal-view="cockpit" aria-pressed="true" aria-controls="liveCockpit">Live &amp; Paper</button>
+      <button type="button" data-terminal-view="g3monitor" aria-pressed="false" aria-controls="g3TradeMonitor">G3 Trade Monitor ·15s</button>
       <button type="button" data-terminal-view="operations" aria-pressed="false" aria-controls="terminalOperations">Operations &amp; logs</button>
       <span class="terminal-nav-note">V13-V10-G / RECORDED EVIDENCE / IST</span>
     </nav>
@@ -9731,6 +9862,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <div class="refresh-notice" id="refreshNotice" role="status" hidden></div>
   <main class="terminal-workspace">
     <section id="liveCockpit" aria-label="V13-V10-G live and paper monitoring"><p>Loading trading evidence...</p></section>
+    <section id="g3TradeMonitor" class="g3tm-panel" aria-label="G3 advisory trade monitoring and separate one-minute research" data-read-only="true" hidden></section>
     <section id="terminalOperations" aria-label="Operations and logs" hidden>
       <div class="operations-heading"><div><h2>Operations &amp; logs</h2><p>Worker health, data coverage and the existing session controls.</p></div><div class="operations-tools">
         <button type="button" class="theme-toggle" id="timelineToggle" title="Show or hide timeline">Timeline</button>
@@ -9763,8 +9895,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
   <script>__FNO_MONITOR_JS__</script>
   <script>__OPS_STATE_JS__</script>
   <script>__COCKPIT_JS__</script>
+  <style>__G3_TRADE_MONITOR_CSS__</style>
+  <script>__G3_TRADE_MONITOR_JS__</script>
   <script>
     const LOG_ORDER = [
+      "g3_trade_monitor",
+      "g3_trade_monitor_backtest",
       "nifty_guard_fetch_v16_5min",
       "eod_5min_data",
       "kiteticker_5min_data",
@@ -9870,6 +10006,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       "eod_1540_update"
     ];
     const LOG_TITLES = {
+      "g3_trade_monitor": "G3 Trade Monitor ·15s",
+      "g3_trade_monitor_backtest": "G3 Monitor Backtest ·1m",
       "dashboard_flow_opening_observer": "G3 LIVE / PAPER opening-data observer",
       "dashboard_flow_opening_history": "G3 BACKTEST opening-data recovery",
       "signal_early_engine_v16_5min":  "V16 5min Signal Early Engine (SEE)",
@@ -9997,6 +10135,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         accent: "market",
         ids: [
           "v7_live_5min_monitor",
+          "g3_trade_monitor",
+          "g3_trade_monitor_backtest",
           "fno_oi_universe",
           "fno_oi_fetch_5min_fast_production",
           "fno_oi_fetch_5min",
@@ -10021,6 +10161,12 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
           "fno_oi_eod_qc"
         ],
         subgroups: [
+          {
+            key: "g3-trade-monitoring",
+            title: "G3 Trade Monitoring",
+            note: "advisory only | PAPER / LIVE recorded fills | 15s refresh | separate 1m research",
+            ids: ["g3_trade_monitor", "g3_trade_monitor_backtest"]
+          },
           {
             key: "fno-v13-v10-g-live-kite-qty1",
             title: "FnO V13-V10-G Live Kite - Quantity 1",
@@ -10451,18 +10597,23 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
 
     const cockpit = window.DashboardCockpit.mount({host: document.getElementById("liveCockpit"), apiUrl});
     cockpit.setPaused(AUTO_REFRESH_PAUSED);
+    const g3TradeMonitor = window.G3TradeMonitor.mount(document.getElementById("g3TradeMonitor"), {token: API_TOKEN});
+    g3TradeMonitor.setPaused(AUTO_REFRESH_PAUSED);
     function setTerminalView(view) {
+      view = ["cockpit", "operations", "g3monitor"].includes(view) ? view : "cockpit";
       const operations = view === "operations";
-      document.getElementById("liveCockpit").hidden = operations;
+      document.getElementById("liveCockpit").hidden = view !== "cockpit";
       document.getElementById("terminalOperations").hidden = !operations;
+      document.getElementById("g3TradeMonitor").hidden = view !== "g3monitor";
+      g3TradeMonitor.setActive(view === "g3monitor");
       document.querySelectorAll("[data-terminal-view]").forEach(button => {
-        button.setAttribute("aria-pressed", String(button.dataset.terminalView === (operations ? "operations" : "cockpit")));
+        button.setAttribute("aria-pressed", String(button.dataset.terminalView === view));
       });
-      sessionStorage.setItem("eqidv2_terminal_view", operations ? "operations" : "cockpit");
+      sessionStorage.setItem("eqidv2_terminal_view", view);
       window.dispatchEvent(new Event("resize"));
     }
     document.querySelectorAll("[data-terminal-view]").forEach(button => button.addEventListener("click", () => setTerminalView(button.dataset.terminalView)));
-    setTerminalView(sessionStorage.getItem("eqidv2_terminal_view") || "cockpit");
+    setTerminalView(window.location.hash === "#g3-trade-monitor" ? "g3monitor" : sessionStorage.getItem("eqidv2_terminal_view") || "cockpit");
 
     function displayName(id) {
       return LOG_TITLES[id] || id;
@@ -10697,7 +10848,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         return title.includes("v7") || title.includes("id_5min") || title.includes("5mins id");
       }
       if (filter === "v16") return title.includes("v16");
-      if (filter === "fno") return id.startsWith("fno_") || id === "v7_live_5min_monitor";
+      if (filter === "fno") return id.startsWith("fno_") || id.startsWith("g3_trade_monitor") || id === "v7_live_5min_monitor";
       if (filter === "paper") return title.includes("paper");
       if (filter === "live") return title.includes("live") || title.includes("kite");
       if (filter === "research") {
@@ -10806,6 +10957,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
       document.getElementById("autoRefreshBtn").addEventListener("click", () => {
         AUTO_REFRESH_PAUSED = !AUTO_REFRESH_PAUSED;
         cockpit.setPaused(AUTO_REFRESH_PAUSED);
+        g3TradeMonitor.setPaused(AUTO_REFRESH_PAUSED);
         sessionStorage.setItem("eqidv2_dashboard_paused", AUTO_REFRESH_PAUSED ? "1" : "0");
         refreshStatusText();
         if (!AUTO_REFRESH_PAUSED) loadNow();
@@ -11868,6 +12020,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
               </div>
               ${killControls}
               ${["dashboard_flow_opening_observer", "dashboard_flow_opening_history"].includes(id) ? `<div class="compact-desc"><a href="${esc(apiUrl('/dashboard-flow') + '#live')}" target="_blank" rel="noopener noreferrer">Open opening-data analysis in Dashboard Flow &#8599;</a> &middot; Reporting only</div>` : ""}
+              ${["g3_trade_monitor", "g3_trade_monitor_backtest"].includes(id) ? '<div class="compact-desc"><button type="button" data-open-g3-monitor="true">Open G3 Trade Monitor and separate 1m research</button> · Advisory only</div>' : ""}
               ${id === "v7_live_5min_monitor" ? '<section id="fno-stock-monitor" class="fno-detail-panel" data-read-only="true" aria-label="Stock-level 5-minute and 1-minute monitoring"></section>' : ""}
               ${isEmptyLog ? `<div class="empty-state"><div><strong>${esc(emptyLabel)}</strong><span>${esc(emptyHint)}</span></div></div>` : `<pre>${esc(logText)}</pre>`}
             </div>
@@ -11953,6 +12106,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         if (window.FnoMonitor) window.FnoMonitor.beforeRefresh();
         cards.innerHTML = html;
         wireCardControls();
+        cards.querySelectorAll("[data-open-g3-monitor]").forEach(button => button.addEventListener("click", () => setTerminalView("g3monitor")));
         wirePinControls();
         wireLogToggleControls();
         wireStatusFilters();
@@ -12000,6 +12154,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
         html = html.replace("__G_BACKTEST_TIME__", "17:15" if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" else "16:20")
         html = html.replace("__FNO_MONITOR_CSS__", (BASE_DIR / "dashboard_fno_monitor.css").read_text(encoding="utf-8"))
         html = html.replace("__FNO_MONITOR_JS__", (BASE_DIR / "dashboard_fno_monitor.js").read_text(encoding="utf-8"))
+        html = html.replace("__G3_TRADE_MONITOR_CSS__", (BASE_DIR / "dashboard_g3_trade_monitor.css").read_text(encoding="utf-8"))
+        html = html.replace("__G3_TRADE_MONITOR_JS__", (BASE_DIR / "dashboard_g3_trade_monitor.js").read_text(encoding="utf-8"))
         html = html.replace("__OPS_STATE_JS__", (BASE_DIR / "dashboard_ops_state.js").read_text(encoding="utf-8"))
         html = html.replace("__TERMINAL_CSS__", (BASE_DIR / "dashboard_terminal.css").read_text(encoding="utf-8"))
         html = html.replace("__COCKPIT_CSS__", (BASE_DIR / "dashboard_cockpit.css").read_text(encoding="utf-8"))
@@ -13226,6 +13382,8 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             }
 
         items.extend(opening_observer_session_items(runtime_dir()))
+        from dashboard_g3_trade_monitor import session_items as g3_monitor_session_items
+        items.extend(g3_monitor_session_items())
         for item in items:
             item["status"] = apply_scheduler_status(str(item.get("id", "")), item.get("status", {}), task_snapshot)
             item["status"] = _apply_fno_v13_v10_g_identity(str(item.get("id", "")), item["status"])
@@ -13247,6 +13405,7 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
             "server_time": dt.datetime.now().isoformat(sep=" ", timespec="seconds"),
             "active_strategy": {"profile": FNO_ACTIVE_PROFILE.name, "label": FNO_ACTIVE_PROFILE.label,
                                 "version": FNO_ACTIVE_PROFILE.version, "fingerprint": expected_fingerprint(),
+                                "displayed_session_identity": _fno_g_display_identity(dt.datetime.now(IST).date().isoformat()).metadata(),
                                 "deployment_stage": deployment_state().get("deployment_stage"),
                                 "live_activation_authorized": deployment_state().get("live_activation_authorized") is True,
                                 "live_execution_policy": g3_execution_metadata() if FNO_ACTIVE_PROFILE.name == "V13_V10_G_3" else None},

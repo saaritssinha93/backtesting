@@ -16,6 +16,7 @@ import re
 import pandas as pd
 
 from eqidv2_runtime_paths import RUNTIME_ROOT
+import fno_oi_common as common
 from fno_v13_v10_g_3_opening_oi import (
     _quality, _stamp, bootstrap_0920_oi_change, bootstrap_0920_oi_change_from_quote,
 )
@@ -27,7 +28,7 @@ PRICE_BASIS = "09:15_CASH_OPEN_TO_09:20_CASH_CLOSE"
 def load_futures_frame(path):
     """Retain contract, expiry, source quality and receipt (legacy loader drops them)."""
     try:
-        frame = pd.read_parquet(path)
+        frame = common.read_parquet_snapshot(path)
         frame["ts"] = pd.to_datetime(frame["timestamp"], utc=True).dt.tz_convert("Asia/Kolkata")
         return frame.sort_values("ts").reset_index(drop=True)
     except (OSError, KeyError, ValueError):

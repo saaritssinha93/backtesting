@@ -87,7 +87,7 @@ def selected_setups(config):
                 max_entries=1, picker="max_liquidity", price_change_pct=level["price_change_pct"],
                 oi_change_pct=level["oi_change_pct"], volume_ratio=level["five_minute_volume_ratio_min"],
                 body_ratio=level["one_minute_body_ratio_min"], max_wick_ratio=level["one_minute_wick_ratio_max"],
-                stop_pct=1.25, target_pct=row["target_pct"], source_version=VERSION)
+                stop_pct=1.25, target_pct=row["target_pct"], source_version=config["variant_id"])
             specs.append(spec)
             volumes[spec.setup_id] = level["one_minute_volume_ratio_min"]
         contract.CORE_SETUPS = contract.ACTIVE_SETUPS = tuple(specs)
@@ -95,7 +95,7 @@ def selected_setups(config):
         contract._ACTIVE_BY_ID = dict(contract._CORE_BY_ID)
         contract.MIN_CONFIRMATION_VOLUME_BY_SETUP = volumes
         contract.SIGNAL_TO_CONFIRMATION = {s.signal_end: s.confirmation_end for s in specs}
-        contract.STRATEGY_PROFILE = contract.STRATEGY_VERSION = contract.ACCEPTED_VARIANT = VERSION
+        contract.STRATEGY_PROFILE = contract.STRATEGY_VERSION = contract.ACCEPTED_VARIANT = config["variant_id"]
         yield
     finally:
         for name, before in old.items():
@@ -131,7 +131,8 @@ def metrics(frame, days):
 def write_report(output, summary, setups, monthly, periods, daily):
     page = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>G4 selected ten full backtest</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;background:#f4f7fa;color:#172a3d;margin:30px}h1,h2{line-height:1.2}.note{background:#fff0ce;padding:16px;border-left:4px solid #b78000}.scroll{overflow:auto;max-height:650px;margin:18px 0 30px}table{border-collapse:collapse;background:white;width:100%}th,td{padding:9px;border-bottom:1px solid #d8e0e8;text-align:right;white-space:nowrap}th{background:#243d57;color:white;position:sticky;top:0}td:first-child,th:first-child{text-align:left}a{color:#075db6}p{max-width:1150px}</style></head><body><h1>G4: the ten selected additions</h1>'''
-    page += f"<p>{summary['first_date']} to {summary['last_date']}: {summary['sessions']} sessions. The original 27 G4 setups plus exactly ten selected additions; no new threshold or target optimization in this run.</p>"
+    page = page.replace("G4 selected ten full backtest", "G4 selected additions full backtest").replace("G4: the ten selected additions", f"G4: {summary['original_setups']} existing + {summary['added_setups']} selected additions")
+    page += f"<p>{summary['first_date']} to {summary['last_date']}: {summary['sessions']} sessions. The existing {summary['original_setups']} G4 setups plus exactly {summary['added_setups']} selected additions; no new threshold or target optimization in this run.</p>"
     page += '<div class=note>Targets and this subset were selected after inspecting historical results. Full-period and later-period outcomes are descriptive, not untouched out-of-sample validation. October 1 is excluded because immutable input was incomplete.</div>'
     page += '<p>New entries use exact next-minute confirmation and the highest-liquidity qualifying stock, at most once per setup/session. Target percentages are those selected in the preceding target study. Stops remain 1.25%, tightening to 1.00% after 120 minutes; entry expiry is ten minutes and square-off is 15:15.</p>'
     page += '<p>Capital is Rs 100,000 per entry at five-times exposure, with Rs 1,000,000 portfolio capital. P&amp;L deducts five basis points round-trip cost. Wins mean positive net P&amp;L, including profitable time exits. Drawdown is measured from daily realized P&amp;L. Extra slippage, market impact and broker-specific charges are not modeled.</p>'
@@ -139,10 +140,10 @@ def write_report(output, summary, setups, monthly, periods, daily):
     headline_cols = ["scope", "selected_orders", "executed_trades", "wins", "losses", "win_rate_pct", "net_pnl_rs", "max_drawdown_rs", "profit_factor"]
     setup_cols = ["setup_id", "signal_end", "side", "native_target_pct", "executed_trades", "wins", "losses", "win_rate_pct", "net_pnl_rs", "max_drawdown_rs"]
     tables = [("Portfolio totals", totals[headline_cols]),
-        ("The ten additions: actual portfolio executions", setups.loc[setups.addition, setup_cols]),
+        ("Selected additions: actual portfolio executions", setups.loc[setups.addition, setup_cols]),
         ("Monthly results", monthly[["month", "scope", "executed_trades", "wins", "win_rate_pct", "net_pnl_rs", "max_drawdown_rs"]]),
         ("Original training and later periods", periods[["period", "scope", "executed_trades", "wins", "win_rate_pct", "net_pnl_rs"]]),
-        ("All 37 configured setups", setups[setup_cols]),
+        (f"All {summary['total_setups']} configured setups", setups[setup_cols]),
         ("Combined daily results", daily.loc[daily.scope.eq("combined"), ["day", "executed_trades", "wins", "losses", "net_pnl_rs", "cumulative_net_pnl_rs", "daily_drawdown_rs"]])]
     for title, frame in tables:
         page += f'<h2>{html.escape(title)}</h2><div class=scroll>{frame.to_html(index=False,border=0,na_rep="—",float_format=lambda v:f"{v:,.2f}")}</div>'

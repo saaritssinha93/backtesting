@@ -542,6 +542,17 @@ def _observed_pool(minute: pd.DataFrame, future: pd.DataFrame, *, day: date,
     denominator = volume.shift(1).rolling(20, min_periods=5).mean()
     confirmation = minute[["ts", "open", "high", "low", "close", "volume"]].copy()
     confirmation["v9_1m_volume_ratio"] = volume.div(denominator.where(denominator.gt(0)))
+    # Point-in-time 10:36 entry extension for the G3 10:35 LONG/SHORT setups.
+    # Compute before selecting the confirmation row so the EMA and ATR see
+    # completed history through that row, never subsequent candles.
+    if (five.confirmation_ts.dt.strftime("%H:%M") == "10:36").any():
+        one_close = pd.to_numeric(minute.close, errors="coerce")
+        previous_close = one_close.shift()
+        true_range = pd.concat([minute.high - minute.low,
+            (minute.high - previous_close).abs(),
+            (minute.low - previous_close).abs()], axis=1).max(axis=1)
+        confirmation["v9_1m_ema20"] = one_close.ewm(span=20, adjust=False).mean()
+        confirmation["v9_1m_atr14"] = true_range.rolling(14, min_periods=14).mean()
     confirmation = confirmation.loc[confirmation.ts.isin(five.confirmation_ts)].copy()
     confirmation["v9_1m_feature_ts"] = confirmation.ts
     o, h, low, c = [confirmation[name].astype(float) for name in ("open", "high", "low", "close")]
@@ -634,8 +645,12 @@ def build_day_features(day: date, *, roots: DataRoots, signal_clocks=None) -> di
                         pool[key] = None
                     pool.loc[opening_mask, key] = value
                 if opening["opening_0920_status"] != "VALID":
+                    opening_setups = [s for s in config.ACTIVE_SETUPS if s.signal_end == "09:20"]
                     result["opening_0920_exclusions"].append(dict(symbol=symbol,
-                        reason="MISSING_OR_INVALID_0920_OPENING_OI", setup_id="0921_LONG"))
+                        reason="MISSING_OR_INVALID_0920_OPENING_OI",
+                        setup_id=opening_setups[0].setup_id if len(opening_setups) == 1 else "",
+                        setup_ids=[s.setup_id for s in opening_setups],
+                        sides=[s.side for s in opening_setups]))
             pool["instrument_token"] = int(contract["equity_instrument_token"])
             pool["futures_instrument_token"] = int(contract["futures_instrument_token"])
             pool["exchange"] = "NSE"

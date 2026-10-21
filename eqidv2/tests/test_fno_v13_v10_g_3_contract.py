@@ -42,13 +42,13 @@ def candidate(symbol="A", *, side="LONG", signal="09:30", **changes):
 def test_normalized_effective_book_and_frozen_metadata_are_distinct():
     config.validate_strategy()
     assert config.strategy_fingerprint() == contract.config_fingerprint()
-    assert len(config.ACTIVE_SETUPS) == 32
+    assert len(config.ACTIVE_SETUPS) == 61
     assert config.setup_for("09:50", "LONG").target_pct == .75
     assert config.setup_for("09:55", "SHORT") is None
     assert config.setup_for("10:00", "SHORT") is None
     assert config.setup_for("09:55", "LONG").target_pct == .9
     assert config.setup_for("09:25", "LONG").stop_pct == 1.25
-    assert config.setup_for("09:25", "LONG", session_date=date(2026, 10, 9)).volume_ratio == 3.
+    assert config.setup_for("09:25", "LONG", session_date=date(2026, 10, 9)).volume_ratio == 1.2
     assert config.setup_for("09:25", "LONG", session_date=date(2026, 10, 9)).body_ratio == .6
     if not FROZEN.exists():
         pytest.skip("Accepted external evidence archive unavailable")
@@ -63,8 +63,9 @@ def test_promoted_setup_matches_research_without_changing_existing_rules():
     research = json.loads((ROOT / "configs/strategies/v13_v10_g_3_backtest_0950_long_target075_v1.json").read_text())["new_setup"]
     current = contract.strategy_payload()
     for family in ("core_setups", "active_setups"):
-        retained = [{**asdict(s), "source_version": contract.LEGACY_STRATEGY_VERSION}
-                    for s in getattr(contract, family.upper()) if s.setup_id not in {"0921_LONG", "0951_LONG", *contract.late_setups.SETUP_IDS, *contract.selected_setups.SETUP_IDS}]
+        retained = [{**asdict(s), "source_version": contract.LEGACY_STRATEGY_VERSION,
+                     "volume_ratio": 3.0 if s.setup_id == "0926_LONG" else s.volume_ratio}
+                    for s in getattr(contract, family.upper()) if s.setup_id not in {"0921_LONG", "0951_LONG", *contract.ADDED_SETUP_IDS, *contract.late_setups.SETUP_IDS, *contract.selected_setups.SETUP_IDS, *contract.midday_setups.SETUP_IDS, *contract.afternoon_setups.SETUP_IDS}]
         assert retained == prior[family]
     setup = contract.setup_for("09:50", "LONG")
     for key in ("signal_end", "confirmation_end", "side", "mode", "max_entries", "picker",
@@ -74,6 +75,8 @@ def test_promoted_setup_matches_research_without_changing_existing_rules():
         research["five_minute_volume_ratio_min"], research["one_minute_body_ratio_min"],
         research["one_minute_upper_wick_ratio_max"], research["initial_stop_pct"])
     assert contract.confirmation_volume_minimum("LONG", signal_end="09:50") == research["one_minute_volume_ratio_min"]
+    assert contract.confirmation_volume_minimum("LONG", signal_end="09:40") == .8
+    assert contract.confirmation_volume_minimum("SHORT", signal_end="09:40") == 1.2
     assert contract.confirmation_volume_minimum("LONG", signal_end="09:55") == 1.1
     assert contract.confirmation_volume_minimum("SHORT", signal_end="09:50") == 1.2
     assert current["exit"]["tighten_after_minutes"] == research["tighten_after_minutes"]
@@ -92,12 +95,48 @@ def test_all_setup_boundary_thresholds_and_quotas(setup):
         oi_change_pct=setup.oi_change_pct, volume_ratio=setup.volume_ratio,
         body_ratio=setup.body_ratio, wick_ratio=setup.max_wick_ratio,
         v9_1m_volume_ratio=config.confirmation_volume_minimum(side, setup_id=setup.setup_id))
+    if setup.setup_id in config.MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP:
+        row.update(confirm_open=100., confirm_high=102. if side == "LONG" else 100.1,
+                   confirm_low=99.9 if side == "LONG" else 98.,
+                   confirm_close=101.8 if side == "LONG" else 98.2,
+                   v9_1m_ema20=100., v9_1m_atr14=1.)
     assert config.passes_selected_filters(row, setup)
     for field in ("oi_change_pct", "volume_ratio", "body_ratio", "v9_1m_volume_ratio"):
         assert not config.passes_selected_filters({**row,field:row[field]-1e-9},setup), field
     assert not config.passes_selected_filters({**row,"wick_ratio":setup.max_wick_ratio+1e-9},setup)
     changed_price = row["price_change_pct"] - (1e-9 if side == "LONG" else -1e-9)
     assert not config.passes_selected_filters({**row,"price_change_pct":changed_price},setup)
+
+
+@pytest.mark.parametrize("side", ["LONG", "SHORT"])
+def test_1035_one_minute_extension_is_causal_symmetric_and_fails_closed(side):
+    setup = config.setup_for("10:35", side)
+    direction = 1 if side == "LONG" else -1
+    row = candidate(side=side, signal="10:35", v9_1m_ema20=100., v9_1m_atr14=1.,
+        confirm_open=100., confirm_high=104. if side == "LONG" else 100.1,
+        confirm_low=99.9 if side == "LONG" else 96., confirm_close=100. + 3. * direction)
+    assert config.passes_selected_filters(row, setup)
+    assert not config.passes_selected_filters({**row, "confirm_close":100. + 3.01 * direction}, setup)
+    assert not config.passes_selected_filters({**row, "v9_1m_atr14":None}, setup)
+    assert not config.passes_selected_filters({**row, "v9_1m_ema20":None}, setup)
+
+
+def test_1035_live_extension_uses_only_completed_confirmation_history():
+    stamps = pd.date_range("2026-10-09 10:06", periods=30, freq="min", tz="Asia/Kolkata")
+    history = pd.DataFrame(dict(timestamp=[s.isoformat() for s in stamps],
+        open=[100. + i * .1 for i in range(30)],
+        high=[100.5 + i * .1 for i in range(30)],
+        low=[99.5 + i * .1 for i in range(30)],
+        close=[100. + i * .1 for i in range(30)], volume=[100.] * 30))
+    bar = dict(timestamp="2026-10-09T10:36:00+05:30", open=103., high=104.,
+               low=102.5, close=103.5, volume=120.)
+    actual = config.annotate_confirmation_volume(bar, history)
+    future = pd.DataFrame([dict(timestamp="2026-10-09T10:37:00+05:30",
+        open=10000., high=10001., low=9999., close=10000., volume=999999.)])
+    extended = config.annotate_confirmation_volume(bar, pd.concat([history, future], ignore_index=True))
+    assert actual["v9_1m_ema20"] == extended["v9_1m_ema20"]
+    assert actual["v9_1m_atr14"] == extended["v9_1m_atr14"]
+    assert actual["v9_1m_atr14"] > 0
 
 
 @pytest.mark.parametrize("ratio", [1.099999999,None,float("nan"),float("inf"),-1])
@@ -115,6 +154,21 @@ def test_new_long_pool_reranks_while_short_threshold_stays_120():
     assert result[0]["v9_1m_volume_ratio"] == 1.1
     short=candidate(side="SHORT",v9_1m_volume_ratio=1.19999999)
     assert config.rank_candidates([short],config.setup_for("09:30","SHORT")) == []
+
+
+def test_0941_long_uses_080_only_for_its_exact_setup():
+    long_0941 = config.setup_for("09:40", "LONG")
+    short_0941 = config.setup_for("09:40", "SHORT")
+    row = candidate(signal="09:40", price_change_pct=.3, oi_change_pct=.1,
+                    volume_ratio=2.1, body_ratio=.6, v9_1m_volume_ratio=.8)
+    assert config.passes_selected_filters(row, long_0941)
+    assert not config.passes_selected_filters({**row, "v9_1m_volume_ratio": .799999}, long_0941)
+    assert not config.passes_selected_filters({**row, "signal_timestamp":
+        pd.Timestamp("2026-10-09 09:35", tz="Asia/Kolkata").isoformat()}, long_0941)
+    short = candidate(side="SHORT", signal="09:40", price_change_pct=-.3,
+                      oi_change_pct=.1, volume_ratio=2.1, body_ratio=.6,
+                      v9_1m_volume_ratio=.8)
+    assert not config.passes_selected_filters(short, short_0941)
 
 
 def test_short_core_precedes_better_ranked_expansion_and_ties_are_stable():
@@ -135,13 +189,15 @@ def test_v4_preserves_all_sixteen_v3_setups_and_adds_only_requested_six():
     for family in ("core_setups", "active_setups"):
         current = contract.strategy_payload()[family]
         added = [s for s in current if (s["signal_end"], s["side"]) in requested]
-        retained = [{**s, "source_version": prior["strategy_version"]}
+        retained = [{**s, "source_version": prior["strategy_version"],
+                     "volume_ratio": 3.0 if s["confirmation_end"] == "09:26" and s["side"] == "LONG"
+                     else s["volume_ratio"]}
                     for s in current if (s["signal_end"], s["side"]) not in requested
-                    and s["confirmation_end"].replace(":", "") + "_" + s["side"] not in contract.selected_setups.SETUP_IDS]
+                    and s["confirmation_end"].replace(":", "") + "_" + s["side"] not in (contract.selected_setups.SETUP_IDS | contract.midday_setups.SETUP_IDS | contract.afternoon_setups.SETUP_IDS | contract.ADDED_SETUP_IDS)]
         assert len(added) == 6 and retained == prior[family]
     for clock in ("10:05", "10:10", "10:15", "10:20", "10:25", "10:30"):
         for side in ("LONG", "SHORT"):
-            assert (contract.setup_for(clock, side) is not None) == ((clock, side) in requested)
+            assert (contract.setup_for(clock, side) is not None) == ((clock, side) in requested | {("10:10", "LONG")})
     assert contract.supported_identity(prior["strategy_version"], "0119d67996b0f801dcfe55057d76e82482d10bec40898dab017262b09506a811", allow_legacy=True)
     assert not contract.supported_identity(prior["strategy_version"], "0119d67996b0f801dcfe55057d76e82482d10bec40898dab017262b09506a811")
 
@@ -265,7 +321,7 @@ import json
 from pathlib import Path
 import pandas as pd
 import fno_v13_v10_g_backtest as g
-import fno_v13_v10_g_3_contract as c
+from research.archived_g3_v7 import contract as c
 root=Path("C:/TradingData/eqidv2/fno_oi/strategy_research")
 x=pd.read_parquet(root/"v13_v10_g_full_history/run_20260925_cutoff_corrected_through_20260923/dataset/signals.parquet")
 settings=json.loads((root/"v13_corrected_v10_g/run_20260914_opportunity_expansion/frozen_config.json").read_text())
@@ -273,7 +329,7 @@ work=x.copy()
 work.loc[work.side.eq("LONG"),"v9_1m_volume_ratio"]*=1.2/1.1
 old=g.select_orders(work,g.v9.V9Config(),g.SelectionChange(**settings["selection_change"]),core_first=True)
 new=c.select_orders(x)
-new=new.loc[~new.setup_id.isin({"0921_LONG", "0951_LONG", *c.late_setups.SETUP_IDS, *c.selected_setups.SETUP_IDS})]
+new=new.loc[~new.setup_id.isin({"0921_LONG", "0951_LONG", *c.late_setups.SETUP_IDS, *c.selected_setups.SETUP_IDS, *c.midday_setups.SETUP_IDS, *c.afternoon_setups.SETUP_IDS})]
 keys=lambda z:set(zip(z.sid.astype(int),z.setup_id))
 assert keys(old)==keys(new),(keys(old)-keys(new),keys(new)-keys(old))
 assert len(old)==len(new)==88

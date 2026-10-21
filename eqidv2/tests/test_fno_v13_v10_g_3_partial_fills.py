@@ -215,6 +215,24 @@ def test_reconciliation_uses_unclosed_residual_and_original_active_order_quantit
     assert squareoff["quantity"] == 390
 
 
+def test_reconciliation_accepts_broker_protected_sl_normalization(runtime):
+    _, state, broker, _ = opened(runtime)
+    stop = broker.rows[state["stop_order_id"]]
+    assert stop["order_type"] == "SL-M"
+    # Kite exposes a market-protected SL-M as an SL carrying a calculated
+    # limit price. The ID, tag, trigger, side and quantity remain authoritative.
+    stop.update(order_type="SL", price=104.0, status="TRIGGER PENDING")
+
+    report = runtime._publish_broker_position_reconciliation(
+        [state], broker, DAY
+    )
+
+    assert report["mismatch_count"] == 0
+    assert report["active_order_parity_complete"] is True, report[
+        "active_order_mismatches"
+    ]
+
+
 def test_cancelled_partial_market_exit_retries_only_confirmed_residual(runtime, monkeypatch):
     _, state, broker, at = opened(runtime)
     broker.rows[state["target_order_id"]].update(status="OPEN", filled_quantity=100, average_price=103.)

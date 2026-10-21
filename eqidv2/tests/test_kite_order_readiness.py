@@ -198,6 +198,44 @@ def test_success_is_only_read_access_and_outputs_no_account_identity(tmp_path):
     assert opener.calls[0][1].get_header("Authorization") == "token key_app1:token_app1"
 
 
+@pytest.mark.parametrize("balance,covers", [(20000, True), (19999.99, False)])
+def test_minimum_live_balance_is_checked_without_persisting_actual_balance(
+    tmp_path, balance, covers
+):
+    credentials(tmp_path)
+    opener = FakeOpener({
+        ("GET", "/user/margins/equity"): {
+            "enabled": True, "available": {"live_balance": balance},
+        }
+    })
+    row = probe.inspect_app(
+        "app1", root=tmp_path, minimum_live_balance=20000.0,
+        client_factory=factory(opener), delay=0,
+    )
+    assert row["minimum_live_balance_rupees"] == 20000.0
+    assert row["live_balance_covers_minimum"] is covers
+    assert str(balance) not in json.dumps(row) or balance == 20000
+
+
+def test_required_minimum_balance_makes_cli_fail_closed(tmp_path, monkeypatch):
+    credentials(tmp_path)
+    opener = FakeOpener({
+        ("GET", "/user/margins/equity"): {
+            "enabled": True, "available": {"live_balance": 19999.99},
+        },
+        ("GET", "/orders"): [],
+        ("GET", "/portfolio/positions"): {"net": []},
+    })
+    assert run_fake_main(
+        tmp_path, monkeypatch, {"app1": opener},
+        ["--app", "app1", "--minimum-live-balance", "20000"],
+    ) == 2
+    report = json.loads((tmp_path / "logs/kite_order_readiness/latest.json").read_text())
+    assert report["state"] == "MINIMUM_LIVE_BALANCE_NOT_MET"
+    assert report["apps"][0]["live_balance_covers_minimum"] is False
+    assert "19999.99" not in json.dumps(report)
+
+
 @pytest.mark.parametrize("total,expected", [(0, "MARGIN_ESTIMATE_RECEIVED"), (100, "MARGIN_ESTIMATE_RECEIVED"),
                                            (True, "INVALID_MARGIN_RESPONSE"), (False, "INVALID_MARGIN_RESPONSE"),
                                            (-1, "INVALID_MARGIN_RESPONSE"), (None, "INVALID_MARGIN_RESPONSE"),
@@ -347,9 +385,10 @@ def test_all_apps_partial_failures_do_not_hide_selected_read_success_or_expose_p
     openers = {f"app{i}": FakeOpener() for i in range(1, 9)}
     openers["app1"] = FakeOpener({("GET", "/user/profile"): http_error(401, "TokenException")})
     openers["app3"] = FakeOpener({("GET", "/orders"): http_error(403, "PermissionException")})
-    assert run_fake_main(tmp_path, monkeypatch, openers) == 0
+    assert run_fake_main(tmp_path, monkeypatch, openers) == 2
     report = json.loads((tmp_path / "logs/kite_order_readiness/latest.json").read_text())
     assert report["readable_apps"] == ["app2"] and len(report["apps"]) == 8
+    assert report["state"] == "PARTIAL_READ_ACCESS"
     assert report["apps"][2]["state"] == "PARTIAL_READ_ACCESS" and report["apps"][3]["state"] == "CREDENTIALS_MISSING"
     assert report["mode"] == "VALIDATE_ONLY" and report["order_mutations_available"] is False
     assert report["orders_submitted"] == 0 and report["strategy_controls_changed"] is False

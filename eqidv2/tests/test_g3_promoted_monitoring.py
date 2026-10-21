@@ -8,7 +8,13 @@ from ai_platform.observability.runtime_collector import RuntimeMetricsCollector
 from ai_platform.observability import live_trust as trust
 
 
-@pytest.mark.parametrize("clock,previous", [("10:35", "10:30"), ("11:25", "11:20")])
+@pytest.mark.parametrize("clock,previous", [("10:35", "10:30"), ("11:25", "11:20"),
+                                           ("11:35", "11:25"), ("12:30", "12:25"),
+                                           ("12:35", "12:30"), ("12:45", "12:35"),
+                                           ("12:50", "12:45"), ("12:55", "12:50"),
+                                           ("13:00", "12:55"), ("13:05", "13:00"),
+                                           ("13:15", "13:05"), ("13:20", "13:15"),
+                                           ("13:25", "13:20"), ("13:30", "13:25")])
 def test_metrics_require_each_added_signal_slot(tmp_path, clock, previous):
     stamp = datetime.fromisoformat(f"2026-10-14T{clock}:00+05:30")
     from datetime import timedelta
@@ -28,12 +34,12 @@ def test_metrics_require_each_added_signal_slot(tmp_path, clock, previous):
 
 @pytest.mark.parametrize("helper", [trust._scanner_schedule_detail,
     trust._confirmation_completion_detail, trust._equity_feed_completion_detail])
-def test_terminal_completion_requires_all_22_signal_clocks(helper):
-    now = datetime.fromisoformat("2026-10-14T11:29:00+05:30")
+def test_terminal_completion_requires_all_40_signal_clocks(helper):
+    now = datetime.fromisoformat("2026-10-14T13:34:00+05:30")
     slots = tuple(contract.SIGNAL_TO_CONFIRMATION)
-    assert len(slots) == 22 and slots[-1] == "11:25"
-    heartbeat = dict(state="DONE", phase="ALL_V6_WINDOWS_DONE", slot="11:25",
-                     ts="2026-10-14T11:28:00+05:30", processed_slots="15")
+    assert len(slots) == 40 and slots[-1] == "13:30"
+    heartbeat = dict(state="DONE", phase="ALL_V6_WINDOWS_DONE", slot="13:30",
+                     ts="2026-10-14T13:33:00+05:30", processed_slots="30")
     assert helper(heartbeat, now=now, session_date=now.date(), slots=slots)[0] is False
     heartbeat["processed_slots"] = str(len(slots))
     assert helper(heartbeat, now=now, session_date=now.date(), slots=slots)[0] is True

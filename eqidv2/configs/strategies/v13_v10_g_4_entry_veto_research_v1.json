@@ -1,0 +1,19 @@
+{
+  "variant_id": "V13-V10-G-4-ENTRY-VETO-RESEARCH-V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "baseline_variant": "V13-V10-G-4-BOUNDED-EXIT-V11",
+  "selection_stage": "VETO_AFTER_EXISTING_RANKING_WITHOUT_REPLACEMENT",
+  "entry_expiry_minutes": 10,
+  "extension_formula": "direction * (confirmation_close - EMA20) / ATR14",
+  "pending_rule": "cancel on a completed pre-fill close beyond the opposite edge of the confirmation candle",
+  "same_minute_trigger_precedes_close_cancellation": true,
+  "scenarios": {
+    "current_g4": {"maximum_extension_atr": null, "cancel_invalidated_pending": false},
+    "stretch_3atr": {"maximum_extension_atr": 3.0, "cancel_invalidated_pending": false},
+    "stretch_4atr": {"maximum_extension_atr": 4.0, "cancel_invalidated_pending": false},
+    "pending_invalidation": {"maximum_extension_atr": null, "cancel_invalidated_pending": true},
+    "stretch_3atr_and_pending": {"maximum_extension_atr": 3.0, "cancel_invalidated_pending": true},
+    "stretch_4atr_and_pending": {"maximum_extension_atr": 4.0, "cancel_invalidated_pending": true}
+  }
+}

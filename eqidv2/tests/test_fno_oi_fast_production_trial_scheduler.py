@@ -76,7 +76,10 @@ class FnoOiFastProductionTrialSchedulerTests(unittest.TestCase):
         )
         self.assertIn("/SC WEEKLY /D MON,TUE,WED,THU,FRI", content)
         self.assertIn('RepeatMinutes = 5; RepeatDuration = "06:30"; RestartCount = 3', content)
-        self.assertIn('RepeatMinutes = 5; RepeatDuration = "02:10"', content)
+        self.assertIn(
+            'RepeatMinutes = 5; RepeatDuration = "04:20"; RestartCount = 3',
+            content,
+        )
         self.assertIn('/RI $task.RepeatMinutes /DU $task.RepeatDuration', content)
 
 

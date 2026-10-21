@@ -54,9 +54,85 @@ def test_lot_constraint_overrides_and_separate_paper_contract():
             policy.requested_quantity(102.,1,override)
     assert config.size_position(250.,1,live=True,capital_rs=1e9,leverage=100).quantity == 200
     assert config.size_position(250.,1,live=False).quantity == 2000
-    assert config.strategy_fingerprint() == "fcb7c981b518b8c9e427155cdfb06e3cc34c6ed16525e78514e6ecf3afab2aea"
+    assert config.strategy_fingerprint() == "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4"
     assert policy.policy_fingerprint() != config.strategy_fingerprint()
     policy.validate_policy()
+
+
+def test_live_portfolio_admission_limits_are_explicitly_unlimited_and_exported():
+    assert (
+        policy.MAX_RESERVED_OPEN_POSITIONS,
+        policy.MAX_DAILY_ENTRIES,
+        policy.MAX_RESERVED_GROSS_EXPOSURE_RS,
+    ) == (None, None, None)
+    expected = {
+        "max_reserved_open_positions": None,
+        "max_daily_entries": None,
+        "max_reserved_gross_exposure_rs": None,
+    }
+    assert {key: policy.policy_payload()[key] for key in expected} == expected
+    assert {key: policy.execution_metadata()[key] for key in expected} == expected
+    policy.validate_execution_metadata(policy.execution_metadata())
+    for key in expected:
+        tampered = {**policy.execution_metadata(), key: 1}
+        with pytest.raises(ValueError, match=key):
+            policy.validate_execution_metadata(tampered)
+
+
+def test_previous_capped_metadata_is_restart_only_and_cannot_validate_as_current():
+    previous = policy.previous_capped_execution_metadata()
+    assert previous["live_execution_policy_fingerprint"] == (
+        "979556c444f951ea1e79ec4a90b7570b010dc931f2af674aa0849da6c64f3362"
+    )
+    assert previous["max_reserved_open_positions"] == 2
+    with pytest.raises(ValueError, match="execution policy mismatch"):
+        policy.validate_execution_metadata(previous)
+
+
+@pytest.mark.parametrize("key", [
+    "max_reserved_open_positions",
+    "max_daily_entries",
+    "max_reserved_gross_exposure_rs",
+])
+def test_missing_portfolio_limit_field_is_not_explicit_unlimited(key):
+    current = policy.execution_metadata()
+    del current[key]
+    with pytest.raises(ValueError, match=key):
+        policy.validate_execution_metadata(current)
+    with pytest.raises(ValueError):
+        policy.validate_existing_execution_metadata(current)
+
+    previous = policy.previous_capped_execution_metadata()
+    del previous[key]
+    with pytest.raises(ValueError):
+        policy.validate_existing_execution_metadata(previous)
+
+
+@pytest.mark.parametrize("key", [
+    "max_reserved_open_positions",
+    "max_daily_entries",
+    "max_reserved_gross_exposure_rs",
+])
+def test_signal_envelope_requires_every_portfolio_limit_field(runtime, key):
+    for metadata in (
+        policy.signal_metadata(),
+        policy.previous_capped_signal_metadata(),
+    ):
+        signal = production_signal(runtime)
+        signal.update(deepcopy(metadata))
+        del signal["live_execution_policy"][key]
+        with pytest.raises(ValueError, match="live_execution_policy"):
+            policy.validate_signal_sizing(signal)
+
+
+def test_previous_capped_signal_can_create_only_a_current_policy_order(runtime):
+    signal = production_signal(runtime)
+    signal.update(policy.previous_capped_signal_metadata())
+    policy.validate_signal_sizing(signal)
+    state = runtime.create_order_state(signal, "LIVE")
+    assert state["live_execution_policy_fingerprint"] == policy.policy_fingerprint()
+    assert state["max_reserved_open_positions"] is None
+    policy.validate_order_sizing(state, require_pending_quantity=True)
 
 
 def production_signal(runtime):
@@ -125,6 +201,39 @@ def test_coordinator_exports_current_policy_and_real_quantity(runtime):
     common.atomic_write_json(path,state)
     with pytest.raises(ValueError,match="quantity"):
         coordinator.export_snapshot(DAY)
+
+
+def test_coordinator_reads_only_safe_previous_policy_states(runtime):
+    coordinator = isolated("g3_previous_policy_coordinator", "fno_v6_live_kite_session.py")
+    signal = production_signal(runtime)
+    signal.update(policy.previous_capped_signal_metadata())
+    signal_path = coordinator.SIGNAL_ROOT / DAY.isoformat() / (signal["signal_id"] + ".json")
+    common.atomic_write_json(signal_path, signal)
+    state_path = coordinator.profile_order_day_dir(DAY) / (signal["signal_id"] + ".json")
+
+    previous = runtime.create_order_state(signal, "LIVE")
+    previous.update(policy.previous_capped_execution_metadata())
+    previous.update(status="OPEN", entry_submission_attempt_count=1,
+                    entry_order_id="OLD_ORDER", entry_price=102.0,
+                    entry_at_ist=config.slot_datetime(DAY, "09:32").isoformat(),
+                    quantity=7)
+    common.atomic_write_json(state_path, previous)
+    rows = coordinator.load_profile_order_states(DAY, {signal["signal_id"]})
+    assert rows[0]["entry_order_id"] == "OLD_ORDER"
+
+    terminal = runtime.create_order_state(signal, "LIVE")
+    terminal.update(policy.previous_capped_execution_metadata())
+    terminal.update(status="BLOCKED_PORTFOLIO", status_reason="OLD_CAP")
+    common.atomic_write_json(state_path, terminal)
+    assert coordinator.load_profile_order_states(
+        DAY, {signal["signal_id"]}
+    )[0]["status"] == "BLOCKED_PORTFOLIO"
+
+    pristine = runtime.create_order_state(signal, "LIVE")
+    pristine.update(policy.previous_capped_execution_metadata())
+    common.atomic_write_json(state_path, pristine)
+    with pytest.raises(ValueError, match="Superseded G3 LIVE pending"):
+        coordinator.load_profile_order_states(DAY, {signal["signal_id"]})
 
 
 def test_legacy_open_state_can_only_manage_existing_position(runtime,monkeypatch):
