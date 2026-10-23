@@ -16,11 +16,11 @@ from typing import Any
 
 import pandas as pd
 
-import fno_v13_v10_g_3_contract as contract
+import fno_v13_v10_g_3_cutoff_production as contract
 import fno_v13_v10_g_3_policy as policy
 import fno_v13_v10_g_3_live_execution_policy as live_execution_policy
 from g3_one_minute_extension import last_features
-from fno_v13_v10_g_3_contract import *
+from fno_v13_v10_g_3_cutoff_production import *
 from fno_v13_v10_g_3_contract import _number, _stamp, _true
 
 LIVE_GENERATION = "v6"
@@ -35,11 +35,11 @@ SESSION_END = "15:32"
 # Latest exact confirmation plus its 90-second publication grace, rounded up.
 PIPELINE_DEADLINE = (datetime.strptime(max(SIGNAL_TO_CONFIRMATION.values()), "%H:%M")
     + timedelta(seconds=ENTRY_ACTIVATION_GRACE_SEC + 59)).strftime("%H:%M")
-SELECTED_OBJECTIVE = "G3_W1_LONG110_SHORT120_CORE_FIRST_0941_LONG080_0950_LONG060_TARGET075_0920_LONG180_TARGET300_LATE_SIX_SELECTED_TEN_MIDDAY_TWELVE_AFTERNOON_FIFTEEN_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120"
+SELECTED_OBJECTIVE = "G3_W1_LONG110_SHORT120_CORE_FIRST_0941_LONG080_0950_LONG060_TARGET075_0920_LONG180_TARGET300_LATE_SIX_SELECTED_TEN_MIDDAY_TWELVE_AFTERNOON_FIFTEEN_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120_1011_SHORT_MOVE011_TARGET_GT075_RESTORED3"
 LIVE_ACK_ENV = "FNO_V13_V10_G_3_LIVE_ACK"
 LIVE_ACK = "I_UNDERSTAND_REAL_FNO_V13_V10_G_3_EQUITY_ORDERS"
 ORDER_TAG_PREFIX = "FVG3"
-CONFIG_PATH = Path(__file__).resolve().parent / "configs/strategies/v13_v10_g_3_production_v11.json"
+CONFIG_PATH = Path(__file__).resolve().parent / "configs/strategies/v13_v10_g_3_production_v13.json"
 CONFIG_SHA256 = hashlib.sha256((json.dumps(contract.strategy_payload(), indent=2, sort_keys=True) + "\n").encode()).hexdigest()
 FROZEN_ROOT = (Path(os.getenv("EQIDV2_RUNTIME_ROOT", r"C:\TradingData\eqidv2")) / "fno_oi/strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1")
 FROZEN_CONFIG_PATH = FROZEN_ROOT / "frozen_config.json"
@@ -89,7 +89,7 @@ def validate_strategy() -> None:
     if hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest() != CONFIG_SHA256:
         raise ValueError("G3 production configuration bytes changed")
     if (STRATEGY_PROFILE, STRATEGY_VERSION, LIVE_ROOT_NAME, CONTROL_ROOT_NAME, LIVE_QUANTITY_CAP,
-            ARMED, EXECUTION_AUTHORITY) != ("V13_V10_G_3", "V13-V10-G-3-PRODUCTION-V11",
+            ARMED, EXECUTION_AUTHORITY) != ("V13_V10_G_3", "V13-V10-G-3-PRODUCTION-V13",
             "v13_v10_g_3_live", "v13_v10_g_3_live", 1, False, False):
         raise ValueError("G3 runtime identity, controls or accepted decision contract changed")
     live_execution_policy.validate_policy()

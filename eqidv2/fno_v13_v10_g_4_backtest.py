@@ -31,7 +31,8 @@ from research.g4_bounded_exit_backtest import (
     VERSION as BOUNDED_VERSION, run as run_bounded,
 )
 from research.g4_complete_inventory_backtest import (
-    DEFAULT_CONFIG, VERSION as COMPLETE_VERSION, run as run_complete,
+    DEFAULT_CONFIG, VERSION as COMPLETE_VERSION, PREVIOUS_VERSION as COMPLETE_PREVIOUS_VERSION,
+    run as run_complete,
 )
 from research.g4_1216_comparison import (
     run as run_1216_comparison, STUDY_LAST_DATE as COMPARISON_STUDY_LAST_DATE,
@@ -70,10 +71,10 @@ def main() -> None:
         print(output.resolve(),flush=True)
         return
     version = json.loads(args.config.read_text(encoding="utf-8")).get("variant_id")
-    if version in (BOUNDED_VERSION, COMPLETE_VERSION):
+    if version in (BOUNDED_VERSION, COMPLETE_VERSION, COMPLETE_PREVIOUS_VERSION):
         if args.source_cache or args.reuse_candidate_pool:
             parser.error("Source-cache overrides do not apply to the bounded G4 profile")
-        runner = run_complete if version == COMPLETE_VERSION else run_bounded
+        runner = run_complete if version in (COMPLETE_VERSION, COMPLETE_PREVIOUS_VERSION) else run_bounded
         result = runner(args.config, output, through=args.through)
         print(json.dumps({key: result[key] for key in ('sessions', 'first_date', 'last_date',
               'active_setups', 'comparison')}, indent=2), flush=True)

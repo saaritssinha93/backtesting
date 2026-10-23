@@ -30,9 +30,12 @@ EXPECTED_BROKER_APPS = tuple(f'app{i}' for i in range(1, 9))
 EXPLICIT_APPROVAL_SOURCE = 'EXPLICIT_OPERATOR_APPLY'
 STANDING_APPROVAL_SOURCE = 'STANDING_OPERATOR_POLICY'
 STANDING_POLICY_SCHEMA = 'g3_live_standing_operator_policy_v1'
-STANDING_POLICY_ID = 'G3_LIVE_STANDING_20261023_V1'
-STANDING_POLICY_EFFECTIVE_DATE = date(2026, 10, 23)
-STANDING_POLICY = ROOT / 'configs/authorizations/g3_live_standing_policy_v1.json'
+STANDING_POLICY_ID = 'G3_LIVE_STANDING_20261024_V2'
+STANDING_POLICY_EFFECTIVE_DATE = date(2026, 10, 24)
+STANDING_POLICY = ROOT / 'configs/authorizations/g3_live_standing_policy_v2.json'
+# A strategy change does not inherit V12's standing LIVE authorization.  The
+# V13 artifact is an identity template only until separately approved.
+STANDING_POLICY_ENABLED = False
 STANDING_APPROVAL_WINDOW_START = time(9, 9)
 STANDING_APPROVAL_WINDOW_END = time(9, 12, 30)
 BROKER_REPORT = ROOT / 'logs/kite_order_readiness/latest.json'
@@ -95,7 +98,7 @@ def standing_policy_payload():
     return dict(schema_version=STANDING_POLICY_SCHEMA, source=STANDING_APPROVAL_SOURCE,
         policy_id=STANDING_POLICY_ID,
         effective_from_session_date=STANDING_POLICY_EFFECTIVE_DATE.isoformat(),
-        regular_verified_nse_sessions_only=True, enabled=True, revoked=False,
+        regular_verified_nse_sessions_only=True, enabled=STANDING_POLICY_ENABLED, revoked=False,
         strategy_profile=config.STRATEGY_PROFILE, strategy_version=config.STRATEGY_VERSION,
         strategy_fingerprint=config.strategy_fingerprint(), setup_ids=setup_ids,
         setup_ids_sha256=canonical_fingerprint(setup_ids),

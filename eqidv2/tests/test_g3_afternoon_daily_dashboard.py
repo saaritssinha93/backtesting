@@ -60,7 +60,7 @@ def test_afternoon_raw_inputs_execute_only_targets_above_cutoff(
     directory = tmp_path / f"afternoon-{clock.replace(':', '')}-{side}"
     result = replay.replay_day(DAY, directory, roots=roots)
     assert result["complete"], result["coverage"]
-    assert result["strategy_version"] == "V13-V10-G-3-BACKTEST-TARGET-GT075-RESTORED3-V13"
+    assert result["strategy_version"] == "V13-V10-G-3-BACKTEST-TARGET-GT075-RESTORED3-V14"
     ledger = pd.read_csv(directory / "portfolio_trades.csv")
     setup_id = confirmation.strftime("%H%M") + "_" + side
     added = ledger.loc[ledger.setup_id.eq(setup_id)]

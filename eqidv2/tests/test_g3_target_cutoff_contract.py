@@ -51,6 +51,22 @@ def test_exact_restored_exceptions_and_production_isolation():
     runtime.validate_strategy()
 
 
+def test_1011_short_move_011_is_shared_without_changing_frozen_g4():
+    from research import g4_complete_inventory_backtest as g4
+    from research import g6_g4_replica_backtest as g6
+    from research.archived_g3_v13 import contract as previous
+
+    live = runtime.setup_for('10:10', 'SHORT')
+    historical = cutoff.setup_for('10:10', 'SHORT')
+    assert live.price_change_pct == historical.price_change_pct == .11
+    assert previous._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .13
+    assert g4.Identity(g4.configuration())._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .13
+    assert g6.Identity(g6.configuration())._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .11
+    assert production.passes_selected_filters(candidate(live, move=-.115), live)
+    assert cutoff.passes_selected_filters(candidate(historical, move=-.115), historical)
+    assert not production.passes_selected_filters(candidate(live, move=-.105), live)
+
+
 def test_archived_v8_stays_readable_and_distinct_from_current():
     from research.archived_g3_v8 import contract as archived
     assert len(archived.ACTIVE_SETUPS) == 46 and len(archived.DISABLED_SETUPS) == 13

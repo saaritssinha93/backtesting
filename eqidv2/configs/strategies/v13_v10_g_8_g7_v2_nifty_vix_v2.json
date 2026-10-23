@@ -1,0 +1,19 @@
+{
+  "variant_id": "V13-V10-G-8-G7V2-NIFTY-VIX-V2",
+  "replica_source_variant": "V13-V10-G-7-G6-REPLICA-V2",
+  "runner": "fno_v13_v10_g_8_backtest.py",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "through": "2026-10-22",
+  "baseline_policy": "persistent_direction_30m_2.0",
+  "gate": {"id": "persistent_direction_30m_2.0", "mode": "persistent_direction", "window": 30, "threshold": 2.0},
+  "nifty_filter": "Reject only when both completed slot and session directions oppose the trade",
+  "vix_filter": "Reject LONG when session and recent VIX changes are both >= 2%; reject SHORT when both are <= -2%",
+  "early_session_fallback": "Use the session VIX change when a full 30-minute lookback is unavailable, matching the tested candidate",
+  "active_setup_count": 51,
+  "exit_mode": "G7_V2_ORIGINAL_SLOT_TARGETS_SINGLE_EXIT",
+  "selection_basis": "Explicit user adoption on 2026-10-23 after reviewing 5-minute versus 30-minute results",
+  "independent_holdout": false,
+  "baseline_pointer": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_8/latest_baseline.json",
+  "rollback_policy": "baseline_nifty"
+}

@@ -52,6 +52,10 @@ def test_inventory_copies_entry_rules_and_keeps_g4_exits_and_guards():
         for key,value in vars(original).items():
             if key not in {'stop_pct','target_pct','source_version'}:
                 assert copied[key]==value
+    assert identity._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .11
+    assert complete.mirror.read(complete.DEFAULT_CONFIG.with_name(
+        'v13_v10_g_4_bounded_exit_51_setups_v13.json'))['active_setups'][
+        next(i for i,s in enumerate(config['active_setups']) if s['setup_id']=='1011_SHORT')]['price_change_pct'] == .13
     approval=config['approved_0920_decisions']
     assert approval['setup_ids']==['0921_LONG','0921_SHORT']
     assert approval['configuration_changed'] is False
@@ -113,6 +117,14 @@ def test_config_drift_is_rejected(tmp_path):
     path.write_text(json.dumps(config))
     with pytest.raises(ValueError,match='drift'):
         complete.configuration(path)
+
+
+def test_previous_g4_profile_remains_available_for_rollback():
+    config = complete.configuration(complete.PREVIOUS_CONFIG)
+    assert config['variant_id'] == complete.PREVIOUS_VERSION
+    identity = complete.Identity(config)
+    assert identity._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .13
+    assert identity.payload['source_strategy_version'] == complete.frozen_donor.STRATEGY_VERSION
 
 
 def test_normal_cli_defaults_to_51_setups(tmp_path,monkeypatch):

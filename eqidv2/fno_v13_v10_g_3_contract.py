@@ -29,13 +29,13 @@ from g3_one_minute_extension import extension_atr
 
 IST = ZoneInfo("Asia/Kolkata")
 STRATEGY_PROFILE = "V13_V10_G_3"
-STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V11"
-PREVIOUS_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V10"
-PREVIOUS_STRATEGY_FINGERPRINT = "04697846e334466cf902d7977cefe186c04cfafdb66b4a6582d250405f7b9e7d"
+STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V12"
+PREVIOUS_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V11"
+PREVIOUS_STRATEGY_FINGERPRINT = "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4"
 LEGACY_STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V1"
 LEGACY_STRATEGY_FINGERPRINT = "9761be9583ef63f4627bad43d3b67f6c5b12480e09a5d853325fe2b994e82275"
 SIGNAL_ID_SCHEMA_VERSION = "eqidv2.v13_v10_g_3.signal_id.v1"
-ACCEPTED_VARIANT = afternoon_setups.ACCEPTED_VARIANT + "_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120"
+ACCEPTED_VARIANT = afternoon_setups.ACCEPTED_VARIANT + "_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120_1011_SHORT_MOVE011"
 ADDED_SETUP_IDS = frozenset({"0921_SHORT", "1011_LONG"})
 FROZEN_ACCEPTED_VARIANT = "G3_W1_V1p1"
 FROZEN_VERSION = "V13-V10-G-3-FROZEN-LONG110-NEXTMINUTE-V1"
@@ -138,7 +138,9 @@ _SETUP_ROWS = (
     ("10:00", "LONG", 1, "max_liquidity", .40, .05, 1., .40, .60, 3.),
     ("10:10", "LONG", 1, "max_liquidity", .10, .05, 1.3, .50, .50, 1.50),
     ("11:20", "SHORT", 1, "max_liquidity", .20, .05, 1., .40, .60, 2.),
-    *late_setups.ROWS,
+    # Keep the promoted V4 donor immutable; V12 changes only this one slot.
+    *(row[:4] + (.11,) + row[5:] if row[0:2] == ("10:10", "SHORT") else row
+      for row in late_setups.ROWS),
     *selected_setups.ROWS,
     *midday_setups.ROWS,
     *afternoon_setups.ROWS,
@@ -518,7 +520,7 @@ def validate_contract(value: dict[str, Any] | None = None) -> None:
     if value is not None and value != strategy_payload():
         raise ValueError("G3 production configuration differs from the accepted normalized contract")
     if len(ACTIVE_SETUPS) != 61 or len(_ACTIVE_BY_ID) != 61:
-        raise ValueError("G3 V11 requires exactly 61 effective setups")
+        raise ValueError("G3 V12 requires exactly 61 effective setups")
     if MIN_CONFIRMATION_VOLUME_BY_SIDE != {"LONG": 1.1, "SHORT": 1.2}:
         raise ValueError("G3 side confirmation thresholds changed")
     if MIN_CONFIRMATION_VOLUME_BY_SETUP != {"0921_LONG": 1.8, "0921_SHORT": 1.2, "0941_LONG": .8, "0951_LONG": .6, "1011_LONG": .6,
@@ -528,7 +530,8 @@ def validate_contract(value: dict[str, Any] | None = None) -> None:
     if MAX_CONFIRMATION_EXTENSION_ATR_BY_SETUP != {"1036_LONG": 3.0, "1036_SHORT": 3.0}:
         raise ValueError("G3 10:35 one-minute extension guard changed")
     for row in (*late_setups.ROWS, *selected_setups.ROWS, *midday_setups.ROWS, *afternoon_setups.ROWS):
-        expected = _make_setup(row)
+        expected = _make_setup(row[:4] + (.11,) + row[5:]
+            if row[0:2] == ("10:10", "SHORT") else row)
         if _ACTIVE_BY_ID.get(expected.setup_id) != expected or _CORE_BY_ID.get(expected.setup_id) != expected:
             raise ValueError("G3 approved late setup differs from historical rules")
     if setup_for("09:20", "LONG") != _make_setup(("09:20", "LONG", 1, "max_liquidity", .30, .10, 3., .75, .35, 3.)):

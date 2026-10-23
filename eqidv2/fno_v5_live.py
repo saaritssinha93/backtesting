@@ -1536,6 +1536,11 @@ class KitePool:
         )
         return prices, self.last_operation_app, list(self.last_operation_failures)
 
+    def quote(self, instruments: list[str]) -> Any:
+        """Read full Kite quotes, including the exchange's current price band."""
+
+        return self._call_read("quote", lambda client: client.quote(instruments))
+
     def orders(self) -> Any:
         return self._call_read("orders", lambda client: client.orders())
 
@@ -2661,6 +2666,10 @@ def create_order_state(
         "stop_order_id": "",
         "target_order_id": "",
         "squareoff_order_id": "",
+        "stop_submission_pending": False,
+        "target_submission_pending": False,
+        "bracket_confirmed": False,
+        "exit_bracket_failure": "",
         "entry_price": 0.0,
         "entry_at_ist": "",
         "last_price": 0.0,
@@ -3327,6 +3336,58 @@ def _live_quote_price(client: Any, tradingsymbol: str) -> float | None:
     return _valid_live_price(values.get(tradingsymbol))
 
 
+def _g3_live_entry_exit_band_check(
+    state: dict[str, Any], client: Any, now: datetime
+) -> bool:
+    """Do not enter G3 LIVE when either planned exit cannot be sent to Kite.
+
+    The fill can differ from the planned trigger, so this is only a preflight;
+    the post-fill broker acknowledgement remains authoritative.
+    """
+
+    if not is_g3_config(config) or str(state.get("mode", "")).upper() != "LIVE":
+        return True
+    key = f"{state['exchange']}:{state['tradingsymbol']}"
+    try:
+        payload = _observe_broker_call("quote", lambda: client.quote([key]))
+        row = payload.get(key) if isinstance(payload, dict) else None
+        if not isinstance(row, dict):
+            raise ValueError("Full quote is missing the requested instrument")
+        lower = _valid_live_price(row.get("lower_circuit_limit"))
+        upper = _valid_live_price(row.get("upper_circuit_limit"))
+        if lower is None or upper is None or lower >= upper:
+            raise ValueError("Full quote has no valid lower/upper circuit limits")
+    except Exception as exc:
+        state.update(
+            status_reason="WAITING_FOR_EXIT_PRICE_BAND_QUOTE",
+            last_entry_blocker_reason="WAITING_FOR_EXIT_PRICE_BAND_QUOTE",
+            last_entry_blocker_at_ist=now.isoformat(timespec="seconds"),
+            exit_price_band_quote_error=f"{type(exc).__name__}: {exc}",
+            updated_at_ist=now.isoformat(timespec="seconds"),
+        )
+        return False
+    state.update(
+        exit_price_band_lower=lower,
+        exit_price_band_upper=upper,
+        exit_price_band_checked_at_ist=now.isoformat(timespec="seconds"),
+        exit_price_band_quote_error="",
+    )
+    for role in ("stop", "target"):
+        price = _valid_live_price(state.get(f"{role}_price"))
+        if price is None or not lower <= price <= upper:
+            state.update(
+                status="CANCELLED",
+                status_reason=f"EXIT_PRICE_BAND_BLOCKED:{role.upper()}",
+                entry_terminal_cause="EXIT_PRICE_BAND_BLOCKED",
+                last_entry_blocker_reason=f"EXIT_PRICE_BAND_BLOCKED:{role.upper()}",
+                last_entry_blocker_at_ist=now.isoformat(timespec="seconds"),
+                exit_price_band_blocked_role=role,
+                updated_at_ist=now.isoformat(timespec="seconds"),
+            )
+            return False
+    return True
+
+
 def _broker_find_entry_order(
     client: Any,
     *,
@@ -3681,6 +3742,7 @@ def _begin_g3_live_squareoff(state: dict[str, Any], client: Any, now: datetime,
                            exit_transaction: str, tag: str, reason: str) -> None:
     state.setdefault("g3_exit_reason", "SQUARE_OFF")
     state.update(status="SQUARE_OFF_PENDING", status_reason=reason,
+                 bracket_confirmed=False, protection_confirmed=False,
                  updated_at_ist=now.isoformat(timespec="seconds"))
     cancellations_confirmed = True
     for key in ("target_order_id", "stop_order_id"):
@@ -4025,6 +4087,8 @@ def advance_live_order(
                 )
                 return state
             state["last_price"] = observed_price
+            if not _g3_live_entry_exit_band_check(state, client, now):
+                return state
             trigger_touched = _entry_trigger_touched(state, observed_price)
             order_type = "MARKET" if trigger_touched else "SL-M"
             submission_reason = (
@@ -4127,7 +4191,20 @@ def advance_live_order(
                     {**state, "quantity": int(state["quantity"])
                      - _safe_int(state.get("staged_partial_exit_quantity"), 0)}, recovered_stop)
                 state["stop_order_id"] = str(recovered_stop.get("order_id", ""))
+                state["stop_submission_pending"] = False
+        if (state["status"] == "OPEN" and not state.get("stop_order_id")
+                and state.get("stop_submission_pending")):
+            state.update(
+                status_reason="STOP_SUBMISSION_UNCERTAIN_AWAITING_RECONCILIATION",
+                exit_bracket_failure="STOP_SUBMISSION_UNCERTAIN",
+                updated_at_ist=now.isoformat(timespec="seconds"),
+            )
+            return state
         if state["status"] == "OPEN" and not state.get("stop_order_id"):
+            g3_live = is_g3_config(config) and str(state.get("mode", "")).upper() == "LIVE"
+            if g3_live:
+                state["stop_submission_pending"] = True
+                _write_order_state(state)  # A lost response must not duplicate the stop.
             try:
                 state["stop_order_id"] = _broker_place(
                     client,
@@ -4142,12 +4219,22 @@ def advance_live_order(
                     validity="DAY",
                     tag=stop_tag,
                 )
+                if g3_live:
+                    state["stop_submission_pending"] = False
             except BrokerMutationUncertain:
                 # The stop may exist at Kite even though no response arrived.
-                # Leave the state OPEN so the next loop reconciles the exact
-                # deterministic tag before attempting another mutation.
+                # Reconcile by tag; never send another order after one miss.
+                if g3_live:
+                    state["exit_bracket_failure"] = "STOP_SUBMISSION_UNCERTAIN"
                 raise
             except Exception as exc:
+                if g3_live and not _is_explicit_broker_rejection(exc):
+                    state["exit_bracket_failure"] = "STOP_SUBMISSION_UNCERTAIN"
+                    raise
+                if g3_live:
+                    state["stop_submission_pending"] = False
+                    state["exit_bracket_failure"] = "STOP_ORDER_PLACE_REJECTED"
+                    _record_live_execution_error(state, exc, now)
                 _begin_live_squareoff(
                     state,
                     client,
@@ -4168,30 +4255,78 @@ def advance_live_order(
             if recovered_target:
                 _validate_recovered_order_quantity(state, recovered_target)
                 state["target_order_id"] = str(recovered_target.get("order_id", ""))
-        if state["status"] == "OPEN" and not state.get("target_order_id"):
-            state["target_order_id"] = _broker_place(
-                client,
-                variety="regular",
-                exchange=str(state["exchange"]),
-                tradingsymbol=state["tradingsymbol"],
-                transaction_type=exit_transaction,
-                quantity=int(state["quantity"]),
-                product="MIS",
-                order_type="LIMIT",
-                price=float(state["target_price"]),
-                validity="DAY",
-                tag=target_tag,
+                state["target_submission_pending"] = False
+        if (state["status"] == "OPEN" and not state.get("target_order_id")
+                and state.get("target_submission_pending")):
+            state.update(
+                status_reason="TARGET_SUBMISSION_UNCERTAIN_AWAITING_RECONCILIATION",
+                exit_bracket_failure="TARGET_SUBMISSION_UNCERTAIN",
+                updated_at_ist=now.isoformat(timespec="seconds"),
             )
+            return state
+        if state["status"] == "OPEN" and not state.get("target_order_id"):
+            g3_live = is_g3_config(config) and str(state.get("mode", "")).upper() == "LIVE"
+            if g3_live:
+                state["target_submission_pending"] = True
+                _write_order_state(state)  # Persist the target tag before submission.
+            try:
+                state["target_order_id"] = _broker_place(
+                    client,
+                    variety="regular",
+                    exchange=str(state["exchange"]),
+                    tradingsymbol=state["tradingsymbol"],
+                    transaction_type=exit_transaction,
+                    quantity=int(state["quantity"]),
+                    product="MIS",
+                    order_type="LIMIT",
+                    price=float(state["target_price"]),
+                    validity="DAY",
+                    tag=target_tag,
+                )
+                if g3_live:
+                    state["target_submission_pending"] = False
+            except Exception as exc:
+                if not g3_live or not _is_explicit_broker_rejection(exc):
+                    if g3_live:
+                        state["exit_bracket_failure"] = "TARGET_SUBMISSION_UNCERTAIN"
+                    raise
+                state["target_submission_pending"] = False
+                state["exit_bracket_failure"] = "TARGET_ORDER_PLACE_REJECTED"
+                _record_live_execution_error(state, exc, now)
+                _begin_live_squareoff(
+                    state, client, now, exit_transaction, squareoff_tag,
+                    f"TARGET_ORDER_PLACE_REJECTED:{type(exc).__name__}",
+                )
+                return state
     if state["status"] == "OPEN":
         target_order = _broker_order(client, str(state["target_order_id"]))
         stop_order = _broker_order(client, str(state["stop_order_id"]))
         stop_status = str(stop_order.get("status", "")).upper()
         target_status = str(target_order.get("status", "")).upper()
+        was_bracket_confirmed = bool(state.get("bracket_confirmed"))
         state.update(
             stop_order_status=stop_status,
             stop_order_status_observed_at_ist=now.isoformat(timespec="seconds"),
+            target_order_status=target_status,
+            target_order_status_observed_at_ist=now.isoformat(timespec="seconds"),
             protection_confirmed=stop_status in {"OPEN", "TRIGGER PENDING"},
+            bracket_confirmed=(stop_status in {"OPEN", "TRIGGER PENDING"}
+                               and target_status == "OPEN"),
         )
+        if is_g3_config(config) and str(state.get("mode", "")).upper() == "LIVE":
+            if state["bracket_confirmed"]:
+                state["exit_bracket_failure"] = ""
+                if not was_bracket_confirmed:
+                    state.update(
+                        bracket_confirmed_at_ist=now.isoformat(timespec="seconds"),
+                        status_reason="LIVE_EXIT_BRACKET_CONFIRMED",
+                    )
+            elif stop_status in {"REJECTED", "CANCELLED"}:
+                state["exit_bracket_failure"] = f"STOP_ORDER_{stop_status}"
+            elif target_status in {"REJECTED", "CANCELLED"}:
+                state["exit_bracket_failure"] = f"TARGET_ORDER_{target_status}"
+            else:
+                state["exit_bracket_failure"] = "BRACKET_ACK_UNCONFIRMED"
         if is_g3_config(config) and (_safe_int(stop_order.get("filled_quantity"), 0) > 0
                                     or _safe_int(target_order.get("filled_quantity"), 0) > 0):
             # Once an exit starts filling, reconcile both orders before closing
@@ -5630,6 +5765,15 @@ def run_worker(
                 persist_after_advance = not isinstance(exc, LiveRiskIntegrityError)
                 if persist_after_advance:
                     _write_order_state(state)
+            if (mode == "LIVE" and is_g3_config(config)
+                    and state.get("status") in {"OPEN", "SQUARE_OFF_PENDING"}
+                    and state.get("exit_bracket_failure")):
+                iteration_errors.append({
+                    "phase": "EXIT_BRACKET_FAILURE",
+                    "signal_id": str(state.get("signal_id", "")),
+                    "error_type": str(state["exit_bracket_failure"]),
+                    "message": str(state.get("status_reason", "")),
+                })
             if persist_after_advance and (mode != "PAPER" or not is_modern_config(config)):
                 _write_order_state(state)
         common.atomic_write_text(report_path(role), _render_worker_report(session_date, side, mode))

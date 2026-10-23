@@ -4,6 +4,8 @@ import io
 import json
 from types import SimpleNamespace
 
+import pytest
+
 import log_dashboard_server as dashboard
 
 
@@ -91,13 +93,14 @@ def test_flow_api_passes_only_selected_run(monkeypatch):
     assert handler.response_headers["Cache-Control"] == "no-store"
 
 
-def test_flow_api_selects_latest_within_one_strategy(monkeypatch):
+@pytest.mark.parametrize("strategy", ["V13-V10-G-2", "V13-V10-G-6", "V13-V10-G-7"])
+def test_flow_api_selects_latest_within_one_strategy(monkeypatch, strategy):
     import dashboard_flow
     monkeypatch.setattr(dashboard_flow, "load_flow_data", lambda run, strategy=None: {"run": run, "strategy": strategy})
-    handler = Handler("/api/dashboard-flow?strategy=V13-V10-G-2")
+    handler = Handler("/api/dashboard-flow?strategy=" + strategy)
     handler.do_GET()
     assert handler.status == 200
-    assert json.loads(handler.wfile.getvalue()) == {"run": None, "strategy": "V13-V10-G-2"}
+    assert json.loads(handler.wfile.getvalue()) == {"run": None, "strategy": strategy}
     duplicate = Handler("/api/dashboard-flow?strategy=V13-V10-G-2&strategy=V13-V10-G")
     duplicate.do_GET()
     assert duplicate.status == 400
@@ -142,5 +145,7 @@ def test_flow_preserves_historical_families_when_active_profile_is_g3(monkeypatc
     assert "{strategy:'V13-V10-G',label:'G'," in html
     assert "{strategy:'V13-V10-G-2',label:'G-2'," in html
     assert "{strategy:'V13-V10-G-3',label:'G-3'," in html
+    assert "{strategy:'V13-V10-G-6',label:'G-6'," in html
+    assert "{strategy:'V13-V10-G-7',label:'G-7'," in html
     compare_asset = (dashboard.BASE_DIR / "dashboard_flow_compare.js").read_text(encoding="utf-8-sig")
     assert compare_asset in html

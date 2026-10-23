@@ -43,6 +43,7 @@
     if (run.current_full_strategy) return `${shortStrategy(run.strategy)} · ${latest ? 'Latest full historical backtest' : 'Full historical backtest'} · ${coverage}`;
     if (run.kind === 'production_history') return `${shortStrategy(run.strategy)} · ${run.strategy_matches_active === false && !run.strategy_matches_backtest ? 'Archived revision' : 'Daily replay history'} · ${coverage}`;
     if (run.kind === 'production_daily') return `${shortStrategy(run.strategy)} · ${run.strategy_matches_active === false && !run.strategy_matches_backtest ? 'Archived revision daily replay' : 'Daily replay'} · ${shortDate(run.period_end)}`;
+    if (run.kind === 'daily_replay') return `${shortStrategy(run.strategy)} · Verified daily replay · ${shortDate(run.period_end)}`;
     if (run.short_0920_enabled === false) return `${shortStrategy(run.strategy)} · 09:20 LONG comparison · Target ${run.target_pct}% · Through ${shortDate(run.period_end)}`;
     if (run.kind === 'research_variant') return `${shortStrategy(run.strategy)} · ${run.role === 'backtest_history' ? 'Latest backtest' : 'Backtest-only'} 09:50 LONG · Target ${run.target_pct}% · Through ${shortDate(run.period_end)}`;
     const kind = run.kind === 'daily' ? 'Daily replay' : run.kind === 'full_history' ? 'Full history' : 'Backtest';

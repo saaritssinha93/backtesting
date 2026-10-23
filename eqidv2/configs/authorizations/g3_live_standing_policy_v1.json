@@ -7,8 +7,8 @@
   "enabled": true,
   "revoked": false,
   "strategy_profile": "V13_V10_G_3",
-  "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
-  "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
+  "strategy_version": "V13-V10-G-3-PRODUCTION-V12",
+  "strategy_fingerprint": "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
   "setup_ids": [
     "0921_LONG",
     "0921_SHORT",
@@ -85,5 +85,5 @@
     "max_daily_entries": null,
     "max_reserved_gross_exposure_rs": null
   },
-  "standing_policy_fingerprint": "25d18e6f028a004159a7caf9ce6e717321852c01435c17c4b3b6efb4ca5f7a43"
+  "standing_policy_fingerprint": "8b7c7a1dbc6564266c931ee3fd6a0ae451bfdf732bb9ae582f7f19f4f8c5115f"
 }

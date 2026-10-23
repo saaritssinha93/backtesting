@@ -715,7 +715,7 @@ def test_preflight_reports_promoted_configuration_without_runtime_mutations():
     from fno_v13_v10_g_3_preflight import inspect_deployment
     report = inspect_deployment(verify_frozen=False)
     assert report["ready"] is True
-    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V11"
+    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V12"
     assert report["active_setup_count"] == 61
     assert len(report["promoted_afternoon_fifteen"]) == 15
     assert {s["setup_id"] for s in report["promoted_afternoon_fifteen"]} == config.contract.afternoon_setups.SETUP_IDS

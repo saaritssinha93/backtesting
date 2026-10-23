@@ -1,0 +1,37 @@
+{
+  "version": "G6-DIRECTION-REFINEMENTS-V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "source_run": "runs/2026-10-21/20261021T151944559417_7b43ad5e_g6_primary_index",
+  "source_manifest_sha256": "1255501c24a98654177f7ccadec2c89b3d1b002e68fb170fdb30b3dbb29e3b08",
+  "selection": "Filter the same 551 selected orders at confirmation; no replacement or new entry delay; replay portfolio allocation.",
+  "stock_confirmation": {
+    "vwap": "Incremental-volume-weighted HLC3 from 09:16 through the completed confirmation minute.",
+    "support_resistance": "Lowest low / highest high of the three exact completed one-minute bars immediately before confirmation; confirmation close must break strictly.",
+    "main_rule": "Primary index veto AND stock on adverse side of session VWAP AND adverse support/resistance break."
+  },
+  "persistence": {
+    "candles": [2, 3],
+    "rule": "Primary index veto AND every one of the last N same-session completed five-minute candle bodies opposes the trade.",
+    "insufficient_opening_history": "Retain the current primary-index veto until N same-session completed candles exist."
+  },
+  "volatility": {
+    "measure": "Mean true range of preceding 14 same-session completed five-minute index candles, excluding the current candle, divided by previous close, as a percentage.",
+    "minimum_prior_candles": 5,
+    "multipliers": [0.25, 0.5, 1.0],
+    "rule": "Both adverse slot and session percentage moves must strictly exceed multiplier times prior ATR percentage.",
+    "insufficient_opening_history": "Retain the current primary-index veto until five prior candles exist."
+  },
+  "combination_rule": "All named conditions must hold to veto. Combine main stock confirmation, two-candle persistence, and 0.5 ATR threshold in each pair and all three.",
+  "fixed_thresholds_pct": [0.02, 0.05],
+  "reference_policies": ["unfiltered", "nifty_futures", "nifty50_cash", "primary_current"],
+  "periods": {"development_sessions": 35, "later_sessions": 19},
+  "walk_forward": {
+    "initial_training_sessions": 20,
+    "test_block_sessions": 10,
+    "selection": "Among variants with training loss amount, losing days and daily-close drawdown no worse than the Nifty reference, choose highest training net profit. Nifty reference is an eligible fallback. Freeze choice before the next block.",
+    "caveat": "All dates have previously been researched; chronological evaluation is diagnostic, not an untouched holdout."
+  },
+  "cost_sensitivity_round_trip_bps": [5, 10, 15],
+  "promotion": "No strategy default or latest baseline pointer changes; user selects a policy after reviewing results."
+}

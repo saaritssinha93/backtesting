@@ -1,7 +1,8 @@
 """Read-only, standard-library data adapter for Dashboard Flow.
 
-Only retained V13-V10-G, G-2, G-3 and verified G-4 backtest files are eligible. Public
-run IDs resolve through discovery; callers cannot supply a filesystem path.
+Only retained V13-V10-G, G-2, G-3 and verified G-4/G-6/G-7 backtest files are
+eligible. Public run IDs resolve through discovery; callers cannot supply a
+filesystem path.
 """
 
 from __future__ import annotations
@@ -32,7 +33,10 @@ _G3_RESEARCH_TARGETS = {
     "V13-V10-G-3-BT-0950-LONG-V1": 1.0,
     "V13-V10-G-3-BT-0950-LONG-T075-V1": 0.75,
 }
-_STRATEGIES = {"V13-V10-G-4", "V13-V10-G-3", "V13-V10-G-2", "V13-V10-G"}
+_STRATEGIES = {
+    "V13-V10-G-7", "V13-V10-G-6", "V13-V10-G-4",
+    "V13-V10-G-3", "V13-V10-G-2", "V13-V10-G",
+}
 
 
 def _uses_current_g3_0950_rules(config: dict) -> bool:
@@ -682,10 +686,243 @@ def _verified_g4_current_backtest() -> list[tuple[dict, Path]]:
         return []
 
 
+@lru_cache(maxsize=8)
+def _g6_verified_accounting(run: str, manifest_digest: str) -> dict:
+    """Verify one pinned G6 history package before it can reach the dashboard."""
+    from research import g6_g4_replica_backtest as g6
+    return g6.verify(Path(run))
+
+
+@lru_cache(maxsize=8)
+def _g7_verified_accounting(run: str, manifest_digest: str) -> dict:
+    """Verify one pinned G7 history package before it can reach the dashboard."""
+    from research import g7_g6_replica_backtest as g7
+    return g7.verify(Path(run))
+
+
+@lru_cache(maxsize=8)
+def _g6_daily_verified_accounting(run: str, manifest_digest: str) -> dict:
+    from research import g6_daily_backtest as daily
+    return daily.verify(Path(run))
+
+
+@lru_cache(maxsize=8)
+def _g7_daily_verified_accounting(run: str, manifest_digest: str) -> dict:
+    from research import g7_daily_backtest as daily
+    return daily.verify(Path(run))
+
+
+def _verified_manifest(run: Path, root: Path, digest: str, *, schema: str | None = None) -> dict:
+    """Read a complete manifest only after checking its pointer and every member."""
+    manifest_path = run / "manifest.json"
+    if not _inside(run, root) or not _checked_hash(manifest_path, digest):
+        raise ValueError("The pinned manifest is unavailable or changed.")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files or (schema and manifest.get("schema_version") != schema):
+        raise ValueError("The result manifest identity is invalid.")
+    for name, expected in files.items():
+        member = Path(name)
+        path = run / member
+        if (not isinstance(name, str) or not name or member.is_absolute() or ".." in member.parts
+                or not _inside(path, run) or not _checked_hash(path, expected)):
+            raise ValueError("A result manifest member is invalid.")
+    return manifest
+
+
+def _g67_definition(family: str) -> dict:
+    """Return the fixed identity of the two isolated research families."""
+    if family == "g6":
+        from research import g6_g4_replica_backtest as module
+        return {
+            "module": module, "strategy": "V13-V10-G-6", "short": "G-6",
+            "root_name": "backtesting_result_v13_v10_g_6", "policy": module.NIFTY_POLICY,
+            "history_verify": _g6_verified_accounting,
+            "daily_verify": _g6_daily_verified_accounting,
+            "daily_module": "g6_daily_backtest", "version_label": "V2",
+        }
+    if family == "g7":
+        from research import g7_g6_replica_backtest as module
+        return {
+            "module": module, "strategy": "V13-V10-G-7", "short": "G-7",
+            "root_name": "backtesting_result_v13_v10_g_7", "policy": module.NIFTY_POLICY,
+            "history_verify": _g7_verified_accounting,
+            "daily_verify": _g7_daily_verified_accounting,
+            "daily_module": "g7_daily_backtest", "version_label": "V3",
+        }
+    raise ValueError("Unknown research family")
+
+
+def _verified_g67_current_backtest(family: str) -> list[tuple[dict, Path]]:
+    """Expose only the current pinned Nifty-futures policy for G6 or G7."""
+    try:
+        definition = _g67_definition(family)
+        module = definition["module"]
+        root = DATA_ROOT / definition["root_name"]
+        pointer = json.loads((root / "latest" / "bounded_exit.json").read_text(encoding="utf-8-sig"))
+        relative = Path(pointer["run_dir"])
+        if (pointer.get("variant_id") != module.VERSION
+                or pointer.get("selected_policy") != definition["policy"]
+                or pointer.get("direction_filter_mode") != "nifty_both_counter_skip"
+                or pointer.get("execution_authority") is not False
+                or relative.is_absolute() or ".." in relative.parts
+                or len(relative.parts) != 3 or relative.parts[0] != "runs"):
+            return []
+        run = root / relative
+        manifest = _verified_manifest(run, root, pointer["manifest_sha256"])
+        folder = run / definition["policy"]
+        required = {
+            "summary.json", "config.json",
+            definition["policy"] + "/daily_results.csv",
+            definition["policy"] + "/portfolio_trades.csv",
+        }
+        if not required.issubset(manifest["files"]):
+            return []
+        summary = definition["history_verify"](str(run.resolve()), pointer["manifest_sha256"])
+        config = json.loads((run / "config.json").read_text(encoding="utf-8-sig"))
+        expected_config = module.configuration_payload()
+        direction = config.get("direction_filter", {})
+        days = summary.get("days")
+        if (config != expected_config
+                or config.get("variant_id") != module.VERSION
+                or config.get("strategy") != definition["strategy"]
+                or config.get("scope") != "BACKTEST_ONLY"
+                or config.get("execution_authority") is not False
+                or direction.get("mode") != "nifty_both_counter_skip"
+                or direction.get("selected_policy") != definition["policy"]
+                or direction.get("execution_authority") is not False
+                or summary.get("variant_id") != module.VERSION
+                or summary.get("selected_policy") != definition["policy"]
+                or summary.get("direction_filter_mode") != "nifty_both_counter_skip"
+                or summary.get("execution_authority") is not False
+                or summary.get("active_setups") != 51
+                or summary.get("last_date") != pointer.get("session_date")
+                or not isinstance(days, list) or not days
+                or summary.get("sessions") != len(days)
+                or summary.get("first_date") != days[0]
+                or summary.get("last_date") != days[-1]):
+            return []
+        exit_mode = (config.get("exit_policy") or {}).get("mode")
+        suffix = " · two-stage exits" if family == "g7" else ""
+        identity = relative.as_posix() + "/" + definition["policy"]
+        metadata = dict(
+            id=family + "b-" + hashlib.sha256(identity.encode()).hexdigest()[:16],
+            label=f'{definition["short"]} {definition["version_label"]} full history{suffix}',
+            strategy=definition["strategy"], run_name=run.name,
+            source_label=(f'{definition["short"]} {definition["version_label"]} verified historical '
+                          f'backtest · Nifty-futures both-directions-opposed filter{suffix}'),
+            kind="backtest", role="backtest_history", verified=True, integrity_verified=True,
+            current_full_strategy=True, strategy_matches_active=False,
+            strategy_matches_backtest=True, strategy_version=module.VERSION,
+            strategy_fingerprint=module.mirror.fingerprint(config),
+            variant_id=module.VERSION, active_setup_count=51,
+            selected_policy=definition["policy"], direction_filter_mode="nifty_both_counter_skip",
+            exit_policy_mode=exit_mode, scope="BACKTEST_ONLY", execution_authority=False,
+            period_start=summary["first_date"], period_end=summary["last_date"],
+            sessions=summary["sessions"], _run_dir=str(folder), _ledger="portfolio_trades.csv",
+        )
+        return [(metadata, folder / "daily_results.csv")]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, AssertionError, ImportError):
+        return []
+
+
+def _verified_g67_daily_backtest(family: str) -> list[tuple[dict, Path]]:
+    """Expose the separately pinned, one-session replay for G6 or G7."""
+    try:
+        definition = _g67_definition(family)
+        module = definition["module"]
+        daily = __import__("research." + definition["daily_module"], fromlist=["SCHEMA"])
+        root = DATA_ROOT / definition["root_name"]
+        pointer = json.loads((root / "latest" / "daily_backtest.json").read_text(encoding="utf-8-sig"))
+        relative = Path(pointer["run_dir"])
+        if (pointer.get("schema_version") != daily.SCHEMA
+                or pointer.get("selected_policy") != definition["policy"]
+                or pointer.get("direction_filter_mode") != "nifty_both_counter_skip"
+                or pointer.get("execution_authority") is not False
+                or relative.is_absolute() or ".." in relative.parts
+                or len(relative.parts) != 4 or relative.parts[:2] != ("daily", "runs")):
+            return []
+        run = root / relative
+        manifest = _verified_manifest(run, root, pointer["manifest_sha256"], schema=daily.SCHEMA)
+        folder = run / definition["policy"]
+        required = {"summary.json", "config.json", definition["policy"] + "/portfolio_trades.csv"}
+        if not required.issubset(manifest["files"]):
+            return []
+        summary = definition["daily_verify"](str(run.resolve()), pointer["manifest_sha256"])
+        config = json.loads((run / "config.json").read_text(encoding="utf-8-sig"))
+        direction = config.get("direction_filter", {})
+        result = summary.get("selected_result")
+        session = pointer.get("session_date")
+        if (config != module.configuration_payload()
+                or config.get("variant_id") != module.VERSION
+                or config.get("strategy") != definition["strategy"]
+                or config.get("execution_authority") is not False
+                or direction.get("mode") != "nifty_both_counter_skip"
+                or direction.get("selected_policy") != definition["policy"]
+                or summary.get("schema_version") != daily.SCHEMA
+                or summary.get("variant_id") != module.VERSION
+                or summary.get("complete") is not True
+                or summary.get("execution_authority") is not False
+                or summary.get("active_setups") != 51
+                or summary.get("selected_policy") != definition["policy"]
+                or summary.get("direction_filter_mode") != "nifty_both_counter_skip"
+                or summary.get("sessions") != 1
+                or summary.get("session_date") != session
+                or summary.get("first_date") != session or summary.get("last_date") != session
+                or summary.get("days") != [session]
+                or summary.get("history_pointer_changed") is not False
+                or not isinstance(result, dict)):
+            return []
+        row = {
+            "day": session, "trades": result.get("trades"), "wins": result.get("wins"),
+            "losses": result.get("losses"), "net_pnl": result.get("net_pnl_rs"),
+            "gross_pnl": result.get("gross_pnl_rs"), "cost": result.get("costs_rs"),
+        }
+        suffix = " · two-stage exits" if family == "g7" else ""
+        identity = relative.as_posix() + "/" + definition["policy"]
+        metadata = dict(
+            id=family + "d-" + hashlib.sha256(identity.encode()).hexdigest()[:16],
+            label=f'{definition["short"]} {definition["version_label"]} daily replay · {session}{suffix}',
+            strategy=definition["strategy"], run_name=run.name,
+            source_label=(f'{definition["short"]} {definition["version_label"]} verified daily replay '
+                          f'· Nifty-futures both-directions-opposed filter{suffix}'),
+            kind="daily_replay", role="backtest_daily", verified=True, integrity_verified=True,
+            current_full_strategy=False, strategy_version=module.VERSION,
+            variant_id=module.VERSION, active_setup_count=51,
+            selected_policy=definition["policy"], direction_filter_mode="nifty_both_counter_skip",
+            exit_policy_mode=(config.get("exit_policy") or {}).get("mode"),
+            scope="BACKTEST_ONLY", execution_authority=False,
+            period_start=session, period_end=session, sessions=1,
+            _run_dir=str(folder), _ledger="portfolio_trades.csv", _daily_result=row,
+        )
+        # The synthetic row is used only after all package evidence above is verified.
+        return [(metadata, run / "summary.json")]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, AssertionError, ImportError):
+        return []
+
+
+def _verified_g6_current_backtest() -> list[tuple[dict, Path]]:
+    return _verified_g67_current_backtest("g6")
+
+
+def _verified_g7_current_backtest() -> list[tuple[dict, Path]]:
+    return _verified_g67_current_backtest("g7")
+
+
+def _verified_g6_daily_backtest() -> list[tuple[dict, Path]]:
+    return _verified_g67_daily_backtest("g6")
+
+
+def _verified_g7_daily_backtest() -> list[tuple[dict, Path]]:
+    return _verified_g67_daily_backtest("g7")
+
+
 def _discover() -> list[tuple[dict, Path]]:
     found = (_verified_g3_runs() + _verified_g3_current_backtest()
              + _verified_g3_0920_long_backtest() + _verified_g3_0920_daily()
-             + _verified_g3_research_runs() + _verified_g4_current_backtest())
+             + _verified_g3_research_runs() + _verified_g4_current_backtest()
+             + _verified_g6_current_backtest() + _verified_g6_daily_backtest()
+             + _verified_g7_current_backtest() + _verified_g7_daily_backtest())
     for prefix, strategy, source_label, relative, pattern in _SOURCES:
         root = DATA_ROOT / relative
         if not _inside(root, DATA_ROOT):
@@ -722,7 +959,10 @@ def _discover() -> list[tuple[dict, Path]]:
     # The normal full-strategy history and the post-promotion daily aggregate
     # have different coverage. A newer daily cutoff must not displace the
     # current normal historical backtest (or restore an archived revision).
-    family_order = {"V13-V10-G-3": 4, "V13-V10-G-4": 3, "V13-V10-G-2": 2, "V13-V10-G": 1}
+    family_order = {
+        "V13-V10-G-3": 6, "V13-V10-G-4": 5, "V13-V10-G-6": 4,
+        "V13-V10-G-7": 3, "V13-V10-G-2": 2, "V13-V10-G": 1,
+    }
     found.sort(key=lambda entry: (family_order[entry[0]["strategy"]],
         -1 if entry[0].get("strategy_matches_active") is False and not entry[0].get("strategy_matches_backtest") else
         5 if entry[0].get("current_full_strategy") and entry[0].get("verified") else
@@ -923,6 +1163,10 @@ def load_flow_data(run_id: str | None = None, strategy: str | None = None) -> di
         coverage = metadata.get("coverage", {})
         if metadata['strategy'] == 'V13-V10-G-4':
             warnings.append(f"G-4 historical research: {metadata['active_setup_count']} setups with {metadata['additional_atr_guards']} additional one-minute ATR guards. Only the primary scenario is shown; comparison trials are not combined. G-3, PAPER and LIVE configurations remain separate. These dates informed parameter selection and are not untouched validation.")
+        elif metadata['strategy'] == 'V13-V10-G-6':
+            warnings.append("G-6 is an isolated, backtest-only 51-setup replica. This view uses only its verified Nifty-futures policy: reject an entry when both completed slot and session directions oppose the trade. It has no order-execution authority and is not combined with the unfiltered or primary-index trials.")
+        elif metadata['strategy'] == 'V13-V10-G-7':
+            warnings.append("G-7 V3 is an isolated, backtest-only 51-setup result. It uses the verified Nifty-futures both-directions-opposed entry filter and its two-stage exit: half at half target, then the runner targets the full target with its stop moved to target one from the next one-minute bar. It has no order-execution authority; V2 rollback results are not presented as current V3.")
         elif metadata.get("current_full_strategy"):
             setup_count = metadata.get("active_setup_count", len(backtest_contract.ACTIVE_SETUPS))
             details = metadata.get("backtest_scope_text") or _g3_backtest_scope(metadata.get("strategy_version"), metadata.get("strategy_fingerprint")).get("backtest_scope_text")
@@ -945,6 +1189,8 @@ def load_flow_data(run_id: str | None = None, strategy: str | None = None) -> di
             )
         if metadata["kind"] == "full_history":
             daily = _load_full_daily(path.parent, trades, warnings)
+        elif metadata["kind"] == "daily_replay":
+            daily = _normalize_daily([metadata["_daily_result"]], trades, warnings)
         elif metadata["kind"] == "research_variant":
             rows = [{"day": row.get("day"), "trades": row.get("variant_fills"),
                      "wins": row.get("variant_wins"),

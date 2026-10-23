@@ -1,0 +1,10 @@
+{
+  "baseline_allocation_and_pnl_exact": true,
+  "unique_order_ids": true,
+  "index_features_at_or_before_confirmation": true,
+  "chronological_reference_excludes_current_day": true,
+  "daily_totals_reconcile": true,
+  "pnl_delta_reconciles_saved_losses_minus_lost_winners_plus_new_allocation": true,
+  "current_morning_excluded_from_outcomes": true,
+  "production_pointer_unchanged": true
+}

@@ -1,4 +1,4 @@
-"""G4 V13: unchanged 51 setups plus approved, separately dated comparisons."""
+"""G4 V14: 51 setups with the approved 10:11 SHORT 0.11% entry move."""
 from __future__ import annotations
 
 from dataclasses import asdict, replace
@@ -13,14 +13,18 @@ import pandas as pd
 from research import g4_bounded_exit_backtest as bounded
 from research import g4_g3_mirror_backtest as mirror
 from research import g3_target_cutoff_contract as donor
+from research.archived_g3_v13 import contract as frozen_donor
 from research import g4_1216_comparison as approved1216
 from research.g4_extended_target_sweep import read_frozen_csv
 
-VERSION = 'V13-V10-G-4-BOUNDED-EXIT-51-SETUPS-V13'
-DEFAULT_CONFIG = bounded.ROOT/'configs/strategies/v13_v10_g_4_bounded_exit_51_setups_v13.json'
+VERSION = 'V13-V10-G-4-BOUNDED-EXIT-51-SETUPS-V14'
+PREVIOUS_VERSION = 'V13-V10-G-4-BOUNDED-EXIT-51-SETUPS-V13'
+DEFAULT_CONFIG = bounded.ROOT/'configs/strategies/v13_v10_g_4_bounded_exit_51_setups_v14.json'
+PREVIOUS_CONFIG = bounded.ROOT/'configs/strategies/v13_v10_g_4_bounded_exit_51_setups_v13.json'
+PREVIOUS_CONFIG_SHA256 = '9d95188a2664fe3c58defbae679edbc87633dc7a1da52320d397bf0cb19b9c1c'
 ADDED_IDS = frozenset({'0921_SHORT', '1011_LONG'})
 APPROVED_0920_IDS = ('0921_LONG', '0921_SHORT')
-DONOR_FINGERPRINT = '77eefabdebbd580e798e7584d206214df5f383983c5053230a3171ef939e2883'
+DONOR_FINGERPRINT = '871ed037495f5a68c916826200e13ce491fe60621f0b6a7f673e18ca601816cb'
 APPROVED_RESEARCH = {
     '0921_LONG': {
         'artifact': '20261016T174500_g4_0920_long_parameters_v1',
@@ -52,7 +56,7 @@ def configuration_payload():
             winner_profit_give_up_limit_pct=10.0,
             decision='Retain the current 09:20 LONG and SHORT parameters; publish their audited comparisons with G4.',
             research={setup_id: dict(details) for setup_id, details in APPROVED_RESEARCH.items()}),
-        selection_rule='Keep existing 49 G4 entry rules; add G3 09:20 SHORT and 10:10 LONG with their full entry filters and quotas; allocate the combined portfolio.',
+        selection_rule='Keep existing 49 G4 entry rules, except 10:11 SHORT requires a 0.11% downward move; add G3 09:20 SHORT and 10:10 LONG with their full entry filters and quotas; allocate the combined portfolio.',
         target_rule='Clip all 51 setup targets to 0.60 through 2.00 percent',
         active_setups=[dict(setup_id=s.setup_id, **asdict(replace(s, source_version=VERSION,
             stop_pct=1.2, target_pct=float(np.clip(s.target_pct,.6,2.))))) for s in donor.ACTIVE_SETUPS],
@@ -64,6 +68,10 @@ def configuration_payload():
 
 def configuration(path=DEFAULT_CONFIG):
     value = mirror.read(path)
+    if (Path(path).resolve() == PREVIOUS_CONFIG.resolve() and
+            mirror.sha256(PREVIOUS_CONFIG) == PREVIOUS_CONFIG_SHA256 and
+            value.get('variant_id') == PREVIOUS_VERSION):
+        return value
     if value != configuration_payload():
         raise ValueError('G4 51-setup backtest configuration drift')
     return value
@@ -71,17 +79,21 @@ def configuration(path=DEFAULT_CONFIG):
 
 class Identity(mirror.Identity):
     def __init__(self, config):
-        self.STRATEGY_VERSION = VERSION
+        self.STRATEGY_VERSION = config['variant_id']
         self.ACTIVE_SETUPS = tuple(mirror.production.SetupSpec(**{k:v for k,v in s.items() if k!='setup_id'})
                                    for s in config['active_setups'])
         self._ACTIVE_BY_ID = {s.setup_id:s for s in self.ACTIVE_SETUPS}
-        self.payload = donor.strategy_payload()
-        self.payload.update(strategy_version=VERSION, strategy_profile='V13_V10_G_4',
-            accepted_variant=VERSION, execution_authority=False, scope='BACKTEST_ONLY',
-            source_strategy_version=donor.STRATEGY_VERSION, source_strategy_fingerprint=DONOR_FINGERPRINT,
+        previous = self.STRATEGY_VERSION == PREVIOUS_VERSION
+        self.payload = (frozen_donor if previous else donor).strategy_payload()
+        self.payload.update(strategy_version=self.STRATEGY_VERSION, strategy_profile='V13_V10_G_4',
+            accepted_variant=self.STRATEGY_VERSION, execution_authority=False, scope='BACKTEST_ONLY',
+            source_strategy_version=config['donor_g3_version'], source_strategy_fingerprint=config['donor_g3_fingerprint'],
             active_setups=[asdict(s) for s in self.ACTIVE_SETUPS],
-            core_setups=[asdict(replace(s,source_version=VERSION,stop_pct=1.2,
-                target_pct=float(np.clip(s.target_pct,.6,2.)))) for s in donor.CORE_SETUPS],
+            core_setups=[asdict(replace(s,source_version=self.STRATEGY_VERSION,
+                price_change_pct=.13 if previous and s.setup_id=='1011_SHORT' else s.price_change_pct,
+                stop_pct=1.2,
+                target_pct=float(np.clip(s.target_pct,.6,2.))))
+                for s in donor.CORE_SETUPS],
             maximum_confirmation_extension_atr_by_setup=config['maximum_confirmation_extension_atr_by_setup'],
             g4_five_minute_volume_ratio_overrides=config['five_minute_volume_ratio_overrides'])
         self.payload['exit'].update(initial_stop_pct=1.2,
@@ -196,13 +208,14 @@ def _today_research(evidence, result, days):
 
 
 def run(config_path, output, *, through=None):
+    from research import g4_1011_short_threshold_compare as short_threshold
     config = configuration(config_path)
     approved_evidence = _approved_research_evidence()
     approved_1216 = approved1216.load_evidence()
     output = Path(output).resolve()
     if output.exists() or not output.is_relative_to(bounded.G4_ROOT.resolve()):
         raise ValueError('Fresh G4 result directory required')
-    codepaths = [Path(__file__),Path(config_path),Path(bounded.__file__),Path(mirror.__file__),
+    codepaths = [Path(__file__),Path(config_path),Path(short_threshold.__file__),Path(bounded.__file__),Path(mirror.__file__),
                  Path(donor.__file__),Path(mirror.production.__file__),
                  bounded.ROOT/'fno_v13_v10_g_4_backtest.py',
                  bounded.ROOT/'research/g3_sl_target_simulator.py',Path(bounded.history.__file__),
@@ -211,17 +224,26 @@ def run(config_path, output, *, through=None):
     old,old_summary,current,source_summary,pointer = bounded.checked_sources(bounded.configuration(),through)
     print('Verified source history; replaying retained entries and adding both G3 setups.',flush=True)
     prices = Prices(source_summary)
-    retained,old_identity,changes,sources,candidates = bounded.extended_orders(old,old_summary,current,source_summary,prices)
+    frozen_retained,old_identity,changes,sources,candidates = bounded.extended_orders(old,old_summary,current,source_summary,prices)
+    if config['variant_id'] == VERSION:
+        short_audit,short_sources = short_threshold._candidate_pool(source_summary)
+        retained,short_audit,short_changes = short_threshold._select_changed(short_audit,frozen_retained)
+    else:
+        retained = frozen_retained
+        short_audit,short_sources = pd.DataFrame(),{}
+        short_changes = pd.DataFrame(columns=['day','setup_id','tradingsymbol','action'])
     g3 = read_frozen_csv(current/'selected_orders.csv')
     added = g3.loc[g3.setup_id.isin(ADDED_IDS)].copy()
     combined = pd.concat([retained,added],ignore_index=True,sort=False)
     if combined.sid.duplicated().any() or combined.duplicated(['day','setup_id','tradingsymbol']).any():
         raise ValueError('Duplicate selected order in expanded G4 inventory')
     days = source_summary['days']
-    paths = prices.paths(combined.sort_values(['tradingsymbol','day','confirmation_ts']))
+    path_orders = pd.concat([combined,frozen_retained.loc[~frozen_retained.sid.isin(combined.sid)]],
+                            ignore_index=True,sort=False)
+    paths = prices.paths(path_orders.sort_values(['tradingsymbol','day','confirmation_ts']))
     print(f'Validated {len(paths)} complete execution paths; {len(added)} added selected orders.',flush=True)
     calendar = [date.fromisoformat(d) for d in days]
-    native = bounded.history._simulate(retained,paths,calendar,old_identity)
+    native = bounded.history._simulate(frozen_retained,paths,calendar,old_identity)
     previous = native.loc[native.day.le(old_summary['last_date'])]
     saved = read_frozen_csv(old/old_summary['primary_scenario']/'portfolio_trades.csv')
     bounded.history._same_native(previous,saved)
@@ -231,9 +253,10 @@ def run(config_path, output, *, through=None):
     orders = identity.identify(combined)
     replay = bounded.history._simulate(orders,paths,calendar,identity)
     result = _bounded(replay,paths,config)
-    # Extra positions may change allocation, but cannot change existing fills.
+    # Extra positions may change allocation, but cannot change unchanged fills.
     a = control.set_index('sid').sort_index()
-    b = result.set_index('sid').loc[a.index]
+    b = result.set_index('sid').loc[a.index.intersection(result.sid)].sort_index()
+    a = a.loc[b.index]
     for field in ['filled','entry_ts','entry_price','exit_ts','exit_price','exit_reason']:
         pd.testing.assert_series_equal(a[field],b[field],check_names=False,check_dtype=False)
     for path,digest in codehash.items():
@@ -253,11 +276,16 @@ def run(config_path, output, *, through=None):
     approved_configuration = _approved_configuration(identity, config)
     approved_comparison = _approved_comparison(result, days)
     today_research = _today_research(approved_evidence, result, days)
-    summary = dict(variant_id=VERSION,scope='BACKTEST_ONLY',execution_authority=False,
+    summary = dict(variant_id=config['variant_id'],scope='BACKTEST_ONLY',execution_authority=False,
         sessions=len(days),first_date=days[0],last_date=days[-1],days=days,active_setups=51,
         added_setup_ids=sorted(ADDED_IDS),added_selected_orders=len(added),
         primary_policy='g4_bounded_exit',control_policy='g4_previous_49',
         original_g4_history_parity_verified=True,retained_native_fills_and_exits_unchanged=True,
+        short_1011_entry_change=dict(previous_price_change_pct=.13,
+            price_change_pct=.11 if config['variant_id']==VERSION else .13,
+            selection_changes=short_changes.to_dict('records'),candidate_sources=short_sources,
+            rule='Rerank the complete pre-quota 10:11 SHORT pool for every backtested session.'
+                if config['variant_id']==VERSION else 'Preserve the frozen 0.13% G4 V13 entry rule.'),
         baseline_g4_run=str(old),baseline_g4_manifest_sha256=config['donor_g4_manifest_sha256'],
         current_g3_source_run=str(current),current_g3_manifest_sha256=pointer['manifest_sha256'],
         appended_sources=sources,price_sources=prices.proof,comparison=comparison.to_dict('records'),
@@ -304,10 +332,13 @@ def run(config_path, output, *, through=None):
     approved1216.write_evidence(output,approved_1216)
     candidates.to_csv(output/'appended_guard_candidate_audit.csv',index=False)
     changes.to_csv(output/'selection_changes.csv',index=False)
+    short_audit.to_csv(output/'short_1011_candidate_audit.csv',index=False)
+    short_changes.to_csv(output/'short_1011_selection_changes.csv',index=False)
     (output/'config.json').write_text(json.dumps(config,indent=2)+'\n',encoding='utf-8')
     (output/'summary.json').write_text(json.dumps(summary,indent=2,default=str)+'\n',encoding='utf-8')
     report = '<!doctype html><meta charset="utf-8"><title>G4 51 setups</title><style>body{background:#101927;color:#edf4ff;font:15px/1.6 system-ui;padding:24px}a{color:#8ed6ff}td,th{padding:8px;border-bottom:1px solid #476078;text-align:left}table{border-collapse:collapse}</style><h1>G4: 51 setups</h1>'
     report += f'<p>{days[0]} through {days[-1]}: {len(days)} complete sessions. Added 09:20 SHORT and 10:10 LONG; each targets 1.50%. All setups retain G4 bounded exits: stop 1.20%, tightening to 1.00% after 120 minutes; targets 0.60–2.00%.</p>'
+    report += f'<p>10:11 SHORT required downward move: {0.11 if config["variant_id"]==VERSION else 0.13:.2f}%.</p>'
     fields = ['policy','period','trades','wins','losses','win_rate_pct','stop_exits','profitable_days','losing_days','net_pnl_rs']
     report += comparison[fields].to_html(index=False,border=0,float_format=lambda v:f'{v:,.2f}')
     approved_fields = ['setup_id','period','configuration_changed','approved_trades','approved_wins',
@@ -326,7 +357,7 @@ def run(config_path, output, *, through=None):
         files={p.relative_to(output).as_posix():mirror.sha256(p) for p in output.rglob('*') if p.is_file()}),indent=2)+'\n',encoding='utf-8')
     verify(output)
     from fno_v13_v10_g_3_daily_replay import atomic_json
-    atomic_json(bounded.G4_ROOT/'latest/bounded_exit.json',dict(variant_id=VERSION,
+    atomic_json(bounded.G4_ROOT/'latest/bounded_exit.json',dict(variant_id=config['variant_id'],
         run_dir=output.relative_to(bounded.G4_ROOT).as_posix(),manifest_sha256=mirror.sha256(output/'manifest.json'),
         session_date=days[-1],execution_authority=False))
     return summary
@@ -336,7 +367,7 @@ def verify(output):
     output = Path(output)
     manifest = mirror.read(output/'manifest.json')
     summary = mirror.read(output/'summary.json')
-    if summary['variant_id']!=VERSION or summary['active_setups']!=51 or summary['execution_authority'] is not False:
+    if summary['variant_id'] not in (VERSION,PREVIOUS_VERSION) or summary['active_setups']!=51 or summary['execution_authority'] is not False:
         raise ValueError('Unexpected G4 result identity')
     if summary.get('approved_0920',{}).get('setup_ids') != list(APPROVED_0920_IDS):
         raise ValueError('Approved 09:20 decisions are missing')

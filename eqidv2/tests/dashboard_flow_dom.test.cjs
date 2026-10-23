@@ -122,6 +122,20 @@ test('strategy tabs and refresh follow the newest run within the chosen family',
   assert.match(ui.requests.at(-1),/strategy=V13-V10-G-2/);
 });
 
+test('strategy controls render all six recorded G families', async () => {
+  const data=fixture();
+  data.runs=[
+    data.selected_run,
+    {...data.selected_run,id:'g4-latest',strategy:'V13-V10-G-4'},
+    {...data.selected_run,id:'g6-latest',strategy:'V13-V10-G-6'},
+    {...data.selected_run,id:'g7-v3-latest',strategy:'V13-V10-G-7'},
+    {...data.selected_run,id:'g2-latest',strategy:'V13-V10-G-2'},
+    {...data.selected_run,id:'g-latest',strategy:'V13-V10-G'},
+  ];
+  const ui=await app(data);
+  assert.deepEqual(ui.get('family-tabs').children.map(button=>button.textContent),['G-3','G-4','G-6','G-7','G-2','G']);
+});
+
 test('direction and replay update session evidence; entire-run scope restores daily totals', async () => {
   const ui = await app(fixture());
   ui.get('side-filter').onchange({target:{value:'SHORT'}});

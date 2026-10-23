@@ -20,8 +20,10 @@ $ArmPath = 'C:\TradingData\eqidv2\fno_oi\v13_v10_g_3_live\live_arm.json'
 $LogPath = Join-Path $Workspace 'logs\g3_live_activation_2026-10-22.log'
 $StatusHelpers = Join-Path $PSScriptRoot 'g3_activation_status_helpers.ps1'
 $ExpectedHealthWarning = 'acceptance pending: waiting for the first canonical 09:20 stock-futures marker'
-$ExpectedStrategyVersion = 'V13-V10-G-3-PRODUCTION-V11'
-$ExpectedStrategyFingerprint = '82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4'
+$ExpectedStrategyVersion = 'V13-V10-G-3-PRODUCTION-V12'
+$ExpectedStrategyFingerprint = '7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c'
+$ExpectedPriorStrategyVersion = 'V13-V10-G-3-PRODUCTION-V11'
+$ExpectedPriorStrategyFingerprint = '82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4'
 $ExpectedPolicyFingerprint = 'cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e'
 $ExpectedPriorPolicyFingerprint = '979556c444f951ea1e79ec4a90b7570b010dc931f2af674aa0849da6c64f3362'
 $ExpectedSetupCount = 61
@@ -250,8 +252,8 @@ function Assert-StalePriorDayArmCannotAuthorizeCurrentSession {
         throw 'An unexpected same-day or future LIVE arm already exists.'
     }
     if ([string]$arm.session_date -ne $PriorSessionDate -or
-        $arm.strategy_version -ne $ExpectedStrategyVersion -or
-        $arm.strategy_fingerprint -ne $ExpectedStrategyFingerprint -or
+        $arm.strategy_version -ne $ExpectedPriorStrategyVersion -or
+        $arm.strategy_fingerprint -ne $ExpectedPriorStrategyFingerprint -or
         $arm.live_execution_policy_fingerprint -ne $ExpectedPriorPolicyFingerprint) {
         throw 'The stale LIVE arm is not the reviewed prior-session authorization.'
     }

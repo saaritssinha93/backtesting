@@ -67,8 +67,8 @@
     },
     "V13_V10_G_3": {
       "label": "V13-V10-G-3",
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
-      "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V12",
+      "strategy_fingerprint": "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
       "live_generation": "v6",
       "frozen_config_path": "C:/TradingData/eqidv2/fno_oi/strategy_research/v13_corrected_v10_g_3/frozen_20261008_long110_nextminute_v1/frozen_config.json",
       "frozen_config_sha256": "788fbb3dbda6cf86d3f0f26a9db777e7462ba64c7906368cca077e983f72552a",
@@ -138,7 +138,7 @@
         "V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4"
       ],
       "evidence_class": "G3_61_SETUP_PROMOTION_WITH_0926_LONG_VOLUME120_REUSED_HISTORY_NOT_UNTOUCHED_VALIDATION",
-      "production_config_relative_path": "configs/strategies/v13_v10_g_3_production_v11.json",
+      "production_config_relative_path": "configs/strategies/v13_v10_g_3_production_v12.json",
       "five_minute_volume_ratio_min_by_setup": {
         "0926_LONG": 1.2
       },
@@ -202,8 +202,8 @@
       "max_reserved_open_positions": null,
       "max_daily_entries": null,
       "max_reserved_gross_exposure_rs": null,
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
-      "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V12",
+      "strategy_fingerprint": "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
       "source_id": "g3_equity_live_orders"
     },
     "V13_V10_G_3_EQUITY_PAPER_EXPOSURE": {
@@ -212,15 +212,15 @@
       "quantity_policy": "STRATEGY_SIZED",
       "capital_per_entry_rs": 100000.0,
       "leverage": 5.0,
-      "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
-      "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V12",
+      "strategy_fingerprint": "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
       "source_id": "g3_equity_paper_orders"
     },
     "V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4": {
       "label": "V13-V10-G-3 options: one lot ATM, 30% stop, 40.4% target",
       "strategy_version": "FNO_V13_V10_G_3_OPTIONS_ONE_LOT_ATM_SL30_T40P4_20261011",
-      "equity_strategy_version": "V13-V10-G-3-PRODUCTION-V11",
-      "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
+      "equity_strategy_version": "V13-V10-G-3-PRODUCTION-V12",
+      "strategy_fingerprint": "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
       "mode": "PAPER",
       "lots": 1,
       "execution_sources": [

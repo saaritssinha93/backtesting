@@ -1,12 +1,12 @@
 {
   "schema_version": "fno_active_strategy_deployment_v1",
   "profile": "V13_V10_G_3",
-  "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
-  "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
-  "accepted_variant": "G3_W1_V1p1_0950_LONG_T075_0920_LONG_T300_LATE_SIX_SELECTED_TEN_MIDDAY_TWELVE_AFTERNOON_FIFTEEN_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120",
-  "production_config": "configs/strategies/v13_v10_g_3_production_v11.json",
-  "deployment_stage": "LIVE_APPROVED",
-  "live_activation_authorized": true,
+  "strategy_version": "V13-V10-G-3-PRODUCTION-V13",
+  "strategy_fingerprint": "74ff6bf6a2c1a68a08a324d8090809dbfe10a3ccacf289ab1953fb03636ca615",
+  "accepted_variant": "G3_W1_V1p1_0950_LONG_T075_0920_LONG_T300_LATE_SIX_SELECTED_TEN_MIDDAY_TWELVE_AFTERNOON_FIFTEEN_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120_1011_SHORT_MOVE011_TARGET_GT075_RESTORED3",
+  "production_config": "configs/strategies/v13_v10_g_3_production_v13.json",
+  "deployment_stage": "PAPER_VALIDATION",
+  "live_activation_authorized": false,
   "live_execution_policy": {
     "live_execution_policy_schema_version": "g3_live_execution_policy_v1",
     "live_execution_policy_fingerprint": "cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e",
@@ -19,8 +19,8 @@
     "max_daily_entries": null,
     "max_reserved_gross_exposure_rs": null
   },
-  "migration_date": "2026-10-15",
-  "migration_plan": "docs/G3_0926_LONG_VOLUME120_2026-10-15.md",
+  "migration_date": "2026-10-23",
+  "migration_plan": "configs/strategies/v13_v10_g_3_production_v13.json",
   "historical_profiles_preserved": [
     "V13_V10_G",
     "V13_V10_G_2"
@@ -31,20 +31,19 @@
     "Separate explicit LIVE activation approval",
     "Dated strategy- and execution-policy-bound G3 acknowledgement and arm record"
   ],
-  "next_worker_session": "2026-10-16",
+  "next_worker_session": "2026-10-24",
   "previous_session_identity": {
-    "through_session": "2026-10-15",
-    "strategy_version": "V13-V10-G-3-PRODUCTION-V9",
-    "strategy_fingerprint": "d65237ffc1e5caf932258fc91b15c487951d1b6b75d32614e4fd0cbe88fa61b5",
-    "reason": "Existing V9 workers finish open positions; new scheduled workers load V10 on 2026-10-16."
+    "through_session": "2026-10-23",
+    "strategy_version": "V13-V10-G-3-PRODUCTION-V12",
+    "strategy_fingerprint": "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
+    "reason": "Existing V12 orders retain their identity; subsequent PAPER workers use V13. LIVE needs fresh V13-bound approval."
   },
   "live_approval": {
-    "source": "EXPLICIT_OPERATOR_APPLY",
-    "approved_at_ist": "2026-10-21T11:34:52.454505+05:30",
-    "entry_not_before_ist": "2026-10-21T11:34:52.454505+05:30",
-    "session_date": "2026-10-21",
-    "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
-    "live_execution_policy_fingerprint": "979556c444f951ea1e79ec4a90b7570b010dc931f2af674aa0849da6c64f3362",
+    "source": "STANDING_OPERATOR_POLICY",
+    "entry_not_before_ist": "2026-10-23T09:10:29.859474+05:30",
+    "session_date": "2026-10-23",
+    "strategy_fingerprint": "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
+    "live_execution_policy_fingerprint": "cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e",
     "setup_ids": [
       "0921_LONG",
       "0921_SHORT",
@@ -108,7 +107,11 @@
       "1326_SHORT",
       "1331_LONG"
     ],
-    "paper_validation": "OPERATOR_OVERRIDE_NOT_ATTESTED",
-    "broker_checked_at_ist": "2026-10-21T11:34:41.752747+05:30"
+    "paper_validation": "STANDING_OPERATOR_POLICY_OVERRIDE_NOT_ATTESTED",
+    "standing_policy_id": "G3_LIVE_STANDING_20261023_V1",
+    "standing_policy_fingerprint": "8b7c7a1dbc6564266c931ee3fd6a0ae451bfdf732bb9ae582f7f19f4f8c5115f",
+    "setup_ids_sha256": "f555f8f81cad15b9c5d33a74a6f277ae0ed5dfe077c07657a19f472b7e5028b5",
+    "approved_at_ist": "2026-10-23T09:10:29.859474+05:30",
+    "broker_checked_at_ist": "2026-10-23T09:10:26.750392+05:30"
   }
 }

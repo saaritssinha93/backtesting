@@ -10,8 +10,8 @@ from research import g3_target_cutoff_contract as contract
 from research.archived_g3_v6 import contract as previous
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION_CONFIG_PATH = ROOT / "configs/strategies/v13_v10_g_3_production_v11.json"
-CONFIG_PATH = ROOT / "configs/strategies/v13_v10_g_3_backtest_target_gt075_restored3_v13.json"
+PRODUCTION_CONFIG_PATH = ROOT / "configs/strategies/v13_v10_g_3_production_v12.json"
+CONFIG_PATH = ROOT / "configs/strategies/v13_v10_g_3_backtest_target_gt075_restored3_v14.json"
 HISTORY_CONFIG = ROOT / "configs/strategies/v13_v10_g_3_backtest_selected_afternoon_v7.json"
 VERSION = contract.STRATEGY_VERSION
 ADDED_IDS = production.afternoon_setups.SETUP_IDS - contract.DISABLED_IDS
@@ -64,6 +64,8 @@ def production_configuration():
             actual.pop("source_version")
             if setup_id == "0926_LONG":
                 expected["volume_ratio"] = 1.2
+            if setup_id == "1011_SHORT":
+                expected["price_change_pct"] = .11
             if actual != expected:
                 raise ValueError(f"G3 existing setup changed: {setup_id}")
         for row in value["setups"]:

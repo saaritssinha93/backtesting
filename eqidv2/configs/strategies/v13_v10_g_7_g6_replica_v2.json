@@ -1,0 +1,27 @@
+{
+  "variant_id": "V13-V10-G-7-G6-REPLICA-V2",
+  "base_variant": "V13-V10-G-7-G6-REPLICA-V1",
+  "replica_source_variant": "V13-V10-G-6-G4-REPLICA-V2",
+  "target_policy": "RESTORE_G6_PER_SETUP_TARGETS",
+  "slot_entry_filters": {
+    "1011_LONG": {
+      "field": "oi_change_pct",
+      "source_minimum": 0.05,
+      "minimum": 0.125
+    },
+    "1206_LONG": {
+      "field": "oi_change_pct",
+      "source_minimum": 0.05,
+      "minimum": 0.1
+    },
+    "1226_SHORT": {
+      "field": "traded_value",
+      "source_minimum": 0.0,
+      "minimum": 10000000.0
+    }
+  },
+  "filter_application": "AFTER_SLOT_RANKING_BEFORE_EXECUTION_NO_REPLACEMENT",
+  "direction_filter_mode": "nifty_both_counter_skip",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false
+}

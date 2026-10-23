@@ -8,7 +8,7 @@ $Workspace = Split-Path $PSScriptRoot -Parent
 $Python = 'C:\Users\Saarit\AppData\Local\Programs\Python\Python312\python.exe'
 $Operator = Join-Path $Workspace 'tools\g3_live_operator.py'
 $BrokerProbe = Join-Path $Workspace 'tools\test_kite_order_readiness.py'
-$StandingPolicyPath = Join-Path $Workspace 'configs\authorizations\g3_live_standing_policy_v1.json'
+$StandingPolicyPath = Join-Path $Workspace 'configs\authorizations\g3_live_standing_policy_v2.json'
 $HealthCheck = Join-Path $Workspace 'preopen_session_healthcheck.py'
 $HealthPath = Join-Path $Workspace 'logs\preopen_session_healthcheck_latest.json'
 $HealthRefreshLog = Join-Path $Workspace 'logs\g3_live_standing_healthcheck.log'
@@ -21,15 +21,17 @@ $ArmPath = Join-Path $RuntimeRoot 'fno_oi\v13_v10_g_3_live\live_arm.json'
 $LogPath = Join-Path $Workspace 'logs\g3_live_standing_activation.log'
 $StatusHelpers = Join-Path $PSScriptRoot 'g3_activation_status_helpers.ps1'
 $EffectiveDate = [datetime]::ParseExact(
-    '2026-10-23', 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture
+    '2026-10-24', 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture
 ).Date
 $ExpectedHealthWarning = 'acceptance pending: waiting for the first canonical 09:20 stock-futures marker'
-$ExpectedStrategyVersion = 'V13-V10-G-3-PRODUCTION-V11'
-$ExpectedStrategyFingerprint = '82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4'
+$ExpectedStrategyVersion = 'V13-V10-G-3-PRODUCTION-V13'
+$ExpectedStrategyFingerprint = '74ff6bf6a2c1a68a08a324d8090809dbfe10a3ccacf289ab1953fb03636ca615'
+$ExpectedPriorStrategyVersion = 'V13-V10-G-3-PRODUCTION-V12'
+$ExpectedPriorStrategyFingerprint = '7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c'
 $ExpectedPolicyFingerprint = 'cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e'
-$ExpectedStandingPolicyId = 'G3_LIVE_STANDING_20261023_V1'
-$ExpectedStandingPolicyFingerprint = '25d18e6f028a004159a7caf9ce6e717321852c01435c17c4b3b6efb4ca5f7a43'
-$ExpectedSetupIdsSha256 = 'f555f8f81cad15b9c5d33a74a6f277ae0ed5dfe077c07657a19f472b7e5028b5'
+$ExpectedStandingPolicyId = 'G3_LIVE_STANDING_20261024_V2'
+$ExpectedStandingPolicyFingerprint = '235ea597d8e2fd3a6de9cb23bbd3c8e422898f387ab93300aa23d69e8f37387a'
+$ExpectedSetupIdsSha256 = 'a59e03c5be37fb6da8f190adecfbc99ada9fe378d216f13591e9cde0aa423625'
 $ExpectedSetupIds = @(
     '0921_LONG|0921_SHORT|0926_LONG|0926_SHORT|0931_LONG|0931_SHORT|' +
     '0936_LONG|0936_SHORT|0941_LONG|0941_SHORT|0946_LONG|0946_SHORT|' +
@@ -38,11 +40,10 @@ $ExpectedSetupIds = @(
     '1036_LONG|1036_SHORT|1041_LONG|1046_LONG|1046_SHORT|1051_LONG|' +
     '1056_SHORT|1111_LONG|1111_SHORT|1126_SHORT|1136_LONG|1136_SHORT|' +
     '1141_LONG|1141_SHORT|1146_SHORT|1206_LONG|1211_SHORT|1216_LONG|' +
-    '1216_SHORT|1226_SHORT|1231_LONG|1231_SHORT|1236_LONG|1236_SHORT|' +
-    '1246_LONG|1246_SHORT|1251_LONG|1251_SHORT|1256_SHORT|1301_SHORT|' +
-    '1306_LONG|1316_LONG|1316_SHORT|1321_SHORT|1326_LONG|1326_SHORT|1331_LONG'
+    '1216_SHORT|1226_SHORT|1231_LONG|1231_SHORT|1236_SHORT|1301_SHORT|' +
+    '1321_SHORT|1326_SHORT|1331_LONG'
 ).Split('|')
-$ExpectedSetupCount = 61
+$ExpectedSetupCount = 51
 $AuthMaxAgeSeconds = 5400
 $HealthMaxAgeSeconds = 120
 $BrokerMaxAgeSeconds = 60
@@ -99,7 +100,7 @@ function Assert-ExactSetupIds($Actual, [string]$Label) {
     $ids = @($Actual)
     if ($ids.Count -ne $ExpectedSetupCount -or
         ($ids -join '|') -ne ($ExpectedSetupIds -join '|')) {
-        throw "$Label does not contain the exact reviewed ordered 61-setup set."
+        throw "$Label does not contain the exact reviewed ordered 51-setup set."
     }
 }
 
@@ -142,7 +143,7 @@ function Assert-StandingPolicyArtifact {
     if ($policy.schema_version -ne 'g3_live_standing_operator_policy_v1' -or
         $policy.source -ne 'STANDING_OPERATOR_POLICY' -or
         $policy.policy_id -ne $ExpectedStandingPolicyId -or
-        $policy.effective_from_session_date -ne '2026-10-23' -or
+        $policy.effective_from_session_date -ne '2026-10-24' -or
         $policy.regular_verified_nse_sessions_only -ne $true -or
         $policy.enabled -ne $true -or $policy.revoked -ne $false -or
         $policy.strategy_profile -ne 'V13_V10_G_3' -or
@@ -332,8 +333,11 @@ function Assert-PreApprovalState([datetime]$SessionDate) {
     if ($armDate -ge $SessionDate.Date) {
         throw 'An unexpected same-day or future LIVE arm already exists.'
     }
-    if ($arm.strategy_version -ne $ExpectedStrategyVersion -or
-        $arm.strategy_fingerprint -ne $ExpectedStrategyFingerprint -or
+    $currentIdentity = ($arm.strategy_version -eq $ExpectedStrategyVersion -and
+        $arm.strategy_fingerprint -eq $ExpectedStrategyFingerprint)
+    $priorIdentity = ($arm.strategy_version -eq $ExpectedPriorStrategyVersion -and
+        $arm.strategy_fingerprint -eq $ExpectedPriorStrategyFingerprint)
+    if (-not ($currentIdentity -or $priorIdentity) -or
         $arm.live_execution_policy_fingerprint -ne $ExpectedPolicyFingerprint) {
         throw 'The prior dated arm does not match the exact reviewed G3 identity.'
     }
@@ -651,7 +655,7 @@ try {
     if ($session -lt $EffectiveDate -or
         [string]$session.DayOfWeek -in @('Saturday', 'Sunday') -or
         $now -lt $windowStart -or $now -ge $deadline) {
-        throw 'Standing activation is valid from 2026-10-23 onward on weekdays only, from 09:09:00 through 09:12:29 IST.'
+        throw 'Standing activation is valid from 2026-10-24 onward on weekdays only, from 09:09:00 through 09:12:29 IST.'
     }
 
     Write-G3StandingActivationLog "Starting fail-closed standing activation checks for $($session.ToString('yyyy-MM-dd'))."

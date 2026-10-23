@@ -7,6 +7,7 @@ with G4's unchanged ATR and volume guards. Research only.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from datetime import date
 import html
 import json
@@ -62,9 +63,10 @@ def checked_sources(config,through):
         raise ValueError('Current G3 run pointer changed')
     summary,g3_config=mirror._checked_artifacts(current,G3_ROOT,pointer['manifest_sha256'],
         {'summary.json','config.json','selected_orders.csv','portfolio_trades.csv'})
-    if (summary['strategy_version']!=current_g3.STRATEGY_VERSION
-            or summary['strategy_fingerprint']!=current_g3.strategy_fingerprint()
-            or g3_config!=current_g3.strategy_payload() or len(current_g3.ACTIVE_SETUPS)!=51):
+    source_profile = current_g3.contract_for_identity(
+        summary['strategy_version'], summary['strategy_fingerprint'])
+    if (source_profile is None or g3_config!=source_profile.strategy_payload()
+            or len(source_profile.ACTIVE_SETUPS)!=51):
         raise ValueError('Current G3 daily evidence identity changed')
     last=date.fromisoformat(summary['last_date'])
     if through is not None and through!=last:
@@ -74,14 +76,16 @@ def checked_sources(config,through):
     if last<=date.fromisoformat(old_summary['last_date']):
         raise ValueError('No completed day to append')
     frozen=mirror.frozen_donor._ACTIVE_BY_ID
-    newer=current_g3._ACTIVE_BY_ID
+    newer=source_profile._ACTIVE_BY_ID
     if set(newer)-set(frozen)!={'0921_SHORT','1011_LONG'}:
         raise ValueError('G3 entry inventory changed beyond two G3-only slots')
     for sid,original in frozen.items():
         if sid not in newer:
             raise ValueError(f'Missing old G4 setup {sid}')
         for field,val in vars(original).items():
-            if field not in {'setup_id','source_version','volume_ratio'} and getattr(newer[sid],field)!=val:
+            if field not in {'setup_id','source_version','volume_ratio'} and not (
+                    sid == '1011_SHORT' and field == 'price_change_pct'
+                    and val == .13 and getattr(newer[sid], field) in (.13, .11)) and getattr(newer[sid],field)!=val:
                 raise ValueError(f'G3/G4 shared setup changed: {sid} {field}')
         if sid!='0926_LONG' and newer[sid].volume_ratio!=original.volume_ratio:
             raise ValueError(f'G3/G4 shared volume rule changed: {sid}')
@@ -122,6 +126,13 @@ def extended_orders(old,old_summary,current,summary,prices):
         if mirror.sha256(file)!=item['sha256']:
             raise ValueError('Daily candidate file changed')
         raw=morning.normalize_signals(read_frozen_csv(file))
+        short_raw=raw.loc[raw.hhmm_int.eq(1010) & raw.side.eq('SHORT')].copy()
+        short_raw['sid']=np.arange(210_000_000+len(extensions)*100_000,
+                                   210_000_000+len(extensions)*100_000+len(short_raw))
+        short_audit=current_g3.selection_audit(short_raw)
+        frozen_short=replace(current_g3._ACTIVE_BY_ID['1011_SHORT'],price_change_pct=.13)
+        short_selected=current_g3.rank_candidates(short_audit.to_dict('records'),frozen_short,
+                                                    session_date=day)
         raw=raw.loc[raw.hhmm_int.isin(clocks)].copy()
         raw['sid']=np.arange(97_000_000+len(extensions)*100_000,
                              97_000_000+len(extensions)*100_000+len(raw))
@@ -131,6 +142,22 @@ def extended_orders(old,old_summary,current,summary,prices):
         selected=mirror.reselect(pool,guards,volumes)
         g3_day=g3_orders.loc[g3_orders.day.eq(daystr)
             & g3_orders.setup_id.isin(mirror.frozen_donor._ACTIVE_BY_ID)].copy()
+        current_short=g3_day.loc[g3_day.setup_id.eq('1011_SHORT')]
+        frozen_rows=[]
+        for candidate in short_selected:
+            previous=current_short.loc[current_short.tradingsymbol.eq(candidate['tradingsymbol'])]
+            if len(previous)>1:
+                raise ValueError('Duplicate G3 10:11 SHORT order')
+            frozen_rows.append(previous.iloc[0].to_dict() if len(previous) else candidate)
+        frozen_short_orders=pd.DataFrame(frozen_rows).reindex(columns=g3_day.columns)
+        frozen_keys=mirror.selected_keys(frozen_short_orders)
+        current_keys=mirror.selected_keys(current_short)
+        for action,keys in [('REMOVED_BY_G4_1011_THRESHOLD',current_keys-frozen_keys),
+                            ('ADDED_BY_G4_1011_THRESHOLD',frozen_keys-current_keys)]:
+            changes.extend(dict(day=d,action=action,setup_id=s,tradingsymbol=t)
+                           for d,s,t in sorted(keys))
+        g3_day=pd.concat([g3_day.loc[g3_day.setup_id.ne('1011_SHORT')],frozen_short_orders],
+                         ignore_index=True,sort=False)
         g3_guard=g3_day.loc[g3_day.setup_id.isin(guard_ids)]
         chosen=pd.concat([g3_day.loc[~g3_day.setup_id.isin(guard_ids)],selected],
                          ignore_index=True,sort=False)

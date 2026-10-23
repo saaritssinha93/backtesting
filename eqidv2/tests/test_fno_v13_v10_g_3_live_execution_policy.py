@@ -54,7 +54,7 @@ def test_lot_constraint_overrides_and_separate_paper_contract():
             policy.requested_quantity(102.,1,override)
     assert config.size_position(250.,1,live=True,capital_rs=1e9,leverage=100).quantity == 200
     assert config.size_position(250.,1,live=False).quantity == 2000
-    assert config.strategy_fingerprint() == "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4"
+    assert config.strategy_fingerprint() == "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c"
     assert policy.policy_fingerprint() != config.strategy_fingerprint()
     policy.validate_policy()
 

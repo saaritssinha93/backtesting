@@ -22,6 +22,7 @@ from typing import Any
 from fno_v13_v10_g_3_contract import (IST, SIGNAL_TO_CONFIRMATION, STRATEGY_VERSION,
     strategy_fingerprint, supported_identity)
 from fno_v13_v10_g_identity import canonical_signal_id
+from research import g3_target_cutoff_contract as backtest_contract
 
 MAX_JSON = 4 * 1024 * 1024
 MAX_CSV = 64 * 1024 * 1024
@@ -341,9 +342,12 @@ def _history(data_root: Path, day: str, warnings: list[str], sources: list[dict]
         if hashlib.sha256(manifest_raw).hexdigest() != pointer["manifest_sha256"]:
             raise ValueError("Manifest hash mismatch")
         manifest = json.loads(manifest_raw)
+        version, fingerprint = manifest.get("strategy_version"), manifest.get("strategy_fingerprint")
+        if not backtest_contract.supported_identity(version, fingerprint, allow_legacy=True):
+            raise ValueError("Unknown historical strategy identity")
         for record in (pointer, manifest):
-            if (record.get("role") != "cumulative_history" or record.get("strategy_version") != STRATEGY_VERSION
-                    or record.get("strategy_fingerprint") != FINGERPRINT):
+            if (record.get("role") != "cumulative_history" or record.get("strategy_version") != version
+                    or record.get("strategy_fingerprint") != fingerprint):
                 raise ValueError("Historical identity mismatch")
         if (manifest.get("schema_version") != "fno_g3_production_run_v1" or manifest.get("complete") is not True
                 or manifest.get("execution_authority") is not False
@@ -370,13 +374,13 @@ def _history(data_root: Path, day: str, warnings: list[str], sources: list[dict]
             if len(records) > MAX_ROWS:
                 raise ValueError("CSV row limit")
             rows = [row for row in records if row.get("day") == day]
-            if any(row.get("strategy_version") != STRATEGY_VERSION or row.get("strategy_fingerprint") != FINGERPRINT for row in rows):
+            if any(row.get("strategy_version") != version or row.get("strategy_fingerprint") != fingerprint for row in rows):
                 raise ValueError("Historical row identity mismatch")
             result.append(rows)
             artifact_sources.append(_source(path, data_root, f"Hash-verified G3 backtest {name}"))
         sources.extend(artifact_sources)
         return {"state": "VERIFIED_BACKTEST", "run": run.relative_to(data_root).as_posix(),
-                "strategy_version": STRATEGY_VERSION,
+                "strategy_version": version, "current_profile": version == backtest_contract.STRATEGY_VERSION,
                 "manifest_sha256": pointer["manifest_sha256"], "timing": "RETROSPECTIVE_BACKTEST"}, result[0], result[1]
     except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError):
         warnings.append("G3 historical package failed identity/integrity checks; no backtest decisions accepted")
@@ -423,12 +427,14 @@ def _load_history(slots: dict, history: dict, audits: list[dict], trades: list[d
         slot["counts"]["backtest_fills"] += filled is True
 
 
-def build_live_evidence(data_root: Path, session_date: str, *, now: datetime | None = None) -> dict:
+def build_live_evidence(data_root: Path, session_date: str, *, now: datetime | None = None,
+                        realtime: bool = False) -> dict:
     """Return one session of immutable observations, keyed by signal slot/symbol.
 
     Counters are ``None`` where evidence is absent, zero only for an available
     recorded source. Backtest and recorded runtime counters remain separate.
     ``now`` bounds future-dated files, not subsequent outcomes of an old slot.
+    In realtime mode the bound advances while the live files are being read.
     """
     if not isinstance(session_date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session_date):
         raise ValueError("Use a YYYY-MM-DD session date")
@@ -449,8 +455,10 @@ def build_live_evidence(data_root: Path, session_date: str, *, now: datetime | N
             strategy_slot=expected, scanner=None, confirmation=None, counts=dict.fromkeys(count_names),
             orders_state={}, rows={}, notes=[])
         if expected and not future:
-            _load_slot(slots[clock], root, data_root, session_date, clock, now, warnings, sources)
-    _load_orders(slots, root, data_root, session_date, now, warnings, sources)
+            _load_slot(slots[clock], root, data_root, session_date, clock,
+                       datetime.now(IST) if realtime else now, warnings, sources)
+    _load_orders(slots, root, data_root, session_date,
+                 datetime.now(IST) if realtime else now, warnings, sources)
     history, audits, trades = _history(data_root, session_date, warnings, sources)
     _load_history(slots, history, audits, trades, session_date)
     return dict(schema_version="dashboard_flow_live_evidence_v1", session_date=session_date,

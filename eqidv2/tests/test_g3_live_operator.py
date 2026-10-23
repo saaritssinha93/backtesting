@@ -95,6 +95,8 @@ def test_tomorrow_plan_keeps_approved_midday_filters_and_all_previous_setups(sta
         expected = {key: value for key, value in before.items() if key != 'source_version'}
         if setup_id == '0926_LONG':
             expected['volume_ratio'] = 1.2
+        if setup_id == '1011_SHORT':
+            expected['price_change_pct'] = .11
         assert {key: rows[setup_id][key] for key in before if key != 'source_version'} == {
             key: value for key, value in expected.items()}
         expected_minimum = previous['minimum_confirmation_1m_volume_ratio_by_setup'].get(
@@ -121,13 +123,13 @@ def test_approval_requires_current_fingerprint_and_preserves_sizing(state, repor
         op.validate_launch(approved, arm, now=NOW + timedelta(days=1), runtime_root=tmp_path)
 
 
-def test_standing_policy_artifact_is_exactly_bound_to_v11_setups_and_live_caps():
+def test_standing_policy_artifact_is_exactly_bound_to_v12_setups_and_live_caps():
     policy = op.load_standing_policy()
     ids = [setup.setup_id for setup in op.config.ACTIVE_SETUPS]
     assert policy['source'] == 'STANDING_OPERATOR_POLICY'
     assert policy['effective_from_session_date'] == '2026-10-23'
     assert policy['enabled'] is True and policy['revoked'] is False
-    assert policy['strategy_version'] == 'V13-V10-G-3-PRODUCTION-V11'
+    assert policy['strategy_version'] == 'V13-V10-G-3-PRODUCTION-V12'
     assert policy['strategy_fingerprint'] == op.config.strategy_fingerprint()
     assert policy['setup_ids'] == ids
     assert policy['setup_ids_sha256'] == op.canonical_fingerprint(ids)
@@ -355,6 +357,8 @@ def test_tomorrow_plan_preserves_prior_44_and_contains_exact_afternoon_targets(s
         expected = {key: value for key, value in before.items() if key != 'source_version'}
         if setup_id == '0926_LONG':
             expected['volume_ratio'] = 1.2
+        if setup_id == '1011_SHORT':
+            expected['price_change_pct'] = .11
         assert {key: rows[setup_id][key] for key in before if key != 'source_version'} == {
             key: value for key, value in expected.items()}
         expected_minimum = previous['minimum_confirmation_1m_volume_ratio_by_setup'].get(

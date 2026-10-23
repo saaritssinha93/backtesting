@@ -18,16 +18,16 @@ from research import g6_nifty_direction as nifty_filter
 from research import g6_primary_index_direction as primary_filter
 from research.g4_extended_target_sweep import read_frozen_csv
 
-VERSION = 'V13-V10-G-6-G4-REPLICA-V1'
+VERSION = 'V13-V10-G-6-G4-REPLICA-V2'
 G6_ROOT = bounded.G4_ROOT.parent/'backtesting_result_v13_v10_g_6'
-DEFAULT_CONFIG = bounded.ROOT/'configs/strategies/v13_v10_g_6_g4_replica_v1.json'
+DEFAULT_CONFIG = bounded.ROOT/'configs/strategies/v13_v10_g_6_g4_replica_v2.json'
 ADDED_IDS = frozenset({'0921_SHORT', '1011_LONG'})
 APPROVED_0920_IDS = ('0921_LONG', '0921_SHORT')
 PRIMARY_POLICY = 'g6_primary_index_both_counter'
 NIFTY_POLICY = 'g6_nifty_futures_both_counter'
 NIFTY50_SPOT_POLICY = 'g6_nifty50_spot_both_counter'
 SELECTED_POLICY = 'g6_bounded_exit'
-DONOR_FINGERPRINT = '77eefabdebbd580e798e7584d206214df5f383983c5053230a3171ef939e2883'
+DONOR_FINGERPRINT = '871ed037495f5a68c916826200e13ce491fe60621f0b6a7f673e18ca601816cb'
 APPROVED_RESEARCH = {
     '0921_LONG': {
         'artifact': '20261016T174500_g4_0920_long_parameters_v1',
@@ -45,7 +45,7 @@ APPROVED_RESEARCH = {
 def configuration_payload():
     donor.validate_contract()
     if donor.strategy_fingerprint() != DONOR_FINGERPRINT or set(donor._ACTIVE_BY_ID)-set(mirror.frozen_donor._ACTIVE_BY_ID) != ADDED_IDS:
-        raise ValueError('G3 entry contract changed; create a new G4 profile')
+        raise ValueError('G6 entry donor changed')
     value = bounded.configuration()
     entry = mirror.configuration()
     scenario = entry['primary_scenario']
@@ -53,6 +53,9 @@ def configuration_payload():
     guards.update(mirror.guard_limits(entry['scenarios'][scenario]))
     value.update(variant_id=VERSION, strategy='V13-V10-G-6',
         replica_source_variant='V13-V10-G-4-BOUNDED-EXIT-51-SETUPS-V13', active_setup_count=51,
+        entry_override=dict(setup_id='1011_SHORT', source_price_change_pct=.13,
+                            price_change_pct=.11, historical_replay_all_sessions=True,
+                            production_effective_from_session='2026-10-22'),
         donor_g3_version=donor.STRATEGY_VERSION, donor_g3_fingerprint=DONOR_FINGERPRINT,
         added_setup_ids=sorted(ADDED_IDS),
         approved_0920_decisions=dict(
@@ -69,8 +72,8 @@ def configuration_payload():
         five_minute_volume_ratio_overrides=entry['five_minute_volume_ratio_overrides'][scenario],
         direction_filter_schema_version=2,
         direction_filter=dict(
-            mode=primary_filter.PRIMARY_FILTER,
-            selected_policy=PRIMARY_POLICY,
+            mode=primary_filter.NIFTY_FILTER,
+            selected_policy=NIFTY_POLICY,
             alternatives=dict(
                 primary_index_both_counter_skip=PRIMARY_POLICY,
                 nifty_both_counter_skip=NIFTY_POLICY,
@@ -104,6 +107,26 @@ def configuration(path=DEFAULT_CONFIG):
     if value != configuration_payload():
         raise ValueError('G4 51-setup backtest configuration drift')
     return value
+
+
+def reselect_1011_short(retained, source_summary):
+    """Apply G6's one entry-rule delta to the complete pre-quota pool."""
+    from research.g4_1011_short_threshold_compare import _candidate_pool, _keys, _select_changed
+
+    audit, provenance = _candidate_pool(source_summary)
+    if not audit.setup_id.eq('1011_SHORT').all():
+        raise ValueError('G6 10:11 audit contains another setup')
+    revised, audit, changes = _select_changed(audit, retained)
+    old_keys = _keys(retained.loc[retained.setup_id.eq('1011_SHORT')])
+    new_keys = _keys(revised.loc[revised.setup_id.eq('1011_SHORT')])
+    if revised.sid.duplicated().any() or revised.duplicated(
+            ['day', 'setup_id', 'tradingsymbol']).any() or _keys(
+            audit.loc[audit.selected_011.eq(True)]) != new_keys:
+        raise ValueError('G6 10:11 revised selection differs from candidate audit')
+    if set(changes.action) - {'ADDED', 'REMOVED'} or len(changes) != len(new_keys ^ old_keys):
+        raise ValueError('G6 10:11 change audit differs from reselection')
+    changes['action'] = changes.action + '_BY_1011_MOVE011'
+    return revised, audit, changes, provenance
 
 
 class Identity(mirror.Identity):
@@ -415,6 +438,7 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
         raise ValueError('Fresh isolated G6 result directory required')
     codepaths = [Path(__file__),Path(config_path),Path(bounded.__file__),Path(mirror.__file__),
                  Path(donor.__file__),Path(mirror.production.__file__),
+                 bounded.ROOT/'research/g4_1011_short_threshold_compare.py',
                  bounded.ROOT/'fno_v13_v10_g_6_backtest.py',
                  bounded.ROOT/'research/g3_sl_target_simulator.py',Path(bounded.history.__file__),
                  Path(approved1216.__file__),Path(nifty_filter.__file__),
@@ -425,13 +449,16 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
     print('Verified source history; replaying retained entries and adding both G3 setups.',flush=True)
     prices = Prices(source_summary)
     retained,old_identity,changes,sources,candidates = bounded.extended_orders(old,old_summary,current,source_summary,prices)
+    revised_retained, short_audit, short_changes, short_provenance = reselect_1011_short(
+        retained, source_summary)
     g3 = read_frozen_csv(current/'selected_orders.csv')
     added = g3.loc[g3.setup_id.isin(ADDED_IDS)].copy()
-    combined = pd.concat([retained,added],ignore_index=True,sort=False)
+    combined = pd.concat([revised_retained,added],ignore_index=True,sort=False)
     if combined.sid.duplicated().any() or combined.duplicated(['day','setup_id','tradingsymbol']).any():
         raise ValueError('Duplicate selected order in expanded G4 inventory')
     days = source_summary['days']
-    paths = prices.paths(combined.sort_values(['tradingsymbol','day','confirmation_ts']))
+    path_orders = pd.concat([combined, retained], ignore_index=True, sort=False).drop_duplicates('sid')
+    paths = prices.paths(path_orders.sort_values(['tradingsymbol','day','confirmation_ts']))
     print(f'Validated {len(paths)} complete execution paths; {len(added)} added selected orders.',flush=True)
     calendar = [date.fromisoformat(d) for d in days]
     native = bounded.history._simulate(retained,paths,calendar,old_identity)
@@ -445,28 +472,42 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
     replay = bounded.history._simulate(orders,paths,calendar,identity)
     unfiltered = _bounded(replay,paths,config)
     unfiltered['g6_direction_filter_mode'] = primary_filter.OFF
-    # Always compute every reference on the identical order set.  Selecting a
-    # mode changes only the compatibility alias, never the comparison cohort.
+    # The Nifty-futures policy is independently auditable. An optional
+    # primary-index comparison must not block it when dated membership ends.
     nifty_audit, nifty_proof, nifty_inputs = nifty_filter.order_audit(unfiltered,prices)
     nifty_result, _ = nifty_filter.apply_filter(unfiltered,nifty_audit,config)
     nifty_result['g6_direction_filter_mode'] = primary_filter.NIFTY_FILTER
-    (primary_audit, nifty50_spot_audit, snapshot_naive_audit, primary_proof,
-        primary_inputs, effective_mapping, order_mapping,
-        primary_metadata) = primary_filter.order_audits(unfiltered)
-    primary_result, _ = primary_filter.apply_filter(
-        unfiltered,primary_audit,config,mode=primary_filter.PRIMARY_FILTER)
-    nifty50_spot_result, _ = primary_filter.apply_filter(
-        unfiltered,nifty50_spot_audit,config,mode=primary_filter.NIFTY50_SPOT_FILTER)
+    primary_unavailable_reason = None
+    try:
+        (primary_audit, nifty50_spot_audit, snapshot_naive_audit, primary_proof,
+            primary_inputs, effective_mapping, order_mapping,
+            primary_metadata) = primary_filter.order_audits(unfiltered)
+    except ValueError as exc:
+        if mode == primary_filter.PRIMARY_FILTER or not str(exc).startswith(
+                ('Expected one effective primary index:', 'Missing primary-index mapping:')):
+            raise
+        primary_unavailable_reason = str(exc)
+    if primary_unavailable_reason is None:
+        primary_result, _ = primary_filter.apply_filter(
+            unfiltered,primary_audit,config,mode=primary_filter.PRIMARY_FILTER)
+        nifty50_spot_result, _ = primary_filter.apply_filter(
+            unfiltered,nifty50_spot_audit,config,mode=primary_filter.NIFTY50_SPOT_FILTER)
+    else:
+        primary_result = nifty50_spot_result = None
     for book in (nifty_result,primary_result,nifty50_spot_result):
+        if book is None:
+            continue
         book['strategy_fingerprint'] = unfiltered['strategy_fingerprint']
     for row in nifty_proof.itertuples():
         if mirror.sha256(Path(row.path)) != row.sha256:
             raise ValueError('Nifty futures input changed during G6 replay')
-    for row in primary_proof.itertuples():
-        if mirror.sha256(Path(row.path)) != row.sha256:
-            raise ValueError('Primary cash-index input changed during G6 replay')
-    policy_books = {PRIMARY_POLICY:primary_result,NIFTY_POLICY:nifty_result,
-                    'g6_unfiltered':unfiltered}
+    if primary_unavailable_reason is None:
+        for row in primary_proof.itertuples():
+            if mirror.sha256(Path(row.path)) != row.sha256:
+                raise ValueError('Primary cash-index input changed during G6 replay')
+    policy_books = {NIFTY_POLICY:nifty_result,'g6_unfiltered':unfiltered}
+    if primary_result is not None:
+        policy_books[PRIMARY_POLICY] = primary_result
     result = policy_books[selected_policy].copy()
     result['g6_direction_filter_mode'] = mode
     # Extra positions may change allocation, but cannot change existing fills.
@@ -483,15 +524,18 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
     if mirror.sha256(current/'manifest.json')!=pointer['manifest_sha256']:
         raise ValueError('G3 selection evidence changed during G4 replay')
     ledgers = {'g4_previous_49':control,'g6_unfiltered':unfiltered,
-        NIFTY_POLICY:nifty_result,NIFTY50_SPOT_POLICY:nifty50_spot_result,
-        PRIMARY_POLICY:primary_result,SELECTED_POLICY:result}
+        NIFTY_POLICY:nifty_result,SELECTED_POLICY:result}
+    if primary_result is not None:
+        ledgers[NIFTY50_SPOT_POLICY] = nifty50_spot_result
+        ledgers[PRIMARY_POLICY] = primary_result
     periods = {'all':days,'prior':days[:-1],'last_day':[days[-1]]}
     comparison = pd.DataFrame([dict(policy=p,period=t,**bounded.stats(book,cohort))
         for p,book in ledgers.items() for t,cohort in periods.items()])
     daily = pd.DataFrame([dict(day=d,policy=p,**bounded.stats(book,[d]))
         for d in days for p,book in ledgers.items()])
-    direction_reports = _direction_reports(identity,days,unfiltered,nifty_result,primary_result,
+    direction_reports = (_direction_reports(identity,days,unfiltered,nifty_result,primary_result,
         nifty_audit,primary_audit,snapshot_naive_audit,order_mapping)
+        if primary_result is not None else None)
     approved_configuration = _approved_configuration(identity, config)
     approved_comparison = _approved_comparison(unfiltered, days)
     today_research = _today_research(approved_evidence, unfiltered, days)
@@ -502,23 +546,30 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
         selected_policy=selected_policy,compatibility_policy=SELECTED_POLICY,
         nifty_direction_filter_enabled=True,nifty_direction_filter_mode=nifty_filter.FILTER,
         nifty_reference_mode=nifty_filter.FILTER,nifty_reference_policy=NIFTY_POLICY,
-        primary_index_reference_policy=PRIMARY_POLICY,
-        nifty50_spot_reference_policy=NIFTY50_SPOT_POLICY,
+        primary_index_reference_policy=PRIMARY_POLICY if primary_result is not None else None,
+        nifty50_spot_reference_policy=NIFTY50_SPOT_POLICY if primary_result is not None else None,
+        primary_index_reference_available=primary_result is not None,
+        primary_index_unavailable_reason=primary_unavailable_reason,
         nifty_order_decisions=len(nifty_audit),nifty_source_proofs=nifty_proof.to_dict('records'),
-        primary_index_order_decisions=len(primary_audit),
-        primary_index_source_proofs=primary_proof.to_dict('records'),
-        primary_index_mapping_workbook_sha256=primary_metadata['workbook_sha256'],
-        primary_vs_nifty_raw_decision_changes=int(primary_audit.both_counter_allowed.astype(bool).ne(
-            nifty_audit.both_counter_allowed.astype(bool)).sum()),
-        effective_vs_snapshot_raw_decision_changes=int(primary_audit.both_counter_allowed.astype(bool).ne(
-            snapshot_naive_audit.both_counter_allowed.astype(bool)).sum()),
+        primary_index_order_decisions=len(primary_audit) if primary_result is not None else None,
+        primary_index_source_proofs=primary_proof.to_dict('records') if primary_result is not None else [],
+        primary_index_mapping_workbook_sha256=primary_metadata['workbook_sha256'] if primary_result is not None else None,
+        primary_vs_nifty_raw_decision_changes=int(
+            primary_audit.set_index('sid').both_counter_allowed.astype(bool).ne(
+                nifty_audit.set_index('sid').both_counter_allowed.astype(bool)).sum()) if primary_result is not None else None,
+        effective_vs_snapshot_raw_decision_changes=int(
+            primary_audit.set_index('sid').both_counter_allowed.astype(bool).ne(
+                snapshot_naive_audit.set_index('sid').both_counter_allowed.astype(bool)).sum()) if primary_result is not None else None,
         effective_membership_changed_orders=int(order_mapping.primary_index.ne(
-            order_mapping.current_snapshot_index).sum()),
+            order_mapping.current_snapshot_index).sum()) if primary_result is not None else None,
         scope='BACKTEST_ONLY',execution_authority=False,
         sessions=len(days),first_date=days[0],last_date=days[-1],days=days,active_setups=51,
         added_setup_ids=sorted(ADDED_IDS),added_selected_orders=len(added),
         primary_policy=SELECTED_POLICY,control_policy='g6_unfiltered',
-        original_g4_history_parity_verified=True,retained_native_fills_and_exits_unchanged=True,
+        original_g4_history_parity_verified=True,
+        retained_native_fills_and_exits_unchanged_except_1011_short=True,
+        entry_override_changes=short_changes.to_dict('records'),
+        entry_override_source=short_provenance,
         baseline_g4_run=str(old),baseline_g4_manifest_sha256=config['donor_g4_manifest_sha256'],
         current_g3_source_run=str(current),current_g3_manifest_sha256=pointer['manifest_sha256'],
         appended_sources=sources,price_sources=prices.proof,comparison=comparison.to_dict('records'),
@@ -542,7 +593,8 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
             'Rs100,000 capital per entry, 5x exposure, Rs1,000,000 portfolio; all allocation replayed.',
             'Opening entries require the same verified opening evidence and Nifty guard as G3.',
             'The selected G6 direction mode is explicit; nifty_both_counter_skip and off remain rollback modes.',
-            'Each stock uses its effective-dated primary size index; the 2026-09-30 official reconstitution is applied as of that date.',
+            ('Each stock uses its effective-dated primary size index; the 2026-09-30 official reconstitution is applied as of that date.'
+             if primary_result is not None else 'Optional primary-index comparison omitted because dated membership does not cover every order: '+primary_unavailable_reason),
             'Cash-index and Nifty-futures bar timestamps mark completed candles; actual feed receipt before submission is not independently established.',
             'The Nifty-futures to primary-cash comparison changes both benchmark choice and futures-versus-cash basis; the Nifty-50 cash reference isolates source basis.',
             'This current G3 reconstruction can differ from the frozen 54-session G4 research benchmark; compare this run with its own g6_unfiltered ledger.',
@@ -553,9 +605,10 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
     (output/'nifty_inputs').mkdir()
     for day, frame in nifty_inputs.items():
         frame.to_parquet(output/'nifty_inputs'/(day+'.parquet'),index=False)
-    primary_filter.write_evidence(output,primary_audit,nifty50_spot_audit,
-        snapshot_naive_audit,primary_proof,primary_inputs,effective_mapping,
-        order_mapping,primary_metadata)
+    if primary_result is not None:
+        primary_filter.write_evidence(output,primary_audit,nifty50_spot_audit,
+            snapshot_naive_audit,primary_proof,primary_inputs,effective_mapping,
+            order_mapping,primary_metadata)
     for name,book in ledgers.items():
         folder = output/name
         folder.mkdir()
@@ -569,16 +622,17 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
         for s in identity.ACTIVE_SETUPS]).to_csv(output/'setup_results.csv',index=False)
     comparison.to_csv(output/'comparison.csv',index=False)
     daily.to_csv(output/'daily_comparison.csv',index=False)
-    direction_reports['summary'].to_csv(output/'primary_vs_nifty_summary.csv',index=False)
-    direction_reports['daily'].to_csv(output/'primary_vs_nifty_daily.csv',index=False)
-    direction_reports['setup_side'].to_csv(output/'primary_vs_nifty_slot_side.csv',index=False)
-    direction_reports['side'].to_csv(output/'primary_vs_nifty_side.csv',index=False)
-    direction_reports['index_side'].to_csv(output/'primary_vs_nifty_index_side.csv',index=False)
-    direction_reports['decisions'].to_csv(output/'direction_decision_comparison.csv',index=False)
-    direction_reports['changed'].to_csv(output/'changed_direction_decisions.csv',index=False)
-    direction_reports['execution_changes'].to_csv(output/'portfolio_execution_changes.csv',index=False)
-    direction_reports['transition_summary'].to_csv(output/'decision_transition_summary.csv',index=False)
-    direction_reports['regime_summary'].to_csv(output/'mapping_regime_summary.csv',index=False)
+    if direction_reports is not None:
+        direction_reports['summary'].to_csv(output/'primary_vs_nifty_summary.csv',index=False)
+        direction_reports['daily'].to_csv(output/'primary_vs_nifty_daily.csv',index=False)
+        direction_reports['setup_side'].to_csv(output/'primary_vs_nifty_slot_side.csv',index=False)
+        direction_reports['side'].to_csv(output/'primary_vs_nifty_side.csv',index=False)
+        direction_reports['index_side'].to_csv(output/'primary_vs_nifty_index_side.csv',index=False)
+        direction_reports['decisions'].to_csv(output/'direction_decision_comparison.csv',index=False)
+        direction_reports['changed'].to_csv(output/'changed_direction_decisions.csv',index=False)
+        direction_reports['execution_changes'].to_csv(output/'portfolio_execution_changes.csv',index=False)
+        direction_reports['transition_summary'].to_csv(output/'decision_transition_summary.csv',index=False)
+        direction_reports['regime_summary'].to_csv(output/'mapping_regime_summary.csv',index=False)
     approved_configuration.to_csv(output/'approved_0920_configuration.csv',index=False)
     approved_comparison.to_csv(output/'approved_0920_comparison.csv',index=False)
     today_research.to_csv(output/'approved_0920_today_research.csv',index=False)
@@ -587,18 +641,23 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
     approved1216.write_evidence(output,approved_1216)
     candidates.to_csv(output/'appended_guard_candidate_audit.csv',index=False)
     changes.to_csv(output/'selection_changes.csv',index=False)
+    short_audit.to_csv(output/'1011_short_candidate_audit.csv',index=False)
+    short_changes.to_csv(output/'1011_short_entry_changes.csv',index=False)
     (output/'config.json').write_text(json.dumps(config,indent=2)+'\n',encoding='utf-8')
     (output/'summary.json').write_text(json.dumps(summary,indent=2,default=str)+'\n',encoding='utf-8')
     report = '<!doctype html><meta charset="utf-8"><title>G6 replica: 51 setups</title><style>body{background:#101927;color:#edf4ff;font:15px/1.6 system-ui;padding:24px}a{color:#8ed6ff}td,th{padding:8px;border-bottom:1px solid #476078;text-align:left}table{border-collapse:collapse}</style><h1>G6: G4 replica, 51 setups</h1>'
     report += '<p>Selected direction mode: '+html.escape(mode)+'. Compatibility policy: g6_bounded_exit; explicit selected policy: '+html.escape(selected_policy)+'. Same-run rollback control: g6_unfiltered.</p>'
-    report += '<p>Each stock is matched to its effective-dated primary size cash index. An entry is rejected only when both the exact completed five-minute candle and its close versus the 09:20 session open oppose the trade. The prior Nifty-futures rule remains a same-run reference.</p>'
+    report += '<p>Selected entry gate: the Nifty-futures rule rejects only when both completed five-minute and session directions oppose the trade. '+(
+        'The optional effective-dated primary-index comparison is available.' if primary_result is not None else
+        'The optional primary-index comparison is unavailable: '+html.escape(primary_unavailable_reason))+ '</p>'
     report += f'<p>{days[0]} through {days[-1]}: {len(days)} complete sessions. Added 09:20 SHORT and 10:10 LONG; each targets 1.50%. All setups retain G4 bounded exits: stop 1.20%, tightening to 1.00% after 120 minutes; targets 0.60â€“2.00%.</p>'
     fields = ['policy','period','trades','wins','losses','win_rate_pct','stop_exits','profitable_days','losing_days','net_pnl_rs']
     report += comparison[fields].to_html(index=False,border=0,float_format=lambda v:f'{v:,.2f}')
     paired_fields=['period','nifty_trades','primary_trades','trades_change','nifty_wins','primary_wins',
         'nifty_losses','primary_losses','nifty_losing_days','primary_losing_days','nifty_net_pnl_rs',
         'primary_net_pnl_rs','net_pnl_change_rs','loss_amount_reduction_rs','drawdown_reduction_rs']
-    report += '<h2>Primary index versus prior Nifty-futures rule</h2>'+direction_reports['summary'][paired_fields].to_html(index=False,border=0,float_format=lambda v:f'{v:,.2f}')
+    if direction_reports is not None:
+        report += '<h2>Primary index versus prior Nifty-futures rule</h2>'+direction_reports['summary'][paired_fields].to_html(index=False,border=0,float_format=lambda v:f'{v:,.2f}')
     approved_fields = ['setup_id','period','configuration_changed','approved_trades','approved_wins',
         'approved_losses','approved_win_rate_pct','approved_net_pnl_rs','delta_net_pnl_rs']
     report += '<h2>Approved 09:20 LONG and SHORT</h2><p>The approved decision retains the current parameters, so every before/after delta is zero. The tables make that decision auditable without presenting rejected research variants as G4 settings.</p>'
@@ -609,7 +668,10 @@ def run(config_path, output, *, through=None, direction_filter_mode=None, nifty_
     report += approved1216.report_section(approved_1216)
     report += '<h2>Daywise comparison</h2>'+daily[['day','policy',*fields[2:]]].to_html(index=False,border=0,float_format=lambda v:f'{v:,.2f}')
     report += '<h2>Scope and assumptions</h2><ul>'+''.join('<li>'+html.escape(x)+'</li>' for x in summary['limitations'])+'</ul>'
-    report += '<p><a href="primary_vs_nifty_daily.csv">Primary vs Nifty daywise</a> | <a href="primary_vs_nifty_slot_side.csv">Slot/side</a> | <a href="primary_vs_nifty_index_side.csv">Index/side</a> | <a href="changed_direction_decisions.csv">Changed decisions</a> | <a href="primary_index_effective_mapping.csv">Effective mapping</a> | <a href="daily_comparison.csv">All-policy daywise CSV</a></p>'
+    report += '<p><a href="daily_comparison.csv">All-policy daywise CSV</a>'
+    if direction_reports is not None:
+        report += ' | <a href="primary_vs_nifty_daily.csv">Primary vs Nifty daywise</a> | <a href="primary_vs_nifty_slot_side.csv">Slot/side</a> | <a href="primary_vs_nifty_index_side.csv">Index/side</a> | <a href="changed_direction_decisions.csv">Changed decisions</a> | <a href="primary_index_effective_mapping.csv">Effective mapping</a>'
+    report += '</p>'
     (output/'report.html').write_text(report,encoding='utf-8')
     (output/'manifest.json').write_text(json.dumps(dict(code_sha256=codehash,
         files={p.relative_to(output).as_posix():mirror.sha256(p) for p in output.rglob('*') if p.is_file()}),indent=2)+'\n',encoding='utf-8')
@@ -645,4 +707,44 @@ def verify(output):
         raise ValueError('Approved 09:20 comparison identity changed')
     delta_columns = [name for name in approved if name.startswith('delta_')]
     if not np.allclose(approved[delta_columns].fillna(0).to_numpy(dtype=float),0,rtol=0,atol=1e-9):
-        raise 
+        raise ValueError('Approved baseline comparison must have zero deltas')
+    nifty_filter.verify_saved(output,summary)
+    if summary.get('primary_index_reference_policy'):
+        primary_filter.verify_saved(output,summary)
+        names=['g4_previous_49','g6_unfiltered',NIFTY_POLICY,NIFTY50_SPOT_POLICY,
+               PRIMARY_POLICY,SELECTED_POLICY]
+    else:
+        names=['g4_previous_49','g6_unfiltered',SELECTED_POLICY]
+    for name in names:
+        book = read_frozen_csv(output/name/'portfolio_trades.csv')
+        for period,days in [('all',summary['days']),('prior',summary['days'][:-1]),('last_day',summary['days'][-1:])]:
+            recorded = comparison.loc[comparison.policy.eq(name)&comparison.period.eq(period)]
+            if len(recorded)!=1:
+                raise ValueError('Missing G4 comparison row')
+            for field,value in bounded.stats(book,days).items():
+                if not np.isclose(value,recorded.iloc[0][field],rtol=0,atol=1e-6):
+                    raise ValueError('G4 accounting changed: '+field)
+    if summary.get('primary_index_reference_policy'):
+        selected=read_frozen_csv(output/summary['selected_policy']/'portfolio_trades.csv')
+        compatibility=read_frozen_csv(output/SELECTED_POLICY/'portfolio_trades.csv')
+        pd.testing.assert_frame_equal(selected,compatibility,check_dtype=False,check_exact=False,
+                                      rtol=0,atol=1e-12)
+        paired=read_frozen_csv(output/'primary_vs_nifty_summary.csv')
+        changed_decisions=read_frozen_csv(output/'changed_direction_decisions.csv')
+        if len(changed_decisions) != summary['primary_vs_nifty_raw_decision_changes']:
+            raise ValueError('Raw primary-versus-Nifty decision count differs')
+        overall=paired.loc[paired.period.eq('all')]
+        if len(overall)!=1:
+            raise ValueError('Missing primary-versus-Nifty overall comparison')
+        delta=float(overall.net_pnl_change_rs.iloc[0])
+        daily=read_frozen_csv(output/'primary_vs_nifty_daily.csv')
+        if not np.isclose(daily.net_pnl_change_rs.sum(),delta,rtol=0,atol=1e-6):
+            raise ValueError('Daywise primary-versus-Nifty profit delta differs')
+        for report in ('primary_vs_nifty_slot_side.csv','primary_vs_nifty_index_side.csv'):
+            if not np.isclose(read_frozen_csv(output/report).net_pnl_change_rs.sum(),
+                              delta,rtol=0,atol=1e-6):
+                raise ValueError('Grouped primary-versus-Nifty profit delta differs: '+report)
+        changes=read_frozen_csv(output/'portfolio_execution_changes.csv')
+        if not np.isclose(changes.net_pnl_change_rs.sum(),delta,rtol=0,atol=1e-6):
+            raise ValueError('Trade-level primary-versus-Nifty profit delta differs')
+    return summary

@@ -1,0 +1,24 @@
+{
+  "version": "G6-MARKET-REGIME-RESEARCH-V1",
+  "rules": {
+    "baseline": "Approved G6 Nifty futures: reject only when slot and session both oppose",
+    "recent_and_vwap": "Also reject: 15-minute Nifty move opposes by >0.10% and price is adverse to futures VWAP",
+    "breadth_opposition": "Also reject: >60% of covered F&O futures oppose from open and Nifty 15-minute move opposes",
+    "breadth_reversal": "Also reject: breadth moves >=10 percentage points against side in 15 minutes and Nifty 15-minute move opposes",
+    "session_and_recent": "Also reject: Nifty session direction opposes and 15-minute move opposes by >0.05%",
+    "chop": "Also reject: 30-minute trend efficiency <0.25 (six completed returns required)",
+    "chop_high_vol": "Also reject: efficiency <0.25 and same-clock realized volatility >1.25x prior-20-session median",
+    "high_vol": "Also reject: same-clock realized volatility >1.50x prior-20-session median",
+    "vwap_crosses": "Also reject: at least three futures session-VWAP sign crossings during last 30 minutes",
+    "market_extension": "Also reject: Nifty extends in trade direction >2 times mean true range of last 14 five-minute bars from VWAP",
+    "weak_participation": "Also reject: volume <0.70x prior-20-session same-clock median and efficiency <0.35",
+    "cross_index_opposition": "Also reject: >=3 of Bank, Financial, Midcap and Next50 futures oppose in both session and 15-minute returns",
+    "combined": "Also reject: breadth_reversal OR chop_high_vol"
+  },
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "thresholds_frozen_before_outcome_analysis": true,
+  "missing_features": "Keep approved G6 decision; never interpret missing as zero",
+  "training_sessions": 35,
+  "selection": "Training net >= baseline, losing days and drawdown <= baseline, <=10% baseline positive trade PnL excluded; maximize avoided negative PnL, tie by net PnL. Otherwise baseline."
+}

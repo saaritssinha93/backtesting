@@ -12,6 +12,7 @@ import pytest
 
 import dashboard_flow_live_evidence as evidence
 from fno_v13_v10_g_3_contract import LEGACY_STRATEGY_VERSION, LEGACY_STRATEGY_FINGERPRINT
+from research.archived_g3_v13 import contract as archived_backtest
 
 DAY = "2026-10-12"
 NOW = datetime.fromisoformat(DAY + "T12:00:00+05:30")
@@ -241,6 +242,21 @@ def test_paper_and_live_orders_are_explicit_and_duplicate_snapshots_not_pooled(t
     assert all(r["filled"] and r["timing"] == "LATEST_RECORDED_OUTCOME" for r in rows)
 
 
+def test_realtime_order_read_uses_clock_after_slot_reconstruction(tmp_path, monkeypatch):
+    order(tmp_path, updated_at_ist=DAY + "T10:00:20+05:30")
+
+    class LaterClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromisoformat(DAY + "T10:00:30+05:30").astimezone(tz)
+
+    monkeypatch.setattr(evidence, "datetime", LaterClock)
+    result = evidence.build_live_evidence(tmp_path, DAY,
+        now=datetime.fromisoformat(DAY + "T10:00:00+05:30"), realtime=True)
+    assert result["slots"]["09:25"]["counts"]["paper_orders"] == 1
+    assert not any("invalid G3 order snapshot" in item for item in result["warnings"])
+
+
 def test_conflicting_orders_are_omitted_not_counted_twice(tmp_path):
     order(tmp_path, mode="LIVE", quantity=1)
     order(tmp_path, mode="LIVE", namespace="live_kite_qty1", quantity=500)
@@ -297,6 +313,33 @@ def test_hash_verified_backtest_separate_from_actual_runtime(tmp_path):
     assert row["backtest"][0]["timing"] == "RETROSPECTIVE_BACKTEST"
     assert slot["counts"]["backtest_selected"] == slot["counts"]["backtest_fills"] == 1
     assert slot["counts"]["selected"] is None
+
+
+def test_archived_hash_verified_history_retains_its_own_identity(tmp_path):
+    run = history(tmp_path)
+    version, fingerprint = archived_backtest.STRATEGY_VERSION, archived_backtest.strategy_fingerprint()
+    for name in ("selection_audit", "portfolio_trades"):
+        path = run / (name + ".csv")
+        path.write_text(path.read_text().replace(evidence.STRATEGY_VERSION, version)
+                        .replace(evidence.FINGERPRINT, fingerprint), encoding="utf-8")
+    manifest_path = run / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update(strategy_version=version, strategy_fingerprint=fingerprint)
+    for name in ("selection_audit", "portfolio_trades"):
+        manifest["artifacts"][name]["sha256"] = hashlib.sha256((run / (name + ".csv")).read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    pointer_path = tmp_path / "backtesting_result_v13_v10_g_3/latest/current_history.json"
+    pointer = json.loads(pointer_path.read_text())
+    pointer.update(strategy_version=version, strategy_fingerprint=fingerprint,
+                   manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest())
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    result = load(tmp_path)
+    assert result["warnings"] == []
+    assert result["history"]["state"] == "VERIFIED_BACKTEST"
+    assert result["history"]["strategy_version"] == version
+    assert result["history"]["current_profile"] is False
+    assert result["slots"]["09:25"]["rows"]["TEST"]["backtest"][0]["strategy_version"] == version
 
 
 def test_corrupt_historical_artifact_rejects_all_backtest_evidence(tmp_path):

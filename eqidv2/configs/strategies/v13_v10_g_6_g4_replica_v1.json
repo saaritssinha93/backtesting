@@ -1021,6 +1021,32 @@
     "0926_LONG": 1.2
   },
   "replica_source_variant": "V13-V10-G-4-BOUNDED-EXIT-51-SETUPS-V13",
+  "direction_filter_schema_version": 2,
+  "direction_filter": {
+    "mode": "nifty_both_counter_skip",
+    "selected_policy": "g6_nifty_futures_both_counter",
+    "alternatives": {
+      "primary_index_both_counter_skip": "g6_primary_index_both_counter",
+      "nifty_both_counter_skip": "g6_nifty_futures_both_counter",
+      "off": "g6_unfiltered"
+    },
+    "legacy_nifty_mode_alias": "both_counter_skip",
+    "execution_authority": false
+  },
+  "primary_index_direction_filter": {
+    "mode": "primary_index_both_counter_skip",
+    "source": "effective_dated_per_stock_primary_size_cash_index_5minute",
+    "membership_config": "configs/research/g6_primary_index_effective_membership_v1.json",
+    "mapping_workbook": "outputs/fno_index_mapping_20261021/nse_fno_stock_index_mapping_2026-10-21.xlsx",
+    "mapping_workbook_sha256": "dc9afcfd00e69be53a81de6948cec537995167d06034368b81fc21e90ec1f3c5",
+    "slot_direction": "exact_latest_completed_5minute_close_vs_open",
+    "session_direction": "exact_latest_completed_5minute_close_vs_0920_open",
+    "block_when": "both_slot_and_session_oppose_trade_side",
+    "flat_or_mixed": "allow",
+    "missing_or_invalid": "fail_run",
+    "membership_resolution": "effective_dated_with_2026_09_30_reconstitution",
+    "execution_authority": false
+  },
   "nifty_direction_filter": {
     "mode": "both_counter_skip",
     "source": "dated_near_month_nifty_futures_5minute",

@@ -235,8 +235,11 @@ def test_stale_arm_gate_accepts_only_exact_prior_policy_identity(
         "Assert-StalePriorDayArmCannotAuthorizeCurrentSession",
         "Assert-AuthenticationReady",
     )
-    strategy_fingerprint = (
+    prior_strategy_fingerprint = (
         "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4"
+    )
+    strategy_fingerprint = (
+        "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c"
     )
     current_policy_fingerprint = (
         "cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e"
@@ -250,7 +253,7 @@ def test_stale_arm_gate_accepts_only_exact_prior_policy_identity(
         json.dumps(
             {
                 "profile": "V13_V10_G_3",
-                "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
+                "strategy_version": "V13-V10-G-3-PRODUCTION-V12",
                 "strategy_fingerprint": strategy_fingerprint,
                 "live_execution_policy": {
                     "live_execution_policy_fingerprint": current_policy_fingerprint,
@@ -267,7 +270,7 @@ def test_stale_arm_gate_accepts_only_exact_prior_policy_identity(
                 "enabled": True,
                 "session_date": arm_date,
                 "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
-                "strategy_fingerprint": strategy_fingerprint,
+                "strategy_fingerprint": prior_strategy_fingerprint,
                 "live_execution_policy_fingerprint": arm_policy_fingerprint,
             }
         ),
@@ -280,8 +283,10 @@ def test_stale_arm_gate_accepts_only_exact_prior_policy_identity(
 $ErrorActionPreference = 'Stop'
 $SessionDate = '2026-10-22'
 $PriorSessionDate = '2026-10-21'
-$ExpectedStrategyVersion = 'V13-V10-G-3-PRODUCTION-V11'
+$ExpectedStrategyVersion = 'V13-V10-G-3-PRODUCTION-V12'
 $ExpectedStrategyFingerprint = '{strategy_fingerprint}'
+$ExpectedPriorStrategyVersion = 'V13-V10-G-3-PRODUCTION-V11'
+$ExpectedPriorStrategyFingerprint = '{prior_strategy_fingerprint}'
 $ExpectedPolicyFingerprint = '{current_policy_fingerprint}'
 $ExpectedPriorPolicyFingerprint = '{prior_policy_fingerprint}'
 $ProfilePath = '{ps_profile_path}'

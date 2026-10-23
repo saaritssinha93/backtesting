@@ -37,6 +37,7 @@ def _row_evidence(raw: dict) -> dict:
 
 def load_live_flow(data_root: Path, session_date: str | None = None, *, now: datetime | None = None) -> dict:
     """Return a single session; external callers supply a date, never a path."""
+    realtime = now is None
     now = now or datetime.now(IST)
     now = now.replace(tzinfo=IST) if now.tzinfo is None else now.astimezone(IST)
     today = now.date().isoformat()
@@ -48,7 +49,7 @@ def load_live_flow(data_root: Path, session_date: str | None = None, *, now: dat
     dates = sorted({item for item in list_available_dates(Path(data_root)) if _DATE.fullmatch(item) and item <= today})
     session_date = session_date or (today if today in dates or not dates else dates[-1])
     market = load_session_market(Path(data_root), session_date, now=now)
-    recorded = build_live_evidence(Path(data_root), session_date, now=now)
+    recorded = build_live_evidence(Path(data_root), session_date, now=now, realtime=realtime)
     market_slots = market.get("slots") or []
     if isinstance(market_slots, list):
         market_slots = {item["time"]: item for item in market_slots}

@@ -8,26 +8,29 @@ import fno_v13_v10_g_6_backtest as cli
 from research import g4_complete_inventory_backtest as g4
 from research import g6_g4_replica_backtest as g6
 from research import g6_nifty_direction as nifty_filter
+from research import g6_primary_index_direction as primary_filter
 
 
-def test_replica_configuration_preserves_every_trading_parameter():
+def test_replica_configuration_keeps_the_same_1011_short_entry_threshold():
     original = g4.configuration()
     replica = g6.configuration()
-    expected = {**original, "variant_id": g6.VERSION, "strategy": "V13-V10-G-6",
-                "replica_source_variant": g4.VERSION,
-                "active_setups": [{**setup, "source_version": g6.VERSION}
-                                  for setup in original["active_setups"]],
-                "nifty_direction_filter": g6.configuration_payload()["nifty_direction_filter"]}
-    assert replica == expected
+    assert replica == g6.configuration_payload()
+    for source, copied in zip(original["active_setups"], replica["active_setups"], strict=True):
+        expected = {**source, "source_version": g6.VERSION}
+        if source["setup_id"] == "1011_SHORT":
+            assert source["price_change_pct"] == .11
+        assert copied == expected
+    assert replica["entry_override"]["historical_replay_all_sessions"] is True
     assert replica["execution_authority"] is False
     assert replica["scope"] == "BACKTEST_ONLY"
 
 
-def test_all_51_entry_specs_equal_g4_except_strategy_identity():
+def test_all_51_entry_specs_equal_g4_except_identity():
     original, replica = g4.Identity(g4.configuration()), g6.Identity(g6.configuration())
     assert len(replica.ACTIVE_SETUPS) == 51
     for source, copied in zip(original.ACTIVE_SETUPS, replica.ACTIVE_SETUPS, strict=True):
-        assert {**asdict(source), "source_version": g6.VERSION} == asdict(copied)
+        expected = {**asdict(source), "source_version": g6.VERSION}
+        assert expected == asdict(copied)
     assert replica.STRATEGY_VERSION == g6.VERSION
     assert replica.payload["strategy_profile"] == "V13_V10_G_6"
 
@@ -54,10 +57,14 @@ def test_config_verification_reports_default_filter_without_execution(monkeypatc
     cli.main()
     import json
     value = json.loads(capsys.readouterr().out)
+    assert value["direction_filter_enabled"] is True
+    assert value["direction_filter_mode"] == "nifty_both_counter_skip"
+    assert value["selected_policy"] == g6.NIFTY_POLICY
     assert value["nifty_direction_filter_enabled"] is True
     assert value["nifty_direction_filter_mode"] == "both_counter_skip"
     assert value["execution_authority"] is False
     assert value["active_setups"] == 51
+    assert value["entry_override"]["price_change_pct"] == .11
     assert g6.G6_ROOT != g6.bounded.G4_ROOT
 
 
@@ -67,8 +74,55 @@ def test_explicit_off_is_available_as_rollback_without_running(monkeypatch, caps
     cli.main()
     import json
     value = json.loads(capsys.readouterr().out)
-    assert value["nifty_direction_filter_mode"] == "off"
+    assert value["direction_filter_mode"] == "off"
+    assert value["direction_filter_enabled"] is False
+
+
+def test_legacy_both_counter_mode_selects_nifty_reference(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["g6", "--verify-config", "--nifty-filter-mode", "both_counter_skip"])
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: pytest.fail("Verification must not run replay"))
+    cli.main()
+    import json
+    value = json.loads(capsys.readouterr().out)
+    assert value["direction_filter_mode"] == "nifty_both_counter_skip"
+    assert value["selected_policy"] == g6.NIFTY_POLICY
+    assert value["nifty_direction_filter_enabled"] is True
+
+
+def test_primary_index_remains_available_as_explicit_rollback(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["g6", "--verify-config", "--direction-filter-mode",
+                                    "primary_index_both_counter_skip"])
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: pytest.fail("Must not run replay"))
+    cli.main()
+    import json
+    value = json.loads(capsys.readouterr().out)
+    assert value["direction_filter_mode"] == "primary_index_both_counter_skip"
+    assert value["selected_policy"] == g6.PRIMARY_POLICY
     assert value["nifty_direction_filter_enabled"] is False
+    assert value["execution_authority"] is False
+
+
+@pytest.mark.parametrize("mode,suffix", [
+    (None, "g6_nifty_futures"),
+    ("primary_index_both_counter_skip", "g6_primary_index"),
+    ("off", "g6_unfiltered"),
+])
+def test_cli_output_name_matches_selected_filter_without_replaying(monkeypatch, capsys, mode, suffix):
+    args = ["g6"] + (["--direction-filter-mode", mode] if mode else [])
+    monkeypatch.setattr("sys.argv", args)
+    seen = {}
+
+    def fake_run(config_path, output, **kwargs):
+        seen.update(output=output, options=kwargs, config=g6.configuration(config_path))
+        return dict(variant_id=g6.VERSION, sessions=0, first_date=None, last_date=None,
+                    active_setups=51, comparison=[])
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    cli.main()
+    assert seen["output"].name.endswith("_" + suffix)
+    assert seen["options"]["direction_filter_mode"] == mode
+    assert seen["config"]["direction_filter"]["selected_policy"] == g6.NIFTY_POLICY
+    assert seen["config"]["execution_authority"] is False
 
 
 @pytest.mark.parametrize("side,slot,session,expected", [
@@ -100,3 +154,32 @@ def test_g6_filter_reallocates_and_preserves_native_exit_evidence():
     assert book.portfolio_net_profit_rupees.iloc[1] == 0.
     assert book.portfolio_status.iloc[1] == "G6_NIFTY_BOTH_COUNTER_BLOCKED"
     assert not book.execution_authority.any()
+
+
+def test_effective_primary_membership_changes_at_official_boundary():
+    mapping, _, _ = primary_filter.effective_mapping()
+    rows = pd.DataFrame([
+        dict(sid=1,day="2026-09-29",tradingsymbol="BSE"),
+        dict(sid=2,day="2026-09-30",tradingsymbol="BSE"),
+        dict(sid=3,day="2026-09-29",tradingsymbol="WIPRO"),
+        dict(sid=4,day="2026-09-30",tradingsymbol="WIPRO"),
+        dict(sid=5,day="2026-09-29",tradingsymbol="KPITTECH"),
+        dict(sid=6,day="2026-09-30",tradingsymbol="KPITTECH"),
+    ])
+    resolved = primary_filter.mapping_for_orders(rows,mapping).set_index("sid")
+    assert resolved.loc[1,"primary_index"] == "Nifty Midcap 150"
+    assert resolved.loc[2,"primary_index"] == "Nifty 50"
+    assert resolved.loc[3,"primary_index"] == "Nifty 50"
+    assert resolved.loc[4,"primary_index"] == "Nifty Next 50"
+    assert resolved.loc[5,"primary_index"] == "Nifty Midcap 150"
+    assert resolved.loc[6,"primary_index"] == "Nifty Smallcap 250"
+
+
+def test_primary_index_input_excludes_opening_snapshot_and_has_exact_sessions():
+    proofs, inputs = primary_filter.load_index_inputs(["2026-10-19"])
+    assert set(proofs.primary_index) == set(primary_filter.INDEX_SPECS)
+    for days in inputs.values():
+        frame = days["2026-10-19"]
+        assert len(frame) == 75
+        assert frame.ts.dt.strftime("%H:%M").iloc[0] == "09:20"
+        assert frame.ts.dt.strftime("%H:%M").iloc[-1] == "15:30"

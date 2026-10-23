@@ -14,10 +14,10 @@ from pathlib import Path
 
 import fno_v13_v10_g_3_contract as production
 
-STRATEGY_VERSION = "V13-V10-G-3-BACKTEST-TARGET-GT075-RESTORED3-V13"
-ACCEPTED_VARIANT = "G3_V11_BACKTEST_TARGET_CUTOFF_RESTORE_THREE_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120"
+STRATEGY_VERSION = "V13-V10-G-3-BACKTEST-TARGET-GT075-RESTORED3-V14"
+ACCEPTED_VARIANT = "G3_V12_BACKTEST_TARGET_CUTOFF_RESTORE_THREE_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120_1011_SHORT_MOVE011"
 TARGET_CUTOFF_PCT = .75
-SOURCE_FINGERPRINT = "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4"
+SOURCE_FINGERPRINT = "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c"
 RESTORED_TARGETS = {'0951_LONG': .75, '1006_LONG': .56, '1016_SHORT': .68}
 RESTORED_IDS = frozenset(RESTORED_TARGETS)
 DISABLED_SETUPS = tuple(s for s in production.ACTIVE_SETUPS
@@ -116,6 +116,9 @@ def contract_for_identity(version, fingerprint):
     import sys
     if (version, fingerprint) == (STRATEGY_VERSION, strategy_fingerprint()):
         return sys.modules[__name__]
+    from research.archived_g3_v13 import contract as before_short_move_change
+    if (version, fingerprint) == (before_short_move_change.STRATEGY_VERSION, before_short_move_change.strategy_fingerprint()):
+        return before_short_move_change
     from research.archived_g3_v12 import contract as before_volume_change
     if (version, fingerprint) == (before_volume_change.STRATEGY_VERSION, before_volume_change.strategy_fingerprint()):
         return before_volume_change

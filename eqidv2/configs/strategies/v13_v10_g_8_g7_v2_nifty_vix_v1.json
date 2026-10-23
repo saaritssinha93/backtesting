@@ -1,0 +1,18 @@
+{
+  "variant_id": "V13-V10-G-8-G7V2-NIFTY-VIX-V1",
+  "replica_source_variant": "V13-V10-G-7-G6-REPLICA-V2",
+  "source_config": "configs/strategies/v13_v10_g_7_g6_replica_v2.json",
+  "runner": "fno_v13_v10_g_8_backtest.py",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "through": "2026-10-22",
+  "active_setup_count": 51,
+  "exit_mode": "SINGLE_EXIT_NOT_G7_V3_PARTIAL",
+  "baseline_policy": "nifty_base__original",
+  "candidate_definition": "research/g8_nifty_vix_backtest.py:gate_specs and exit_specs",
+  "selection": "Chronological development and validation; never select from final-test outcomes",
+  "selected_config": "Each verified G8 run contains an expanded config.json and slot_settings.csv",
+  "research_pointer": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_8/latest_research.json",
+  "independent_holdout": false,
+  "profit_guarantee": false
+}

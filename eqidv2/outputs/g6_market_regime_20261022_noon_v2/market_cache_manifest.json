@@ -1,0 +1,24 @@
+{
+  "source_manifest_sha256": "b4d09614897cffa80cf146ab9eb8d5880a16f9f2073be1e468e1e74ca935d38c",
+  "asof_day": "2026-10-22",
+  "asof_time": "12:00",
+  "files": {
+    "market_slots.csv": "956d4ccbf803905aac576b9ae63c9dea6bfac21aa167473045be8e481be4117d",
+    "source_provenance.json": "4d7913d27c9dfd77c6544a217ad9c85cfb6798d11c2ae94df8bdaaee2ee5d3f1",
+    "market_inputs\\001_NIFTY26AUGFUT_5minute.parquet": "26acdac9d3597b7426edd86fa992f9a6e777b2917ceedff9fc0741c30a869d51",
+    "market_inputs\\002_BANKNIFTY26AUGFUT_5minute.parquet": "2b5d9649cd1b0c39a14051e2cdde4ecbef3a1458ff85216b9800ff8e77867eeb",
+    "market_inputs\\003_FINNIFTY26AUGFUT_5minute.parquet": "a14ea8f989018a8cf8439405b3258514087803c8321e4d551c232995b8b5a6db",
+    "market_inputs\\004_MIDCPNIFTY26AUGFUT_5minute.parquet": "fec3198934a49bb9df507454c0c222ba944bb3783e48a7b7c63ad2db39994262",
+    "market_inputs\\005_NIFTYNXT5026AUGFUT_5minute.parquet": "e61c3ee671a1444ba088630249cfa3f02d2db5d12d72f17bb6ba269b4faf9fc4",
+    "market_inputs\\024_NIFTY26SEPFUT_5minute.parquet": "4dc13ae9a185b88bec8547e6a35016be9511688ac44e9675173f47dc3402ea1e",
+    "market_inputs\\025_BANKNIFTY26SEPFUT_5minute.parquet": "162de4c7b9e317390fca90b51be0909f09377ed9934a4feaaf5b9efc98d5eabd",
+    "market_inputs\\026_FINNIFTY26SEPFUT_5minute.parquet": "2d25c111770674f4e7b9e36d48b8cb9b7980e8934c87832be6c8ec0d602cd414",
+    "market_inputs\\027_MIDCPNIFTY26SEPFUT_5minute.parquet": "f4e1062836fc99ff88f32ce0a1b4251aaaf674c3cb18dc310f49a12a3d58e687",
+    "market_inputs\\028_NIFTYNXT5026SEPFUT_5minute.parquet": "902b8eaedf48843e8647ae8ab6b0c3240eee64f2398004ae649e3f64a12f35b5",
+    "market_inputs\\053_NIFTY26OCTFUT_5minute.parquet": "634d8a1dc172ea09e5040fc46e5c228ec3385ced3d63fea42fe2cd4c395b70fb",
+    "market_inputs\\054_BANKNIFTY26OCTFUT_5minute.parquet": "3b326cf3c09048c81bdc6dbe7baac95c8a703348d092aebe8e895d86ef0b0c07",
+    "market_inputs\\055_FINNIFTY26OCTFUT_5minute.parquet": "31fdc45efa8e70f87c16bc7158b1f61b3ac5eba412a2706f71d6fadabe261b8a",
+    "market_inputs\\056_MIDCPNIFTY26OCTFUT_5minute.parquet": "7feebe73cc0c5e92752aeddd91a154d94d723308fef9b8415f19989fc3d08505",
+    "market_inputs\\057_NIFTYNXT5026OCTFUT_5minute.parquet": "2b198922346ddf678e7fb6952681d687d402ad408592e8cde441672425fbb327"
+  }
+}

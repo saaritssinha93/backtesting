@@ -163,4 +163,4 @@ def test_normal_cli_routes_to_cutoff_build_and_publish(tmp_path, monkeypatch):
     cli.main()
     assert calls == [("build", root, output, date(2026, 10, 13)), ("publish", root, output)]
     assert len(production.ACTIVE_SETUPS) == 61
-    assert production.STRATEGY_VERSION == "V13-V10-G-3-PRODUCTION-V11"
+    assert production.STRATEGY_VERSION == "V13-V10-G-3-PRODUCTION-V12"
