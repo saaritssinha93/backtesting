@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+import g3_symbol_admission as symbol_guard
+
 ADMISSION_SCHEMA_VERSION = "g3_live_risk_admission_v1"
 ACTIVE_STATES = frozenset({"PENDING_ENTRY", "OPEN", "SQUARE_OFF_PENDING"})
 
@@ -224,6 +226,10 @@ def admit_live_entry(
     candidate_id = str(state.get("signal_id", "")).strip()
     if not candidate_id or candidate_path.stem != candidate_id:
         raise LiveRiskIntegrityError("G3 LIVE candidate filename/signal identity mismatch")
+    try:
+        candidate_symbol = symbol_guard.symbol_key(state)
+    except ValueError as exc:
+        raise LiveRiskIntegrityError(str(exc)) from exc
 
     rows: list[tuple[Path, dict[str, Any], bool, Decimal | None]] = []
     seen_ids: dict[str, Path] = {}
@@ -266,6 +272,12 @@ def admit_live_entry(
             "Duplicate G3 LIVE signal identity: "
             f"{seen_ids[candidate_id]} and {candidate_path}"
         )
+    if persisted_candidate is not None:
+        try:
+            if symbol_guard.symbol_key(persisted_candidate) != candidate_symbol:
+                raise LiveRiskIntegrityError("G3 LIVE durable symbol changed in memory")
+        except ValueError as exc:
+            raise LiveRiskIntegrityError(str(exc)) from exc
 
     if unadmitted_active_paths:
         raise LiveRiskIntegrityError(
@@ -284,6 +296,7 @@ def admit_live_entry(
     daily_entries = 0
     active_entries = 0
     reserved_gross = Decimal("0")
+    symbol_conflicts = []
     for _path, row, admitted, reserved in rows:
         if not admitted:
             continue
@@ -293,6 +306,12 @@ def admit_live_entry(
         if remains_reserved:
             active_entries += 1
             reserved_gross += reserved or Decimal("0")
+            try:
+                if (symbol_guard.symbol_key(row) == candidate_symbol
+                        and row["signal_id"] != candidate_id):
+                    symbol_conflicts.append(row["signal_id"])
+            except ValueError as exc:
+                raise LiveRiskIntegrityError(str(exc)) from exc
 
     if state_admitted:
         immutable = (
@@ -317,6 +336,8 @@ def admit_live_entry(
         raise LiveRiskIntegrityError("G3 LIVE candidate exceeds its per-trade exposure")
 
     violations: list[str] = []
+    if symbol_conflicts:
+        violations.append(symbol_guard.BLOCK_REASON)
     if (policy.MAX_DAILY_ENTRIES is not None
             and daily_entries + 1 > int(policy.MAX_DAILY_ENTRIES)):
         violations.append("MAX_DAILY_ENTRIES")
@@ -329,6 +350,10 @@ def admit_live_entry(
         violations.append("MAX_RESERVED_GROSS_EXPOSURE")
 
     observed = {
+        "live_risk_symbol_guard_schema_version": symbol_guard.SCHEMA_VERSION,
+        "live_risk_symbol_guard_policy": symbol_guard.POLICY,
+        "live_risk_symbol": candidate_symbol,
+        "live_risk_blocking_signal_ids": sorted(symbol_conflicts),
         "live_risk_observed_daily_entries": daily_entries,
         "live_risk_observed_reserved_open_positions": active_entries,
         "live_risk_observed_reserved_gross_exposure_rs": float(reserved_gross),

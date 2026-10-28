@@ -41,7 +41,9 @@ def test_exact_restored_exceptions_and_production_isolation():
     assert len(cutoff.SIGNAL_TO_CONFIRMATION) == 35
     assert {s.setup_id: s.target_pct for s in cutoff.ACTIVE_SETUPS if s.target_pct <= .75} == RESTORED
     assert cutoff.setup_for('13:25', 'SHORT').target_pct == .76
-    assert runtime.contract is production and len(runtime.ACTIVE_SETUPS) == 61
+    assert runtime.contract is not production and len(runtime.ACTIVE_SETUPS) == 51
+    assert [s.setup_id for s in runtime.ACTIVE_SETUPS] == [s.setup_id for s in cutoff.ACTIVE_SETUPS]
+    assert len(production.ACTIVE_SETUPS) == 61
     assert production.strategy_fingerprint() == cutoff.SOURCE_FINGERPRINT
     assert profile.configuration() == cutoff.strategy_payload()
     assert not production.supported_identity(cutoff.STRATEGY_VERSION, cutoff.strategy_fingerprint())
@@ -60,7 +62,7 @@ def test_1011_short_move_011_is_shared_without_changing_frozen_g4():
     historical = cutoff.setup_for('10:10', 'SHORT')
     assert live.price_change_pct == historical.price_change_pct == .11
     assert previous._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .13
-    assert g4.Identity(g4.configuration())._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .13
+    assert g4.Identity(g4.configuration())._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .11
     assert g6.Identity(g6.configuration())._ACTIVE_BY_ID['1011_SHORT'].price_change_pct == .11
     assert production.passes_selected_filters(candidate(live, move=-.115), live)
     assert cutoff.passes_selected_filters(candidate(historical, move=-.115), historical)
@@ -83,11 +85,19 @@ def test_disable_before_execution_and_preserve_every_retained_choice(spec):
     original = production.select_orders(signals)
     assert len(original) == 1
     result = cutoff.select_orders(signals)
+    current = runtime.contract.select_orders(signals)
     if spec.setup_id in EXPECTED:
         assert result.empty
+        assert current.empty
         assert not cutoff.passes_selected_filters(candidate(spec), spec)
         return
     assert len(result) == 1 and result.iloc[0].source_signal_id == original.iloc[0].signal_id
+    assert len(current) == 1
+    assert current.iloc[0].setup_id == result.iloc[0].setup_id
+    assert current.iloc[0].tradingsymbol == result.iloc[0].tradingsymbol
+    assert current.iloc[0].target_pct == result.iloc[0].target_pct
+    assert current.iloc[0].stop_pct == result.iloc[0].stop_pct
+    assert current.iloc[0].strategy_version == runtime.STRATEGY_VERSION
     assert result.iloc[0].signal_id != original.iloc[0].signal_id
     assert result.iloc[0].strategy_version == cutoff.STRATEGY_VERSION
     actual, expected = asdict(cutoff._ACTIVE_BY_ID[spec.setup_id]), asdict(spec)
@@ -119,6 +129,6 @@ def test_preflight_reports_intentional_backtest_difference_truthfully():
     from fno_v13_v10_g_3_preflight import inspect_deployment
     result = inspect_deployment(verify_frozen=False)
     assert result['ready'] and result['backtest_variant_valid']
-    assert result['historical_daily_paper_live_contract_matches'] is False
+    assert result['historical_daily_paper_live_contract_matches'] is True
     assert result['backtest_active_setup_count'] == 51
-    assert result['active_setup_count'] == 61
+    assert result['active_setup_count'] == 51

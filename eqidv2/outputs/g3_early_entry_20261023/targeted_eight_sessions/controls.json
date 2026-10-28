@@ -1,0 +1,90 @@
+[
+  {
+    "day": "2026-10-13",
+    "selection": {
+      "matches": true,
+      "actual_orders": 14,
+      "saved_orders": 14
+    },
+    "actual_pnl": -170.0052856536954,
+    "saved_pnl": -170.0052856536954,
+    "pnl_matches": true
+  },
+  {
+    "day": "2026-10-14",
+    "selection": {
+      "matches": true,
+      "actual_orders": 11,
+      "saved_orders": 11
+    },
+    "actual_pnl": 27617.383394757504,
+    "saved_pnl": 27617.383394757504,
+    "pnl_matches": true
+  },
+  {
+    "day": "2026-10-15",
+    "selection": {
+      "matches": true,
+      "actual_orders": 11,
+      "saved_orders": 11
+    },
+    "actual_pnl": -15343.471330542841,
+    "saved_pnl": -15343.47133054284,
+    "pnl_matches": true
+  },
+  {
+    "day": "2026-10-16",
+    "selection": {
+      "matches": true,
+      "actual_orders": 10,
+      "saved_orders": 10
+    },
+    "actual_pnl": -20581.730501317477,
+    "saved_pnl": -20581.73050131748,
+    "pnl_matches": true
+  },
+  {
+    "day": "2026-10-19",
+    "selection": {
+      "matches": true,
+      "actual_orders": 8,
+      "saved_orders": 8
+    },
+    "actual_pnl": 13990.465303445668,
+    "saved_pnl": 13990.465303445668,
+    "pnl_matches": true
+  },
+  {
+    "day": "2026-10-21",
+    "selection": {
+      "matches": true,
+      "actual_orders": 11,
+      "saved_orders": 11
+    },
+    "actual_pnl": 21849.697513899206,
+    "saved_pnl": 21849.69751389921,
+    "pnl_matches": true
+  },
+  {
+    "day": "2026-10-22",
+    "selection": {
+      "matches": true,
+      "actual_orders": 14,
+      "saved_orders": 14
+    },
+    "actual_pnl": -18064.574153775266,
+    "saved_pnl": -18064.574153775266,
+    "pnl_matches": true
+  },
+  {
+    "day": "2026-10-23",
+    "selection": {
+      "matches": true,
+      "actual_orders": 11,
+      "saved_orders": 11
+    },
+    "actual_pnl": -191.45315352372927,
+    "saved_pnl": -191.45315352372927,
+    "pnl_matches": true
+  }
+]

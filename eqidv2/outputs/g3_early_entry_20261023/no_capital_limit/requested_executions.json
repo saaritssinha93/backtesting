@@ -1,0 +1,62 @@
+[
+  {
+    "tradingsymbol": "MOTILALOFS",
+    "side": "SHORT",
+    "entry_ts": "2026-10-23T09:22:00+05:30",
+    "entry_price": 957.0,
+    "exit_ts": "2026-10-23T09:36:00+05:30",
+    "exit_reason": "TARGET",
+    "net_return_pct": 1.4500000000000013,
+    "portfolio_net_profit_rupees": 7250.000000000006
+  },
+  {
+    "tradingsymbol": "BANDHANBNK",
+    "side": "SHORT",
+    "entry_ts": "2026-10-23T09:22:00+05:30",
+    "entry_price": 155.61000061035156,
+    "exit_ts": "2026-10-23T09:58:00+05:30",
+    "exit_reason": "TARGET",
+    "net_return_pct": 1.4500000000000013,
+    "portfolio_net_profit_rupees": 7250.000000000006
+  },
+  {
+    "tradingsymbol": "SWIGGY",
+    "side": "SHORT",
+    "entry_ts": "2026-10-23T09:32:00+05:30",
+    "entry_price": 192.60000610351562,
+    "exit_ts": "2026-10-23T09:48:00+05:30",
+    "exit_reason": "TARGET",
+    "net_return_pct": 1.4500000000000013,
+    "portfolio_net_profit_rupees": 7250.000000000006
+  },
+  {
+    "tradingsymbol": "COLPAL",
+    "side": "SHORT",
+    "entry_ts": "2026-10-23T09:32:00+05:30",
+    "entry_price": 1658.9000244140625,
+    "exit_ts": "2026-10-23T09:52:00+05:30",
+    "exit_reason": "TARGET",
+    "net_return_pct": 1.4500000000000013,
+    "portfolio_net_profit_rupees": 7250.000000000006
+  },
+  {
+    "tradingsymbol": "DELHIVERY",
+    "side": "SHORT",
+    "entry_ts": "2026-10-23T09:37:00+05:30",
+    "entry_price": 379.3999938964844,
+    "exit_ts": "2026-10-23T10:56:00+05:30",
+    "exit_reason": "TARGET",
+    "net_return_pct": 1.4500000000000013,
+    "portfolio_net_profit_rupees": 7250.000000000006
+  },
+  {
+    "tradingsymbol": "ETERNAL",
+    "side": "LONG",
+    "entry_ts": "2026-10-23T11:17:00+05:30",
+    "entry_price": 310.0,
+    "exit_ts": "2026-10-23T13:02:00+05:30",
+    "exit_reason": "TARGET",
+    "net_return_pct": 1.4499999999999902,
+    "portfolio_net_profit_rupees": 7249.999999999951
+  }
+]

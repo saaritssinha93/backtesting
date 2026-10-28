@@ -1,0 +1,55 @@
+{
+  "version": "V13-V10-G-7-V4-PRACTICAL-RESEARCH",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "baseline": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_7\\v4_backtesting\\runs\\2026-10-27\\20261027T183647837523_low_efficiency_protection",
+  "baseline_manifest_sha256": "716c193d049f033b1dae47338ebd45929645a9bfd3f412aac19677f92744269a",
+  "candidates": {
+    "cmf20_confirm": "Reject only ready directional CMF20<0; warmup/zero weights preserve entry.",
+    "vwap_slope_failure": "Reject opposing5-minute session-VWAP slope AND actual failed breakout of preceding5-bar edge.",
+    "close75_interaction": "Retest earlier close75 hypothesis on current V4: require directional close location>=0.75 and agreeing candle body.",
+    "gap_cancel10": "During original10-minute pending life, permanently cancel at an observed open >10bps beyond trigger; no later same-bar recovery fill.",
+    "loss_lock2": "After two actually executed net-losing exits, block new admissions strictly after the second exit for that day; leave open positions managed normally."
+  },
+  "candidate_count": 5,
+  "selection": {
+    "reference": "execution_control",
+    "net_profit": ">=control",
+    "losing_amount": "<=90%control",
+    "loss_count": "<control",
+    "win_rate": ">=control",
+    "winner_retention": ">=95%",
+    "trade_retention": ">=80%",
+    "daily_close_drawdown": "<=control",
+    "changed_executions_min": 5,
+    "changed_days_min": 3,
+    "ranking": "development net profit; then smallest losing amount; then winners; then name",
+    "chronology": "35 development choose once;14 validation and8 assessment use same gates; no replacement",
+    "costs": "selected rule later-block net>=control at9/15/19/30/34bps",
+    "no_qualifier": "retain saved current G7 V4; do not invent a winner"
+  },
+  "baseline_adjustments": [
+    "entry-bar-open capacity reservation",
+    "integer cash-share quantities"
+  ],
+  "costs_bps": [
+    5,
+    9,
+    15,
+    19,
+    30,
+    34
+  ],
+  "execution_drag": "extra4bps cost approximation, not explicit price/slippage replay",
+  "numerical_boundary": "Preserve all sealed native entry events; validate recorded fill touches within8 binary64 epsilons times price; never normalize earlier bars or alter opens/prices",
+  "research_history": "Previously examined same59 sessions; earlier17 entry,3 failure exit,10 indicator trials plus protection tests; no independent holdout",
+  "stop_rule": "Exactly5 hypotheses; no threshold expansion/combination after outcomes; no October-driven replacement",
+  "original_exit_policy": {
+    "protect_after_close_pct": 0.6,
+    "protected_profit_pct": 0.1,
+    "activation": "COMPLETED_FULL_POST_ENTRY_CLOSE",
+    "effective": "NEXT_MINUTE_OPEN"
+  },
+  "independent_holdout": false,
+  "default_change": false
+}

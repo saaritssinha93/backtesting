@@ -42,6 +42,7 @@ def order(signal_id: str, *, side: str = "LONG") -> dict:
         "strategy_fingerprint": FINGERPRINT,
         "status": "PENDING_ENTRY",
         "side": side,
+        "tradingsymbol": signal_id,
         "trigger_price": 102.0,
         "sizing_reference_price": 102.0,
         "lot_size": 1,
@@ -313,6 +314,7 @@ def test_tampered_reserved_exposure_fails_closed(tmp_path):
 
 def runtime_state(runtime, suffix: str = "") -> dict:
     row = candidate()
+    row["tradingsymbol"] += suffix
     row["data_contract"] = runtime.hybrid.DATA_CONTRACT_VERSION
     signal = runtime.select_entry_signals(
         [row], RUNTIME_DAY, "09:30", capital_rs=100000.0, leverage=5.0

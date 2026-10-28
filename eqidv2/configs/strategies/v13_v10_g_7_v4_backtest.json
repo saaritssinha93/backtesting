@@ -1,0 +1,40 @@
+{
+  "variant_id": "V13-V10-G-7-V4-PROFIT-PROTECTION",
+  "display_name": "G7 V4: Protect +0.1% after +0.6%",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "selection_basis": "USER_REQUEST",
+  "research_qualification": false,
+  "max_positions_per_symbol": 1,
+  "exit_policy": {
+    "protect_after_close_pct": 0.6,
+    "protected_profit_pct": 0.1,
+    "activation": "COMPLETED_FULL_POST_ENTRY_CLOSE",
+    "effective": "NEXT_MINUTE_OPEN"
+  },
+  "unchanged": [
+    "G7 V2 entry selection and Nifty permission",
+    "Original setup targets and initial stop",
+    "Timed stop tightening after 120 minutes, never loosening a protected stop",
+    "Fixed capital, leverage and modeled transaction costs",
+    "One active position per symbol; re-entry permitted after exit"
+  ],
+  "source_research": {
+    "output": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_7/v4_research/exit_research/runs/2026-10-27/20261027T172723446017_fixed_exit_rules",
+    "manifest_sha256": "54bb9079a92f527bc96f4fb0e4bf5a13930d9be3f356c3b00df8dd791f76ab22",
+    "policy": "cushion_half_r"
+  },
+  "default_cache": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_7/v4_research/runs/2026-10-27/20261027T165517683392_v4_extremes/inputs",
+  "default_cache_manifest_sha256": "31fb98ab092aa8c3ea5e59f7e65e377d41095306ba71cc93ae964aeedc998c51",
+  "entrypoint_migration": {
+    "previous_entrypoint": "fno_v13_v10_g_7_v4_backtest.py",
+    "archived_copy": "research/archive/fno_v13_v10_g_7_v4_extreme_research_entrypoint.py",
+    "previous_sha256": "8a0402af8093643c9e9d1801525564206cc2d933e0001fbc6a91ca28b0cf2a1a"
+  },
+  "limitations": [
+    "User-selected for backtesting despite failing the prior research acceptance screen.",
+    "Protection is a gross price level; costs and adverse gaps can still produce a net loss.",
+    "Available historical data and target settings were previously inspected; no independent forward-validation claim.",
+    "Inherited after-close stock-day eligibility is not a validated live causal universe."
+  ]
+}

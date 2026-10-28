@@ -1,0 +1,58 @@
+{
+  "scope": "Read-only audit through 2026-10-23; no configuration or result pointers changed",
+  "main_policy": {
+    "id": "persistent_direction_30m_2.0",
+    "source": "configs/strategies/v13_v10_g_8_g7_v2_nifty_vix_v2.json",
+    "vix_candle_resolution_minutes": 5,
+    "vix_lookback_minutes": 30,
+    "threshold_pct": 2.0,
+    "description": "First reject both-opposing Nifty slot/session directions. Reject long when VIX session and recent changes are both >=2%; reject short when both <=-2%. Early full-lookback shortage uses session change.",
+    "independent_holdout": false,
+    "selection_basis": "Explicit user adoption on 2026-10-23 after reviewing 5-minute versus 30-minute results"
+  },
+  "shock_policy": {
+    "id": "shock_s0.875_t0.5",
+    "source": "research/g8_regime_exit_research.py",
+    "trigger": "abs(VIX 5-minute return)>=1.0% OR (trade-signed Nifty slot return<=-0.05% AND trade-signed Nifty session return>=0.10%)",
+    "action": "Initial SL=1.20%*0.875=1.05%; target=original slot target*0.5. Other regimes retain baseline exits. Existing timed tightening retained.",
+    "status": "Exploratory risk candidate; automatic development/validation selection retained original exits",
+    "candidate_count": 27,
+    "independent_holdout": false
+  },
+  "coverage": {
+    "first_day": "2026-07-29",
+    "last_day": "2026-10-23",
+    "eligible_sessions": 57,
+    "july_sessions": 3,
+    "august_sessions": 19,
+    "september_sessions": 21,
+    "october_sessions": 14,
+    "known_missing_session": "2026-10-01: sealed input incomplete; never count as zero P&L",
+    "october_is_partial": true
+  },
+  "selection_history": {
+    "inherited_source_provenance": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_8/inputs/baseline_v2/provenance.json",
+    "inherited_g3_history": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_3/backtests/runs/2026-10-21/20261021T182814038844_068bceab_current_full_history",
+    "inherited_targets_selected_after_inspection": true,
+    "inherited_independent_holdout_qualification": false,
+    "g3_code_evidence": "research/g3_target_cutoff_backtest.py:539-540",
+    "g4_code_evidence": "research/g4_selected_backtest.py:224,252; training_38/later_11, historical_targets_and_subset_selected_after_inspection=true, untouched_out_of_sample=false",
+    "g8_original_combinations": 230,
+    "g8_selection_review_candidates": "57 fixed rules +24 model/threshold choices +12 combinations =93; +18 neighboring sensitivity settings",
+    "g8_selection_review_evidence": "research/g8_vix_selection_review.py:200-208",
+    "development": "First35 eligible sessions:2026-07-29..2026-09-18",
+    "validation": "Next10 eligible sessions:2026-09-21..2026-10-06",
+    "final_internal_assessment": "Last11 eligible sessions:2026-10-07..2026-10-22",
+    "interpretation": "Splits restrict direct look-ahead in each experiment but reused entry rules, targets, repeated trials, and later manual choice mean none of the historical months is a clean whole-strategy out-of-sample test. Do not label October an untouched holdout.",
+    "automatic_selection_result": "G8 selection research and past-only research latest pointers retained baseline_nifty. Adopted main30m policy was a later manual user choice.",
+    "october23": "Existing fixed parameters replayed; no new parameter fit to this day. One day alone is not validation."
+  },
+  "analytical_interpretation": [
+    "October has materially lower per-trade success, particularly shorts. It does not have the largest losing-day fraction: G8 October2/14=14.29%, versus August3/19=15.79%.",
+    "Entry-time VIX is higher in October, but trade-signed Nifty slot/session alignment is stronger too; plain disagreement with Nifty is not a sufficient explanation.",
+    "The G8 normal_mixed category worsens from September80.28% win rate on71 trades to October43.48% on23 trades. High VIX alone cannot explain all losses.",
+    "October baseline losers averaged0.388% positive excursion before exit. This is a retrospective exit-efficiency diagnostic, not an entry feature or proof that a tighter target improves total P&L.",
+    "Shock exits improve October by4 wins and7521.43 rupees but reduce profits in each earlier month. This is evidence for a measured tradeoff, not a universal remedy.",
+    "G3..G8 share entry ancestry, so cross-version deterioration is correlated, not independent evidence of the same external cause."
+  ]
+}

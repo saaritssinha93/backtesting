@@ -1,0 +1,28 @@
+{
+  "scope": "RESEARCH_ONLY",
+  "execution_authority": false,
+  "code_sha256": "5da14ffaa2b04a0989287c3c07043ab3465c1af08bf5940ae69d08916bbd2915",
+  "allocator_sha256": "e4eb49ac9f0402be1e50a0ae793d4e159e277728fbee307cba4d58aef541ce35",
+  "source_study": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\g3_early_entry_20261023\\universe",
+  "changed_parameter": "MAX_CONCURRENT_POSITIONS: 10 versus unlimited",
+  "unchanged": "Rules, quota, ranking, per-trade size, one executed symbol/day for experimental rules, target/SL and costs",
+  "margin_per_trade_rupees": 100000,
+  "exposure_per_trade_rupees": 500000,
+  "cost_bps": 5,
+  "evidence_days": [
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-15",
+    "2026-10-16",
+    "2026-10-19",
+    "2026-10-21",
+    "2026-10-22",
+    "2026-10-23"
+  ],
+  "caveats": [
+    "Only eight sealed sessions, not the entire 57-session baseline history",
+    "Historical hypothetical fills; no extra slippage, latency, impact, or quantity rounding",
+    "Breakout timestamps are candle ends; same-minute execution sequence is unknown",
+    "No return percentage on the old Rs1m portfolio denominator for unlimited-capital results"
+  ]
+}

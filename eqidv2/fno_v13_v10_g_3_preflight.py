@@ -32,12 +32,16 @@ def inspect_deployment(*, verify_frozen: bool = True) -> dict:
                 for name in current.get("execution_profiles", [])))
     from research.g3_backtest_profile import contract as backtest_contract, CONFIG_PATH as backtest_path, configuration
     backtest_value = configuration()
-    backtest_matches = (backtest_contract is config.contract and backtest_path == config.CONFIG_PATH)
+    backtest_matches = (len(backtest_contract.ACTIVE_SETUPS) == len(config.ACTIVE_SETUPS)
+        and [asdict(replace(s, source_version=config.STRATEGY_VERSION)) for s in backtest_contract.ACTIVE_SETUPS]
+            == [asdict(s) for s in config.ACTIVE_SETUPS]
+        and backtest_contract.SIGNAL_TO_CONFIRMATION == config.SIGNAL_TO_CONFIRMATION
+        and backtest_contract.MIN_CONFIRMATION_VOLUME_BY_SETUP == config.MIN_CONFIRMATION_VOLUME_BY_SETUP)
     from research import g3_target_cutoff_contract as cutoff
     cutoff.validate_contract(backtest_value)
     backtest_variant_valid = (backtest_contract is cutoff
         and backtest_value.get("scope") == "BACKTEST_ONLY"
-        and backtest_value.get("source_strategy_fingerprint") == config.strategy_fingerprint()
+        and backtest_value.get("source_strategy_fingerprint") == config.contract.PREVIOUS_STRATEGY_FINGERPRINT
         and backtest_value.get("execution_authority") is False)
     promoted = config.setup_for("09:50", "LONG")
     opening = config.setup_for("09:20", "LONG")

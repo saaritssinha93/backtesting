@@ -139,7 +139,7 @@ def test_gate_uses_exact_window_deadline_effective_date_and_global_mutex():
     script = source("activate_g3_live_standing.ps1")
 
     for evidence in (
-        "2026-10-23",
+        "2026-10-24",
         "$windowStart = $session.AddHours(9).AddMinutes(9)",
         "$deadline = $session.AddHours(9).AddMinutes(12).AddSeconds(30)",
         "$now -lt $windowStart -or $now -ge $deadline",
@@ -260,12 +260,12 @@ def test_gate_pins_exact_standing_policy_strategy_setups_and_live_caps():
     for evidence in (
         "g3_live_standing_operator_policy_v1",
         "STANDING_OPERATOR_POLICY",
-        "G3_LIVE_STANDING_20261023_V1",
-        "8b7c7a1dbc6564266c931ee3fd6a0ae451bfdf732bb9ae582f7f19f4f8c5115f",
-        "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
+        "G3_LIVE_STANDING_20261024_V2",
+        "235ea597d8e2fd3a6de9cb23bbd3c8e422898f387ab93300aa23d69e8f37387a",
+        "74ff6bf6a2c1a68a08a324d8090809dbfe10a3ccacf289ab1953fb03636ca615",
         "cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e",
-        "f555f8f81cad15b9c5d33a74a6f277ae0ed5dfe077c07657a19f472b7e5028b5",
-        "$ExpectedSetupCount = 61",
+        "a59e03c5be37fb6da8f190adecfbc99ada9fe378d216f13591e9cde0aa423625",
+        "$ExpectedSetupCount = 51",
         "Assert-ExactSetupIds",
         "capital_per_trade_rs -ne 10000.0",
         "leverage -ne 5.0",

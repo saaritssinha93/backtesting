@@ -1,0 +1,2135 @@
+{
+  "feature_source": "C:\\TradingData\\eqidv2\\fno_oi\\strategy_research\\v13_v10_g_full_history\\run_20260925_cutoff_corrected_through_20260923\\dataset\\all_5m_features.parquet",
+  "feature_source_sha256": "f82e7bc23dd23f9855930468be7f8ae4188703b19fa84c1a518036b759690a82",
+  "dataset_manifest": "C:\\TradingData\\eqidv2\\fno_oi\\strategy_research\\v13_v10_g_full_history\\run_20260925_cutoff_corrected_through_20260923\\dataset\\dataset_manifest.json",
+  "dataset_manifest_sha256": "e6b7de21fb241f941ebf9ce6e5a336309dc972491550387ea9ebfb6303bc7f97",
+  "source_scope": "Every complete observed equity 5m bar 09:20-15:15 on source-eligible required-contract sessions. Missing equity bars are not imputed. Missing exact futures OI and 1m confirmation remain explicit NaNs/rejections.",
+  "candidate_pool": "ALL_OBSERVED_5M_BARS_BEFORE_OI_AND_SELECTION_FILTERS",
+  "execution_source_manifest": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\g3_early_entry_20261023\\full_history_source\\execution_minutes\\manifest.json",
+  "execution_source_manifest_sha256": "8386a9f22db77d74d2c06eb70c94ddc33a3de1838c41b3b53cd89c0f87141608",
+  "day": "2026-07-31",
+  "loader_sha256": "b18802f9f31efc0b98437d4ea2ec00341f5994c29db7fbeb2548bc895cc195a4",
+  "observed_rows": 10608,
+  "stocks": 208,
+  "missing_oi_rows": 8,
+  "nonpositive_oi_rows": 4667,
+  "minute_ohlcv_reconciled": true,
+  "universe": {
+    "policy": "LEGACY_AFTER_DATED_MONTHLY_UNIVERSE_NOT_POINT_IN_TIME",
+    "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-08-21.parquet",
+    "sha256": "4fdf6efa665bb4ec36cd9684f9103164a9a77e6153844aaf33f2dfe99d663327",
+    "feature_symbols": 208,
+    "universe_symbols": 208,
+    "missing_from_features": [],
+    "extra_in_features": [],
+    "historical_cohort_preserved": true,
+    "strict_point_in_time_universe": false
+  },
+  "opening_policy": "Native cash09:15open-to09:20close and futures09:16-to09:20 OI, retrospective historical observer; replaces legacy overnight opening comparisons.",
+  "opening_provenance": [
+    {
+      "symbol": "360ONE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\360ONE26AUGFUT.json",
+      "observer_sha256": "49be1f0a79f84476102b743753f4fcaf03d308ac1f1b35a72c91d546dc8aedb3",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\360ONE26AUGFUT_5minute.parquet",
+        "sha256": "98c456f0062f8d1861d4b730a1b4db7320fa87765619f8e87ea7a99bea809761"
+      }
+    },
+    {
+      "symbol": "ABB",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ABB26AUGFUT.json",
+      "observer_sha256": "db791dbf2d8eded611c832f1c07af25decf94b762007ec99b9a8d740534f9a5f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ABB26AUGFUT_5minute.parquet",
+        "sha256": "c4764efb8c5c95a61960b502f4c07979c40224ddc141050bd94d7fff4e305af4"
+      }
+    },
+    {
+      "symbol": "ABCAPITAL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ABCAPITAL26AUGFUT.json",
+      "observer_sha256": "7db48baaa4c5d8263abbde6f7eee7f6265156c4445701a761f587b9070a45a8f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ABCAPITAL26AUGFUT_5minute.parquet",
+        "sha256": "aa1462892d3ce469d7e4b615519b18ec87c3dd14177b909153ffac7afb6d7bdc"
+      }
+    },
+    {
+      "symbol": "ADANIENSOL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ADANIENSOL26AUGFUT.json",
+      "observer_sha256": "3408632b2d0296c51be320e81b3d55105fe7acbcd74655a86210078779181693",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ADANIENSOL26AUGFUT_5minute.parquet",
+        "sha256": "1a287fadd970007097562d04664cef2edac161fc29a3f75b866d6c85719cb492"
+      }
+    },
+    {
+      "symbol": "ADANIENT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ADANIENT26AUGFUT.json",
+      "observer_sha256": "79b16b59bf3f074956bca589c0c0cdbb474c1e49a4664a0061c943d1aef5eebe",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ADANIENT26AUGFUT_5minute.parquet",
+        "sha256": "3392045be028f7eebd4a180c93fef4e136ada895ee64a6dbf2d4b00689611c6a"
+      }
+    },
+    {
+      "symbol": "ADANIGREEN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ADANIGREEN26AUGFUT.json",
+      "observer_sha256": "d4267acfa488cfd394977b74f9ad7e16b7f3824df9017d53ca097a232bb6a037",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ADANIGREEN26AUGFUT_5minute.parquet",
+        "sha256": "64fb026162dea6c45ed54bd544263a8ea44e0d627470a886bdc3361d5b1b98e7"
+      }
+    },
+    {
+      "symbol": "ADANIPORTS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ADANIPORTS26AUGFUT.json",
+      "observer_sha256": "e37bad4f936257a9206b506efd4f853b6fe94c182708554b998a6a5f7ef63ad1",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ADANIPORTS26AUGFUT_5minute.parquet",
+        "sha256": "73b886bab0148c04faf6d0efec6602719692f35eb59f4006691d211d2c8c27b0"
+      }
+    },
+    {
+      "symbol": "ADANIPOWER",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ADANIPOWER26AUGFUT.json",
+      "observer_sha256": "a24d18aebc609cf2ed4cc446b4211e8eca7590e067de8e69d71e98cb882183b4",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ADANIPOWER26AUGFUT_5minute.parquet",
+        "sha256": "7760e474ba841663a7cb8b4bbf5b7357db228ac4c273993d1d3477564d3dd09d"
+      }
+    },
+    {
+      "symbol": "ALKEM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ALKEM26AUGFUT.json",
+      "observer_sha256": "16def94cbb5c79e1b184ea2afb71429f4c54c6f580419cf6b155138b6cdb9d79",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ALKEM26AUGFUT_5minute.parquet",
+        "sha256": "c235b936c3977f65f14d12f23a86d829626be3b698dba6f8fda65004b23cfee1"
+      }
+    },
+    {
+      "symbol": "AMBER",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\AMBER26AUGFUT.json",
+      "observer_sha256": "926ef513e0093ad52092a75be2be33a37f707cd0465590424972ea05efb2a027",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\AMBER26AUGFUT_5minute.parquet",
+        "sha256": "ea0b8f853b7c48ca92c75763b93d8d055c95affb8c0004d4c095d5a4ed8ec77e"
+      }
+    },
+    {
+      "symbol": "AMBUJACEM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\AMBUJACEM26AUGFUT.json",
+      "observer_sha256": "83359b9cfdb1b6854b44809e3ced0b635a81e8c1b50d99b929ab889fdd065c5d",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\AMBUJACEM26AUGFUT_5minute.parquet",
+        "sha256": "e91d0c871348943cffd8b74ed5735b95214ffbca10d0fb45b6e93cf15f3cf897"
+      }
+    },
+    {
+      "symbol": "ANGELONE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ANGELONE26AUGFUT.json",
+      "observer_sha256": "f0190e2a5fcdb374ad49da36533a69ab664fbce96b4a28958e109f0a991048b1",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ANGELONE26AUGFUT_5minute.parquet",
+        "sha256": "ca6c39d3f70a7926a9d8c0faefd0cfa7f246efd93bc28a67df06ab8a16fed8e8"
+      }
+    },
+    {
+      "symbol": "APLAPOLLO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\APLAPOLLO26AUGFUT.json",
+      "observer_sha256": "b79ded87ed55ef997b941d78faddcfbf2e6395c5e1f579582bd7b33212e1df63",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\APLAPOLLO26AUGFUT_5minute.parquet",
+        "sha256": "eb098916a9d2097ce6f9281e0b556ffb8c8e6e300b37de899c2efc0d4d15688e"
+      }
+    },
+    {
+      "symbol": "APOLLOHOSP",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\APOLLOHOSP26AUGFUT.json",
+      "observer_sha256": "0e33ababc7588fbf014e6fd537b4aedcefd8e881ea0474fe7ab9e553713b9581",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\APOLLOHOSP26AUGFUT_5minute.parquet",
+        "sha256": "79849faf2a583f8c3b2557ab8510b5aab0c1ad61b2b8945c67834dd521903538"
+      }
+    },
+    {
+      "symbol": "ASHOKLEY",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ASHOKLEY26AUGFUT.json",
+      "observer_sha256": "00df85d9a94e8c900e490da91130336d575243335c40a07a1d00fca3d9809c3b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ASHOKLEY26AUGFUT_5minute.parquet",
+        "sha256": "d27c779615900a6a7a03caa2b0e1e44afb99ac9c3b34314c2328ebf2381b0ea9"
+      }
+    },
+    {
+      "symbol": "ASIANPAINT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ASIANPAINT26AUGFUT.json",
+      "observer_sha256": "90d3711e917e7d6c3f28354dccd6d5af9c4b07086ae49acd50cc938d7316ee4c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ASIANPAINT26AUGFUT_5minute.parquet",
+        "sha256": "5783708936efa82cb2002a4725ab26b23cea0558acea17da786648de6c2c4669"
+      }
+    },
+    {
+      "symbol": "ASTRAL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ASTRAL26AUGFUT.json",
+      "observer_sha256": "eda5877e28948963bae9671fc7cf5ddf0807246f5d19dac2a90b31bc1b96b900",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ASTRAL26AUGFUT_5minute.parquet",
+        "sha256": "6c5df9d1e693009e9ac1c01e2304e4aa0c556cb8a5657aa69f1be2615c5dd5fc"
+      }
+    },
+    {
+      "symbol": "AUBANK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\AUBANK26AUGFUT.json",
+      "observer_sha256": "6bd61c5f0acf3a210bd0b72af777c48caf9fdf9faf3df345b3bab05b4f35f67f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\AUBANK26AUGFUT_5minute.parquet",
+        "sha256": "cdceac80277a2566fb29816e6efbb5f68e5eb62fb23d528c954471e21330f336"
+      }
+    },
+    {
+      "symbol": "AUROPHARMA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\AUROPHARMA26AUGFUT.json",
+      "observer_sha256": "a4c5a925c2f62033bb776adf114398cb213fbc2bf8213f5dbb4e2a8f946b076a",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\AUROPHARMA26AUGFUT_5minute.parquet",
+        "sha256": "2c5fd2442a0a77af725ec1c55f48f00736624ad52f9c4399b58be7dc2619a636"
+      }
+    },
+    {
+      "symbol": "AXISBANK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\AXISBANK26AUGFUT.json",
+      "observer_sha256": "baf1295235ae4b31847cb8ad831bd938ef88f4b1c0751b54e8558af1e36ab250",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\AXISBANK26AUGFUT_5minute.parquet",
+        "sha256": "1729d5c266590a724780971623876b2145a9957fc5a3acfbb29e9b342bac583d"
+      }
+    },
+    {
+      "symbol": "BAJAJ-AUTO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BAJAJ-AUTO26AUGFUT.json",
+      "observer_sha256": "973eb950b4dc04d7d9653c809d448ddfacd9971343ed6744175da9465ff82895",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BAJAJ-AUTO26AUGFUT_5minute.parquet",
+        "sha256": "e6ee8244a33bba41d45a948d2b8296ac09fc545b0f26f6c1f5649ff85e6081db"
+      }
+    },
+    {
+      "symbol": "BAJAJFINSV",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BAJAJFINSV26AUGFUT.json",
+      "observer_sha256": "c4d6b9cc4732a43b64c9f832062dff76eb58e50f21244e5937b5845a0a1e1350",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BAJAJFINSV26AUGFUT_5minute.parquet",
+        "sha256": "3da39ebfc7a9618352bae555e21d45d67391dd803e521fcf5a098660718506b3"
+      }
+    },
+    {
+      "symbol": "BAJAJHLDNG",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BAJAJHLDNG26AUGFUT.json",
+      "observer_sha256": "7aa5c7df3c5f8fc95a1460e0c3e9aa78bae2af0df565832384195d6de1d5639e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BAJAJHLDNG26AUGFUT_5minute.parquet",
+        "sha256": "9cd35bfb6f7d0481dc4625360b5708cc24c16dbb81e2f384a38f55b4d5e8dfb4"
+      }
+    },
+    {
+      "symbol": "BAJFINANCE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BAJFINANCE26AUGFUT.json",
+      "observer_sha256": "6d34aef55002de9384ef18f7bf59280069da0ab880cb9f9a87edc6bb56f23e72",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BAJFINANCE26AUGFUT_5minute.parquet",
+        "sha256": "c91cd44e13684bbb15c231aaa5910c1a86e7f10a0eb692aa24a0e6a62614e2eb"
+      }
+    },
+    {
+      "symbol": "BANDHANBNK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BANDHANBNK26AUGFUT.json",
+      "observer_sha256": "3a99c65da5bfb4fe3787bd50d13473739b621228bab699d3517c6def87352f00",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BANDHANBNK26AUGFUT_5minute.parquet",
+        "sha256": "d0a0cb4e54371b5aaf90b8dab2685badb83488fb3a60a38e426cdeaddb878f8c"
+      }
+    },
+    {
+      "symbol": "BANKBARODA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BANKBARODA26AUGFUT.json",
+      "observer_sha256": "41e7afd8f0f1d97ea21e8e13d4bbe166724af95a7ea02d4a2f69a2b7dc33c94c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BANKBARODA26AUGFUT_5minute.parquet",
+        "sha256": "85c57dec93c20a1e8853b80274a07ed8dcef961ed7f578b62a25cbaa213184a6"
+      }
+    },
+    {
+      "symbol": "BANKINDIA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BANKINDIA26AUGFUT.json",
+      "observer_sha256": "39a76c004ae406d77015d99c47156fc0faa97cac9b1b28b177a888d965c3cc29",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BANKINDIA26AUGFUT_5minute.parquet",
+        "sha256": "c1993be6afd30fb9a2e8c15e3fa2ce6dc0a4d10201956106bcd9301aef76eb32"
+      }
+    },
+    {
+      "symbol": "BDL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BDL26AUGFUT.json",
+      "observer_sha256": "a26fac3654f54841bfe8d3a1bc960231c8a3de845feffc7e9b413e48381fcf6b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BDL26AUGFUT_5minute.parquet",
+        "sha256": "a5978ea66602989f2496a8d1f84cb08448a378cab0985da18a32196122c0d87c"
+      }
+    },
+    {
+      "symbol": "BEL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BEL26AUGFUT.json",
+      "observer_sha256": "d755d952feebd4273a2157ff826b9e406dd5a4c6c3821a0fa2f76b5f92504a03",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BEL26AUGFUT_5minute.parquet",
+        "sha256": "091408cf7b128443dba542d75193593ab250ff0e589e27defa9b649ff48d368e"
+      }
+    },
+    {
+      "symbol": "BHARATFORG",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BHARATFORG26AUGFUT.json",
+      "observer_sha256": "f0c2383deae54d0d083ad7d28c89e5780577884efdd193c21d8a048bba5d67e0",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BHARATFORG26AUGFUT_5minute.parquet",
+        "sha256": "7b99c7ae13352030e9cfe502e91b522e6448f72ca7b5c1212ff05db873dd6a19"
+      }
+    },
+    {
+      "symbol": "BHARTIARTL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BHARTIARTL26AUGFUT.json",
+      "observer_sha256": "b6c78aee90a8dd627d8fe1335b3611ac47316306ce5d613a65f13dc3fefcf5b3",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BHARTIARTL26AUGFUT_5minute.parquet",
+        "sha256": "66cd9748ed6f013aba3fe73ad6142d4e7340fd9763df7463ecc0420406e0ae89"
+      }
+    },
+    {
+      "symbol": "BHEL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BHEL26AUGFUT.json",
+      "observer_sha256": "bfb820a896b3580ac2d9efa4f4586cace5cc57a0f6d8c08cf584faec6a017e72",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BHEL26AUGFUT_5minute.parquet",
+        "sha256": "75ecc393593b54af2cf2ee584455c586ca7872a685953f58fd5eec923c88c975"
+      }
+    },
+    {
+      "symbol": "BIOCON",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BIOCON26AUGFUT.json",
+      "observer_sha256": "460d68cf22f3226e8757ea6d05783d9fa50718e5c2eded2627ecdb56c57fc450",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BIOCON26AUGFUT_5minute.parquet",
+        "sha256": "6ec9a0bf47803f4f9685d195461da1cb953566dd875a09b70e04b419b5ec3d72"
+      }
+    },
+    {
+      "symbol": "BLUESTARCO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BLUESTARCO26AUGFUT.json",
+      "observer_sha256": "1ae7885fc6e697a7c0c39f3f9655f64d18f518db780101e5a4337a827c8e0d3e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BLUESTARCO26AUGFUT_5minute.parquet",
+        "sha256": "5bc1849fdb53fe6699c413d742c20b7a85046c44c2c944786b771904db05f90f"
+      }
+    },
+    {
+      "symbol": "BOSCHLTD",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BOSCHLTD26AUGFUT.json",
+      "observer_sha256": "045efe3c5e43618c7c59b2f24f9017965216395e2e65b1974eb792854986b822",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BOSCHLTD26AUGFUT_5minute.parquet",
+        "sha256": "9cbb697d11e0c6c81c5d76ac3c2513bdc65f00772a1b87ed5f5d7610c9ad2961"
+      }
+    },
+    {
+      "symbol": "BPCL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BPCL26AUGFUT.json",
+      "observer_sha256": "15a3f009d0ffc2297aa604551b7dc356ed95381d245c5342a4c4fac10a5d2922",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BPCL26AUGFUT_5minute.parquet",
+        "sha256": "e1032d27c065cdf793f219e7c85da0c6e27548c01ea5e6a594c8e5a4d522b6c3"
+      }
+    },
+    {
+      "symbol": "BRITANNIA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BRITANNIA26AUGFUT.json",
+      "observer_sha256": "540ff63d2ad4f517a4854e96c663fa7850515c0a10898cf55d2bc9f011e91663",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BRITANNIA26AUGFUT_5minute.parquet",
+        "sha256": "8b5390e2ba09349cc8e03e3fe2cc3fc1cba8019447af0afeba6ef0a3ff20e2bf"
+      }
+    },
+    {
+      "symbol": "BSE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\BSE26AUGFUT.json",
+      "observer_sha256": "cf4c36bc79dd3aaeeb5fc4e6bb58ad85ef84c2ab4180fa2fc10851f7938322b7",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\BSE26AUGFUT_5minute.parquet",
+        "sha256": "475a69079c975abb0b7eba1765735f5a1fba55be88b884de7dfeca7482b739fc"
+      }
+    },
+    {
+      "symbol": "CAMS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CAMS26AUGFUT.json",
+      "observer_sha256": "0f8decdda9db417fc0bb61bda34117d85c2ebb1f60d300a5d8500add80f97785",
+      "opening_status": "MISSING_OR_INVALID_OPENING_EVIDENCE",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CAMS26AUGFUT_5minute.parquet",
+        "sha256": "e830e2b734a9e3ce71393ccb3d2289293a4ba6f87e670f72fb193766cfc6120b"
+      }
+    },
+    {
+      "symbol": "CANBK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CANBK26AUGFUT.json",
+      "observer_sha256": "afed7648802c7e7c1e114f85b497a3fac8683fc61e65230c3b223e974997cd5b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CANBK26AUGFUT_5minute.parquet",
+        "sha256": "6bb9a3bdc322cec5c9917b9e909c69c3636f0e2be3ed4d670c1cb9b23bfccc4d"
+      }
+    },
+    {
+      "symbol": "CDSL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CDSL26AUGFUT.json",
+      "observer_sha256": "d95367c33320899f64f99dccd0db5ed76f5919bbcb4bf14ecbae2055b3021738",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CDSL26AUGFUT_5minute.parquet",
+        "sha256": "ecf09ab4d300e500e96cd8a06ad9e02da29d09885e2b9a25de63495a112728ef"
+      }
+    },
+    {
+      "symbol": "CGPOWER",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CGPOWER26AUGFUT.json",
+      "observer_sha256": "f4f6d5f0bcd58ca9349bd67d6ca8948ba79b8e3ccf56bb28a42589a9b4055d25",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CGPOWER26AUGFUT_5minute.parquet",
+        "sha256": "e23d3c37b0cc08ec0054d0b0c0d7cb81cdcc228baa498151beca5084144d45a7"
+      }
+    },
+    {
+      "symbol": "CHOLAFIN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CHOLAFIN26AUGFUT.json",
+      "observer_sha256": "444662011c22f533a64ab43889da8e33f0f5943d367b54c242adee0591c857f0",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CHOLAFIN26AUGFUT_5minute.parquet",
+        "sha256": "b56fdfed741b115daa628a7802a7da60e5a8ecc93d75db0ba78956f140cb9349"
+      }
+    },
+    {
+      "symbol": "CIPLA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CIPLA26AUGFUT.json",
+      "observer_sha256": "ef889a638d1cfc415990435fb997e8b8db3c5226b09867dbf9f2eeebad1e41e6",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CIPLA26AUGFUT_5minute.parquet",
+        "sha256": "851aa25fe5ea5c8acbe109f5eb19355361d9ddbd6b9ab392f066dd7f2718a7b4"
+      }
+    },
+    {
+      "symbol": "COALINDIA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\COALINDIA26AUGFUT.json",
+      "observer_sha256": "8a86fb1fb60d271fa7fc3526620d91e3e0526f8334441097edb02aa7f4392a66",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\COALINDIA26AUGFUT_5minute.parquet",
+        "sha256": "7173eb6fb705679c364375a6b96bb40cd0893c989bc0d2bd1f2c739a58fd0792"
+      }
+    },
+    {
+      "symbol": "COCHINSHIP",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\COCHINSHIP26AUGFUT.json",
+      "observer_sha256": "9f8234e5934676dd70e9cbdefabef22bd4c4e2d67196f6376e34e774c3b74b72",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\COCHINSHIP26AUGFUT_5minute.parquet",
+        "sha256": "a1788a4c36c446220bdbd31cabd13c93b9952f17aac08738ed5be0c48627840b"
+      }
+    },
+    {
+      "symbol": "COFORGE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\COFORGE26AUGFUT.json",
+      "observer_sha256": "d8a7ea0e4c7ee739490ac2f69289acb1843da26efc0bf12532a1a553c8c83e57",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\COFORGE26AUGFUT_5minute.parquet",
+        "sha256": "5ce7ae08918d1f9283fc10831bc3572b5017f2d05d7e602dd5a8e581ff133009"
+      }
+    },
+    {
+      "symbol": "COLPAL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\COLPAL26AUGFUT.json",
+      "observer_sha256": "600b851eee3393cfcb0f4c6600fcf8c9674a8b882cd0f8ccc6069539eb50394a",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\COLPAL26AUGFUT_5minute.parquet",
+        "sha256": "e392969fc8b22c60b73ec837998a0e61809dee9377d2948bb275465c10979e45"
+      }
+    },
+    {
+      "symbol": "CONCOR",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CONCOR26AUGFUT.json",
+      "observer_sha256": "2f1adb1ae489a88b32c2c4ec829fb84d86c2a000dbf1cf90676e5b56f97c8aec",
+      "opening_status": "MISSING_OR_INVALID_OPENING_EVIDENCE",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CONCOR26AUGFUT_5minute.parquet",
+        "sha256": "72d93604c0a9da6990c7811b3243346d15a5cdcbc318ab6718da6d1e2c0ff44a"
+      }
+    },
+    {
+      "symbol": "CROMPTON",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CROMPTON26AUGFUT.json",
+      "observer_sha256": "96fbe63b4a27e44a30169061ee0ad72406dda57b821af01130d4ecd24b27213c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CROMPTON26AUGFUT_5minute.parquet",
+        "sha256": "8d08886b9e5f326d945d73fb6a8b51807ce1963ff6b403ca42061bf0eab6e52e"
+      }
+    },
+    {
+      "symbol": "CUMMINSIND",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\CUMMINSIND26AUGFUT.json",
+      "observer_sha256": "6dffd3fee42007b0965bb411f1f84babf3297cc48ac616cc3adaf0753bce44b3",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\CUMMINSIND26AUGFUT_5minute.parquet",
+        "sha256": "d9e20c09e8151f6da7e1a3ced3b16a8fc490a190679751fca9d8f5918e3938b6"
+      }
+    },
+    {
+      "symbol": "DABUR",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\DABUR26AUGFUT.json",
+      "observer_sha256": "c694c258357c08dd81463e238df661f991a6a57ca1232c96bb276dcf70c98af7",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\DABUR26AUGFUT_5minute.parquet",
+        "sha256": "20b8545da09f4fd8742ea4f522e3541dc81bb070c84828ee47659ad2388e9852"
+      }
+    },
+    {
+      "symbol": "DALBHARAT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\DALBHARAT26AUGFUT.json",
+      "observer_sha256": "ffb41c926f81e3d0c16daad0b7441453e3740c63065b5c60cc3c1768c282ea9a",
+      "opening_status": "MISSING_OR_INVALID_OPENING_EVIDENCE",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\DALBHARAT26AUGFUT_5minute.parquet",
+        "sha256": "ebb44105fecb8126bffb7443ffbbe1f4b1ea0b1a4fc7d529bd7b502647990641"
+      }
+    },
+    {
+      "symbol": "DELHIVERY",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\DELHIVERY26AUGFUT.json",
+      "observer_sha256": "dd9ba16e3782d4f947c9c1e845a25261b6165c1abadd191df8b3b87b595cf369",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\DELHIVERY26AUGFUT_5minute.parquet",
+        "sha256": "f4e2596947a1c0b49867a1d3cd536d24484c9f462afdc9b298ec79bfeef701f2"
+      }
+    },
+    {
+      "symbol": "DIVISLAB",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\DIVISLAB26AUGFUT.json",
+      "observer_sha256": "f6b65898ae7a010882d2c48ee8418275ce3ff1888fde7bc122351e1ae20e53d4",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\DIVISLAB26AUGFUT_5minute.parquet",
+        "sha256": "d7cc59d47def0f53ad5a372c110b34f5a3659a3642cf3050d0cc9bd8fed92fb8"
+      }
+    },
+    {
+      "symbol": "DIXON",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\DIXON26AUGFUT.json",
+      "observer_sha256": "40bcd7e9024379453079e68d63c7498c23753288ef2cf5cf0cc46e836044f063",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\DIXON26AUGFUT_5minute.parquet",
+        "sha256": "cce4c9e4e1de14409d8d5f8820d44903a4682242dc44a78762d44ea2bf02ee7e"
+      }
+    },
+    {
+      "symbol": "DLF",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\DLF26AUGFUT.json",
+      "observer_sha256": "9f721627e7ae0ff4091e5de0cdaffdd9afa1a93710aa33efe3f40f4eb81d5262",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\DLF26AUGFUT_5minute.parquet",
+        "sha256": "5fecb5b3776764446893d719eb86e347301c2cac0c6860632ccd2100672898de"
+      }
+    },
+    {
+      "symbol": "DMART",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\DMART26AUGFUT.json",
+      "observer_sha256": "7c5904969276ce270179df582173b437f9a8ed55e03cfdf59246e86919d8e2ee",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\DMART26AUGFUT_5minute.parquet",
+        "sha256": "e6e0b70d125d7b60622a3442d65db024db1a88c7906ba9dd814bbfa98366d53e"
+      }
+    },
+    {
+      "symbol": "DRREDDY",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\DRREDDY26AUGFUT.json",
+      "observer_sha256": "40367c85044a573f55df42cdb7c359a7d1e7becb343e83a8d9f3f5cabd376042",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\DRREDDY26AUGFUT_5minute.parquet",
+        "sha256": "f40471529e1619a4daf1ff1abaf6d41a50f21ec05d164385b5628357b731aa39"
+      }
+    },
+    {
+      "symbol": "EICHERMOT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\EICHERMOT26AUGFUT.json",
+      "observer_sha256": "ada6a281273dd3a0d4f1ab55ef32e4b32ad17a8b1419ddcd1fef5155c4fd619e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\EICHERMOT26AUGFUT_5minute.parquet",
+        "sha256": "3a1ca37cd6f93d5f43e97b0a83660bbdb550c7b37df7dbb6d027bbda775eddcc"
+      }
+    },
+    {
+      "symbol": "ETERNAL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ETERNAL26AUGFUT.json",
+      "observer_sha256": "39b4f4aeb6175ca44d8384ab43eca1425e12267d8f4217042018764fe0ddbd65",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ETERNAL26AUGFUT_5minute.parquet",
+        "sha256": "5d1569702431e70b65c100922afc142fde238205a2c370debc43a529dfd308d0"
+      }
+    },
+    {
+      "symbol": "FEDERALBNK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\FEDERALBNK26AUGFUT.json",
+      "observer_sha256": "fdc3d634d2ece26a88012efcaac3311cc06c354fc50beb3f54f11ca7ffcaeb9b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\FEDERALBNK26AUGFUT_5minute.parquet",
+        "sha256": "44f8d904b93bfdb38945e8c4ae224c6a00ba41b1dc75a36d54a857b80976f1e1"
+      }
+    },
+    {
+      "symbol": "FORCEMOT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\FORCEMOT26AUGFUT.json",
+      "observer_sha256": "52cbca600b0ecc4d97bc3e776b7fa69b23341bf778118c89be21c09d2ad1435e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\FORCEMOT26AUGFUT_5minute.parquet",
+        "sha256": "5b89c5169e224183eebf37951115e696f8a83dff70c62df1f8a1a47cd0945d18"
+      }
+    },
+    {
+      "symbol": "FORTIS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\FORTIS26AUGFUT.json",
+      "observer_sha256": "d5701256e683e95403d3599ab07f91b1cf5a2d555810f4241917304a4d879532",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\FORTIS26AUGFUT_5minute.parquet",
+        "sha256": "f6a93e44250beb1965f40d23df92c61c037903bb0cfb918016d192bf3c793359"
+      }
+    },
+    {
+      "symbol": "GAIL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\GAIL26AUGFUT.json",
+      "observer_sha256": "dea1cb4e7eb1321b6635793cac856f8c53ada7ad3b6d0038384307b10b92553a",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\GAIL26AUGFUT_5minute.parquet",
+        "sha256": "e15c87adfd6af4a1f7187cd94172041ef9b06790fdb72642209fdeb57964ec2b"
+      }
+    },
+    {
+      "symbol": "GLENMARK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\GLENMARK26AUGFUT.json",
+      "observer_sha256": "1c3e4e03420db5fc97b37a3676a4ce8b4df4e36a5da3bc2b4b8e04995e0ded4c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\GLENMARK26AUGFUT_5minute.parquet",
+        "sha256": "1c2eefd7e5a0832a65676dc98f32bd6ff939542a365ad5bf22d9d0ea3fe307d3"
+      }
+    },
+    {
+      "symbol": "GMRAIRPORT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\GMRAIRPORT26AUGFUT.json",
+      "observer_sha256": "4cb55ef8f1397354a10a7b02f9611c07d254865a5890770d8546cb04d82b2589",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\GMRAIRPORT26AUGFUT_5minute.parquet",
+        "sha256": "79d3b4d3f594b4ac54e188e383122e8cb3067b98ad9d2b38bb4cf72d38e19246"
+      }
+    },
+    {
+      "symbol": "GODFRYPHLP",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\GODFRYPHLP26AUGFUT.json",
+      "observer_sha256": "ac76d69c89bfa81ac08f8fde5ca22152831d973b3a0a2c767694c931356c7066",
+      "opening_status": "MISSING_OR_INVALID_OPENING_EVIDENCE",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\GODFRYPHLP26AUGFUT_5minute.parquet",
+        "sha256": "6a09a041e148c4b9f72941338088964e8278dc35c0019759f769a106eb426924"
+      }
+    },
+    {
+      "symbol": "GODREJCP",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\GODREJCP26AUGFUT.json",
+      "observer_sha256": "d25aeb54d9202d29aabf264a384ecc3fa0909e69e7d7834f0d7196f5483e1278",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\GODREJCP26AUGFUT_5minute.parquet",
+        "sha256": "a229adf0c957d83a388bf55c1e2f0b66f4aeee6ef1f29e20266e1211d240ce62"
+      }
+    },
+    {
+      "symbol": "GODREJPROP",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\GODREJPROP26AUGFUT.json",
+      "observer_sha256": "da3d0df60d5fe12f98fc6bec405f52110067d0baca1c38fd4e8e14c0137f7b83",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\GODREJPROP26AUGFUT_5minute.parquet",
+        "sha256": "53d1c0de1bd99f64a37cf1e7d66641ed5e034007c3b1d12bc38a19343c0d773d"
+      }
+    },
+    {
+      "symbol": "GRASIM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\GRASIM26AUGFUT.json",
+      "observer_sha256": "4778b1829d4defdf3eccd4c6284c96ca4607ec076f79a140256aeec119f03e2e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\GRASIM26AUGFUT_5minute.parquet",
+        "sha256": "6eaa6b36a2e7a0fbf8aac5c604386439a7b58d84b94c06e0242577258559255e"
+      }
+    },
+    {
+      "symbol": "GVT&D",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\GVT&D26AUGFUT.json",
+      "observer_sha256": null,
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\GVT_D26AUGFUT_42db319f_5minute.parquet",
+        "sha256": "f9d4ad68fe84c4e07abadbcedd435fed126588e64a8193ba4fa3438a380d3f5a"
+      }
+    },
+    {
+      "symbol": "HAL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HAL26AUGFUT.json",
+      "observer_sha256": "3b243e58d5b02836e172eb0e0fbf1d74ef6de620203ee070b02ab1c5f03ba324",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HAL26AUGFUT_5minute.parquet",
+        "sha256": "c1c6059727f2f116ea54c36d8d4992c5e3a1d0ea69ddcbd17410edb3f212f902"
+      }
+    },
+    {
+      "symbol": "HAVELLS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HAVELLS26AUGFUT.json",
+      "observer_sha256": "d56ed3605d95793c78a4730ae746bc073acf1d11b4275eff06f9f52fa2c3111d",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HAVELLS26AUGFUT_5minute.parquet",
+        "sha256": "de537836afadbbbe9b0939f2b28465274500e2611a346ef773edcf46ff086abf"
+      }
+    },
+    {
+      "symbol": "HCLTECH",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HCLTECH26AUGFUT.json",
+      "observer_sha256": "c6dc195dccdc320fd98d1021f6ea6fb69491047cb7a3973586fad28cff536067",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HCLTECH26AUGFUT_5minute.parquet",
+        "sha256": "47969ea24f35c9345f717a2ba752dca816275b06d2ee39a15223173168be1dcb"
+      }
+    },
+    {
+      "symbol": "HDFCAMC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HDFCAMC26AUGFUT.json",
+      "observer_sha256": "dbe694ad2827bb1b52b364bf7c4978e4cca02bd0b5d70601cd941c3395ca64da",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HDFCAMC26AUGFUT_5minute.parquet",
+        "sha256": "73317fc2bbde360b06bc6121cf31e009277897f36dfa020471cae2970f240fa6"
+      }
+    },
+    {
+      "symbol": "HDFCBANK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HDFCBANK26AUGFUT.json",
+      "observer_sha256": "d87f4f9f3c65626d21745db13f0f9a8608f548049b5a5c52e1732ce62bf5c257",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HDFCBANK26AUGFUT_5minute.parquet",
+        "sha256": "85fcd7038ed03b9cac168c6ae28ee4737bcc75984b9625fa7eabf5bc03097e92"
+      }
+    },
+    {
+      "symbol": "HDFCLIFE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HDFCLIFE26AUGFUT.json",
+      "observer_sha256": "7e74777c15e1139233150c57000ee7571863298ec9468b3e9bb351f4a3bcbdf7",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HDFCLIFE26AUGFUT_5minute.parquet",
+        "sha256": "a93bd4269645857be99fe768b7d13b567efcc5ffaf1027c32b7582b3ed0c4848"
+      }
+    },
+    {
+      "symbol": "HEROMOTOCO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HEROMOTOCO26AUGFUT.json",
+      "observer_sha256": "622bb7b9bd8cc756eaa6cacf415154f340bf72ea67d6d4d91c493d4233aea941",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HEROMOTOCO26AUGFUT_5minute.parquet",
+        "sha256": "b3c8fe21db9d923df2e825f99a1da4c33fb4446c410e811c2e8c4755fff2ec42"
+      }
+    },
+    {
+      "symbol": "HINDALCO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HINDALCO26AUGFUT.json",
+      "observer_sha256": "0f78eb6ffbf7f903ba3cbf112ebf6fe7cc3534c05754a6ab7865c9808a6c67b9",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HINDALCO26AUGFUT_5minute.parquet",
+        "sha256": "5392219bafd95f825ed47193b91de7d5e5e96aad47a414427926691c62cfecd7"
+      }
+    },
+    {
+      "symbol": "HINDPETRO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HINDPETRO26AUGFUT.json",
+      "observer_sha256": "518f4163594ec6fdc64eeec1baf6d6431e0b48523e4cf682d948e275d2db95de",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HINDPETRO26AUGFUT_5minute.parquet",
+        "sha256": "e0b22a1949a0d049b49866db1db8ecc3200b8237e7b3960258f0738e0bac585f"
+      }
+    },
+    {
+      "symbol": "HINDUNILVR",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HINDUNILVR26AUGFUT.json",
+      "observer_sha256": "1f60596f2343c4e07491497de2a22d6380e787c9621b3e15363ba639ccec3c63",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HINDUNILVR26AUGFUT_5minute.parquet",
+        "sha256": "b374598005f78f00532ed3137c4966412152f3f76c2daaad681c000628f9bff1"
+      }
+    },
+    {
+      "symbol": "HINDZINC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HINDZINC26AUGFUT.json",
+      "observer_sha256": "bc435b18768654a40b4b810c374fd255aabe23ca579b9ef3c9dd91ecac31c57c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HINDZINC26AUGFUT_5minute.parquet",
+        "sha256": "f4da35cf14ea1cfbf5ab991997bd07bc54b2b4c2366d87ac6cfd92c4c03cc7ea"
+      }
+    },
+    {
+      "symbol": "HYUNDAI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\HYUNDAI26AUGFUT.json",
+      "observer_sha256": "37192d002213cf60c394fd112389f75bd7004ff47fef8e2e5d5247013ac6915a",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\HYUNDAI26AUGFUT_5minute.parquet",
+        "sha256": "d2780a0199afb711661973fff8431bf2a89cd9ef6eba34e2c6e4a4039d6fe4cc"
+      }
+    },
+    {
+      "symbol": "ICICIBANK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ICICIBANK26AUGFUT.json",
+      "observer_sha256": "ede3b0200adce62dc08d99fbd641bcdd04325875ee56b4718389b3ef8e544f25",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ICICIBANK26AUGFUT_5minute.parquet",
+        "sha256": "0fcb68673b86e74ecbf6f4d805dab74831b3c3daf9c88a17b5545e8f741f51ad"
+      }
+    },
+    {
+      "symbol": "ICICIGI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ICICIGI26AUGFUT.json",
+      "observer_sha256": "18bc193c62bd0f9672ac4fa596513cd1d94f94a2618851c8a05530f20694aaa1",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ICICIGI26AUGFUT_5minute.parquet",
+        "sha256": "b5bc60aadb36703da2d2d0eb3b58ff8fd4928b6aee7165cf8df6f8e254ffb5bc"
+      }
+    },
+    {
+      "symbol": "ICICIPRULI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ICICIPRULI26AUGFUT.json",
+      "observer_sha256": "df31eea93cac04a3e0ae8703ce7c8277a67656fa060acc0e0ce9072cea093467",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ICICIPRULI26AUGFUT_5minute.parquet",
+        "sha256": "2e133be49afb713acf098e0add2826517cd68ce317fa107790b42f3d466632dc"
+      }
+    },
+    {
+      "symbol": "IDEA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\IDEA26AUGFUT.json",
+      "observer_sha256": "0090c9c186101dc405aeda5d111f7fdb45bf0532403db1aa5dfd5d6f150ee2d8",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\IDEA26AUGFUT_5minute.parquet",
+        "sha256": "45dd7f7bc86a4f0880a72d3af403e35b4b688e4e9fb2388754b7ea626279a87e"
+      }
+    },
+    {
+      "symbol": "IDFCFIRSTB",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\IDFCFIRSTB26AUGFUT.json",
+      "observer_sha256": "bd66c6a78542cff1bfe35912238535e5f0386d7aadb0bccb1612bdc333fc37e8",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\IDFCFIRSTB26AUGFUT_5minute.parquet",
+        "sha256": "89700428855e0a38fd82980f6deda7e9f090a7f4e18c5d5787ac6eb2bf9a213d"
+      }
+    },
+    {
+      "symbol": "IEX",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\IEX26AUGFUT.json",
+      "observer_sha256": "16c79b01e7165d507be69c9bb18ceb565627e08f77d93fe09bf53f01936041f8",
+      "opening_status": "MISSING_OR_INVALID_OPENING_EVIDENCE",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\IEX26AUGFUT_5minute.parquet",
+        "sha256": "de054b344335b2a041f718a80cf84c070da72ffbb19934ae2dfccb42fe7b85be"
+      }
+    },
+    {
+      "symbol": "INDHOTEL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\INDHOTEL26AUGFUT.json",
+      "observer_sha256": "fbe2913cd7bbae000db647b790c459c392549bf43a1fbeed4e5f5cba2e2c9a3c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\INDHOTEL26AUGFUT_5minute.parquet",
+        "sha256": "47d496531a589b9317550ce43cac3b34b22905bca3f93cbe05db152b0216b0a9"
+      }
+    },
+    {
+      "symbol": "INDIANB",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\INDIANB26AUGFUT.json",
+      "observer_sha256": "606135388197ffece2fe95d607c7602ed272af18fcc8f7fbc2060a02e78c2cc6",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\INDIANB26AUGFUT_5minute.parquet",
+        "sha256": "d7035e08c4a6e47a5efc53310492b4cba98aea4b36ac9b0ca475736f3b132220"
+      }
+    },
+    {
+      "symbol": "INDIGO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\INDIGO26AUGFUT.json",
+      "observer_sha256": "55ff1005d48b37ed7ffcb32791e7b00176c59304eedd77f51ebba4d150920f34",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\INDIGO26AUGFUT_5minute.parquet",
+        "sha256": "9e330e0fbcce4a27229d6f284140fc4d8fa8a4b8411ad2a127ac6f0728117339"
+      }
+    },
+    {
+      "symbol": "INDUSINDBK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\INDUSINDBK26AUGFUT.json",
+      "observer_sha256": "e8966a910ccfd17557f0b933cf12da5c6f3d890fa245da62adc0dba7c9b7d0ea",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\INDUSINDBK26AUGFUT_5minute.parquet",
+        "sha256": "9f0fdecb3df191fa0bec17cdd5386ab589189b9d831e14255b5ac19f4b0edcde"
+      }
+    },
+    {
+      "symbol": "INDUSTOWER",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\INDUSTOWER26AUGFUT.json",
+      "observer_sha256": "4caeb0cda79b8e18f535dcd59784c0f7cd3276821a2cab7a979d5fe452b14ee7",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\INDUSTOWER26AUGFUT_5minute.parquet",
+        "sha256": "ca2278379e76a7cebc2827f05ce37b18aea7354d2e2deba7db7e21dc44554bb2"
+      }
+    },
+    {
+      "symbol": "INFY",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\INFY26AUGFUT.json",
+      "observer_sha256": "6f00ea4ea39a1e0000a903b61dacac4a4fb47d9db50666f3e44e45c6478a7b93",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\INFY26AUGFUT_5minute.parquet",
+        "sha256": "8d8709a5a3f75c193dcc6404d30552a137368f5261d74eb0b942c062146e5a3b"
+      }
+    },
+    {
+      "symbol": "INOXWIND",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\INOXWIND26AUGFUT.json",
+      "observer_sha256": "2ccf489dde14ceed89bbed3d7bfc878b4840e8280bdba4800c89b5dcef6dd587",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\INOXWIND26AUGFUT_5minute.parquet",
+        "sha256": "6560173753399bd196582276eb55eb50079e1a65bc7858036bea4544a590e38a"
+      }
+    },
+    {
+      "symbol": "IOC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\IOC26AUGFUT.json",
+      "observer_sha256": "806b2cfdbf8d52c236b8726925df0bc53a8ccdf71fc3d530e1c3f5f1bf9c314f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\IOC26AUGFUT_5minute.parquet",
+        "sha256": "7b403ddeb45c3d80bb2e179adb23b03ac98819986e2848de22a1c5995da3c277"
+      }
+    },
+    {
+      "symbol": "IREDA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\IREDA26AUGFUT.json",
+      "observer_sha256": "3a6393ab3e8cb2d92d6a3bb2091d2e23cb0e716064e627fe270c1447b26ace21",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\IREDA26AUGFUT_5minute.parquet",
+        "sha256": "0c7356068958871e3650f64337f2b501ee4a57396c77bf48da245a2064bd5369"
+      }
+    },
+    {
+      "symbol": "IRFC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\IRFC26AUGFUT.json",
+      "observer_sha256": "8bfbc122ac4e8a5e0b2eca735fca1eba5b2e79bd3df3029852bee26477fbe06e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\IRFC26AUGFUT_5minute.parquet",
+        "sha256": "e72fca92e071fca25911af8ffe135e815c4d5948248b80cdd8718b0a9d2dd085"
+      }
+    },
+    {
+      "symbol": "ITC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ITC26AUGFUT.json",
+      "observer_sha256": "e256e227f9fb9d9b2797b2a79853019cdee888c7c7dca34846b52bd038c8a82b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ITC26AUGFUT_5minute.parquet",
+        "sha256": "9b9d7f29302a6cc452a33d9c1373dd786d52e98ae3de8096a1fbf5a9832445e1"
+      }
+    },
+    {
+      "symbol": "JINDALSTEL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\JINDALSTEL26AUGFUT.json",
+      "observer_sha256": "b48153d07c0be0636091c4c43c3a14091194a2a1aa95a460774af2410e0ebd2d",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\JINDALSTEL26AUGFUT_5minute.parquet",
+        "sha256": "fe4872b55075de391177fa2701549184be2fb957e6683739760e00f10026b9e6"
+      }
+    },
+    {
+      "symbol": "JIOFIN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\JIOFIN26AUGFUT.json",
+      "observer_sha256": "b73466f1a3709587eaff0be102d5fd4f7a1089a4b5143c5447b4cff02064df3b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\JIOFIN26AUGFUT_5minute.parquet",
+        "sha256": "3b1f3e1f7ec3d16756f4d511d9dd5b8e56d12bbfa9ba51f3da8fc723f20fe22b"
+      }
+    },
+    {
+      "symbol": "JSWENERGY",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\JSWENERGY26AUGFUT.json",
+      "observer_sha256": "e44565654120c99d0d9f2445d4097b0f1cf5f9759d5521107f621789de3c6111",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\JSWENERGY26AUGFUT_5minute.parquet",
+        "sha256": "fbf943a1bc38723dd77d53e26eca3298502b9261bd18ee5c22630c005812ab7a"
+      }
+    },
+    {
+      "symbol": "JSWSTEEL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\JSWSTEEL26AUGFUT.json",
+      "observer_sha256": "5c16bc0c91e9217ba51d8be6794d0f125480a2f37cbf596f7dcddb0f065b66c3",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\JSWSTEEL26AUGFUT_5minute.parquet",
+        "sha256": "2b7b26e1aff01b23532d851b01a5e00556123df0d4393ec3bbc44fc155bf7037"
+      }
+    },
+    {
+      "symbol": "JUBLFOOD",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\JUBLFOOD26AUGFUT.json",
+      "observer_sha256": "47b79470b32aafabcacc2e1265eeab92047ac1c7fc0ea954e056c60ad33d205a",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\JUBLFOOD26AUGFUT_5minute.parquet",
+        "sha256": "d993931d8bc8a50ba167a209787c4d659fe4944d8b65a814b95f3fe5c3d35595"
+      }
+    },
+    {
+      "symbol": "KALYANKJIL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\KALYANKJIL26AUGFUT.json",
+      "observer_sha256": "3fb0dcaf053daee926e08d9f4767c3feb5a9e11eb441a4c0fd7323d843b698ed",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\KALYANKJIL26AUGFUT_5minute.parquet",
+        "sha256": "dba285d55cf661f0296f07d1ae94d79d9925ff26f577d357dc2688b0daeb8524"
+      }
+    },
+    {
+      "symbol": "KAYNES",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\KAYNES26AUGFUT.json",
+      "observer_sha256": "a65723ee5df6f2ae5b3b1d118447bee17b4a7696aef724e84e26659ed9c4913c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\KAYNES26AUGFUT_5minute.parquet",
+        "sha256": "b19b4f8d1c6504b47c33ccf3e6cbfdc48b6788277a17ac0eacb21320524e6966"
+      }
+    },
+    {
+      "symbol": "KEI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\KEI26AUGFUT.json",
+      "observer_sha256": "81452263689609d9544fd82c99b5bc0e5d0ac0c6c0cea904d3318a3dbe856119",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\KEI26AUGFUT_5minute.parquet",
+        "sha256": "aa35f75ebb2cb92eedddd62fce3f132f26b06b2cf6d3aeb648a6286c018c8d59"
+      }
+    },
+    {
+      "symbol": "KFINTECH",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\KFINTECH26AUGFUT.json",
+      "observer_sha256": "93385f9bbe47c6498355e7e937358c0515d063dd49644b6e53215f866009ba4b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\KFINTECH26AUGFUT_5minute.parquet",
+        "sha256": "b929584867ce371bbb5ff3cc0562ffb60ed51f0143a02ecfe400d3ff287dcb92"
+      }
+    },
+    {
+      "symbol": "KOTAKBANK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\KOTAKBANK26AUGFUT.json",
+      "observer_sha256": "4ae609f148124371f74c4fe43f8f2e298161b8ef96ca8e3da03d346617c1a36e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\KOTAKBANK26AUGFUT_5minute.parquet",
+        "sha256": "93530ec148bdda9cf2298f266e4904dbf6eff325f82ba9593fecd705c6fc6c3d"
+      }
+    },
+    {
+      "symbol": "KPITTECH",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\KPITTECH26AUGFUT.json",
+      "observer_sha256": "6c8f10b59e3e4e5e845ab8c55ebbd6225569dd694453e58cced825eed6817ff9",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\KPITTECH26AUGFUT_5minute.parquet",
+        "sha256": "f9cf560676a0b7877d8fb798136b70530a3bd0fa9df170ab92590c7f99f8cbb0"
+      }
+    },
+    {
+      "symbol": "LAURUSLABS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\LAURUSLABS26AUGFUT.json",
+      "observer_sha256": "448bafa3183218970e15c3a1cadd5e4701df41acdec4ff74171296c033de3704",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\LAURUSLABS26AUGFUT_5minute.parquet",
+        "sha256": "7f54cb2f203d0c4de15bdb9f6e68434d5e42156dd564b6583801452f6e10ebd5"
+      }
+    },
+    {
+      "symbol": "LICHSGFIN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\LICHSGFIN26AUGFUT.json",
+      "observer_sha256": "7f11981694b7a6900985d6cdbfdd5515586da4eb64c4632559829356f40d4c6d",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\LICHSGFIN26AUGFUT_5minute.parquet",
+        "sha256": "505624c44a2c5197cbd5710944e33a2737ac6e5e22a2fc3f5bb368ba474d6695"
+      }
+    },
+    {
+      "symbol": "LICI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\LICI26AUGFUT.json",
+      "observer_sha256": "fe01e06673fd142758bdafa37e645fbfcdfe8e77012d98962d45968dd0760122",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\LICI26AUGFUT_5minute.parquet",
+        "sha256": "c3c3438a2d6e52461e55d40b71a4d016f71c05b399fdffbf7346a098a0ce5656"
+      }
+    },
+    {
+      "symbol": "LODHA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\LODHA26AUGFUT.json",
+      "observer_sha256": "18964d4baa9417927f5fc8d0a531041a4291179a581df94413792b92301d7494",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\LODHA26AUGFUT_5minute.parquet",
+        "sha256": "64b5504bbf2e9ff1326a8d96fd4a218c701f93c25e3b1fb1feefa7d72e34a4bf"
+      }
+    },
+    {
+      "symbol": "LT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\LT26AUGFUT.json",
+      "observer_sha256": "31a5907f4acc6ce249516329ecaa71b41a9c3371a8ef2b6c496b39167c4e1970",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\LT26AUGFUT_5minute.parquet",
+        "sha256": "771cb19f342452204f9fb58fa1d66862b94ab19c150b3cf762de78fe4e545077"
+      }
+    },
+    {
+      "symbol": "LTF",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\LTF26AUGFUT.json",
+      "observer_sha256": "7c39c2e8751f993cc05a9632696ff5274125c624d9a5d1e21666905e967a9be4",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\LTF26AUGFUT_5minute.parquet",
+        "sha256": "8479f247748505fb2046e388958ec52119eb954273be3b0abe2bd70668ad74d8"
+      }
+    },
+    {
+      "symbol": "LTM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\LTM26AUGFUT.json",
+      "observer_sha256": "998f5f0f4b14625ca7c7fb70c9c423fa9b0c6d633cb06b510664b7ecb710df8c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\LTM26AUGFUT_5minute.parquet",
+        "sha256": "c0fe4fdd28de146abe33a2460feb4969d14da777467d3ec6b140bcf41a3158ce"
+      }
+    },
+    {
+      "symbol": "LUPIN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\LUPIN26AUGFUT.json",
+      "observer_sha256": "1d319035ebce2c108782ce35c249f8c20b6a78e301263eee6c8081e1b367bb5f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\LUPIN26AUGFUT_5minute.parquet",
+        "sha256": "e1669bdbf75e786558a582edccbd6839d1c6a0b8e3599fcc94a259e78be2f73c"
+      }
+    },
+    {
+      "symbol": "M&M",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\M&M26AUGFUT.json",
+      "observer_sha256": null,
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\M_M26AUGFUT_ee2dfa85_5minute.parquet",
+        "sha256": "c9adf11289c3c64387f4e12ada716b8d93f9e8e3aff4dc7049615f4ad79900ba"
+      }
+    },
+    {
+      "symbol": "MANAPPURAM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MANAPPURAM26AUGFUT.json",
+      "observer_sha256": "9577a026859fff1ba14a853c0e6cc4ce1dd4f3b8a1ef08d9ed7dd830004be4a7",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MANAPPURAM26AUGFUT_5minute.parquet",
+        "sha256": "c7fff6129225176015905cd3a3ea62f955804f8c3fe16d1870a27abed8f16be4"
+      }
+    },
+    {
+      "symbol": "MANKIND",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MANKIND26AUGFUT.json",
+      "observer_sha256": "5304fdbd89ec720e204d23ce11fac78a34366a79c6fccda5b0495b08977b876b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MANKIND26AUGFUT_5minute.parquet",
+        "sha256": "a9b1d7b37b14c224563f6439ebf0bfce0b22a16f027e108645c547fd3b4f31ef"
+      }
+    },
+    {
+      "symbol": "MARICO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MARICO26AUGFUT.json",
+      "observer_sha256": "0071b4ba5b80b1ef7000afa196d4832c03c95d8d262302416f2f8ca63a51feab",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MARICO26AUGFUT_5minute.parquet",
+        "sha256": "82a6d40892943931050ef5549546e32b35ff78ac0dd01f87f8fba73e075428d2"
+      }
+    },
+    {
+      "symbol": "MARUTI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MARUTI26AUGFUT.json",
+      "observer_sha256": "6768296080caaabcf14050e2723e64b9713c3c14e640471b81a5e3d57bfb6c1e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MARUTI26AUGFUT_5minute.parquet",
+        "sha256": "e379dd2fd2fa1d1a5606cee494abb56c5e732732203bd4701f643e8f7aba58c5"
+      }
+    },
+    {
+      "symbol": "MAXHEALTH",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MAXHEALTH26AUGFUT.json",
+      "observer_sha256": "0577b7bdad96029a4bf12f68b787093a49600b2f5c3b60ca996d103d591d56ea",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MAXHEALTH26AUGFUT_5minute.parquet",
+        "sha256": "866829f82aca1a421238b834f7a17c1056a5631d9917897019e456678944e867"
+      }
+    },
+    {
+      "symbol": "MAZDOCK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MAZDOCK26AUGFUT.json",
+      "observer_sha256": "dc13befb700ab30168823dc2fafbb0d4ce664175479e115ef7ef2870f5c75dd3",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MAZDOCK26AUGFUT_5minute.parquet",
+        "sha256": "eec00c4694bf74a1ff61b688f6a774f537ab813ef8b1826c4f5dbe87641ea8cb"
+      }
+    },
+    {
+      "symbol": "MCX",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MCX26AUGFUT.json",
+      "observer_sha256": "f848f562a6a2295a87bce2d471912fd12f6d3ff620d06af213d39b31464ebb36",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MCX26AUGFUT_5minute.parquet",
+        "sha256": "372266b2f4e73fd947df07eb943f1a03950ed193e4fdae96b21b79073ba80aae"
+      }
+    },
+    {
+      "symbol": "MFSL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MFSL26AUGFUT.json",
+      "observer_sha256": "09051887ca39af04907f7e793b075e5d45beaf73bd8ffbe0253ee68445163329",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MFSL26AUGFUT_5minute.parquet",
+        "sha256": "c2fc0435507be715e78aa29a269adc6160c421e1b1d46888f99977860f355c66"
+      }
+    },
+    {
+      "symbol": "MOTHERSON",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MOTHERSON26AUGFUT.json",
+      "observer_sha256": "f96931aa6e11aeab94af679142beaab11c62a9c53b25f6f8c447e63491486cec",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MOTHERSON26AUGFUT_5minute.parquet",
+        "sha256": "be4a9ed2f2f69a81d02d7dbfe2a6225f719ca07ed6310bce19833c68a40701b6"
+      }
+    },
+    {
+      "symbol": "MOTILALOFS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MOTILALOFS26AUGFUT.json",
+      "observer_sha256": "34ad16368a36222eab74f5e1c0b4c02bfaf5df1233e2bd3739a3992bb306bf6e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MOTILALOFS26AUGFUT_5minute.parquet",
+        "sha256": "6012637dec7fc7c786970fcc7d9d1f5266f22845669b136c533f3df901d972f5"
+      }
+    },
+    {
+      "symbol": "MPHASIS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MPHASIS26AUGFUT.json",
+      "observer_sha256": "ec23f345f384524a75aefc9d7bb0d16f57b9248adb6dd2002a8f94e6f616a1c1",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MPHASIS26AUGFUT_5minute.parquet",
+        "sha256": "c7919bdae97a8d7b0c139464cbb6d8cf32347f4e388414d19a6379fbf54931fe"
+      }
+    },
+    {
+      "symbol": "MUTHOOTFIN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\MUTHOOTFIN26AUGFUT.json",
+      "observer_sha256": "b6c40ad76932b22ef728ddb62de7248f4b5b48559d72380524e59acf0b36367c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\MUTHOOTFIN26AUGFUT_5minute.parquet",
+        "sha256": "ff59a921a43e9a54274dbbcf8cc8d2bb660b96b1ffe9c5195e6a2a672696dbb2"
+      }
+    },
+    {
+      "symbol": "NAM-INDIA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NAM-INDIA26AUGFUT.json",
+      "observer_sha256": "ca1151d1dadd5ce8227823ec90003d927a070970fedf6f7547640677d1843764",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NAM-INDIA26AUGFUT_5minute.parquet",
+        "sha256": "4d194c4e7bd6a504e6601829acce2f611ff108dac913a68c23d1de8ba92f5a24"
+      }
+    },
+    {
+      "symbol": "NATIONALUM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NATIONALUM26AUGFUT.json",
+      "observer_sha256": "acfc636e9a0668290a88123b52b57d01db8559e9b6f12c5954614ec19da07b99",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NATIONALUM26AUGFUT_5minute.parquet",
+        "sha256": "2e2795a8319b8ae5e036acf6245575fde6a1fbb2314adf8877764ca55b382131"
+      }
+    },
+    {
+      "symbol": "NAUKRI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NAUKRI26AUGFUT.json",
+      "observer_sha256": "454cb3e329db76c602a54c877e72b608e8a5ab50e21f712728daf1b93b4bfe2c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NAUKRI26AUGFUT_5minute.parquet",
+        "sha256": "0a22936f28d42b017d4e94be0ffe95aeb8676071191d4f2d23c16cfb8c87120e"
+      }
+    },
+    {
+      "symbol": "NBCC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NBCC26AUGFUT.json",
+      "observer_sha256": "f7b721eedb5da48857628e046274cb7596bfcacb2937c561a85065b8979896c3",
+      "opening_status": "MISSING_OR_INVALID_OPENING_EVIDENCE",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NBCC26AUGFUT_5minute.parquet",
+        "sha256": "9d0ec994e75eda7391976ccdebbfc981858687de3fa4f76b626628ea6f4f197b"
+      }
+    },
+    {
+      "symbol": "NESTLEIND",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NESTLEIND26AUGFUT.json",
+      "observer_sha256": "770952ae4508215a9c099acee0c5433ed1f9c1494c774d040cf9597552b9d6f3",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NESTLEIND26AUGFUT_5minute.parquet",
+        "sha256": "30d995ae1ff5b5f3ea8e24edcc8c525b7952534aaec45424d940287968790ae1"
+      }
+    },
+    {
+      "symbol": "NHPC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NHPC26AUGFUT.json",
+      "observer_sha256": "4305ab5dfc505142d25c37e3ef273a84486d03899c5eed6d01349bd6a24b8088",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NHPC26AUGFUT_5minute.parquet",
+        "sha256": "c0f2bc9e60fff95ac846edfc61e43eb8fdfa7fc51a9a28901c20ad546a05f9dd"
+      }
+    },
+    {
+      "symbol": "NMDC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NMDC26AUGFUT.json",
+      "observer_sha256": "e3d411f6b732e8919d822abb7ace40c476ba895c3a7d5c928f6324525f48d8e3",
+      "opening_status": "MISSING_OR_INVALID_OPENING_EVIDENCE",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NMDC26AUGFUT_5minute.parquet",
+        "sha256": "d61474f6b8545c2a775e9acfaca282552742d95951a18a4b716b72bace0e7279"
+      }
+    },
+    {
+      "symbol": "NTPC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NTPC26AUGFUT.json",
+      "observer_sha256": "3b6cbdc61565355e922c678dc8ea53a2980a6965bbdf1a5f06183af9624cbb4c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NTPC26AUGFUT_5minute.parquet",
+        "sha256": "e6390cb58ec78abfd9602a8267945eaff62b117ad800d9cd6c893dc3dee467d2"
+      }
+    },
+    {
+      "symbol": "NYKAA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\NYKAA26AUGFUT.json",
+      "observer_sha256": "f6bb84cc6b051efb468202e6c0f05ab6e790a1da8fdbdb6b82f17ec3f25ec913",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NYKAA26AUGFUT_5minute.parquet",
+        "sha256": "6957bae15558d30eb21d18ab5219defbe32b42ff6064bdf5800d140d8b9ed5af"
+      }
+    },
+    {
+      "symbol": "OBEROIRLTY",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\OBEROIRLTY26AUGFUT.json",
+      "observer_sha256": "9726b84d5d24c9ee54f959e6c37325e72e55f1b70f295052d752029cf0cd5f8e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\OBEROIRLTY26AUGFUT_5minute.parquet",
+        "sha256": "35c6f47018fea1091c945ad07ee4a1f058cc442f41122d17588c25ce164f792b"
+      }
+    },
+    {
+      "symbol": "OFSS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\OFSS26AUGFUT.json",
+      "observer_sha256": "0b422dc2fb9b0ce594066bfeb10d47a275f52e4c318dd101faa8700a7b5e8c40",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\OFSS26AUGFUT_5minute.parquet",
+        "sha256": "fe3f23ade004fceaae84bf5b9ef36dec3963e146acdb3124e3ac47c73c763598"
+      }
+    },
+    {
+      "symbol": "OIL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\OIL26AUGFUT.json",
+      "observer_sha256": "bff2f86dbcda3e01879555642f41fb87e89bef344b4ead881dcefdf213b91ceb",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\OIL26AUGFUT_5minute.parquet",
+        "sha256": "078f88bfe33e58695d0c8325687fe8dad0a21f9aa58c10e4ba574549fd539f23"
+      }
+    },
+    {
+      "symbol": "ONGC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ONGC26AUGFUT.json",
+      "observer_sha256": "0059445c80391b528d3480dd3cb93d099368fefae3f49fc7265ef2d5a9046ad6",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ONGC26AUGFUT_5minute.parquet",
+        "sha256": "6ce4edc8565a2aa86188bae99586a08e294d24dfbf6c3dbb419e996d866cdc51"
+      }
+    },
+    {
+      "symbol": "PAGEIND",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PAGEIND26AUGFUT.json",
+      "observer_sha256": "3da24312cb163d451d90c3632e9ec29e683faa8f677d6401849a038951ba2c22",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PAGEIND26AUGFUT_5minute.parquet",
+        "sha256": "849c3bfc5e9dcdaf7ad039baf8b44cd9b6432330d37ae4cfcb4beab50f8af853"
+      }
+    },
+    {
+      "symbol": "PATANJALI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PATANJALI26AUGFUT.json",
+      "observer_sha256": "60918d18ce6da125b02b0779182a2fd0e7aa83785625c2cd87d7c7cd13afd717",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PATANJALI26AUGFUT_5minute.parquet",
+        "sha256": "f91fd573bb238a5a071aecc76fffe08b26702c062810d473d72079f59c50b416"
+      }
+    },
+    {
+      "symbol": "PAYTM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PAYTM26AUGFUT.json",
+      "observer_sha256": "65fba7a164f93b1cfdb0636796bf57bd9c3abb37798ccde3576fa5c24059471d",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PAYTM26AUGFUT_5minute.parquet",
+        "sha256": "a1ade5da4c3d61318f4e92697308820e73a65808d7406f3544906731dfe6e128"
+      }
+    },
+    {
+      "symbol": "PERSISTENT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PERSISTENT26AUGFUT.json",
+      "observer_sha256": "87d405a3f53b5a68f67d6a08554ce42a915fe2888e207011d20ea7bdf3326fe7",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PERSISTENT26AUGFUT_5minute.parquet",
+        "sha256": "4452f150c99c135748cdc893034107751a9a317f413292411e0ffefa0fa75455"
+      }
+    },
+    {
+      "symbol": "PETRONET",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PETRONET26AUGFUT.json",
+      "observer_sha256": "f64b2b073842fc4153bc1c01d4e116c559077556b9b16d7952e07b73cdf57241",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PETRONET26AUGFUT_5minute.parquet",
+        "sha256": "5bcd2e06b4cba266c384686a0613e118e674b9b7de90cc08aa9f94eb23bb4be7"
+      }
+    },
+    {
+      "symbol": "PFC",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PFC26AUGFUT.json",
+      "observer_sha256": "74a1672a223f86059c553c59c03a978d2d37eebb275868c9a98a963cea162415",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PFC26AUGFUT_5minute.parquet",
+        "sha256": "8426f4d86690fab5669056533eb054b9115d773285c06f939d22dd79e2b8134c"
+      }
+    },
+    {
+      "symbol": "PGEL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PGEL26AUGFUT.json",
+      "observer_sha256": "8fce117cf977391e7ea412ab526452d111a8a57b5db186c9b6cffcc0041eac03",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PGEL26AUGFUT_5minute.parquet",
+        "sha256": "8fb8a5052f996aa6370b8b653e0b241dcb681890060b3f4fdb13f7cbd3d32546"
+      }
+    },
+    {
+      "symbol": "PHOENIXLTD",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PHOENIXLTD26AUGFUT.json",
+      "observer_sha256": "8fc09a5d2ffd5a43602e3b7168ce0a275dae76b26a6d4d973a547e3dfea1df25",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PHOENIXLTD26AUGFUT_5minute.parquet",
+        "sha256": "47653b6aac5e5b94d139b03d90a26ca922e37ebb886c21f63145ff199c698fc3"
+      }
+    },
+    {
+      "symbol": "PIDILITIND",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PIDILITIND26AUGFUT.json",
+      "observer_sha256": "eeacde7c1a484d957d7e4e9350815394e95ff902b34aafa99c84894f4126a45b",
+      "opening_status": "MISSING_OR_INVALID_OPENING_EVIDENCE",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PIDILITIND26AUGFUT_5minute.parquet",
+        "sha256": "0c1e4d6fe6748cd4925fc1c8563591f8c63d5208bcffc674fda5d54461c7dcaf"
+      }
+    },
+    {
+      "symbol": "PIIND",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PIIND26AUGFUT.json",
+      "observer_sha256": "ea9a53381f489d50d9606566f4a26f1dc3c54b3697ba461833aac76036277373",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PIIND26AUGFUT_5minute.parquet",
+        "sha256": "125d6720b0c93e921704615cc5aa9caecf22c83d0a4eabb27aca5cb826a13667"
+      }
+    },
+    {
+      "symbol": "PNB",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PNB26AUGFUT.json",
+      "observer_sha256": "851513b477c8d9cd9961ab9a4280515c7b9fd9ee812dca510fe9ad9b7759a63f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PNB26AUGFUT_5minute.parquet",
+        "sha256": "45c590232c206c7942cc90cb6a903e9fa97e0160af5c8d3c0f77f6e17e543a9f"
+      }
+    },
+    {
+      "symbol": "PNBHOUSING",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PNBHOUSING26AUGFUT.json",
+      "observer_sha256": "319580dfa5c396dbb974b4644e1ea1ef6df8f09df70e000bce0ef2efc35ea98f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PNBHOUSING26AUGFUT_5minute.parquet",
+        "sha256": "eaa89e74fbc3523a168e65b972eb35ea79e74ac5fc75b9d2bbfbf6e518837a6a"
+      }
+    },
+    {
+      "symbol": "POLICYBZR",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\POLICYBZR26AUGFUT.json",
+      "observer_sha256": "03bf97ad011907d96908de70b6889c6eb1c623e8b3a34faa8000a28bcd93b58b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\POLICYBZR26AUGFUT_5minute.parquet",
+        "sha256": "097550f1842bd3f821950eeccdc4fc88179bd92a8c1cc917fd05bd21f6a4b573"
+      }
+    },
+    {
+      "symbol": "POLYCAB",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\POLYCAB26AUGFUT.json",
+      "observer_sha256": "c94f35819044ed774b207b99e914bad0a94c042eab7783d84e9514c36bc4da72",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\POLYCAB26AUGFUT_5minute.parquet",
+        "sha256": "43dbc5bb1806c90755a4107efd9c389214c9afb022a49a4366a35220400a6614"
+      }
+    },
+    {
+      "symbol": "POWERGRID",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\POWERGRID26AUGFUT.json",
+      "observer_sha256": "8166d9786a5f68ad311bb2db5ccb989d5a61e69331e1381b23b513ebf9bbf144",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\POWERGRID26AUGFUT_5minute.parquet",
+        "sha256": "785cf2eca8a9b2dc3981b9a43c6307813ed6f3de0a104f0cf22477787b6e9c71"
+      }
+    },
+    {
+      "symbol": "POWERINDIA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\POWERINDIA26AUGFUT.json",
+      "observer_sha256": "3740a8fbcd2532c30c7f2b562a700b0b1ed7803cffa89c88b32b8d1e11c22578",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\POWERINDIA26AUGFUT_5minute.parquet",
+        "sha256": "4d50afbf0c6050cefcca7ea1a695766fd58e434c3f9803ed06a7cf833388892b"
+      }
+    },
+    {
+      "symbol": "PREMIERENE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PREMIERENE26AUGFUT.json",
+      "observer_sha256": "9ab74be18652db572393c9c33fa7afef3aa338430c8f8f3bb7aea8ebb61f7790",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PREMIERENE26AUGFUT_5minute.parquet",
+        "sha256": "b6003a254f6df7e436273b672be4a5c315ec825970d474e334460bbc533cb2f6"
+      }
+    },
+    {
+      "symbol": "PRESTIGE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\PRESTIGE26AUGFUT.json",
+      "observer_sha256": "7335af45d7d9e2fceb16a52a6a86fb9fc0bcb0202c7836fa6960ea473e08be56",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\PRESTIGE26AUGFUT_5minute.parquet",
+        "sha256": "6f1d88d7600598990bd67fbb18fe1081e6e66335cb90011c34c1f2fab3da8a43"
+      }
+    },
+    {
+      "symbol": "RADICO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\RADICO26AUGFUT.json",
+      "observer_sha256": "70cb9b6ae392444ee3ce60c4c8be035b93c1594a2797674af6bcc331bfb77888",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\RADICO26AUGFUT_5minute.parquet",
+        "sha256": "7dbfebeaaa7bf161023307243c6cc4f58b6dc60da560ba1681b04f4285122db0"
+      }
+    },
+    {
+      "symbol": "RBLBANK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\RBLBANK26AUGFUT.json",
+      "observer_sha256": "479ecacba63a713fedb0441ca68f4e9d62fe24d9c3df6897a0a42536792f1f04",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\RBLBANK26AUGFUT_5minute.parquet",
+        "sha256": "3fbcc6e72980667d00a05e9c24f88b3c74a1e669e6bbddaf253aa288152cb163"
+      }
+    },
+    {
+      "symbol": "RECLTD",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\RECLTD26AUGFUT.json",
+      "observer_sha256": "502544c3907fb94e7c11a002c522307fd908a138ef6347f8ad400e4cc2a7c96c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\RECLTD26AUGFUT_5minute.parquet",
+        "sha256": "fb9ea57d6cba4cab15bcf166d933e74256e822df186c0f5b912ac429a47d9005"
+      }
+    },
+    {
+      "symbol": "RELIANCE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\RELIANCE26AUGFUT.json",
+      "observer_sha256": "9cd51e36dcb68d06c52ae30c412da0129cae3b11e492decc343b43ace6341ab5",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\RELIANCE26AUGFUT_5minute.parquet",
+        "sha256": "140014f8470483b365cb7612cbbe600a00d7599b0808996aa664532de6b55db0"
+      }
+    },
+    {
+      "symbol": "RVNL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\RVNL26AUGFUT.json",
+      "observer_sha256": "ebab3f9ceb47e681556e23437a4b863a88d8756d9f3b759ecc492fe64f0008df",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\RVNL26AUGFUT_5minute.parquet",
+        "sha256": "b495741372d3d6fee8ff67cf43c810be720bc30b6776c5804872cd5922c19821"
+      }
+    },
+    {
+      "symbol": "SAIL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SAIL26AUGFUT.json",
+      "observer_sha256": "2af8ba32d2a4a8aa8a33098c7603ec9e7bdd4084e7491fc444096c787897fdd6",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SAIL26AUGFUT_5minute.parquet",
+        "sha256": "a422b2ee9b66608c8350828505e29495cbbe3bfb9c5b95a80a4dc558e9db0c4b"
+      }
+    },
+    {
+      "symbol": "SBICARD",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SBICARD26AUGFUT.json",
+      "observer_sha256": "3a5bcef6ef6c5b338018af29bdeadb6949da38825f41d96afe2faa6f2aeb7da2",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SBICARD26AUGFUT_5minute.parquet",
+        "sha256": "5e163fff822e567a9fc2cc254e16604815ab92b2828c3a183b435435697d6938"
+      }
+    },
+    {
+      "symbol": "SBILIFE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SBILIFE26AUGFUT.json",
+      "observer_sha256": "bfd5da0f7fd1fcaeea027a5b62698b2f1fd890a461172ea35293ecbe82d5dfb8",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SBILIFE26AUGFUT_5minute.parquet",
+        "sha256": "993817fb6af291d2103c876fe5454ad0b327657640be66abf277e0b60f85863c"
+      }
+    },
+    {
+      "symbol": "SBIN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SBIN26AUGFUT.json",
+      "observer_sha256": "0b9d0e99ddb595a03b6c72195d5eb2a3c15f9e185ee3d23790b168e16f0afb1b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SBIN26AUGFUT_5minute.parquet",
+        "sha256": "3083d31192f0c0893217172d4ea72159444bdd6830cf3445e9f465f15eaf2322"
+      }
+    },
+    {
+      "symbol": "SHREECEM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SHREECEM26AUGFUT.json",
+      "observer_sha256": "b15f0ddb31cf352515e213c467dcc83538feeb204ac41e49ec0e3e1287d7b813",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SHREECEM26AUGFUT_5minute.parquet",
+        "sha256": "0ee58cb1e1fc6d484ccd223d0e0cad250cb4282c94ca24b66f15e0ef896b08a6"
+      }
+    },
+    {
+      "symbol": "SHRIRAMFIN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SHRIRAMFIN26AUGFUT.json",
+      "observer_sha256": "7459f76641b7d23610a386099c49a0dfb61592bf770f5b0f483883e8b26e0e85",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SHRIRAMFIN26AUGFUT_5minute.parquet",
+        "sha256": "ef377bfa4d034d4308c552e44e32d78220b8a5ebb3610c52398bf348da2dcd82"
+      }
+    },
+    {
+      "symbol": "SIEMENS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SIEMENS26AUGFUT.json",
+      "observer_sha256": "bc0ad8a7ae6f221b7c57a6be545bce8cd8b0b70a3ef852589134f9b6835e409f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SIEMENS26AUGFUT_5minute.parquet",
+        "sha256": "f015785e801889524c5d39decf4c695b344ff787e8861d8c3c88c4534400ce30"
+      }
+    },
+    {
+      "symbol": "SOLARINDS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SOLARINDS26AUGFUT.json",
+      "observer_sha256": "f8f0b339d6ca2040a5ed6d7e6502fa0cef3839e66d494c773a2793df65c05663",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SOLARINDS26AUGFUT_5minute.parquet",
+        "sha256": "38bbab5e5921b24aac265f3a7086b2f9977dc93734a73ca878f675847b918657"
+      }
+    },
+    {
+      "symbol": "SONACOMS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SONACOMS26AUGFUT.json",
+      "observer_sha256": "f5dbd4904df82103a9e36de8734a53fa2a434793c6e8351561700c2033600889",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SONACOMS26AUGFUT_5minute.parquet",
+        "sha256": "d926a8b2c7603e46288cf3ad86046b5784b8f6d049a09d8966584edaf0b0f423"
+      }
+    },
+    {
+      "symbol": "SRF",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SRF26AUGFUT.json",
+      "observer_sha256": "5ce0ca39e0d23cb40e3e5cc33fe9ebff9cdd4801ea1d05d6c52dcc20ec31a7c6",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SRF26AUGFUT_5minute.parquet",
+        "sha256": "ffc71b7f518ee61e768753379bd7afd93c0a00547b01d04a775b0dc828f069f2"
+      }
+    },
+    {
+      "symbol": "SUNPHARMA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SUNPHARMA26AUGFUT.json",
+      "observer_sha256": "51a809fe42d8dd86e541920bcaf1464c34557aeb1e57e4ebb4a670e940a6a9b2",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SUNPHARMA26AUGFUT_5minute.parquet",
+        "sha256": "4cda734496317d459836e340221dbf3f09832bbfda8a589515c65ceb0ca7145a"
+      }
+    },
+    {
+      "symbol": "SUPREMEIND",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SUPREMEIND26AUGFUT.json",
+      "observer_sha256": "bd2e398c3f94e1b8d745027470a03a900d37779c10fa8f027fafef13216be51f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SUPREMEIND26AUGFUT_5minute.parquet",
+        "sha256": "2d539325d0247a6704c85cb31efd710dbe99d9a90eb571a4fad631b7528638c6"
+      }
+    },
+    {
+      "symbol": "SUZLON",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SUZLON26AUGFUT.json",
+      "observer_sha256": "61e4dbb34fabfb2945052946df1fa0879f8b618a3d4e463e21cb5af0d1b0976e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SUZLON26AUGFUT_5minute.parquet",
+        "sha256": "bac43f82246160ffc83a889426ef9ab2840c25ab651ac19482ce6b068698cb29"
+      }
+    },
+    {
+      "symbol": "SWIGGY",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\SWIGGY26AUGFUT.json",
+      "observer_sha256": "47bd95a80ad85dffed83a1ce03ab2928fd6ab7e0ce8779200233352cef7780b5",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\SWIGGY26AUGFUT_5minute.parquet",
+        "sha256": "89eb50d87c9015b8250377a9b6fb2cc95ff7e54194c13e5ce745d5262a27f575"
+      }
+    },
+    {
+      "symbol": "TATACONSUM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TATACONSUM26AUGFUT.json",
+      "observer_sha256": "efbdd3ca8417338b5e606b770ab145db1ded23deab364ecae821d907e4fd4c10",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TATACONSUM26AUGFUT_5minute.parquet",
+        "sha256": "6c991a7e32ea35a42868a2c9667367ab5e31329059f46f618ecdca9349ac3641"
+      }
+    },
+    {
+      "symbol": "TATAELXSI",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TATAELXSI26AUGFUT.json",
+      "observer_sha256": "986edf9ba85ccb02567a3d5d26806f6b76efb68408a23a1a371b44e034fec393",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TATAELXSI26AUGFUT_5minute.parquet",
+        "sha256": "de28a67b0d3f594a7e040494c93d23cc18cf382db824dcac808e2f82f063fec9"
+      }
+    },
+    {
+      "symbol": "TATAPOWER",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TATAPOWER26AUGFUT.json",
+      "observer_sha256": "7cc69eb3f6601e7e392a18d14014d4b1ed8f8b03ee67130e8251c3e29fdd3c6e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TATAPOWER26AUGFUT_5minute.parquet",
+        "sha256": "fd3c031bee842c5dd9b7bb3926f84ac8c19f31720f727a6cde82d86a940c9fd8"
+      }
+    },
+    {
+      "symbol": "TATASTEEL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TATASTEEL26AUGFUT.json",
+      "observer_sha256": "970e09354a798f019f8832253132f18937441e060dc236452379bd0d0f72a917",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TATASTEEL26AUGFUT_5minute.parquet",
+        "sha256": "a1fc93ae0ffbaeb187d346a0d7dddef55094b671a0915b23340b1dbda5330738"
+      }
+    },
+    {
+      "symbol": "TCS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TCS26AUGFUT.json",
+      "observer_sha256": "bf37c0f2c6a68a456462f7bf7b675bbfd4924a1aa554f1af833d7e7cfee0d311",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TCS26AUGFUT_5minute.parquet",
+        "sha256": "2e64582d4a23558476fbcbdf8b68a45a8706353870fa501016e455ff16b53351"
+      }
+    },
+    {
+      "symbol": "TECHM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TECHM26AUGFUT.json",
+      "observer_sha256": "ff1c93d0134ff5de5c6fb041b794b411fa02c48a9a1dc0fe13bfcb9ec65e6a74",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TECHM26AUGFUT_5minute.parquet",
+        "sha256": "d91de6d41d3486fcfb737e1adfd3e9a37d7c2070fba11200df84113b51dfd32d"
+      }
+    },
+    {
+      "symbol": "TIINDIA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TIINDIA26AUGFUT.json",
+      "observer_sha256": "d83b002bb862440b97bea87f3101f1d350fed554e0a80d57d39e76be6dfd4cfc",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TIINDIA26AUGFUT_5minute.parquet",
+        "sha256": "7a6574288ffe024567e9ee16e82816cf7f9eb3c31de431593e59f4da24f065d8"
+      }
+    },
+    {
+      "symbol": "TITAN",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TITAN26AUGFUT.json",
+      "observer_sha256": "b4baedd3e237d263f2fd11afa01b52563262f80c8edb6aca5cc4491af0c6a45f",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TITAN26AUGFUT_5minute.parquet",
+        "sha256": "859bdf27c5bdfc651e89d36290a7ccf1ede06307f04236636a1bdf4d9e42a846"
+      }
+    },
+    {
+      "symbol": "TMPV",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TMPV26AUGFUT.json",
+      "observer_sha256": "f990e943cdbc9d89d1e4d8a282e597cafaa605c309036dba80199b9a9da051ae",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TMPV26AUGFUT_5minute.parquet",
+        "sha256": "db59645260fafa565a9fe78587e4e66dcb75edb7366201b445f2d35c37c50649"
+      }
+    },
+    {
+      "symbol": "TORNTPHARM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TORNTPHARM26AUGFUT.json",
+      "observer_sha256": "b6f727bab8005788abd13774840697594fa9b7fd76799ea762ba6a5086f8229b",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TORNTPHARM26AUGFUT_5minute.parquet",
+        "sha256": "96ff70e077391abff99f1185ec25027ffd943f3140fee92e31433e5908c48e87"
+      }
+    },
+    {
+      "symbol": "TRENT",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TRENT26AUGFUT.json",
+      "observer_sha256": "51b12eb0603475f66a36ecbd3371b51cb3058cae4a9a92ec38f523bf5268381c",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TRENT26AUGFUT_5minute.parquet",
+        "sha256": "781a57f723951202d7726edec060e8a144a3621becb72149f012a73137c63346"
+      }
+    },
+    {
+      "symbol": "TVSMOTOR",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\TVSMOTOR26AUGFUT.json",
+      "observer_sha256": "d8fdc9fa70b1b443c4684b9ea5f46860966c06846016a57509310b396e124fda",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\TVSMOTOR26AUGFUT_5minute.parquet",
+        "sha256": "8ec1f2611828c5b626f8c41e83da0fcc1dd7b600dcc28343d7bdd4c9e1fd592e"
+      }
+    },
+    {
+      "symbol": "ULTRACEMCO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ULTRACEMCO26AUGFUT.json",
+      "observer_sha256": "ba43c2140f00e8c415b64f33bf49fe31a54cf324ff65b2b684c473d783b70af6",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ULTRACEMCO26AUGFUT_5minute.parquet",
+        "sha256": "b5d53c3f4f45b6d71fdc9eebdd441bf7fd324cb683f7c1aba49d8631da61e1d6"
+      }
+    },
+    {
+      "symbol": "UNIONBANK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\UNIONBANK26AUGFUT.json",
+      "observer_sha256": "326b99e31576e273892851da1c4c3f900815314c3ca11f9797cccf4b57944adb",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\UNIONBANK26AUGFUT_5minute.parquet",
+        "sha256": "4ec882d0e9a01f8e824f9c874eaabff68328699a8bc67c5b23bd1550efc8227d"
+      }
+    },
+    {
+      "symbol": "UNITDSPR",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\UNITDSPR26AUGFUT.json",
+      "observer_sha256": "e2eb6dadf24524c4a8e367a4c2ea7c117f0d2200e8bbe9e7c357568861845a97",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\UNITDSPR26AUGFUT_5minute.parquet",
+        "sha256": "e5a76db1db9446c2efdf408c07b8f4b9bc3b4eacf3a892a4545314c3879b3b3e"
+      }
+    },
+    {
+      "symbol": "UNOMINDA",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\UNOMINDA26AUGFUT.json",
+      "observer_sha256": "2f9f633d5e9fb955c7e6630e906c2e7d96e94e3f9e459200d13be589cac26cac",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\UNOMINDA26AUGFUT_5minute.parquet",
+        "sha256": "b5f5fb6afb92a30b121fcf4bb3fe9da73b92147e436dbc86d2a34eebfebf2a6b"
+      }
+    },
+    {
+      "symbol": "UPL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\UPL26AUGFUT.json",
+      "observer_sha256": "3ee1202264b525798d4611d0a8f8dada4a036655c6631e1bb20df907a432f8e4",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\UPL26AUGFUT_5minute.parquet",
+        "sha256": "94f39e425aa86dd5cd7e690449784448c8b19364eb8c025810cd8de6d4ec9914"
+      }
+    },
+    {
+      "symbol": "VBL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\VBL26AUGFUT.json",
+      "observer_sha256": "0b01b269fdc4ce453e738854175d0ee7c805dce0db6917f7f9b191a80d1905e9",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\VBL26AUGFUT_5minute.parquet",
+        "sha256": "8148f41b5381f064c4765f4531b3be0db055771fc0277e2f1be90c86ca0b89a7"
+      }
+    },
+    {
+      "symbol": "VEDL",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\VEDL26AUGFUT.json",
+      "observer_sha256": "8b1b814a01190d8613569eb3472733ca5085fea7513ae3120fc3b3b1558401a9",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\VEDL26AUGFUT_5minute.parquet",
+        "sha256": "47220d321b987fbc776db5397f736e2b2dcc4364fbc35cda274e7764f292936a"
+      }
+    },
+    {
+      "symbol": "VMM",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\VMM26AUGFUT.json",
+      "observer_sha256": "ecea92a35187a4451424254e282e264c48640923d1a3b271207e8ef2e74a816e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\VMM26AUGFUT_5minute.parquet",
+        "sha256": "d3b19ae945f6de49d899170c82a6db9d7cb8e92038074b9d45eedac29e40ea30"
+      }
+    },
+    {
+      "symbol": "VOLTAS",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\VOLTAS26AUGFUT.json",
+      "observer_sha256": "1e14bd475d010491baf20e60f9030b3fcd1339702a2d26075eaeb23d98a9f2d8",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\VOLTAS26AUGFUT_5minute.parquet",
+        "sha256": "84d2c72582417cb8bbf3ee34143f0fb4801c7c40af8654f8c7f2021fbf1f92bf"
+      }
+    },
+    {
+      "symbol": "WAAREEENER",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\WAAREEENER26AUGFUT.json",
+      "observer_sha256": "1051f4ae3f13ffb542402977af055568030cfe87896586ed7171f40dabc51588",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\WAAREEENER26AUGFUT_5minute.parquet",
+        "sha256": "76c8133a03a9fcb445abae1ab7f097fdf245ce67927a66e822caadfc570d45df"
+      }
+    },
+    {
+      "symbol": "WIPRO",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\WIPRO26AUGFUT.json",
+      "observer_sha256": "c09332eae5a5f27e29c2e0e0e6075044a1c02a028bb4bc20b996c94bbc31c1ea",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\WIPRO26AUGFUT_5minute.parquet",
+        "sha256": "9117e1e339fc3cd15e786894f77be2e39b78c532ec494fceed413f48a7d66679"
+      }
+    },
+    {
+      "symbol": "YESBANK",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\YESBANK26AUGFUT.json",
+      "observer_sha256": "90345aae68abd4fd71190a3ec332051f32d9cae683071d2b831f82c467b3a26e",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\YESBANK26AUGFUT_5minute.parquet",
+        "sha256": "304312c6e89e371e5fce657abeb6fba56b6d4057f1acbfd16d35681982219947"
+      }
+    },
+    {
+      "symbol": "ZYDUSLIFE",
+      "observer_path": "C:\\TradingData\\eqidv2\\dashboard_flow_observer\\historical\\2026-07-31\\ZYDUSLIFE26AUGFUT.json",
+      "observer_sha256": "a379ef9adaeacbcb632c644031f1aa422c7c9ff6c5534f912fb7c860b15d61a4",
+      "opening_status": "VALID",
+      "futures": {
+        "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\ZYDUSLIFE26AUGFUT_5minute.parquet",
+        "sha256": "f0216e34cea15dbbe18b0ef2c91c9cf0361355801cec7df01633305545db7d5a"
+      }
+    }
+  ],
+  "invalid_opening_oi_symbols": [
+    "CAMS",
+    "CONCOR",
+    "DALBHARAT",
+    "GODFRYPHLP",
+    "IEX",
+    "NBCC",
+    "NMDC",
+    "PIDILITIND"
+  ],
+  "nifty_provenance": {
+    "path": "C:\\TradingData\\eqidv2\\fno_oi\\raw_contracts_5m\\NIFTY26AUGFUT_5minute.parquet",
+    "sha256": "b16569d05e22a34c9a9de6018c84d8026c73dc8b873b5bf33e37c29df7b087c3"
+  },
+  "baseline_selection_parity": {
+    "reconstructed_orders": 12,
+    "legacy_orders": 12,
+    "matching": true,
+    "added": [],
+    "missing": [],
+    "field_differences": []
+  },
+  "features_sha256": "ec8aeb77953042f30aae948d608f9a5beca549fb9e1b0f5eba0fff0c6dd98c86",
+  "minutes_sha256": "0c6f62ff8fb1c0a43ea9858c204132404d2646d150b64e09b72ebfaee547dd4d"
+}

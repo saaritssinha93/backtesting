@@ -1,0 +1,44 @@
+{
+  "variant_id": "V13-V10-G-7-V4-LOW-EFFICIENCY-PROTECTION",
+  "display_name": "G7 V4: extreme-entry efficiency filter and profit protection",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "selection_basis": "USER_REQUEST",
+  "research_qualification": false,
+  "max_positions_per_symbol": 1,
+  "exit_policy": {
+    "protect_after_close_pct": 0.6,
+    "protected_profit_pct": 0.1,
+    "activation": "COMPLETED_FULL_POST_ENTRY_CLOSE",
+    "effective": "NEXT_MINUTE_OPEN"
+  },
+  "entry_filter": {
+    "policy": "low_efficiency",
+    "efficiency_period": 10,
+    "efficiency_below": 0.3,
+    "rsi_period": 14,
+    "rsi_weakening_minutes": 3,
+    "extreme": "VWAP_Z_GT_2P5_OR_PRIOR_SAME_CLOCK_HISTORICAL_95",
+    "minimum_session_bars": 30,
+    "decision_at": "ORIGINAL_CONFIRMATION_CLOSE",
+    "insufficient_warmup": "PRESERVE_ENTRY"
+  },
+  "source_research": {
+    "output": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_7/v4_research/protected_indicator_research/runs/2026-10-27/20261027T181929999373_two_stages_fixed",
+    "manifest_sha256": "1c573ef4bac2eecf502b6dade8fbe99524d6ebf9d623c13b95e1837b3c461783",
+    "policy": "low_efficiency"
+  },
+  "previous_protection_config": "configs/strategies/v13_v10_g_7_v4_backtest.json",
+  "entrypoint_migration": {
+    "previous_entrypoint": "fno_v13_v10_g_7_v4_backtest.py",
+    "archived_copy": "research/archive/fno_v13_v10_g_7_v4_protection_entrypoint.py",
+    "previous_sha256": "a27ed706ac66e84bd4a0b343155ae608ce3ba89601cb91035c2a779d2d834cea"
+  },
+  "limitations": [
+    "User-selected for backtesting; this filter did not pass the fixed research acceptance screen.",
+    "Historical benefit came from five changed trades: three losers avoided and two winners missed.",
+    "All evaluation history was previously inspected; no independent forward-validation claim.",
+    "Inherited after-close stock-day eligibility and previously examined targets remain limitations.",
+    "The protected profit is gross; transaction costs and gaps can still produce a net loss."
+  ]
+}

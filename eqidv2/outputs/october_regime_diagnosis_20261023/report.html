@@ -1,0 +1,367 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>October strategy comparison</title>
+<style>body{font:15px/1.55 system-ui,sans-serif;color:#25344a;max-width:1350px;margin:36px auto;padding:0 24px}h1{font-size:28px}h2{font-size:20px;margin-top:30px}.table{overflow:auto}table{border-collapse:collapse;font-size:13px}td,th{padding:8px 11px;border-bottom:1px solid #dce2e9;text-align:right}th{background:#edf1f6}td:first-child,th:first-child{text-align:left}p{max-width:1100px}a{color:#1658a8}code{background:#edf1f6;padding:2px 4px}.scope{background:#f1f4f8;padding:14px 18px}</style>
+<h1>Why October win rates are lower</h1><p>Comparison through 23 October 2026. The decline is real in these saved simulations: it reflects weaker sustained follow-through and more adverse movement, particularly in shorts. Higher volatility is a measurable association, but neither higher VIX, trend disagreement, nor immediate reversal alone explains it.</p>
+<p class="scope">Same-version ledgers, executed trades only, win = net P&amp;L above zero. Available history: 29 July–23 October; 57 sessions (July 3, August 19, September 21, October 14). October is partial. 1 October is missing from sealed inputs and is excluded, never counted as a zero day. Monetary results use the existing ₹100,000 allocation per trade, 5× exposure, ₹1,000,000 portfolio and 5bps round-trip modeled cost. They are not the ₹10,000 LIVE sizing policy.</p>
+<h2>Monthly comparison</h2><p>Month columns below are win rates in percent. July appears in the CSV but is omitted here because three sessions are too few for a useful monthly reference.</p>
+<div class="table"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Strategy</th>
+      <th>August win %</th>
+      <th>September win %</th>
+      <th>October win %</th>
+      <th>October trades</th>
+      <th>October wins</th>
+      <th>October net INR</th>
+      <th>October losing days</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>G3</td>
+      <td>75.38</td>
+      <td>77.19</td>
+      <td>56.93</td>
+      <td>137</td>
+      <td>78</td>
+      <td>115,378.59</td>
+      <td>6</td>
+    </tr>
+    <tr>
+      <td>G4</td>
+      <td>78.76</td>
+      <td>77.58</td>
+      <td>58.02</td>
+      <td>131</td>
+      <td>76</td>
+      <td>120,176.73</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td>G6</td>
+      <td>78.53</td>
+      <td>79.02</td>
+      <td>60.18</td>
+      <td>113</td>
+      <td>68</td>
+      <td>135,035.71</td>
+      <td>3</td>
+    </tr>
+    <tr>
+      <td>G7V2</td>
+      <td>78.53</td>
+      <td>81.29</td>
+      <td>60.71</td>
+      <td>112</td>
+      <td>68</td>
+      <td>136,119.60</td>
+      <td>3</td>
+    </tr>
+    <tr>
+      <td>G7V3</td>
+      <td>80.98</td>
+      <td>84.29</td>
+      <td>68.75</td>
+      <td>112</td>
+      <td>77</td>
+      <td>111,238.59</td>
+      <td>5</td>
+    </tr>
+    <tr>
+      <td>G8</td>
+      <td>78.40</td>
+      <td>81.29</td>
+      <td>62.96</td>
+      <td>108</td>
+      <td>68</td>
+      <td>154,863.64</td>
+      <td>2</td>
+    </tr>
+    <tr>
+      <td>G8shock</td>
+      <td>78.40</td>
+      <td>82.73</td>
+      <td>66.67</td>
+      <td>108</td>
+      <td>72</td>
+      <td>162,385.07</td>
+      <td>2</td>
+    </tr>
+  </tbody>
+</table></div>
+<p>Higher win rate does not automatically mean higher profits. October G7 V3 wins 68.75% but earns ₹111,238.59; G8 wins 62.96% and earns ₹154,863.64. G8 has 2 losing days out of 14 in October versus 3 out of 19 in August, so lower trade win rate does not imply the highest losing-day frequency.</p>
+<h2>What changed, and what did not</h2>
+<p><b>1. Volatility increased.</b> On the matched 09:20–13:30 Nifty clock sample through 21 October, mean realized volatility rises from 0.3248% in September to 0.5192% in October (+59.8%), and mean session-so-far range rises from 0.4851% to 0.9386% (+93.5%). Mean trend efficiency is 0.3973 versus 0.3970: a general claim of greater chop is unsupported. This market sample has 12 October sessions, whereas the final results above have 14.</p>
+<p>For executed G8 trades through 23 October, mean VIX at entry is 12.09 in September and 14.92 in October. Trade-signed Nifty slot alignment increases from +0.0286% to +0.0580%, so index alignment was stronger at entry. Short-side pre-entry stock ATR in the history through 22 October rises from 0.1192% to 0.1490% (+25%) while the initial stop stays 1.20%. A fixed stop therefore represents fewer units of current stock noise. This does not by itself prove that widening stops would help.</p>
+<p><b>2. Follow-through weakened after entry.</b> G7 V2 stop-loss exits rise from 7.19% to 18.75%, target exits fall from 38.13% to 32.14%, and the win rate of time-exit trades falls from 78.95% to 58.18%. G8 mean favorable excursion falls from 0.975% to 0.892%, while adverse excursion magnitude rises from 0.438% to 0.541%. These excursions are post-entry outcomes through the actual exit, including the inherited OHLC-bar ambiguity conventions; they cannot be used as entry-time predictors.</p>
+<p>The separate minute-path check through 22 October does not show a broad increase in immediate reversal: G8 shorts negative five minutes after entry are 45.26% in September versus 44.74% in October. Mean signed 15-minute short return declines from +0.093% to +0.053%. The problem is therefore broader than removing trades that turn red immediately. This path check follows stock prices through each stated horizon even if the original exit occurred earlier, and is diagnostic only.</p>
+<p><b>3. Shorts deteriorated within comparable groups.</b> G8 short win rate falls 85.26%→62.35%; long win rate falls 72.73%→65.22%. Even within low ATR bands the short win rate declines, so simply moving all high-volatility trades out would not remove the whole problem.</p>
+<p><b>4. The side mix does not explain the decline.</b> Relative to August–September, G8 drops 16.77 percentage points. October’s different long/short weights would improve win rate by 0.68 points at the earlier success rates; the change within sides contributes −17.46 points. Exact-slot decomposition is exploratory because many slots are sparse and one October trade has no prior matching setup.</p>
+<div class="table"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>model</th>
+      <th>prior_win_rate_pct</th>
+      <th>october_win_rate_pct</th>
+      <th>change_pp</th>
+      <th>composition_effect_pp</th>
+      <th>within_group_effect_pp</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>G3</td>
+      <td>76.22</td>
+      <td>56.93</td>
+      <td>-19.28</td>
+      <td>0.81</td>
+      <td>-20.09</td>
+    </tr>
+    <tr>
+      <td>G4</td>
+      <td>78.21</td>
+      <td>58.02</td>
+      <td>-20.20</td>
+      <td>0.94</td>
+      <td>-21.13</td>
+    </tr>
+    <tr>
+      <td>G6</td>
+      <td>78.76</td>
+      <td>60.18</td>
+      <td>-18.58</td>
+      <td>1.13</td>
+      <td>-19.71</td>
+    </tr>
+    <tr>
+      <td>G7V2</td>
+      <td>79.80</td>
+      <td>60.71</td>
+      <td>-19.09</td>
+      <td>0.66</td>
+      <td>-19.75</td>
+    </tr>
+    <tr>
+      <td>G7V3</td>
+      <td>82.51</td>
+      <td>68.75</td>
+      <td>-13.76</td>
+      <td>-0.18</td>
+      <td>-13.58</td>
+    </tr>
+    <tr>
+      <td>G8</td>
+      <td>79.73</td>
+      <td>62.96</td>
+      <td>-16.77</td>
+      <td>0.69</td>
+      <td>-17.46</td>
+    </tr>
+    <tr>
+      <td>G8shock</td>
+      <td>80.40</td>
+      <td>66.67</td>
+      <td>-13.73</td>
+      <td>0.63</td>
+      <td>-14.36</td>
+    </tr>
+  </tbody>
+</table></div>
+<h2>Where the decline is concentrated</h2><p>G8 setup-level contributions below compare October to August–September. Setup names use the confirmation clock. These are descriptions, not rules selected for deletion. For example, 13:21 SHORT went from 10 wins in 11 trades to 1 in 6, but six October trades cannot justify a permanent slot ban.</p>
+<div class="table"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>group</th>
+      <th>n_old</th>
+      <th>wr_old</th>
+      <th>n_oct</th>
+      <th>wr_oct</th>
+      <th>within_pp</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1321_SHORT</td>
+      <td>11.00</td>
+      <td>90.91</td>
+      <td>6.00</td>
+      <td>16.67</td>
+      <td>-4.12</td>
+    </tr>
+    <tr>
+      <td>1231_SHORT</td>
+      <td>6.00</td>
+      <td>83.33</td>
+      <td>5.00</td>
+      <td>40.00</td>
+      <td>-2.01</td>
+    </tr>
+    <tr>
+      <td>1216_LONG</td>
+      <td>6.00</td>
+      <td>100.00</td>
+      <td>3.00</td>
+      <td>33.33</td>
+      <td>-1.85</td>
+    </tr>
+    <tr>
+      <td>1301_SHORT</td>
+      <td>11.00</td>
+      <td>81.82</td>
+      <td>7.00</td>
+      <td>57.14</td>
+      <td>-1.60</td>
+    </tr>
+    <tr>
+      <td>1216_SHORT</td>
+      <td>12.00</td>
+      <td>83.33</td>
+      <td>8.00</td>
+      <td>62.50</td>
+      <td>-1.54</td>
+    </tr>
+    <tr>
+      <td>1226_SHORT</td>
+      <td>7.00</td>
+      <td>85.71</td>
+      <td>3.00</td>
+      <td>33.33</td>
+      <td>-1.46</td>
+    </tr>
+    <tr>
+      <td>1211_SHORT</td>
+      <td>9.00</td>
+      <td>88.89</td>
+      <td>5.00</td>
+      <td>60.00</td>
+      <td>-1.34</td>
+    </tr>
+    <tr>
+      <td>0921_LONG</td>
+      <td>3.00</td>
+      <td>100.00</td>
+      <td>1.00</td>
+      <td>0.00</td>
+      <td>-0.93</td>
+    </tr>
+  </tbody>
+</table></div>
+<h2>Controls against misleading conclusions</h2>
+<p>Every October G6, G7 V2/V3, and G8 executed trade identity is also in G4; these strategies share entry ancestry. Their repeated decline is correlated evidence. Saved source records explicitly mark historical targets as selected after inspection and independent holdout qualification as false. G8 examined 230 initial combinations, 93 later choices plus sensitivity checks, and 27 exit variants. Earlier months are an optimistic benchmark, and October is not an untouched whole-strategy test.</p>
+<p>Some historical opening-OI and stock indicator coverage differs by month. The inherited saved VWAP/range columns are absent or unreliable in parts of October, so the market comparisons use separately reconstructed price features. A day-block bootstrap gives a descriptive interval for the change, but does not remove parameter-selection bias or dependence across days.</p>
+<div class="table"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>model</th>
+      <th>difference_pp</th>
+      <th>day_bootstrap_p025_pp</th>
+      <th>day_bootstrap_p975_pp</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>G3</td>
+      <td>-19.28</td>
+      <td>-29.19</td>
+      <td>-8.79</td>
+    </tr>
+    <tr>
+      <td>G4</td>
+      <td>-20.20</td>
+      <td>-31.47</td>
+      <td>-8.16</td>
+    </tr>
+    <tr>
+      <td>G6</td>
+      <td>-18.58</td>
+      <td>-30.09</td>
+      <td>-6.39</td>
+    </tr>
+    <tr>
+      <td>G7V2</td>
+      <td>-19.09</td>
+      <td>-30.81</td>
+      <td>-6.68</td>
+    </tr>
+    <tr>
+      <td>G7V3</td>
+      <td>-13.76</td>
+      <td>-25.42</td>
+      <td>-1.80</td>
+    </tr>
+    <tr>
+      <td>G8</td>
+      <td>-16.77</td>
+      <td>-28.66</td>
+      <td>-4.88</td>
+    </tr>
+    <tr>
+      <td>G8shock</td>
+      <td>-13.73</td>
+      <td>-24.72</td>
+      <td>-2.62</td>
+    </tr>
+  </tbody>
+</table></div>
+<h2>Can a numerical rule improve it?</h2>
+<p>Yes, the conditions can be measured, but a profitable threshold has not been established. The existing G6 full portfolio replays through 21 October show that rejecting realized volatility above 1.5× the prior same-clock median reduces October profit by ₹55,431.57 and increases losing days from 2 to 4. Rejecting efficiency below 0.25 reduces profit by ₹42,066.41. Breadth opposition helps October by ₹5,750.23 but costs ₹16,698.04 in July–September.</p>
+<p>The already tested G8 shock rule raises October wins from 68 to 72 out of 108 and adds ₹7,521.43, but loses ₹13,825 in August and ₹14,458.74 in September. Its trigger is absolute 5-minute VIX change ≥1%, or trade-signed Nifty slot change ≤−0.05% while session change ≥+0.10%. Its action is initial SL 1.05% (0.875×1.20%) and half the original target, with existing timed tightening retained. It remains exploratory; prior automated development/validation retained original exits.</p>
+<div class="table"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Parameter</th>
+      <th>Calculation</th>
+      <th>Availability constraint</th>
+      <th>Finding / use</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Volatility relative to the clock</td>
+      <td>RV(t) / median(RV at same clock over 20 strictly previous sessions)</td>
+      <td>Cumulative square root of summed squared 5-minute log returns, percent; match available timestamps.</td>
+      <td>October RV is higher. A blanket &gt;1.5 veto reduced October G6 profit.</td>
+    </tr>
+    <tr>
+      <td>Stock noise and stop cushion</td>
+      <td>ATR14_prior / confirmation_price * 100; stop_pct / ATR_pct</td>
+      <td>Use completed same-session 1-minute bars before confirmation. Missing warmup stays missing.</td>
+      <td>Short-side ATR rose 25% from September to October. Losses also worsened within ATR bands.</td>
+    </tr>
+    <tr>
+      <td>Trend efficiency</td>
+      <td>abs(P_t - P_t-30m) / sum(abs(completed 5m price changes))</td>
+      <td>Only completed bars at/before decision time; zero denominator is unavailable.</td>
+      <td>Average efficiency is almost unchanged. A blanket &lt;0.25 veto was unprofitable.</td>
+    </tr>
+    <tr>
+      <td>Direction and relative strength</td>
+      <td>side_sign * Nifty_return_5m; side_sign * session_return; side_sign * (stock_return_5m - Nifty_return_5m)</td>
+      <td>Identical completed endpoints and the dated Nifty futures contract.</td>
+      <td>Nifty alignment is stronger in October; direction alone did not prevent the decline.</td>
+    </tr>
+    <tr>
+      <td>VIX level and change</td>
+      <td>VIX / median(prior 20 session closes); 100*(VIX_t/VIX_t-30m - 1)</td>
+      <td>5-minute candle close is available at candle start plus 5 minutes; reference uses up to 20 prior session closes with minimum 10 readiness; early fallback must be explicit.</td>
+      <td>Current adopted G8 is a 30-minute lookback on 5-minute candles, not a 5-minute lookback.</td>
+    </tr>
+    <tr>
+      <td>Conditional exit expectancy</td>
+      <td>p_target*mean_target_return + p_stop*mean_stop_return + p_time*mean_time_return - costs</td>
+      <td>Estimate using earlier sessions only, pool sparse slots toward the side/regime average, include gaps.</td>
+      <td>Prefer probability of target before stop plus time exits over optimizing win rate alone.</td>
+    </tr>
+    <tr>
+      <td>Rolling deterioration</td>
+      <td>Observed wins - sum(prior-model win probabilities); realized net return per unit of initial risk</td>
+      <td>Monitor by day blocks and use earlier sessions to calibrate alarm thresholds.</td>
+      <td>Do not fit a separate October switch or use future MFE/MAE as predictors.</td>
+    </tr>
+  </tbody>
+</table></div>
+<p>A practical next experiment would use a few shared volatility/trend regimes with partial pooling across sparse slot/side groups. Estimate target-before-stop, stop-first and time-exit probabilities from earlier days, optimize net expectancy after costs, and retain a candidate only when later sequential test blocks preserve profit and reduce losses. Include a baseline fallback when samples or input history are insufficient. Do not optimize an October-specific calendar filter, fit 51 independent parameter sets on 14 sessions, or call a retrospective improvement a validated edge. Freeze any selected candidate for genuinely new data.</p>
+<h2>Files and definitions</h2><p><a href="monthly_all_models.csv">All monthly metrics</a> · <a href="analytical_parameter_plan.csv">Numerical parameter plan</a> · <a href="slot_side_contributions.csv">Slot/side attribution</a> · <a href="postentry_path_monthly.csv">Post-entry path diagnostics</a> · <a href="market/g6_full_policy_month_split.csv">Full portfolio filter checks</a> · <a href="book_source_provenance.csv">Source ledgers and configuration hashes</a> · <a href="g8/research_audit.json">G8 provenance and research history</a></p>
+<p>Win rates are trade-weighted, not averages of daily percentages. Mean daily win rates, average gains/losses, net profit per session, net return on fixed portfolio capital, profit factor and losing-day counts are in the monthly CSV. Stop-loss rates require both a STOP exit label and negative net P&amp;L; profitable G7 V3 runner stops are not losses. Full-target exit rates include G7 V3 full-runner targets; its separate two-stage first-target-hit rate includes subsequent profit-lock stops and time exits.</p>
+<p>Reference: <a href="https://www.nseindia.com/static/products-services/indices-indiavix-index">NSE India VIX definition</a> describes 30-calendar-day expected volatility, not a guaranteed intraday direction or stop distance. <a href="https://escholarship.org/uc/item/4w1110bb">Bailey et al., The Probability of Backtest Overfitting</a> explains the risks of selecting strategies through repeated backtests.</p>
+<p>Analysis only. No trading configurations, saved result books, approval controls, or publication pointers were changed.</p></html>

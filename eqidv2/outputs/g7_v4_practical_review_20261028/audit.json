@@ -1,0 +1,55 @@
+{
+  "source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_7\\v4_research\\practical_research\\runs\\2026-10-27\\20261027T185748273567_five_fixed_tests",
+  "source_manifest_sha256": "daa7440e6c2e0a8d60a6bc89841da802d59639aa1c2f43f78a371622ca43f56b",
+  "tests_passed": 192,
+  "replay_verified": true,
+  "independent_ledger_reconciliation": true,
+  "selected_candidate": null,
+  "default_changed": false,
+  "execution_authority": false,
+  "copied_files": {
+    "all_period_totals.csv": "f6de181db1f88bcb5293c12905191371cb3f919917305fc6dcea3bd59c880237",
+    "comparison.csv": "4fafc7566eec18c3f76116f23e05867d469465ee82dd44e7c35e59ee672cf8cd",
+    "october_daywise_all.csv": "4c24933e71c4b6d1f030d339afe6b4a0a8d5a338e08809a0cac23bcfc8ca67a7",
+    "daywise_all.csv": "732d36f4266fa1dcae31859140a925893f0137a53c6c59816bfcdf33ad68bb8f",
+    "cost_sensitivity.csv": "a020fcceecc7d5daa239d21fff9114904f2c77c837855efa1bd065aef936dec9",
+    "minute_close_drawdown.csv": "3abd07aca8b65de65e415c94fbad69c04526701f3e1460c8bcd217b092e60ad9",
+    "development_selection.csv": "05fcc50aef163fda1177901163ad1541c9a8ab8dfe361b34ac339d7a9b4a736f",
+    "protocol.json": "b957b65c31346d404fbe9a6db58e44c275a08ed90719417ea35a16c532eb40fc"
+  },
+  "execution_correction": {
+    "blocked_ambiguous_reentries": [
+      "2026-08-27 BHEL SID152",
+      "2026-08-28 TVSMOTOR SID259"
+    ],
+    "avoided_native_losses_rs": 12500.0,
+    "integer_sizing_net_change_rs": -2038.0522357742,
+    "not_indicator_alpha": true
+  },
+  "upstream_coverage_audit": {
+    "legacy_runs_checked": 21,
+    "production_runs_checked": 116,
+    "legacy_missing_oi_stock_days": 15,
+    "production_missing_oi_stock_days": 20,
+    "afternoon_only_exclusion_observed": false,
+    "oct26_oct27_stocks_each": 213,
+    "oct26_oct27_required_oi_and_equity_misses": 0,
+    "universe_regenerated": false,
+    "source_module": "fno_v13_replay_source.py:384,431,627",
+    "observed_example": "GODFRYPHLP 2026-09-25 missing09:20 OI excludes whole stock-day"
+  },
+  "incomplete_attempts": "Two pre-outcome assertions retained with run_failure.json; no candidate P&L emitted; hypotheses and acceptance gates unchanged",
+  "source_copy_sha256_before_g3_extension": {
+    "daywise_all.csv": "3367da8bc2da349adcbc2c4d6666dcf4090a356b57731d4756cd017275619c4b",
+    "october_daywise_all.csv": "cf86666cb09cddfb787ac17d881bb1692f9676cc819c9f0e33595229b3768406"
+  },
+  "g3_extension": {
+    "source_reference": "g3_reference.json",
+    "column": "g3_published_backtest",
+    "original_columns_unchanged": true,
+    "same_calendar": true,
+    "ledger_daily_and_totals_reconciled": true,
+    "reference_only": true,
+    "sealed_research_changed": false
+  }
+}

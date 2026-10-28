@@ -20,7 +20,7 @@
     "max_reserved_gross_exposure_rs": null
   },
   "migration_date": "2026-10-23",
-  "migration_plan": "configs/strategies/v13_v10_g_3_production_v13.json",
+  "migration_plan": "docs/G3_PRODUCTION_V13_PARITY_2026-10-23.md",
   "historical_profiles_preserved": [
     "V13_V10_G",
     "V13_V10_G_2"
@@ -31,14 +31,20 @@
     "Separate explicit LIVE activation approval",
     "Dated strategy- and execution-policy-bound G3 acknowledgement and arm record"
   ],
-  "next_worker_session": "2026-10-24",
+  "next_worker_session": "2026-10-26",
   "previous_session_identity": {
     "through_session": "2026-10-23",
     "strategy_version": "V13-V10-G-3-PRODUCTION-V12",
     "strategy_fingerprint": "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c",
     "reason": "Existing V12 orders retain their identity; subsequent PAPER workers use V13. LIVE needs fresh V13-bound approval."
   },
-  "live_approval": {
+  "archived_previous_session_identity": {
+    "through_session": "2026-10-21",
+    "strategy_version": "V13-V10-G-3-PRODUCTION-V11",
+    "strategy_fingerprint": "82c8518f9350d27a49237b81c5b0965cf745bfefef0e2b675cecde75f8b8e4b4",
+    "reason": "Existing V11 workers finish any open positions; scheduled workers load V12 on 2026-10-22 only after the current-session approval gates pass."
+  },
+  "previous_live_approval": {
     "source": "STANDING_OPERATOR_POLICY",
     "entry_not_before_ist": "2026-10-23T09:10:29.859474+05:30",
     "session_date": "2026-10-23",

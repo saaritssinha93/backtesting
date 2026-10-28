@@ -36,6 +36,10 @@ AFTERNOON_PROMOTED_CASES = [
     ("13:25", "LONG", .41, .2), ("13:25", "SHORT", .76, 1.2),
     ("13:30", "LONG", 1.17, .8),
 ]
+AFTERNOON_PROMOTED_CASES = [
+    case for case in AFTERNOON_PROMOTED_CASES
+    if config.setup_for(case[0], case[1]) is not None
+]
 
 
 def isolated(name, filename):
@@ -612,7 +616,8 @@ def test_g3_capacity_book_uses_g3_fingerprint(runtime):
     signal = runtime.select_entry_signals([candidate()], DAY, "09:30", capital_rs=100000., leverage=5.)[0]
     states = []
     for i in range(11):
-        state = runtime.create_order_state({**signal, "signal_id": str(i)}, "PAPER")
+        state = runtime.create_order_state(
+            {**signal, "signal_id": str(i), "tradingsymbol": f"TEST{i}"}, "PAPER")
         states.append(runtime._advance_g_paper_state(state, 102., config.slot_datetime(DAY, "09:32")))
     assert sum(s["status"] == "OPEN" for s in states) == 10
     assert states[-1]["status"] == "BLOCKED_PORTFOLIO"
@@ -715,10 +720,11 @@ def test_preflight_reports_promoted_configuration_without_runtime_mutations():
     from fno_v13_v10_g_3_preflight import inspect_deployment
     report = inspect_deployment(verify_frozen=False)
     assert report["ready"] is True
-    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V12"
-    assert report["active_setup_count"] == 61
-    assert len(report["promoted_afternoon_fifteen"]) == 15
-    assert {s["setup_id"] for s in report["promoted_afternoon_fifteen"]} == config.contract.afternoon_setups.SETUP_IDS
+    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V13"
+    assert report["active_setup_count"] == 51
+    assert len(report["promoted_afternoon_fifteen"]) == 5
+    assert {s["setup_id"] for s in report["promoted_afternoon_fifteen"]} == (
+        config.contract.afternoon_setups.SETUP_IDS & {s.setup_id for s in config.ACTIVE_SETUPS})
     assert len(report["promoted_midday_twelve"]) == 12
     assert {s["setup_id"] for s in report["promoted_midday_twelve"]} == config.contract.midday_setups.SETUP_IDS
     assert report["promoted_0950_long_setup"]["target_pct"] == .75

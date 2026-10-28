@@ -27,12 +27,13 @@ CORE_SETUPS = tuple(replace(s, source_version=STRATEGY_VERSION) for s in backtes
 ACTIVE_SETUPS = tuple(replace(s, source_version=STRATEGY_VERSION) for s in backtest.ACTIVE_SETUPS)
 _CORE_BY_ID = {s.setup_id: s for s in CORE_SETUPS}
 _ACTIVE_BY_ID = {s.setup_id: s for s in ACTIVE_SETUPS}
+_ACTIVE_BY_SIGNAL_SIDE = {(s.signal_end, s.side): s for s in ACTIVE_SETUPS}
 SIGNAL_TO_CONFIRMATION = dict(backtest.SIGNAL_TO_CONFIRMATION)
 MIN_CONFIRMATION_VOLUME_BY_SETUP = dict(backtest.MIN_CONFIRMATION_VOLUME_BY_SETUP)
 
 
 def setup_for(signal_end: str, side: str, *, session_date: date | None = None):
-    return _ACTIVE_BY_ID.get(f"{SIGNAL_TO_CONFIRMATION.get(signal_end, '----').replace(':', '')}_{side.upper()}")
+    return _ACTIVE_BY_SIGNAL_SIDE.get((signal_end, side.upper()))
 
 
 def passes_selected_filters(candidate, setup, *, session_date=None, original_only=False):

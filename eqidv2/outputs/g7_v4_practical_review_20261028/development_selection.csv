@@ -1,0 +1,6 @@
+policy,period,eligible,failure_reasons
+cmf20_confirm,development,False,net profit reduced; loss amount reduction below10%; win rate reduced; winner retention below95%
+vwap_slope_failure,development,False,net profit reduced; loss amount reduction below10%; loss count not reduced; win rate reduced; insufficient changed trades/days
+close75_interaction,development,False,net profit reduced; win rate reduced; winner retention below95%; trade retention below80%
+gap_cancel10,development,False,loss amount reduction below10%; loss count not reduced; insufficient changed trades/days
+loss_lock2,development,False,net profit reduced; loss amount reduction below10%; loss count not reduced; win rate reduced; larger daily-close drawdown

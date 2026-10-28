@@ -1,0 +1,180 @@
+{
+  "day": "2026-10-23",
+  "universe": {
+    "SWIGGY": "SHORT",
+    "MOTILALOFS": "SHORT",
+    "BANDHANBNK": "SHORT",
+    "COLPAL": "SHORT",
+    "DELHIVERY": "SHORT",
+    "ETERNAL": "LONG"
+  },
+  "nifty_opening_return_pct": -0.020621994454006476,
+  "production_feature_parity": {
+    "compared_rows": 210,
+    "maximum_absolute_difference": {
+      "price_change_pct": 4.440892098500626e-16,
+      "oi_change_pct": 2.220446049250313e-16,
+      "volume_ratio": 8.881784197001252e-16,
+      "v9_1m_volume_ratio": 1.7763568394002505e-15,
+      "ema9": 2.2737367544323206e-13,
+      "ema20": 2.2737367544323206e-13,
+      "ema50": 2.2737367544323206e-13,
+      "body_ratio": 1.1102230246251565e-16
+    },
+    "tolerance": 1e-07,
+    "explanation": "Opening price-change float32 storage causes maximum4.3e-8percentage-point drift; remaining consumed fields match exactly."
+  },
+  "input_provenance": [
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\snapshot_manifest.json",
+      "sha256": "8eb0d105472a65e37d033eb0861cc35183c0e31c56b32b691d921fe11005aa17",
+      "sealed_hash_verified": false
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\SWIGGY_stocks_indicators_1min.parquet",
+      "sha256": "a09d722a177e3217eab3f9466faf86c19e9eb06be7f10c03814b2eb5a5e62b0f",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\futures_5m\\SWIGGY26OCTFUT_5minute.parquet",
+      "sha256": "0ea5bafe63bcf7d43aad74301a2994c95208a8011cde66e6026ad07d46f57adc",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\opening_observer\\historical\\2026-10-23\\SWIGGY26OCTFUT.json",
+      "sha256": "b5bda90d3d6f5003c64fd520cde6c043761ce4f57ca91959a4b73e4da969c2cc",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\MOTILALOFS_stocks_indicators_1min.parquet",
+      "sha256": "78dd958725afafe10d5474128851f5418122a12991d47198d2aa6e884ea2b80a",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\futures_5m\\MOTILALOFS26OCTFUT_5minute.parquet",
+      "sha256": "c78fbbfbc2e571a04481f94a2ac573999a1827fff77bbfa67fd725c9a59f49b5",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\opening_observer\\historical\\2026-10-23\\MOTILALOFS26OCTFUT.json",
+      "sha256": "875525143a44636b48ee23dda6730d0e7585486f556f30a7725aba4830cc51e0",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\BANDHANBNK_stocks_indicators_1min.parquet",
+      "sha256": "6725d824dc8fcd3e551e22e602ea9a7266c20e4781e9d4ef1bee946344508d2c",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\futures_5m\\BANDHANBNK26OCTFUT_5minute.parquet",
+      "sha256": "f922ac06f04d33ca209b1273946868ea18840c0011d5b3375f8d6be2f7850bba",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\opening_observer\\historical\\2026-10-23\\BANDHANBNK26OCTFUT.json",
+      "sha256": "3e40e2b260b9a21465d8709d6522194eabdff475e180db62dd11a1b315d0f1ac",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\COLPAL_stocks_indicators_1min.parquet",
+      "sha256": "9f8d29d79d5ced5ca801ef670a61c69ab9f4a3c628077e2dd09424baf11e0acd",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\futures_5m\\COLPAL26OCTFUT_5minute.parquet",
+      "sha256": "82efa07dfc7151dbf6aaf2a34807436450149de2899a2b27d3d6b4f384233e96",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\opening_observer\\historical\\2026-10-23\\COLPAL26OCTFUT.json",
+      "sha256": "1b42925c2eb5f99b1542fe65af9f72b70edd178ea53e22374e5805b33bf95566",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\DELHIVERY_stocks_indicators_1min.parquet",
+      "sha256": "4d86262d8d3b8c8c4303468f634d184e5409bdd4b1157ca469a7418ca52cc2ef",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\futures_5m\\DELHIVERY26OCTFUT_5minute.parquet",
+      "sha256": "b6897abbecfa4089643dafebbe8e9bb8f5d9aae65a4556b88efae3cd47c562e1",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\opening_observer\\historical\\2026-10-23\\DELHIVERY26OCTFUT.json",
+      "sha256": "22858d871cfccfd3d91f467870208e28379169c2ed03c0434d7c78dbf58d5f35",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\ETERNAL_stocks_indicators_1min.parquet",
+      "sha256": "404ce1f9114e6f44d06ff3df9edc233e0d16e5db082b2e57342ec197fcf378ca",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\futures_5m\\ETERNAL26OCTFUT_5minute.parquet",
+      "sha256": "b2c74619a0e1896feb6d0c0104c1f130032e6688216a55e544aca0b92bf75ea7",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\opening_observer\\historical\\2026-10-23\\ETERNAL26OCTFUT.json",
+      "sha256": "0bf17be2bf378120f533169d06dc4d527ed9c7b40020f8fa5742ed788e7ecc2a",
+      "sealed_hash_verified": true
+    },
+    {
+      "path": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\futures_5m\\NIFTY26OCTFUT_5minute.parquet",
+      "sha256": "80c720b8dbc4613a2c691c33cc6fc01b9a9721662cda9511bdeb875c44f5a371",
+      "sealed_hash_verified": true
+    }
+  ],
+  "code_provenance": [
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\research\\g3_early_six_audit_20261023.py",
+      "sha256": "31efdea244a54d7e25bc3fbae7f715dc03341c9945916d26e0994487965b0c07"
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py",
+      "sha256": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c"
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_v10_g_2_backtest.py",
+      "sha256": "7fae148069554bae20e09a0e77f4bfd8cd60ae4454f79a8c92ca28c801327d55"
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_corrected_v5_backtest.py",
+      "sha256": "d8bb7769b8442a48c0b1a902bc2bf46d29edb2138c9881c9fa38f73d40616e58"
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py",
+      "sha256": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc"
+    }
+  ],
+  "errors": [],
+  "rules": {
+    "oi": "Diagnostic only; neither sign nor magnitude selects entries",
+    "move_minimum_pct": 0.2,
+    "volume_variants": [
+      0.4,
+      0.8
+    ],
+    "confirmation_body_minimum": 0.3,
+    "confirmation_volume_minimum": 0.5,
+    "directional_wick_maximum": 0.6,
+    "stop_pct": 1.25,
+    "tightened_stop_pct": 1.0,
+    "tighten_after_minutes": 120,
+    "target_pct": 1.5,
+    "round_trip_cost_bps": 5,
+    "breakout_valid_minutes": 10,
+    "scan_clocks": "Every5min09:20to13:30"
+  },
+  "selection": "Earliest filled qualifying candidate per variant and requested stock, never selected by return. No cross-stock quota or portfolio allocator applied.",
+  "timing": "Input timestamps label completed candle ends. Features use no later price. Strict breakout starts in the next candle, fill tick unknown within its start/end interval. Next-open assumes zero order-submission latency at confirmation close; optimistic for live. Opening-price-only uses completed09:20bar and begins09:20-09:21bar without looking at09:21confirmation.",
+  "limitations": [
+    "Six names were supplied after this day's outcomes: selection bias, not proof of robust performance.",
+    "One-minute OHLC execution cannot reproduce spreads, queues, tick sequence, circuit-lock liquidity, or live latency.",
+    "Native stop-first ambiguity policy and conservative entry-candle stop timing retained.",
+    "MFE/MAE use complete entry/exit candles and can include price movement before fill or after exit within those candles.",
+    "Opening OI is retrospectively reconstructed from sealed inputs and diagnostic only in these rules.",
+    "Summed trade returns are neither a portfolio return nor an equal-capital return unless divided by total invested exposure."
+  ]
+}

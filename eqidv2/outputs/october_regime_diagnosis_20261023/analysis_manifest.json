@@ -1,0 +1,36 @@
+{
+  "scope": "READ_ONLY_RETROSPECTIVE_DIAGNOSTICS",
+  "through": "2026-10-23",
+  "postentry_paths_through": "2026-10-22",
+  "market_metrics_through": "2026-10-21",
+  "independent_holdout": false,
+  "bootstrap_unit": "session",
+  "bootstrap_seed": 20261023,
+  "bootstrap_draws": 20000,
+  "code_sha256": "fc85fba761ddb376d3462b398f406212e4e7c3f3386fd8debf90a28ff86ed5fe",
+  "inputs": {
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\october_regime_diagnosis_20261023\\normalized_executed_books_g3_g7.csv": "0728c0d8a9b16975a9b53b05216bbfd12d16f5426c5f5366b4722a42230ba714",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\october_regime_diagnosis_20261023\\common_calendar_g3_g7.csv": "bc3c6448ee3ecaa7bb1314817c8702a3fa3ed52608e32b0aa55a19b298bf66a5",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_8\\daily_comparison\\2026-10-23\\20261023T125505562512_g8_baseline_vs_shock\\baseline\\combined_portfolio_trades.csv": "931c6d647c54586954f1894ff800314e237c6298b46e7968085194d9b252a55c",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_8\\daily_comparison\\2026-10-23\\20261023T125505562512_g8_baseline_vs_shock\\shock\\combined_portfolio_trades.csv": "f74b169a85a98e86dd44390364ad73fcb3fb407e987f19cceda185a000128eff",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\october_regime_diagnosis_20261023\\market\\manifest.json": "690be4ae868891277791bb5ce8b5c7d24345aee3de3500e98264a05e79942234",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\october_regime_diagnosis_20261023\\g8\\research_audit.json": "bd8c7da7ac450003e2e726023329dc273ad6a3f93fdba6e0b6d8ad29d462a276"
+  },
+  "outputs": {
+    "analytical_parameter_plan.csv": "f8a55c76aec4785f0d9610a05a0c84e4ffadb6b16579ffdb4d7e7c3667706688",
+    "book_source_provenance.csv": "99b8825d41bd1b5db812b13ef1a8be9d2c620c251a93a77629eb27c3b26286fe",
+    "common_calendar_g3_g7.csv": "bc3c6448ee3ecaa7bb1314817c8702a3fa3ed52608e32b0aa55a19b298bf66a5",
+    "monthly_all_models.csv": "7d3383ea909ae774eb0c5cdbd00148e28f8d7b14a40e35c50a8392416bb7be43",
+    "monthly_results_g3_g7.csv": "6be9abb82b86033ad74ce3e7325a28b9b254641ea9365c722dc35552346ab843",
+    "monthly_setup_side_g3_g7.csv": "aec7844ef467c10ae85385c0db644a0f7a7e86c770d1c08a973165d547e1dc2e",
+    "normalized_executed_books_g3_g7.csv": "0728c0d8a9b16975a9b53b05216bbfd12d16f5426c5f5366b4722a42230ba714",
+    "normalized_selected_books_g3_g7.csv": "bce6438857c366f62bb9f7f07605c5ef072d776e025282cc5858ad3a6d3378d3",
+    "october_shared_entries.csv": "6e61f2f5c7e704cb44a859dd728d51735cb0c8b4b040e29f7e7997d5161565ab",
+    "postentry_path_monthly.csv": "56af645a724656371bc9d4968db713472edb6e1cf1f9e3bbcb66630cf0710d9c",
+    "postentry_path_observations.csv": "6061ca152ad2047f98c2d4cec2f0a5deb715d069e49ea90dc6dd3a942a6f35b0",
+    "report.html": "fa06aa2a8016ed87922501717dc89a2016525f7d3b457115c39f02d3d039a3e3",
+    "slot_side_contributions.csv": "c579e36ec87895fb170989afe5f4f18316c6a164a8a9a50d0859c773b4fa529d",
+    "win_rate_decomposition.csv": "ce393b212611e550912d2b33afec2e95ae93b5d50473661cbfe95ab6c429a9e7",
+    "win_rate_uncertainty.csv": "dc48b7c28a8a70690021b64aec3d87a4b232a46296914f5c43ae5e2f21d83453"
+  }
+}

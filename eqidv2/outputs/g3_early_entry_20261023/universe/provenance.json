@@ -1,0 +1,898 @@
+[
+  {
+    "day": "2026-10-13",
+    "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-13\\20261013T222838087345_6e7355c3\\input_snapshots\\02df2087a01f950db2e3b3f7148b7cfb0f9fbddc548979d49e8ebf599d520881\\snapshot_manifest.json",
+    "snapshot_sha256": "37e8fe61b767e6d61e04daff51f93b904c8f6282ca704080cd10134f63e19a3d",
+    "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-13\\20261013T222838087345_6e7355c3\\feature_ledger.csv",
+    "seed_sha256": "e02df9788a7f1ddf41f6ce1f4956b0a85a8552e8583c97ac51fe3184b2a6e5d7",
+    "builder_dependencies": {
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+    },
+    "clocks": [
+      "09:20",
+      "09:25",
+      "09:30",
+      "09:35",
+      "09:40",
+      "09:45",
+      "09:50",
+      "09:55",
+      "10:00",
+      "10:05",
+      "10:10",
+      "10:15",
+      "10:20",
+      "10:25",
+      "10:30",
+      "10:35",
+      "10:40",
+      "10:45",
+      "10:50",
+      "10:55",
+      "11:00",
+      "11:05",
+      "11:10",
+      "11:15",
+      "11:20",
+      "11:25",
+      "11:30",
+      "11:35",
+      "11:40",
+      "11:45",
+      "11:50",
+      "11:55",
+      "12:00",
+      "12:05",
+      "12:10",
+      "12:15",
+      "12:20",
+      "12:25",
+      "12:30",
+      "12:35",
+      "12:40",
+      "12:45",
+      "12:50",
+      "12:55",
+      "13:00",
+      "13:05",
+      "13:10",
+      "13:15",
+      "13:20",
+      "13:25",
+      "13:30"
+    ],
+    "reconstructed_stocks": 212,
+    "rows": 10812,
+    "reconstruction_checks": {
+      "close": {
+        "rows": 8480,
+        "mismatches": 0
+      },
+      "ema9": {
+        "rows": 8480,
+        "mismatches": 0
+      },
+      "ema20": {
+        "rows": 8480,
+        "mismatches": 0
+      },
+      "ema50": {
+        "rows": 8480,
+        "mismatches": 0
+      },
+      "price_change_pct": {
+        "rows": 8480,
+        "mismatches": 0
+      },
+      "oi_change_pct": {
+        "rows": 8480,
+        "mismatches": 0
+      },
+      "volume_ratio": {
+        "rows": 8480,
+        "mismatches": 0
+      },
+      "confirmation_close": {
+        "rows": 8480,
+        "mismatches": 0
+      },
+      "v9_1m_volume_ratio": {
+        "rows": 8480,
+        "mismatches": 0
+      }
+    },
+    "problems": [],
+    "excluded_stocks": [],
+    "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+    "raw_snapshot_members_verified": true,
+    "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+    "features_sha256": "33de69a558130f5dbd6b4cdf6152b125766d01756d1cfbbfde440d51ff2079b3",
+    "minutes_sha256": "559d3f8ea1edc3edbbabcd1e93847de084981629c27353bb6038f34cdbc32b88"
+  },
+  {
+    "day": "2026-10-14",
+    "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-14\\20261021T183531060381_39efe64c\\input_snapshots\\4e03fbb05aa63bc26d5042eb1eaf8d8eb74be44644ff04d2339a4d55253c6923\\snapshot_manifest.json",
+    "snapshot_sha256": "7c7ba43ad19d6424aebfd22f41c0ffe0f729dd81e3862ea5be98d26402aa9bb0",
+    "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-14\\20261021T183531060381_39efe64c\\feature_ledger.csv",
+    "seed_sha256": "560cc086ab30221e501377529816313b0272cc3521be0d3434b48f1c57e6bb5b",
+    "builder_dependencies": {
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+    },
+    "clocks": [
+      "09:20",
+      "09:25",
+      "09:30",
+      "09:35",
+      "09:40",
+      "09:45",
+      "09:50",
+      "09:55",
+      "10:00",
+      "10:05",
+      "10:10",
+      "10:15",
+      "10:20",
+      "10:25",
+      "10:30",
+      "10:35",
+      "10:40",
+      "10:45",
+      "10:50",
+      "10:55",
+      "11:00",
+      "11:05",
+      "11:10",
+      "11:15",
+      "11:20",
+      "11:25",
+      "11:30",
+      "11:35",
+      "11:40",
+      "11:45",
+      "11:50",
+      "11:55",
+      "12:00",
+      "12:05",
+      "12:10",
+      "12:15",
+      "12:20",
+      "12:25",
+      "12:30",
+      "12:35",
+      "12:40",
+      "12:45",
+      "12:50",
+      "12:55",
+      "13:00",
+      "13:05",
+      "13:10",
+      "13:15",
+      "13:20",
+      "13:25",
+      "13:30"
+    ],
+    "reconstructed_stocks": 212,
+    "rows": 10812,
+    "reconstruction_checks": {
+      "close": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema9": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema20": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema50": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "price_change_pct": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "oi_change_pct": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "volume_ratio": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "confirmation_close": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "v9_1m_volume_ratio": {
+        "rows": 7420,
+        "mismatches": 0
+      }
+    },
+    "problems": [],
+    "excluded_stocks": [],
+    "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+    "raw_snapshot_members_verified": true,
+    "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+    "features_sha256": "226592a2c8fd0544a7946c901aa3e47ced88c1ad4049be0c7454d981ccda57c0",
+    "minutes_sha256": "11b964360a0ea83d8df1564d8cb325cf957fc42355c9ca402f96b627f39a54f8"
+  },
+  {
+    "day": "2026-10-15",
+    "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-15\\20261021T184048876424_41b4a860\\input_snapshots\\de5c7c1956318eb13d1907c880f019ceec20c4cef8cc9bc849c77886b8870a64\\snapshot_manifest.json",
+    "snapshot_sha256": "489e475b0dc59d1ad0cb4c192d7ba04ee6ba55d11a1026227e4863defdc05849",
+    "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-15\\20261021T184048876424_41b4a860\\feature_ledger.csv",
+    "seed_sha256": "2a688385b9dc38a818bd2e72d741b4eceaad323a2a48717297712ee03460f8ec",
+    "builder_dependencies": {
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+    },
+    "clocks": [
+      "09:20",
+      "09:25",
+      "09:30",
+      "09:35",
+      "09:40",
+      "09:45",
+      "09:50",
+      "09:55",
+      "10:00",
+      "10:05",
+      "10:10",
+      "10:15",
+      "10:20",
+      "10:25",
+      "10:30",
+      "10:35",
+      "10:40",
+      "10:45",
+      "10:50",
+      "10:55",
+      "11:00",
+      "11:05",
+      "11:10",
+      "11:15",
+      "11:20",
+      "11:25",
+      "11:30",
+      "11:35",
+      "11:40",
+      "11:45",
+      "11:50",
+      "11:55",
+      "12:00",
+      "12:05",
+      "12:10",
+      "12:15",
+      "12:20",
+      "12:25",
+      "12:30",
+      "12:35",
+      "12:40",
+      "12:45",
+      "12:50",
+      "12:55",
+      "13:00",
+      "13:05",
+      "13:10",
+      "13:15",
+      "13:20",
+      "13:25",
+      "13:30"
+    ],
+    "reconstructed_stocks": 212,
+    "rows": 10812,
+    "reconstruction_checks": {
+      "close": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema9": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema20": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema50": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "price_change_pct": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "oi_change_pct": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "volume_ratio": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "confirmation_close": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "v9_1m_volume_ratio": {
+        "rows": 7420,
+        "mismatches": 0
+      }
+    },
+    "problems": [],
+    "excluded_stocks": [],
+    "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+    "raw_snapshot_members_verified": true,
+    "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+    "features_sha256": "9dd7bf11aed95d5b158b4cf9ad0a1d2d690173e1a43c33520880cd25b54881d2",
+    "minutes_sha256": "8244782ea697f06658e88ed7bdffa018b9bd6b2a1f6faf7d87a5aeb04accf37b"
+  },
+  {
+    "day": "2026-10-16",
+    "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-16\\20261021T184609636621_2a7f3b2e\\input_snapshots\\c5d6e5f6000bed683d3576157269514c739ad2f81d3c74f58494acb26ee9d1d0\\snapshot_manifest.json",
+    "snapshot_sha256": "4465f93ec09d71be39c7a8adaa35b9d03b776180ecb6abaf672fb3fb40f8e877",
+    "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-16\\20261021T184609636621_2a7f3b2e\\feature_ledger.csv",
+    "seed_sha256": "6dfe154e7ebe5881d63cb734338ae89be2dec1043525aba6718f1c651f06fe76",
+    "builder_dependencies": {
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+    },
+    "clocks": [
+      "09:20",
+      "09:25",
+      "09:30",
+      "09:35",
+      "09:40",
+      "09:45",
+      "09:50",
+      "09:55",
+      "10:00",
+      "10:05",
+      "10:10",
+      "10:15",
+      "10:20",
+      "10:25",
+      "10:30",
+      "10:35",
+      "10:40",
+      "10:45",
+      "10:50",
+      "10:55",
+      "11:00",
+      "11:05",
+      "11:10",
+      "11:15",
+      "11:20",
+      "11:25",
+      "11:30",
+      "11:35",
+      "11:40",
+      "11:45",
+      "11:50",
+      "11:55",
+      "12:00",
+      "12:05",
+      "12:10",
+      "12:15",
+      "12:20",
+      "12:25",
+      "12:30",
+      "12:35",
+      "12:40",
+      "12:45",
+      "12:50",
+      "12:55",
+      "13:00",
+      "13:05",
+      "13:10",
+      "13:15",
+      "13:20",
+      "13:25",
+      "13:30"
+    ],
+    "reconstructed_stocks": 211,
+    "rows": 10761,
+    "reconstruction_checks": {
+      "close": {
+        "rows": 7385,
+        "mismatches": 0
+      },
+      "ema9": {
+        "rows": 7385,
+        "mismatches": 0
+      },
+      "ema20": {
+        "rows": 7385,
+        "mismatches": 0
+      },
+      "ema50": {
+        "rows": 7385,
+        "mismatches": 0
+      },
+      "price_change_pct": {
+        "rows": 7385,
+        "mismatches": 0
+      },
+      "oi_change_pct": {
+        "rows": 7385,
+        "mismatches": 0
+      },
+      "volume_ratio": {
+        "rows": 7385,
+        "mismatches": 0
+      },
+      "confirmation_close": {
+        "rows": 7385,
+        "mismatches": 0
+      },
+      "v9_1m_volume_ratio": {
+        "rows": 7385,
+        "mismatches": 0
+      }
+    },
+    "problems": [],
+    "excluded_stocks": [],
+    "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+    "raw_snapshot_members_verified": true,
+    "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+    "features_sha256": "ab5721dc9649e9ed473d8b30d14139c85d94ea80628ab929e2980e9e22ec01fa",
+    "minutes_sha256": "2a53d9d30b2300fa8e1e8f7f201b7a09e768e0bda8a08392db8a1154278560e2"
+  },
+  {
+    "day": "2026-10-19",
+    "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-19\\20261021T185123643305_6ef36857\\input_snapshots\\ef92a13661da56e62e36801c1a3f8e1dfabd12c2f2c09ab94557c5aa108bc273\\snapshot_manifest.json",
+    "snapshot_sha256": "8fc71373d8013a0e6131189c867e92223809db1fc860da13b9a12bde70c3b685",
+    "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-19\\20261021T185123643305_6ef36857\\feature_ledger.csv",
+    "seed_sha256": "4950456d50d073176368f5bc2d55575f5a995d67537de2330968e05c624f5805",
+    "builder_dependencies": {
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+    },
+    "clocks": [
+      "09:20",
+      "09:25",
+      "09:30",
+      "09:35",
+      "09:40",
+      "09:45",
+      "09:50",
+      "09:55",
+      "10:00",
+      "10:05",
+      "10:10",
+      "10:15",
+      "10:20",
+      "10:25",
+      "10:30",
+      "10:35",
+      "10:40",
+      "10:45",
+      "10:50",
+      "10:55",
+      "11:00",
+      "11:05",
+      "11:10",
+      "11:15",
+      "11:20",
+      "11:25",
+      "11:30",
+      "11:35",
+      "11:40",
+      "11:45",
+      "11:50",
+      "11:55",
+      "12:00",
+      "12:05",
+      "12:10",
+      "12:15",
+      "12:20",
+      "12:25",
+      "12:30",
+      "12:35",
+      "12:40",
+      "12:45",
+      "12:50",
+      "12:55",
+      "13:00",
+      "13:05",
+      "13:10",
+      "13:15",
+      "13:20",
+      "13:25",
+      "13:30"
+    ],
+    "reconstructed_stocks": 210,
+    "rows": 10710,
+    "reconstruction_checks": {
+      "close": {
+        "rows": 7350,
+        "mismatches": 0
+      },
+      "ema9": {
+        "rows": 7350,
+        "mismatches": 0
+      },
+      "ema20": {
+        "rows": 7350,
+        "mismatches": 0
+      },
+      "ema50": {
+        "rows": 7350,
+        "mismatches": 0
+      },
+      "price_change_pct": {
+        "rows": 7350,
+        "mismatches": 0
+      },
+      "oi_change_pct": {
+        "rows": 7350,
+        "mismatches": 0
+      },
+      "volume_ratio": {
+        "rows": 7350,
+        "mismatches": 0
+      },
+      "confirmation_close": {
+        "rows": 7350,
+        "mismatches": 0
+      },
+      "v9_1m_volume_ratio": {
+        "rows": 7350,
+        "mismatches": 0
+      }
+    },
+    "problems": [],
+    "excluded_stocks": [],
+    "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+    "raw_snapshot_members_verified": true,
+    "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+    "features_sha256": "b93609c5a8701622538f69357d503848116d30d1f7dcb6366d44942018183f52",
+    "minutes_sha256": "1c0b4d536f99d2f277a367418cb6d711130553e4478cdaaee61360c5637d367c"
+  },
+  {
+    "day": "2026-10-21",
+    "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-21\\20261021T185633085368_2b07d4a7\\input_snapshots\\3c8ba8b18d6edb999a049b63a7557361dfc1a79a90bfa1007383e3c688f2d431\\snapshot_manifest.json",
+    "snapshot_sha256": "3da55ea2a5ee102062003bd6deda71706eef7e968a062aa4a4c7cc37cd531343",
+    "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-21\\20261021T185633085368_2b07d4a7\\feature_ledger.csv",
+    "seed_sha256": "296c45a45333aa344d126bad7ad1e82c3f5d1c49d17bba5cfd98fca8b2bf77bf",
+    "builder_dependencies": {
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+    },
+    "clocks": [
+      "09:20",
+      "09:25",
+      "09:30",
+      "09:35",
+      "09:40",
+      "09:45",
+      "09:50",
+      "09:55",
+      "10:00",
+      "10:05",
+      "10:10",
+      "10:15",
+      "10:20",
+      "10:25",
+      "10:30",
+      "10:35",
+      "10:40",
+      "10:45",
+      "10:50",
+      "10:55",
+      "11:00",
+      "11:05",
+      "11:10",
+      "11:15",
+      "11:20",
+      "11:25",
+      "11:30",
+      "11:35",
+      "11:40",
+      "11:45",
+      "11:50",
+      "11:55",
+      "12:00",
+      "12:05",
+      "12:10",
+      "12:15",
+      "12:20",
+      "12:25",
+      "12:30",
+      "12:35",
+      "12:40",
+      "12:45",
+      "12:50",
+      "12:55",
+      "13:00",
+      "13:05",
+      "13:10",
+      "13:15",
+      "13:20",
+      "13:25",
+      "13:30"
+    ],
+    "reconstructed_stocks": 212,
+    "rows": 10812,
+    "reconstruction_checks": {
+      "close": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema9": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema20": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema50": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "price_change_pct": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "oi_change_pct": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "volume_ratio": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "confirmation_close": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "v9_1m_volume_ratio": {
+        "rows": 7420,
+        "mismatches": 0
+      }
+    },
+    "problems": [],
+    "excluded_stocks": [],
+    "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+    "raw_snapshot_members_verified": true,
+    "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+    "features_sha256": "198b47c78b85d7f6934296f0cab6573c22a9246ad3b258612c214dd77688ad15",
+    "minutes_sha256": "67c798c72bfc4f6d7c6ff2a507889c97da76dbcdf898b495e129bf0d30e7a136"
+  },
+  {
+    "day": "2026-10-23",
+    "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\snapshot_manifest.json",
+    "snapshot_sha256": "8eb0d105472a65e37d033eb0861cc35183c0e31c56b32b691d921fe11005aa17",
+    "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\feature_ledger.csv",
+    "seed_sha256": "16d691afc095c40594e5db372f051fae47b811080b09e47818907c2e01cd447b",
+    "builder_dependencies": {
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+    },
+    "clocks": [
+      "09:20",
+      "09:25",
+      "09:30",
+      "09:35",
+      "09:40",
+      "09:45",
+      "09:50",
+      "09:55",
+      "10:00",
+      "10:05",
+      "10:10",
+      "10:15",
+      "10:20",
+      "10:25",
+      "10:30",
+      "10:35",
+      "10:40",
+      "10:45",
+      "10:50",
+      "10:55",
+      "11:00",
+      "11:05",
+      "11:10",
+      "11:15",
+      "11:20",
+      "11:25",
+      "11:30",
+      "11:35",
+      "11:40",
+      "11:45",
+      "11:50",
+      "11:55",
+      "12:00",
+      "12:05",
+      "12:10",
+      "12:15",
+      "12:20",
+      "12:25",
+      "12:30",
+      "12:35",
+      "12:40",
+      "12:45",
+      "12:50",
+      "12:55",
+      "13:00",
+      "13:05",
+      "13:10",
+      "13:15",
+      "13:20",
+      "13:25",
+      "13:30"
+    ],
+    "reconstructed_stocks": 212,
+    "rows": 10812,
+    "reconstruction_checks": {
+      "close": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema9": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema20": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "ema50": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "price_change_pct": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "oi_change_pct": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "volume_ratio": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "confirmation_close": {
+        "rows": 7420,
+        "mismatches": 0
+      },
+      "v9_1m_volume_ratio": {
+        "rows": 7420,
+        "mismatches": 0
+      }
+    },
+    "problems": [],
+    "excluded_stocks": [],
+    "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+    "raw_snapshot_members_verified": true,
+    "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+    "features_sha256": "40140fa63dadd987dd2785da17def592e5a3fc046c66564a0bc771fbb47356ca",
+    "minutes_sha256": "0053247e5b1db612c8d89ce0680b37214a36d3e8abe858718684ff97e49a321e"
+  },
+  {
+    "day": "2026-10-22",
+    "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-22\\20261022T171516772518_faf6a6fc\\input_snapshots\\3cc2672d26bf1a232448a5f420af0770165f3e70f25eb089999bd456cf1b5660\\snapshot_manifest.json",
+    "snapshot_sha256": "0d403c587d02ad1e9fc30610f3dfa3b2b92842a876e3ba6088a330a590cbeb4c",
+    "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-22\\20261022T171516772518_faf6a6fc\\feature_ledger.csv",
+    "seed_sha256": "972a80427c840c6de44a682a7aefb50c44063f8e5ba776660467da85ee73953c",
+    "builder_dependencies": {
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+      "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+    },
+    "clocks": [
+      "09:20",
+      "09:25",
+      "09:30",
+      "09:35",
+      "09:40",
+      "09:45",
+      "09:50",
+      "09:55",
+      "10:00",
+      "10:05",
+      "10:10",
+      "10:15",
+      "10:20",
+      "10:25",
+      "10:30",
+      "10:35",
+      "10:40",
+      "10:45",
+      "10:50",
+      "10:55",
+      "11:00",
+      "11:05",
+      "11:10",
+      "11:15",
+      "11:20",
+      "11:25",
+      "11:30",
+      "11:35",
+      "11:40",
+      "11:45",
+      "11:50",
+      "11:55",
+      "12:00",
+      "12:05",
+      "12:10",
+      "12:15",
+      "12:20",
+      "12:25",
+      "12:30",
+      "12:35",
+      "12:40",
+      "12:45",
+      "12:50",
+      "12:55",
+      "13:00",
+      "13:05",
+      "13:10",
+      "13:15",
+      "13:20",
+      "13:25",
+      "13:30"
+    ],
+    "reconstructed_stocks": 213,
+    "rows": 10863,
+    "reconstruction_checks": {
+      "close": {
+        "rows": 7455,
+        "mismatches": 0
+      },
+      "ema9": {
+        "rows": 7455,
+        "mismatches": 0
+      },
+      "ema20": {
+        "rows": 7455,
+        "mismatches": 0
+      },
+      "ema50": {
+        "rows": 7455,
+        "mismatches": 0
+      },
+      "price_change_pct": {
+        "rows": 7455,
+        "mismatches": 0
+      },
+      "oi_change_pct": {
+        "rows": 7455,
+        "mismatches": 0
+      },
+      "volume_ratio": {
+        "rows": 7455,
+        "mismatches": 0
+      },
+      "confirmation_close": {
+        "rows": 7455,
+        "mismatches": 0
+      },
+      "v9_1m_volume_ratio": {
+        "rows": 7455,
+        "mismatches": 0
+      }
+    },
+    "problems": [],
+    "excluded_stocks": [],
+    "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+    "raw_snapshot_members_verified": true,
+    "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+    "features_sha256": "ba22e4211f9379d3eb14ee30db9634c0465abd447d7791d2b01e4ed62e89461f",
+    "minutes_sha256": "f6a71c79bc611e1464d354288207a893b45c391c1c48aca6136e36d45df85378"
+  }
+]

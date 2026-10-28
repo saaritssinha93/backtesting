@@ -14,6 +14,23 @@ from tools import g3_live_operator as op
 NOW = datetime(2026, 10, 13, 8, 30, tzinfo=op.config.IST)
 DAY = NOW.date()
 STANDING_NOW = datetime(2026, 10, 23, 9, 10, tzinfo=op.config.IST)
+REAL_STANDING_POLICY = op.STANDING_POLICY
+
+
+@pytest.fixture(autouse=True)
+def hypothetical_authorized_standing_policy(monkeypatch, tmp_path):
+    """Exercise the old standing gates without enabling the real V13 policy."""
+    monkeypatch.setattr(op, 'STANDING_POLICY_ENABLED', True)
+    monkeypatch.setattr(op, 'STANDING_POLICY_EFFECTIVE_DATE', STANDING_NOW.date())
+    path = tmp_path / 'hypothetical_standing.json'
+    policy = op.standing_policy_payload()
+    policy['standing_policy_fingerprint'] = op.standing_policy_fingerprint(policy)
+    path.write_text(json.dumps(policy), encoding='utf-8')
+    monkeypatch.setattr(op, 'STANDING_POLICY', path)
+
+
+def test_real_v13_standing_policy_is_disabled_pending_new_approval():
+    assert json.loads(REAL_STANDING_POLICY.read_text())['enabled'] is False
 
 
 @pytest.fixture
@@ -55,13 +72,13 @@ def test_preview_is_read_only_and_covers_every_setup(state, tmp_path):
     root = tmp_path / 'absent'
     plan = op.plan(DAY, state, now=NOW, runtime_root=root)
     assert state == before and not root.exists()
-    assert plan['active_setup_count'] == 61
-    assert len(set(plan['setup_ids'])) == 61
+    assert plan['active_setup_count'] == 51
+    assert len(set(plan['setup_ids'])) == 51
     assert plan['targets_pct']['1006_LONG'] == .56
     assert plan['targets_pct']['1031_SHORT'] == 1.66
     assert plan['targets_pct']['1136_LONG'] == 7.15
     assert plan['targets_pct']['1231_SHORT'] == 1.85
-    assert plan['targets_pct']['1236_LONG'] == .37
+    assert '1236_LONG' not in plan['targets_pct']
     assert plan['targets_pct']['1331_LONG'] == 1.17
     assert plan['last_confirmation'] == '13:31'
     assert plan['pipeline_deadline'] == '13:33'
@@ -104,7 +121,7 @@ def test_tomorrow_plan_keeps_approved_midday_filters_and_all_previous_setups(sta
         assert rows[setup_id]['minimum_confirmation_volume_ratio'] == (
             .8 if setup_id == '0941_LONG' else expected_minimum)
     assert len(previous['active_setups']) == 32
-    assert len(rows) == 61 and len(plan['signal_to_confirmation']) == 40
+    assert len(rows) == 51 and len(plan['signal_to_confirmation']) == 35
     assert plan['exit_policy'] == dict(initial_stop_pct=1.25, tightened_stop_pct=1.,
         tighten_after_minutes=120, entry_expiry_minutes=10, square_off='15:15')
     assert not plan['mutates_controls'] and not plan['starts_workers'] and not plan['submits_orders']
@@ -123,13 +140,13 @@ def test_approval_requires_current_fingerprint_and_preserves_sizing(state, repor
         op.validate_launch(approved, arm, now=NOW + timedelta(days=1), runtime_root=tmp_path)
 
 
-def test_standing_policy_artifact_is_exactly_bound_to_v12_setups_and_live_caps():
+def test_standing_policy_artifact_is_exactly_bound_to_v13_setups_and_live_caps():
     policy = op.load_standing_policy()
     ids = [setup.setup_id for setup in op.config.ACTIVE_SETUPS]
     assert policy['source'] == 'STANDING_OPERATOR_POLICY'
     assert policy['effective_from_session_date'] == '2026-10-23'
     assert policy['enabled'] is True and policy['revoked'] is False
-    assert policy['strategy_version'] == 'V13-V10-G-3-PRODUCTION-V12'
+    assert policy['strategy_version'] == 'V13-V10-G-3-PRODUCTION-V13'
     assert policy['strategy_fingerprint'] == op.config.strategy_fingerprint()
     assert policy['setup_ids'] == ids
     assert policy['setup_ids_sha256'] == op.canonical_fingerprint(ids)
@@ -365,10 +382,8 @@ def test_tomorrow_plan_preserves_prior_44_and_contains_exact_afternoon_targets(s
             setup_id, previous['minimum_confirmation_1m_volume_ratio'][before['side']])
         assert rows[setup_id]['minimum_confirmation_volume_ratio'] == (
             .8 if setup_id == '0941_LONG' else expected_minimum)
-    expected = {'1236_LONG': .37, '1236_SHORT': 1.24, '1246_LONG': .23, '1246_SHORT': .49,
-                '1251_LONG': .26, '1251_SHORT': .14, '1256_SHORT': .14, '1301_SHORT': .88,
-                '1306_LONG': .18, '1316_LONG': .17, '1316_SHORT': .33, '1321_SHORT': 1.01,
-                '1326_LONG': .41, '1326_SHORT': .76, '1331_LONG': 1.17}
+    expected = {'1236_SHORT': 1.24, '1301_SHORT': .88,
+                '1321_SHORT': 1.01, '1326_SHORT': .76, '1331_LONG': 1.17}
     assert len(previous_ids) == 44
     assert set(rows) - previous_ids == set(expected) | op.config.contract.ADDED_SETUP_IDS
     assert {setup_id: rows[setup_id]['target_pct'] for setup_id in expected} == expected

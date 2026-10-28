@@ -17,6 +17,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+import g3_symbol_admission as symbol_guard
+
 def _default_config():
     # G3 passes its profile explicitly; importing its lock must never require
     # legacy frozen G files. Existing G callers retain the same lazy default.
@@ -90,6 +92,7 @@ def capacity_from_states(states: Iterable[dict[str, Any]], current: dict[str, An
 
     Pending orders do not consume capital. Other strategy OPEN states inside
     this isolated paper book block admission; they cannot be silently ignored.
+    G3 also permits only one filled position per symbol, across setups/sides.
     """
     config = strategy_config or _default_config()
     if current.get("mode") != "PAPER" or current.get("strategy_version") != config.STRATEGY_VERSION:
@@ -105,11 +108,17 @@ def capacity_from_states(states: Iterable[dict[str, Any]], current: dict[str, An
         raise PortfolioStateError("Invalid G paper session date") from exc
     if not signal_id:
         raise PortfolioStateError("Missing G paper signal ID")
+    guard_symbols = getattr(config, "STRATEGY_PROFILE", "") == "V13_V10_G_3"
+    try:
+        current_symbol = symbol_guard.symbol_key(current) if guard_symbols else None
+    except ValueError as exc:
+        raise PortfolioStateError(str(exc)) from exc
     required = _positive_number(current.get("capital_rs"), "capital")
     if abs(required - config.CAPITAL_PER_ENTRY_RS) > 1e-9:
         raise PortfolioStateError("G paper allocation must be one lakh per filled entry")
     reserved = 0.
     seen = set()
+    symbol_conflicts = []
     for state in states:
         if not isinstance(state, dict):
             raise PortfolioStateError("Invalid paper order object")
@@ -152,11 +161,24 @@ def capacity_from_states(states: Iterable[dict[str, Any]], current: dict[str, An
             raise PortfolioStateError("OPEN paper quantity is not whole equity shares")
         _positive_number(state.get("entry_price"), "entry price")
         reserved += capital
+        if guard_symbols:
+            try:
+                if symbol_guard.symbol_key(state) == current_symbol:
+                    symbol_conflicts.append(identity)
+            except ValueError as exc:
+                raise PortfolioStateError(str(exc)) from exc
     available = max(0., config.PORTFOLIO_CAPITAL_RS - reserved)
-    allowed = reserved + required <= config.PORTFOLIO_CAPITAL_RS + 1e-9
-    return dict(allowed=allowed, reason="PAPER_CAPITAL_AVAILABLE" if allowed else "PORTFOLIO_CAPITAL_LIMIT",
+    allowed = not symbol_conflicts and reserved + required <= config.PORTFOLIO_CAPITAL_RS + 1e-9
+    reason = (symbol_guard.BLOCK_REASON if symbol_conflicts else
+              "PAPER_CAPITAL_AVAILABLE" if allowed else "PORTFOLIO_CAPITAL_LIMIT")
+    result = dict(allowed=allowed, reason=reason,
                 portfolio_capital_rs=config.PORTFOLIO_CAPITAL_RS, reserved_capital_rs=reserved,
                 available_capital_rs=available, required_capital_rs=required, open_positions=len(seen))
+    if guard_symbols:
+        result.update(symbol_entry_guard_schema_version=symbol_guard.SCHEMA_VERSION,
+                      symbol_entry_guard_policy=symbol_guard.POLICY,
+                      symbol=current_symbol, blocking_signal_ids=sorted(symbol_conflicts))
+    return result
 
 
 def capacity_for_fill(current: dict[str, Any], day_root: Path | str, *, strategy_config=None) -> dict[str, Any]:

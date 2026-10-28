@@ -1,0 +1,134 @@
+{
+  "day": "2026-10-13",
+  "snapshot_manifest": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-13\\20261013T222838087345_6e7355c3\\input_snapshots\\02df2087a01f950db2e3b3f7148b7cfb0f9fbddc548979d49e8ebf599d520881\\snapshot_manifest.json",
+  "snapshot_sha256": "37e8fe61b767e6d61e04daff51f93b904c8f6282ca704080cd10134f63e19a3d",
+  "feature_source": "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-13\\20261013T222838087345_6e7355c3\\feature_ledger.csv",
+  "seed_sha256": "e02df9788a7f1ddf41f6ce1f4956b0a85a8552e8583c97ac51fe3184b2a6e5d7",
+  "builder_dependencies": {
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_replay_source.py": "002c2ac68eb54eed22d23552b4b7fe15e201218d0b643c86d4c9c0d50d7f454c",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_hybrid_data.py": "2d6ecc8d877be219d82b696ea4a1fd77b50e2f88d9fcb34d8cb91d94d211c3fc",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_oi_common.py": "8e71a7530af218cf3ef720215aaf6fe430340633e6fe689e572f52340c6b7c3b"
+  },
+  "clocks": [
+    "09:20",
+    "09:25",
+    "09:30",
+    "09:35",
+    "09:40",
+    "09:45",
+    "09:50",
+    "09:55",
+    "10:00",
+    "10:05",
+    "10:10",
+    "10:15",
+    "10:20",
+    "10:25",
+    "10:30",
+    "10:35",
+    "10:40",
+    "10:45",
+    "10:50",
+    "10:55",
+    "11:00",
+    "11:05",
+    "11:10",
+    "11:15",
+    "11:20",
+    "11:25",
+    "11:30",
+    "11:35",
+    "11:40",
+    "11:45",
+    "11:50",
+    "11:55",
+    "12:00",
+    "12:05",
+    "12:10",
+    "12:15",
+    "12:20",
+    "12:25",
+    "12:30",
+    "12:35",
+    "12:40",
+    "12:45",
+    "12:50",
+    "12:55",
+    "13:00",
+    "13:05",
+    "13:10",
+    "13:15",
+    "13:20",
+    "13:25",
+    "13:30"
+  ],
+  "reconstructed_stocks": 212,
+  "rows": 10812,
+  "reconstruction_checks": {
+    "close": {
+      "rows": 8480,
+      "mismatches": 0
+    },
+    "ema9": {
+      "rows": 8480,
+      "mismatches": 0
+    },
+    "ema20": {
+      "rows": 8480,
+      "mismatches": 0
+    },
+    "ema50": {
+      "rows": 8480,
+      "mismatches": 0
+    },
+    "price_change_pct": {
+      "rows": 8480,
+      "mismatches": 0
+    },
+    "oi_change_pct": {
+      "rows": 8480,
+      "mismatches": 0
+    },
+    "volume_ratio": {
+      "rows": 8480,
+      "mismatches": 0
+    },
+    "confirmation_close": {
+      "rows": 8480,
+      "mismatches": 0
+    },
+    "v9_1m_volume_ratio": {
+      "rows": 8480,
+      "mismatches": 0
+    }
+  },
+  "problems": [],
+  "excluded_stocks": [],
+  "build_version": "sealed_opening_ema_seed_exact_recurrence_v1",
+  "raw_snapshot_members_verified": true,
+  "ema_seed_policy": "Exact09:20sealedEMA; subsequent completed5m closes only",
+  "features_sha256": "33de69a558130f5dbd6b4cdf6152b125766d01756d1cfbbfde440d51ff2079b3",
+  "minutes_sha256": "559d3f8ea1edc3edbbabcd1e93847de084981629c27353bb6038f34cdbc32b88",
+  "loader_sha256": "b18802f9f31efc0b98437d4ea2ec00341f5994c29db7fbeb2548bc895cc195a4",
+  "universe": {
+    "policy": "EXACT_DATE_UNIVERSE_VALIDATION",
+    "path": "C:\\TradingData\\eqidv2\\fno_oi\\universe\\near_month_2026-10-13.parquet",
+    "sha256": "508b4fca7a3967e3461405aea734a91006832cb75bdf1d51f3b761a58f6c730a",
+    "feature_symbols": 212,
+    "universe_symbols": 213,
+    "missing_from_features": [
+      "KAYNES"
+    ],
+    "extra_in_features": [],
+    "historical_cohort_preserved": true,
+    "strict_point_in_time_universe": true
+  },
+  "baseline_selection_parity": {
+    "reconstructed_orders": 14,
+    "legacy_orders": 14,
+    "matching": true,
+    "added": [],
+    "missing": [],
+    "field_differences": []
+  }
+}

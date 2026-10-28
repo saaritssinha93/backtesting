@@ -138,8 +138,8 @@ def validate_standing_policy(policy, *, session_date=None):
     return policy
 
 
-def load_standing_policy(path=STANDING_POLICY, *, session_date=None):
-    return validate_standing_policy(read(path), session_date=session_date)
+def load_standing_policy(path=None, *, session_date=None):
+    return validate_standing_policy(read(STANDING_POLICY if path is None else path), session_date=session_date)
 
 
 def validate_identity(state):
@@ -294,7 +294,7 @@ def approval_payloads(day, state, report, *, now=None, runtime_root=RUNTIME_ROOT
 
 def standing_approval_payloads(day, state, report, *, now=None,
                                runtime_root=RUNTIME_ROOT,
-                               standing_policy_path=STANDING_POLICY):
+                               standing_policy_path=None):
     """Build a same-session approval under the reviewed standing policy."""
     now = now or datetime.now(config.IST)
     if now.tzinfo is None or now.utcoffset() is None:
@@ -335,7 +335,7 @@ def standing_approval_payloads(day, state, report, *, now=None,
 
 
 def validate_launch(state, arm, *, now=None, runtime_root=RUNTIME_ROOT,
-                    standing_policy_path=STANDING_POLICY):
+                    standing_policy_path=None):
     now = now or datetime.now(config.IST)
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError('LIVE launch validation requires a timezone-aware clock')

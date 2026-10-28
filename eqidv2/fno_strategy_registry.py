@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from fno_v13_v10_g_3_contract import STRATEGY_VERSION as G3_STRATEGY_VERSION
+from fno_v13_v10_g_3_cutoff_production import STRATEGY_VERSION as G3_STRATEGY_VERSION
 
 WORKSPACE = Path(__file__).resolve().parent
 ACTIVE_PROFILE_PATH = WORKSPACE / "configs" / "strategies" / "active_profile.json"
@@ -83,7 +83,7 @@ def active_profile() -> StrategyProfile:
 def expected_fingerprint(profile: str | None = None) -> str:
     name = profile or active_profile_name()
     if name == "V13_V10_G_3":
-        from fno_v13_v10_g_3_contract import config_fingerprint
+        from fno_v13_v10_g_3_cutoff_production import config_fingerprint
         return config_fingerprint()
     # Historical G fingerprints remain the responsibility of its explicit
     # registry/record. Do not import a live engine to render a dashboard.
@@ -119,13 +119,26 @@ def display_identity(session_date: str, profile: str | None = None, *, current_f
     fingerprint = expected_fingerprint(name) if current_fingerprint is None else current_fingerprint
     if name != "V13_V10_G_3":
         return DisplayIdentity(name, PROFILES[name].version, fingerprint, {})
-    from fno_v13_v10_g_3_contract import strategy_payload
+    from fno_v13_v10_g_3_cutoff_production import strategy_payload
     current = DisplayIdentity(name, PROFILES[name].version, fingerprint, strategy_payload())
     state = deployment_state()
     previous = state.get("previous_session_identity")
     if (state.get("profile") != name or not isinstance(previous, dict)
             or previous.get("through_session") != session_date):
         return current
+    # Prior-session display is read-only and tied to a known historical contract.
+    if session_date == "2026-10-23":
+        from fno_v13_v10_g_3_contract import strategy_fingerprint as v12_fingerprint
+        version = "V13-V10-G-3-PRODUCTION-V12"
+        digest = v12_fingerprint()
+        if (previous.get("strategy_version"), previous.get("strategy_fingerprint")) != (version, digest):
+            raise ValueError("Previous G3 display identity does not match the pinned V12 session")
+        path = WORKSPACE / "configs/strategies/v13_v10_g_3_production_v12.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        canonical = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        if canonical != digest or value.get("strategy_version") != version:
+            raise ValueError("Previous G3 V12 display configuration fingerprint changed")
+        return DisplayIdentity(name, version, digest, value, previous_session=True)
     # These immutable pins preserve the 2026-10-15 V9 session during the staged V11 handoff.
     # A deployment JSON cannot authorize an arbitrary legacy contract or date.
     version = "V13-V10-G-3-PRODUCTION-V9"
