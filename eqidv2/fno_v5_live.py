@@ -64,6 +64,10 @@ LIVE_GENERATION = os.getenv("FNO_LIVE_GENERATION", "v5").strip().lower()
 if LIVE_GENERATION not in {"v5", "v6"}:
     raise RuntimeError(f"Unsupported FnO live generation: {LIVE_GENERATION}")
 config = config_for_generation(LIVE_GENERATION)
+if getattr(config, "STRATEGY_PROFILE", "") == "V13_V10_G_7_V4_LOCK":
+    # G7 has distinct Nifty, historical-indicator, exit and admission rules.
+    # Never run it through the G3/legacy transport merely by changing a label.
+    raise RuntimeError("G7 V4 lock live/paper transport NOT_SUPPORTED; use its readiness entrypoint")
 LIVE_LABEL = LIVE_GENERATION.upper()
 DISPLAY_LABEL = getattr(config, "DISPLAY_LABEL", LIVE_LABEL)
 REPORT_PREFIX = getattr(config, "REPORT_PREFIX", f"fno_{LIVE_GENERATION}")
@@ -734,6 +738,8 @@ def scan_five_minute_slot(
     *,
     verified_no_candle_symbols: set[str] | None = None,
 ) -> dict[str, Any]:
+    if is_g3_config(config) and signal_end not in config.SIGNAL_TO_CONFIRMATION:
+        raise ValueError("SLOT_WIN_RATE_POLICY_DISABLED: " + signal_end)
     slot = config.slot_datetime(session_date, signal_end)
     candidates: list[dict[str, Any]] = []
     feature_evaluations: list[dict[str, Any]] = []
@@ -1117,6 +1123,23 @@ def confirmation_metrics(
     return result
 
 
+def _slot_entry_allowed(row: dict[str, Any]) -> bool:
+    """The user-selected slot screen applies only to prospective entries."""
+    if not is_g3_config(config):
+        return True
+    from strategy_slot_selection import slot_allowed
+    setup_id = str(row.get("setup_id", ""))
+    if not setup_id:
+        clock = str(row.get("confirmation_end", "")).replace(":", "")
+        setup_id = clock + "_" + str(row.get("side", "")).upper()
+    return slot_allowed("G3", setup_id)
+
+
+def _require_entry_slot(row: dict[str, Any]) -> None:
+    if not _slot_entry_allowed(row):
+        raise ValueError("SLOT_WIN_RATE_POLICY_DISABLED: " + str(row.get("setup_id", "")))
+
+
 def select_entry_signals(
     confirmed: list[dict[str, Any]],
     session_date: date,
@@ -1131,6 +1154,8 @@ def select_entry_signals(
         setup = (config.setup_for(signal_end, side, session_date=session_date)
                  if is_modern_config(config) else config.setup_for(signal_end, side))
         if setup is None:
+            continue
+        if not _slot_entry_allowed({"setup_id": setup.setup_id}):
             continue
         ranked = (config.rank_candidates(directional, setup, session_date=session_date)
                   if is_modern_config(config) else config.rank_candidates(directional, setup))
@@ -1958,6 +1983,7 @@ def _authoritative_signal_ids(session_date: date) -> set[str]:
 
 
 def _validate_signal(signal: dict[str, Any], session_date: date) -> None:
+    _require_entry_slot(signal)
     side = str(signal.get("side", "")).upper()
     signal_end = str(signal.get("signal_end", ""))
     setup = (config.setup_for(signal_end, side, session_date=session_date)
@@ -2337,6 +2363,8 @@ def process_confirmation_slot(
     pool: KitePool | None,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
+    if is_g3_config(config) and signal_end not in config.SIGNAL_TO_CONFIRMATION:
+        raise ValueError("SLOT_WIN_RATE_POLICY_DISABLED: " + signal_end)
     if snapshot.get("strategy_version") != config.STRATEGY_VERSION:
         raise RuntimeError("The 5-minute scanner snapshot has a stale strategy version.")
     if snapshot.get("strategy_fingerprint") != config.strategy_fingerprint():
@@ -2560,6 +2588,11 @@ def create_order_state(
     *,
     live_quantity: int | None = None,
 ) -> dict[str, Any]:
+    _require_entry_slot(signal)
+    if is_g3_config(config) and (
+            signal.get("strategy_version") != config.STRATEGY_VERSION
+            or signal.get("strategy_fingerprint") != config.strategy_fingerprint()):
+        raise ValueError("ARCHIVED_STRATEGY_CANNOT_CREATE_NEW_ENTRY")
     execution_mode = mode.upper()
     if execution_mode == "LIVE" and is_g3_config(config):
         config.live_execution_policy.validate_signal_sizing(signal)
@@ -2934,6 +2967,16 @@ def advance_paper_order(
 ) -> dict[str, Any]:
     status = str(state["status"])
     if status in TERMINAL_STATES:
+        return state
+    if status == "PENDING_ENTRY" and not _slot_entry_allowed(state):
+        state.update(status="CANCELLED", status_reason="SLOT_WIN_RATE_POLICY_DISABLED",
+                     updated_at_ist=now.isoformat(timespec="seconds"))
+        return state
+    if status == "PENDING_ENTRY" and is_g3_config(config) and (
+            state.get("strategy_version") != config.STRATEGY_VERSION
+            or state.get("strategy_fingerprint") != config.strategy_fingerprint()):
+        state.update(status="CANCELLED", status_reason="ARCHIVED_STRATEGY_CANNOT_CREATE_NEW_ENTRY",
+                     updated_at_ist=now.isoformat(timespec="seconds"))
         return state
     if is_modern_config(config):
         from fno_v13_v10_g_paper import expire_pending
@@ -3562,6 +3605,7 @@ def _place_live_entry_order(
     order_type: str,
     reason: str,
 ) -> str:
+    _require_entry_slot(state)
     g3_live = is_g3_config(config)
     if g3_live:
         if state.get("strategy_fingerprint") != config.strategy_fingerprint() or state.get("strategy_version") != config.STRATEGY_VERSION:
@@ -3777,16 +3821,41 @@ def _begin_g3_live_squareoff(state: dict[str, Any], client: Any, now: datetime,
             _validate_recovered_order_quantity({**state, "quantity": _g3_exit_residual(state)}, recovered)
             state["squareoff_order_id"] = str(recovered.get("order_id", ""))
             state["g3_squareoff_submission_pending"] = False
+            state["g3_squareoff_submission_rejected"] = False
     if not state.get("squareoff_order_id"):
+        if state.get("g3_squareoff_submission_rejected"):
+            state["status_reason"] = "G3_EXIT_SUBMISSION_REJECTED_MANUAL_RECONCILIATION_REQUIRED"
+            return
         if state.get("g3_squareoff_submission_pending"):
             state["status_reason"] = "G3_EXIT_SUBMISSION_UNCERTAIN_AWAITING_RECONCILIATION"
             return
         state["g3_squareoff_submission_pending"] = True
         _write_order_state(state)  # Persist the deterministic retry tag before submission.
-        state["squareoff_order_id"] = _broker_place(client, variety="regular",
-            exchange=str(state["exchange"]), tradingsymbol=state["tradingsymbol"],
-            transaction_type=exit_transaction, quantity=_g3_exit_residual(state),
-            product="MIS", order_type="MARKET", validity="DAY", tag=tag)
+        try:
+            state["squareoff_order_id"] = _broker_place(client, variety="regular",
+                exchange=str(state["exchange"]), tradingsymbol=state["tradingsymbol"],
+                transaction_type=exit_transaction, quantity=_g3_exit_residual(state),
+                product="MIS", order_type="MARKET", validity="DAY", tag=tag)
+        except Exception as exc:
+            if not _is_explicit_broker_rejection(exc):
+                # A lost response can hide an accepted order. Preserve the
+                # persisted tag/latch so recovery cannot submit a duplicate.
+                raise
+            _record_live_execution_error(state, exc, now)
+            state.update(
+                g3_squareoff_submission_pending=False,
+                g3_squareoff_submission_rejected=True,
+                g3_squareoff_rejection_type=type(exc).__name__,
+                g3_squareoff_rejection_message=str(exc),
+                g3_squareoff_rejected_at_ist=now.isoformat(timespec="seconds"),
+                exit_bracket_failure="SQUARE_OFF_PLACE_REJECTED",
+                status_reason="G3_EXIT_SUBMISSION_REJECTED_MANUAL_RECONCILIATION_REQUIRED",
+            )
+            # A definite rejection is actionable, not an unknown fill. Keep
+            # the residual open and blocked; never invent a close or retry a
+            # rejected MIS exit indefinitely (for example after cutoff).
+            _write_order_state(state)
+            return
         state["g3_squareoff_submission_pending"] = False
         _write_order_state(state)
 
@@ -3913,11 +3982,24 @@ def advance_live_order(
     now: datetime,
     *,
     last_price: float | None = None,
+    entry_blocker_reason: str = "",
 ) -> dict[str, Any]:
     status = str(state["status"])
     if status in TERMINAL_STATES:
         return state
     armed, arm_reason = _live_arm_state(now.date())
+    if status == "PENDING_ENTRY" and entry_blocker_reason:
+        # Reconcile/cancel an already submitted entry and protect any fill
+        # racing with cancellation, but never submit new exposure.
+        armed, arm_reason = False, entry_blocker_reason
+    if status == "PENDING_ENTRY" and not _slot_entry_allowed(state):
+        # Reuse the existing cancellation/reconciliation path. A broker fill
+        # racing with cancellation still receives normal position protection.
+        armed, arm_reason = False, "SLOT_WIN_RATE_POLICY_DISABLED"
+    elif status == "PENDING_ENTRY" and is_g3_config(config) and (
+            state.get("strategy_version") != config.STRATEGY_VERSION
+            or state.get("strategy_fingerprint") != config.strategy_fingerprint()):
+        armed, arm_reason = False, "ARCHIVED_STRATEGY_PROTECTIVE_MANAGEMENT_ONLY"
     kill_enabled = _kill_switch_enabled()
     if int(state["quantity"]) <= 0:
         state.update(status="BLOCKED_SIZING", status_reason="LIVE_QUANTITY_ZERO")
@@ -4733,9 +4815,13 @@ def _advance_g_paper_state(state: dict[str, Any], price: float | None,
     path = _order_path(day, "PAPER", str(state["signal_id"]))
     with paper_portfolio_lock(root):
         previous = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else dict(state)
-        if (not isinstance(previous, dict) or previous.get("signal_id") != state["signal_id"]
-                or previous.get("strategy_fingerprint") != config.strategy_fingerprint()):
+        if not isinstance(previous, dict) or previous.get("signal_id") != state["signal_id"]:
             raise ValueError("G paper state identity changed while acquiring portfolio lock")
+        if previous.get("strategy_fingerprint") != config.strategy_fingerprint():
+            if not is_g3_config(config):
+                raise ValueError("G paper state identity changed while acquiring portfolio lock")
+            from g3_legacy_state_recovery import validate_protective_state
+            validate_protective_state(previous, day, "PAPER")
         proposed = advance_paper_order(dict(previous), price, now)
         result = enforce_fill_capacity(previous, proposed, root, strategy_config=config)
         _write_order_state(result)
@@ -5587,6 +5673,42 @@ def run_confirmation(args: argparse.Namespace, session_date: date) -> int:
     return 0
 
 
+def _g3_archived_recovery_states(session_date: date, mode: str, side: str):
+    """Discover validated same-day positions independently of new signals.
+
+    Current positions need the same independent recovery as archived ones:
+    scanner/confirmation failure may remove the authoritative signal set, but
+    must not strand an already acquired broker position.
+    """
+    if not is_g3_config(config):
+        return [], []
+    from g3_legacy_state_recovery import archived_contract, validate_protective_state
+    states, errors = [], []
+    for path in sorted(order_day_dir(session_date, mode).glob("*.json")):
+        try:
+            row = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(row, dict):
+                raise ValueError("Order state is not an object")
+            if row.get("side") != side or row.get("status") in TERMINAL_STATES:
+                continue
+            current_identity = (row.get("strategy_version"), row.get("strategy_fingerprint")) == (
+                config.STRATEGY_VERSION, config.strategy_fingerprint())
+            if not current_identity and archived_contract(row) is None:
+                raise ValueError("Unknown nonterminal strategy state requires reconciliation")
+            if row.get("status") == "PENDING_ENTRY" and not _has_g3_entry_broker_evidence(row):
+                continue  # Protective recovery can never create a new entry.
+            validate_protective_state(row, session_date, mode, allow_current=True)
+            if path.stem != row.get("signal_id"):
+                raise ValueError("Saved protective state filename differs from its identity")
+            if mode == "LIVE" and str(row.get("execution_profile", "")) != EXECUTION_SESSION_NAMESPACE:
+                raise ValueError("Saved protective state execution namespace mismatch")
+            states.append(row)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            errors.append(dict(phase="ARCHIVED_STATE_RECOVERY_REQUIRES_RECONCILIATION",
+                signal_id=path.stem, error_type=type(exc).__name__, message=str(exc)))
+    return states, errors
+
+
 def run_worker(
     args: argparse.Namespace,
     session_date: date,
@@ -5598,19 +5720,37 @@ def run_worker(
     pool: KitePool | None = None
     while True:
         now = common.now_ist()
-        signals = load_signals(session_date, side)
+        recovered_states, recovery_errors = _g3_archived_recovery_states(session_date, mode, side)
+        try:
+            signals = load_signals(session_date, side) if not recovery_errors else []
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            if not recovered_states:
+                raise
+            signals = []
+            recovery_errors.append(dict(phase="NEW_SIGNALS_BLOCKED_PROTECTION_CONTINUES",
+                error_type=type(exc).__name__, message=str(exc)))
         issue = _blocking_pipeline_issue(session_date)
-        if not signals and issue:
+        if not signals and not recovered_states and issue:
             common.atomic_write_text(
                 report_path(role), _render_worker_report(session_date, side, mode)
             )
             _publish_upstream_block(role, issue)
             return 2
         states: list[dict[str, Any]] = []
-        validation_errors: list[dict[str, str]] = []
+        validation_errors: list[dict[str, str]] = list(recovery_errors)
+        if is_g3_config(config) and issue:
+            validation_errors.append(dict(
+                phase="UPSTREAM_NEW_ENTRIES_BLOCKED_PROTECTION_CONTINUES",
+                error_type="UPSTREAM_BLOCKED", message=str(issue)))
         for signal in signals:
             path = _order_path(session_date, mode, str(signal["signal_id"]))
             existing_state = _read_json(path)
+            if is_g3_config(config) and issue and (
+                    not existing_state or (existing_state.get("status") == "PENDING_ENTRY"
+                    and not (mode == "LIVE" and _has_g3_entry_broker_evidence(existing_state)))):
+                # Upstream failure blocks new exposure, never stop/target or
+                # square-off management of validated existing positions.
+                continue
             try:
                 state = existing_state or create_order_state(signal, mode, live_quantity=live_quantity)
                 state.setdefault("origin_run_id", state.get("run_id", ""))
@@ -5650,6 +5790,8 @@ def run_worker(
                 # authentication or quote access fails later in this pass.
                 _write_order_state(state)
             states.append(state)
+        current_ids = {str(row.get("signal_id")) for row in states}
+        states.extend(row for row in recovered_states if str(row.get("signal_id")) not in current_ids)
         if mode == "PAPER" and is_modern_config(config):
             # Persist pending expiries even if authentication or quotes fail next.
             for state in states:
@@ -5671,6 +5813,7 @@ def run_worker(
                 for state in active
                 if state.get("status") == "PENDING_ENTRY"
                 and not state.get("entry_order_id")
+                and not (is_g3_config(config) and issue)
             ]
         )
         if quote_states and pool is not None:
@@ -5703,6 +5846,8 @@ def run_worker(
             if mode == "LIVE" and state.get("status") in TERMINAL_STATES:
                 continue
             persist_after_advance = True
+            entry_controls = ({"entry_blocker_reason": "UPSTREAM_BLOCKED_PROTECTIVE_MANAGEMENT_ONLY"}
+                              if is_g3_config(config) and issue else {})
             try:
                 if mode == "PAPER":
                     price = prices.get(str(state["tradingsymbol"]))
@@ -5722,6 +5867,7 @@ def run_worker(
                             pool,
                             now,
                             last_price=prices.get(str(state["tradingsymbol"])),
+                            **entry_controls,
                         )
                     else:
                         with runtime.bind(
@@ -5749,6 +5895,7 @@ def run_worker(
                                 pool,
                                 now,
                                 last_price=prices.get(str(state["tradingsymbol"])),
+                                **entry_controls,
                             )
             except Exception as exc:
                 _record_live_execution_error(state, exc, now)

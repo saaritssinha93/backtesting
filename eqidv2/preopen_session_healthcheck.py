@@ -577,6 +577,7 @@ def _run_schtasks_query(task_name: str) -> Optional[str]:
                 ["schtasks", "/Query", "/TN", candidate, "/FO", "LIST", "/V"],
                 capture_output=True,
                 text=True,
+                timeout=5,
                 check=False,
             )
         except Exception:

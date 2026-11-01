@@ -11,17 +11,18 @@ test('common sessions exclude absent dates rather than inserting zero results', 
     family('G-4',[row('2026-09-30',10),row('2026-10-02',-5)]),
     family('G-6',[row('2026-09-30',30),row('2026-10-01',60),row('2026-10-02',-15)]),
     family('G-7',[row('2026-09-30',40),row('2026-10-01',70),row('2026-10-02',-20)]),
+    family('G-7 V4 lock',[row('2026-09-30',45),row('2026-10-02',-5)]),
     family('G-2',[row('2026-09-30',20),row('2026-10-01',100),row('2026-10-02',-10)]),
     family('G',[row('2026-09-30',30),row('2026-10-01',200),row('2026-10-02',-15)]),
   ];
   const common=prepare(entries);
   assert.deepEqual(common.common,['2026-09-30','2026-10-02']);
-  assert.deepEqual(common.families.map(f=>f.summary.net_pnl),[5,5,15,20,10,15]);
+  assert.deepEqual(common.families.map(f=>f.summary.net_pnl),[5,5,15,20,40,10,15]);
   assert.deepEqual(common.families[0].missing,['2026-10-01']);
-  assert.deepEqual(common.families[4].excluded,['2026-10-01']);
+  assert.deepEqual(common.families[5].excluded,['2026-10-01']);
   const full=prepare(entries,'full');
-  assert.deepEqual(full.families.map(f=>f.summary.sessions),[2,2,3,3,3,3]);
-  assert.deepEqual(full.families.map(f=>f.summary.net_pnl),[5,5,75,90,110,215]);
+  assert.deepEqual(full.families.map(f=>f.summary.sessions),[2,2,3,3,2,3,3]);
+  assert.deepEqual(full.families.map(f=>f.summary.net_pnl),[5,5,75,90,40,110,215]);
 });
 
 test('daily drawdown includes loss from a zero starting balance', () => {
@@ -60,9 +61,10 @@ test('latest run selection retains supplied family and full-history priority', (
     {id:'g4-latest',strategy:'V13-V10-G-4'},
     {id:'g6-latest',strategy:'V13-V10-G-6'},
     {id:'g7-v3-latest',strategy:'V13-V10-G-7'},
+    {id:'g7-v4-lock-latest',strategy:'V13-V10-G-7-V4-LOCK'},
     {id:'g2-latest',strategy:'V13-V10-G-2'},
     {id:'g3-latest',strategy:'V13-V10-G-3'},
     {id:'g3-archived',strategy:'V13-V10-G-3'},
   ]);
-  assert.deepEqual(result.map(f=>f.run.id),['g3-latest','g4-latest','g6-latest','g7-v3-latest','g2-latest','g-full-latest']);
+  assert.deepEqual(result.map(f=>f.run.id),['g3-latest','g4-latest','g6-latest','g7-v3-latest','g7-v4-lock-latest','g2-latest','g-full-latest']);
 });

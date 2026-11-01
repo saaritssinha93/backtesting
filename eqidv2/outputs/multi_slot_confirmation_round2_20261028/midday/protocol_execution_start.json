@@ -1,0 +1,15 @@
+{
+  "2026-10-28": "EXCLUDED_FROM_FROZEN_DATASET",
+  "cumulative_nonbaseline_comparisons": 380,
+  "independent_holdout": false,
+  "new_nonbaseline_comparisons": 160,
+  "protocol_path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\protocol.json",
+  "protocol_sha256": "428416358857cd2a1dfc4f11623d3d77cd3428cb42506a0fa51221219bb22772",
+  "runner_sha256": "8df036e50837d9b6aacc78ac25a000344dc9bd5b0ac519c1677fd541f336b84a",
+  "setups": [
+    "1051_LONG",
+    "1111_SHORT",
+    "1146_SHORT"
+  ],
+  "started_at_ist": "2026-10-28T20:59:13.394470+05:30"
+}

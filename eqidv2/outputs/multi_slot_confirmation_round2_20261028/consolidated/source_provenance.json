@@ -1,0 +1,31 @@
+{
+  "files": {
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\summarize_round2.py": "4465fc58996fb28cb00b4e15f7572d5530a09b1eb01c78cfafd15fce426e9712",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\run_round2.py": "8df036e50837d9b6aacc78ac25a000344dc9bd5b0ac519c1677fd541f336b84a",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\protocol.json": "428416358857cd2a1dfc4f11623d3d77cd3428cb42506a0fa51221219bb22772",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\feature_manifest.json": "a217e481ef8da033368b900582eb78db0352ed35d7cbab0e5ad31c5cbb23e315",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\diagnosis\\artifact_manifest.json": "b8a5a47766e5ba86d0b1e2e8767fb5144254f4a05c8c7b7cfa78f02c470875d6",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\consolidated\\build_consolidated.py": "2082bed7cc275527430bd94c1b8675bdbc3e1d6dc7e2850d2eea5e55ad96ee94",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_7\\v4_lock_backtest\\runs\\2026-10-28\\20261028T143059782924_f86f1197_0926_short_wick020_lock2\\g3_reference_portfolio_trades.csv": "7fd051ac41fb3ad9956ca52f641fdc8b55bed033c6a04365c7e648dd7c3de564",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_7\\v4_lock_backtest\\runs\\2026-10-28\\20261028T143059782924_f86f1197_0926_short_wick020_lock2\\portfolio_trades.csv": "341b3735093aa31bfdfe31e71a61f7353da0136686c156caa0106606d97c5e1e"
+  },
+  "batch_manifests": [
+    {
+      "group": "early",
+      "files_verified": 75,
+      "manifest_sha256": "37a8dcd24267b530359032d7f7018d94b05c9bcb7a711f996fd9f18f496e232e"
+    },
+    {
+      "group": "midday",
+      "files_verified": 75,
+      "manifest_sha256": "f2ea27616c869aaa8a310b287a0aa78ef3d08dfbfc84ebb0ebd7b7777cfa669c"
+    },
+    {
+      "group": "late",
+      "files_verified": 93,
+      "manifest_sha256": "99251fb7ff4f3cb5baf5ded00879cfbef6f5055dd2fa16b0ab591f49bd87241c"
+    }
+  ],
+  "main_files_changed": false,
+  "independent_holdout": false
+}

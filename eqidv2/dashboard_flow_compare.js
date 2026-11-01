@@ -5,7 +5,8 @@
     {strategy:'V13-V10-G-3',label:'G-3',color:'var(--family-g3, #087553)'},
     {strategy:'V13-V10-G-4',label:'G-4',color:'var(--family-g4, #7854a6)'},
     {strategy:'V13-V10-G-6',label:'G-6',color:'var(--family-g6, #b26412)'},
-    {strategy:'V13-V10-G-7',label:'G-7',color:'var(--family-g7, #006d8f)'},
+    {strategy:'V13-V10-G-7',label:'G-7 V3',color:'var(--family-g7, #006d8f)'},
+    {strategy:'V13-V10-G-7-V4-LOCK',label:'G-7 V4 lock',color:'var(--family-g7-v4, #b04475)'},
     {strategy:'V13-V10-G-2',label:'G-2',color:'var(--family-g2, #385f9b)'},
     {strategy:'V13-V10-G',label:'G',color:'var(--family-g, #a54661)'},
   ];

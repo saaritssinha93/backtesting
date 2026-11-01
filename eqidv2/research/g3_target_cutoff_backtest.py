@@ -82,6 +82,8 @@ def _validate_profile():
         raise ValueError("Pinned PAPER/LIVE baseline identity changed")
     allowed, removed = set(contract._ACTIVE_BY_ID), set(contract.DISABLED_IDS)
     expected = {s.setup_id for s in production.ACTIVE_SETUPS if s.target_pct > TARGET_CUTOFF} | set(RESTORED_TARGETS)
+    if hasattr(contract, "slots"):
+        expected &= set(contract.slots.enabled_setup_ids("G3"))
     if (allowed != expected or removed != set(production._ACTIVE_BY_ID) - allowed
             or any(contract._ACTIVE_BY_ID[key].target_pct != target for key, target in RESTORED_TARGETS.items())):
         raise ValueError("Backtest must retain targets above 0.75% and exactly the three approved exceptions")
@@ -381,6 +383,8 @@ def _provenance():
     paths = {Path(__file__).resolve(), Path(CONFIG_PATH).resolve(), *(Path(m.__file__).resolve() for m in modules)}
     paths.update(project / name for name in ("research/g3_backtest_profile.py", "research/g3_backtest_report.py",
         "research/g3_1035_extension_backtest.py", "g3_one_minute_extension.py",
+        "research/g3_slot_win70_contract.py", "research/g3_target_cutoff_contract.py",
+        "strategy_slot_selection.py", "configs/strategies/slot_win70_20261028.json",
         "research/g3_two_slot_backtest.py", "research/g3_0920_strategy.py", "research/g3_0920_parameter_search.py",
         "research/g3_0920_history.py", "research/g3_0920_feature_export.py",
         "research/g3_0920_backtest.py", "research/g3_g4_late_combined_backtest.py", "research/g3_0950_long_backtest.py",
@@ -429,7 +433,7 @@ def build(root, output, through, *, base=None, roots=None):
                 raise ValueError("Pinned 09:26 execution path differs from candidate evidence")
         else:
             paths[sid] = path
-    historical_proof["revised_0926_long_volume"] = volume_proof
+    historical_proof["revised_0926_selection"] = volume_proof
     revised_orders, revised_paths, revision_proof = _revised_0941_orders(original_orders, days, members)
     if set(revised_paths) & set(paths):
         raise ValueError("Revised 09:41 paths collide with pinned paths")
@@ -453,8 +457,12 @@ def build(root, output, through, *, base=None, roots=None):
     paths.update(new_paths)
     historical_proof["enabled_two_slots"] = new_slot_proof
     orders = original_orders.loc[original_orders.setup_id.isin(allowed)
-                                 & ~original_orders.setup_id.isin({"0926_LONG", "1036_LONG", "1036_SHORT"})].copy()
+                                 & ~original_orders.setup_id.isin(
+                                     {"0926_LONG", "0926_SHORT", "1036_LONG", "1036_SHORT"})].copy()
     orders = pd.concat([orders, revised_0926_orders, revised_orders, guarded_orders, new_orders], ignore_index=True, sort=False)
+    # Reconstructed donor/replacement inventories contain historical disabled
+    # slots. Apply the current shared allowlist before any capital allocation.
+    orders = orders.loc[orders.setup_id.isin(allowed)].reset_index(drop=True)
     orders["source_sid"] = orders.sid
     source_ids = orders.sid.map(baseline.set_index("sid").signal_id)
     orders["source_signal_id"] = (source_ids.combine_first(orders.source_signal_id).combine_first(orders.signal_id)
@@ -517,11 +525,15 @@ def build(root, output, through, *, base=None, roots=None):
     daily = _daily(ledger, days)
     stats = _stats(ledger, days)
     disabled = pd.DataFrame([dict(setup_id=s.setup_id, signal_end=s.signal_end, side=s.side,
-        target_pct=s.target_pct, reason="TARGET_LESS_THAN_OR_EQUAL_TO_0.75_PERCENT")
+        target_pct=s.target_pct, reason=("TARGET_LESS_THAN_OR_EQUAL_TO_0.75_PERCENT"
+            if s.target_pct <= TARGET_CUTOFF and s.setup_id not in RESTORED_TARGETS
+            else "SLOT_WIN_RATE_BELOW_70_OR_NO_EVIDENCE"))
         for s in production.ACTIVE_SETUPS if s.setup_id in removed])
     summary = dict(schema_version=SCHEMA, scope="BACKTEST_ONLY", execution_authority=False,
         strategy_version=contract.STRATEGY_VERSION, strategy_fingerprint=contract.strategy_fingerprint(),
         active_setup_count=len(allowed), disabled_setup_count=len(removed), target_cutoff_pct=TARGET_CUTOFF,
+        slot_selection=contract.strategy_payload().get("slot_selection"),
+        slot_selection_fingerprint=contract.strategy_payload().get("slot_selection_fingerprint"),
         restored_setup_ids=sorted(RESTORED_TARGETS),
         created_at_ist=datetime.now(contract.IST).isoformat(), first_date=str(days[0]), last_date=str(days[-1]),
         sessions=len(days), days=[str(d) for d in days], current_g3=stats,
@@ -543,7 +555,7 @@ def build(root, output, through, *, base=None, roots=None):
                           original_selected=guard_proof["original_selected"],
                           revised_selected=guard_proof["revised_selected"],
                           source=guard_proof),
-        enabled_two_slots=new_slot_proof, revised_0926_long_volume=volume_proof,
+        enabled_two_slots=new_slot_proof, revised_0926_selection=volume_proof,
         coverage=dict(excluded_sessions=[dict(day="2026-10-01", reason="Incomplete immutable historical input")],
             history_scope="FULL_CURRENT_STRATEGY_HISTORY_WITH_DAILY_EXTENSIONS",
             opening_0920_short=new_slot_proof["opening_coverage"],
@@ -646,9 +658,9 @@ def verified_package(directory, root):
     _same_allocation(baseline, saved_baseline)
     comparison_ledger = ledger.loc[ledger.day.astype(str).isin({str(d) for d in baseline_days})].copy()
     if "enabled_two_slots_selection.csv" in manifest_files:
-        _verify_two_slot_audit(directory, summary, comparison_ledger)
+        _verify_two_slot_audit(directory, summary, comparison_ledger, profile=profile)
     if "revised_0926_selection.csv" in manifest_files:
-        _verify_0926_audit(directory, summary, comparison_ledger)
+        _verify_0926_audit(directory, summary, comparison_ledger, profile)
     allowed = set(profile._ACTIVE_BY_ID)
     retained_baseline = baseline.loc[baseline.setup_id.isin(allowed)]
     prior = comparison_ledger.loc[comparison_ledger.sid.isin(retained_baseline.sid)]
@@ -677,35 +689,42 @@ def verified_package(directory, root):
     return summary, manifest
 
 
-def _verify_0926_audit(directory, summary, comparison_ledger):
-    """Bind the 1.2x pre-quota selection to its sealed candidates and trade ledger."""
+def _verify_0926_audit(directory, summary, comparison_ledger, profile=contract):
+    """Bind both replacement-aware 09:26 rules to sealed candidates and ledger."""
     from research import g3_0926_volume_backtest as volume
     source_dir = runtime_dir("backtesting_result_v13_v10_g_4") / volume.SOURCE_RELATIVE
     if (sha256(source_dir / "manifest.json") != volume.MANIFEST_SHA256
             or sha256(source_dir / "candidate_extension_audit.csv") != volume.POOL_SHA256):
         raise ValueError("09:26 volume source evidence changed")
     pool = read_frozen_csv(source_dir / "candidate_extension_audit.csv")
-    expected = production.selection_audit(pool.loc[pool.setup_id.eq(volume.SETUP_ID)
+    current_rule = profile.strategy_payload().get("minimum_directional_wick_ratio_by_setup", {}).get("0926_SHORT") == .20
+    setup_ids = volume.SETUP_IDS if current_rule else ("0926_LONG",)
+    selector = profile if current_rule else production
+    expected = selector.selection_audit(pool.loc[pool.setup_id.isin(setup_ids)
         & pool.day.astype(str).isin(set(summary["days"][:summary["comparison_sessions"]]))].copy())
     audit = read_frozen_csv(Path(directory) / "revised_0926_selection.csv")
     if (len(expected) != len(audit) or not expected.sid.astype(int).equals(audit.sid.astype(int))
             or not expected.v9_selected.astype(bool).equals(audit.v9_selected.astype(bool))):
         raise ValueError("09:26 volume audit differs from fresh contract selection")
     selected = audit.loc[audit.v9_selected.eq(True)]
-    actual = comparison_ledger.loc[comparison_ledger.setup_id.eq(volume.SETUP_ID)]
+    actual = comparison_ledger.loc[comparison_ledger.setup_id.isin(setup_ids)]
     def keys(frame):
         return set(zip(frame.day.astype(str).str[:10], frame.tradingsymbol, frame.sid.astype(int)))
-    proof = summary.get("revised_0926_long_volume", {})
+    proof = summary.get("revised_0926_selection" if current_rule else "revised_0926_long_volume", {})
+    thresholds_match = (proof.get("threshold_5m_volume_ratio") == {"0926_LONG": 1.2}
+        and proof.get("minimum_directional_wick_ratio") == {"0926_SHORT": .20}
+        and proof.get("filter_application") == "BEFORE_RANKING_AND_QUOTA_WITH_REPLACEMENT"
+        if current_rule else proof.get("threshold_5m_volume_ratio") == 1.2)
     if (keys(selected) != keys(actual) or proof.get("candidate_rows") != len(audit)
             or proof.get("revised_selected") != len(selected)
-            or proof.get("threshold_5m_volume_ratio") != 1.2
+            or not thresholds_match
             or proof.get("outcomes_used_for_selection") is not False
             or proof.get("source_manifest_sha256") != volume.MANIFEST_SHA256
             or proof.get("source_pool_sha256") != volume.POOL_SHA256):
         raise ValueError("09:26 volume selections differ from historical ledger or sealed source")
 
 
-def _verify_two_slot_audit(directory, summary, comparison_ledger):
+def _verify_two_slot_audit(directory, summary, comparison_ledger, profile=contract):
     """Bind the new-slot selection audit to the freshly simulated historical cohort."""
     from research.g3_two_slot_backtest import SETUP_IDS
     audit = read_frozen_csv(Path(directory) / "enabled_two_slots_selection.csv")
@@ -719,7 +738,8 @@ def _verify_two_slot_audit(directory, summary, comparison_ledger):
     actual = comparison_ledger.loc[comparison_ledger.setup_id.isin(SETUP_IDS)]
     def keys(frame):
         return set(zip(frame.day.astype(str), frame.setup_id, frame.tradingsymbol, frame.sid.astype(int)))
-    if keys(selected) != keys(actual) or proof.get("selected_orders") != len(selected):
+    retained = selected.loc[selected.setup_id.isin(profile._ACTIVE_BY_ID)]
+    if keys(retained) != keys(actual) or proof.get("selected_orders") != len(selected):
         raise ValueError("New-slot selections differ from the historical trade ledger")
     expected_counts = {setup_id: int(selected.setup_id.eq(setup_id).sum()) for setup_id in sorted(SETUP_IDS)}
     if proof.get("selected_by_setup") != expected_counts:

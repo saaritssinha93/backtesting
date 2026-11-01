@@ -1,0 +1,16 @@
+{
+  "complete": true,
+  "created_at_ist": "2026-10-28T20:58:32.626230+05:30",
+  "files": {
+    "candidate_features.csv": "f74cfbc349de60bb0132f406152e5a308894223929d89a091cdcea564475fb49",
+    "candidate_inventory.csv": "f55997bcb99e876be4dddf81a6020abaed19032eccc16c7576e40abade15cae3",
+    "candidate_pool.pkl": "d96f24a9d2145d59eb846778100d15f2d06b6a7b74026042331da811bef4a1c9",
+    "candidate_pool_proof.json": "8a6ff590e03f33d4c548a893d434573532e5535b6dfe2239e25536cc7dc1b2c6",
+    "feature_audit.json": "0f5a411d3d5bf2b7141b32cfd89bf590697e7104ca5f7f1c36c37b312bdaa8ac",
+    "feature_qa.json": "af07cdac0594fcd8da6a7b78e82f3499fe082a2d3ceacf4e008d5743bff5a3a1",
+    "feature_source_proof.json": "8a6ff590e03f33d4c548a893d434573532e5535b6dfe2239e25536cc7dc1b2c6",
+    "prepare_features.py": "9cad30f947cf5b3b022ec27c301d0bfd1fec5fed39abc3c6cb7a308efa365313",
+    "protocol.json": "428416358857cd2a1dfc4f11623d3d77cd3428cb42506a0fa51221219bb22772",
+    "test_prepare_features.py": "efe5b535223aa906bbd4972d22e6f0254b99659ad05cd7972cbfcd7dacd3b290"
+  }
+}

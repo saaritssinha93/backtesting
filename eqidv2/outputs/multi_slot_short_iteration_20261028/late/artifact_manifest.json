@@ -1,0 +1,29 @@
+{
+  "created_at_ist": "2026-10-28T14:57:30.336097+05:30",
+  "execution_authority": false,
+  "files": {
+    "baseline_reproduction.json": "4ddb9769d82694ae49f176e005a97d529ad8915639e2d9394fc10d7f2299bcad",
+    "candidate_pool_full.pkl": "63f3f1321151a74f34164d1fd458816b9b434c083f94fb7bf1afdb6665dff6e1",
+    "candidate_pool_inventory.csv": "7b5518a90505bfddbc1a26ea869605bb4e7ca98dff944af1cf86161c4d38fec5",
+    "candidate_pool_proof.json": "0fc79bbac56757da1a316626a233955ac4826991d7e9c067e5ad93aa222530b9",
+    "candidate_variant_decisions.csv": "dd98e0e6c1d0c55f941b42c98c7828473cfad220ddf6a20d1a4b19dbb086a207",
+    "development_selection.csv": "62fc8ee82daa2a48661a24e94de04c292f83b600a030429b048b73821164e513",
+    "feature_compatibility_audit.json": "08a81ce16aaa1abeaba2c50da4ce47d819645a9ec1df821cbb2ea4d64daa10d7",
+    "fixed_grid_metrics.csv": "338e67b5e683a0f78d42aeb55d85e167585e6fc1b20085410bfb118c7d3c1a8b",
+    "g7_causal_features.csv": "090f2072a62d132e68f0a3fbc0ffac1e1b34fce8f50358c12fdc68b2b5c546f5",
+    "g7_nifty_decisions.csv": "a1dc9f4616b40972465d093202db70437ccc5b1ffb6c7b37f4282849e2f0f068",
+    "g7_nifty_source_proof.csv": "3df03c22ce7e25725ee31fe4aad4490771b7b08d58b0b010840d4554a20f4bc8",
+    "methodology_audit.json": "992f1fe7e5a6fcfa24523c49813a1c35ad8b461c4734b3b73b3a35516af325d7",
+    "october_daywise_portfolio.csv": "4e62c36e2ed8ea4b9bc8c4203483c37764765d4de1c579a2312d0a55da4837ef",
+    "report.md": "b2bacf982138d0ebdd0c11553837fe30bb723d41b3c467d0b9471a470eb44403",
+    "run_1321_short.py": "b90d34b3afe388930ca9dc9cdd88e5f491636ba4753165ac87e9cf475db799cc",
+    "selected_chronology_results.csv": "1a144bcbea0442c62438a61107a014feef3abee46a8b9a8a8416c9fd4372866e",
+    "selected_cost_stress.csv": "58f1e1f7dd8cb025ab73187826feb4388ac3fa4121958901dbea02e6b36053f9",
+    "selection_changes.csv": "61e9511ece9b1549f5f636e7c936f17971642dd0749d9330bf6e0d59d093528a",
+    "source_provenance.json": "03ce5c06bc1437f80b4f4e1c0ae3db38116a8851af6d1b61533be5a1aeb8cb3b",
+    "summary.json": "ff9ee604a38ecb94edddf8a848c37c73754ec52b5f832f6870b813cd760edd16",
+    "unprovable_replacements.csv": "79955bd156ecd9c77a1a8dd651397ac726cb9e5b1d0d129941a00bd63669946b",
+    "variant_trade_details.csv": "5903692842a64e6d3494d58fad01c0f49a55daa80a5767b701e8f574450efd06"
+  },
+  "scope": "BACKTEST_ONLY"
+}

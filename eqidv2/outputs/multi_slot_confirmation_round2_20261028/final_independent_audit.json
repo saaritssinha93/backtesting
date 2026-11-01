@@ -1,0 +1,95 @@
+{
+  "status": "PASS",
+  "auditor": "independent_round2_causal_audit",
+  "created_at_ist": "2026-10-28T21:11:41.000605+05:30",
+  "sealed_artifacts_modified": false,
+  "source_code_sha256": "2c05beee6b0612bd973acdb9a0628ad2e434ad5bc784a4f5670bbb4f848715eb",
+  "manifest_members_verified": 275,
+  "manifests": [
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\feature_manifest.json",
+      "sha256": "a217e481ef8da033368b900582eb78db0352ed35d7cbab0e5ad31c5cbb23e315",
+      "members": 10
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\early\\artifact_manifest.json",
+      "sha256": "37a8dcd24267b530359032d7f7018d94b05c9bcb7a711f996fd9f18f496e232e",
+      "members": 75
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\midday\\artifact_manifest.json",
+      "sha256": "f2ea27616c869aaa8a310b287a0aa78ef3d08dfbfc84ebb0ebd7b7777cfa669c",
+      "members": 75
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\late\\artifact_manifest.json",
+      "sha256": "99251fb7ff4f3cb5baf5ded00879cfbef6f5055dd2fa16b0ab591f49bd87241c",
+      "members": 93
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\diagnosis\\artifact_manifest.json",
+      "sha256": "b8a5a47766e5ba86d0b1e2e8767fb5144254f4a05c8c7b7cfa78f02c470875d6",
+      "members": 6
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\consolidated\\artifact_manifest.json",
+      "sha256": "4af70e477f86d37f6ff02dca04d8147a0898cc3e48a49965b5a4a4232807e219",
+      "members": 16
+    }
+  ],
+  "source_provenance_hashes_verified": 8,
+  "metric_rows": 7560,
+  "development_gates_independently_recomputed": 160,
+  "setup_strategy_choices_independently_recomputed": 20,
+  "saved_book_period_scope_checks": 2520,
+  "accepted_period_checks": 140,
+  "baseline_parity_checks": 26,
+  "october_slot_rows_verified": 320,
+  "october_requested_aggregate_rows_verified": 32,
+  "october_fullportfolio_rows_verified": 32,
+  "fullportfolio_baseline_metric_rows_unique": 42,
+  "accepted_overall_ledger_rows_verified": 8,
+  "paired_october_rows_verified": 16,
+  "report_loss_diagnosis_independently_verified": {
+    "G3": {
+      "losses": 48,
+      "time_exit_losses": 28,
+      "median_losing_hold_minutes": 132.0
+    },
+    "G7_V4_LOCK2": {
+      "losses": 33,
+      "time_exit_losses": 20,
+      "median_losing_hold_minutes": 133.0,
+      "protection_armed_losses": 0
+    }
+  },
+  "diagnostic_october_rows_separately_labelled": 32,
+  "development_choices": [
+    {
+      "setup_id": "1051_LONG",
+      "strategy": "G3",
+      "choice": "r2_close_location_ge_0p8",
+      "status": "REJECTED_LATER",
+      "later_trades": 2,
+      "later_wins": 1,
+      "later_losses": 1,
+      "later_win_rate_pct": 50.0,
+      "later_net_change_rs": -4300.000000000082
+    },
+    {
+      "setup_id": "1051_LONG",
+      "strategy": "G7_V4_LOCK2",
+      "choice": "r2_close_location_ge_0p8",
+      "status": "REJECTED_LATER",
+      "later_trades": 2,
+      "later_wins": 1,
+      "later_losses": 1,
+      "later_win_rate_pct": 50.0,
+      "later_net_change_rs": -904.4414873047226
+    }
+  ],
+  "combined_replay_required": false,
+  "reason": "All development choices failed frozen later gates",
+  "wording_audit": "Baseline, isolated diagnostics, and full portfolio remain separate; no uncombined aggregate gains claimed",
+  "issues": []
+}

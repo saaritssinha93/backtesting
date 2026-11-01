@@ -52,7 +52,8 @@ try {
 
     $definition.Settings.DisallowStartIfOnBatteries = $false
     $definition.Settings.StopIfGoingOnBatteries = $false
-    $definition.Settings.ExecutionTimeLimit = "PT0S"
+    # Preserve the bounded lifetime of the data-only options feed launcher.
+    $definition.Settings.ExecutionTimeLimit = if ($parts.Name -eq 'EQIDV2_fno_options_atm_fetch_5min_0907') { 'PT7H' } else { 'PT0S' }
     $definition.Settings.StartWhenAvailable = $true
     $definition.Settings.RunOnlyIfNetworkAvailable = $false
     $definition.Settings.WakeToRun = [bool]$WakeToRun

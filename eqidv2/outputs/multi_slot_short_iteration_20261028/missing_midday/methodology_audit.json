@@ -1,0 +1,26 @@
+{
+  "addendum_planned_nonbaseline_comparisons": 110,
+  "addendum_slots": 5,
+  "bonferroni_context_bounds_reported_for_110_and_220_comparisons": true,
+  "combined_claim_permitted": false,
+  "combined_replay_performed": false,
+  "combined_replay_reason": "The two G3 development-selected diagnostics both failed the >75% target later and overall; therefore neither was promoted and there were no promoted rules to combine.",
+  "development_gate": {
+    "full_portfolio_net_pnl_not_below_baseline": true,
+    "losing_trade_amount_strictly_below_baseline": true,
+    "minimum_executed_trades": 8,
+    "point_win_rate_strictly_above_pct": 75.0,
+    "setup_net_pnl_not_below_baseline": true,
+    "tie_break": "highest setup net PnL, then fewer losses, then frozen variant order"
+  },
+  "development_only_selection": true,
+  "independent_holdout": false,
+  "later_periods_never_selected_or_replaced_a_rule": true,
+  "nonbaseline_variants_per_slot": 11,
+  "original_plus_addendum_nonbaseline_comparisons": 220,
+  "protocol_frozen_before_outcomes": true,
+  "sample_size_warning": "All point estimates have small denominators and every relevant Wilson lower bound is below 75%; the same 59 sessions have also been repeatedly inspected.",
+  "strategies": 2,
+  "unadjusted_wilson_95_is_descriptive_after_selection": true,
+  "variants_per_slot_including_baseline": 12
+}

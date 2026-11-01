@@ -1,0 +1,81 @@
+{
+  "audit_date_ist": "2026-10-30",
+  "scope": "Read-only historical TECHM audit and offline code correction; no broker calls or recorded execution-state edits",
+  "session_date": "2026-10-29",
+  "signal_id": "20261029_1236_SHORT_TECHM_a831d91ee335",
+  "strategy_version": "V13-V10-G-3-PRODUCTION-V15",
+  "entry": {
+    "order_id": "261029170670551",
+    "side": "SHORT",
+    "quantity": 28,
+    "price": 1768.0,
+    "observed_at_ist": "2026-10-29T12:37:30+05:30"
+  },
+  "known_exit_order_ids": {
+    "stop": "261029170672597",
+    "target": "261029170672620",
+    "squareoff": ""
+  },
+  "sequence": [
+    {
+      "at_ist": "2026-10-29T14:37:31+05:30",
+      "evidence": "Stop tightening confirmed; local TECHM still OPEN"
+    },
+    {
+      "at_ist": "2026-10-29T14:37:38.977+05:30",
+      "evidence": "Original SHORT worker published BLOCKED, phase UPSTREAM_BLOCKED, reason SLOTS_BLOCKED, upstream scanner; prior worker event showed open=1/error_count=0"
+    },
+    {
+      "at_ist": "2026-10-29T15:32:22+05:30",
+      "evidence": "Coordinator exited with code 2; supervisor began restart cycle"
+    },
+    {
+      "at_ist": "2026-10-29T15:32:40+05:30",
+      "evidence": "Restarted worker saw stop/target CANCELLED with zero known fills, then squareoff placement returned InputException: Intraday orders (MIS) are allowed only till 3:12 PM. Try placing a CNC order."
+    },
+    {
+      "at_ist": "2026-10-29T15:33:06+05:30",
+      "evidence": "Persisted squareoff-submission latch mislabeled the definite rejection as G3_EXIT_SUBMISSION_UNCERTAIN_AWAITING_RECONCILIATION"
+    },
+    {
+      "at_ist": "2026-10-29T15:52:54+05:30",
+      "evidence": "Read-only reconciliation: local expected TECHM -28, broker 0; no active tagged broker orders; squareoff order ID missing"
+    }
+  ],
+  "implementation_corrections": [
+    "Distinguish a definite squareoff rejection from an unknown network outcome, persist the rejection and retain a manual-reconciliation block without repeated submissions",
+    "Recover validated current as well as prior-profile saved positions independently of missing or malformed entry signals",
+    "Block fresh entry submissions while upstream is blocked, while continuing known-position protective management",
+    "Keep invalid saved states unchanged and visibly degraded while continuing protection for independently validated states"
+  ],
+  "historical_reconciliation": {
+    "complete": false,
+    "reason": "No authoritative closing buy fill identity, executed quantity, price and time were present in inspected local records. Broker net zero alone does not establish the exit price, order attribution or P&L.",
+    "required_evidence": [
+      "Broker tradebook/order history or contract-note execution records for all TECHM NSE MIS orders on 2026-10-29, including untagged/manual/broker-squareoff orders",
+      "Complete entry SELL 28 confirmation and closing BUY fill quantities totaling the outstanding 28, with unique execution/order IDs and timestamps",
+      "Proof that candidate closing fills were not already attributed to another strategy or local order"
+    ],
+    "repair_rule": "Only after evidence reconciles all 28 shares: append an auditable repair event and fill ledger with actual executed prices; close the local state and recalculate reports. Do not send a replacement order, invent a fill, delete the state, or use a current net-zero snapshot as historical fill proof."
+  },
+  "timing_policy": {
+    "configured_square_off": "15:15",
+    "broker_rejection_stated_cutoff": "15:12",
+    "changed": false,
+    "note": "One observed broker rejection establishes this rejected request, not a complete standing broker timing policy. Timing alignment needs explicit configuration evidence."
+  },
+  "evidence_files": [
+    "C:/TradingData/eqidv2/fno_oi/v13_v10_g_3_live/orders/LIVE/live_kite_qty1/2026-10-29/20261029_1236_SHORT_TECHM_a831d91ee335.json",
+    "C:/TradingData/eqidv2/fno_oi/v13_v10_g_3_live/order_events/LIVE/2026-10-29.jsonl",
+    "C:/TradingData/eqidv2/observability/reconciliation/broker_positions_v13_v10_g_3_2026-10-29.json",
+    "C:/TradingData/eqidv2/observability/logs/fno_v13_v10_g_3-live-runtime-6996.jsonl",
+    "C:/TradingData/eqidv2/observability/logs/fno_v13_v10_g_3-live-runtime-7804.jsonl",
+    "C:/TradingData/eqidv2/observability/logs/fno_v13_v10_g_3-live-runtime-38276.jsonl",
+    "logs/fno_v13_v10_g_3_live_kite_qty1_2026-10-29.log.supervisor.log"
+  ],
+  "validation": {
+    "command": "python -m pytest tests/test_fno_v13_v10_g_3_partial_fills.py tests/test_slot70_runtime_boundaries.py -q --tb=short",
+    "passed": 67,
+    "broker": "In-memory only; real network calls prohibited by fixture"
+  }
+}

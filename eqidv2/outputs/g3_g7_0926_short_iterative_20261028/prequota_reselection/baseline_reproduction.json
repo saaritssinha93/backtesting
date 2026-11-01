@@ -1,0 +1,26 @@
+[
+  {
+    "differences": [],
+    "label": "G3 full-portfolio allocator control",
+    "passed": true,
+    "rows": 634
+  },
+  {
+    "differences": [],
+    "label": "G7 V4 lock2 full-portfolio control",
+    "passed": true,
+    "rows": 603
+  },
+  {
+    "differences": [],
+    "label": "G3 reconstructed baseline selection + paths + portfolio",
+    "passed": true,
+    "rows": 634
+  },
+  {
+    "differences": [],
+    "label": "G7 reconstructed extension<=4 selection + paths + V4 protection + lock2 portfolio",
+    "passed": true,
+    "rows": 603
+  }
+]

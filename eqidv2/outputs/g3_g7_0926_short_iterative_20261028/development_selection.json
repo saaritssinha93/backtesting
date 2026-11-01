@@ -1,0 +1,164 @@
+[
+  {
+    "variant": "protect_0p6_0p1",
+    "eligible": false,
+    "failure_reasons": "G3 development win rate is not above 75%; G3 development portfolio net falls; G7_V4_lock2 development win rate is not above 75%",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 75.0,
+    "worst_strategy_slot_net_rs": 22571.45514272147,
+    "combined_portfolio_delta_rs": -18267.72323805839
+  },
+  {
+    "variant": "protect_0p5_0p1",
+    "eligible": false,
+    "failure_reasons": "G3 development win rate is not above 75%; G3 development portfolio net falls; G7_V4_lock2 development win rate is not above 75%",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 75.0,
+    "worst_strategy_slot_net_rs": 22571.45514272147,
+    "combined_portfolio_delta_rs": -18267.72323805839
+  },
+  {
+    "variant": "protect_0p4_0p1",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 83.33333333333333,
+    "worst_strategy_slot_net_rs": 19654.642549228665,
+    "combined_portfolio_delta_rs": -20155.11162250582
+  },
+  {
+    "variant": "protect_0p3_0p1",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 83.33333333333333,
+    "worst_strategy_slot_net_rs": 8652.6074094912,
+    "combined_portfolio_delta_rs": -40657.00637061021
+  },
+  {
+    "variant": "protect_0p2_0p1",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 91.66666666666667,
+    "worst_strategy_slot_net_rs": 1302.6074094912324,
+    "combined_portfolio_delta_rs": -52006.39014026348
+  },
+  {
+    "variant": "protect_0p2_0p15",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 91.66666666666667,
+    "worst_strategy_slot_net_rs": 3495.8304833109264,
+    "combined_portfolio_delta_rs": -47877.15132092778
+  },
+  {
+    "variant": "price_magnitude_min_0p30",
+    "eligible": false,
+    "failure_reasons": "G3 development win rate is not above 75%; G3 development portfolio net falls; G7_V4_lock2 development win rate is not above 75%; G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 70.0,
+    "worst_strategy_slot_net_rs": 22131.798690495976,
+    "combined_portfolio_delta_rs": -3830.192877067253
+  },
+  {
+    "variant": "oi_min_0p10",
+    "eligible": false,
+    "failure_reasons": "G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 87.5,
+    "worst_strategy_slot_net_rs": 19276.28419049599,
+    "combined_portfolio_delta_rs": -4163.400671071024
+  },
+  {
+    "variant": "volume_min_2p50",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 83.33333333333333,
+    "worst_strategy_slot_net_rs": 7290.607925968228,
+    "combined_portfolio_delta_rs": -27458.434139818535
+  },
+  {
+    "variant": "body_min_0p60",
+    "eligible": false,
+    "failure_reasons": "G3 development win rate is not above 75%; G3 development portfolio net falls; G7_V4_lock2 development win rate is not above 75%; G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 57.142857142857146,
+    "worst_strategy_slot_net_rs": 2400.5854604224505,
+    "combined_portfolio_delta_rs": -51549.24807383923
+  },
+  {
+    "variant": "wick_max_0p40",
+    "eligible": false,
+    "failure_reasons": "G3 development win rate is not above 75%; G3 development portfolio net falls; G7_V4_lock2 development win rate is not above 75%; G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 66.66666666666667,
+    "worst_strategy_slot_net_rs": 12381.598026645603,
+    "combined_portfolio_delta_rs": -26186.319096518448
+  },
+  {
+    "variant": "nifty_open_max_minus_0p15",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 1,
+    "worst_strategy_win_rate_pct": 77.77777777777777,
+    "worst_strategy_slot_net_rs": 14802.268098268123,
+    "combined_portfolio_delta_rs": -19823.898509956896
+  },
+  {
+    "variant": "protect_0p4_0p1_price_min",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls",
+    "complexity": 2,
+    "worst_strategy_win_rate_pct": 80.0,
+    "worst_strategy_slot_net_rs": 19154.642549228665,
+    "combined_portfolio_delta_rs": -21153.955765968887
+  },
+  {
+    "variant": "protect_0p4_0p1_oi_min",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 2,
+    "worst_strategy_win_rate_pct": 87.5,
+    "worst_strategy_slot_net_rs": 19276.28419049599,
+    "combined_portfolio_delta_rs": -20967.899765968905
+  },
+  {
+    "variant": "protect_0p4_0p1_volume_min",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 2,
+    "worst_strategy_win_rate_pct": 83.33333333333333,
+    "worst_strategy_slot_net_rs": 6890.914635013607,
+    "combined_portfolio_delta_rs": -46992.19207378803
+  },
+  {
+    "variant": "protect_0p4_0p1_body_min",
+    "eligible": false,
+    "failure_reasons": "G3 development win rate is not above 75%; G3 development slot net is nonpositive; G3 development portfolio net falls; G7_V4_lock2 development win rate is not above 75%; G7_V4_lock2 development portfolio net falls",
+    "complexity": 2,
+    "worst_strategy_win_rate_pct": 71.42857142857143,
+    "worst_strategy_slot_net_rs": -5447.392590508832,
+    "combined_portfolio_delta_rs": -65487.20413577987
+  },
+  {
+    "variant": "protect_0p4_0p1_wick_max",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 2,
+    "worst_strategy_win_rate_pct": 77.77777777777777,
+    "worst_strategy_slot_net_rs": 7902.607409491145,
+    "combined_portfolio_delta_rs": -42156.19156955683
+  },
+  {
+    "variant": "protect_0p4_0p1_nifty_max",
+    "eligible": false,
+    "failure_reasons": "G3 development portfolio net falls; G7_V4_lock2 development portfolio net falls",
+    "complexity": 2,
+    "worst_strategy_win_rate_pct": 88.88888888888889,
+    "worst_strategy_slot_net_rs": 8058.81206591744,
+    "combined_portfolio_delta_rs": -39979.01013246272
+  }
+]

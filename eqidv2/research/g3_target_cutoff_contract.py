@@ -12,10 +12,12 @@ import hashlib
 import json
 from pathlib import Path
 
+import pandas as pd
+
 import fno_v13_v10_g_3_contract as production
 
-STRATEGY_VERSION = "V13-V10-G-3-BACKTEST-TARGET-GT075-RESTORED3-V14"
-ACCEPTED_VARIANT = "G3_V12_BACKTEST_TARGET_CUTOFF_RESTORE_THREE_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120_1011_SHORT_MOVE011"
+STRATEGY_VERSION = "V13-V10-G-3-BACKTEST-TARGET-GT075-RESTORED3-V15"
+ACCEPTED_VARIANT = "G3_V12_BACKTEST_TARGET_CUTOFF_RESTORE_THREE_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120_1011_SHORT_MOVE011_0926_SHORT_MIN_WICK020"
 TARGET_CUTOFF_PCT = .75
 SOURCE_FINGERPRINT = "7d4012b1886bce289f7d5036fd3a4d09ee9f8fd1f3da5d8265a83f8096d26b1c"
 RESTORED_TARGETS = {'0951_LONG': .75, '1006_LONG': .56, '1016_SHORT': .68}
@@ -32,6 +34,7 @@ _CORE_BY_ID = {s.setup_id: s for s in CORE_SETUPS}
 SIGNAL_TO_CONFIRMATION = dict(sorted({s.signal_end: s.confirmation_end for s in ACTIVE_SETUPS}.items()))
 MIN_CONFIRMATION_VOLUME_BY_SETUP = {key: value for key, value in production.MIN_CONFIRMATION_VOLUME_BY_SETUP.items()
                                   if key not in DISABLED_IDS}
+MIN_DIRECTIONAL_WICK_RATIO_BY_SETUP = {"0926_SHORT": .20}
 
 
 def __getattr__(name):
@@ -48,14 +51,25 @@ def confirmation_volume_minimum(side, *, signal_end=None, setup_id=None):
 
 
 def passes_selected_filters(candidate, setup, *, session_date=None, original_only=False):
-    return (setup.setup_id in _ACTIVE_BY_ID and production.passes_selected_filters(
-        candidate, setup, session_date=session_date, original_only=original_only))
+    if setup.setup_id not in _ACTIVE_BY_ID or not production.passes_selected_filters(
+            candidate, setup, session_date=session_date, original_only=original_only):
+        return False
+    minimum = MIN_DIRECTIONAL_WICK_RATIO_BY_SETUP.get(setup.setup_id, 0.)
+    try:
+        row = production._candidate(candidate)
+        wick = row.get("wick_ratio", row.get(
+            "v9_1m_upper_wick_ratio" if setup.side == "LONG" else "v9_1m_lower_wick_ratio"))
+        return float(wick) >= minimum
+    except (TypeError, ValueError):
+        return False
 
 
 def rank_candidates(candidates, setup, *, session_date=None):
     if setup.setup_id not in _ACTIVE_BY_ID:
         return []
-    return production.rank_candidates(candidates, setup, session_date=session_date)
+    eligible = [row for row in candidates
+                if passes_selected_filters(row, setup, session_date=session_date)]
+    return production.rank_candidates(eligible, setup, session_date=session_date)
 
 
 def identify_orders(orders):
@@ -76,9 +90,36 @@ def identify_orders(orders):
 
 
 def selection_audit(signals):
-    audit = production.selection_audit(signals)
-    audit = audit.loc[audit.setup_id.isin(_ACTIVE_BY_ID)].copy()
-    return identify_orders(audit).reset_index(drop=True)
+    # Run the new wick gate before ranking/quota so the next valid candidate can
+    # replace a rejected 09:26 SHORT.  Keep every rejected candidate in the
+    # decision audit rather than silently deleting it from the evidence.
+    source = signals.copy()
+    if "sid" not in source:
+        source["sid"] = source.index
+    baseline = production.selection_audit(source)
+    baseline = baseline.loc[baseline.setup_id.isin(_ACTIVE_BY_ID)].copy()
+    minimum = MIN_DIRECTIONAL_WICK_RATIO_BY_SETUP["0926_SHORT"]
+    targeted = baseline.setup_id.eq("0926_SHORT")
+    wick = pd.to_numeric(baseline.wick_ratio, errors="coerce")
+    rejected = targeted & ~wick.ge(minimum)
+    rejected_sids = set(baseline.loc[rejected, "sid"])
+    revised = production.selection_audit(source.loc[~source.sid.isin(rejected_sids)].copy())
+    revised = revised.loc[revised.setup_id.isin(_ACTIVE_BY_ID)].copy()
+    excluded = baseline.loc[rejected].copy()
+    if len(excluded):
+        excluded["v9_selected"] = False
+        excluded["v9_filter_pass"] = False
+        excluded["v9_rank_in_setup_day"] = pd.NA
+        excluded["v9_decision"] = "FILTER_REJECTED_MIN_DIRECTIONAL_WICK"
+    audit = (pd.concat([revised, excluded], ignore_index=True, sort=False)
+             if len(excluded) else revised.copy())
+    audit["minimum_directional_wick_ratio"] = audit.setup_id.map(
+        MIN_DIRECTIONAL_WICK_RATIO_BY_SETUP).fillna(0.)
+    audit["minimum_directional_wick_pass"] = pd.to_numeric(
+        audit.wick_ratio, errors="coerce").ge(audit.minimum_directional_wick_ratio)
+    audit = identify_orders(audit)
+    return audit.sort_values(["day", "hhmm_int", "side", "setup_id", "tradingsymbol"],
+                             kind="stable").reset_index(drop=True)
 
 
 def select_orders(signals):
@@ -99,7 +140,13 @@ def strategy_payload():
         disabled_setups=[dict(**asdict(s), enabled=False, reason="TARGET_LE_075") for s in DISABLED_SETUPS],
         core_setups=[asdict(s) for s in CORE_SETUPS], active_setups=[asdict(s) for s in ACTIVE_SETUPS],
         signal_to_confirmation=dict(SIGNAL_TO_CONFIRMATION),
-        minimum_confirmation_1m_volume_ratio_by_setup=dict(MIN_CONFIRMATION_VOLUME_BY_SETUP))
+        minimum_confirmation_1m_volume_ratio_by_setup=dict(MIN_CONFIRMATION_VOLUME_BY_SETUP),
+        minimum_directional_wick_ratio_by_setup=dict(MIN_DIRECTIONAL_WICK_RATIO_BY_SETUP),
+        minimum_directional_wick_policy=dict(
+            setup_id="0926_SHORT", side="SHORT", minimum=.20,
+            feature="CONFIRMATION_CANDLE_LOWER_WICK_RATIO",
+            application="BEFORE_MAX_VOLUME_RANKING_AND_TWO_ENTRY_QUOTA",
+            replacement_candidates=True, outcomes_used_for_selection=False))
     value['exit']['setups'] = {key: spec for key, spec in value['exit']['setups'].items() if key not in DISABLED_IDS}
     return value
 
@@ -116,6 +163,10 @@ def contract_for_identity(version, fingerprint):
     import sys
     if (version, fingerprint) == (STRATEGY_VERSION, strategy_fingerprint()):
         return sys.modules[__name__]
+    from research.archived_g3_v14 import contract as before_minimum_wick
+    if (version, fingerprint) == (before_minimum_wick.STRATEGY_VERSION,
+                                  before_minimum_wick.strategy_fingerprint()):
+        return before_minimum_wick
     from research.archived_g3_v13 import contract as before_short_move_change
     if (version, fingerprint) == (before_short_move_change.STRATEGY_VERSION, before_short_move_change.strategy_fingerprint()):
         return before_short_move_change
@@ -152,6 +203,8 @@ def validate_contract(value=None):
     exceptions = {s.setup_id: s.target_pct for s in ACTIVE_SETUPS if s.target_pct <= TARGET_CUTOFF_PCT}
     if exceptions != RESTORED_TARGETS:
         raise ValueError("Cutoff must preserve exactly the three explicitly restored setups")
+    if MIN_DIRECTIONAL_WICK_RATIO_BY_SETUP != {"0926_SHORT": .20}:
+        raise ValueError("G3 V15 must apply only the accepted 09:26 SHORT minimum wick rule")
     if value is not None and value != strategy_payload():
         raise ValueError("G3 cutoff backtest differs from the accepted normalized contract")
 

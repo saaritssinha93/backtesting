@@ -8,6 +8,10 @@ from fno_strategy_registry import deployment_state
 
 
 def entry_authority(profile: str) -> tuple[bool, str]:
+    if profile == "V13_V10_G_7_V4_LOCK":
+        # A named, configured research profile must never fall through the
+        # legacy permission branch while its transport is not implemented.
+        return False, "G7_V4_LOCK_EXECUTION_ADAPTER_NOT_SUPPORTED"
     if profile not in {"V13_V10_G", "V13_V10_G_3"}:
         return True, "LEGACY_PROFILE"
     try:

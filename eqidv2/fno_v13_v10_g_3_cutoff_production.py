@@ -1,4 +1,4 @@
-"""G3 production V13: the exact 51 setup decisions of G3 backtest V14.
+"""G3 production V15: V13 entry rules with the all-slot selection.
 
 V12 remains the immutable donor for old orders and historical backtests.  This
 module changes setup enablement and strategy identity; it never grants trading
@@ -13,14 +13,16 @@ import json
 from pathlib import Path
 
 import fno_v13_v10_g_3_contract as donor
-from research import g3_target_cutoff_contract as backtest
+from research import g3_slot_win70_contract as backtest
+from research import archived_g3_production_v13 as previous
+from research import archived_g3_production_v14 as previous_selected
 
 from fno_v13_v10_g_3_contract import *  # noqa: F401,F403 - unchanged helpers
 
-STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V13"
-ACCEPTED_VARIANT = donor.ACCEPTED_VARIANT + "_TARGET_GT075_RESTORED3"
-PREVIOUS_STRATEGY_VERSION = donor.STRATEGY_VERSION
-PREVIOUS_STRATEGY_FINGERPRINT = donor.strategy_fingerprint()
+STRATEGY_VERSION = "V13-V10-G-3-PRODUCTION-V15"
+ACCEPTED_VARIANT = previous.ACCEPTED_VARIANT + "_ALL_SLOT_NET_WIN_GE70"
+PREVIOUS_STRATEGY_VERSION = previous.STRATEGY_VERSION
+PREVIOUS_STRATEGY_FINGERPRINT = previous.strategy_fingerprint()
 DISABLED_IDS = backtest.DISABLED_IDS
 RESTORED_TARGETS = dict(backtest.RESTORED_TARGETS)
 CORE_SETUPS = tuple(replace(s, source_version=STRATEGY_VERSION) for s in backtest.CORE_SETUPS)
@@ -30,6 +32,7 @@ _ACTIVE_BY_ID = {s.setup_id: s for s in ACTIVE_SETUPS}
 _ACTIVE_BY_SIGNAL_SIDE = {(s.signal_end, s.side): s for s in ACTIVE_SETUPS}
 SIGNAL_TO_CONFIRMATION = dict(backtest.SIGNAL_TO_CONFIRMATION)
 MIN_CONFIRMATION_VOLUME_BY_SETUP = dict(backtest.MIN_CONFIRMATION_VOLUME_BY_SETUP)
+MIN_DIRECTIONAL_WICK_RATIO_BY_SETUP = dict(previous.strategy_payload().get("minimum_directional_wick_ratio_by_setup", {}))
 
 
 def setup_for(signal_end: str, side: str, *, session_date: date | None = None):
@@ -37,18 +40,19 @@ def setup_for(signal_end: str, side: str, *, session_date: date | None = None):
 
 
 def passes_selected_filters(candidate, setup, *, session_date=None, original_only=False):
-    return setup.setup_id in _ACTIVE_BY_ID and donor.passes_selected_filters(
+    return setup.setup_id in _ACTIVE_BY_ID and previous.passes_selected_filters(
         candidate, setup, session_date=session_date, original_only=original_only)
 
 
 def rank_candidates(candidates, setup, *, session_date=None):
     if setup.setup_id not in _ACTIVE_BY_ID:
         return []
-    return donor.rank_candidates(candidates, setup, session_date=session_date)
+    return previous.rank_candidates(candidates, setup, session_date=session_date)
 
 
 def selection_audit(signals):
-    audit = backtest.selection_audit(signals)
+    audit = previous.selection_audit(signals)
+    audit = audit.loc[audit.setup_id.isin(_ACTIVE_BY_ID)].reset_index(drop=True)
     if audit.empty:
         return audit
     audit = audit.copy()
@@ -68,13 +72,21 @@ def select_orders(signals):
 
 
 def strategy_payload() -> dict:
-    value = backtest.strategy_payload()
+    value = previous.strategy_payload()
     value.pop("scope", None)
     value.update(strategy_version=STRATEGY_VERSION, accepted_variant=ACCEPTED_VARIANT,
                  source_strategy_version=PREVIOUS_STRATEGY_VERSION,
                  source_strategy_fingerprint=PREVIOUS_STRATEGY_FINGERPRINT,
+                 slot_selection=backtest.slots.policy_payload("G3"),
+                 slot_selection_fingerprint=backtest.slots.policy_fingerprint("G3"),
+                 signal_to_confirmation=dict(SIGNAL_TO_CONFIRMATION),
+                 minimum_confirmation_1m_volume_ratio_by_setup=dict(MIN_CONFIRMATION_VOLUME_BY_SETUP),
                  core_setups=[asdict(s) for s in CORE_SETUPS],
                  active_setups=[asdict(s) for s in ACTIVE_SETUPS])
+    value["setup_enablement"].update(rule="PRIOR_PRODUCTION_AND_ALL_SLOTS_WIN_GE70",
+        enabled_count=len(ACTIVE_SETUPS), disabled_count=len(DISABLED_IDS), disabled_setup_ids=sorted(DISABLED_IDS))
+    value["disabled_setups"] = backtest.strategy_payload()["disabled_setups"]
+    value["exit"]["setups"] = {k:v for k,v in value["exit"]["setups"].items() if k in _ACTIVE_BY_ID}
     return value
 
 
@@ -88,22 +100,24 @@ config_fingerprint = strategy_fingerprint
 
 def supported_identity(version, fingerprint, *, allow_legacy=False):
     return (version, fingerprint) == (STRATEGY_VERSION, strategy_fingerprint()) or (
-        allow_legacy and donor.supported_identity(version, fingerprint, allow_legacy=True))
+        allow_legacy and ((version, fingerprint) ==
+            (previous_selected.STRATEGY_VERSION, previous_selected.strategy_fingerprint()) or
+            previous.supported_identity(version, fingerprint, allow_legacy=True)))
 
 
 def validate_contract(value=None):
     donor.validate_contract()
     backtest.validate_contract()
-    if len(ACTIVE_SETUPS) != 51 or len(DISABLED_IDS) != 10:
-        raise ValueError("G3 production cutoff must have exactly 51 enabled and 10 disabled setups")
+    if set(_ACTIVE_BY_ID) != set(backtest.slots.enabled_setup_ids("G3")):
+        raise ValueError("G3 production slots must match the shared >=70% selection")
     if any(asdict(_ACTIVE_BY_ID[s.setup_id]) != {**asdict(s), "source_version": STRATEGY_VERSION}
            for s in backtest.ACTIVE_SETUPS):
-        raise ValueError("Production selection diverges from G3 V14 backtest")
+        raise ValueError("Production selection diverges from G3 V17 backtest")
     payload = strategy_payload()
     if value is not None and value != payload:
-        raise ValueError("G3 V13 production configuration differs from the accepted cutoff contract")
+        raise ValueError("G3 V15 production configuration differs from the selected contract")
     if payload["execution_authority"] is not False or payload["default_armed"] is not False:
-        raise ValueError("G3 V13 contract cannot authorize trading")
+        raise ValueError("G3 V15 contract cannot authorize trading")
     return payload
 
 

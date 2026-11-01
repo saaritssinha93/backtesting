@@ -746,15 +746,15 @@ class LauncherFastPathConfigTests(unittest.TestCase):
             self._batch_value(text, "EQIDV2_FNO_5M_FROM_1M"),
             "1",
         )
-        per_app = self._batch_value(text, "MAX_WORKERS_PER_APP")
-        total = self._batch_value(text, "MAX_WORKERS")
-        self.assertIsNotNone(per_app)
-        self.assertIsNotNone(total)
+        from tools.fno_data_supervisor import Config
+        arguments = Config("cash5m").command()
+        per_app = arguments[arguments.index("--max-workers-per-app") + 1]
+        total = arguments[arguments.index("--max-workers") + 1]
         self.assertEqual(int(per_app), 16)
         self.assertEqual(int(total), 128)
         self.assertEqual(int(total), 8 * int(per_app))
-        self.assertIn('"--max-workers","%MAX_WORKERS%"', text)
-        self.assertIn('"--max-workers-per-app","%MAX_WORKERS_PER_APP%"', text)
+        self.assertIn("fno_data_supervisor.py", text)
+        self.assertIn("--service cash5m", text)
 
     def test_scanner_launcher_starts_immediately_and_uses_small_chunks(self) -> None:
         text = (

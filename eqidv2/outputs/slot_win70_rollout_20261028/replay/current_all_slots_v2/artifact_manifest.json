@@ -1,0 +1,17 @@
+{
+  "execution_authority": false,
+  "files": {
+    "baseline_reproduction.json": "a005952095c70c7173f7f914574e2c20045dda70b78801dc27a2d4749d1d42de",
+    "changed_admissions.csv": "170612e84f51fa0ed0316f1b3aa10e4b0c787fe6f67cd9746fb803cd3b744413",
+    "config.json": "da527bde49e64123ec58199110f4121f33dee6b164d1bd83f6f83825e0daefbb",
+    "daywise_comparison.csv": "474d2e99549c57838c44b623950ebd7257f0f41d9363cba3010bd5e302b23145",
+    "g3_portfolio_trades.csv": "9b44941b16659e2142f997fa4b9e91df774de2f3de64b3b1bed508338f360a2f",
+    "g7_v4_lock2_portfolio_trades.csv": "57ba1bd7d0539fe9f70239ec248d253d4036bdf1711ef9b5a3c0836e477a4158",
+    "october_daywise_comparison.csv": "5aa0d3dd1d4cbd31fde0653e890234b3f26420c59a71b89c23e37c9e1abf0db1",
+    "overall_comparison.csv": "717498377b6a950c6108b284e80db5c5706c8a498d52f8054f4e3947375198a8",
+    "selected_slot_results.csv": "e140a70d0e760f1cb92f971f7b2e634e427b299b4d630e349223bbaffc9353cd",
+    "source_provenance.json": "31ced5fd06cd6cb3dbc7e06aadae323fc2c574c69176a882349a2710fa005679",
+    "summary.json": "5165e28fc1fbd170a64b7f872ac7a688169abb43b1f536a349290ec9be53c345"
+  },
+  "scope": "BACKTEST_ONLY"
+}

@@ -17,7 +17,7 @@ from ai_platform.api.registry import SourceRegistry
 from ai_platform.api.repository import PlatformRepository
 from ai_platform.observability.g3_shadow_gate import STATE, pending_g3_shadow
 from ai_platform.observability.runtime_collector import RuntimeMetricsCollector
-from fno_v13_v10_g_3_contract import STRATEGY_VERSION, config_fingerprint
+from fno_v13_v10_g_3_cutoff_production import STRATEGY_VERSION, config_fingerprint
 
 ROOT=Path(__file__).resolve().parents[1]
 DAY="2026-10-09"

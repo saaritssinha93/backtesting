@@ -44,6 +44,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from datetime import date, datetime, time as dtime, timedelta
@@ -68,6 +69,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.download_manager import WDMDownloadManager
+from webdriver_manager.core.driver_cache import DriverCacheManager
+from webdriver_manager.core.http import WDMHttpClient
+from webdriver_manager.core.os_manager import OperationSystemManager
 
 ROOT = Path(__file__).resolve().parent
 IST = pytz.timezone("Asia/Kolkata")
@@ -154,6 +159,118 @@ SECONDARY_LOGIN_ATTEMPTS = 2
 SECONDARY_RETRY_DELAY_SEC = 5.0
 AUTO_SUBMIT_GRACE_SEC = 8.0
 POST_SUBMIT_TIMEOUT_SEC = 35.0
+DRIVER_BOOTSTRAP_TIMEOUT_SEC = 60
+BROWSER_PAGE_TIMEOUT_SEC = 30
+
+
+def _windows_file_version(path: Path) -> str:
+    """Read the actual installed executable, without invoking PowerShell."""
+    import ctypes
+    from ctypes import wintypes
+
+    version_api = ctypes.WinDLL("version", use_last_error=True)
+    version_api.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p]
+    version_api.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+    version_api.VerQueryValueW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+    size = version_api.GetFileVersionInfoSizeW(str(path), None)
+    if not size:
+        raise OSError(f"Cannot read Chrome file version: {path}")
+    data = ctypes.create_string_buffer(size)
+    if not version_api.GetFileVersionInfoW(str(path), 0, size, data):
+        raise OSError("Cannot load Chrome version resource")
+    pointer, length = ctypes.c_void_p(), wintypes.UINT()
+    if not version_api.VerQueryValueW(data, "\\", ctypes.byref(pointer), ctypes.byref(length)) or length.value < 16:
+        raise OSError("Cannot find Chrome fixed file version")
+    values = ctypes.cast(pointer, ctypes.POINTER(wintypes.DWORD))
+    if values[0] != 0xFEEF04BD:
+        raise OSError("Invalid Chrome version resource")
+    return ".".join(str(value) for value in (values[2] >> 16, values[2] & 0xFFFF, values[3] >> 16, values[3] & 0xFFFF))
+
+
+def _installed_windows_chrome() -> Tuple[Path, str]:
+    for variable in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        directory = os.environ.get(variable)
+        if directory:
+            binary = Path(directory) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            if binary.is_file():
+                return binary, _windows_file_version(binary)
+    raise RuntimeError("Installed Google Chrome was not found")
+
+
+def _compatible_cached_driver(browser_version: str, cache_root: Path) -> Optional[Path]:
+    """Reuse a verified matching build even after WDM's one-day cache expiry."""
+    build = tuple(browser_version.split(".")[:3])
+    candidates = []
+    for binary in (cache_root / "drivers" / "chromedriver").glob("*/*/**/chromedriver.exe"):
+        match = re.search(r"[\\/](\d+\.\d+\.\d+\.\d+)[\\/]", str(binary))
+        if match and tuple(match.group(1).split(".")[:3]) == build:
+            candidates.append((tuple(map(int, match.group(1).split("."))), binary))
+    for _version, binary in sorted(candidates, reverse=True):
+        try:
+            result = subprocess.run(
+                [str(binary), "--version"], capture_output=True, text=True,
+                timeout=5, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            match = re.search(r"ChromeDriver (\d+\.\d+\.\d+)\.", result.stdout)
+            if match and tuple(match.group(1).split(".")) == build:
+                return binary
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return None
+
+
+class _BoundedDriverHttpClient(WDMHttpClient):
+    def get(self, url, **kwargs):
+        kwargs.setdefault("timeout", (5, 15))
+        return super().get(url, **kwargs)
+
+
+class _NativeChromeOSManager(OperationSystemManager):
+    def __init__(self, browser_version: str):
+        super().__init__()
+        self.browser_version = ".".join(browser_version.split(".")[:3])
+
+    def get_browser_version_from_os(self, browser_type=None):
+        return self.browser_version
+
+
+def _resolve_browser_driver() -> dict:
+    """Credential-free worker; its caller enforces a total bootstrap deadline."""
+    browser_path, browser_version = (None, None)
+    cache_manager = DriverCacheManager()
+    os_manager = None
+    if os.name == "nt":
+        browser_path, browser_version = _installed_windows_chrome()
+        cached = _compatible_cached_driver(browser_version, Path.home() / ".wdm")
+        if cached:
+            return {"driver_path": str(cached), "browser_path": str(browser_path), "browser_version": browser_version, "source": "compatible-cache"}
+        os_manager = _NativeChromeOSManager(browser_version)
+        # WDM creates its own OS manager in the cache as well as in the driver.
+        # Both must avoid its unbounded PowerShell version probe.
+        cache_manager._os_system_manager = os_manager
+    path = ChromeDriverManager(
+        cache_manager=cache_manager, os_system_manager=os_manager,
+        download_manager=WDMDownloadManager(http_client=_BoundedDriverHttpClient()),
+    ).install()
+    return {"driver_path": path, "browser_path": str(browser_path) if browser_path else None, "browser_version": browser_version, "source": "webdriver-manager"}
+
+
+def _prepare_browser_driver() -> dict:
+    print("[AUTH] Preparing Chrome driver (bounded bootstrap).", flush=True)
+    try:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--prepare-browser-driver"],
+            capture_output=True, text=True, timeout=DRIVER_BOOTSTRAP_TIMEOUT_SEC,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Chrome driver preparation exceeded {DRIVER_BOOTSTRAP_TIMEOUT_SEC}s") from exc
+    if result.returncode:
+        # This worker never reads credentials; still avoid dumping arbitrary output.
+        raise RuntimeError("Chrome driver preparation failed; verify installed Chrome and matching driver cache")
+    prepared = json.loads(result.stdout.strip().splitlines()[-1])
+    print(f"[AUTH] Chrome {prepared['browser_version']} driver ready ({prepared['source']}).", flush=True)
+    return prepared
 
 
 def now_ist() -> datetime:
@@ -709,11 +826,17 @@ def _request_token_after_totp(
 
 
 def _do_browser_login_for_request_token(kite: KiteConnect, user_id: str, password: str, totp_secret: str) -> str:
-    service = Service(ChromeDriverManager().install())
+    prepared = _prepare_browser_driver()
+    service = Service(prepared["driver_path"])
     options = Options()
+    if prepared.get("browser_path"):
+        options.binary_location = prepared["browser_path"]
     driver = webdriver.Chrome(service=service, options=options)
 
     try:
+        driver.set_page_load_timeout(BROWSER_PAGE_TIMEOUT_SEC)
+        driver.set_script_timeout(BROWSER_PAGE_TIMEOUT_SEC)
+        print("[AUTH] Opening broker login page.", flush=True)
         driver.get(kite.login_url())
         wait = WebDriverWait(driver, 15)
 
@@ -1029,6 +1152,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--prepare-browser-driver"]:
+        print(json.dumps(_resolve_browser_driver()))
+        raise SystemExit(0)
     with _single_instance_lock() as acquired:
         if not acquired:
             print(

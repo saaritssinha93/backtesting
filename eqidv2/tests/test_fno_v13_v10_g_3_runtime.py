@@ -36,10 +36,6 @@ AFTERNOON_PROMOTED_CASES = [
     ("13:25", "LONG", .41, .2), ("13:25", "SHORT", .76, 1.2),
     ("13:30", "LONG", 1.17, .8),
 ]
-AFTERNOON_PROMOTED_CASES = [
-    case for case in AFTERNOON_PROMOTED_CASES
-    if config.setup_for(case[0], case[1]) is not None
-]
 
 
 def isolated(name, filename):
@@ -97,7 +93,9 @@ def test_g3_live_order_write_keeps_original_failure_behavior(runtime, tmp_path, 
     assert calls == [path]
 
 
-def candidate(side="LONG", ratio=1.1, clock="09:30"):
+def candidate(side="LONG", ratio=1.1, clock="09:25"):
+    # The default remains an enabled current LONG setup. Risk/activation tests
+    # must reach their gates rather than stop at the removed 09:31 LONG slot.
     stamp = config.slot_datetime(DAY, clock)
     long = side == "LONG"
     return dict(tradingsymbol="TEST", instrument_token=1, futures_tradingsymbol="TEST26OCTFUT",
@@ -115,7 +113,7 @@ def test_runtime_profile_selection_identity_and_quantity(runtime):
     assert runtime.LIVE_ROOT.name == "v13_v10_g_3_live"
     assert runtime.CONTROL_ROOT.name == "v13_v10_g_3_live"
     assert runtime.ORDER_TAG_PREFIX == "FVG3"
-    rows = runtime.select_entry_signals([candidate()], DAY, "09:30", capital_rs=100000., leverage=5.)
+    rows = runtime.select_entry_signals([candidate()], DAY, "09:25", capital_rs=100000., leverage=5.)
     assert len(rows) == 1
     signal = rows[0]
     assert signal["stop_pct"] == 1.25
@@ -125,30 +123,30 @@ def test_runtime_profile_selection_identity_and_quantity(runtime):
     assert signal["paper_sizing"]["quantity"] == 4901
     assert runtime.create_order_state(signal, "LIVE", live_quantity=100)["quantity"] == 100
     assert runtime.create_order_state(signal, "LIVE", live_quantity=10000)["quantity"] == 490
-    assert signal["signal_id"] == config.canonical_signal_id(config.STRATEGY_VERSION, DAY, "09:30", "09:31", "LONG", "TEST")
+    assert signal["signal_id"] == config.canonical_signal_id(config.STRATEGY_VERSION, DAY, "09:25", "09:26", "LONG", "TEST")
 
 
 def test_late_live_activation_blocks_recent_pre_start_signal_before_broker_pool(
     runtime, monkeypatch
 ):
-    now = datetime.fromisoformat("2026-10-12T09:32:00+05:30")
+    now = datetime.fromisoformat("2026-10-12T09:27:00+05:30")
     signal = runtime.select_entry_signals(
-        [candidate()], DAY, "09:30", capital_rs=100000.0, leverage=5.0
+        [candidate()], DAY, "09:25", capital_rs=100000.0, leverage=5.0
     )[0]
     # This signal is still inside its normal ten-minute trigger window, but it
     # was committed before both the approval and this coordinator start.
-    signal["published_at_ist"] = "2026-10-12T09:31:20+05:30"
+    signal["published_at_ist"] = "2026-10-12T09:26:20+05:30"
     common.atomic_write_json(
         runtime.LIVE_ARM_PATH,
         {
             "enabled": True,
             "session_date": DAY.isoformat(),
-            "entry_not_before_ist": "2026-10-12T09:31:30+05:30",
+            "entry_not_before_ist": "2026-10-12T09:26:30+05:30",
         },
     )
     monkeypatch.setenv(
         runtime.G3_LIVE_ACTIVATION_EPOCH_ENV,
-        "2026-10-12T09:31:45+05:30",
+        "2026-10-12T09:26:45+05:30",
     )
     monkeypatch.setattr(runtime.common, "now_ist", lambda: now)
     monkeypatch.setattr(runtime, "load_signals", lambda *_args, **_kwargs: [signal])
@@ -185,33 +183,34 @@ def test_late_live_activation_blocks_recent_pre_start_signal_before_broker_pool(
 def test_live_activation_epoch_allows_only_signal_published_after_start(
     runtime, monkeypatch
 ):
-    now = datetime.fromisoformat("2026-10-12T09:32:00+05:30")
+    now = datetime.fromisoformat("2026-10-12T09:27:00+05:30")
     signal = runtime.select_entry_signals(
-        [candidate()], DAY, "09:30", capital_rs=100000.0, leverage=5.0
+        [candidate()], DAY, "09:25", capital_rs=100000.0, leverage=5.0
     )[0]
-    signal["published_at_ist"] = "2026-10-12T09:31:50+05:30"
+    signal["published_at_ist"] = "2026-10-12T09:26:50+05:30"
     common.atomic_write_json(
         runtime.LIVE_ARM_PATH,
         {
             "enabled": True,
             "session_date": DAY.isoformat(),
-            "entry_not_before_ist": "2026-10-12T09:31:30+05:30",
+            "entry_not_before_ist": "2026-10-12T09:26:30+05:30",
         },
     )
     monkeypatch.setenv(
         runtime.G3_LIVE_ACTIVATION_EPOCH_ENV,
-        "2026-10-12T09:31:45+05:30",
+        "2026-10-12T09:26:45+05:30",
     )
     state = runtime.create_order_state(signal, "LIVE")
 
     assert runtime._block_pre_activation_g3_entry(signal, state, now) is False
     assert state["status"] == "PENDING_ENTRY"
-    assert state["live_entry_not_before_ist"] == "2026-10-12T09:31:45+05:30"
+    assert state["live_entry_not_before_ist"] == "2026-10-12T09:26:45+05:30"
 
 
 def test_runtime_side_thresholds_and_strict_0925(runtime):
-    assert runtime.select_entry_signals([candidate(ratio=1.099)], DAY, "09:30", capital_rs=100000., leverage=5.) == []
-    assert runtime.select_entry_signals([candidate("SHORT", 1.199)], DAY, "09:30", capital_rs=100000., leverage=5.) == []
+    assert runtime.select_entry_signals([candidate(ratio=1.099)], DAY, "09:25", capital_rs=100000., leverage=5.) == []
+    assert runtime.select_entry_signals([candidate("SHORT", 1.199, "09:30")], DAY, "09:30", capital_rs=100000., leverage=5.) == []
+    assert len(runtime.select_entry_signals([candidate("SHORT", 1.2, "09:30")], DAY, "09:30", capital_rs=100000., leverage=5.)) == 1
     row = candidate(clock="09:25")
     row.update(ema9=99., ema20=101., ema50=100.)
     assert runtime.select_entry_signals([row], DAY, "09:25", capital_rs=100000., leverage=5.) == []
@@ -236,6 +235,11 @@ def test_scanner_adapts_exact_join_timestamp_to_g3_contract(runtime,monkeypatch,
     monkeypatch.setattr(runtime.hybrid,"load_equity_five_minute",lambda *a,**k:frame.copy())
     monkeypatch.setattr(runtime.hybrid,"join_equity_price_with_futures_oi",lambda *a,**k:frame.copy())
     monkeypatch.setattr(runtime,"_g_nifty_first_bar_context",lambda *a:{"nifty_first_bar_return_pct":-.1})
+    if clock not in config.SIGNAL_TO_CONFIRMATION:
+        monkeypatch.setattr(runtime.backtest, "load_five_minute", lambda *a, **k: pytest.fail("Disabled clock read trading inputs"))
+        with pytest.raises(ValueError, match="SLOT_WIN_RATE_POLICY_DISABLED"):
+            runtime.scan_five_minute_slot(universe, DAY, clock)
+        return
     snapshot = runtime.scan_five_minute_slot(universe,DAY,clock)
     assert snapshot["state"] == "SUCCESS"
     assert len(snapshot["candidates"]) == 1
@@ -243,6 +247,10 @@ def test_scanner_adapts_exact_join_timestamp_to_g3_contract(runtime,monkeypatch,
     assert row["side"] == side
     assert row["signal_timestamp"] == config.slot_datetime(DAY,clock).isoformat()
     assert snapshot["strategy_fingerprint"] == config.strategy_fingerprint()
+    if config.setup_for(clock, side) is None:
+        # The shared-clock scanner may retain a raw observation; it must never
+        # become a selected entry for the removed side.
+        assert runtime.select_entry_signals([row], DAY, clock, capital_rs=100000., leverage=5.) == []
 
 
 def test_scanner_restart_preserves_completed_slots_and_waits_for_future(runtime,monkeypatch):
@@ -408,15 +416,15 @@ def test_scanner_opening_quality_audits_only_the_completed_futures_bar(runtime, 
 
 def test_g3_staged_stop_for_all_dates_and_quote_free_expiry(runtime):
     assert runtime._g_stop_policy_metadata(date(2026, 8, 1))["tighten_after_minutes"] == 120
-    signal = runtime.select_entry_signals([candidate()], DAY, "09:30", capital_rs=100000., leverage=5.)[0]
+    signal = runtime.select_entry_signals([candidate()], DAY, "09:25", capital_rs=100000., leverage=5.)[0]
     state = runtime.create_order_state(signal, "PAPER")
-    expired = runtime.advance_paper_order(state, None, config.slot_datetime(DAY, "09:42"))
+    expired = runtime.advance_paper_order(state, None, config.slot_datetime(DAY, "09:37"))
     assert expired["status"] == "CANCELLED"
     state = runtime.create_order_state(signal, "PAPER")
-    opened = runtime.advance_paper_order(state, 102., config.slot_datetime(DAY, "09:32"))
+    opened = runtime.advance_paper_order(state, 102., config.slot_datetime(DAY, "09:27"))
     assert opened["status"] == "OPEN"
-    assert runtime._staged_stop_target(opened, config.slot_datetime(DAY, "11:31")) is None
-    assert runtime._staged_stop_target(opened, config.slot_datetime(DAY, "11:32")) == 101.
+    assert runtime._staged_stop_target(opened, config.slot_datetime(DAY, "11:26")) is None
+    assert runtime._staged_stop_target(opened, config.slot_datetime(DAY, "11:27")) == 101.
 
 
 def test_promoted_0950_long_passes_confirmation_and_sizes_both_execution_modes(runtime):
@@ -490,6 +498,9 @@ def test_promoted_confirmation_paper_fill_and_live_order_configuration(runtime, 
         row.update(opening_0920_status="VALID", price_change_basis="09:15_CASH_OPEN_TO_09:20_CASH_CLOSE",
                    oi_change_source="FIRST_MINUTE_0916_TO_COMPLETED_0920_FUTURES_4M")
     setup = config.setup_for(clock, side)
+    if setup is None:
+        assert runtime.select_entry_signals([row], DAY, clock, capital_rs=100000., leverage=5.) == []
+        return
     row["body_ratio"] = max(row["body_ratio"], setup.body_ratio)
     if setup.setup_id in config.contract.midday_setups.SETUP_IDS | config.contract.afternoon_setups.SETUP_IDS:
         row["price_change_pct"] = setup.price_change_pct * (1 if side == "LONG" else -1)
@@ -589,7 +600,7 @@ def test_0920_scanner_keeps_receipt_metadata_and_fails_closed_without_baseline(r
 @pytest.mark.parametrize("clock,side,ratio,minimum,expected", [
     ("09:50", "LONG", .6, .6, True),
     ("09:50", "LONG", .599999, .6, False),
-    ("09:30", "LONG", .6, 1.1, False),
+    ("09:25", "LONG", .6, 1.1, False),
     ("09:50", "SHORT", .6, 1.2, False),
     ("09:50", "SHORT", 1.2, 1.2, True),
 ])
@@ -613,12 +624,12 @@ def test_promoted_slot_ranks_liquidity_after_confirmation_and_keeps_one_entry(ru
 
 
 def test_g3_capacity_book_uses_g3_fingerprint(runtime):
-    signal = runtime.select_entry_signals([candidate()], DAY, "09:30", capital_rs=100000., leverage=5.)[0]
+    signal = runtime.select_entry_signals([candidate()], DAY, "09:25", capital_rs=100000., leverage=5.)[0]
     states = []
     for i in range(11):
         state = runtime.create_order_state(
             {**signal, "signal_id": str(i), "tradingsymbol": f"TEST{i}"}, "PAPER")
-        states.append(runtime._advance_g_paper_state(state, 102., config.slot_datetime(DAY, "09:32")))
+        states.append(runtime._advance_g_paper_state(state, 102., config.slot_datetime(DAY, "09:27")))
     assert sum(s["status"] == "OPEN" for s in states) == 10
     assert states[-1]["status"] == "BLOCKED_PORTFOLIO"
 
@@ -720,13 +731,19 @@ def test_preflight_reports_promoted_configuration_without_runtime_mutations():
     from fno_v13_v10_g_3_preflight import inspect_deployment
     report = inspect_deployment(verify_frozen=False)
     assert report["ready"] is True
-    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V13"
-    assert report["active_setup_count"] == 51
-    assert len(report["promoted_afternoon_fifteen"]) == 5
+    assert report["strategy_version"] == "V13-V10-G-3-PRODUCTION-V15"
+    assert report["active_setup_count"] == 34
+    assert report["backtest_scope"] == "BACKTEST_ONLY_SLOT_WIN_RATE_GE70"
+    assert report["historical_daily_paper_live_contract_matches"] is True
+    # The pre-existing 09:26 wick difference remains separate from slot selection.
+    assert report["confirmation_rules_match"] is False
+    assert report["promoted_two_slot_rules_match"] is True
+    assert {slot["setup_id"] for slot in report["promoted_two_slots"]} == {"0921_SHORT", "1011_LONG"}
+    assert all(slot["enabled"] is False for slot in report["promoted_two_slots"])
     assert {s["setup_id"] for s in report["promoted_afternoon_fifteen"]} == (
         config.contract.afternoon_setups.SETUP_IDS & {s.setup_id for s in config.ACTIVE_SETUPS})
-    assert len(report["promoted_midday_twelve"]) == 12
-    assert {s["setup_id"] for s in report["promoted_midday_twelve"]} == config.contract.midday_setups.SETUP_IDS
+    assert {s["setup_id"] for s in report["promoted_midday_twelve"]} == (
+        config.contract.midday_setups.SETUP_IDS & {s.setup_id for s in config.ACTIVE_SETUPS})
     assert report["promoted_0950_long_setup"]["target_pct"] == .75
     assert report["promoted_0950_long_setup"]["minimum_confirmation_volume_ratio"] == .6
     assert report["workers_started"] is report["broker_requests"] is report["arm_files_written"] is False

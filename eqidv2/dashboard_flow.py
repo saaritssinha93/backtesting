@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any
 from fno_strategy_registry import active_profile_name, g3_live_activation_authorized, PROFILES
 from fno_v13_v10_g_3_contract import confirmation_volume_minimum, setup_for, supported_identity
-from research.g3_backtest_profile import contract as backtest_contract, production as production_contract
+from research.g3_backtest_profile import contract as backtest_contract
+import fno_v13_v10_g_3_cutoff_production as production_contract
+from dashboard_slot_selection import discover as _verified_slot_selection, NOTICE as SLOT_SELECTION_NOTICE
 
 
 DATA_ROOT = Path(r"C:\TradingData\eqidv2")
@@ -34,6 +36,7 @@ _G3_RESEARCH_TARGETS = {
     "V13-V10-G-3-BT-0950-LONG-T075-V1": 0.75,
 }
 _STRATEGIES = {
+    "V13-V10-G-7-V4-LOCK",
     "V13-V10-G-7", "V13-V10-G-6", "V13-V10-G-4",
     "V13-V10-G-3", "V13-V10-G-2", "V13-V10-G",
 }
@@ -323,6 +326,14 @@ def _g3_backtest_scope(version, fingerprint) -> dict:
         return {}
     count = len(profile.ACTIVE_SETUPS)
     disabled = len(profile.strategy_payload().get("disabled_setups", []))
+    slot_policy = profile.strategy_payload().get("slot_selection")
+    if slot_policy:
+        return dict(active_setup_count=count, disabled_setup_count=disabled,
+                    backtest_rule_label="historical slot win rate >=70% on all slots",
+                    backtest_scope_text=(f"This saved backtest enables {count} slot/direction combinations. The historical net win rates >=70% cutoff applies to every represented pair, "
+                        f"using results through {slot_policy['source_period']['last_session']}; 17 G3 pairs are disabled. Zero-trade slots are excluded. "
+                        "Prior entry and exit rules remain in force. These outcomes informed selection and are not independent validation."),
+                    slot_selection_fingerprint=profile.strategy_payload().get("slot_selection_fingerprint"))
     exceptions = [s for s in profile.ACTIVE_SETUPS if s.target_pct <= .75]
     labels = ', '.join(f'{s.signal_end} {s.side} ({s.target_pct:g}%)' for s in exceptions)
     rule = (f'target >0.75% plus {len(exceptions)} restored setups' if exceptions else 'target >0.75%')
@@ -918,7 +929,7 @@ def _verified_g7_daily_backtest() -> list[tuple[dict, Path]]:
 
 
 def _discover() -> list[tuple[dict, Path]]:
-    found = (_verified_g3_runs() + _verified_g3_current_backtest()
+    found = (_verified_slot_selection(DATA_ROOT) + _verified_g3_runs() + _verified_g3_current_backtest()
              + _verified_g3_0920_long_backtest() + _verified_g3_0920_daily()
              + _verified_g3_research_runs() + _verified_g4_current_backtest()
              + _verified_g6_current_backtest() + _verified_g6_daily_backtest()
@@ -960,10 +971,12 @@ def _discover() -> list[tuple[dict, Path]]:
     # have different coverage. A newer daily cutoff must not displace the
     # current normal historical backtest (or restore an archived revision).
     family_order = {
+        "V13-V10-G-7-V4-LOCK": 5.5,
         "V13-V10-G-3": 6, "V13-V10-G-4": 5, "V13-V10-G-6": 4,
         "V13-V10-G-7": 3, "V13-V10-G-2": 2, "V13-V10-G": 1,
     }
     found.sort(key=lambda entry: (family_order[entry[0]["strategy"]],
+        6 if entry[0].get("current_slot_selection") and entry[0].get("verified") else
         -1 if entry[0].get("strategy_matches_active") is False and not entry[0].get("strategy_matches_backtest") else
         5 if entry[0].get("current_full_strategy") and entry[0].get("verified") else
         4 if entry[0].get("role") in {"backtest_history", "cumulative_history"} else
@@ -1161,7 +1174,10 @@ def load_flow_data(run_id: str | None = None, strategy: str | None = None) -> di
         if excluded_sessions:
             warnings.append(f"{len(excluded_sessions)} source sessions were excluded from this backtest. See the coverage report for dates and reasons; these are not zero-trade days.")
         coverage = metadata.get("coverage", {})
-        if metadata['strategy'] == 'V13-V10-G-4':
+        if metadata.get("current_slot_selection"):
+            warnings.append(SLOT_SELECTION_NOTICE)
+            warnings.append(f"This saved replay enables {metadata['active_setup_count']} slot/direction combinations. Configuration changes apply to future decisions; saved historical orders retain their original identities. The dashboard is read-only and cannot enable execution.")
+        elif metadata['strategy'] == 'V13-V10-G-4':
             warnings.append(f"G-4 historical research: {metadata['active_setup_count']} setups with {metadata['additional_atr_guards']} additional one-minute ATR guards. Only the primary scenario is shown; comparison trials are not combined. G-3, PAPER and LIVE configurations remain separate. These dates informed parameter selection and are not untouched validation.")
         elif metadata['strategy'] == 'V13-V10-G-6':
             warnings.append("G-6 is an isolated, backtest-only 51-setup replica. This view uses only its verified Nifty-futures policy: reject an entry when both completed slot and session directions oppose the trade. It has no order-execution authority and is not combined with the unfiltered or primary-index trials.")

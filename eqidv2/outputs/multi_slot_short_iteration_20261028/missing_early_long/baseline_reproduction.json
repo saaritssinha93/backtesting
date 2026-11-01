@@ -1,0 +1,38 @@
+[
+  {
+    "differences": [],
+    "label": "accepted G3 allocator control",
+    "passed": true,
+    "rows": 626
+  },
+  {
+    "differences": [],
+    "label": "accepted G7 V4 protection + lock2 control",
+    "passed": true,
+    "rows": 595
+  },
+  {
+    "differences": [],
+    "label": "fresh baseline G3/0931_LONG",
+    "passed": true,
+    "rows": 626
+  },
+  {
+    "differences": [],
+    "label": "fresh baseline G3/1001_LONG",
+    "passed": true,
+    "rows": 626
+  },
+  {
+    "differences": [],
+    "label": "fresh baseline G7_V4_LOCK2/0931_LONG",
+    "passed": true,
+    "rows": 595
+  },
+  {
+    "differences": [],
+    "label": "fresh baseline G7_V4_LOCK2/1001_LONG",
+    "passed": true,
+    "rows": 595
+  }
+]

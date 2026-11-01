@@ -1,0 +1,21 @@
+{
+  "active_configs_modified": false,
+  "config_name": "0926_SHORT_MIN_DIRECTIONAL_WICK_0P20_FORWARD_RESEARCH",
+  "decision_artifact": "outputs\\g3_g7_0926_short_iterative_20261028\\prequota_reselection\\candidate_decision.json",
+  "execution_authority": false,
+  "implementation_note": "The live configuration schema currently exposes a maximum wick gate. A separate minimum directional wick gate must be implemented and validated before any future adoption.",
+  "inherits_current_strategy_settings": {
+    "G3": "current pinned G-3 full-history configuration",
+    "G7_V4_LOCK2": "current pinned G7 V4 profit protection and two-loss-lock configuration"
+  },
+  "research_overlay": {
+    "apply_before_ranking_and_quota": true,
+    "max_entries": 2,
+    "minimum_directional_wick_ratio": 0.2,
+    "ranking": "MAX_VOLUME",
+    "setup_id": "0926_SHORT",
+    "side": "SHORT"
+  },
+  "scope": "BACKTEST_ONLY",
+  "status": "RESEARCH_SPECIFICATION_NOT_IMPLEMENTED_OR_ADOPTED"
+}

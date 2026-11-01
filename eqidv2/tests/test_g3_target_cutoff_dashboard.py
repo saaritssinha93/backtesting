@@ -14,6 +14,8 @@ import fno_v13_v10_g_3_backtest as cli
 import fno_v13_v10_g_3_contract as production
 from research import g3_backtest_report as report
 from research.archived_g3_v8 import contract as archived_v8
+from research.archived_g3_v14 import contract as archived_v14
+import fno_v13_v10_g_3_cutoff_production as runtime_production
 from research.g3_0920_backtest import _stats
 
 
@@ -21,9 +23,9 @@ VERSION = report.contract.STRATEGY_VERSION
 SCHEMA = "fno_g3_target_cutoff_backtest_v1"
 
 
-@pytest.fixture(params=["current", "archived_v8"])
+@pytest.fixture(params=["current", "archived_v8", "archived_v14"])
 def cutoff_run(tmp_path, monkeypatch, request):
-    profile = report.contract if request.param == "current" else archived_v8
+    profile = {"current": report.contract, "archived_v8": archived_v8, "archived_v14": archived_v14}[request.param]
     monkeypatch.setattr(flow, "DATA_ROOT", tmp_path)
     monkeypatch.setattr(flow, "active_profile_name", lambda: "V13_V10_G_3")
     root = tmp_path / "backtesting_result_v13_v10_g_3"
@@ -60,19 +62,26 @@ def test_cutoff_reader_and_user_copy_distinguish_paper_live(cutoff_run):
     metadata, _ = records[0]
     assert metadata["strategy_matches_backtest"] is current
     assert metadata["strategy_matches_active"] is False
-    assert metadata["active_setup_count"] == (51 if current else 46)
+    count = summary["active_setup_count"]
+    assert metadata["active_setup_count"] == count
     assert metadata["backtest_only_target_cutoff"] is True
-    assert "target >0.75%" in metadata["label"]
+    assert ("slot win rate >=70%" if current else "target >0.75%") in metadata["label"]
     payload = flow.load_flow_data(strategy="V13-V10-G-3")
     copy = next(item for item in payload["warnings"] if item.startswith("Current G-3 historical backtest:"))
-    assert f"{51 if current else 46} setups" in copy and "targets <=0.75%" in copy
+    assert f"{count} setups" in copy
     if current:
-        assert "09:50 LONG (0.75%)" in copy and "10:05 LONG (0.56%)" in copy and "10:15 SHORT (0.68%)" in copy
-        assert "10 other setups" in copy
-        assert "09:20 SHORT and 10:10 LONG setups each use a 1.50% target" in copy
+        assert count == 34
+        assert "historical net win rates >=70%" in copy
+        assert "not independent validation" in copy
+        assert "applies to every represented pair" in copy
+        assert "17 G3 pairs are disabled" in copy
+        assert "targets <=0.75%" not in copy
+    elif count == 51:
+        assert "10 other setups" in copy and "targets <=0.75%" in copy
+        assert "09:50 LONG (0.75%)" in copy
     else:
         assert "all 13 setups" in copy and "restored" not in copy
-    assert "PAPER/LIVE retain their separate 61-setup" in copy
+    assert f"PAPER/LIVE retain their separate {len(runtime_production.ACTIVE_SETUPS)}-setup" in copy
     assert "share the same" not in copy
 
 
@@ -90,7 +99,7 @@ def test_cutoff_reader_rejects_invalid_pointer(cutoff_run, corruption):
 
 
 def _report_input(profile):
-    ledger = pd.DataFrame([dict(day="2026-10-13", setup_id="0931_LONG", filled=True,
+    ledger = pd.DataFrame([dict(day="2026-10-13", setup_id=profile.ACTIVE_SETUPS[0].setup_id, filled=True,
         portfolio_executed=True, portfolio_net_profit_rupees=100.,
         portfolio_gross_profit_rupees=105., portfolio_cost_rupees=5.)])
     summary = dict(days=["2026-10-13"], first_date="2026-10-13", last_date="2026-10-13", sessions=1,
@@ -100,20 +109,32 @@ def _report_input(profile):
     return summary, ledger, daily
 
 
-def test_current_report_has_51_rows_and_explicit_restored_exceptions(tmp_path):
-    assert len(report.contract.ACTIVE_SETUPS) == 51
+def test_current_report_has_34_rows_and_explicit_retrospective_slot_selection(tmp_path):
+    assert len(report.contract.ACTIVE_SETUPS) == 34
     report.write(tmp_path, *_report_input(report.contract))
     setups = pd.read_csv(tmp_path / "setup_results.csv")
-    assert len(setups) == 51
+    assert len(setups) == 34
     assert set(setups.loc[setups.target_pct.le(.75), 'setup_id']) == {'0951_LONG', '1006_LONG', '1016_SHORT'}
-    assert int(setups.added.sum()) == 5
+    assert int(setups.added.sum()) == len(set(report.contract._ACTIVE_BY_ID) & production.afternoon_setups.SETUP_IDS)
+    page = (tmp_path / "report.html").read_text()
+    assert "G3 historical backtest: 34 setups" in page
+    assert "Historical slot win rate >=70%" in page
+    assert "applies to every represented slot/direction pair" in page
+    assert "Seventeen G3 pairs are disabled" in page
+    assert "59 sessions from 2026-07-29 through 2026-10-27" in page
+    assert "not independent validation" in page
+    assert "PAPER/LIVE use the same frozen G3 slot selection" in page
+    assert "remaining setups with target <=0.75%" not in page
+
+
+def test_archived_v14_report_preserves_51_rows_and_restored_exceptions(tmp_path):
+    report.write(tmp_path, *_report_input(archived_v14))
+    setups = pd.read_csv(tmp_path / "setup_results.csv")
+    assert len(setups) == 51
     page = (tmp_path / "report.html").read_text()
     assert "G3 historical backtest: 51 setups" in page
     assert "10 remaining setups with target <=0.75% are disabled" in page
-    for restored in ("09:50 LONG (0.75%)", "10:05 LONG (0.56%)", "10:15 SHORT (0.68%)"):
-        assert restored in page
-    assert "PAPER/LIVE retain their 61-setup" in page
-    assert "share the same" not in page
+    assert "Historical slot win rate >=70%" not in page
 
 
 def test_archived_v8_report_retains_46_rows_without_restored_exceptions(tmp_path):

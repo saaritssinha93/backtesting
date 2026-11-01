@@ -1,0 +1,65 @@
+{
+  "protocol_id": "G3_G7_V4_LOCK_MULTI_SHORT_PREQUOTA_V1",
+  "frozen_before_slot_outcomes": true,
+  "frozen_at_ist": "2026-10-28T14:35:00+05:30",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "setups": [
+    "0931_SHORT",
+    "1226_SHORT",
+    "1231_SHORT",
+    "1301_SHORT",
+    "1321_SHORT"
+  ],
+  "selection_contract": {
+    "feature_cutoff": "SETUP_CONFIRMATION_CLOSE",
+    "apply_variant_before_ranking_and_quota": true,
+    "replacement_candidates_allowed": true,
+    "preserve_existing_setup_picker_and_quota": true,
+    "fresh_execution_and_full_portfolio_allocation_required": true,
+    "g7_requires_v4_protection_and_causal_two_realized_loss_lock": true
+  },
+  "variants": [
+    {"variant": "baseline"},
+    {"variant": "wick_ge_0p10", "wick_ratio_min": 0.1},
+    {"variant": "wick_ge_0p20", "wick_ratio_min": 0.2},
+    {"variant": "wick_ge_0p30", "wick_ratio_min": 0.3},
+    {"variant": "extension_le_3p5", "extension_atr_max": 3.5},
+    {"variant": "extension_le_3p0", "extension_atr_max": 3.0},
+    {"variant": "extension_le_2p5", "extension_atr_max": 2.5},
+    {"variant": "body_le_0p90", "body_ratio_max": 0.9},
+    {"variant": "body_le_0p80", "body_ratio_max": 0.8},
+    {"variant": "down_move_le_0p75", "downward_move_magnitude_pct_max": 0.75},
+    {"variant": "down_move_le_0p50", "downward_move_magnitude_pct_max": 0.5},
+    {"variant": "wick_ge_0p20_and_extension_le_3p0", "wick_ratio_min": 0.2, "extension_atr_max": 3.0}
+  ],
+  "periods": {
+    "development": "first 35 available sessions",
+    "validation": "next 14 sessions",
+    "assessment": "next 8 sessions",
+    "final_sessions": "remaining sessions through 2026-10-27",
+    "october": "all available October sessions"
+  },
+  "development_selection": {
+    "minimum_executed_trades": 8,
+    "point_win_rate_strictly_above_pct": 75.0,
+    "net_pnl_not_below_setup_baseline": true,
+    "losing_trade_amount_below_setup_baseline": true,
+    "full_portfolio_net_pnl_not_below_baseline": true,
+    "tie_break": "highest development setup net PnL, then fewer setup losses, then simpler variant order"
+  },
+  "later_evaluation": {
+    "chosen_once_from_development": true,
+    "no_later_replacement": true,
+    "report_validation_assessment_october_and_all": true,
+    "report_wilson_95_lower_bound": true,
+    "cost_stress_bps": [5, 9, 15]
+  },
+  "honesty_controls": [
+    "A point estimate above 75 percent is not described as validated when the Wilson lower bound is below 75 percent.",
+    "If no predeclared variant passes development and later checks, retain baseline and report no honest qualifier.",
+    "All tested variants and replacement decisions remain in artifacts.",
+    "Do not combine individually chosen slot rules without a separate combined full-portfolio replay.",
+    "The same 59-session history has been repeatedly inspected; no independent holdout claim is allowed."
+  ]
+}

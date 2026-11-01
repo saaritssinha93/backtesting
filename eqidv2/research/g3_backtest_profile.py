@@ -1,4 +1,4 @@
-"""G3 historical/daily backtests use 51 setups including three restored and two new slots."""
+"""G3 historical/daily backtests use the shared >=70% selected slot contract."""
 from dataclasses import asdict
 import hashlib
 import json
@@ -6,12 +6,12 @@ from pathlib import Path
 from eqidv2_runtime_paths import runtime_dir
 
 import fno_v13_v10_g_3_contract as production
-from research import g3_target_cutoff_contract as contract
+from research import g3_slot_win70_contract as contract
 from research.archived_g3_v6 import contract as previous
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_CONFIG_PATH = ROOT / "configs/strategies/v13_v10_g_3_production_v12.json"
-CONFIG_PATH = ROOT / "configs/strategies/v13_v10_g_3_backtest_target_gt075_restored3_v14.json"
+CONFIG_PATH = ROOT / "configs/strategies/v13_v10_g_3_backtest_slot_win70_v17.json"
 HISTORY_CONFIG = ROOT / "configs/strategies/v13_v10_g_3_backtest_selected_afternoon_v7.json"
 VERSION = contract.STRATEGY_VERSION
 ADDED_IDS = production.afternoon_setups.SETUP_IDS - contract.DISABLED_IDS

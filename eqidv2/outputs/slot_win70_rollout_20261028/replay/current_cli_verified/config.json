@@ -1,0 +1,73 @@
+{
+  "calendar": {
+    "available_sessions": 59,
+    "first_session": "2026-07-29",
+    "last_session": "2026-10-27"
+  },
+  "daily_loss_lock": {
+    "block_new_admissions": "STRICTLY_AFTER_SECOND_LOSS_EXIT",
+    "cost_basis_bps": 5.0,
+    "maximum_realized_net_losing_exits": 2,
+    "open_positions": "CONTINUE_NORMAL_MANAGEMENT"
+  },
+  "entry_rule": {
+    "application": "BEFORE_MAX_VOLUME_RANKING_AND_TWO_ENTRY_QUOTA",
+    "available_at": "09:26_CONFIRMATION_CLOSE",
+    "feature": "CONFIRMATION_CANDLE_LOWER_WICK_RATIO",
+    "minimum": 0.2,
+    "outcomes_used_for_selection": false,
+    "replacement_candidates": true
+  },
+  "execution_authority": false,
+  "limitations": [
+    "The 09:26 SHORT point estimate is based on only 11 executed trades after filtering.",
+    "The same 59 sessions were used to choose the 0.20 threshold; there is no independent holdout.",
+    "The full-portfolio win rate is reported separately and is not claimed to exceed 75 percent.",
+    "Backtest fills use one-minute OHLC and do not model spread, queue position, or market impact beyond configured costs.",
+    "This configuration has no PAPER or LIVE authority.",
+    "The fixed slot allowlist is selected from the same historical after-cost outcomes; its replay is retrospective and includes slots with very small trade samples."
+  ],
+  "profit_protection": {
+    "activate_after_gross_return_pct": 0.6,
+    "activation": "NEXT_ONE_MINUTE_BAR_OPEN",
+    "ambiguous_bar_policy": "STOP_FIRST",
+    "protected_gross_return_pct": 0.1
+  },
+  "scope": "BACKTEST_ONLY",
+  "selected_variant": "wick_ge_0p20",
+  "selection_contract": {
+    "full_portfolio_replay_required": true,
+    "max_entries_per_setup_day": 2,
+    "ranking": "MAX_VOLUME",
+    "retain_0926_short_maximum_extension_atr": 4.0,
+    "retain_current_g7_base_gates": true
+  },
+  "setup_id": "0926_SHORT",
+  "slot_selection": {
+    "application": "BEFORE_PORTFOLIO_ALLOCATION_AND_FRESH_LOSS_LOCK",
+    "independent_holdout": false,
+    "policy_file": "configs/strategies/slot_win70_20261028.json",
+    "policy_fingerprint": "eace35bffa351d0d0d613f34ce6f9d3ab9570e8545d0e651fed3fb27a640ea0b",
+    "selection_uses_historical_outcomes": true,
+    "strategy": "G7_V4_LOCK2",
+    "threshold_percent": 70
+  },
+  "source_research": {
+    "baseline_g7_v4_lock2": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_7/v4_research/practical_research/runs/2026-10-27/20261027T185748273567_five_fixed_tests/loss_lock2",
+    "candidate_pool_path": "outputs/g3_g7_0926_short_iterative_20261028/prequota_reselection/candidate_pool_full.pkl",
+    "candidate_pool_proof_path": "outputs/g3_g7_0926_short_iterative_20261028/prequota_reselection/candidate_pool_proof.json",
+    "candidate_pool_proof_sha256": "163c01be0650be26a7b8bcff995cf1371abb12abe4207f918c4408d7c604d99e",
+    "candidate_pool_sha256": "c5269fb3ec471ebcdd2136ad3eda682047404efad86792d8bf63e649a5d0c448",
+    "replacement_aware_audit": "outputs/g3_g7_0926_short_iterative_20261028/prequota_reselection"
+  },
+  "variant_id": "V13-V10-G-7-V4-WICK020-LOSS-LOCK2-SLOT-WIN70-BACKTEST-V2",
+  "variants": [
+    {
+      "variant": "baseline"
+    },
+    {
+      "variant": "wick_ge_0p20",
+      "wick_ratio_min": 0.2
+    }
+  ]
+}

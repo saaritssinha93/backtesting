@@ -1,0 +1,30 @@
+{
+  "created_at_ist": "2026-10-28T15:13:02.235306+05:30",
+  "execution_authority": false,
+  "files": {
+    "baseline_reproduction.json": "30a69e143fea28ff0ec188b899017d3fba6b12c9a720ade8ea43ede790468a52",
+    "candidate_pool.pkl": "446ff2edcb968fb4ce346c08217da0ea7f33d73617de5a9b1cac42b2bffb7c70",
+    "candidate_pool_inventory.csv": "21f11b8cf8d94404d73fd6c53cd2c1ffcd365d948945f9f021f191d034054923",
+    "candidate_pool_proof.json": "444849177f02875a7e1349c51ebce967086e47fe20f9bd184ce469936cdbdd54",
+    "candidate_variant_decisions.csv": "cce49e8b8ca69dc5845466bfa79686048076ee331b22706d83dcb782789d488b",
+    "cost_stress_summary.csv": "8f43ed9b22b2368ae69168186510a7817c45df26012a179ca48b161ecfd8dba9",
+    "development_selection.csv": "129b7c1999ecb01a566f15e98b86c5cf7850728f6d06f4faab50d92188dea259",
+    "diagnostic_period_matrix.csv": "b083fe498dfb062fcdb05e17466d2b2033c6063bcd40d6ef7f3819565843fed0",
+    "g7_candidate_features.csv": "a241270ccef7fe4ab86cd1115c30ef8fd71cd9e1977f2b402e006388718cab40",
+    "honesty_assessment.csv": "9a92d4bfd2b93fe93b9d4177f5296112b5c57a4fb69f161e1e6b8b94fbe87101",
+    "honesty_gate_matrix.csv": "bb6da32d5810062615c412677455abcd8e19e77f708a2507a4629876a690a431",
+    "joint_development_selection.csv": "052cd26e9a83d61d0e1507de7db0b3084c52e67852d8eea13b4d9f3e72e4cf8c",
+    "postprocess_mid_audit.py": "6a0a84707d4250077dcd3706c1cb29ce2188bdf7b0c3b198ba4c65706b8a55bb",
+    "report.md": "fcb1f206c3ded17b8354f61a3a63c589f7dba1d37c6305a47eed52d9d4addae3",
+    "run_mid_slots.py": "fc7df29eb9bb45f74c630ba2b4828b34216fc8b2ff11fa4bf55b82a7c67f46c4",
+    "selected_variant_daywise.csv": "9a0403677f67833846ce4bd6acfb51125800bb249000f0d58e5b43731da136df",
+    "selected_variant_results.csv": "86fa9be8970820b3d2615f6cc081bc20cbf204fbdfbe95ba5ba8dbcf03e55776",
+    "selection_changes.csv": "1abccabaed7987ecce04ea4ed10f70001c190a47216377d3bfd7a935e2b6e6cb",
+    "source_provenance.json": "54fb412918fa2e98453b805290d02aa959891fb7bef0c0291a03bb10dacceee7",
+    "variant_portfolio_metrics.csv": "f33456afd80e77e5f9156b234ba200b47389a12866d53550b2d62c50cfc77dd2",
+    "variant_setup_metrics.csv": "755f3905e469f9014c49bd6f339080b9d37ce06bcf2b140e8b5cf0f28838e141",
+    "variant_trade_details.csv": "3c13109aebd5b77b152bb4d2c5e46113a9f1b84d7486105dd472d3c7b1dc870d"
+  },
+  "scope": "BACKTEST_ONLY",
+  "selection_changed": false
+}

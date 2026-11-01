@@ -12,7 +12,7 @@ import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from fno_v13_v10_g_3_contract import STRATEGY_PROFILE, STRATEGY_VERSION, config_fingerprint
+from fno_v13_v10_g_3_cutoff_production import STRATEGY_PROFILE, STRATEGY_VERSION, config_fingerprint
 
 STATE = "AWAITING_G3_MODEL_AND_PROSPECTIVE_EVIDENCE"
 

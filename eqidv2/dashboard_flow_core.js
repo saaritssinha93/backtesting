@@ -34,12 +34,17 @@
       period_start: calendar[0] || null, period_end: calendar.at(-1) || null,
     };
   }
-  function shortStrategy(strategy) { return String(strategy || '').replace(/^V13-V10-/, ''); }
+  function shortStrategy(strategy) {
+    if(strategy==='V13-V10-G-7-V4-LOCK')return 'G-7 V4 lock';
+    if(strategy==='V13-V10-G-7')return 'G-7 V3';
+    return String(strategy || '').replace(/^V13-V10-/, '');
+  }
   function runLabel(run, latest, index = 0) {
     const shortDate = value => value ? new Date(value + 'T12:00:00').toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'}) : 'date unavailable';
     const match = run.run_name.match(/(?:^run_|^)(\d{4})(\d{2})(\d{2})/);
     const saved = match ? shortDate(`${match[1]}-${match[2]}-${match[3]}`) : '';
     const coverage = `${shortDate(run.period_start)} to ${shortDate(run.period_end)} · ${run.sessions} sessions`;
+    if(run.current_slot_selection)return `${shortStrategy(run.strategy)} · >=70% cutoff on all slots (${run.active_setup_count} total enabled) · ${coverage}`;
     if (run.current_full_strategy) return `${shortStrategy(run.strategy)} · ${latest ? 'Latest full historical backtest' : 'Full historical backtest'} · ${coverage}`;
     if (run.kind === 'production_history') return `${shortStrategy(run.strategy)} · ${run.strategy_matches_active === false && !run.strategy_matches_backtest ? 'Archived revision' : 'Daily replay history'} · ${coverage}`;
     if (run.kind === 'production_daily') return `${shortStrategy(run.strategy)} · ${run.strategy_matches_active === false && !run.strategy_matches_backtest ? 'Archived revision daily replay' : 'Daily replay'} · ${shortDate(run.period_end)}`;

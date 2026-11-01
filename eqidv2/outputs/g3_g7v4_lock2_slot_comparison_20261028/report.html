@@ -48,7 +48,102 @@
       <td>131,109.98</td>
     </tr>
   </tbody>
-</table></div><p>Slot labels denote the completed confirmation minute in the setup ID, not the eventual fill minute. Each table includes all configured slots, including slots with zero executed trades in the period. Net differences subtract the G7 lock result from G3; these are descriptive comparisons between different entry and exit rules. G3 uses fractional sizing and its original admission convention; the G7 lock uses whole shares and reserves a slot at the entry minute open.</p><h2>Overall: by confirmation time</h2><div class="scroll"><table class="dataframe">
+</table></div><h2>LONG and SHORT totals</h2><div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>period</th>
+      <th>side</th>
+      <th>strategy</th>
+      <th>trades</th>
+      <th>wins</th>
+      <th>losses</th>
+      <th>net_rs</th>
+      <th>losing_amount_rs</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>overall</td>
+      <td>LONG</td>
+      <td>G3</td>
+      <td>201</td>
+      <td>147</td>
+      <td>54</td>
+      <td>519,683.42</td>
+      <td>222,184.04</td>
+    </tr>
+    <tr>
+      <td>overall</td>
+      <td>LONG</td>
+      <td>G7 V4 two-loss lock</td>
+      <td>137</td>
+      <td>116</td>
+      <td>21</td>
+      <td>344,284.03</td>
+      <td>84,238.29</td>
+    </tr>
+    <tr>
+      <td>overall</td>
+      <td>SHORT</td>
+      <td>G3</td>
+      <td>352</td>
+      <td>248</td>
+      <td>104</td>
+      <td>692,594.08</td>
+      <td>397,235.03</td>
+    </tr>
+    <tr>
+      <td>overall</td>
+      <td>SHORT</td>
+      <td>G7 V4 two-loss lock</td>
+      <td>263</td>
+      <td>203</td>
+      <td>60</td>
+      <td>498,582.72</td>
+      <td>214,592.21</td>
+    </tr>
+    <tr>
+      <td>october</td>
+      <td>LONG</td>
+      <td>G3</td>
+      <td>41</td>
+      <td>26</td>
+      <td>15</td>
+      <td>47,719.22</td>
+      <td>69,041.61</td>
+    </tr>
+    <tr>
+      <td>october</td>
+      <td>LONG</td>
+      <td>G7 V4 two-loss lock</td>
+      <td>29</td>
+      <td>22</td>
+      <td>7</td>
+      <td>49,062.51</td>
+      <td>34,822.57</td>
+    </tr>
+    <tr>
+      <td>october</td>
+      <td>SHORT</td>
+      <td>G3</td>
+      <td>113</td>
+      <td>62</td>
+      <td>51</td>
+      <td>66,380.24</td>
+      <td>204,370.02</td>
+    </tr>
+    <tr>
+      <td>october</td>
+      <td>SHORT</td>
+      <td>G7 V4 two-loss lock</td>
+      <td>80</td>
+      <td>54</td>
+      <td>26</td>
+      <td>80,923.45</td>
+      <td>96,287.41</td>
+    </tr>
+  </tbody>
+</table></div><p>Slot labels denote the completed confirmation minute in the setup ID, not the eventual fill minute. Each time-and-direction table pairs LONG then SHORT at every slot; configured_setup=0 means that direction was not configured, so its zero metrics are placeholders. Net differences subtract the G7 lock result from G3; these are descriptive comparisons between different entry and exit rules. G3 uses fractional sizing and its original admission convention; the G7 lock uses whole shares and reserves a slot at the entry minute open.</p><h2>Overall: by confirmation time</h2><div class="scroll"><table class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>slot</th>
@@ -485,10 +580,12 @@
       <td>14,269.78</td>
     </tr>
   </tbody>
-</table></div><h2>Overall: time and direction</h2><div class="scroll"><table class="dataframe">
+</table></div><h2>Overall: time and direction (LONG then SHORT)</h2><div class="scroll"><table class="dataframe">
   <thead>
     <tr style="text-align: right;">
-      <th>setup_id</th>
+      <th>slot</th>
+      <th>side</th>
+      <th>configured_setup</th>
       <th>g3_trades</th>
       <th>g3_wins</th>
       <th>g3_losses</th>
@@ -502,7 +599,9 @@
   </thead>
   <tbody>
     <tr>
-      <td>0921_LONG</td>
+      <td>09:21</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>8</td>
       <td>6</td>
       <td>2</td>
@@ -514,7 +613,9 @@
       <td>47,601.13</td>
     </tr>
     <tr>
-      <td>0921_SHORT</td>
+      <td>09:21</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>9</td>
       <td>1</td>
       <td>8</td>
@@ -526,7 +627,9 @@
       <td>-12,257.41</td>
     </tr>
     <tr>
-      <td>0926_LONG</td>
+      <td>09:26</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>14</td>
       <td>11</td>
       <td>3</td>
@@ -538,7 +641,9 @@
       <td>19,059.50</td>
     </tr>
     <tr>
-      <td>0926_SHORT</td>
+      <td>09:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>18</td>
       <td>10</td>
       <td>8</td>
@@ -550,7 +655,9 @@
       <td>-406.02</td>
     </tr>
     <tr>
-      <td>0931_LONG</td>
+      <td>09:31</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>4</td>
       <td>2</td>
       <td>2</td>
@@ -562,7 +669,9 @@
       <td>9,157.37</td>
     </tr>
     <tr>
-      <td>0931_SHORT</td>
+      <td>09:31</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>14</td>
       <td>10</td>
       <td>4</td>
@@ -574,7 +683,9 @@
       <td>30,031.91</td>
     </tr>
     <tr>
-      <td>0936_LONG</td>
+      <td>09:36</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>6</td>
       <td>3</td>
       <td>3</td>
@@ -586,7 +697,9 @@
       <td>-12,400.65</td>
     </tr>
     <tr>
-      <td>0936_SHORT</td>
+      <td>09:36</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -598,7 +711,9 @@
       <td>170.03</td>
     </tr>
     <tr>
-      <td>0941_LONG</td>
+      <td>09:41</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>11</td>
       <td>5</td>
       <td>6</td>
@@ -610,7 +725,9 @@
       <td>-379.44</td>
     </tr>
     <tr>
-      <td>0941_SHORT</td>
+      <td>09:41</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>14</td>
       <td>9</td>
       <td>5</td>
@@ -622,7 +739,9 @@
       <td>9,640.70</td>
     </tr>
     <tr>
-      <td>0946_LONG</td>
+      <td>09:46</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>4</td>
       <td>2</td>
       <td>2</td>
@@ -634,7 +753,9 @@
       <td>-4,581.89</td>
     </tr>
     <tr>
-      <td>0946_SHORT</td>
+      <td>09:46</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>3</td>
       <td>2</td>
       <td>1</td>
@@ -646,7 +767,9 @@
       <td>-6,497.53</td>
     </tr>
     <tr>
-      <td>0951_LONG</td>
+      <td>09:51</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>16</td>
       <td>15</td>
       <td>1</td>
@@ -658,7 +781,9 @@
       <td>8,971.95</td>
     </tr>
     <tr>
-      <td>0951_SHORT</td>
+      <td>09:51</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>10</td>
       <td>7</td>
       <td>3</td>
@@ -670,7 +795,9 @@
       <td>-6,429.88</td>
     </tr>
     <tr>
-      <td>0956_LONG</td>
+      <td>09:56</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>11</td>
       <td>8</td>
       <td>3</td>
@@ -682,7 +809,23 @@
       <td>4,888.37</td>
     </tr>
     <tr>
-      <td>1001_LONG</td>
+      <td>09:56</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:01</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>9</td>
       <td>5</td>
       <td>4</td>
@@ -694,7 +837,23 @@
       <td>5,797.20</td>
     </tr>
     <tr>
-      <td>1006_LONG</td>
+      <td>10:01</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:06</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>11</td>
       <td>9</td>
       <td>2</td>
@@ -706,7 +865,23 @@
       <td>2,183.24</td>
     </tr>
     <tr>
-      <td>1011_LONG</td>
+      <td>10:06</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:11</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>9</td>
       <td>4</td>
       <td>5</td>
@@ -718,7 +893,9 @@
       <td>-18,091.10</td>
     </tr>
     <tr>
-      <td>1011_SHORT</td>
+      <td>10:11</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>5</td>
       <td>5</td>
       <td>0</td>
@@ -730,7 +907,9 @@
       <td>14,608.27</td>
     </tr>
     <tr>
-      <td>1016_LONG</td>
+      <td>10:16</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>6</td>
       <td>5</td>
       <td>1</td>
@@ -742,7 +921,9 @@
       <td>126.85</td>
     </tr>
     <tr>
-      <td>1016_SHORT</td>
+      <td>10:16</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>7</td>
       <td>5</td>
       <td>2</td>
@@ -754,7 +935,23 @@
       <td>825.14</td>
     </tr>
     <tr>
-      <td>1026_SHORT</td>
+      <td>10:26</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>6</td>
       <td>5</td>
       <td>1</td>
@@ -766,7 +963,23 @@
       <td>9,671.93</td>
     </tr>
     <tr>
-      <td>1031_SHORT</td>
+      <td>10:31</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:31</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>4</td>
       <td>3</td>
       <td>1</td>
@@ -778,7 +991,9 @@
       <td>7,777.22</td>
     </tr>
     <tr>
-      <td>1036_LONG</td>
+      <td>10:36</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>2</td>
       <td>2</td>
       <td>0</td>
@@ -790,7 +1005,9 @@
       <td>624.12</td>
     </tr>
     <tr>
-      <td>1036_SHORT</td>
+      <td>10:36</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>10</td>
       <td>8</td>
       <td>2</td>
@@ -802,7 +1019,9 @@
       <td>7,872.53</td>
     </tr>
     <tr>
-      <td>1041_LONG</td>
+      <td>10:41</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>6</td>
       <td>5</td>
       <td>1</td>
@@ -814,7 +1033,23 @@
       <td>11,074.78</td>
     </tr>
     <tr>
-      <td>1046_LONG</td>
+      <td>10:41</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:46</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>5</td>
       <td>5</td>
       <td>0</td>
@@ -826,7 +1061,9 @@
       <td>10,855.83</td>
     </tr>
     <tr>
-      <td>1046_SHORT</td>
+      <td>10:46</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>10</td>
       <td>8</td>
       <td>2</td>
@@ -838,7 +1075,9 @@
       <td>23.23</td>
     </tr>
     <tr>
-      <td>1051_LONG</td>
+      <td>10:51</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>21</td>
       <td>15</td>
       <td>6</td>
@@ -850,7 +1089,37 @@
       <td>11,585.93</td>
     </tr>
     <tr>
-      <td>1056_SHORT</td>
+      <td>10:51</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:56</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:56</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>18</td>
       <td>13</td>
       <td>5</td>
@@ -862,7 +1131,9 @@
       <td>17,464.42</td>
     </tr>
     <tr>
-      <td>1111_LONG</td>
+      <td>11:11</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>5</td>
       <td>4</td>
       <td>1</td>
@@ -874,7 +1145,9 @@
       <td>3,795.65</td>
     </tr>
     <tr>
-      <td>1111_SHORT</td>
+      <td>11:11</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>9</td>
       <td>6</td>
       <td>3</td>
@@ -886,7 +1159,23 @@
       <td>-624.63</td>
     </tr>
     <tr>
-      <td>1121_SHORT</td>
+      <td>11:21</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>11:21</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>7</td>
       <td>7</td>
       <td>0</td>
@@ -898,7 +1187,23 @@
       <td>4,657.85</td>
     </tr>
     <tr>
-      <td>1126_SHORT</td>
+      <td>11:26</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>11:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>18</td>
       <td>14</td>
       <td>4</td>
@@ -910,7 +1215,9 @@
       <td>24,700.86</td>
     </tr>
     <tr>
-      <td>1136_LONG</td>
+      <td>11:36</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>7</td>
       <td>5</td>
       <td>2</td>
@@ -922,7 +1229,9 @@
       <td>32,202.21</td>
     </tr>
     <tr>
-      <td>1136_SHORT</td>
+      <td>11:36</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>22</td>
       <td>18</td>
       <td>4</td>
@@ -934,7 +1243,9 @@
       <td>-4,761.02</td>
     </tr>
     <tr>
-      <td>1141_LONG</td>
+      <td>11:41</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>10</td>
       <td>7</td>
       <td>3</td>
@@ -946,7 +1257,9 @@
       <td>2,168.42</td>
     </tr>
     <tr>
-      <td>1141_SHORT</td>
+      <td>11:41</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>13</td>
       <td>9</td>
       <td>4</td>
@@ -958,7 +1271,23 @@
       <td>-4,502.83</td>
     </tr>
     <tr>
-      <td>1146_SHORT</td>
+      <td>11:46</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>11:46</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>19</td>
       <td>13</td>
       <td>6</td>
@@ -970,7 +1299,9 @@
       <td>39,415.18</td>
     </tr>
     <tr>
-      <td>1206_LONG</td>
+      <td>12:06</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>7</td>
       <td>6</td>
       <td>1</td>
@@ -982,7 +1313,37 @@
       <td>3,505.24</td>
     </tr>
     <tr>
-      <td>1211_SHORT</td>
+      <td>12:06</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>12:11</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>12:11</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>15</td>
       <td>12</td>
       <td>3</td>
@@ -994,7 +1355,9 @@
       <td>3,540.86</td>
     </tr>
     <tr>
-      <td>1216_LONG</td>
+      <td>12:16</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>9</td>
       <td>7</td>
       <td>2</td>
@@ -1006,7 +1369,9 @@
       <td>1,937.23</td>
     </tr>
     <tr>
-      <td>1216_SHORT</td>
+      <td>12:16</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>23</td>
       <td>16</td>
       <td>7</td>
@@ -1018,7 +1383,23 @@
       <td>11,321.61</td>
     </tr>
     <tr>
-      <td>1226_SHORT</td>
+      <td>12:26</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>12:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>11</td>
       <td>7</td>
       <td>4</td>
@@ -1030,7 +1411,9 @@
       <td>15,185.88</td>
     </tr>
     <tr>
-      <td>1231_LONG</td>
+      <td>12:31</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>10</td>
       <td>8</td>
       <td>2</td>
@@ -1042,7 +1425,9 @@
       <td>21,047.66</td>
     </tr>
     <tr>
-      <td>1231_SHORT</td>
+      <td>12:31</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>13</td>
       <td>9</td>
       <td>4</td>
@@ -1054,7 +1439,23 @@
       <td>8,328.04</td>
     </tr>
     <tr>
-      <td>1236_SHORT</td>
+      <td>12:36</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>12:36</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>19</td>
       <td>14</td>
       <td>5</td>
@@ -1066,7 +1467,23 @@
       <td>2,313.46</td>
     </tr>
     <tr>
-      <td>1301_SHORT</td>
+      <td>13:01</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>13:01</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>25</td>
       <td>18</td>
       <td>7</td>
@@ -1078,7 +1495,23 @@
       <td>13,113.84</td>
     </tr>
     <tr>
-      <td>1321_SHORT</td>
+      <td>13:21</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>13:21</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>22</td>
       <td>14</td>
       <td>8</td>
@@ -1090,7 +1523,23 @@
       <td>10,782.92</td>
     </tr>
     <tr>
-      <td>1326_SHORT</td>
+      <td>13:26</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>13:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>7</td>
       <td>4</td>
       <td>3</td>
@@ -1102,7 +1551,9 @@
       <td>-1,955.22</td>
     </tr>
     <tr>
-      <td>1331_LONG</td>
+      <td>13:31</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>10</td>
       <td>8</td>
       <td>2</td>
@@ -1112,6 +1563,20 @@
       <td>1</td>
       <td>14,128.82</td>
       <td>14,269.78</td>
+    </tr>
+    <tr>
+      <td>13:31</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
     </tr>
   </tbody>
 </table></div><h2>October: by confirmation time</h2><div class="scroll"><table class="dataframe">
@@ -1551,10 +2016,12 @@
       <td>2.53</td>
     </tr>
   </tbody>
-</table></div><h2>October: time and direction</h2><div class="scroll"><table class="dataframe">
+</table></div><h2>October: time and direction (LONG then SHORT)</h2><div class="scroll"><table class="dataframe">
   <thead>
     <tr style="text-align: right;">
-      <th>setup_id</th>
+      <th>slot</th>
+      <th>side</th>
+      <th>configured_setup</th>
       <th>g3_trades</th>
       <th>g3_wins</th>
       <th>g3_losses</th>
@@ -1568,7 +2035,9 @@
   </thead>
   <tbody>
     <tr>
-      <td>0921_LONG</td>
+      <td>09:21</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>1</td>
       <td>0</td>
       <td>1</td>
@@ -1580,7 +2049,9 @@
       <td>-973.77</td>
     </tr>
     <tr>
-      <td>0921_SHORT</td>
+      <td>09:21</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>6</td>
       <td>0</td>
       <td>6</td>
@@ -1592,7 +2063,9 @@
       <td>-19,246.33</td>
     </tr>
     <tr>
-      <td>0926_LONG</td>
+      <td>09:26</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>3</td>
       <td>3</td>
       <td>0</td>
@@ -1604,7 +2077,9 @@
       <td>4,602.91</td>
     </tr>
     <tr>
-      <td>0926_SHORT</td>
+      <td>09:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>3</td>
       <td>1</td>
       <td>2</td>
@@ -1616,7 +2091,9 @@
       <td>-5,752.47</td>
     </tr>
     <tr>
-      <td>0931_LONG</td>
+      <td>09:31</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>0</td>
       <td>0</td>
       <td>0</td>
@@ -1628,7 +2105,9 @@
       <td>0.00</td>
     </tr>
     <tr>
-      <td>0931_SHORT</td>
+      <td>09:31</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>4</td>
       <td>1</td>
       <td>3</td>
@@ -1640,7 +2119,9 @@
       <td>-13,499.70</td>
     </tr>
     <tr>
-      <td>0936_LONG</td>
+      <td>09:36</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>2</td>
       <td>0</td>
       <td>2</td>
@@ -1652,7 +2133,9 @@
       <td>-11,891.88</td>
     </tr>
     <tr>
-      <td>0936_SHORT</td>
+      <td>09:36</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>0</td>
       <td>0</td>
       <td>0</td>
@@ -1664,7 +2147,9 @@
       <td>0.00</td>
     </tr>
     <tr>
-      <td>0941_LONG</td>
+      <td>09:41</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>2</td>
       <td>1</td>
       <td>1</td>
@@ -1676,7 +2161,9 @@
       <td>15,634.84</td>
     </tr>
     <tr>
-      <td>0941_SHORT</td>
+      <td>09:41</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>5</td>
       <td>3</td>
       <td>2</td>
@@ -1688,7 +2175,9 @@
       <td>-6,155.68</td>
     </tr>
     <tr>
-      <td>0946_LONG</td>
+      <td>09:46</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>2</td>
       <td>1</td>
       <td>1</td>
@@ -1700,7 +2189,9 @@
       <td>-5,231.89</td>
     </tr>
     <tr>
-      <td>0946_SHORT</td>
+      <td>09:46</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -1712,7 +2203,9 @@
       <td>2.41</td>
     </tr>
     <tr>
-      <td>0951_LONG</td>
+      <td>09:51</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>3</td>
       <td>3</td>
       <td>0</td>
@@ -1724,7 +2217,9 @@
       <td>3,508.89</td>
     </tr>
     <tr>
-      <td>0951_SHORT</td>
+      <td>09:51</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>2</td>
       <td>1</td>
       <td>1</td>
@@ -1736,7 +2231,9 @@
       <td>-0.62</td>
     </tr>
     <tr>
-      <td>0956_LONG</td>
+      <td>09:56</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>5</td>
       <td>3</td>
       <td>2</td>
@@ -1748,7 +2245,23 @@
       <td>-5,591.47</td>
     </tr>
     <tr>
-      <td>1001_LONG</td>
+      <td>09:56</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:01</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>2</td>
       <td>1</td>
       <td>1</td>
@@ -1760,7 +2273,23 @@
       <td>23.70</td>
     </tr>
     <tr>
-      <td>1006_LONG</td>
+      <td>10:01</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:06</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -1772,7 +2301,23 @@
       <td>-194.98</td>
     </tr>
     <tr>
-      <td>1011_LONG</td>
+      <td>10:06</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:11</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>2</td>
       <td>1</td>
       <td>1</td>
@@ -1784,7 +2329,9 @@
       <td>-5,489.96</td>
     </tr>
     <tr>
-      <td>1011_SHORT</td>
+      <td>10:11</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>3</td>
       <td>3</td>
       <td>0</td>
@@ -1796,7 +2343,9 @@
       <td>14,601.46</td>
     </tr>
     <tr>
-      <td>1016_LONG</td>
+      <td>10:16</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -1808,7 +2357,9 @@
       <td>3.48</td>
     </tr>
     <tr>
-      <td>1016_SHORT</td>
+      <td>10:16</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>3</td>
       <td>2</td>
       <td>1</td>
@@ -1820,7 +2371,23 @@
       <td>800.03</td>
     </tr>
     <tr>
-      <td>1026_SHORT</td>
+      <td>10:26</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -1832,7 +2399,9 @@
       <td>896.59</td>
     </tr>
     <tr>
-      <td>1031_SHORT</td>
+      <td>10:31</td>
+      <td>LONG</td>
+      <td>0</td>
       <td>0</td>
       <td>0</td>
       <td>0</td>
@@ -1844,7 +2413,23 @@
       <td>0.00</td>
     </tr>
     <tr>
-      <td>1036_LONG</td>
+      <td>10:31</td>
+      <td>SHORT</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:36</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -1856,7 +2441,9 @@
       <td>616.74</td>
     </tr>
     <tr>
-      <td>1036_SHORT</td>
+      <td>10:36</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>3</td>
       <td>2</td>
       <td>1</td>
@@ -1868,7 +2455,9 @@
       <td>3,138.05</td>
     </tr>
     <tr>
-      <td>1041_LONG</td>
+      <td>10:41</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -1880,19 +2469,9 @@
       <td>8.90</td>
     </tr>
     <tr>
-      <td>1046_LONG</td>
+      <td>10:41</td>
+      <td>SHORT</td>
       <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0.00</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0.00</td>
-      <td>0.00</td>
-    </tr>
-    <tr>
-      <td>1046_SHORT</td>
       <td>0</td>
       <td>0</td>
       <td>0</td>
@@ -1904,7 +2483,37 @@
       <td>0.00</td>
     </tr>
     <tr>
-      <td>1051_LONG</td>
+      <td>10:46</td>
+      <td>LONG</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:46</td>
+      <td>SHORT</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:51</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>5</td>
       <td>3</td>
       <td>2</td>
@@ -1916,7 +2525,37 @@
       <td>6,738.39</td>
     </tr>
     <tr>
-      <td>1056_SHORT</td>
+      <td>10:51</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:56</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>10:56</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>4</td>
       <td>2</td>
       <td>2</td>
@@ -1928,7 +2567,9 @@
       <td>-1,854.41</td>
     </tr>
     <tr>
-      <td>1111_LONG</td>
+      <td>11:11</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>0</td>
       <td>0</td>
       <td>0</td>
@@ -1940,7 +2581,9 @@
       <td>0.00</td>
     </tr>
     <tr>
-      <td>1111_SHORT</td>
+      <td>11:11</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>2</td>
       <td>0</td>
       <td>2</td>
@@ -1952,7 +2595,23 @@
       <td>-3,107.15</td>
     </tr>
     <tr>
-      <td>1121_SHORT</td>
+      <td>11:21</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>11:21</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>4</td>
       <td>4</td>
       <td>0</td>
@@ -1964,7 +2623,23 @@
       <td>3,553.42</td>
     </tr>
     <tr>
-      <td>1126_SHORT</td>
+      <td>11:26</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>11:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>9</td>
       <td>8</td>
       <td>1</td>
@@ -1976,7 +2651,9 @@
       <td>18,839.24</td>
     </tr>
     <tr>
-      <td>1136_LONG</td>
+      <td>11:36</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>0</td>
       <td>0</td>
       <td>0</td>
@@ -1988,7 +2665,9 @@
       <td>0.00</td>
     </tr>
     <tr>
-      <td>1136_SHORT</td>
+      <td>11:36</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>8</td>
       <td>5</td>
       <td>3</td>
@@ -2000,7 +2679,9 @@
       <td>439.21</td>
     </tr>
     <tr>
-      <td>1141_LONG</td>
+      <td>11:41</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>3</td>
       <td>2</td>
       <td>1</td>
@@ -2012,7 +2693,9 @@
       <td>-5,238.83</td>
     </tr>
     <tr>
-      <td>1141_SHORT</td>
+      <td>11:41</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>4</td>
       <td>2</td>
       <td>2</td>
@@ -2024,7 +2707,23 @@
       <td>-5,836.84</td>
     </tr>
     <tr>
-      <td>1146_SHORT</td>
+      <td>11:46</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>11:46</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>6</td>
       <td>4</td>
       <td>2</td>
@@ -2036,7 +2735,9 @@
       <td>10,082.85</td>
     </tr>
     <tr>
-      <td>1206_LONG</td>
+      <td>12:06</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -2048,7 +2749,37 @@
       <td>2,635.60</td>
     </tr>
     <tr>
-      <td>1211_SHORT</td>
+      <td>12:06</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>12:11</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>12:11</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>5</td>
       <td>3</td>
       <td>2</td>
@@ -2060,7 +2791,9 @@
       <td>-209.61</td>
     </tr>
     <tr>
-      <td>1216_LONG</td>
+      <td>12:16</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>4</td>
       <td>2</td>
       <td>2</td>
@@ -2072,7 +2805,9 @@
       <td>-503.14</td>
     </tr>
     <tr>
-      <td>1216_SHORT</td>
+      <td>12:16</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>8</td>
       <td>5</td>
       <td>3</td>
@@ -2084,7 +2819,23 @@
       <td>-3,393.06</td>
     </tr>
     <tr>
-      <td>1226_SHORT</td>
+      <td>12:26</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>12:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>4</td>
       <td>1</td>
       <td>3</td>
@@ -2096,7 +2847,9 @@
       <td>-6,328.25</td>
     </tr>
     <tr>
-      <td>1231_LONG</td>
+      <td>12:31</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>1</td>
       <td>0</td>
       <td>1</td>
@@ -2108,7 +2861,9 @@
       <td>-3.35</td>
     </tr>
     <tr>
-      <td>1231_SHORT</td>
+      <td>12:31</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>5</td>
       <td>2</td>
       <td>3</td>
@@ -2120,7 +2875,23 @@
       <td>-168.39</td>
     </tr>
     <tr>
-      <td>1236_SHORT</td>
+      <td>12:36</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>12:36</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>3</td>
       <td>2</td>
       <td>1</td>
@@ -2132,7 +2903,23 @@
       <td>1,877.85</td>
     </tr>
     <tr>
-      <td>1301_SHORT</td>
+      <td>13:01</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>13:01</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>10</td>
       <td>7</td>
       <td>3</td>
@@ -2144,7 +2931,23 @@
       <td>1,709.11</td>
     </tr>
     <tr>
-      <td>1321_SHORT</td>
+      <td>13:21</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>13:21</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>7</td>
       <td>1</td>
       <td>6</td>
@@ -2156,7 +2959,23 @@
       <td>-3,267.90</td>
     </tr>
     <tr>
-      <td>1326_SHORT</td>
+      <td>13:26</td>
+      <td>LONG</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>13:26</td>
+      <td>SHORT</td>
+      <td>1</td>
       <td>3</td>
       <td>1</td>
       <td>2</td>
@@ -2168,7 +2987,9 @@
       <td>-1,663.02</td>
     </tr>
     <tr>
-      <td>1331_LONG</td>
+      <td>13:31</td>
+      <td>LONG</td>
+      <td>1</td>
       <td>1</td>
       <td>1</td>
       <td>0</td>
@@ -2179,5 +3000,19 @@
       <td>5,597.47</td>
       <td>2.53</td>
     </tr>
+    <tr>
+      <td>13:31</td>
+      <td>SHORT</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
   </tbody>
-</table></div><p>The two-loss rule blocks new admissions after two realized losing exits. It changes which later opportunities get capital; these slot results are from the full portfolio replay and should not be read as independent standalone slot strategies. Prior research reused these dates, so the best-looking slot is not a validated new filter.</p><h2>Download data</h2><ul><li><a href="slot_time_overall.csv">slot_time_overall.csv</a></li><li><a href="setup_side_overall.csv">setup_side_overall.csv</a></li><li><a href="slot_time_october.csv">slot_time_october.csv</a></li><li><a href="setup_side_october.csv">setup_side_october.csv</a></li><li><a href="slot_daywise_october.csv">slot_daywise_october.csv</a></li><li><a href="source_provenance.json">source_provenance.json</a></li></ul></body></html>
+</table></div><p>The two-loss rule blocks new admissions after two realized losing exits. It changes which later opportunities get capital; these slot results are from the full portfolio replay and should not be read as independent standalone slot strategies. Prior research reused these dates, so the best-looking slot is not a validated new filter.</p><h2>Download data</h2><ul><li><a href="slot_time_overall.csv">slot_time_overall.csv</a></li><li><a href="setup_side_overall.csv">setup_side_overall.csv</a></li><li><a href="setup_side_paired_overall.csv">setup_side_paired_overall.csv</a></li><li><a href="slot_time_october.csv">slot_time_october.csv</a></li><li><a href="setup_side_october.csv">setup_side_october.csv</a></li><li><a href="setup_side_paired_october.csv">setup_side_paired_october.csv</a></li><li><a href="slot_daywise_october.csv">slot_daywise_october.csv</a></li><li><a href="setup_side_daywise_october.csv">setup_side_daywise_october.csv</a></li><li><a href="source_provenance.json">source_provenance.json</a></li></ul></body></html>

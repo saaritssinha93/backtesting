@@ -40,7 +40,7 @@ if "%EXIT_CODE%"=="75" (
   endlocal & exit /b 0
 )
 
-for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm:ss"') do set "RUN_TS=%%a"
+for /f "delims=" %%a in ('^""%PYTHON_EXE%" -c "from datetime import datetime; print(datetime.now().isoformat(timespec='seconds').replace('T','_'))"^"') do set "RUN_TS=%%a"
 if "%EXIT_CODE%"=="0" (
   >"%STATUS_FILE%" echo status=SUCCESS
   >>"%STATUS_FILE%" echo script=%SCRIPT_NAME%
@@ -56,7 +56,8 @@ if "%EXIT_CODE%"=="0" (
 )
 
 if not "%EXIT_CODE%"=="0" (
-  for /f %%a in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "TS=%%a"
+  set "TS=!RUN_TS:-=!"
+  set "TS=!TS::=!"
   set "ALERT_FILE=%ALERT_DIR%\CRITICAL_authentication_v2_FAILED_!TS!.txt"
 
   (
@@ -85,9 +86,6 @@ if not "%EXIT_CODE%"=="0" (
 
   eventcreate /L APPLICATION /T ERROR /ID 9003 /SO EQIDV2 /D "CRITICAL: authentication_v2.py failed with exit code %EXIT_CODE%. See %LOG_FILE%" >nul 2>&1
   msg %USERNAME% /TIME:15 "CRITICAL: authentication_v2.py failed (exit=%EXIT_CODE%) - check %LOG_FILE%" >nul 2>&1
-
-  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "try { $ws = New-Object -ComObject WScript.Shell; [void]$ws.Popup('CRITICAL FAILURE in authentication_v2.py`nExitCode: %EXIT_CODE%`nSee log: %LOG_FILE%', 10, 'EQIDV2 ALERT', 16) } catch { }"
 
   echo [ALERT] CRITICAL: %SCRIPT_NAME% failed. ExitCode=%EXIT_CODE%
   echo [ALERT] AlertFile=!ALERT_FILE!

@@ -1,0 +1,23 @@
+{
+  "directory": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\early",
+  "files": {
+    "baseline_reproduction.json": "1735c2ed377d2cb01add9f0c05171e6bca864815f6b11d56c0bbb7128b037484",
+    "candidate_pool.pkl": "f35e686ad387d54bb8a7fa0510a2395c46e61fdbd49a7f186da947fb7a1bbb5a",
+    "candidate_pool_inventory.csv": "4b78b804cd16c4c11cd2bda49217bf454816ae720f4f26fa9db157f6a8805ae5",
+    "candidate_pool_proof.json": "fe2991e5aa43309b9d38666e951219df07764b60754f74f76879f66ebf46dd25",
+    "candidate_variant_decisions.csv": "85fc128287df2dbfde76c433b48a21426b73cf76440e428f103bd0f76ea419c0",
+    "development_selection.csv": "6fac0d8e9dd22510ad9d115e560519096563ee1d7d1b79380559aeac3eb4aa63",
+    "g7_candidate_features.csv": "7f18513f8af29d80dcbf4755dea3c50686037c78e06d701dde0124f2aa0670c9",
+    "joint_development_selection.csv": "a621f8799099a9a556fdad44789294f915bd81722a323e7354331bd17a8e2bc9",
+    "report.md": "016db4c16e2b80169b1884fa369ff9ea4a8a97a21f83a6ae60bdd7223f9d5bb6",
+    "run_early_short_grid.py": "f85ac391a00221ea9e35087b29486598d6ecd40fb417b429602c421f8ede539d",
+    "selected_variant_daywise.csv": "a576ae64ad86ce7449e5aec82caf708aa6e854aa5db73d83d608c021c3d87902",
+    "selected_variant_results.csv": "26f99f2a580a3e04db49068fd5474da8f12668ee136e3f118f7e8b93136d9783",
+    "selection_changes.csv": "9578289c0e608798d7c0a407a355f64423a009a71944943bc1bb8bcfa967d824",
+    "source_provenance.json": "4152a2d38add13e4aa65d43a4e3d929034d8e31f6739ce6db67b967592c6c847",
+    "variant_portfolio_metrics.csv": "570ff294ce0d1675c17302ccf45bc2bc63442d4d79cbab00f50980389eaceef7",
+    "variant_setup_metrics.csv": "a8817b62958e1018ccd3316d8fb4a03c4f406be74e70f79e817f0eb581457415",
+    "variant_trade_details.csv": "e0ba667c8f755843a9c9d3e62a2a0e349feef40abe55d97bdd89c70b43c5baf9"
+  },
+  "generated_at_utc": "2026-10-28T09:26:36.401725+00:00"
+}

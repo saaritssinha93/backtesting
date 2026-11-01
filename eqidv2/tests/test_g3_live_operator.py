@@ -13,24 +13,18 @@ from tools import g3_live_operator as op
 
 NOW = datetime(2026, 10, 13, 8, 30, tzinfo=op.config.IST)
 DAY = NOW.date()
-STANDING_NOW = datetime(2026, 10, 23, 9, 10, tzinfo=op.config.IST)
+STANDING_NOW = datetime(2026, 10, 29, 9, 10, tzinfo=op.config.IST)
 REAL_STANDING_POLICY = op.STANDING_POLICY
+HISTORICAL_V2_POLICY = op.ROOT / 'configs/authorizations/g3_live_standing_policy_v2.json'
 
 
-@pytest.fixture(autouse=True)
-def hypothetical_authorized_standing_policy(monkeypatch, tmp_path):
-    """Exercise the old standing gates without enabling the real V13 policy."""
-    monkeypatch.setattr(op, 'STANDING_POLICY_ENABLED', True)
-    monkeypatch.setattr(op, 'STANDING_POLICY_EFFECTIVE_DATE', STANDING_NOW.date())
-    path = tmp_path / 'hypothetical_standing.json'
-    policy = op.standing_policy_payload()
-    policy['standing_policy_fingerprint'] = op.standing_policy_fingerprint(policy)
-    path.write_text(json.dumps(policy), encoding='utf-8')
-    monkeypatch.setattr(op, 'STANDING_POLICY', path)
-
-
-def test_real_v13_standing_policy_is_disabled_pending_new_approval():
-    assert json.loads(REAL_STANDING_POLICY.read_text())['enabled'] is False
+def test_historical_v2_standing_policy_remains_disabled():
+    previous = json.loads(HISTORICAL_V2_POLICY.read_text(encoding='utf-8'))
+    assert previous['policy_id'] == 'G3_LIVE_STANDING_20261024_V2'
+    assert previous['strategy_version'] == 'V13-V10-G-3-PRODUCTION-V13'
+    assert len(previous['setup_ids']) == 51
+    assert previous['enabled'] is False
+    assert REAL_STANDING_POLICY != HISTORICAL_V2_POLICY
 
 
 @pytest.fixture
@@ -72,12 +66,12 @@ def test_preview_is_read_only_and_covers_every_setup(state, tmp_path):
     root = tmp_path / 'absent'
     plan = op.plan(DAY, state, now=NOW, runtime_root=root)
     assert state == before and not root.exists()
-    assert plan['active_setup_count'] == 51
-    assert len(set(plan['setup_ids'])) == 51
+    assert plan['active_setup_count'] == 34
+    assert len(set(plan['setup_ids'])) == 34
     assert plan['targets_pct']['1006_LONG'] == .56
     assert plan['targets_pct']['1031_SHORT'] == 1.66
     assert plan['targets_pct']['1136_LONG'] == 7.15
-    assert plan['targets_pct']['1231_SHORT'] == 1.85
+    assert '1231_SHORT' not in plan['targets_pct']
     assert '1236_LONG' not in plan['targets_pct']
     assert plan['targets_pct']['1331_LONG'] == 1.17
     assert plan['last_confirmation'] == '13:31'
@@ -88,7 +82,7 @@ def test_preview_is_read_only_and_covers_every_setup(state, tmp_path):
     assert not plan['mutates_controls'] and not plan['starts_workers']
 
 
-def test_tomorrow_plan_keeps_approved_midday_filters_and_all_previous_setups(state, tmp_path):
+def test_tomorrow_plan_keeps_approved_filters_for_enabled_setups(state, tmp_path):
     plan = op.plan(date(2026, 10, 14), state, now=NOW, runtime_root=tmp_path)
     selected = json.loads((op.ROOT / 'configs/strategies/v13_v10_g_4_backtest_selected_midday_v5.json').read_text())
     previous = json.loads((op.ROOT / 'configs/strategies/v13_v10_g_3_production_v5.json').read_text())
@@ -99,6 +93,8 @@ def test_tomorrow_plan_keeps_approved_midday_filters_and_all_previous_setups(sta
               'one_minute_wick_ratio_max': 'max_wick_ratio',
               'one_minute_volume_ratio_min': 'minimum_confirmation_volume_ratio'}
     for setup in selected['setups']:
+        if setup['setup_id'] not in rows:
+            continue
         actual = rows[setup['setup_id']]
         assert actual['target_pct'] == setup['target_pct']
         assert actual['stop_pct'] == setup['initial_stop_pct']
@@ -109,6 +105,8 @@ def test_tomorrow_plan_keeps_approved_midday_filters_and_all_previous_setups(sta
             assert actual[target] == setup['thresholds'][source]
     for before in previous['active_setups']:
         setup_id = before['confirmation_end'].replace(':', '') + '_' + before['side']
+        if setup_id not in rows:
+            continue
         expected = {key: value for key, value in before.items() if key != 'source_version'}
         if setup_id == '0926_LONG':
             expected['volume_ratio'] = 1.2
@@ -121,7 +119,8 @@ def test_tomorrow_plan_keeps_approved_midday_filters_and_all_previous_setups(sta
         assert rows[setup_id]['minimum_confirmation_volume_ratio'] == (
             .8 if setup_id == '0941_LONG' else expected_minimum)
     assert len(previous['active_setups']) == 32
-    assert len(rows) == 51 and len(plan['signal_to_confirmation']) == 35
+    assert len(rows) == 34 and len(plan['signal_to_confirmation']) == len({
+        row['signal_end'] for row in rows.values()})
     assert plan['exit_policy'] == dict(initial_stop_pct=1.25, tightened_stop_pct=1.,
         tighten_after_minutes=120, entry_expiry_minutes=10, square_off='15:15')
     assert not plan['mutates_controls'] and not plan['starts_workers'] and not plan['submits_orders']
@@ -140,17 +139,23 @@ def test_approval_requires_current_fingerprint_and_preserves_sizing(state, repor
         op.validate_launch(approved, arm, now=NOW + timedelta(days=1), runtime_root=tmp_path)
 
 
-def test_standing_policy_artifact_is_exactly_bound_to_v13_setups_and_live_caps():
+def test_current_standing_policy_artifact_is_bound_to_v15_34_setups_and_live_caps():
     policy = op.load_standing_policy()
     ids = [setup.setup_id for setup in op.config.ACTIVE_SETUPS]
+    assert REAL_STANDING_POLICY.name == 'g3_live_standing_policy_v3.json'
+    assert policy['policy_id'] == 'G3_LIVE_STANDING_20261029_V3'
     assert policy['source'] == 'STANDING_OPERATOR_POLICY'
-    assert policy['effective_from_session_date'] == '2026-10-23'
+    assert policy['effective_from_session_date'] == '2026-10-29'
     assert policy['enabled'] is True and policy['revoked'] is False
-    assert policy['strategy_version'] == 'V13-V10-G-3-PRODUCTION-V13'
-    assert policy['strategy_fingerprint'] == op.config.strategy_fingerprint()
+    assert policy['strategy_version'] == op.config.STRATEGY_VERSION == 'V13-V10-G-3-PRODUCTION-V15'
+    assert policy['strategy_fingerprint'] == op.config.strategy_fingerprint() == (
+        '89aae1fe359f6c6cd7b6cbaac4879d5818ce40c92808c4bf539544a4f80e3aed')
+    assert len(ids) == 34
     assert policy['setup_ids'] == ids
-    assert policy['setup_ids_sha256'] == op.canonical_fingerprint(ids)
-    assert policy['standing_policy_fingerprint'] == op.standing_policy_fingerprint(policy)
+    assert policy['setup_ids_sha256'] == op.canonical_fingerprint(ids) == (
+        '750b52503841d7055a9facabb3204959f69e1673008f3e60f0dc99a93638970c')
+    assert policy['standing_policy_fingerprint'] == op.standing_policy_fingerprint(policy) == (
+        'ad8a9180c2be2f9ede2b9cd27f7207ed535d06f50dd84000c6452fa4f7ff11d8')
     assert policy['live_execution_policy'] == op.config.live_execution_policy.execution_metadata()
     assert policy['live_execution_policy'] == {
         'live_execution_policy_schema_version': 'g3_live_execution_policy_v1',
@@ -193,9 +198,9 @@ def test_standing_policy_tampering_is_fail_closed(mutation):
 def test_standing_policy_is_not_valid_before_effective_date_or_on_weekend():
     policy = op.read(op.STANDING_POLICY)
     with pytest.raises(ValueError, match='not effective'):
-        op.validate_standing_policy(policy, session_date=date(2026, 10, 22))
+        op.validate_standing_policy(policy, session_date=date(2026, 10, 28))
     with pytest.raises(ValueError, match='regular NSE sessions'):
-        op.validate_standing_policy(policy, session_date=date(2026, 10, 24))
+        op.validate_standing_policy(policy, session_date=date(2026, 10, 31))
 
 
 def test_standing_session_approval_is_distinct_dated_and_launchable(
@@ -363,7 +368,7 @@ def test_explicit_source_schema_and_timestamp_semantics_are_fail_closed(
         op.validate_launch(approved, arm, now=NOW, runtime_root=tmp_path)
 
 
-def test_tomorrow_plan_preserves_prior_44_and_contains_exact_afternoon_targets(state, tmp_path):
+def test_tomorrow_plan_preserves_rules_for_selected_prior_and_afternoon_setups(state, tmp_path):
     plan = op.plan(date(2026, 10, 14), state, now=NOW, runtime_root=tmp_path)
     previous = json.loads((op.ROOT / 'configs/strategies/v13_v10_g_3_production_v6.json').read_text())
     rows = {row['setup_id']: row for row in plan['decision_setups']}
@@ -371,6 +376,8 @@ def test_tomorrow_plan_preserves_prior_44_and_contains_exact_afternoon_targets(s
     for before in previous['active_setups']:
         setup_id = before['confirmation_end'].replace(':', '') + '_' + before['side']
         previous_ids.add(setup_id)
+        if setup_id not in rows:
+            continue
         expected = {key: value for key, value in before.items() if key != 'source_version'}
         if setup_id == '0926_LONG':
             expected['volume_ratio'] = 1.2
@@ -385,8 +392,9 @@ def test_tomorrow_plan_preserves_prior_44_and_contains_exact_afternoon_targets(s
     expected = {'1236_SHORT': 1.24, '1301_SHORT': .88,
                 '1321_SHORT': 1.01, '1326_SHORT': .76, '1331_LONG': 1.17}
     assert len(previous_ids) == 44
-    assert set(rows) - previous_ids == set(expected) | op.config.contract.ADDED_SETUP_IDS
-    assert {setup_id: rows[setup_id]['target_pct'] for setup_id in expected} == expected
+    assert set(rows) - previous_ids == (set(expected) | op.config.contract.ADDED_SETUP_IDS) & set(rows)
+    assert {setup_id: rows[setup_id]['target_pct'] for setup_id in expected if setup_id in rows} == {
+        setup_id: value for setup_id,value in expected.items() if setup_id in rows}
     assert '12:40' not in plan['signal_to_confirmation']
     assert '13:10' not in plan['signal_to_confirmation']
     assert plan['mutates_controls'] is plan['starts_workers'] is plan['submits_orders'] is False

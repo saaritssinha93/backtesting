@@ -1,0 +1,787 @@
+{
+  "accepted_baseline_includes_0926_wick_rule": true,
+  "active_configs_modified": false,
+  "candidate_pool_proof": {
+    "by_setup": {
+      "1226_SHORT": 24,
+      "1231_SHORT": 25,
+      "1301_SHORT": 43,
+      "1321_SHORT": 52
+    },
+    "feature_manifest": {
+      "complete": true,
+      "created_at_ist": "2026-10-28T20:58:32.626230+05:30",
+      "files": {
+        "candidate_features.csv": "f74cfbc349de60bb0132f406152e5a308894223929d89a091cdcea564475fb49",
+        "candidate_inventory.csv": "f55997bcb99e876be4dddf81a6020abaed19032eccc16c7576e40abade15cae3",
+        "candidate_pool.pkl": "d96f24a9d2145d59eb846778100d15f2d06b6a7b74026042331da811bef4a1c9",
+        "candidate_pool_proof.json": "8a6ff590e03f33d4c548a893d434573532e5535b6dfe2239e25536cc7dc1b2c6",
+        "feature_audit.json": "0f5a411d3d5bf2b7141b32cfd89bf590697e7104ca5f7f1c36c37b312bdaa8ac",
+        "feature_qa.json": "af07cdac0594fcd8da6a7b78e82f3499fe082a2d3ceacf4e008d5743bff5a3a1",
+        "feature_source_proof.json": "8a6ff590e03f33d4c548a893d434573532e5535b6dfe2239e25536cc7dc1b2c6",
+        "prepare_features.py": "9cad30f947cf5b3b022ec27c301d0bfd1fec5fed39abc3c6cb7a308efa365313",
+        "protocol.json": "428416358857cd2a1dfc4f11623d3d77cd3428cb42506a0fa51221219bb22772",
+        "test_prepare_features.py": "efe5b535223aa906bbd4972d22e6f0254b99659ad05cd7972cbfcd7dacd3b290"
+      }
+    },
+    "feature_manifest_path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\feature_manifest.json",
+    "feature_manifest_sha256": "a217e481ef8da033368b900582eb78db0352ed35d7cbab0e5ad31c5cbb23e315",
+    "original_pool_proofs": [
+      {
+        "batch": "early",
+        "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\early\\candidate_pool.pkl",
+        "sha256": "f35e686ad387d54bb8a7fa0510a2395c46e61fdbd49a7f186da947fb7a1bbb5a"
+      },
+      {
+        "batch": "missing_early_long",
+        "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\missing_early_long\\candidate_pool.pkl",
+        "sha256": "636f8c6b45ee5c9b49a98c20e5f163947aa18df30cb9691a47b7e8611414e63e"
+      },
+      {
+        "batch": "missing_midday",
+        "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\missing_midday\\candidate_pool.pkl",
+        "sha256": "3eaee58b99b85c76f0de5e6572f7cfe2d00161b31b9cfa019d8837c5b5499c83"
+      },
+      {
+        "batch": "mid",
+        "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\mid\\candidate_pool.pkl",
+        "sha256": "446ff2edcb968fb4ce346c08217da0ea7f33d73617de5a9b1cac42b2bffb7c70"
+      },
+      {
+        "batch": "late",
+        "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\late\\candidate_pool_full.pkl",
+        "sha256": "63f3f1321151a74f34164d1fd458816b9b434c083f94fb7bf1afdb6665dff6e1"
+      }
+    ],
+    "rows": 144
+  },
+  "cumulative_nonbaseline_comparisons": 380,
+  "independent_holdout": false,
+  "inputs_and_code": {
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\backtests\\runs\\2026-10-27\\20261027T172043456343_3d50ca01_current_full_history\\manifest.json": "90272456c0e6e8b75ac7fae8bac24be7e3dd83f635680814e49219b4e38759a6",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\backtests\\runs\\2026-10-27\\20261027T172043456343_3d50ca01_current_full_history\\selected_orders.csv": "22598b32ba537ed62db73da800bcee2f7d915aa3d97b5ad7948359a241bada47",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\backtests\\runs\\2026-10-27\\20261027T172043456343_3d50ca01_current_full_history\\summary.json": "6f61bbd38ff8303bef717da58df47df833008a98dc2a2ef5265c4ee3ad6e3475",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_7\\v4_lock_backtest\\runs\\2026-10-28\\20261028T143059782924_f86f1197_0926_short_wick020_lock2\\artifact_manifest.json": "eac818ce71d233f6d105945de164f0f4a2c31c9c33c7fae235735f2101227b08",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_7\\v4_lock_backtest\\runs\\2026-10-28\\20261028T143059782924_f86f1197_0926_short_wick020_lock2\\g3_reference_portfolio_trades.csv": "7fd051ac41fb3ad9956ca52f641fdc8b55bed033c6a04365c7e648dd7c3de564",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_7\\v4_lock_backtest\\runs\\2026-10-28\\20261028T143059782924_f86f1197_0926_short_wick020_lock2\\portfolio_trades.csv": "341b3735093aa31bfdfe31e71a61f7353da0136686c156caa0106606d97c5e1e",
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_7\\v4_research\\runs\\2026-10-27\\20261027T165517683392_v4_extremes\\inputs\\manifest.json": "31fb98ab092aa8c3ea5e59f7e65e377d41095306ba71cc93ae964aeedc998c51",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\fno_v13_v10_g_3_contract.py": "9779b665b22ef8aa373ec868c62fc30d2098bc1a5fa50b115f83c51d841619d9",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\g4_setup_candidate_source_v2_20261016\\manifest.json": "a3887dbf9c34f87e94a5a5585c6b331a36c4814dcf6451749750f934ea810aed",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\protocol.json": "428416358857cd2a1dfc4f11623d3d77cd3428cb42506a0fa51221219bb22772",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\run_round2.py": "8df036e50837d9b6aacc78ac25a000344dc9bd5b0ac519c1677fd541f336b84a",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\research\\g3_target_cutoff_contract.py": "3c785f327a31c3354ab4a327090df13f4075a6e5394037e3d0849c10679f65d7",
+    "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\research\\g7_v4_filtered_backtest.py": "39e8bd904913786c13b112e609664ab948caefba0b9848472c3b760cfe7dc539"
+  },
+  "new_nonbaseline_comparisons": 160,
+  "periods": {
+    "all": [
+      "2026-07-29",
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-12",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-19",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23",
+      "2026-10-26",
+      "2026-10-27"
+    ],
+    "assessment": [
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-19",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23"
+    ],
+    "development": [
+      "2026-07-29",
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18"
+    ],
+    "final_sessions": [
+      "2026-10-26",
+      "2026-10-27"
+    ],
+    "later": [
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-12",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-19",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23",
+      "2026-10-26",
+      "2026-10-27"
+    ],
+    "october": [
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-12",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-19",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23",
+      "2026-10-26",
+      "2026-10-27"
+    ],
+    "validation": [
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-12"
+    ]
+  },
+  "price_source_proof": {
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-25\\20260925T162014227925\\input_snapshots\\6a5210e9133f6ea5b070450b68b5091845e9d5d7d7bec016e262e646c28a9ef4\\equity_1m\\BEL_stocks_indicators_1min.parquet": {
+      "sha256": "49c106c2cea42f9efb71284d93221b5c569e756567d1ef22253224437f9c401f",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-25\\20260925T162014227925\\input_snapshots\\6a5210e9133f6ea5b070450b68b5091845e9d5d7d7bec016e262e646c28a9ef4\\equity_1m\\BHEL_stocks_indicators_1min.parquet": {
+      "sha256": "ebef381f7009b326e1427125bfde5e1c2633b4c5285affbf59df27ba52bb04f2",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-25\\20260925T162014227925\\input_snapshots\\6a5210e9133f6ea5b070450b68b5091845e9d5d7d7bec016e262e646c28a9ef4\\equity_1m\\DIVISLAB_stocks_indicators_1min.parquet": {
+      "sha256": "490e6ae0ea09c151c542dacab5435d3991c5677a71da0ec6fceac025488c47d6",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-25\\20260925T162014227925\\input_snapshots\\6a5210e9133f6ea5b070450b68b5091845e9d5d7d7bec016e262e646c28a9ef4\\equity_1m\\ICICIGI_stocks_indicators_1min.parquet": {
+      "sha256": "c54bd0de243a1056a62d2ac21f3b0dfffb841db758ebda9afb89b72f103a6636",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-25\\20260925T162014227925\\input_snapshots\\6a5210e9133f6ea5b070450b68b5091845e9d5d7d7bec016e262e646c28a9ef4\\equity_1m\\PIDILITIND_stocks_indicators_1min.parquet": {
+      "sha256": "43d5d63c9c34ec9e105cb00e8d22c97f7aebc8c2d01224c7709a94e6e55844f4",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-28\\20260928T162013135062\\input_snapshots\\21c81a4cce4de427a7d8f3e3b5ee87d459f17f85fbad320e57231e472ae6912c\\equity_1m\\ATHERENERG_stocks_indicators_1min.parquet": {
+      "sha256": "f9e0b5bd3f5633006c79db086e16a2fea3430725c5cb69f35ddcf4453657fac2",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-28\\20260928T162013135062\\input_snapshots\\21c81a4cce4de427a7d8f3e3b5ee87d459f17f85fbad320e57231e472ae6912c\\equity_1m\\INDUSTOWER_stocks_indicators_1min.parquet": {
+      "sha256": "f18d214949a270313822195d943b852ce2c988f9f5803de0e57ead6cb9349201",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-28\\20260928T162013135062\\input_snapshots\\21c81a4cce4de427a7d8f3e3b5ee87d459f17f85fbad320e57231e472ae6912c\\equity_1m\\MANAPPURAM_stocks_indicators_1min.parquet": {
+      "sha256": "eafd951347c70ffc55651a82c3f274624fda34b26c5d2af3122419c7ba8cfefd",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-28\\20260928T162013135062\\input_snapshots\\21c81a4cce4de427a7d8f3e3b5ee87d459f17f85fbad320e57231e472ae6912c\\equity_1m\\POWERINDIA_stocks_indicators_1min.parquet": {
+      "sha256": "7e59f7f682c9e253472905ee9914a482223cf18179e4b25e711ccd5861393e22",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-29\\20260929T162013156087\\input_snapshots\\fc251dc288ec5f71057209bde384309f864225ffcab3521451ad46883b989337\\equity_1m\\INDIANB_stocks_indicators_1min.parquet": {
+      "sha256": "8191b1380e55d0075ebac6585c5b79798c5d2d679f85114a967fd7095a378534",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-29\\20260929T162013156087\\input_snapshots\\fc251dc288ec5f71057209bde384309f864225ffcab3521451ad46883b989337\\equity_1m\\MANAPPURAM_stocks_indicators_1min.parquet": {
+      "sha256": "218e1f290f9fc383f78815cf628c1ba859284851f9d87e9cb10513cee75a795b",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-29\\20260929T162013156087\\input_snapshots\\fc251dc288ec5f71057209bde384309f864225ffcab3521451ad46883b989337\\equity_1m\\PREMIERENE_stocks_indicators_1min.parquet": {
+      "sha256": "5535539f669acfc662ad486971a9a3b2a01b7a2526c63c33a23aa62778ff3da9",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-29\\20260929T162013156087\\input_snapshots\\fc251dc288ec5f71057209bde384309f864225ffcab3521451ad46883b989337\\equity_1m\\WAAREEENER_stocks_indicators_1min.parquet": {
+      "sha256": "47f808a95b365d4fc0f2249429e7bd09a51684173ac38feac359ac48c027a174",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-29\\20260929T162013156087\\input_snapshots\\fc251dc288ec5f71057209bde384309f864225ffcab3521451ad46883b989337\\equity_1m\\WIPRO_stocks_indicators_1min.parquet": {
+      "sha256": "15b383032328f2a4f425500c407863f0a7caa5ca20c995aaa726316fa833b438",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-09-30\\20260930T162013805503\\input_snapshots\\4f12a4e8a4ced0b9e6400b022aa59891b596cac4dafae96317a4b309d50038e9\\equity_1m\\TECHM_stocks_indicators_1min.parquet": {
+      "sha256": "ec9212269ed877b9d4b8b627625426b796401eccce02ce8dc1f5ba8d51f3ecd5",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-05\\20261005T162013242339\\input_snapshots\\b6f55ac61c9ab0b3512590d0144e62f7b68671ad84aec15e542d0012a53360eb\\equity_1m\\TIINDIA_stocks_indicators_1min.parquet": {
+      "sha256": "fd21646bad1a7f59a2f3db025f88ff323078c2e9a16cdce29a35c2f5cc5ed6c7",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-06\\20261006T162014247360\\input_snapshots\\85de02ab0d026a9480177f5595fc048b294c2696197585c581b83776d74d1a51\\equity_1m\\UNIONBANK_stocks_indicators_1min.parquet": {
+      "sha256": "63c886c22cd45a784803308329e552abbc090e9b7b555921bce16344238a1b14",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\ABCAPITAL_stocks_indicators_1min.parquet": {
+      "sha256": "de5cf5d743a626c19fa454cbbf1bc1c981a4cb23e360cd38f4bfa0b08db95ce7",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\ADANIENT_stocks_indicators_1min.parquet": {
+      "sha256": "959975ff876e503daf5adef463d9adac42bce806e11e73874a27473cbb54819b",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\AUBANK_stocks_indicators_1min.parquet": {
+      "sha256": "9ace2cce8591bf3a61b7d0537b30749f9679a5f10a8a32842c3f28587bbbe939",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\BHARATFORG_stocks_indicators_1min.parquet": {
+      "sha256": "bb371b765f05f6abbc147995b9ac0bd0765ba5a7626835d402f7cc2607282866",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\HCLTECH_stocks_indicators_1min.parquet": {
+      "sha256": "3c4399d73eb5fae8354506db30c74b651d38208a88b43e2564ee49f03917fd12",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\IDFCFIRSTB_stocks_indicators_1min.parquet": {
+      "sha256": "6dcb9733ce418e969c74e0c75f2361e21b60ece1bd0eb9180c41661375ca0ca7",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\KPITTECH_stocks_indicators_1min.parquet": {
+      "sha256": "548f3848ad91966104d864bd2b901d9011b06fa9b50e2f773bef4778a949f8b8",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\LICI_stocks_indicators_1min.parquet": {
+      "sha256": "fb6556d613d4248d547102738ee4d5d826729aab4271a4f931060f1a6e7f3da0",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\LTF_stocks_indicators_1min.parquet": {
+      "sha256": "4995cbb80b77c68241d971032ad8f71242829e08fb98377943f96b0b9a18efa8",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\M&M_stocks_indicators_1min.parquet": {
+      "sha256": "a8a6dfc3febdbca69c18b1f8ddf9d23b023d2d1ff83a76aa900394fa415ae255",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\RVNL_stocks_indicators_1min.parquet": {
+      "sha256": "97d9e5bc72b2ec3085e9fb4a52f31d2f59595ac267ee3174ff4b222bc35e2dd3",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\SBILIFE_stocks_indicators_1min.parquet": {
+      "sha256": "0cc7c69df7a6bb825d20853dcbe35435f79868dd89f861a4edf6aff1814d2c23",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-07\\20261007T162013491257\\input_snapshots\\702d5a94362a9242a73147d173082061c00fe94d5e13348501933b6f608bdf78\\equity_1m\\VEDL_stocks_indicators_1min.parquet": {
+      "sha256": "a3fa5efe2d7f0d51b82bb5999b1792c1f5b0e4cdcf4f4654b69eaaf4baf802a3",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\ASHOKLEY_stocks_indicators_1min.parquet": {
+      "sha256": "c46bd7c3f4fb37384513a5f3ca69dd3c4209cfdc02569c967006c6fd13cccfd1",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\BAJAJ-AUTO_stocks_indicators_1min.parquet": {
+      "sha256": "4fc44ec0e59a86d85d2bfda6722fa1c21644c3345890f9c6ac474e67f60c3252",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\BAJAJFINSV_stocks_indicators_1min.parquet": {
+      "sha256": "8278d94829c681e15f7922bcd7fae6b3ea0d2e83d740dc414d2aced94ebb1df8",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\BHARTIARTL_stocks_indicators_1min.parquet": {
+      "sha256": "51d9db5c711eedfbc568ff54f782bded2df39f275b03ee3ebb86b1afd508037d",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\GLENMARK_stocks_indicators_1min.parquet": {
+      "sha256": "550c0dbc832cd480f7fd4b1d147ce264bcbbdd3b9f30e42b2f92851a99de5650",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\GMRAIRPORT_stocks_indicators_1min.parquet": {
+      "sha256": "6bd9d2abe7ab9ec6fd8c70a715077ec5344ceb0ff81de15e2a28cfe8901b5a8d",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\GODFRYPHLP_stocks_indicators_1min.parquet": {
+      "sha256": "4f31b7712c433527a551633ffcf0f3029e5254949819be16f9ecb99c7a1e106c",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\HDFCBANK_stocks_indicators_1min.parquet": {
+      "sha256": "e196816d5b73251c4d2fdc5e4c00f4f7aece1bbd1c4a9eca31092b60c5547620",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\HYUNDAI_stocks_indicators_1min.parquet": {
+      "sha256": "d6163380b93e1af449f2d4179fd49b07947940dcc11223accc4f8d957c98ccc6",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\ICICIPRULI_stocks_indicators_1min.parquet": {
+      "sha256": "e5c357493465ab40c5860c4a4576ae9929ab3c546f9d6a237122fa1bfda45dde",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\LODHA_stocks_indicators_1min.parquet": {
+      "sha256": "7ea156f96e14cd3e23a4b51cdf89ebd6b1414c956692b9ec561906f7454548ad",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\MANKIND_stocks_indicators_1min.parquet": {
+      "sha256": "3ec118ad55e93f1c80c91430e09a7eaaf071c15e90e145a4bb016bf7a65b9b43",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\NYKAA_stocks_indicators_1min.parquet": {
+      "sha256": "86b08e17c88a88ef7a9ca1acc00cda5c83eb1b72b6710a765c678bb93d5c1f35",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\RVNL_stocks_indicators_1min.parquet": {
+      "sha256": "153b142df05afe4df3b193f0cec98160c0ac663aaea359115f2f440752ea931b",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\SHRIRAMFIN_stocks_indicators_1min.parquet": {
+      "sha256": "57250f84b38ab372175367d5acbd258ad2581c4a02696472de068c0025474eb6",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\SOLARINDS_stocks_indicators_1min.parquet": {
+      "sha256": "2e90746dd76da9b54bcfd28c655555f60ca419d7e6d49a382e3ce4f7d749e4a3",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-08\\20261008T164156506767\\input_snapshots\\ead27dfb5308f307d8dbe7a86a897db6132acacd24b85602b3c0aaa930e4cb43\\equity_1m\\TORNTPHARM_stocks_indicators_1min.parquet": {
+      "sha256": "043d9b7b5ce64ccf64892865b9afecb446d837951bb43ca4cab1a404ae08baeb",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-09\\20261009T162013087486\\input_snapshots\\5f72d8d26e9634718f2b62bea7076b85b3acee56c5eb2a7454e22d319506539d\\equity_1m\\BSE_stocks_indicators_1min.parquet": {
+      "sha256": "ed287f8697d9143ce90cd694b692da074616ab0653985147e9e86c69184d22bf",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g\\runs\\2026-10-09\\20261009T162013087486\\input_snapshots\\5f72d8d26e9634718f2b62bea7076b85b3acee56c5eb2a7454e22d319506539d\\equity_1m\\JUBLFOOD_stocks_indicators_1min.parquet": {
+      "sha256": "73fcc9d5054a079ce3f57727d323682077465e73ce422bdc6818d5991fb5183a",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-13\\20261013T222838087345_6e7355c3\\input_snapshots\\02df2087a01f950db2e3b3f7148b7cfb0f9fbddc548979d49e8ebf599d520881\\equity_1m\\LTF_stocks_indicators_1min.parquet": {
+      "sha256": "aa0ad87e2e8bc26891eeee8aa0e69accc412628057ca05a6f3ed7c2c2d58ccf2",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-13\\20261013T222838087345_6e7355c3\\input_snapshots\\02df2087a01f950db2e3b3f7148b7cfb0f9fbddc548979d49e8ebf599d520881\\equity_1m\\LUPIN_stocks_indicators_1min.parquet": {
+      "sha256": "18d860a63e4131d7029e81539d2d89387121848a058bd66fb759d99f38cbd861",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-13\\20261013T222838087345_6e7355c3\\input_snapshots\\02df2087a01f950db2e3b3f7148b7cfb0f9fbddc548979d49e8ebf599d520881\\equity_1m\\NAM-INDIA_stocks_indicators_1min.parquet": {
+      "sha256": "d3ec84175584ae473638bf9dd87b63ef7741da77832913d507c3ae6bf95ae3ba",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-13\\20261013T222838087345_6e7355c3\\input_snapshots\\02df2087a01f950db2e3b3f7148b7cfb0f9fbddc548979d49e8ebf599d520881\\equity_1m\\PAYTM_stocks_indicators_1min.parquet": {
+      "sha256": "e6d0646dfbf3f4437c4e77dfe0c98a3667a60141117c97a7339369dfc5b65989",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-14\\20261021T183531060381_39efe64c\\input_snapshots\\4e03fbb05aa63bc26d5042eb1eaf8d8eb74be44644ff04d2339a4d55253c6923\\equity_1m\\INDIGO_stocks_indicators_1min.parquet": {
+      "sha256": "771a763efa5d696284057714aacf56d1a11b77f4b3ea18db5bfc92c1dd290a49",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-14\\20261021T183531060381_39efe64c\\input_snapshots\\4e03fbb05aa63bc26d5042eb1eaf8d8eb74be44644ff04d2339a4d55253c6923\\equity_1m\\VMM_stocks_indicators_1min.parquet": {
+      "sha256": "0e4f5deb0de1cdeb2e0463bc68b182fb6997d88048ad8340b5052e7ab4dbc426",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-15\\20261021T184048876424_41b4a860\\input_snapshots\\de5c7c1956318eb13d1907c880f019ceec20c4cef8cc9bc849c77886b8870a64\\equity_1m\\ABB_stocks_indicators_1min.parquet": {
+      "sha256": "b20acd0e530b40d0dbb94fcd2516410a5fa9966c86e32c577fd877119eb983f2",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-15\\20261021T184048876424_41b4a860\\input_snapshots\\de5c7c1956318eb13d1907c880f019ceec20c4cef8cc9bc849c77886b8870a64\\equity_1m\\BHEL_stocks_indicators_1min.parquet": {
+      "sha256": "b358974b8589982cf437e076a5cbb984bb046016f2be48764150d6fcb34c61c3",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-15\\20261021T184048876424_41b4a860\\input_snapshots\\de5c7c1956318eb13d1907c880f019ceec20c4cef8cc9bc849c77886b8870a64\\equity_1m\\CGPOWER_stocks_indicators_1min.parquet": {
+      "sha256": "a343acd267d08de3b8930128383a8391b86d7d026f61b465572d76d2993a1f48",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-15\\20261021T184048876424_41b4a860\\input_snapshots\\de5c7c1956318eb13d1907c880f019ceec20c4cef8cc9bc849c77886b8870a64\\equity_1m\\KEI_stocks_indicators_1min.parquet": {
+      "sha256": "660627a2cad73223b450f24f39caa9fd38a08e3fa765f624e59dd132601cdeee",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-16\\20261021T184609636621_2a7f3b2e\\input_snapshots\\c5d6e5f6000bed683d3576157269514c739ad2f81d3c74f58494acb26ee9d1d0\\equity_1m\\INDIGO_stocks_indicators_1min.parquet": {
+      "sha256": "771a763efa5d696284057714aacf56d1a11b77f4b3ea18db5bfc92c1dd290a49",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-19\\20261021T185123643305_6ef36857\\input_snapshots\\ef92a13661da56e62e36801c1a3f8e1dfabd12c2f2c09ab94557c5aa108bc273\\equity_1m\\BOSCHLTD_stocks_indicators_1min.parquet": {
+      "sha256": "28019553359017baa75e8995f728d5fda2976822f6c2a241b66682fc6625e673",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-19\\20261021T185123643305_6ef36857\\input_snapshots\\ef92a13661da56e62e36801c1a3f8e1dfabd12c2f2c09ab94557c5aa108bc273\\equity_1m\\LODHA_stocks_indicators_1min.parquet": {
+      "sha256": "53b91aef02c26b6d41ff0b4124eedddc92509aa87bed47d5f3828796ac9b453e",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-19\\20261021T185123643305_6ef36857\\input_snapshots\\ef92a13661da56e62e36801c1a3f8e1dfabd12c2f2c09ab94557c5aa108bc273\\equity_1m\\PHOENIXLTD_stocks_indicators_1min.parquet": {
+      "sha256": "4553b1ab713f9d440501d53d4de8a7e32addb2bc8bd494fe505b11255377177c",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-19\\20261021T185123643305_6ef36857\\input_snapshots\\ef92a13661da56e62e36801c1a3f8e1dfabd12c2f2c09ab94557c5aa108bc273\\equity_1m\\TCS_stocks_indicators_1min.parquet": {
+      "sha256": "9567799f1fc7338e32520af250cfeb3ad627eec326010d469bb6ad49264a1010",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-21\\20261021T185633085368_2b07d4a7\\input_snapshots\\3c8ba8b18d6edb999a049b63a7557361dfc1a79a90bfa1007383e3c688f2d431\\equity_1m\\MUTHOOTFIN_stocks_indicators_1min.parquet": {
+      "sha256": "48f04b424b8460cd85018bf24ae0cc3d7110e8aa98ef2667bb342192fc263345",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-22\\20261022T171516772518_faf6a6fc\\input_snapshots\\3cc2672d26bf1a232448a5f420af0770165f3e70f25eb089999bd456cf1b5660\\equity_1m\\BHARATFORG_stocks_indicators_1min.parquet": {
+      "sha256": "886f64d3d5683109046e0e51f04f62a82a6e42e06d8dd4850d4a3ad9f22c3345",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-22\\20261022T171516772518_faf6a6fc\\input_snapshots\\3cc2672d26bf1a232448a5f420af0770165f3e70f25eb089999bd456cf1b5660\\equity_1m\\CGPOWER_stocks_indicators_1min.parquet": {
+      "sha256": "b5a32d23cb8fa11fcbf3b07ceaffacfa964cc310998a6be4448d1b278231d144",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-22\\20261022T171516772518_faf6a6fc\\input_snapshots\\3cc2672d26bf1a232448a5f420af0770165f3e70f25eb089999bd456cf1b5660\\equity_1m\\MFSL_stocks_indicators_1min.parquet": {
+      "sha256": "be36faf2f69ec076591a176d4b177744041c4c7fe21b18b16af133bbec86df83",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-22\\20261022T171516772518_faf6a6fc\\input_snapshots\\3cc2672d26bf1a232448a5f420af0770165f3e70f25eb089999bd456cf1b5660\\equity_1m\\POWERINDIA_stocks_indicators_1min.parquet": {
+      "sha256": "f050ee8be06462c6c65c7c4d99c45b3b682274149e9399c8a0d8780e0af53bd7",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-22\\20261022T171516772518_faf6a6fc\\input_snapshots\\3cc2672d26bf1a232448a5f420af0770165f3e70f25eb089999bd456cf1b5660\\equity_1m\\RADICO_stocks_indicators_1min.parquet": {
+      "sha256": "527d8231373760e60fd7d0ed63fa5ab41ee6ebbbff307a18ccb7de8672764be0",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-22\\20261022T171516772518_faf6a6fc\\input_snapshots\\3cc2672d26bf1a232448a5f420af0770165f3e70f25eb089999bd456cf1b5660\\equity_1m\\SUPREMEIND_stocks_indicators_1min.parquet": {
+      "sha256": "580ec00f6af1f4d44dc1b4b24e1ca25fff2584f514f2e5d8f9ae684c785640f7",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\ABCAPITAL_stocks_indicators_1min.parquet": {
+      "sha256": "a0ad057db3cc26567bb81a948ab6138ef16fa05048ece02aea063cffe33d6662",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\BAJAJFINSV_stocks_indicators_1min.parquet": {
+      "sha256": "09c974bab72a18d47ecc0467f4394071e0a3fe3078a28eee8f63c064c845d99b",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\BAJFINANCE_stocks_indicators_1min.parquet": {
+      "sha256": "dc4ca1dddb8d48fc9df06019b05bd337d5871f49f32be1d9e69be385870a762b",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\BHARTIARTL_stocks_indicators_1min.parquet": {
+      "sha256": "2088f81f0356820f2b484fa9c7f6856a0d1e75aebc148439781b688afafd1e44",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\INDIGO_stocks_indicators_1min.parquet": {
+      "sha256": "101cf696a259d3cb44062a014d8af4333d50f07b8e244343a136806f3073df9b",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\MANKIND_stocks_indicators_1min.parquet": {
+      "sha256": "ad55129ce6c0bee8305d2f16fdeff76bdfdb7b7de9ada148dba2a8c2305bd2bb",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\SAGILITY_stocks_indicators_1min.parquet": {
+      "sha256": "8d8118957e509ae31421ac02d5282d7e14e66111e5cb68e51ecd4c373222d65f",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-23\\20261023T171521599663_b80e6def\\input_snapshots\\31a25c7fe3e61600a96a9ae41180fff31c750e558a9dfb54e3e99442ff6ea611\\equity_1m\\TATASTEEL_stocks_indicators_1min.parquet": {
+      "sha256": "71925b262920e0569de9483a858ac1190d9b50efe748d9b3b8ffe700556006d3",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\backtesting_result_v13_v10_g_3\\production\\runs\\2026-10-27\\20261027T171521886383_0a615989\\input_snapshots\\7586754d4d94f0fd59628f001f039da9b728d9ca2ea71a30bef10b402bcece39\\equity_1m\\PATANJALI_stocks_indicators_1min.parquet": {
+      "sha256": "b79d46867d1a742959306ec23f7d278d515ccea6e4f5c9c7280662b27d6761af",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\fno_oi\\strategy_research\\v13_v10_g_3_0950_long_backtesting\\oct12_baseline_source_20261012T1600\\input_snapshots\\6e277331befed85c21fb9f58d980de81ceaf67ed479bd321f07cf3f999bde1c5\\equity_1m\\ICICIGI_stocks_indicators_1min.parquet": {
+      "sha256": "b8b58557291489e2239b8ab1bd2dd4e0de4caef66c028d48ab0c0d3352009dfd",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\fno_oi\\strategy_research\\v13_v10_g_3_0950_long_backtesting\\oct12_baseline_source_20261012T1600\\input_snapshots\\6e277331befed85c21fb9f58d980de81ceaf67ed479bd321f07cf3f999bde1c5\\equity_1m\\MFSL_stocks_indicators_1min.parquet": {
+      "sha256": "3127726d4e130c8e934e5ca99ee78a26e7b402e60a03d15d73d93ac13c5884ac",
+      "source_kind": "IMMUTABLE_DAY_SNAPSHOT"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\ABCAPITAL_stocks_indicators_1min.parquet": {
+      "sha256": "a664c249775518cf54bbd967d79e906690dd42671d72c953798727d3e930d735",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\ADANIPORTS_stocks_indicators_1min.parquet": {
+      "sha256": "ff8f2e33df01c4aa3f164597b546ae9af29e221dac8b3fa601013543eb7172b3",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\ANGELONE_stocks_indicators_1min.parquet": {
+      "sha256": "11b1ab44aebdcf5e70f920cba9166ac069ddd739aceeffa23f8976a740948fde",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\AUBANK_stocks_indicators_1min.parquet": {
+      "sha256": "00f9d7243c94eadce07dae24137b4e2f93a2ad0d122fa13a862be0032ad6554d",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\BAJAJ-AUTO_stocks_indicators_1min.parquet": {
+      "sha256": "83b86645741ef9cba63a374df1b216b11ae8851f4522d839f3a1c7267825fb87",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\BHARATFORG_stocks_indicators_1min.parquet": {
+      "sha256": "ff5f99e0d3c5b25fc6fd7b5f5a3026692ad8d918cef9c5cc82e993dc05e8b421",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\BHEL_stocks_indicators_1min.parquet": {
+      "sha256": "c60a3b8189854f6e49209f96129e6d30ac77af87dcfe6f88a3f068650f3af930",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\BIOCON_stocks_indicators_1min.parquet": {
+      "sha256": "dca144baa14f1eb10848298b47eb3113280d70ea29b6e1c909e09e0575cf3b60",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\CANBK_stocks_indicators_1min.parquet": {
+      "sha256": "979d5532ee1489cd93911c66d1267124b907d565b1477649bbda802c301fb9d4",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\COCHINSHIP_stocks_indicators_1min.parquet": {
+      "sha256": "c4299d00d95596d9019a4700a4c6d1c2c8b640e3f4f09869799265465dd39cb9",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\COFORGE_stocks_indicators_1min.parquet": {
+      "sha256": "3d070ee1f8f1c5b007b6f70c219bcc7680089cbbedb19b71f99ac0c53fff4c5a",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\CUMMINSIND_stocks_indicators_1min.parquet": {
+      "sha256": "fe1f8f0d4a5056b36ec6d253566b5f5c1478299c018c345b3fd1fb364f1a9444",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\DIXON_stocks_indicators_1min.parquet": {
+      "sha256": "b39f83281265e8b8e2a8d3a40f02efc93694d2466b0c3dd46607d2838eee8e84",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\FORTIS_stocks_indicators_1min.parquet": {
+      "sha256": "14b5c7571ad87a78680a9b3a757818c3485250e8f3104fd1c06b551bef3020e3",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\GODFRYPHLP_stocks_indicators_1min.parquet": {
+      "sha256": "6375b930440e5b9f69960b3b775f0903e186826e36bd7ef7dbb27a81ab3c90a0",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\GRASIM_stocks_indicators_1min.parquet": {
+      "sha256": "42b317bbfdb9b1d533c71bfe9fdceffa827d6fa6609a3159e0c114d77ba9387c",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\HDFCBANK_stocks_indicators_1min.parquet": {
+      "sha256": "763875fdc94db7b354885610548ab4fea54cd0681b74e7b31d3b3d1ef245d617",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\HINDZINC_stocks_indicators_1min.parquet": {
+      "sha256": "abf87683788f1abfd62aaace7e711cafa74e4b8d6ab2180199c19bccf6c7ffda",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\ICICIGI_stocks_indicators_1min.parquet": {
+      "sha256": "1aca8eb4511ab22234e662172c2217e2225a807cf2dec71b52aea94b03704389",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\IDEA_stocks_indicators_1min.parquet": {
+      "sha256": "a0d3b79e018e0ff239b37cfb6641fb51f0a695e19820f8ed481b25af6e5854b0",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\IEX_stocks_indicators_1min.parquet": {
+      "sha256": "ed32c03aa46073b02f935fb6f32f39f57ef8e2246d15348b44ef02e05591a4db",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\JINDALSTEL_stocks_indicators_1min.parquet": {
+      "sha256": "dc2c24d97750447ed895c6c69130544e8dc9e1bdf7ddf0563b5cc6af13a8595d",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\KALYANKJIL_stocks_indicators_1min.parquet": {
+      "sha256": "484d35731993ea5c32db8f540a478d406a883e9943266f11ecf7453d89cfd218",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\KAYNES_stocks_indicators_1min.parquet": {
+      "sha256": "ebf417fb12d0bb20a70fdca8d6c2242f8b7a2c2df877744c7eaf2aab1e05231b",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\KEI_stocks_indicators_1min.parquet": {
+      "sha256": "c4eb82b530d56c89f1af7d4ee0bf02ab6147525df9103a73cb91e2a8266be67a",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\KOTAKBANK_stocks_indicators_1min.parquet": {
+      "sha256": "c7fea97bcc2005582d24a2734f851848607e0cdef8c9d6a2c5f31a9e90ea0535",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\KPITTECH_stocks_indicators_1min.parquet": {
+      "sha256": "8c33b3e6212342e758be4dbc55a312f6eadf9571493eb1208d24d11c86973906",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\LAURUSLABS_stocks_indicators_1min.parquet": {
+      "sha256": "7546470285e62b663788d29bc9acb1edd36c369fe92c98aa69ba970c989a1f20",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\MANKIND_stocks_indicators_1min.parquet": {
+      "sha256": "07728fbd54f125a721f65af32889d5c7efbb1fd2fee6f51191354e70beaf5f4a",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\MARICO_stocks_indicators_1min.parquet": {
+      "sha256": "33b30406847d93eb4b04e369c965f673bfaf4ba0598f0f4bf6820e3ba0c5d0f4",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\MFSL_stocks_indicators_1min.parquet": {
+      "sha256": "4f7d619438785bd41e3c4f2d9914c64495cce67d005a5a81caa8fd6ce14bf109",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\NATIONALUM_stocks_indicators_1min.parquet": {
+      "sha256": "6d5a6b2e2d397f8f552df3448768ab4425b445491cd5e84584ef3e8c6ee955b4",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\NAUKRI_stocks_indicators_1min.parquet": {
+      "sha256": "c621acf4eac1de90af73cf80a0fb20488bfd79e0bff29511faabc93909849b14",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\OBEROIRLTY_stocks_indicators_1min.parquet": {
+      "sha256": "c6fb2dc0fb908ca9bcc0336198597b9fdf4c67aa283037600106e23ecf9a48b2",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\OFSS_stocks_indicators_1min.parquet": {
+      "sha256": "c86ea8598f496767fb6afd2e564caad3e4a72da3072a939eb367b01efaff22a0",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\PFC_stocks_indicators_1min.parquet": {
+      "sha256": "d8e45c7d88b4cf8c88c7ae91dc3d55bf1d6a444347be6b85be68242ac4788bed",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\PIIND_stocks_indicators_1min.parquet": {
+      "sha256": "c4b882fedf9fb4eb04c8f0aab7156e04479e463964f6bb87295458255c9fb003",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\POLYCAB_stocks_indicators_1min.parquet": {
+      "sha256": "c7e860f6d494c1e4844b9de4161e285ba5347a65ed65ede0afb9973d4f690b5e",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\PREMIERENE_stocks_indicators_1min.parquet": {
+      "sha256": "3705c5521e97facef6b29cdbaf50319416a8e43d81fb2838c8df634d07451252",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\RBLBANK_stocks_indicators_1min.parquet": {
+      "sha256": "065a7fc25d5030bf8e5ddaa6d0233036ddee7f14d8f702a950da5e243ed89d67",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\RECLTD_stocks_indicators_1min.parquet": {
+      "sha256": "f899d025b748448613d8e4be8cc7938ebf52db937123e677b2a761e51f3c3121",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\RELIANCE_stocks_indicators_1min.parquet": {
+      "sha256": "fa6786adbffdc2cd44f2b18fa560969b881de70b98584b286ecb7cfa74173147",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\SAIL_stocks_indicators_1min.parquet": {
+      "sha256": "df7ba2ac0eb4a527177866712284cfb32a3967bac03a7163a4b5d33a1e306326",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\SBIN_stocks_indicators_1min.parquet": {
+      "sha256": "7da06922b6a31ed91fb943eaf16dcfb01ffb18acd835a56e63e05390f97b7be9",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\SOLARINDS_stocks_indicators_1min.parquet": {
+      "sha256": "3b8b32a53434af58330ed90d8eda821b48819c3f4e09b9c4e87b7aae731b7bdd",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\SRF_stocks_indicators_1min.parquet": {
+      "sha256": "6058d8da0832c93a8651a685aef6b9c3495d27760943dace2ae188947fe42ac7",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\TVSMOTOR_stocks_indicators_1min.parquet": {
+      "sha256": "3cb52b34c499992c06e0b7790ccece26754b325ff3184ee431e1a786a5926333",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\UNIONBANK_stocks_indicators_1min.parquet": {
+      "sha256": "a914614f030de28d7cc5d0e0ec6431cebb23383e992f0071e070cc3b67a3a0c4",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\VMM_stocks_indicators_1min.parquet": {
+      "sha256": "b995fe20bc6275315b14f67701cadd59dc3501aad530ca14f3e06e9122fec5df",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\WAAREEENER_stocks_indicators_1min.parquet": {
+      "sha256": "e411067b028bdc998495f262f45ee0c05395bc008076f10e72510470e57c7aa5",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    },
+    "C:\\TradingData\\eqidv2\\stocks_indicators_1min_eq\\ZYDUSLIFE_stocks_indicators_1min.parquet": {
+      "sha256": "8713b516b4ff4126d817d5947b294efe2b39b3963d808f45091be7aeff8f51eb",
+      "source_kind": "CURRENT_HISTORICAL_PARQUET"
+    }
+  },
+  "prior_nonbaseline_comparisons": 220,
+  "protocol": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_confirmation_round2_20261028\\protocol.json",
+  "protocol_sha256": "428416358857cd2a1dfc4f11623d3d77cd3428cb42506a0fa51221219bb22772"
+}

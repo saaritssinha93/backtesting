@@ -1,6 +1,7 @@
 """Operator-only G3 activation handoff. Default plan is read-only.
 
-An operator runs bat/approve_g3_live.ps1 -Apply to approve one dated session.
+Explicit approval uses bat/approve_g3_live.ps1 -Apply; the recurring 09:10
+gate uses the separately versioned standing policy for a dated session.
 This module never exposes a broker order API. Scheduled execution delegates
 to the existing supervised LIVE coordinator only after the dated approval.
 """
@@ -30,12 +31,12 @@ EXPECTED_BROKER_APPS = tuple(f'app{i}' for i in range(1, 9))
 EXPLICIT_APPROVAL_SOURCE = 'EXPLICIT_OPERATOR_APPLY'
 STANDING_APPROVAL_SOURCE = 'STANDING_OPERATOR_POLICY'
 STANDING_POLICY_SCHEMA = 'g3_live_standing_operator_policy_v1'
-STANDING_POLICY_ID = 'G3_LIVE_STANDING_20261024_V2'
-STANDING_POLICY_EFFECTIVE_DATE = date(2026, 10, 24)
-STANDING_POLICY = ROOT / 'configs/authorizations/g3_live_standing_policy_v2.json'
-# A strategy change does not inherit V12's standing LIVE authorization.  The
-# V13 artifact is an identity template only until separately approved.
-STANDING_POLICY_ENABLED = False
+STANDING_POLICY_ID = 'G3_LIVE_STANDING_20261029_V3'
+STANDING_POLICY_EFFECTIVE_DATE = date(2026, 10, 29)
+STANDING_POLICY = ROOT / 'configs/authorizations/g3_live_standing_policy_v3.json'
+# V15 has a separately authorized, version-bound standing policy.  Every
+# session still requires the dated 09:10 broker, health, and clock gate.
+STANDING_POLICY_ENABLED = True
 STANDING_APPROVAL_WINDOW_START = time(9, 9)
 STANDING_APPROVAL_WINDOW_END = time(9, 12, 30)
 BROKER_REPORT = ROOT / 'logs/kite_order_readiness/latest.json'

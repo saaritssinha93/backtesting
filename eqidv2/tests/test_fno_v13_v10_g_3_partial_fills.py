@@ -89,7 +89,10 @@ class MemoryBroker:
 
 
 def pending_entry(runtime, *, status="CANCELLED", filled=100, side="LONG"):
-    signal = runtime.select_entry_signals([candidate(side=side, ratio=1.3)], DAY, "09:30", capital_rs=100000., leverage=5.)[0]
+    # Exercise execution with currently enabled setups on each side; 09:31
+    # LONG was removed by the shared slot policy and cannot seed a position.
+    clock = "09:25" if side == "LONG" else "09:30"
+    signal = runtime.select_entry_signals([candidate(side=side, ratio=1.3, clock=clock)], DAY, clock, capital_rs=100000., leverage=5.)[0]
     state = runtime.create_order_state(signal, "LIVE")
     state.update(entry_order_id="ENTRY", entry_order_type="MARKET")
     broker = MemoryBroker()
@@ -146,16 +149,17 @@ def test_working_partial_entry_awaits_cancel_confirmation(runtime):
     assert state["quantity"] == 100
 
 
-def opened(runtime):
-    signal, state, broker, at = pending_entry(runtime, status="COMPLETE", filled=490)
+def opened(runtime, side="LONG"):
+    signal, state, broker, at = pending_entry(runtime, status="COMPLETE", filled=490, side=side)
     step(runtime, state, broker, at, count=1)
     assert state["status"] == "OPEN"
     return signal, state, broker, at
 
 
 def fresh_entry(runtime, side="LONG"):
+    clock = "09:25" if side == "LONG" else "09:30"
     signal = runtime.select_entry_signals(
-        [candidate(side=side, ratio=1.3)], DAY, "09:30",
+        [candidate(side=side, ratio=1.3, clock=clock)], DAY, clock,
         capital_rs=100000., leverage=5.,
     )[0]
     state = runtime.create_order_state(signal, "LIVE")
@@ -595,6 +599,88 @@ def test_unknown_market_acceptance_never_resubmits_when_broker_list_is_delayed(r
     assert not state.get("squareoff_order_id")
 
 
+@pytest.mark.parametrize("exception_name", ["InputException", "OrderException"])
+def test_definite_squareoff_submission_rejection_is_persisted_and_never_retried(
+    runtime, monkeypatch, exception_name
+):
+    _, state, broker, at = opened(runtime)
+    rejection = type(exception_name, (Exception,), {"code": 400})
+    attempts = []
+
+    def reject(**kwargs):
+        attempts.append(kwargs)
+        raise rejection("Intraday orders (MIS) are allowed only till 3:12 PM")
+
+    monkeypatch.setattr(broker, "place_order", reject)
+    monkeypatch.setattr(runtime, "_kill_switch_enabled", lambda: True)
+    runtime.advance_live_order(state, broker, at + timedelta(seconds=4))
+    path = runtime._order_path(DAY, "LIVE", state["signal_id"])
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["g3_squareoff_submission_pending"] is False
+    assert persisted["g3_squareoff_submission_rejected"] is True
+    assert persisted["g3_squareoff_rejection_type"] == exception_name
+    assert "3:12 PM" in persisted["g3_squareoff_rejection_message"]
+    assert persisted["status_reason"] == "G3_EXIT_SUBMISSION_REJECTED_MANUAL_RECONCILIATION_REQUIRED"
+    assert persisted["exit_bracket_failure"] == "SQUARE_OFF_PLACE_REJECTED"
+    assert persisted["execution_error_count"] == 1
+
+    # Restart from durable state. A flat position snapshot alone cannot supply
+    # the historical exit identity/price or authorize a replacement order.
+    state = persisted
+    monkeypatch.setattr(broker, "positions", lambda: {"net": []})
+    step(runtime, state, broker, at + timedelta(seconds=8))
+    assert len(attempts) == 1
+    assert state["status"] == "SQUARE_OFF_PENDING"
+    assert not state.get("squareoff_order_id")
+    assert runtime._g3_exit_residual(state) == 490
+    assert state["exit_price"] == 0
+    assert state["execution_error_count"] == 1
+    reconciliation = runtime._publish_broker_position_reconciliation([state], broker, DAY)
+    assert reconciliation["mismatch_count"] == 1
+    assert reconciliation["active_order_parity_complete"] is False
+
+
+@pytest.mark.parametrize("visible_after_restart", [False, True])
+def test_lost_squareoff_response_preserves_latch_and_recovers_without_duplicate(
+    runtime, monkeypatch, visible_after_restart
+):
+    _, state, broker, at = opened(runtime)
+    original_place = broker.place_order
+    attempts = []
+
+    def accepted_but_response_lost(**kwargs):
+        attempts.append(kwargs)
+        original_place(**kwargs)
+        raise TimeoutError("Exit accepted, response lost")
+
+    monkeypatch.setattr(broker, "place_order", accepted_but_response_lost)
+    monkeypatch.setattr(runtime, "_kill_switch_enabled", lambda: True)
+    with pytest.raises(TimeoutError, match="response lost"):
+        runtime.advance_live_order(state, broker, at + timedelta(seconds=4))
+    persisted = json.loads(
+        runtime._order_path(DAY, "LIVE", state["signal_id"]).read_text(encoding="utf-8")
+    )
+    assert persisted["g3_squareoff_submission_pending"] is True
+    assert not persisted.get("g3_squareoff_submission_rejected")
+    squareoff_id = next(order_id for order_id, row in broker.rows.items()
+                        if order_id != "ENTRY" and row["order_type"] == "MARKET")
+    original_orders = broker.orders
+    if not visible_after_restart:
+        monkeypatch.setattr(broker, "orders", lambda: [row for row in original_orders()
+                                                       if row["order_id"] != squareoff_id])
+    state = persisted
+    step(runtime, state, broker, at + timedelta(seconds=8))
+    assert len(attempts) == 1
+    assert state["status"] == "SQUARE_OFF_PENDING"
+    if visible_after_restart:
+        assert state["squareoff_order_id"] == squareoff_id
+        assert state["g3_squareoff_submission_pending"] is False
+    else:
+        assert not state.get("squareoff_order_id")
+        assert state["g3_squareoff_submission_pending"] is True
+        assert state["status_reason"] == "G3_EXIT_SUBMISSION_UNCERTAIN_AWAITING_RECONCILIATION"
+
+
 @pytest.mark.parametrize("stale_state_exists", [False, True])
 def test_worker_blocks_stale_unsubmitted_row_without_stranding_legacy_position(runtime, monkeypatch, stale_state_exists):
     signal, state, broker, at = pending_entry(runtime, status="COMPLETE", filled=1)
@@ -633,3 +719,141 @@ def test_worker_blocks_stale_unsubmitted_row_without_stranding_legacy_position(r
     assert published[-1][1]["error_count"] >= 1
     assert len(broker.placed) == 2
     assert all(row["quantity"] == 1 and row["transaction_type"] == "SELL" for row in broker.placed)
+
+
+def prepare_recovery_worker(runtime, monkeypatch, broker, now):
+    monkeypatch.setattr(runtime, "_blocking_pipeline_issue", lambda *_: {
+        "state": "BLOCKED", "reason": "SLOTS_BLOCKED",
+    })
+    monkeypatch.setattr(runtime.common, "now_ist", lambda: now)
+    monkeypatch.setattr(runtime, "_observability_runtime", lambda: None)
+    monkeypatch.setattr(runtime, "_render_worker_report", lambda *_: "offline recovery fixture")
+    broker.last_operation = broker.last_operation_app = ""
+    broker.last_operation_failures = []
+    broker.credential_reload_count = 0
+    monkeypatch.setattr(runtime, "KitePool", lambda *_: broker)
+    published = []
+    monkeypatch.setattr(runtime, "_publish", lambda *args, **kwargs: published.append((args, kwargs)))
+    return published, SimpleNamespace(
+        execution_mode="LIVE", live_quantity=None, max_apps=1, timeout_sec=1., once=True,
+    )
+
+
+@pytest.mark.parametrize("side", ["LONG", "SHORT"])
+@pytest.mark.parametrize("signal_failure", ["missing", "malformed"])
+def test_current_position_squares_off_when_upstream_signals_disappear(
+    runtime, monkeypatch, side, signal_failure
+):
+    _, state, broker, _ = opened(runtime, side)
+    runtime._write_order_state(state)
+    now = config.slot_datetime(DAY, config.SQUARE_OFF)
+    published, args = prepare_recovery_worker(runtime, monkeypatch, broker, now)
+
+    def load_failed(*_):
+        if signal_failure == "malformed":
+            raise ValueError("Confirmation record no longer validates")
+        return []
+
+    monkeypatch.setattr(runtime, "load_signals", load_failed)
+    assert runtime.run_worker(args, DAY, side) == 2
+    persisted = json.loads(runtime._order_path(DAY, "LIVE", state["signal_id"]).read_text())
+    assert persisted["status"] == "SQUARE_OFF_PENDING"
+    assert persisted["squareoff_order_id"]
+    exits = [row for row in broker.placed if row["order_type"] == "MARKET"]
+    assert len(exits) == 1
+    assert exits[0]["quantity"] == state["quantity"]
+    assert exits[0]["transaction_type"] == ("SELL" if side == "LONG" else "BUY")
+    assert published[-1][0][1] == "DEGRADED"
+    assert any(row["phase"] == "UPSTREAM_NEW_ENTRIES_BLOCKED_PROTECTION_CONTINUES"
+               for row in published[-1][1]["errors"])
+
+
+def test_upstream_block_refuses_new_signals_and_unsubmitted_states_but_manages_open(
+    runtime, monkeypatch
+):
+    signal, state, broker, at = opened(runtime)
+    runtime._write_order_state(state)
+    unsubmitted = deepcopy(state)
+    unsubmitted.update(signal_id="unsubmitted", status="PENDING_ENTRY", entry_order_id="",
+                       entry_submission_attempt_count=0, entry_submission_uncertain=False)
+    runtime._write_order_state(unsubmitted)
+    new_signal = {**deepcopy(signal), "signal_id": "new-signal"}
+    unsubmitted_signal = {**deepcopy(signal), "signal_id": "unsubmitted"}
+    published, args = prepare_recovery_worker(runtime, monkeypatch, broker, at)
+    monkeypatch.setattr(runtime, "load_signals", lambda *_: [signal, new_signal, unsubmitted_signal])
+    monkeypatch.setattr(runtime, "_kill_switch_enabled", lambda: True)
+    assert runtime.run_worker(args, DAY, "LONG") == 2
+    assert not runtime._order_path(DAY, "LIVE", "new-signal").exists()
+    pending = json.loads(runtime._order_path(DAY, "LIVE", "unsubmitted").read_text())
+    assert pending["status"] == "PENDING_ENTRY" and pending["entry_order_id"] == ""
+    assert len([row for row in broker.placed if row["order_type"] == "MARKET"]) == 1
+    assert all(row["transaction_type"] == "SELL" for row in broker.placed)
+    assert published[-1][0][1] == "DEGRADED"
+
+
+@pytest.mark.parametrize("filled_during_cancel", [0, 100])
+def test_upstream_block_cancels_working_entry_and_protects_cancel_race_fill(
+    runtime, monkeypatch, filled_during_cancel
+):
+    _, state, broker, at = pending_entry(runtime, status="OPEN", filled=0)
+    runtime._write_order_state(state)
+    if filled_during_cancel:
+        broker.fill_on_cancel["ENTRY"] = (filled_during_cancel, 102.)
+    _, args = prepare_recovery_worker(runtime, monkeypatch, broker, at)
+    monkeypatch.setattr(runtime, "load_signals", lambda *_: [])
+    assert runtime.run_worker(args, DAY, "LONG") == 2
+    persisted = json.loads(runtime._order_path(DAY, "LIVE", state["signal_id"]).read_text())
+    assert "ENTRY" in broker.cancelled
+    assert all(row["transaction_type"] == "SELL" for row in broker.placed)
+    if filled_during_cancel:
+        assert persisted["status"] == "OPEN"
+        assert persisted["quantity"] == 100
+        assert len(broker.placed) == 2
+    else:
+        assert persisted["status"] == "CANCELLED"
+        assert broker.placed == []
+
+
+def test_upstream_block_never_retries_saved_entry_attempt_without_order_id(runtime, monkeypatch):
+    _, state, broker, at = pending_entry(runtime, status="OPEN", filled=0)
+    broker.rows.clear()
+    state.update(entry_order_id="", entry_submission_attempt_count=1, entry_submission_uncertain=False)
+    runtime._write_order_state(state)
+    _, args = prepare_recovery_worker(runtime, monkeypatch, broker, at)
+    monkeypatch.setattr(runtime, "load_signals", lambda *_: [])
+    assert runtime.run_worker(args, DAY, "LONG") == 2
+    persisted = json.loads(runtime._order_path(DAY, "LIVE", state["signal_id"]).read_text())
+    assert not persisted["entry_order_id"]
+    assert persisted["status_reason"] == "UPSTREAM_BLOCKED_PROTECTIVE_MANAGEMENT_ONLY"
+    assert broker.placed == []
+
+
+@pytest.mark.parametrize("tamper", ["identity", "quantity", "namespace"])
+def test_invalid_saved_position_stays_untouched_without_stranding_known_position(
+    runtime, monkeypatch, tamper
+):
+    _, state, broker, at = opened(runtime)
+    runtime._write_order_state(state)
+    invalid = deepcopy(state)
+    invalid["tradingsymbol"] = "UNTRUSTED"
+    invalid["signal_id"] = config.canonical_signal_id(
+        config.STRATEGY_VERSION, DAY, state["signal_end"],
+        state["confirmation_end"], state["side"], "UNTRUSTED",
+    )
+    if tamper == "identity":
+        invalid["strategy_fingerprint"] = "unrecognized"
+    elif tamper == "quantity":
+        invalid["quantity"] = -20
+    else:
+        invalid["execution_profile"] = "wrong-namespace"
+    path = runtime._order_path(DAY, "LIVE", invalid["signal_id"])
+    path.write_text(json.dumps(invalid), encoding="utf-8")
+    before = path.read_bytes()
+    published, args = prepare_recovery_worker(runtime, monkeypatch, broker, at)
+    monkeypatch.setattr(runtime, "load_signals", lambda *_: [])
+    monkeypatch.setattr(runtime, "_kill_switch_enabled", lambda: True)
+    assert runtime.run_worker(args, DAY, "LONG") == 2
+    assert path.read_bytes() == before
+    assert len([row for row in broker.placed if row["order_type"] == "MARKET"]) == 1
+    assert any("RECOVERY_REQUIRES_RECONCILIATION" in row["phase"]
+               for row in published[-1][1]["errors"])

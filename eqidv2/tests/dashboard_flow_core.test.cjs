@@ -57,3 +57,10 @@ test('current backtest profile stays current when PAPER uses a different profile
   assert.doesNotMatch(runLabel({...base,kind:'production_daily'},false),/Archived/);
   assert.doesNotMatch(runLabel({...base,kind:'production_history'},false),/Archived/);
 });
+
+test('selected-slot labels expose threshold, count and distinct G7 V4 identity', () => {
+  const run={strategy:'V13-V10-G-7-V4-LOCK',run_name:'20261028_selection',
+    current_full_strategy:true,current_slot_selection:true,active_setup_count:42,
+    period_start:'2026-07-29',period_end:'2026-10-27',sessions:59};
+  assert.match(runLabel(run,true),/G-7 V4 lock.*>=70% cutoff on all slots \(42 total enabled\).*59 sessions/);
+});

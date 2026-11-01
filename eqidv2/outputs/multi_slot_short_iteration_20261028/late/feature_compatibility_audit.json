@@ -1,0 +1,16 @@
+{
+  "feature_logic_changed": false,
+  "first_observed_false_failure": {
+    "day": "2026-08-12",
+    "expected_minutes": 246,
+    "extra_timestamps": [],
+    "missing_timestamps": [],
+    "observed_minutes": 246,
+    "sid": 550000007,
+    "symbol": "PIIND"
+  },
+  "issue": "pandas DatetimeIndex.equals includes Index.name",
+  "ohlcv_flag_and_synthetic_validation_preserved": true,
+  "original_comparison": "named ts index versus unnamed date_range",
+  "replacement_comparison": "exact timezone-aware nanosecond timestamp sequence"
+}

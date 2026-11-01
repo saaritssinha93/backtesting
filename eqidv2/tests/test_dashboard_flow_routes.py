@@ -93,7 +93,7 @@ def test_flow_api_passes_only_selected_run(monkeypatch):
     assert handler.response_headers["Cache-Control"] == "no-store"
 
 
-@pytest.mark.parametrize("strategy", ["V13-V10-G-2", "V13-V10-G-6", "V13-V10-G-7"])
+@pytest.mark.parametrize("strategy", ["V13-V10-G-2", "V13-V10-G-6", "V13-V10-G-7", "V13-V10-G-7-V4-LOCK"])
 def test_flow_api_selects_latest_within_one_strategy(monkeypatch, strategy):
     import dashboard_flow
     monkeypatch.setattr(dashboard_flow, "load_flow_data", lambda run, strategy=None: {"run": run, "strategy": strategy})
@@ -146,6 +146,7 @@ def test_flow_preserves_historical_families_when_active_profile_is_g3(monkeypatc
     assert "{strategy:'V13-V10-G-2',label:'G-2'," in html
     assert "{strategy:'V13-V10-G-3',label:'G-3'," in html
     assert "{strategy:'V13-V10-G-6',label:'G-6'," in html
-    assert "{strategy:'V13-V10-G-7',label:'G-7'," in html
+    assert "{strategy:'V13-V10-G-7',label:'G-7 V3'," in html
+    assert "{strategy:'V13-V10-G-7-V4-LOCK',label:'G-7 V4 lock'," in html
     compare_asset = (dashboard.BASE_DIR / "dashboard_flow_compare.js").read_text(encoding="utf-8-sig")
     assert compare_asset in html

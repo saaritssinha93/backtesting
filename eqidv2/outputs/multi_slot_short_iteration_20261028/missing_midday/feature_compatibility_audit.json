@@ -1,0 +1,7 @@
+{
+  "feature_logic_changed": false,
+  "issue": "pandas DatetimeIndex.equals includes Index.name",
+  "ohlcv_flag_and_synthetic_validation_preserved": true,
+  "replacement_comparison": "exact timezone-aware nanosecond timestamp values",
+  "unprovable_replacements": 0
+}

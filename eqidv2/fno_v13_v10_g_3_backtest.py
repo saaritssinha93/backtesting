@@ -1,10 +1,9 @@
 """Publish current G3 historical backtesting from the start through the cutoff.
 
-The default replays the current backtest profile: targets >0.75% plus restored
+The default replays the frozen >=70% slot subset of targets >0.75% plus restored
 09:50 LONG, 10:05 LONG and 10:15 SHORT. The 09:20 SHORT and 10:10 LONG
 setups each target 1.50%. It extends matching completed daily minute replays.
-PAPER/LIVE keep their full production
-configuration. Legacy studies are explicit modes; a verified normal run
+PAPER/LIVE share the selected slot allowlist. Legacy studies are explicit modes; a verified normal run
 publishes the current historical pointer.
 """
 from __future__ import annotations

@@ -1,0 +1,154 @@
+{
+  "version": "G3_G7_0926_SHORT_ITERATIVE_20261028_V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "setup_id": "0926_SHORT",
+  "grid_status": "ENUMERATED_IN_RUN_SCRIPT",
+  "externally_preregistered": false,
+  "variants": [
+    {
+      "name": "baseline",
+      "protection_activation_pct": null,
+      "protected_gross_profit_pct": null,
+      "entry_veto": null,
+      "complexity": 0
+    },
+    {
+      "name": "protect_0p6_0p1",
+      "protection_activation_pct": 0.6,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": null,
+      "complexity": 1
+    },
+    {
+      "name": "protect_0p5_0p1",
+      "protection_activation_pct": 0.5,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": null,
+      "complexity": 1
+    },
+    {
+      "name": "protect_0p4_0p1",
+      "protection_activation_pct": 0.4,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": null,
+      "complexity": 1
+    },
+    {
+      "name": "protect_0p3_0p1",
+      "protection_activation_pct": 0.3,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": null,
+      "complexity": 1
+    },
+    {
+      "name": "protect_0p2_0p1",
+      "protection_activation_pct": 0.2,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": null,
+      "complexity": 1
+    },
+    {
+      "name": "protect_0p2_0p15",
+      "protection_activation_pct": 0.2,
+      "protected_gross_profit_pct": 0.15,
+      "entry_veto": null,
+      "complexity": 1
+    },
+    {
+      "name": "price_magnitude_min_0p30",
+      "protection_activation_pct": null,
+      "protected_gross_profit_pct": null,
+      "entry_veto": "price_magnitude_min_0p30",
+      "complexity": 1
+    },
+    {
+      "name": "oi_min_0p10",
+      "protection_activation_pct": null,
+      "protected_gross_profit_pct": null,
+      "entry_veto": "oi_min_0p10",
+      "complexity": 1
+    },
+    {
+      "name": "volume_min_2p50",
+      "protection_activation_pct": null,
+      "protected_gross_profit_pct": null,
+      "entry_veto": "volume_min_2p50",
+      "complexity": 1
+    },
+    {
+      "name": "body_min_0p60",
+      "protection_activation_pct": null,
+      "protected_gross_profit_pct": null,
+      "entry_veto": "body_min_0p60",
+      "complexity": 1
+    },
+    {
+      "name": "wick_max_0p40",
+      "protection_activation_pct": null,
+      "protected_gross_profit_pct": null,
+      "entry_veto": "wick_max_0p40",
+      "complexity": 1
+    },
+    {
+      "name": "nifty_open_max_minus_0p15",
+      "protection_activation_pct": null,
+      "protected_gross_profit_pct": null,
+      "entry_veto": "nifty_open_max_minus_0p15",
+      "complexity": 1
+    },
+    {
+      "name": "protect_0p4_0p1_price_min",
+      "protection_activation_pct": 0.4,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": "price_magnitude_min_0p30",
+      "complexity": 2
+    },
+    {
+      "name": "protect_0p4_0p1_oi_min",
+      "protection_activation_pct": 0.4,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": "oi_min_0p10",
+      "complexity": 2
+    },
+    {
+      "name": "protect_0p4_0p1_volume_min",
+      "protection_activation_pct": 0.4,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": "volume_min_2p50",
+      "complexity": 2
+    },
+    {
+      "name": "protect_0p4_0p1_body_min",
+      "protection_activation_pct": 0.4,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": "body_min_0p60",
+      "complexity": 2
+    },
+    {
+      "name": "protect_0p4_0p1_wick_max",
+      "protection_activation_pct": 0.4,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": "wick_max_0p40",
+      "complexity": 2
+    },
+    {
+      "name": "protect_0p4_0p1_nifty_max",
+      "protection_activation_pct": 0.4,
+      "protected_gross_profit_pct": 0.1,
+      "entry_veto": "nifty_open_max_minus_0p15",
+      "complexity": 2
+    }
+  ],
+  "entry_veto_semantics": "Post-selection veto; no quota replacement",
+  "selection": "Development only: both strategies >75% win rate, positive slot net, at least half baseline trades (minimum5), and no portfolio net reduction. Prefer lower complexity, then worst-strategy win rate and net.",
+  "later_periods": "Reported without candidate replacement; historically inspected, not independent holdouts",
+  "costs_bps": [
+    5.0,
+    9.0,
+    15.0,
+    30.0
+  ],
+  "independent_holdout": false,
+  "active_configuration_changed": false
+}

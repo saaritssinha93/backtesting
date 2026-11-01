@@ -1,0 +1,371 @@
+{
+  "timestamp": "2026-11-01T22:07:12.931169",
+  "tasks": [
+    {
+      "name": "EQIDV2_authentication_v2_0900",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 10:45:06+00:00",
+      "next_run": "2026-11-02 08:30:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_authentication_v2.bat",
+          "arguments": "",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_oi_feature_ranker_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 11:02:27+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_oi_feature_ranker.bat",
+          "arguments": "",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_oi_fetch_5min_fast_production_0905",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 15:35:01+00:00",
+      "next_run": "2026-11-02 09:05:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_oi_fetch_5min_fast_production.bat",
+          "arguments": "",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_options_atm_fetch_5min_0907",
+      "enabled": true,
+      "state": 4,
+      "last_run": "2026-10-30 09:07:00+00:00",
+      "next_run": "2026-11-02 09:07:00+00:00",
+      "last_result": 267009,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_options_atm_fetch_5min.bat",
+          "arguments": "",
+          "working_directory": ""
+        }
+      ],
+      "instances": [
+        {
+          "pid": 2692,
+          "state": 4,
+          "guid": "{64A4E575-579D-4CBF-B877-83966CE39A8A}"
+        }
+      ]
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_confirmation_1min_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 13:35:01+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_confirmation_1min.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_equity_1min_feed_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 13:35:01+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_equity_1min_feed.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_live_kite_qty1_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:15:00+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 2,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": false,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_g3_approved_live.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_live_long_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 10:51:20+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 2,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_live_long.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_live_short_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 10:51:20+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 2,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_live_short.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_net_result_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:15:00+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_net_result.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_options_live_long_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:15:00+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_options_live_long.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_options_live_short_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:15:00+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_options_live_short.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_options_net_result_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:15:00+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_options_net_result.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_options_trade_logger_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:15:00+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_options_trade_logger.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_scanner_5min_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 13:35:01+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 2,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_scanner_5min.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_trade_logger_0915",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:15:00+00:00",
+      "next_run": "2026-11-02 09:15:00+00:00",
+      "last_result": 0,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_trade_logger.bat\"\"",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_g3_live_standing_approval_0910",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:10:00+00:00",
+      "next_run": "2026-11-02 09:10:00+00:00",
+      "last_result": 267014,
+      "limit": "PT3M",
+      "multiple_instances": 2,
+      "start_when_available": false,
+      "actions": [
+        {
+          "path": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\activate_g3_live_standing.ps1\"",
+          "working_directory": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2"
+        }
+      ],
+      "instances": []
+    },
+    {
+      "name": "EQIDV2_preopen_session_healthcheck_0905",
+      "enabled": true,
+      "state": 3,
+      "last_run": "2026-10-30 09:05:00+00:00",
+      "next_run": "2026-11-02 09:05:00+00:00",
+      "last_result": 1,
+      "limit": "PT0S",
+      "multiple_instances": 2,
+      "start_when_available": true,
+      "actions": [
+        {
+          "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_preopen_session_healthcheck.bat",
+          "arguments": "",
+          "working_directory": ""
+        }
+      ],
+      "instances": []
+    }
+  ],
+  "processes": [
+    {
+      "pid": 2692,
+      "ppid": 2592,
+      "name": "cmd.exe",
+      "matches": [
+        "fno_options_atm_fetch_5min"
+      ]
+    },
+    {
+      "pid": 38748,
+      "ppid": 2692,
+      "name": "powershell.exe",
+      "matches": [
+        "fno_options_atm_fetch_5min"
+      ]
+    }
+  ]
+}

@@ -122,11 +122,19 @@ def display_identity(session_date: str, profile: str | None = None, *, current_f
     from fno_v13_v10_g_3_cutoff_production import strategy_payload
     current = DisplayIdentity(name, PROFILES[name].version, fingerprint, strategy_payload())
     state = deployment_state()
-    previous = state.get("previous_session_identity")
+    previous = state.get("previous_session_identities", {}).get(session_date,
+        state.get("previous_session_identity"))
     if (state.get("profile") != name or not isinstance(previous, dict)
             or previous.get("through_session") != session_date):
         return current
     # Prior-session display is read-only and tied to a known historical contract.
+    if session_date == "2026-10-28":
+        from research import archived_g3_production_v13 as archive
+        if (previous.get("strategy_version"), previous.get("strategy_fingerprint")) != (
+                archive.STRATEGY_VERSION, archive.strategy_fingerprint()):
+            raise ValueError("Previous G3 display identity does not match the pinned V13 session")
+        return DisplayIdentity(name, archive.STRATEGY_VERSION, archive.strategy_fingerprint(),
+            archive.strategy_payload(), True)
     if session_date == "2026-10-23":
         from fno_v13_v10_g_3_contract import strategy_fingerprint as v12_fingerprint
         version = "V13-V10-G-3-PRODUCTION-V12"

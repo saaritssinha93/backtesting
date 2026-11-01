@@ -196,6 +196,18 @@ def _equity_roots(session_date: date, source: str) -> list[tuple[str, Path]]:
     return [(name, roots[name]) for name in (("LIVE", "PAPER") if source == "AUTO" else (source,))]
 
 
+def _equity_slot_allowed(row: dict[str, Any]) -> bool:
+    if equity_config.STRATEGY_PROFILE != "V13_V10_G_3":
+        return True
+    from strategy_slot_selection import slot_allowed
+    if row.get("strategy_fingerprint") not in (None, equity_config.strategy_fingerprint()):
+        return False
+    setup_id = str(row.get("setup_id", ""))
+    if not setup_id:
+        setup_id = str(row.get("confirmation_end", "")).replace(":", "") + "_" + str(row.get("side", "")).upper()
+    return slot_allowed("G3", setup_id)
+
+
 def load_equity_entries(
     session_date: date,
     side: str = "",
@@ -245,6 +257,8 @@ def load_equity_entries(
             if row.get("strategy_version") != equity_config.STRATEGY_VERSION:
                 continue
             if row.get("strategy_fingerprint") != equity_config.strategy_fingerprint():
+                continue
+            if not _equity_slot_allowed(row):
                 continue
             if str(row.get("session_date", "")) != session_date.isoformat():
                 continue
@@ -377,6 +391,12 @@ def map_equity_entry(equity: dict[str, Any], master: pd.DataFrame, master_path: 
 
 
 def create_state(equity: dict[str, Any], mapping: dict[str, Any], now: datetime, execution_source: str) -> dict[str, Any]:
+    if not _equity_slot_allowed(equity):
+        raise ValueError("SLOT_WIN_RATE_POLICY_DISABLED")
+    if equity_config.STRATEGY_PROFILE == "V13_V10_G_3" and (
+            equity.get("strategy_version") != equity_config.STRATEGY_VERSION
+            or equity.get("strategy_fingerprint") != equity_config.strategy_fingerprint()):
+        raise ValueError("ARCHIVED_STRATEGY_CANNOT_CREATE_NEW_OPTION_ENTRY")
     signal_id = str(equity["signal_id"])
     return {
         "schema_version": SCHEMA_VERSION,
@@ -385,6 +405,8 @@ def create_state(equity: dict[str, Any], mapping: dict[str, Any], now: datetime,
         "equity_strategy_version": equity_config.STRATEGY_VERSION,
         "trade_id": f"OPT_{signal_id}",
         "signal_id": signal_id,
+        "setup_id": equity.get("setup_id", ""),
+        "confirmation_end": equity.get("confirmation_end", ""),
         "session_date": str(equity["session_date"]),
         "side": str(equity["side"]).upper(),
         "equity_symbol": str(equity["_equity_symbol"]),
@@ -436,7 +458,12 @@ def _validate_state(state: dict[str, Any], session_date: date) -> None:
     if state.get("schema_version") != SCHEMA_VERSION or state.get("strategy_version") != OPTIONS_STRATEGY_VERSION:
         raise ValueError("Foreign option state in isolated one-lot paper book")
     if state.get("strategy_fingerprint") != equity_config.strategy_fingerprint():
-        raise ValueError("Option state equity strategy fingerprint mismatch")
+        recognized = (equity_config.STRATEGY_PROFILE == "V13_V10_G_3"
+            and state.get("status") in ({"OPEN", "WAITING_ENTRY_QUOTE"} | TERMINAL_STATES)
+            and equity_config.supported_identity(state.get("equity_strategy_version"),
+                state.get("strategy_fingerprint"), allow_legacy=True))
+        if not recognized:
+            raise ValueError("Option state equity strategy fingerprint mismatch")
     if state.get("mode") != "PAPER" or state.get("session_date") != session_date.isoformat():
         raise ValueError("Option state mode/date mismatch")
     lot_size = int(state.get("lot_size", 0))
@@ -534,6 +561,10 @@ def _book_cash(states: list[dict[str, Any]], session_date: date) -> float:
 
 
 def _enter_state(state: dict[str, Any], quote: dict[str, float], now: datetime, session_date: date) -> None:
+    if not _equity_slot_allowed(state):
+        state.update(status="SKIPPED", status_reason="SLOT_WIN_RATE_POLICY_DISABLED",
+            updated_at_ist=now.isoformat(timespec="seconds"))
+        return
     raw = quote["ask"]
     price = _tick(raw * (1.0 + SLIPPAGE_BPS / 10_000.0), float(state["tick_size"]), up=True)
     quantity = int(state["quantity"])
@@ -617,6 +648,10 @@ def expire_without_quote(state: dict[str, Any], now: datetime, args: argparse.Na
     """Advance time-only terminal guards even when every quote lane is down."""
     session_date = date.fromisoformat(str(state["session_date"]))
     _validate_state(state, session_date)
+    if state.get("status") == "WAITING_ENTRY_QUOTE" and not _equity_slot_allowed(state):
+        state.update(status="SKIPPED", status_reason="SLOT_WIN_RATE_POLICY_DISABLED",
+            updated_at_ist=now.isoformat(timespec="seconds"))
+        return True
     if state["status"] == "WAITING_ENTRY_QUOTE":
         lag = (now - _ist(state["equity_entry_at_ist"]).to_pydatetime()).total_seconds()
         if lag > args.max_entry_lag_sec or now.date() != session_date or now.time() >= SQUARE_OFF:

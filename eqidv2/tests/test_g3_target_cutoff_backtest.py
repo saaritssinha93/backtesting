@@ -13,13 +13,14 @@ from research import g3_target_cutoff_backtest as history
 DAY = date(2026, 10, 13)
 
 
-def test_current_profile_restores_exact_three_targets_and_keeps_ten_disabled():
+def test_current_profile_preserves_targets_and_applies_all_slot_cutoff():
     allowed, removed = history._validate_profile()
     expected = {"0951_LONG": .75, "1006_LONG": .56, "1016_SHORT": .68}
-    assert len(allowed) == 51 and len(removed) == 10
+    from strategy_slot_selection import enabled_setup_ids
+    assert allowed == enabled_setup_ids("G3")
+    assert len(allowed) == 34 and len(removed) == 27
     assert {s.setup_id: s.target_pct for s in history.contract.ACTIVE_SETUPS if s.target_pct <= .75} == expected
-    assert removed == {s.setup_id for s in history.production.ACTIVE_SETUPS
-                       if s.target_pct <= .75 and s.setup_id not in expected}
+    assert removed == {s.setup_id for s in history.production.ACTIVE_SETUPS} - allowed
 
 
 def _inputs(count=11):
@@ -134,7 +135,17 @@ def test_package_artifact_tamper_fails_before_accounting(tmp_path):
 
 def _without_new_slot_candidates(monkeypatch, orders):
     """Keep synthetic portfolio fixtures isolated from the real market archive."""
+    from research import g3_0926_volume_backtest as volume
     from research import g3_two_slot_backtest as new_slots
+    volume_proof = dict(candidate_rows=0, original_selected=0, revised_selected=0,
+        threshold_5m_volume_ratio={"0926_LONG": 1.2},
+        minimum_directional_wick_ratio={"0926_SHORT": .20},
+        filter_application="BEFORE_RANKING_AND_QUOTA_WITH_REPLACEMENT",
+        outcomes_used_for_selection=False)
+    volume_audit = pd.DataFrame(columns=["day", "setup_id", "tradingsymbol", "sid", "v9_selected"])
+    monkeypatch.setattr(volume, "reselect", lambda *args: (
+        orders.iloc[:0].copy(), {}, volume_proof, volume_audit))
+    monkeypatch.setattr(history, "_verify_0926_audit", lambda *args, **kwargs: None)
     proof = dict(setup_ids=sorted(new_slots.SETUP_IDS), outcomes_used_for_selection=False,
         candidate_rows=0, selected_orders=0,
         selected_by_setup={setup_id: 0 for setup_id in sorted(new_slots.SETUP_IDS)}, opening_coverage={})
@@ -194,8 +205,8 @@ def test_fresh_build_retains_all_three_low_target_exceptions(tmp_path, monkeypat
     ledger = pd.read_csv(output / "portfolio_trades.csv")
     assert set(selected.setup_id) == set(identities) - {"1236_LONG"}
     assert set(ledger.setup_id) == set(selected.setup_id)
-    assert summary["active_setup_count"] == 51
-    assert summary["disabled_setup_count"] == 10
+    assert summary["active_setup_count"] == 34
+    assert summary["disabled_setup_count"] == 27
     assert summary["restored_setup_ids"] == sorted(history.RESTORED_TARGETS)
     assert ledger.loc[ledger.setup_id.isin(history.RESTORED_TARGETS), "portfolio_executed"].all()
 

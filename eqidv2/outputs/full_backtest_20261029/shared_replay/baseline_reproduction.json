@@ -1,0 +1,24 @@
+[
+  {
+    "checked_fields": [
+      "portfolio_executed",
+      "portfolio_net_profit_rupees",
+      "portfolio_gross_profit_rupees",
+      "portfolio_cost_rupees"
+    ],
+    "opportunities": 626,
+    "passed": true,
+    "strategy": "G3"
+  },
+  {
+    "checked_fields": [
+      "portfolio_executed",
+      "portfolio_net_profit_rupees",
+      "portfolio_gross_profit_rupees",
+      "portfolio_cost_rupees"
+    ],
+    "opportunities": 595,
+    "passed": true,
+    "strategy": "G7_V4_LOCK2"
+  }
+]

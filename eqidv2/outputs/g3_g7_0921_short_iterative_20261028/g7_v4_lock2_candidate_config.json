@@ -1,0 +1,27 @@
+{
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "status": "RETROSPECTIVE_UNQUALIFIED_RESEARCH_CANDIDATE",
+  "adopted": false,
+  "strategy": "G7_V4_TWO_LOSS_LOCK",
+  "source_config": "configs/strategies/v13_v10_g_7_v4_low_efficiency_backtest.json",
+  "source_config_sha256": "b7fbd848db48b4298f0b48bf9682ed44cfaf116f01437318e03efdea2b3aaa91",
+  "source_research_run": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_7/v4_research/practical_research/runs/2026-10-27/20261027T185748273567_five_fixed_tests",
+  "setup_id": "0921_SHORT",
+  "post_selection_entry_veto": {
+    "oi_change_pct_max": 0.6,
+    "allow_quota_replacement": false
+  },
+  "slot_exit_override": {
+    "protect_after_completed_post_entry_close_pct": 0.2,
+    "protected_gross_profit_pct": 0.15,
+    "effective": "NEXT_MINUTE_OPEN",
+    "preserve_native_entry_target_and_timed_stop": true
+  },
+  "portfolio": {
+    "conservative_entry_minute_open_capacity": true,
+    "integer_cash_shares": true,
+    "realized_loss_admission_lock": 2
+  },
+  "all_other_setups": "UNCHANGED"
+}

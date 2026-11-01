@@ -15,26 +15,28 @@ import backtesting_result_v13_v10_g_3_daily as publisher
 DAY = date(2030, 1, 7)
 
 
-def _minute_frame(day, *, move=True):
+def _minute_frame(day, *, move=True, signal_clock="09:50"):
     stamps = pd.date_range(f"{day} 09:16", f"{day} 15:15", freq="min", tz="Asia/Kolkata")
     close = 100 + np.arange(len(stamps)) * .001
     frame = pd.DataFrame(dict(date=stamps, open=close - .0005, high=close + .01,
                               low=close - .01, close=close, volume=100., gap_filled=0))
     if move:
-        # A clean 10:00 five-minute rise, exact 10:01 volume confirmation,
-        # then an entry/target path. All other selected windows stay quiet.
-        for clock, price in zip(("09:56", "09:57", "09:58", "09:59", "10:00", "10:01"),
+        # A clean rise into the enabled 09:50 LONG signal, an exact 09:51
+        # confirmation and then entry/target. Other selected windows stay quiet.
+        signal = pd.Timestamp(f"{day} {signal_clock}", tz="Asia/Kolkata")
+        for stamp, price in zip((signal + pd.Timedelta(minutes=n) for n in range(-4, 2)),
                                 (101.2, 101.4, 101.6, 101.8, 102., 102.2)):
-            mask = frame.date.dt.strftime("%H:%M").eq(clock)
+            mask = frame.date.eq(stamp)
             frame.loc[mask, ["open", "high", "low", "close"]] = [price - .2, price + .05, price - .21, price]
-        frame.loc[frame.date.dt.strftime("%H:%M").eq("10:01"), "volume"] = 130.
-        after = frame.date.dt.strftime("%H:%M").ge("10:02")
+            frame.loc[mask, "volume"] = 200.
+        frame.loc[frame.date.eq(signal + pd.Timedelta(minutes=1)), "volume"] = 130.
+        after = frame.date.ge(signal + pd.Timedelta(minutes=2))
         price = 102.3 + np.arange(int(after.sum())) * .001
         frame.loc[after, "open"] = price - .001
         frame.loc[after, "high"] = price + .01
         frame.loc[after, "low"] = price - .01
         frame.loc[after, "close"] = price
-        after_target = frame.date.dt.strftime("%H:%M").ge("10:05")
+        after_target = frame.date.ge(signal + pd.Timedelta(minutes=5))
         frame.loc[after_target, ["open", "high", "low", "close"]] += 3.5
     return frame
 
@@ -64,7 +66,7 @@ def raw(tmp_path):
              for d in (DAY - timedelta(days=3), DAY)]
     future_stamps = parts[0].append(parts[1])
     future = pd.DataFrame(dict(timestamp=future_stamps, open=100., high=100.1, low=99.8,
-                               close=99.9, volume=1000., oi=100000 * np.power(1.001, np.arange(len(future_stamps)))))
+                               close=99.9, volume=1000., oi=100000 * np.power(1.002, np.arange(len(future_stamps)))))
     for row in rows:
         future.assign(tradingsymbol=row["tradingsymbol"], expiry=expiry).to_parquet(roots.futures_5m / f"{row['tradingsymbol']}_5minute.parquet", index=False)
     opening = source.opening_inputs.minute_path(roots.opening_observer, DAY, "EXAMPLE30JANFUT")
@@ -77,9 +79,9 @@ def raw(tmp_path):
 
 def test_raw_new_session_has_g3_identity_and_verified_artifacts(raw, tmp_path):
     roots, equity, _ = raw
-    # The new LONG threshold admits this candidate below legacy G's 1.20.
+    # The enabled 09:51 LONG setup admits this candidate.
     frame = pd.read_parquet(equity)
-    frame.loc[frame.date.eq(pd.Timestamp(f"{DAY} 10:01", tz="Asia/Kolkata")), "volume"] = 115.
+    frame.loc[frame.date.eq(pd.Timestamp(f"{DAY} 09:51", tz="Asia/Kolkata")), "volume"] = 115.
     frame.to_parquet(equity, index=False)
     result = replay.replay_day(DAY, tmp_path / "run", roots=roots)
     assert result["complete"], result["coverage"]
@@ -88,8 +90,9 @@ def test_raw_new_session_has_g3_identity_and_verified_artifacts(raw, tmp_path):
     assert result["metrics"]["orders"] == result["metrics"]["fills"] == 1
     ledger = pd.read_csv(tmp_path / "run" / result["artifacts"]["portfolio_trades"]["path"])
     assert ledger.native_stop_pct.tolist() == [1.25]
-    assert ledger.native_target_pct.tolist() == [3.]
-    assert ledger.v9_1m_volume_ratio.tolist() == [1.15]
+    assert ledger.setup_id.tolist() == ["0951_LONG"]
+    assert ledger.native_target_pct.tolist() == [.75]
+    assert ledger.v9_1m_volume_ratio.iloc[0] >= replay.contract.confirmation_volume_minimum("LONG", setup_id="0951_LONG")
     assert ledger.strategy_version.eq(replay.contract.STRATEGY_VERSION).all()
     for item in result["artifacts"].values():
         assert replay.sha256(tmp_path / "run" / item["path"]) == item["sha256"]
@@ -118,7 +121,7 @@ def test_missing_execution_minute_blocks_publication_and_preserves_current(raw, 
 def test_complete_zero_order_session_has_headers_and_zero_metrics(raw, tmp_path):
     roots, equity, _ = raw
     frame = pd.read_parquet(equity)
-    frame["volume"] = 100.
+    frame = pd.concat([frame.loc[frame.date.dt.date.ne(DAY)], _minute_frame(DAY, move=False)], ignore_index=True)
     frame.to_parquet(equity, index=False)
     result = replay.replay_day(DAY, tmp_path / "zero", roots=roots)
     assert result["complete"]
@@ -131,6 +134,7 @@ def test_complete_zero_order_session_has_headers_and_zero_metrics(raw, tmp_path)
 def test_future_data_never_changes_requested_day(raw, tmp_path):
     roots, equity, _ = raw
     baseline = replay.replay_day(DAY, tmp_path / "before", roots=roots)
+    assert baseline["metrics"]["fills"] == 1
     frame = pd.read_parquet(equity)
     future = _minute_frame(DAY + timedelta(days=1))
     future[["open", "high", "low", "close", "volume"]] *= 100
@@ -175,7 +179,7 @@ def test_all_missing_opening_inputs_block_instead_of_publishing_zero_0920_trades
 def test_sealed_pool_must_include_below_legacy_threshold_before_ranking(raw, tmp_path):
     roots, equity, _ = raw
     frame = pd.read_parquet(equity)
-    frame.loc[frame.date.eq(pd.Timestamp(f"{DAY} 10:01", tz="Asia/Kolkata")), "volume"] = 115.
+    frame.loc[frame.date.eq(pd.Timestamp(f"{DAY} 09:36", tz="Asia/Kolkata")), "volume"] = 115.
     frame.to_parquet(equity, index=False)
     dataset = source.build_day_features(DAY, roots=roots)
     signals = dataset["signals"]
@@ -311,7 +315,7 @@ def test_production_spec_drift_fails_before_input_capture(raw, tmp_path, monkeyp
     path = tmp_path / "drifted_contract.json"
     replay.atomic_json(path, spec)
     monkeypatch.setattr(replay, "PRODUCTION_CONFIG_PATH", path)
-    with pytest.raises(ValueError, match="accepted normalized contract"):
+    with pytest.raises(ValueError, match="G3 slot selection contract mismatch"):
         replay.replay_day(DAY, tmp_path / "never_created", roots=roots)
     assert not (tmp_path / "never_created").exists()
 
@@ -408,6 +412,7 @@ def test_aggregate_refuses_old_revision_ledger(raw, tmp_path):
     run = tmp_path / "source-run"
     replay.replay_day(DAY, run, roots=roots)
     ledger = pd.read_csv(run / "portfolio_trades.csv")
+    assert not ledger.empty, "Revision rejection must exercise an actual executed ledger"
     ledger["strategy_version"] = replay.contract.LEGACY_STRATEGY_VERSION
     with pytest.raises(ValueError, match="another production strategy revision"):
         replay._finish(tmp_path / "mixed", days=[DAY], role="cumulative_history", source_kind="TEST_SOURCE",
@@ -456,6 +461,17 @@ def test_raw_midday_replay_keeps_relaxed_confirmation_and_final_clock(
     ledger = pd.read_csv(directory / "portfolio_trades.csv")
     setup_id = confirmation.strftime("%H%M") + "_" + side
     added = ledger.loc[ledger.setup_id.eq(setup_id)]
+    if replay.contract.setup_for(clock, side) is None:
+        assert setup_id in {"1146_SHORT", "1231_SHORT"}
+        assert added.empty
+        candidates = pd.read_csv(directory / "candidate_signals.csv")
+        raw_candidate = candidates.side.eq(side) & pd.to_datetime(candidates.signal_ts).eq(signal)
+        # Entirely disabled clocks are excluded during source preparation.
+        # At shared clocks, the removed side may remain a raw observation.
+        assert bool(raw_candidate.any()) is (clock in replay.contract.SIGNAL_TO_CONFIRMATION)
+        selected = pd.read_csv(directory / "selected_orders.csv")
+        assert not selected.setup_id.eq(setup_id).any()
+        return
     assert len(added) == 1
     row = added.iloc[0]
     assert row.v9_1m_volume_ratio == pytest.approx(confirmation_volume / 125.)

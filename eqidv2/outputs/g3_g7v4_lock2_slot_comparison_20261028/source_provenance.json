@@ -157,8 +157,11 @@
   "output_sha256": {
     "slot_time_overall.csv": "0d4989af679c7873397fd22596f1280a73c10940b102dae4b6c8672af5a90937",
     "setup_side_overall.csv": "c9f38a37629e07e4376556a86adb426b428c14b55c1ffb7d3852f06c7b8a7090",
+    "setup_side_paired_overall.csv": "7bcfed5b7128c8835dd46039e9c0aaf077893b4010397153aeccd7ebbd27cd3f",
     "slot_time_october.csv": "3b4c0e257550e96ca59772df4fdec4392b74f5d65d2154c9ee7d2037962b6589",
     "setup_side_october.csv": "b5a31eeac5408deaeb72890c3ef6794b734faf9a05ff4748d6698e80c4216ead",
-    "slot_daywise_october.csv": "b97f95b9415695cca3210126a0b933fd29af17a5c84d742ebad88451ad036801"
+    "setup_side_paired_october.csv": "74a6563067b8980dc995cd6a2d1555af94c69a291d948430850ab6a3ec91e816",
+    "slot_daywise_october.csv": "b97f95b9415695cca3210126a0b933fd29af17a5c84d742ebad88451ad036801",
+    "setup_side_daywise_october.csv": "73180ae821012a3b937b2337e8e0d339a462ed3ce342981d1c38c01d702244b5"
   }
 }

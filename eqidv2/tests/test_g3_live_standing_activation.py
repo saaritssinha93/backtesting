@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import base64
 from datetime import date, datetime, time, timedelta
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -139,7 +141,7 @@ def test_gate_uses_exact_window_deadline_effective_date_and_global_mutex():
     script = source("activate_g3_live_standing.ps1")
 
     for evidence in (
-        "2026-10-24",
+        "2026-10-29",
         "$windowStart = $session.AddHours(9).AddMinutes(9)",
         "$deadline = $session.AddHours(9).AddMinutes(12).AddSeconds(30)",
         "$now -lt $windowStart -or $now -ge $deadline",
@@ -258,14 +260,15 @@ def test_gate_pins_exact_standing_policy_strategy_setups_and_live_caps():
     script = source("activate_g3_live_standing.ps1")
 
     for evidence in (
+        "g3_live_standing_policy_v3.json",
         "g3_live_standing_operator_policy_v1",
         "STANDING_OPERATOR_POLICY",
-        "G3_LIVE_STANDING_20261024_V2",
-        "235ea597d8e2fd3a6de9cb23bbd3c8e422898f387ab93300aa23d69e8f37387a",
-        "74ff6bf6a2c1a68a08a324d8090809dbfe10a3ccacf289ab1953fb03636ca615",
+        "G3_LIVE_STANDING_20261029_V3",
+        "ad8a9180c2be2f9ede2b9cd27f7207ed535d06f50dd84000c6452fa4f7ff11d8",
+        "89aae1fe359f6c6cd7b6cbaac4879d5818ce40c92808c4bf539544a4f80e3aed",
         "cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e",
-        "a59e03c5be37fb6da8f190adecfbc99ada9fe378d216f13591e9cde0aa423625",
-        "$ExpectedSetupCount = 51",
+        "750b52503841d7055a9facabb3204959f69e1673008f3e60f0dc99a93638970c",
+        "$ExpectedSetupCount = 34",
         "Assert-ExactSetupIds",
         "capital_per_trade_rs -ne 10000.0",
         "leverage -ne 5.0",
@@ -276,6 +279,17 @@ def test_gate_pins_exact_standing_policy_strategy_setups_and_live_caps():
         "Assert-ExactPropertySet",
     ):
         assert evidence in script
+
+
+def test_gate_ordered_setup_pin_matches_current_policy():
+    script = source("activate_g3_live_standing.ps1")
+    match = re.search(r"\$ExpectedSetupIds = @\((.*?)\)\.Split\('\|'\)", script, re.S)
+    assert match is not None
+    joined = "".join(re.findall(r"'([^']*)'", match.group(1)))
+    policy = json.loads((ROOT / "configs/authorizations/g3_live_standing_policy_v3.json")
+                        .read_text(encoding="utf-8"))
+    assert joined.split("|") == policy["setup_ids"]
+    assert len(policy["setup_ids"]) == 34
 
 
 def test_operator_call_and_postapproval_checks_bind_source_policy_broker_and_epoch():

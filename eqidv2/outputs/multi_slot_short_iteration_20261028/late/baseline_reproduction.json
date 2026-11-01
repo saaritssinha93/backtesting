@@ -1,0 +1,26 @@
+[
+  {
+    "differences": [],
+    "label": "G3 allocator control",
+    "passed": true,
+    "rows": 626
+  },
+  {
+    "differences": [],
+    "label": "accepted G7 V4 protection + 09:26 wick rule + lock2 control",
+    "passed": true,
+    "rows": 595
+  },
+  {
+    "differences": [],
+    "label": "G3 replacement-aware baseline selection + execution + allocation",
+    "passed": true,
+    "rows": 626
+  },
+  {
+    "differences": [],
+    "label": "G7 replacement-aware baseline + Nifty + V4 + lock2",
+    "passed": true,
+    "rows": 595
+  }
+]

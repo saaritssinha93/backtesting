@@ -1,0 +1,46 @@
+{
+  "protocol_id": "0926_SHORT_PREQUOTA_RESELECTION_FIXED_GRID_V1",
+  "frozen_before_reselection_outcomes": true,
+  "frozen_at_ist": "2026-10-28T13:15:00+05:30",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "setup_id": "0926_SHORT",
+  "calendar": {
+    "first_session": "2026-07-29",
+    "last_session": "2026-10-27",
+    "available_sessions": 59
+  },
+  "selection_contract": {
+    "feature_cutoff": "ORIGINAL_09:26_CONFIRMATION_CLOSE",
+    "apply_variant_before_ranking_and_quota": true,
+    "ranking": "MAX_VOLUME",
+    "max_entries_per_setup_day": 2,
+    "retain_strategy_specific_current_minimum_gates": true,
+    "replacement_candidates_allowed": true,
+    "full_portfolio_replay_required": true
+  },
+  "feature_definitions": {
+    "extension_atr": "SHORT directional distance: (EMA20 at confirmation close - confirmation close) / ATR14, using only bars available by 09:26",
+    "downward_move_magnitude_pct": "For SHORT candidates, -price_change_pct; a maximum cap is implemented as price_change_pct >= -cap",
+    "body_ratio": "Existing confirmation candle body_ratio available at 09:26",
+    "wick_ratio": "Existing confirmation candle wick_ratio available at 09:26"
+  },
+  "variants": [
+    {"variant": "baseline"},
+    {"variant": "extension_le_3p5", "extension_atr_max": 3.5},
+    {"variant": "extension_le_3p0", "extension_atr_max": 3.0},
+    {"variant": "extension_le_2p5", "extension_atr_max": 2.5},
+    {"variant": "down_move_le_0p75", "downward_move_magnitude_pct_max": 0.75},
+    {"variant": "down_move_le_0p50", "downward_move_magnitude_pct_max": 0.5},
+    {"variant": "body_le_0p85", "body_ratio_max": 0.85},
+    {"variant": "wick_ge_0p20", "wick_ratio_min": 0.2},
+    {"variant": "extension_le_3p0_and_down_move_le_0p75", "extension_atr_max": 3.0, "downward_move_magnitude_pct_max": 0.75},
+    {"variant": "extension_le_3p0_and_wick_ge_0p20", "extension_atr_max": 3.0, "wick_ratio_min": 0.2}
+  ],
+  "anti_overfit_controls": [
+    "No threshold may be added or changed after inspecting replacement-aware outcomes.",
+    "Every reported variant, including failures, remains in the result table.",
+    "Point estimates above 75 percent are descriptive and require chronological validation.",
+    "Published selected-order veto results are not substitutes for this pre-quota replacement replay."
+  ]
+}

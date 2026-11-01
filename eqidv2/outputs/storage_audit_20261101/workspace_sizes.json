@@ -1,0 +1,772 @@
+{
+  "scope": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2",
+  "elapsed_seconds": 0.45,
+  "note": "Metadata only; reparse points skipped, unique hardlinks counted once across this scope. Allocation is cluster-rounded except compressed/sparse files queried natively; not a deletion estimate.",
+  "directories": [
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\stocks_indicators_1min_eq",
+      "logical_bytes": 11076624014,
+      "estimated_allocated_bytes": 11082469376,
+      "files": 2001,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\.codex_tmp",
+      "logical_bytes": 7571430193,
+      "estimated_allocated_bytes": 7583707136,
+      "files": 6447,
+      "hardlinked_files": 0,
+      "skipped_reparse": 4,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_advanced_indicators_5min",
+      "logical_bytes": 6066114763,
+      "estimated_allocated_bytes": 6068236288,
+      "files": 1046,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_advanced_indicators_5min_current",
+      "logical_bytes": 5981076541,
+      "estimated_allocated_bytes": 5983170560,
+      "files": 1045,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\reports",
+      "logical_bytes": 2324687926,
+      "estimated_allocated_bytes": 2340028416,
+      "files": 5731,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\Train_and_Test",
+      "logical_bytes": 1391499695,
+      "estimated_allocated_bytes": 1401622528,
+      "files": 4457,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs",
+      "logical_bytes": 1088547506,
+      "estimated_allocated_bytes": 1091018752,
+      "files": 1209,
+      "hardlinked_files": 0,
+      "skipped_reparse": 3,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\logs",
+      "logical_bytes": 1806270632,
+      "estimated_allocated_bytes": 729853952,
+      "files": 2649,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_allsetups_internal",
+      "logical_bytes": 315299845,
+      "estimated_allocated_bytes": 315310080,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_short_adv_probe",
+      "logical_bytes": 259597800,
+      "estimated_allocated_bytes": 259612672,
+      "files": 8,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_all_setups_ungated",
+      "logical_bytes": 247840587,
+      "estimated_allocated_bytes": 247857152,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_short_pf2_promoted",
+      "logical_bytes": 225776426,
+      "estimated_allocated_bytes": 225792000,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_short_pf2_expanded",
+      "logical_bytes": 225661496,
+      "estimated_allocated_bytes": 225681408,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2",
+      "logical_bytes": 135666219,
+      "estimated_allocated_bytes": 135680000,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_tune_raw",
+      "logical_bytes": 135635427,
+      "estimated_allocated_bytes": 135647232,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_internal_pf2",
+      "logical_bytes": 135001546,
+      "estimated_allocated_bytes": 135012352,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_internal_tight",
+      "logical_bytes": 134932335,
+      "estimated_allocated_bytes": 134942720,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\research_outputs",
+      "logical_bytes": 116639080,
+      "estimated_allocated_bytes": 118394880,
+      "files": 719,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\isolated_long_3m_research_20260730",
+      "logical_bytes": 100695481,
+      "estimated_allocated_bytes": 100851712,
+      "files": 73,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_v17D_library_tierA",
+      "logical_bytes": 96935478,
+      "estimated_allocated_bytes": 96940032,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\.venv-ai-platform",
+      "logical_bytes": 53524815,
+      "estimated_allocated_bytes": 64536576,
+      "files": 4611,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\research",
+      "logical_bytes": 55459080,
+      "estimated_allocated_bytes": 56717312,
+      "files": 589,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\stocks_indicators_daily_eq",
+      "logical_bytes": 52128602,
+      "estimated_allocated_bytes": 55394304,
+      "files": 1041,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_advanced_indicators_5min_smoke",
+      "logical_bytes": 29299204,
+      "estimated_allocated_bytes": 29310976,
+      "files": 9,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\__pycache__",
+      "logical_bytes": 23380946,
+      "estimated_allocated_bytes": 24727552,
+      "files": 659,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\tests",
+      "logical_bytes": 21977071,
+      "estimated_allocated_bytes": 24190976,
+      "files": 1091,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\.pytest_cache",
+      "logical_bytes": 17647657,
+      "estimated_allocated_bytes": 17670144,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_v17D_library_smoke_full",
+      "logical_bytes": 13136737,
+      "estimated_allocated_bytes": 13139968,
+      "files": 2,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_fade",
+      "logical_bytes": 12514360,
+      "estimated_allocated_bytes": 12529664,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\docs",
+      "logical_bytes": 10976188,
+      "estimated_allocated_bytes": 11255808,
+      "files": 115,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\house-of-yeashi-growth-kit",
+      "logical_bytes": 8727472,
+      "estimated_allocated_bytes": 8753152,
+      "files": 12,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_improved",
+      "logical_bytes": 6868385,
+      "estimated_allocated_bytes": 6881280,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\replay_out_full_pipeline",
+      "logical_bytes": 5621566,
+      "estimated_allocated_bytes": 6340608,
+      "files": 223,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_v17D_phase0",
+      "logical_bytes": 5436560,
+      "estimated_allocated_bytes": 5500928,
+      "files": 26,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_research_catalog_rest_expanded",
+      "logical_bytes": 5105115,
+      "estimated_allocated_bytes": 5115904,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_research_catalog_rest_expanded",
+      "logical_bytes": 5105053,
+      "estimated_allocated_bytes": 5115904,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_allsetups_smoke",
+      "logical_bytes": 4680055,
+      "estimated_allocated_bytes": 4694016,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_improved_balanced",
+      "logical_bytes": 4573779,
+      "estimated_allocated_bytes": 4587520,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\report_v12_assets",
+      "logical_bytes": 4244521,
+      "estimated_allocated_bytes": 4464640,
+      "files": 90,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\v14",
+      "logical_bytes": 3968768,
+      "estimated_allocated_bytes": 4304896,
+      "files": 168,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_v17D_backtest",
+      "logical_bytes": 4213922,
+      "estimated_allocated_bytes": 4251648,
+      "files": 17,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\sweep_results",
+      "logical_bytes": 3243487,
+      "estimated_allocated_bytes": 3256320,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\report_v11_assets",
+      "logical_bytes": 2968985,
+      "estimated_allocated_bytes": 3178496,
+      "files": 83,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\tmp",
+      "logical_bytes": 3049304,
+      "estimated_allocated_bytes": 3076096,
+      "files": 12,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\tools",
+      "logical_bytes": 2489926,
+      "estimated_allocated_bytes": 2707456,
+      "files": 105,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\configs",
+      "logical_bytes": 2337732,
+      "estimated_allocated_bytes": 2621440,
+      "files": 111,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_pf_tuned",
+      "logical_bytes": 2439823,
+      "estimated_allocated_bytes": 2457600,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_v17_cascade",
+      "logical_bytes": 2397598,
+      "estimated_allocated_bytes": 2408448,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_research_short_expanded_normalized",
+      "logical_bytes": 2365127,
+      "estimated_allocated_bytes": 2371584,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_research_short_expanded",
+      "logical_bytes": 2319060,
+      "estimated_allocated_bytes": 2330624,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1",
+      "logical_bytes": 2298140,
+      "estimated_allocated_bytes": 2314240,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_extra_slots",
+      "logical_bytes": 2298140,
+      "estimated_allocated_bytes": 2314240,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\avwap_v11_refactored",
+      "logical_bytes": 2137826,
+      "estimated_allocated_bytes": 2297856,
+      "files": 79,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_top1_baseline",
+      "logical_bytes": 2230823,
+      "estimated_allocated_bytes": 2244608,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_smoke",
+      "logical_bytes": 2086158,
+      "estimated_allocated_bytes": 2097152,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_research_plus_e4_addons",
+      "logical_bytes": 2028364,
+      "estimated_allocated_bytes": 2039808,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\ai_platform",
+      "logical_bytes": 1655839,
+      "estimated_allocated_bytes": 1896448,
+      "files": 106,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat",
+      "logical_bytes": 884976,
+      "estimated_allocated_bytes": 1753088,
+      "files": 311,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_research_pareto_pf26",
+      "logical_bytes": 1687402,
+      "estimated_allocated_bytes": 1695744,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_mom_v1_5min",
+      "logical_bytes": 873769,
+      "estimated_allocated_bytes": 1429504,
+      "files": 205,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\.tmp_resume_review",
+      "logical_bytes": 1339329,
+      "estimated_allocated_bytes": 1355776,
+      "files": 7,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_research_reresolved_mae_mfe",
+      "logical_bytes": 1108262,
+      "estimated_allocated_bytes": 1118208,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\v7_research_layer",
+      "logical_bytes": 1079853,
+      "estimated_allocated_bytes": 1114112,
+      "files": 13,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\ID_backtesting",
+      "logical_bytes": 952067,
+      "estimated_allocated_bytes": 1019904,
+      "files": 34,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_pf_final",
+      "logical_bytes": 997641,
+      "estimated_allocated_bytes": 1015808,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\replay_out_see",
+      "logical_bytes": 577548,
+      "estimated_allocated_bytes": 589824,
+      "files": 9,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\report_v10_assets",
+      "logical_bytes": 480549,
+      "estimated_allocated_bytes": 561152,
+      "files": 32,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_research_e4_top3",
+      "logical_bytes": 474192,
+      "estimated_allocated_bytes": 483328,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_smoke",
+      "logical_bytes": 371210,
+      "estimated_allocated_bytes": 385024,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_advanced_top3_probe",
+      "logical_bytes": 340493,
+      "estimated_allocated_bytes": 344064,
+      "files": 1,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\v17D_setup_library",
+      "logical_bytes": 249944,
+      "estimated_allocated_bytes": 294912,
+      "files": 20,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\v7_v11_parity",
+      "logical_bytes": 194161,
+      "estimated_allocated_bytes": 274432,
+      "files": 26,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\experimental_prefilter",
+      "logical_bytes": 191109,
+      "estimated_allocated_bytes": 237568,
+      "files": 20,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v1_smoke2",
+      "logical_bytes": 218437,
+      "estimated_allocated_bytes": 233472,
+      "files": 6,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_short_pf2_final",
+      "logical_bytes": 84964,
+      "estimated_allocated_bytes": 90112,
+      "files": 4,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_v17D_library_smoke",
+      "logical_bytes": 55407,
+      "estimated_allocated_bytes": 61440,
+      "files": 2,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\docs_early_emit",
+      "logical_bytes": 27300,
+      "estimated_allocated_bytes": 32768,
+      "files": 3,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\kite_exports",
+      "logical_bytes": 20100,
+      "estimated_allocated_bytes": 28672,
+      "files": 5,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\replay_out",
+      "logical_bytes": 23977,
+      "estimated_allocated_bytes": 24576,
+      "files": 1,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\.claude",
+      "logical_bytes": 1087,
+      "estimated_allocated_bytes": 8192,
+      "files": 2,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\resume_output",
+      "logical_bytes": 6340,
+      "estimated_allocated_bytes": 8192,
+      "files": 1,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\tmp_task_backups",
+      "logical_bytes": 3642,
+      "estimated_allocated_bytes": 4096,
+      "files": 1,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_v17_cascade_pkg_smoke",
+      "logical_bytes": 0,
+      "estimated_allocated_bytes": 0,
+      "files": 0,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs_avwap_ID_5min_v2_v17_cascade_smoke",
+      "logical_bytes": 0,
+      "estimated_allocated_bytes": 0,
+      "files": 0,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    },
+    {
+      "path": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\stocks_cache_1min_eq",
+      "logical_bytes": 0,
+      "estimated_allocated_bytes": 0,
+      "files": 0,
+      "hardlinked_files": 0,
+      "skipped_reparse": 0,
+      "errors": 0
+    }
+  ]
+}

@@ -13,6 +13,7 @@ from typing import Any
 
 from dashboard_flow_live_data import list_available_dates, load_session_market
 from dashboard_flow_live_evidence import build_live_evidence
+from dashboard_slot_selection import configured_policy_summary
 
 IST = timezone(timedelta(hours=5, minutes=30))
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
@@ -98,12 +99,15 @@ def load_live_flow(data_root: Path, session_date: str | None = None, *, now: dat
         if source not in sources:
             sources.append(source)
     warnings = list(dict.fromkeys((market.get("warnings") or []) + (recorded.get("warnings") or [])))
+    configured_slots = configured_policy_summary()
+    warnings.append("The configured >=70% historical cutoff applies to every represented slot/direction pair in G-3 and G-7 V4 lock; zero-trade slots are excluded. This configuration describes future eligibility; recorded decisions below retain their original strategy versions and outcomes.")
     if market.get("error_count"):
         warnings.append(f"{market['error_count']} market source reads failed; affected values are unavailable. Inspect source details.")
     return _json_safe({
         "schema_version": "dashboard_flow_live_v1", "session_date": session_date,
         "today": today, "available_dates": dates, "generated_at": now.isoformat(), "timezone": "Asia/Kolkata",
         "strategy": {"label": "V13-V10-G-3", "version": recorded.get("strategy_version"), "fingerprint": recorded.get("strategy_fingerprint")},
+        "configured_slot_selection": configured_slots,
         "read_only": True, "sources": sources, "warnings": warnings, "slots": slots,
         "opening_first_minutes": market.get("opening_first_minutes") or [],
         "opening_observer": market.get("opening_observer"),

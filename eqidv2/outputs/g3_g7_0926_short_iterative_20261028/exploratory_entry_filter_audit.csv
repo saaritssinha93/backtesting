@@ -1,0 +1,6 @@
+filter,g3_wins,g3_trades,g3_win_rate_pct,g3_slot_net_rs,g7_wins,g7_trades,g7_win_rate_pct,g7_slot_net_rs,later_evidence,disposition
+wick_ratio_gte_0p20,7,9,77.7778,23259,9,10,90.0000,29447,"G3 0/1; G7 1/1","REJECT: retains only 50%/55.6% and later G3 trade lost"
+price_change_gte_minus_0p40,6,7,85.7143,20584,7,8,87.5000,25460,"G3 1/2; G7 2/3","REJECT: later rates 50%/66.7%"
+body_ratio_lte_0p75,6,7,85.7143,23513,6,7,85.7143,14939,"G3 0/1; G7 0/1","REJECT: both later trades lost"
+wick_ratio_gte_0p23,5,6,83.3333,25315,6,7,85.7143,26009,"G3 0 trades; G7 0 trades","REJECT: no post-development evidence"
+price_change_gte_minus_0p25,3,3,100.0000,8983,4,4,100.0000,9803,"G3 1 later trade; G7 2 later trades","REJECT: retains 16.7%/22.2%; knife-edge post-hoc fit"

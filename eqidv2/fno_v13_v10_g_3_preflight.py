@@ -37,11 +37,13 @@ def inspect_deployment(*, verify_frozen: bool = True) -> dict:
             == [asdict(s) for s in config.ACTIVE_SETUPS]
         and backtest_contract.SIGNAL_TO_CONFIRMATION == config.SIGNAL_TO_CONFIRMATION
         and backtest_contract.MIN_CONFIRMATION_VOLUME_BY_SETUP == config.MIN_CONFIRMATION_VOLUME_BY_SETUP)
-    from research import g3_target_cutoff_contract as cutoff
+    confirmation_rules_match = (backtest_value.get("minimum_directional_wick_ratio_by_setup", {})
+        == config.strategy_payload().get("minimum_directional_wick_ratio_by_setup", {}))
+    from research import g3_slot_win70_contract as cutoff
     cutoff.validate_contract(backtest_value)
     backtest_variant_valid = (backtest_contract is cutoff
         and backtest_value.get("scope") == "BACKTEST_ONLY"
-        and backtest_value.get("source_strategy_fingerprint") == config.contract.PREVIOUS_STRATEGY_FINGERPRINT
+        and backtest_value.get("slot_selection_fingerprint") == config.strategy_payload().get("slot_selection_fingerprint")
         and backtest_value.get("execution_authority") is False)
     promoted = config.setup_for("09:50", "LONG")
     opening = config.setup_for("09:20", "LONG")
@@ -52,12 +54,15 @@ def inspect_deployment(*, verify_frozen: bool = True) -> dict:
         setup = config.setup_for(signal, side)
         donor = config.setup_for(donor_signal, side)
         replay_setup = backtest_contract.setup_for(signal, side)
-        matches = (setup is not None and donor is not None and replay_setup is not None
+        setup_id = confirmation.replace(":", "") + "_" + side
+        intentionally_disabled = (setup is None and replay_setup is None
+            and setup_id in cutoff.DISABLED_IDS)
+        matches = intentionally_disabled or (setup is not None and donor is not None and replay_setup is not None
             and setup == replace(donor, signal_end=signal, confirmation_end=confirmation, target_pct=1.5)
             and asdict(replace(replay_setup, source_version=setup.source_version)) == asdict(setup)
             and config.confirmation_volume_minimum(side, signal_end=signal) == volume
             and backtest_contract.confirmation_volume_minimum(side, signal_end=signal) == volume)
-        promoted_slots.append({"setup_id": confirmation.replace(":", "") + "_" + side,
+        promoted_slots.append({"setup_id": setup_id, "enabled": not intentionally_disabled,
             **(asdict(setup) if setup is not None else {}),
             "donor_signal_end": donor_signal, "minimum_confirmation_volume_ratio": volume,
             "historical_daily_paper_live_rules_match": matches})
@@ -68,12 +73,15 @@ def inspect_deployment(*, verify_frozen: bool = True) -> dict:
     return {"schema_version": "g3_local_preflight_v1", "ready": not missing and deployment_matches and registry_matches and (backtest_matches or backtest_variant_valid) and promoted_slots_match,
             "deployment_identity_matches": deployment_matches,
             "api_registry_matches": registry_matches, "historical_daily_paper_live_contract_matches": backtest_matches,
+            "confirmation_rules_match": confirmation_rules_match,
+            "confirmation_rule_note": "Existing backtest-only 09:26 SHORT minimum wick remains backtest-only; this update changes slot enablements across the full setup inventory.",
             "backtest_variant_valid": backtest_variant_valid,
             "promoted_two_slot_rules_match": promoted_slots_match,
             "promoted_two_slots": promoted_slots,
             "backtest_strategy_version": backtest_contract.STRATEGY_VERSION,
             "backtest_active_setup_count": len(backtest_contract.ACTIVE_SETUPS),
-            "backtest_scope": "BACKTEST_ONLY_TARGET_GT_075_OR_RESTORED_THREE",
+            "backtest_scope": "BACKTEST_ONLY_SLOT_WIN_RATE_GE70",
+            "slot_selection_fingerprint": backtest_value.get("slot_selection_fingerprint"),
             "strategy_profile": config.STRATEGY_PROFILE, "strategy_version": config.STRATEGY_VERSION,
             "strategy_fingerprint": config.strategy_fingerprint(), "missing_files": missing,
             "strategy_config_file": str(config.CONFIG_PATH), "active_setup_count": len(config.ACTIVE_SETUPS),

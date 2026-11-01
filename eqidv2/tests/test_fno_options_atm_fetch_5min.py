@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 from datetime import date
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -335,3 +336,129 @@ def test_module_contains_no_order_api_calls():
     assert "place_order" not in source
     assert "modify_order" not in source
     assert "cancel_order" not in source
+
+
+@pytest.fixture
+def master_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(opt.common, "MASTER_DIR", tmp_path / "masters")
+    monkeypatch.setattr(opt.common, "FNO_ROOT", tmp_path)
+    monkeypatch.setattr(opt.common, "now_ist", lambda: opt._slot("2026-09-04 09:07+05:30").to_pydatetime())
+    monkeypatch.setattr(opt.common, "publish_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(opt.common, "publish_status", lambda *a, **k: None)
+    opt.common.MASTER_DIR.mkdir()
+    return opt.common.MASTER_DIR / "options_instrument_master_2026-09-04.parquet"
+
+
+def no_master_api():
+    return SimpleNamespace(acquire=lambda *a, **k: pytest.fail("current master API must not be called"))
+
+
+def master_api(records):
+    client = SimpleNamespace(instruments=lambda exchange: records)
+    lane = opt.AppLane("app1", [client], 0)
+    return SimpleNamespace(acquire=lambda *a, **k: ([lane], [], False))
+
+
+def test_exact_archived_master_is_reused_without_authentication(master_store):
+    frame = master_frame()
+    frame.to_parquet(master_store)
+    loaded, digest, lanes, failures, reused = opt.load_or_acquire_master(date(2026, 9, 4), args(), no_master_api())
+    pd.testing.assert_frame_equal(loaded, frame)
+    assert digest and not lanes and not failures and reused
+
+
+@pytest.mark.parametrize("day", [date(2026, 9, 3), date(2026, 9, 5)])
+def test_missing_historical_or_future_master_never_uses_today_api(master_store, day):
+    with pytest.raises(FileNotFoundError, match="cannot substitute"):
+        opt.load_or_acquire_master(day, args(dry_run=False), no_master_api())
+    assert not list(master_store.parent.iterdir())
+
+
+@pytest.mark.parametrize("bad_date", ["2026-09-03", "2026-09-05", None, "invalid", "mixed"])
+def test_archive_filename_cannot_hide_wrong_or_missing_master_date(master_store, bad_date):
+    frame = master_frame()
+    if bad_date is None:
+        frame = frame.drop(columns=["master_date"])
+    elif bad_date == "mixed":
+        frame.loc[0, "master_date"] = pd.Timestamp("2026-09-03")
+    else:
+        frame["master_date"] = bad_date
+    frame.to_parquet(master_store)
+    original = master_store.read_bytes()
+    with pytest.raises(FileNotFoundError, match="Exact 2026-09-04"):
+        opt.load_or_acquire_master(date(2026, 9, 4), args(), no_master_api())
+    assert master_store.read_bytes() == original
+
+
+def test_dry_run_without_master_makes_no_authentication_request_or_write(master_store):
+    with pytest.raises(FileNotFoundError):
+        opt.load_or_acquire_master(date(2026, 9, 4), args(), no_master_api())
+    assert not list(master_store.parent.iterdir())
+
+
+def test_current_api_acquires_real_options_when_generic_master_has_only_futures(master_store):
+    generic = master_store.with_name("instrument_master_2026-09-04.parquet")
+    master_frame().assign(instrument_type="FUT").to_parquet(generic)
+    records = master_frame().drop(columns=["master_date", "underlying"]).to_dict("records")
+    frame, digest, lanes, failures, reused = opt.load_or_acquire_master(
+        date(2026, 9, 4), args(dry_run=False), master_api(records))
+    assert set(frame.instrument_type) == {"CE", "PE"}
+    assert pd.to_datetime(frame.master_date).dt.date.eq(date(2026, 9, 4)).all()
+    pd.testing.assert_frame_equal(pd.read_parquet(master_store), frame, check_dtype=False)
+    meta = opt.common.read_json(master_store.with_suffix(".json"))
+    assert meta["master_date"] == "2026-09-04" and meta["source"] == "kite_instruments_nfo"
+    assert meta["master_sha256"] == digest and lanes and not failures and not reused
+
+
+def test_api_missing_option_contracts_cannot_publish_master(master_store):
+    records = master_frame().assign(instrument_type="FUT").to_dict("records")
+    with pytest.raises(ValueError, match="no option contracts"):
+        opt.load_or_acquire_master(date(2026, 9, 4), args(dry_run=False), master_api(records))
+    assert not master_store.exists()
+
+
+def test_master_network_failure_retries_next_authenticated_lane(master_store):
+    def fail(_):
+        raise TimeoutError("instrument endpoint timeout")
+    bad = opt.AppLane("app1", [SimpleNamespace(instruments=fail)], 0)
+    good = opt.AppLane("app2", [SimpleNamespace(instruments=lambda _: master_frame().to_dict("records"))], 0)
+    session = SimpleNamespace(acquire=lambda *a, **k: ([bad, good], [], False))
+    frame, *_ = opt.load_or_acquire_master(date(2026, 9, 4), args(dry_run=False), session)
+    assert len(frame) and master_store.exists()
+
+
+def test_date_rollover_during_api_call_never_archives_under_old_date(master_store, monkeypatch):
+    clock = iter([opt._slot("2026-09-04 23:59+05:30"), opt._slot("2026-09-05 00:00+05:30")])
+    monkeypatch.setattr(opt.common, "now_ist", lambda: next(clock).to_pydatetime())
+    with pytest.raises(ValueError, match="Session date changed"):
+        opt.load_or_acquire_master(date(2026, 9, 4), args(dry_run=False), master_api(master_frame().to_dict("records")))
+    assert not master_store.exists()
+
+
+def test_live_mode_refuses_old_session_even_when_archive_exists(master_store, monkeypatch):
+    monkeypatch.setattr(opt, "_session_days", lambda _: [date(2026, 9, 3)])
+    monkeypatch.setattr(opt, "load_or_acquire_master", lambda *a: pytest.fail("must reject date before load"))
+    with pytest.raises(ValueError, match="current IST"):
+        opt.run(args(mode="live"))
+
+
+def test_live_slots_reacquire_lanes_after_runtime_auth_invalidation(master_store, monkeypatch):
+    current = [opt._slot("2026-09-04 09:20:05+05:30")]
+    monkeypatch.setattr(opt.common, "now_ist", lambda: current[0].to_pydatetime())
+    monkeypatch.setattr(opt, "_session_days", lambda _: [date(2026, 9, 4)])
+    monkeypatch.setattr(opt.common, "load_holidays", lambda: set())
+    monkeypatch.setattr(opt.legacy, "latest_completed_slot", lambda now, holidays: opt._slot(now).floor("5min"))
+    calls, used, invalidations = [], [], []
+    def acquire(*a, **k):
+        calls.append(len(calls) + 1)
+        return [f"lane{calls[-1]}"], [], False
+    session = SimpleNamespace(acquire=acquire, invalidate_runtime_auth_failures=lambda: invalidations.append(True))
+    monkeypatch.setattr(opt, "AppLaneSession", lambda: session)
+    monkeypatch.setattr(opt, "load_or_acquire_master", lambda *a: (master_frame(), "digest", ["initial"], [], False))
+    def slot(stamp, master, digest, lanes, *unused):
+        used.extend(lanes)
+        current[0] = opt._slot("2026-09-04 09:25:05+05:30" if len(used) == 1 else "2026-09-04 15:34+05:30")
+        return {"complete": True}
+    monkeypatch.setattr(opt, "run_slot", slot)
+    assert opt.run(args(mode="live", dry_run=False, once=False, poll_sec=1)) == 0
+    assert used == ["lane1", "lane2"] and len(invalidations) == 2

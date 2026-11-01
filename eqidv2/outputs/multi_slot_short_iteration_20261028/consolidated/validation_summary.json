@@ -1,0 +1,179 @@
+{
+  "accepted_normalization": [
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "0931_LONG",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "0931_LONG",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "0931_SHORT",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "0931_SHORT",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1001_LONG",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1001_LONG",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1051_LONG",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1051_LONG",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1111_SHORT",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1111_SHORT",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1146_SHORT",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1146_SHORT",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1226_SHORT",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1226_SHORT",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1231_SHORT",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1231_SHORT",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1301_SHORT",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1301_SHORT",
+      "strategy": "G7_V4_LOCK2"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1321_SHORT",
+      "strategy": "G3"
+    },
+    {
+      "all_seven_periods_match_accepted_ledger": true,
+      "setup_id": "1321_SHORT",
+      "strategy": "G7_V4_LOCK2"
+    }
+  ],
+  "accepted_setup_strategy_period_checks": 140,
+  "as_of_session": "2026-10-28_INCOMPLETE_EXCLUDED",
+  "baseline_parity_checks_passed": 30,
+  "batch_validation": [
+    {
+      "baseline_parity_checks_passed": 6,
+      "batch": "early",
+      "declared_files_verified": 17,
+      "directory": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\early",
+      "manifest": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\early\\artifact_manifest.json",
+      "manifest_sha256": "9d798005e140343cb0e093010be02a89555e9f7bd169aed11b9db3fe4b3a1045",
+      "unlisted_files": []
+    },
+    {
+      "baseline_parity_checks_passed": 6,
+      "batch": "missing_early_long",
+      "declared_files_verified": 18,
+      "directory": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\missing_early_long",
+      "manifest": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\missing_early_long\\artifact_manifest.json",
+      "manifest_sha256": "01b2f055faf743ff80d3d6a96ac123a3595bf04294c8a62b522f1d884d8519a4",
+      "unlisted_files": []
+    },
+    {
+      "baseline_parity_checks_passed": 8,
+      "batch": "missing_midday",
+      "declared_files_verified": 29,
+      "directory": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\missing_midday",
+      "manifest": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\missing_midday\\artifact_manifest.json",
+      "manifest_sha256": "edbe722854e1010bf736edccd3808c6e67d31249cafa6564c02cdb1ca7dc8916",
+      "unlisted_files": []
+    },
+    {
+      "baseline_parity_checks_passed": 6,
+      "batch": "mid",
+      "declared_files_verified": 22,
+      "directory": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\mid",
+      "manifest": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\mid\\artifact_manifest.json",
+      "manifest_sha256": "df0aaf8d81b7a56a141b9a62b744441991f103068ac5c6c0a2684f13004e3e81",
+      "unlisted_files": []
+    },
+    {
+      "baseline_parity_checks_passed": 4,
+      "batch": "late",
+      "declared_files_verified": 22,
+      "directory": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\late",
+      "manifest": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\outputs\\multi_slot_short_iteration_20261028\\late\\artifact_manifest.json",
+      "manifest_sha256": "a1ad9b8c7f3a80e5b8f259008e8b3c02c623c5eed70be25bcc2ff1091f9f3756",
+      "unlisted_files": []
+    }
+  ],
+  "data_end": "2026-10-27",
+  "development_gate_rows_recomputed": 220,
+  "development_selected_diagnostics": 2,
+  "expected_setups": [
+    "0931_LONG",
+    "0931_SHORT",
+    "1001_LONG",
+    "1051_LONG",
+    "1111_SHORT",
+    "1146_SHORT",
+    "1226_SHORT",
+    "1231_SHORT",
+    "1301_SHORT",
+    "1321_SHORT"
+  ],
+  "final_nonbaseline_promotions": 0,
+  "october_full_portfolio_rows": 32,
+  "october_requested_aggregate_rows": 32,
+  "october_setup_day_rows": 320,
+  "status": "PASS",
+  "strategies": [
+    "G3",
+    "G7_V4_LOCK2"
+  ],
+  "submanifest_files_verified": 108
+}

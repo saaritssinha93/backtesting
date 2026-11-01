@@ -1,0 +1,35 @@
+{
+  "status": "Read-only inventory; these paths have not been deleted",
+  "units": "decimal GB (1,000,000,000 bytes)",
+  "incomplete_backtest_candidates": [
+    {
+      "path": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_3/production/runs/2026-10-16/20261029T084021387600_2eef8142",
+      "allocated_bytes": 3466680038,
+      "files": 624,
+      "evidence": "Only an incomplete input_snapshots/.staging directory; no run or snapshot manifest. No references found in checked current pointers, history, reports, docs, outputs or configs.",
+      "remaining_check": "Active writer/open handle ownership is not verified. Historical automatic review rejected failed-backtest deletion; no retry performed."
+    },
+    {
+      "path": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_3/production/runs/2026-10-16/20261029T172941047399_8ffa7faf",
+      "allocated_bytes": 1588790457,
+      "files": 318,
+      "evidence": "Only an incomplete input_snapshots/.staging directory; no run or snapshot manifest. No references found in checked current pointers, history, reports, docs, outputs or configs.",
+      "remaining_check": "Active writer/open handle ownership is not verified. Historical automatic review rejected failed-backtest deletion; no retry performed."
+    }
+  ],
+  "installer_cache_candidates": [
+    {"path": "C:/SWSetup", "approximate_gb": 2.037, "classification": "Old extracted HP driver/BIOS installer packages. Check installer ownership and recovery needs before removal."},
+    {"path": "C:/ProgramData/HP/HP Support Framework/Softpaq", "approximate_gb": 1.687, "classification": "Old HP package downloads. Check installer ownership and recovery needs before removal."}
+  ],
+  "retention_review": [
+    {"path": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_3", "approximate_gb": 217.486, "classification": "Includes completed runs and immutable snapshots. Size is NOT a reclaimable-space estimate. Keep current pointer targets and provenance needed to reproduce results; review old runs for external archiving."},
+    {"path": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g", "approximate_gb": 41.986, "classification": "Older strategy outputs; retention review required."}
+  ],
+  "preserve": [
+    "Trading source data, live/paper runtime state, credentials, current result pointers and their target runs",
+    "Current ChromeDriver 156 versions and drivers.json; verified unchanged after cleanup",
+    "Active Temp and PDF-XChange updater installers",
+    "Windows, Visual Studio and security-product installer caches; do not manually remove",
+    "Pagefile and system recovery data"
+  ]
+}

@@ -1,12 +1,12 @@
 {
   "schema_version": "fno_active_strategy_deployment_v1",
   "profile": "V13_V10_G_3",
-  "strategy_version": "V13-V10-G-3-PRODUCTION-V13",
-  "strategy_fingerprint": "74ff6bf6a2c1a68a08a324d8090809dbfe10a3ccacf289ab1953fb03636ca615",
-  "accepted_variant": "G3_W1_V1p1_0950_LONG_T075_0920_LONG_T300_LATE_SIX_SELECTED_TEN_MIDDAY_TWELVE_AFTERNOON_FIFTEEN_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120_1011_SHORT_MOVE011_TARGET_GT075_RESTORED3",
-  "production_config": "configs/strategies/v13_v10_g_3_production_v13.json",
-  "deployment_stage": "PAPER_VALIDATION",
-  "live_activation_authorized": false,
+  "strategy_version": "V13-V10-G-3-PRODUCTION-V15",
+  "strategy_fingerprint": "89aae1fe359f6c6cd7b6cbaac4879d5818ce40c92808c4bf539544a4f80e3aed",
+  "accepted_variant": "G3_W1_V1p1_0950_LONG_T075_0920_LONG_T300_LATE_SIX_SELECTED_TEN_MIDDAY_TWELVE_AFTERNOON_FIFTEEN_0941_LONG_VOLUME080_1035_1M_EXTENSION_ATR3_0920_SHORT_1010_LONG_TARGET150_0926_LONG_5M_VOLUME120_1011_SHORT_MOVE011_TARGET_GT075_RESTORED3_ALL_SLOT_NET_WIN_GE70",
+  "production_config": "configs/strategies/v13_v10_g_3_production_v15.json",
+  "deployment_stage": "LIVE_APPROVED",
+  "live_activation_authorized": true,
   "live_execution_policy": {
     "live_execution_policy_schema_version": "g3_live_execution_policy_v1",
     "live_execution_policy_fingerprint": "cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e",
@@ -19,8 +19,8 @@
     "max_daily_entries": null,
     "max_reserved_gross_exposure_rs": null
   },
-  "migration_date": "2026-10-23",
-  "migration_plan": "docs/G3_PRODUCTION_V13_PARITY_2026-10-23.md",
+  "migration_date": "2026-10-28",
+  "migration_plan": "configs/strategies/slot_win70_20261028.json",
   "historical_profiles_preserved": [
     "V13_V10_G",
     "V13_V10_G_2"
@@ -31,7 +31,7 @@
     "Separate explicit LIVE activation approval",
     "Dated strategy- and execution-policy-bound G3 acknowledgement and arm record"
   ],
-  "next_worker_session": "2026-10-26",
+  "next_worker_session": "2026-10-29",
   "previous_session_identity": {
     "through_session": "2026-10-23",
     "strategy_version": "V13-V10-G-3-PRODUCTION-V12",
@@ -119,5 +119,69 @@
     "setup_ids_sha256": "f555f8f81cad15b9c5d33a74a6f277ae0ed5dfe077c07657a19f472b7e5028b5",
     "approved_at_ist": "2026-10-23T09:10:29.859474+05:30",
     "broker_checked_at_ist": "2026-10-23T09:10:26.750392+05:30"
+  },
+  "previous_session_identities": {
+    "2026-10-28": {
+      "through_session": "2026-10-28",
+      "strategy_version": "V13-V10-G-3-PRODUCTION-V13",
+      "strategy_fingerprint": "74ff6bf6a2c1a68a08a324d8090809dbfe10a3ccacf289ab1953fb03636ca615",
+      "reason": "Recorded V13 decisions remain historical evidence; selected V14 governs new entries."
+    }
+  },
+  "slot_selection_fingerprint": "90520518d7e69fdfd4a8622102d43045facd248597b0dca415b8e061c3334f6d",
+  "superseded_same_day_identity": {
+    "through_session": "2026-10-28",
+    "strategy_version": "V13-V10-G-3-PRODUCTION-V14",
+    "strategy_fingerprint": "4466490c49ab261ba88f61ab8054bb284eadbd2ba32d720265ecd8b5594fc0c3",
+    "reason": "Recorded V14 decisions retain their identity; all-slot V15 governs new entries."
+  },
+  "live_approval": {
+    "source": "STANDING_OPERATOR_POLICY",
+    "entry_not_before_ist": "2026-10-29T09:10:30.657272+05:30",
+    "session_date": "2026-10-29",
+    "strategy_fingerprint": "89aae1fe359f6c6cd7b6cbaac4879d5818ce40c92808c4bf539544a4f80e3aed",
+    "live_execution_policy_fingerprint": "cc9210d610252534af34ee812407ba8bb46546ec466b35e09388bb4815eadc7e",
+    "setup_ids": [
+      "0921_LONG",
+      "0926_LONG",
+      "0926_SHORT",
+      "0931_SHORT",
+      "0936_SHORT",
+      "0951_LONG",
+      "0951_SHORT",
+      "0956_LONG",
+      "1121_SHORT",
+      "1006_LONG",
+      "1011_SHORT",
+      "1016_LONG",
+      "1016_SHORT",
+      "1026_SHORT",
+      "1031_SHORT",
+      "1036_LONG",
+      "1036_SHORT",
+      "1041_LONG",
+      "1046_LONG",
+      "1046_SHORT",
+      "1051_LONG",
+      "1056_SHORT",
+      "1111_LONG",
+      "1126_SHORT",
+      "1136_LONG",
+      "1136_SHORT",
+      "1141_LONG",
+      "1206_LONG",
+      "1211_SHORT",
+      "1216_LONG",
+      "1231_LONG",
+      "1236_SHORT",
+      "1301_SHORT",
+      "1331_LONG"
+    ],
+    "paper_validation": "STANDING_OPERATOR_POLICY_OVERRIDE_NOT_ATTESTED",
+    "standing_policy_id": "G3_LIVE_STANDING_20261029_V3",
+    "standing_policy_fingerprint": "ad8a9180c2be2f9ede2b9cd27f7207ed535d06f50dd84000c6452fa4f7ff11d8",
+    "setup_ids_sha256": "750b52503841d7055a9facabb3204959f69e1673008f3e60f0dc99a93638970c",
+    "approved_at_ist": "2026-10-29T09:10:30.657272+05:30",
+    "broker_checked_at_ist": "2026-10-29T09:10:28.971192+05:30"
   }
 }

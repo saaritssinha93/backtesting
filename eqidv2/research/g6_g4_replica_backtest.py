@@ -12,7 +12,7 @@ import pandas as pd
 
 from research import g4_bounded_exit_backtest as bounded
 from research import g4_g3_mirror_backtest as mirror
-from research import g3_target_cutoff_contract as donor
+from research.archived_g3_v14 import contract as donor
 from research import g4_1216_comparison as approved1216
 from research import g6_nifty_direction as nifty_filter
 from research import g6_primary_index_direction as primary_filter

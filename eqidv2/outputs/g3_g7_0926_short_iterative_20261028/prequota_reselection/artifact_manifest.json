@@ -1,0 +1,26 @@
+{
+  "active_configs_modified": false,
+  "execution_authority": false,
+  "files": {
+    "baseline_reproduction.json": "bc6a7e572efc02db74bc39ee0005c46c213c9f7f26f58279ba39871577a7f404",
+    "candidate_daywise_comparison.csv": "99aaa8cb18d89c5c533d0ce92c36aead9fcbc9498d6913381c7ec0a69c6dd09b",
+    "candidate_decision.json": "b0abaeba25efa560f677b57939a699c9cedeeb25438d85d32c95222313d534f1",
+    "candidate_pool_full.pkl": "c5269fb3ec471ebcdd2136ad3eda682047404efad86792d8bf63e649a5d0c448",
+    "candidate_pool_inventory.csv": "a0f0c13a47783e113504966a0c081f99c275f2247f769b545b48fce6656d17ce",
+    "candidate_pool_proof.json": "163c01be0650be26a7b8bcff995cf1371abb12abe4207f918c4408d7c604d99e",
+    "candidate_variant_decisions.csv": "3871eb2a7df5d1c7a88724348f90556d396217ae572fb95d26ae92f68faf3cd3",
+    "cost_stress_g7_lock_events.csv": "5befaa18a3f71d30fffbe26b4bd44e46a1a2a6127e833b1291bf0cf22c3f6ba6",
+    "cost_stress_metrics.csv": "1daa3e44c469292c786533ca7136201773bc82447c696e06f0b53b0d6d9a68c0",
+    "cost_stress_provenance.json": "a8199f0f5740a9c5b7ef1e2bf29e47f16b4a19a5112980bf5a8a963137b2f99f",
+    "grid_protocol.json": "ab1f6e1c9c94d6ae503803b82d0378c588eb162fbe106208a90797f6993cd9a0",
+    "research_candidate_config.json": "bca404850be8009c74191bca2ef5216132989ae3018edba103a608306deb520b",
+    "run_cost_stress.py": "db937a21265e94e3b727eac813cfbbf6264adac40106388106f9273ceab1e963",
+    "run_prequota_reselection.py": "cde71fe8e458b51b8ad2f0e329d1780c89e19c1cba074783825a96771ac40120",
+    "selection_changes.csv": "89424b0986593fbcf97a3ccb52644dc037fd52b9c586b0d862b1ec1a501e1a56",
+    "source_provenance.json": "0e2e25a88aca655d958b208cbd5d6d16d5371cf9ce286d4f8a6c4a9e0ab85745",
+    "variant_0926_trade_details.csv": "1452ca73967e3495b70c9c0b6e57c23e0d51df3a2b51d756f6c7f93d38740b58",
+    "variant_portfolio_metrics.csv": "d6e27cf7bab15c4544d526138307a59cfa7a3d17e0712ef6cb55478ddb67c57e",
+    "variant_setup_metrics.csv": "061982577895da75bc9995e479ecf6d9f84f01a809a9eacb4fc49dae4e986f06"
+  },
+  "scope": "BACKTEST_ONLY"
+}

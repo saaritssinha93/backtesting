@@ -127,8 +127,13 @@ def test_options_scheduler_defines_one_fetch_and_four_paper_tasks_without_starti
     assert "if (-not $Apply)" in source
     assert "Start-ScheduledTask" not in source
     assert "schtasks.exe /Run" not in source
+    assert "$settings.ExecutionTimeLimit = if ($item.Name -eq 'EQIDV2_fno_options_atm_fetch_5min_0907') { 'PT7H' } else { 'PT0S' }" in source
+    hardener = (BAT / "harden_scheduled_task.ps1").read_text(encoding="utf-8")
+    assert "$definition.Settings.ExecutionTimeLimit = if ($parts.Name -eq 'EQIDV2_fno_options_atm_fetch_5min_0907') { 'PT7H' } else { 'PT0S' }" in hardener
     fetch_launcher = (BAT / "run_fno_options_atm_fetch_5min.bat").read_text(encoding="utf-8")
-    assert '"--max-apps","8"' in fetch_launcher
+    assert "--service options" in fetch_launcher
+    from tools.fno_data_supervisor import Config
+    assert Config("options").command()[3:9] == ["--mode", "live", "--intervals", "both", "--max-apps", "8"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell parser")

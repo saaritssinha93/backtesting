@@ -62,9 +62,12 @@ class FnoOiFastProductionTrialSchedulerTests(unittest.TestCase):
         )
         self.assertNotIn("-Role Trial", content)
         self.assertNotIn('"--session-date"', content)
-        self.assertIn('"--workers-per-app","2"', content)
-        self.assertIn('"--writer-workers","8"', content)
-        self.assertIn("assert_fno_oi_fast_production_trial_exclusive.ps1", content)
+        self.assertIn("fno_data_supervisor.py", content)
+        self.assertIn("--service fetch", content)
+        from tools.fno_data_supervisor import Config
+        arguments = Config("fetch").command()
+        self.assertEqual(arguments[arguments.index("--workers-per-app") + 1], "2")
+        self.assertEqual(arguments[arguments.index("--writer-workers") + 1], "8")
 
     def test_weekday_installer_owns_fast_production_schedule(self) -> None:
         content = (

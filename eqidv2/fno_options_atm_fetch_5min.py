@@ -379,6 +379,21 @@ def resolve_atm_contracts(
     ).reset_index(drop=True)
 
 
+def _validated_dated_master(frame: pd.DataFrame, session_day: date) -> pd.DataFrame:
+    """A filename alone is not evidence of the instrument snapshot's date."""
+    if frame.empty or "master_date" not in frame:
+        raise ValueError("NFO master has no archived master_date")
+    dates = pd.to_datetime(frame["master_date"], errors="coerce", format="mixed").dt.date
+    if dates.isna().any() or not dates.eq(session_day).all():
+        raise ValueError(f"NFO master_date must equal {session_day.isoformat()}")
+    if "underlying" not in frame or any(column not in frame for column in MASTER_COLUMNS):
+        # Normalization is safe only after validating the existing date evidence.
+        frame = normalize_nfo_master(frame.to_dict("records"), master_date=session_day)
+    if not frame["instrument_type"].isin(["CE", "PE"]).any():
+        raise ValueError("NFO master contains no option contracts")
+    return frame
+
+
 def load_or_acquire_master(
     session_day: date, args: argparse.Namespace, lane_session: AppLaneSession
 ) -> tuple[pd.DataFrame, str, list[AppLane], list[str], bool]:
@@ -390,10 +405,10 @@ def load_or_acquire_master(
     )
     for path in (dated, fallback, research):
         if path.exists():
-            frame = pd.read_parquet(path)
-            if "underlying" not in frame.columns or "master_date" not in frame.columns:
-                frame = normalize_nfo_master(frame.to_dict("records"), master_date=session_day)
-            if not frame["instrument_type"].isin(["CE", "PE"]).any():
+            try:
+                frame = _validated_dated_master(pd.read_parquet(path), session_day)
+            except (OSError, ValueError, KeyError) as exc:
+                print(f"[OPT-ATM][MASTER-REJECT] {path.name}: {type(exc).__name__}: {exc}", flush=True)
                 continue
             digest = _json_hash(_frame_records(frame, [c for c in MASTER_COLUMNS if c in frame.columns]))
             if not args.dry_run and path != dated:
@@ -409,11 +424,18 @@ def load_or_acquire_master(
                 })
             return frame, digest, [], [], True
 
+    # Kite instruments() is a current snapshot, never a historical lookup. Do
+    # not save today's contracts under a missing older (or future) filename.
+    if session_day != common.now_ist().date() or args.dry_run:
+        raise FileNotFoundError(f"Exact {session_day.isoformat()} NFO option master unavailable; current API snapshot cannot substitute")
+    common.publish_heartbeat(SESSION, "RUNNING", phase="ACQUIRE_MASTER", session_date_ist=session_day.isoformat())
     lanes, failures, reused = lane_session.acquire(args, auth_tag="[OPT-ATM]")
     last_error: Exception | None = None
     records: list[dict[str, Any]] = []
     for lane in lanes:
         try:
+            common.publish_heartbeat(SESSION, "RUNNING", phase="FETCH_MASTER", app=lane.app_name,
+                                     session_date_ist=session_day.isoformat())
             lane.pace()
             records = list(lane.next_client().instruments("NFO"))
             if records:
@@ -424,7 +446,9 @@ def load_or_acquire_master(
                 lane._runtime_auth_failure.set()
     if not records:
         raise RuntimeError(f"Unable to acquire NFO master: {last_error}")
-    frame = normalize_nfo_master(records, master_date=common.now_ist().date())
+    if common.now_ist().date() != session_day:
+        raise ValueError("Session date changed while acquiring NFO master")
+    frame = _validated_dated_master(normalize_nfo_master(records, master_date=session_day), session_day)
     digest = _json_hash(_frame_records(frame, list(MASTER_COLUMNS)))
     if not args.dry_run:
         common.atomic_write_parquet(frame, dated)
@@ -433,7 +457,7 @@ def load_or_acquire_master(
             .astype(str).unique().tolist()
         )
         common.atomic_write_json(dated.with_suffix(".json"), {
-            "master_date": common.now_ist().date().isoformat(), "master_sha256": digest,
+            "master_date": session_day.isoformat(), "master_sha256": digest,
             "symbol_set_sha256": _json_hash(option_symbols), "rows": len(frame),
             "source": "kite_instruments_nfo",
         })
@@ -920,12 +944,17 @@ def run(args: argparse.Namespace) -> int:
     exit_code = 0
     if args.mode == "live" and len(days) != 1:
         raise ValueError("Live mode accepts exactly one session date")
+    if args.mode == "live" and days[0] != common.now_ist().date():
+        raise ValueError("Live mode requires the current IST session date")
     for session_day in days:
         if not args.dry_run:
             common.publish_status(
                 SESSION, "RUNNING", phase="START", session_date_ist=session_day.isoformat()
             )
         master, digest, lanes, failures, reused = load_or_acquire_master(session_day, args, lane_session)
+        if not args.dry_run:
+            common.publish_status(SESSION, "RUNNING", phase="MASTER_READY", session_date_ist=session_day.isoformat(),
+                                  master_date=session_day.isoformat(), master_rows=len(master), master_sha256=digest)
         if not args.dry_run and not lanes:
             lanes, failures, reused = lane_session.acquire(args, auth_tag="[OPT-ATM]")
         if args.mode == "live":
@@ -954,6 +983,10 @@ def run(args: argparse.Namespace) -> int:
                     time.sleep(max(0.2, min(float(args.poll_sec), 5.0)))
                     continue
                 try:
+                    if not args.dry_run:
+                        # Refresh credentials after a runtime authentication failure;
+                        # AppLaneSession reuses clients when nothing has changed.
+                        lanes, failures, reused = lane_session.acquire(args, auth_tag="[OPT-ATM]")
                     marker = run_slot(latest, master, digest, lanes, args, archive_cache)
                     if not marker.get("complete"):
                         exit_code = 2

@@ -1,0 +1,304 @@
+{
+  "active_configs_modified": false,
+  "artifacts": {
+    "baseline_reproduction.json": "bc6a7e572efc02db74bc39ee0005c46c213c9f7f26f58279ba39871577a7f404",
+    "candidate_daywise_comparison.csv": "99aaa8cb18d89c5c533d0ce92c36aead9fcbc9498d6913381c7ec0a69c6dd09b",
+    "cost_stress_metrics.csv": "1daa3e44c469292c786533ca7136201773bc82447c696e06f0b53b0d6d9a68c0",
+    "variant_portfolio_metrics.csv": "d6e27cf7bab15c4544d526138307a59cfa7a3d17e0712ef6cb55478ddb67c57e",
+    "variant_setup_metrics.csv": "061982577895da75bc9995e479ecf6d9f84f01a809a9eacb4fc49dae4e986f06"
+  },
+  "as_of_session": "2026-10-27",
+  "baseline_reproduction": [
+    {
+      "differences": [],
+      "label": "G3 full-portfolio allocator control",
+      "passed": true,
+      "rows": 634
+    },
+    {
+      "differences": [],
+      "label": "G7 V4 lock2 full-portfolio control",
+      "passed": true,
+      "rows": 603
+    },
+    {
+      "differences": [],
+      "label": "G3 reconstructed baseline selection + paths + portfolio",
+      "passed": true,
+      "rows": 634
+    },
+    {
+      "differences": [],
+      "label": "G7 reconstructed extension<=4 selection + paths + V4 protection + lock2 portfolio",
+      "passed": true,
+      "rows": 603
+    }
+  ],
+  "candidate_pool": {
+    "base_gate_candidates": 213,
+    "calendar_sessions": 59,
+    "candidate_days": 25,
+    "replacement_candidates_allowed": true,
+    "variant_applied_before_ranking_and_quota": true
+  },
+  "candidate_rule": {
+    "feature": "confirmation lower wick / confirmation candle range",
+    "intent": "Require the confirmation candle to close at least 20% of its range above its low; the later break of that low must then reconfirm downside rather than chase a close at the extreme.",
+    "parameter": "minimum_directional_wick_ratio",
+    "setup_id": "0926_SHORT",
+    "side": "SHORT",
+    "timing": "Apply after existing minimum gates and before max-volume ranking and two-entry quota",
+    "value": 0.2
+  },
+  "cost_stress": {
+    "G3": {
+      "15_bps": {
+        "0926_SHORT": {
+          "losses": 2,
+          "net_delta_vs_baseline_same_cost_rs": 15894.552053920288,
+          "net_pnl_rs": 26429.918696420737,
+          "trades": 11,
+          "win_rate_pct": 81.81818181818181,
+          "wins": 9
+        },
+        "full_portfolio": {
+          "losses": 175,
+          "net_delta_vs_baseline_same_cost_rs": 15894.552053920344,
+          "net_pnl_rs": 951672.0486086248,
+          "trades": 546,
+          "win_rate_pct": 67.94871794871794,
+          "wins": 371
+        }
+      },
+      "5_bps": {
+        "0926_SHORT": {
+          "losses": 2,
+          "net_delta_vs_baseline_same_cost_rs": 12394.552053920284,
+          "net_pnl_rs": 31929.918696420737,
+          "trades": 11,
+          "win_rate_pct": 81.81818181818181,
+          "wins": 9
+        },
+        "full_portfolio": {
+          "losses": 152,
+          "net_delta_vs_baseline_same_cost_rs": 12394.55205392046,
+          "net_pnl_rs": 1224672.0486086248,
+          "trades": 546,
+          "win_rate_pct": 72.16117216117216,
+          "wins": 394
+        }
+      },
+      "9_bps": {
+        "0926_SHORT": {
+          "losses": 2,
+          "net_delta_vs_baseline_same_cost_rs": 13794.552053920286,
+          "net_pnl_rs": 29729.918696420733,
+          "trades": 11,
+          "win_rate_pct": 81.81818181818181,
+          "wins": 9
+        },
+        "full_portfolio": {
+          "losses": 162,
+          "net_delta_vs_baseline_same_cost_rs": 13794.55205392046,
+          "net_pnl_rs": 1115472.0486086248,
+          "trades": 546,
+          "win_rate_pct": 70.32967032967034,
+          "wins": 384
+        }
+      }
+    },
+    "G7_V4_LOCK2": {
+      "15_bps": {
+        "0926_SHORT": {
+          "losses": 4,
+          "net_delta_vs_baseline_same_cost_rs": 14614.468174148558,
+          "net_pnl_rs": 25590.1753840871,
+          "trades": 11,
+          "win_rate_pct": 63.63636363636363,
+          "wins": 7
+        },
+        "full_portfolio": {
+          "losses": 137,
+          "net_delta_vs_baseline_same_cost_rs": 42737.30479720596,
+          "net_pnl_rs": 618956.2992656274,
+          "trades": 362,
+          "win_rate_pct": 62.15469613259668,
+          "wins": 225
+        }
+      },
+      "5_bps": {
+        "0926_SHORT": {
+          "losses": 1,
+          "net_delta_vs_baseline_same_cost_rs": 11126.806160385124,
+          "net_pnl_rs": 31068.1895241294,
+          "trades": 11,
+          "win_rate_pct": 90.9090909090909,
+          "wins": 10
+        },
+        "full_portfolio": {
+          "losses": 77,
+          "net_delta_vs_baseline_same_cost_rs": 16772.031879891874,
+          "net_pnl_rs": 859638.7863895202,
+          "trades": 397,
+          "win_rate_pct": 80.60453400503778,
+          "wins": 320
+        }
+      },
+      "9_bps": {
+        "0926_SHORT": {
+          "losses": 1,
+          "net_delta_vs_baseline_same_cost_rs": 12521.870965890505,
+          "net_pnl_rs": 28876.98386811248,
+          "trades": 11,
+          "win_rate_pct": 90.9090909090909,
+          "wins": 10
+        },
+        "full_portfolio": {
+          "losses": 81,
+          "net_delta_vs_baseline_same_cost_rs": 17369.599720004248,
+          "net_pnl_rs": 780478.01261012,
+          "trades": 397,
+          "win_rate_pct": 79.5969773299748,
+          "wins": 316
+        }
+      }
+    }
+  },
+  "execution_authority": false,
+  "next_gate": "First implement this exact research specification in a shadow-only path and prove parity. Then freeze its rule and source hashes and collect untouched forward sessions. Do not promote it until both books retain adequate trade count, remain profitable under stress, and show a lower confidence bound compatible with the required rate.",
+  "numerical_target_above_75_pct_at_5bps": true,
+  "rejection_reasons_for_active_adoption": [
+    "The candidate leaves 11 executions in each strategy, 61.1% as many as baseline; replacements mean this is not identity retention.",
+    "The exact 95% lower confidence bounds are below 75% for both strategies.",
+    "After the development period, G-3 retains one execution and it loses; G7 retains one and it wins.",
+    "At 15 bps G7 falls to 7 wins from 11 executions because small protected exits become net losses and alter the two-loss lock chronology.",
+    "The same history has been inspected repeatedly, and the 0.20 threshold was motivated by a prior post-hoc diagnostic."
+  ],
+  "reliable_true_win_rate_above_75_pct_established": false,
+  "results": {
+    "G3": {
+      "baseline_5bps": {
+        "executed_trades": 18,
+        "losses": 8,
+        "net_pnl_rs": 19535.3666425004,
+        "selected_opportunities": 22,
+        "win_rate_pct": 55.55555555555556,
+        "wins": 10
+      },
+      "candidate_5bps": {
+        "clopper_pearson_95_lower_pct": 48.22441476398273,
+        "clopper_pearson_95_upper_pct": 97.71688017000403,
+        "executed_trade_count_ratio_vs_baseline_pct": 61.11111111111112,
+        "executed_trades": 11,
+        "losses": 2,
+        "net_pnl_rs": 31929.918696420737,
+        "one_sided_p_value_vs_75_pct": 0.4552009105682373,
+        "replacement_winner_identities": [
+          {
+            "day": "2026-08-19",
+            "tradingsymbol": "FORCEMOT"
+          },
+          {
+            "day": "2026-09-07",
+            "tradingsymbol": "WIPRO"
+          }
+        ],
+        "same_baseline_execution_identities": 9,
+        "same_baseline_execution_identity_pct": 50.0,
+        "same_baseline_winner_identities": 7,
+        "same_baseline_winner_identity_pct": 70.0,
+        "selected_opportunities": 14,
+        "win_rate_pct": 81.81818181818181,
+        "winner_count_ratio_vs_baseline_pct": 90.0,
+        "wins": 9
+      },
+      "full_portfolio_baseline_5bps": {
+        "flats": 0.0,
+        "losses": 158.0,
+        "net_delta_vs_baseline_same_cost_rs": 0.0,
+        "net_pnl_rs": 1212277.4965547044,
+        "trades": 553.0,
+        "win_rate_pct": 71.42857142857143,
+        "wins": 395.0
+      },
+      "full_portfolio_candidate_5bps": {
+        "flats": 0.0,
+        "losses": 152.0,
+        "net_delta_vs_baseline_same_cost_rs": 12394.55205392046,
+        "net_pnl_rs": 1224672.0486086248,
+        "trades": 546.0,
+        "win_rate_pct": 72.16117216117216,
+        "wins": 394.0
+      },
+      "post_development_candidate_5bps": {
+        "executed_trades": 1,
+        "losses": 1,
+        "net_pnl_rs": -5250.000000000005,
+        "selected_opportunities": 2,
+        "wins": 0
+      }
+    },
+    "G7_V4_LOCK2": {
+      "baseline_5bps": {
+        "executed_trades": 18,
+        "losses": 5,
+        "net_pnl_rs": 19941.38336374422,
+        "selected_opportunities": 22,
+        "win_rate_pct": 72.22222222222223,
+        "wins": 13
+      },
+      "candidate_5bps": {
+        "clopper_pearson_95_lower_pct": 58.72200830116173,
+        "clopper_pearson_95_upper_pct": 99.77010277861858,
+        "executed_trade_count_ratio_vs_baseline_pct": 61.11111111111112,
+        "executed_trades": 11,
+        "losses": 1,
+        "net_pnl_rs": 31068.1895241294,
+        "one_sided_p_value_vs_75_pct": 0.1970973014831543,
+        "replacement_winner_identities": [
+          {
+            "day": "2026-09-07",
+            "tradingsymbol": "WIPRO"
+          }
+        ],
+        "same_baseline_execution_identities": 10,
+        "same_baseline_execution_identity_pct": 55.55555555555556,
+        "same_baseline_winner_identities": 9,
+        "same_baseline_winner_identity_pct": 69.23076923076923,
+        "selected_opportunities": 14,
+        "win_rate_pct": 90.9090909090909,
+        "winner_count_ratio_vs_baseline_pct": 76.92307692307692,
+        "wins": 10
+      },
+      "full_portfolio_baseline_5bps": {
+        "flats": 0.0,
+        "losses": 81.0,
+        "net_delta_vs_baseline_same_cost_rs": 0.0,
+        "net_pnl_rs": 842866.7545096283,
+        "trades": 400.0,
+        "win_rate_pct": 79.75,
+        "wins": 319.0
+      },
+      "full_portfolio_candidate_5bps": {
+        "flats": 0.0,
+        "losses": 77.0,
+        "net_delta_vs_baseline_same_cost_rs": 16772.031879891874,
+        "net_pnl_rs": 859638.7863895202,
+        "trades": 397.0,
+        "win_rate_pct": 80.60453400503778,
+        "wins": 320.0
+      },
+      "post_development_candidate_5bps": {
+        "executed_trades": 1,
+        "losses": 0,
+        "net_pnl_rs": 249.48000000000044,
+        "selected_opportunities": 2,
+        "wins": 1
+      }
+    }
+  },
+  "scope": "BACKTEST_ONLY",
+  "status": "RESEARCH_SPECIFICATION_NOT_IMPLEMENTED_OR_ADOPTED",
+  "study": "09:26 SHORT G-3 and G7 V4 two-loss-lock replacement-aware audit",
+  "threshold_origin": "The 0.20 threshold had already appeared in selected-ledger exploratory diagnostics. The replacement-aware grid was frozen before its own outcomes, but the threshold is not an untouched hypothesis."
+}

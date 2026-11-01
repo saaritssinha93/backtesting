@@ -70,6 +70,8 @@ foreach ($item in $plan) {
 
 foreach ($item in $plan) {
     $action = New-ScheduledTaskAction -Execute $item.Runner
+    # A stalled data launcher must not suppress tomorrow's IgnoreNew trigger.
+    $settings.ExecutionTimeLimit = if ($item.Name -eq 'EQIDV2_fno_options_atm_fetch_5min_0907') { 'PT7H' } else { 'PT0S' }
     $trigger = New-ScheduledTaskTrigger `
         -Weekly `
         -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday `

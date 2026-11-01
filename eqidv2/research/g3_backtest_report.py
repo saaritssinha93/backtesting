@@ -10,6 +10,7 @@ import pandas as pd
 
 from research.g3_backtest_profile import contract, production
 from research.g3_0920_backtest import _stats
+import fno_v13_v10_g_3_cutoff_production as runtime_production
 
 
 def tables(ledger, days, *, profile=None):
@@ -76,7 +77,8 @@ def write(output, summary, ledger, daily):
     target_cutoff = payload.get('scope') == 'BACKTEST_ONLY'
     disabled_setups = payload.get('disabled_setups', [])
     disabled_count = len(disabled_setups)
-    production_count = len(production.ACTIVE_SETUPS)
+    production_count = len(runtime_production.ACTIVE_SETUPS)
+    slot_policy = payload.get('slot_selection')
     exceptions = [s for s in profile.ACTIVE_SETUPS if s.target_pct <= .75]
     exception_text = ', '.join(f'{s.signal_end} {s.side} ({s.target_pct:g}%)' for s in exceptions)
     for name, frame in [('setup_results', setups), ('monthly_results', monthly), ('period_results', periods)]:
@@ -91,11 +93,22 @@ def write(output, summary, ledger, daily):
             f'all {disabled_count} setups with target <=0.75% are disabled; {setup_count} setups with target >0.75% remain. ')
     inventory = ('Backtest-only configuration: ' + rule + f'PAPER/LIVE retain their {production_count}-setup production configuration. '
         if target_cutoff else f'This saved production configuration contains {setup_count} setups. ')
+    if slot_policy:
+        inventory = (f'Historical slot win rate >=70% applies to every represented slot/direction pair; {setup_count} combinations are enabled in total. '
+            'Seventeen G3 pairs are disabled. Slots with zero executed trades are also excluded. '
+            'The selection is applied before new portfolio admissions; existing positions remain managed. '
+            'Prior entry and exit rules are retained. PAPER/LIVE use the same frozen G3 slot selection, with separate sizing and activation gates. ')
     page += '<p>' + inventory + 'Confirmation is at the exact next minute. Stops remain 1.25%, tightening to 1% after 120 minutes; square-off is 15:15. Afternoon setups use one highest-liquidity qualifying stock per session.</p>'
     page += '<p>Rs100,000 capital per entry, five-times exposure, Rs1,000,000 portfolio capital; five bps round-trip cost. Slippage, market impact and broker-specific charges beyond this estimate are not modeled. Wins are positive net P&amp;L, including profitable time exits.</p>'
-    scope = (f'This historical backtest uses its saved {setup_count}-setup configuration; PAPER/LIVE use {production.STRATEGY_VERSION} with {production_count} setups. '
+    scope = (f'This historical backtest uses its saved {setup_count}-setup configuration; PAPER/LIVE use {runtime_production.STRATEGY_VERSION} with {production_count} setups. '
         if target_cutoff else f'This saved {profile.STRATEGY_VERSION} report contains its full {setup_count}-setup decision rules. ')
-    page += '<p class="note">Targets and the selected subset were chosen after inspecting the original historical cohort. The first 49 sessions are historical fit results, not untouched validation. October 1 is excluded because immutable input was incomplete. Opening OI is retrospective. Daily extensions use this fixed backtest configuration and disclose stock-day exclusions. ' + scope + 'LIVE retains its separate Rs10,000 margin / Rs50,000 exposure sizing and dated activation gate.</p>'
+    selection_note = ('Targets and the selected subset were chosen after inspecting the original historical cohort. The first 49 sessions are historical fit results, not untouched validation. ')
+    if slot_policy:
+        selection_note = (f'Slot selection used {slot_policy["source_period"]["sessions"]} sessions from '
+            f'{escape(slot_policy["source_period"]["first_session"])} through {escape(slot_policy["source_period"]["last_session"])}. '
+            'This is retrospective selection on reused outcomes, not independent validation. Small samples meeting the cutoff are retained. '
+            'Portfolio allocation is replayed; the resulting win rate is not guaranteed to remain >=70%. ')
+    page += '<p class="note">' + selection_note + 'October 1 is excluded because immutable input was incomplete. Opening OI is retrospective. Daily extensions use this fixed backtest configuration and disclose stock-day exclusions. ' + scope + 'LIVE retains its separate Rs10,000 margin / Rs50,000 exposure sizing and dated activation gate.</p>'
     if target_cutoff:
         disabled = pd.DataFrame([dict(setup_id=row['confirmation_end'].replace(':', '') + '_' + row['side'],
             signal_end=row['signal_end'], side=row['side'], target_pct=row['target_pct'])

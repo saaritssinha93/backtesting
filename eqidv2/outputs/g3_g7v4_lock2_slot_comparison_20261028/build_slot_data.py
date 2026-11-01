@@ -123,6 +123,10 @@ def prepare():
     setups = sorted(set(g3.setup_id) | set(lock.setup_id))
     if len(slots) != 35 or len(setups) != 51:
         raise ValueError('Unexpected 35-slot/51-setup inventory')
+    configured = {item['confirmation_end'].replace(':', '') + '_' + item['side']
+                  for item in config['active_setups']}
+    if configured != set(setups):
+        raise ValueError('Configured setup inventory differs from sealed ledgers')
     periods = {'overall': days, 'october': [d for d in days if d.startswith('2026-10')]}
     tables = {}
     totals = {}
@@ -130,13 +134,27 @@ def prepare():
         a, b = (frame.loc[frame.day.isin(calendar)] for frame in (g3, lock))
         tables[f'slot_time_{period}.csv'] = comparison(a, b, 'slot', slots)
         tables[f'setup_side_{period}.csv'] = comparison(a, b, 'setup_id', setups)
+        lookup = {row['setup_id']: row for row in tables[f'setup_side_{period}.csv']}
+        zero = {field: (None if field.endswith('profit_factor') else 0)
+                for field in tables[f'setup_side_{period}.csv'][0] if field != 'setup_id'}
+        tables[f'setup_side_paired_{period}.csv'] = [
+            {'slot': slot, 'side': side, 'configured_setup': int(key in configured),
+             'setup_id': key, **lookup.get(key, zero)}
+            for slot in slots for side in ('LONG', 'SHORT')
+            for key in [slot.replace(':', '') + '_' + side]
+        ]
         totals[period] = {'G3': metrics(a), 'G7 V4 two-loss lock': metrics(b)}
     daywise = []
+    daywise_sides = []
     for day in periods['october']:
         a, b = (frame.loc[frame.day.eq(day)] for frame in (g3, lock))
         dayrows = comparison(a, b, 'slot', slots)
         daywise.extend([{'day': day, **row} for row in dayrows])
+        side_rows = comparison(a, b, 'setup_id', setups)
+        daywise_sides.extend([{'day': day, 'slot': row['setup_id'][:2] + ':' + row['setup_id'][2:4],
+                               'side': row['setup_id'].split('_')[1], **row} for row in side_rows])
     tables['slot_daywise_october.csv'] = daywise
+    tables['setup_side_daywise_october.csv'] = daywise_sides
     for period, expected in [('overall', g3_summary), ('october', read_json(OUT.parent / 'g7_v4_practical_review_20261028/g3_reference.json')['october'])]:
         wanted = expected['current_g3'] if period == 'overall' else expected
         if not np.isclose(totals[period]['G3']['net_rs'], wanted['net_pnl_rs'], atol=1e-6):
@@ -173,7 +191,7 @@ def finalize():
         if len(frame) != len(rows) or list(frame) != list(rows[0]):
             raise ValueError('Artifact CSV shape differs')
         for field in frame:
-            if field in ('slot', 'setup_id', 'day'):
+            if field in ('slot', 'side', 'setup_id', 'day'):
                 if frame[field].astype(str).tolist() != [str(row[field]) for row in rows]:
                     raise ValueError('Artifact key differs')
             else:
@@ -185,13 +203,17 @@ def finalize():
     (OUT / 'source_provenance.json').write_text(json.dumps(prov, indent=2, allow_nan=False), encoding='utf-8')
 
     def table(name, cols):
-        frame = pd.read_csv(OUT / name)[cols].copy()
+        frame = pd.read_csv(OUT / name)
+        if name in ('setup_side_overall.csv', 'setup_side_october.csv'):
+            frame.insert(0, 'slot', frame.setup_id.str[:2] + ':' + frame.setup_id.str[2:4])
+            frame.insert(1, 'side', frame.setup_id.str.rsplit('_', n=1).str[-1])
+        frame = frame[cols].copy()
         return '<div class="scroll">' + frame.to_html(index=False, float_format=lambda x: f'{x:,.2f}', border=0) + '</div>'
 
     cols = ['slot', 'g3_trades', 'g3_wins', 'g3_losses', 'g3_net_rs',
             'g7v4_lock2_trades', 'g7v4_lock2_wins', 'g7v4_lock2_losses',
             'g7v4_lock2_net_rs', 'net_difference_g3_minus_lock2_rs']
-    setup_cols = ['setup_id', *cols[1:]]
+    setup_cols = ['slot', 'side', 'configured_setup', *cols[1:]]
     totals = prov['totals']
     head = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>G3 and G7 V4 two-loss lock: slot results</title><style>body{max-width:1700px;margin:30px auto;padding:0 20px;color:#20344c;font:15px/1.5 system-ui}.scroll{overflow:auto}table{border-collapse:collapse;font-size:13px}th,td{padding:7px 10px;border-bottom:1px solid #ced9e3;text-align:right}th{background:#eaf2f8;position:sticky;top:0}a{color:#1a5d94}.box{background:#eef5fa;border-left:5px solid #3977a0;padding:15px}</style></head><body><h1>G3 and G7 V4 two-loss lock: slot results</h1>'''
     overview = '<p class="box">Same 59 available dates, 29 July–27 October 2026; 35 confirmation slots and 51 time-and-direction setups. Original 5 bps modeled round-trip cost. G3 is the published V14 backtest. The G7 V4 two-loss lock is an unselected research experiment.</p>'
@@ -200,11 +222,25 @@ def finalize():
         for name, m in pair.items():
             rows.append(dict(period=period, strategy=name, trades=m['trades'], wins=m['wins'], losses=m['losses'], net_rs=m['net_rs'], losing_amount_rs=m['losing_amount_rs']))
     overview += '<h2>Totals</h2><div class="scroll">' + pd.DataFrame(rows).to_html(index=False, float_format=lambda x:f'{x:,.2f}', border=0) + '</div>'
-    overview += '<p>Slot labels denote the completed confirmation minute in the setup ID, not the eventual fill minute. Each table includes all configured slots, including slots with zero executed trades in the period. Net differences subtract the G7 lock result from G3; these are descriptive comparisons between different entry and exit rules. G3 uses fractional sizing and its original admission convention; the G7 lock uses whole shares and reserves a slot at the entry minute open.</p>'
+    direction_rows = []
+    for period in ('overall', 'october'):
+        frame = pd.read_csv(OUT / f'setup_side_{period}.csv')
+        frame['side'] = frame.setup_id.str.rsplit('_', n=1).str[-1]
+        for side in ('LONG', 'SHORT'):
+            group = frame.loc[frame.side.eq(side)]
+            for label, prefix in (('G3', 'g3_'), ('G7 V4 two-loss lock', 'g7v4_lock2_')):
+                direction_rows.append(dict(period=period, side=side, strategy=label,
+                                           trades=int(group[prefix+'trades'].sum()),
+                                           wins=int(group[prefix+'wins'].sum()),
+                                           losses=int(group[prefix+'losses'].sum()),
+                                           net_rs=float(group[prefix+'net_rs'].sum()),
+                                           losing_amount_rs=float(group[prefix+'losing_amount_rs'].sum())))
+    overview += '<h2>LONG and SHORT totals</h2><div class="scroll">' + pd.DataFrame(direction_rows).to_html(index=False, float_format=lambda x:f'{x:,.2f}', border=0) + '</div>'
+    overview += '<p>Slot labels denote the completed confirmation minute in the setup ID, not the eventual fill minute. Each time-and-direction table pairs LONG then SHORT at every slot; configured_setup=0 means that direction was not configured, so its zero metrics are placeholders. Net differences subtract the G7 lock result from G3; these are descriptive comparisons between different entry and exit rules. G3 uses fractional sizing and its original admission convention; the G7 lock uses whole shares and reserves a slot at the entry minute open.</p>'
     body = ''
     for period in ('overall', 'october'):
         body += f'<h2>{html.escape(period.title())}: by confirmation time</h2>' + table(f'slot_time_{period}.csv', cols)
-        body += f'<h2>{html.escape(period.title())}: time and direction</h2>' + table(f'setup_side_{period}.csv', setup_cols)
+        body += f'<h2>{html.escape(period.title())}: time and direction (LONG then SHORT)</h2>' + table(f'setup_side_paired_{period}.csv', setup_cols)
     body += '<p>The two-loss rule blocks new admissions after two realized losing exits. It changes which later opportunities get capital; these slot results are from the full portfolio replay and should not be read as independent standalone slot strategies. Prior research reused these dates, so the best-looking slot is not a validated new filter.</p>'
     links = '<h2>Download data</h2><ul>' + ''.join(f'<li><a href="{name}">{name}</a></li>' for name in [*tables, 'source_provenance.json']) + '</ul>'
     (OUT / 'report.html').write_text(head + overview + body + links + '</body></html>', encoding='utf-8')
