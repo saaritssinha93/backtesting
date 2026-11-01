@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -139,7 +140,16 @@ def existing_workers(rows: list[dict], own_pid: int) -> list[dict]:
         command = row.get('command', '').lower()
         if not command:
             conflicts.append({'pid': row['pid'], 'reason': 'unreadable_process'})
-        elif WORKER_LEAF in command:
+            continue
+        # The coordinator starts LONG, SHORT and broker-reconciliation children
+        # as fno_v13_v10_g_3_live.py. A surviving child can still place or
+        # manage orders even when its original coordinator is gone.
+        live_child = ('fno_v13_v10_g_3_live.py' in command and
+                      re.search(r'--execution-mode(?:\s+|=)["\']?live\b', command))
+        legacy_supervisor = ('supervise_command.ps1' in command and NAME in command)
+        another_supervisor = bool(re.search(r'(?:^|[\s/\\"\'])g3_live_supervisor\.py(?=$|[\s"\'])', command))
+        another_launcher = f'activate_{NAME}.bat' in command
+        if WORKER_LEAF in command or live_child or legacy_supervisor or another_supervisor or another_launcher:
             conflicts.append({'pid': row['pid'], 'reason': 'existing_g3_live_worker'})
     return conflicts
 
@@ -220,6 +230,8 @@ def worker_failure(config: Config, run_id: str, worker_pid: int, started: float,
             return 'worker_pid_invalid', last_valid
     if now - stamp >= config.worker_stale:
         return 'worker_heartbeat_stale', last_valid
+    if stamp > now + 5:
+        return 'worker_timestamp_future', last_valid
     return '', last_valid
 
 

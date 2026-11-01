@@ -1,0 +1,124 @@
+{
+  "checked_at_ist": "2026-11-01T22:19:31.717918+05:30",
+  "session": "2026-11-02",
+  "tasks": [
+    {
+      "name": "EQIDV2_authentication_v2_0900",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist_local": "2026-11-02T08:30:00",
+      "last_result": 0,
+      "runtime_limit": "PT0S",
+      "actions": [
+        {
+          "command": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_authentication_v2.bat",
+          "arguments": ""
+        }
+      ]
+    },
+    {
+      "name": "EQIDV2_fno_options_atm_fetch_5min_0907",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist_local": "2026-11-02T09:07:00",
+      "last_result": 0,
+      "runtime_limit": "PT7H",
+      "actions": [
+        {
+          "command": "C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_options_atm_fetch_5min.bat",
+          "arguments": ""
+        }
+      ]
+    },
+    {
+      "name": "EQIDV2_g3_live_standing_approval_0910",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist_local": "2026-11-02T09:10:00",
+      "last_result": 267014,
+      "runtime_limit": "PT3M",
+      "actions": [
+        {
+          "command": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "arguments": "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\activate_g3_live_standing.ps1\""
+        }
+      ]
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_live_kite_qty1_0915",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist_local": "2026-11-02T09:15:00",
+      "last_result": 2,
+      "runtime_limit": "PT0S",
+      "actions": [
+        {
+          "command": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_g3_approved_live.bat\"\""
+        }
+      ]
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_options_live_long_0915",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist_local": "2026-11-02T09:15:00",
+      "last_result": 0,
+      "runtime_limit": "PT0S",
+      "actions": [
+        {
+          "command": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_options_live_long.bat\"\""
+        }
+      ]
+    },
+    {
+      "name": "EQIDV2_fno_v13_v10_g_3_options_live_short_0915",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist_local": "2026-11-02T09:15:00",
+      "last_result": 0,
+      "runtime_limit": "PT0S",
+      "actions": [
+        {
+          "command": "C:\\WINDOWS\\System32\\cmd.exe",
+          "arguments": "/d /c \"\"C:\\Users\\Saarit\\OneDrive\\Desktop\\Trading\\backtesting\\eqidv2\\backtesting\\eqidv2\\bat\\run_fno_v13_v10_g_3_options_live_short.bat\"\""
+        }
+      ]
+    }
+  ],
+  "workers": [],
+  "disk_free_bytes": 9855418368,
+  "options_paper": {
+    "state": "SCHEDULER_REPAIRED",
+    "old_stuck_processes_removed": true,
+    "powershell_free_launcher": true,
+    "after_hours_scheduler_smoke": "PASS; SKIPPED_CUTOFF; no worker launched",
+    "dated_contract_acquisition": "Must obtain genuine Nov2 master after fresh morning authentication; future download not yet verified"
+  },
+  "g3_live": {
+    "state": "SOFTWARE_REPAIRED_OPERATOR_SCHEDULE_INSTALL_PENDING",
+    "strategy_version": "V13-V10-G-3-PRODUCTION-V15",
+    "approval_date": "2026-10-29",
+    "arm_date": "2026-10-29",
+    "standing_schedule_unchanged": true,
+    "live_target_unchanged": true,
+    "user_command": "bat\\repair_g3_live_schedule.bat --apply --operator-confirmed",
+    "instruction": "Run in Command Prompt from project root tonight or before 09:09 IST. Restores automatic real-broker authorization; assistant did not apply.",
+    "next_checks": "08:30 authentication; 09:10 fresh clock, health and flat broker evidence; 09:15 approved worker launch"
+  },
+  "verification": {
+    "combined": "431 passed, 4 deselected",
+    "excluded": "Four legacy PowerShell wrapper simulation cases; native replacement tests included",
+    "additional_known_legacy_failures": [
+      "test_options_cards_are_separate_from_existing_g_cards_and_fully_registered",
+      "test_requested_options_session_titles_and_direction_mapping_are_explicit",
+      "test_dashboard_contract_matches_options_engine_publishers"
+    ],
+    "legacy_failure_context": "Expanded legacy dashboard suite expects G labels/paths while active profile is G3; these three expectations were not changed by this repair",
+    "read_only_live_plan": "PASS V15 / 34 setups",
+    "clock_probe_skew_seconds": -0.546,
+    "real_live_execution_tested": false,
+    "broker_orders_submitted": false
+  }
+}

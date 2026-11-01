@@ -44,10 +44,23 @@ def test_existing_worker_and_unreadable_shell_block_without_termination():
         {'pid': 3, 'ppid': 0, 'name': 'python.exe', 'inspect': True,
          'command': 'python fno_v13_v10_g_3_live_kite_session.py --activate-live'},
         {'pid': 4, 'ppid': 0, 'name': 'powershell.exe', 'inspect': True, 'command': ''},
+        {'pid': 5, 'ppid': 0, 'name': 'python.exe', 'inspect': True,
+         'command': 'python fno_v13_v10_g_3_live.py --role long-entry --execution-mode LIVE'},
+        {'pid': 6, 'ppid': 0, 'name': 'python.exe', 'inspect': True,
+         'command': 'python fno_v13_v10_g_3_live.py --role short-entry --execution-mode PAPER'},
+        {'pid': 7, 'ppid': 0, 'name': 'powershell.exe', 'inspect': True,
+         'command': 'powershell -File supervise_command.ps1 -Name fno_v13_v10_g_3_live_kite_qty1'},
+        {'pid': 8, 'ppid': 0, 'name': 'python.exe', 'inspect': True,
+         'command': 'python tools/g3_live_supervisor.py'},
+        {'pid': 9, 'ppid': 0, 'name': 'python.exe', 'inspect': True,
+         'command': 'python -m pytest tests/test_g3_live_supervisor.py'},
     ]
     assert live.existing_workers(rows, 2) == [
         {'pid': 3, 'reason': 'existing_g3_live_worker'},
         {'pid': 4, 'reason': 'unreadable_process'},
+        {'pid': 5, 'reason': 'existing_g3_live_worker'},
+        {'pid': 7, 'reason': 'existing_g3_live_worker'},
+        {'pid': 8, 'reason': 'existing_g3_live_worker'},
     ]
 
 
@@ -82,6 +95,10 @@ def test_worker_run_id_and_freshness_are_required(tmp_path):
     payload['pid'] = 999
     cfg.worker_heartbeat.write_text(json.dumps(payload), encoding='utf-8')
     assert live.worker_failure(cfg, 'new', 123, now - 200, now - 200, now)[0] == 'worker_pid_mismatch'
+    payload['pid'] = 123
+    payload['heartbeat_ist'] = datetime.fromtimestamp(now + 60, live.IST).isoformat()
+    cfg.worker_heartbeat.write_text(json.dumps(payload), encoding='utf-8')
+    assert live.worker_failure(cfg, 'new', 123, now - 200, now - 200, now)[0] == 'worker_timestamp_future'
 
 
 def test_after_cutoff_unknown_state_never_launches(tmp_path, monkeypatch):

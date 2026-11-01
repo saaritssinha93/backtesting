@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, time, timedelta
 import hashlib
 import json
 import os
@@ -76,11 +76,118 @@ def prepared_xml(old_xml, target_xml, root=ROOT):
 
 
 def control_hashes(root=ROOT):
-    runtime = Path(os.environ.get('EQIDV2_RUNTIME_ROOT', 'C:/TradingData/eqidv2'))
+    # Match the standing gate's fixed runtime, even if the invoking shell has
+    # an unrelated research/paper EQIDV2_RUNTIME_ROOT override.
+    runtime = Path('C:/TradingData/eqidv2')
     paths = [root/'configs/strategies/active_profile.json',
              root/'configs/authorizations/g3_live_standing_policy_v3.json',
              runtime/'fno_oi/v13_v10_g_3_live/live_arm.json']
     return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+
+
+def validate_authorization(root=ROOT):
+    """Installer must use the gate's pinned identity, not only dynamic config."""
+    from tools import g3_live_standing as standing
+    standing.op.validate_identity(standing.read_json(root/'configs/strategies/active_profile.json'))
+    standing.validate_policy(standing.read_json(root/'configs/authorizations/g3_live_standing_policy_v3.json'), None)
+
+
+def action_identity(xml):
+    tree = ET.fromstring(xml)
+    actions = tree.findall('t:Actions/*', NS)
+    assert len(actions) == 1 and actions[0].tag.endswith('}Exec'), 'Expected exactly one Exec action'
+    return text_at(actions[0], 't:Command'), text_at(actions[0], 't:Arguments')
+
+
+def semantic_task(xml):
+    """Compare task content despite XML indentation, prefixes and default fields.
+
+    Keep trigger/action ordering and exact leaf values, including executable
+    arguments and principal identity. Settings/metadata child order is immaterial.
+    """
+    tree = ET.fromstring(xml)
+    defaults = (
+        ('t:Settings', 'Enabled', 'true'),
+        ('t:Settings', 'StartWhenAvailable', 'false'),
+        ('t:Principals/t:Principal', 'RunLevel', 'LeastPrivilege'),
+        ('t:Triggers/t:CalendarTrigger', 'Enabled', 'true'),
+    )
+    for parent_path, name, value in defaults:
+        parent = tree.find(parent_path, NS)
+        if parent is not None and parent.find('t:'+name, NS) is None:
+            ET.SubElement(parent, '{'+NS['t']+'}'+name).text = value
+    ordered = {'Actions', 'Triggers', 'DaysOfWeek'}
+    def freeze(node):
+        children = [freeze(child) for child in node]
+        if node.tag.split('}')[-1] not in ordered:
+            children.sort(key=repr)
+        text = '' if children else (node.text or '')
+        return node.tag, tuple(sorted(node.attrib.items())), text, tuple(children)
+    return freeze(tree)
+
+
+def next_weekday_run(now):
+    wall = now.replace(tzinfo=None)
+    for offset in range(8):
+        day = wall.date() + timedelta(days=offset)
+        candidate = datetime.combine(day, time(9, 10))
+        if day.weekday() < 5 and candidate > wall:
+            return candidate
+    raise ValueError('Cannot determine the next weekly gate trigger')
+
+
+def verify_registered(task, expected_xml, *, expected_action, expected_next_run):
+    assert task.Enabled and task.State == 3 and not list(task.GetInstances(0)), 'Standing gate is not enabled/Ready/idle'
+    assert action_identity(task.Xml) == expected_action, 'Registered gate did not retain the exact requested action'
+    assert semantic_task(task.Xml) == semantic_task(expected_xml), 'Registered gate definition differs from the reviewed definition'
+    # COM DATE is scheduler local wall time, regardless of a pywin32 UTC tag.
+    assert task.NextRunTime.replace(tzinfo=None) == expected_next_run, 'Registered gate next run differs from the next weekday 09:10'
+
+
+def install_replacement(folder, *, old_xml, target_xml, replacement, before, backup, root=ROOT, now=None):
+    """Only explicit installer Apply calls this; all tests use fake COM tasks."""
+    task = folder.GetTask(TASK)
+    if now is None:
+        from tools.g3_live_standing import IST
+        now = datetime.now(IST)
+    expected_run = next_weekday_run(now)
+    principal = task.Definition.Principal.UserId
+    assert not list(task.GetInstances(0)), 'Standing gate started before installation'
+    assert not list(folder.GetTask(TARGET).GetInstances(0)), 'LIVE target started before installation'
+    assert semantic_task(task.Xml) == semantic_task(old_xml), 'Standing gate changed before installation'
+    assert semantic_task(folder.GetTask(TARGET).Xml) == semantic_task(target_xml), 'LIVE target changed before installation'
+    assert control_hashes(root) == before, 'Control files changed before installation'
+    try:
+        folder.RegisterTask(TASK, replacement, 6, principal, None, 3)
+        installed = folder.GetTask(TASK)
+        # prepared_xml accepts both legacy and new actions for idempotency;
+        # post-registration verification must require only the new action.
+        verify_registered(installed, replacement, expected_action=new_action(root), expected_next_run=expected_run)
+        prepared_xml(installed.Xml, folder.GetTask(TARGET).Xml, root)
+        assert control_hashes(root) == before, 'Control files changed during schedule installation'
+        assert semantic_task(folder.GetTask(TARGET).Xml) == semantic_task(target_xml), 'LIVE target task changed during installation'
+        (backup/'after.xml').write_text(installed.Xml, encoding='utf-8')
+        return installed
+    except Exception as original:
+        try:
+            folder.RegisterTask(TASK, old_xml, 6, principal, None, 3)
+            restored = folder.GetTask(TASK)
+            verify_registered(restored, old_xml, expected_action=action_identity(old_xml), expected_next_run=expected_run)
+            assert control_hashes(root) == before, 'Control files changed; rollback cannot attest prior authorization'
+            assert semantic_task(folder.GetTask(TARGET).Xml) == semantic_task(target_xml), 'LIVE target changed; rollback cannot attest prior target'
+        except Exception as rollback:
+            # Never change the LIVE target or approval files during installation.
+            # If restoration is uncertain, only the standing approval gate is disabled.
+            try:
+                folder.GetTask(TASK).Enabled = False
+                disabled = folder.GetTask(TASK)
+                assert disabled.Enabled is False and disabled.State == 1, 'Standing gate disable did not reconcile'
+                assert not list(disabled.GetInstances(0)), 'Standing gate is disabled but an instance is still running'
+                cleanup = 'standing gate disabled and verified; LIVE target and authorization files untouched'
+            except Exception as disable_error:
+                cleanup = f'CRITICAL: could not verify standing gate disabled: {type(disable_error).__name__}: {disable_error}'
+            raise RuntimeError(f'Install failed: {original}; ROLLBACK FAILED: {rollback}; {cleanup}') from original
+        raise RuntimeError(f'Install failed: {original}; prior standing task restored and verified') from original
 
 
 def main(argv=None):
@@ -100,8 +207,7 @@ def main(argv=None):
         assert not list(target.GetInstances(0)), 'LIVE target is currently running'
         assert (ROOT/'tools/g3_live_standing.py').is_file(), 'Python gate is missing'
         from tools import g3_live_operator as operator
-        operator.validate_identity(operator.read(operator.PROFILE))
-        operator.load_standing_policy()
+        validate_authorization()
         old_xml, target_xml = task.Xml, target.Xml
         replacement = prepared_xml(old_xml, target_xml)
         before = control_hashes()
@@ -118,17 +224,9 @@ def main(argv=None):
             backup.mkdir(parents=True, exist_ok=False)
             (backup/'before.xml').write_text(old_xml, encoding='utf-8')
             (backup/'reviewed_target.xml').write_text(target_xml, encoding='utf-8')
-            try:
-                installed = folder.RegisterTask(TASK, replacement, 6, task.Definition.Principal.UserId, None, 3)
-                assert installed.Enabled and installed.State == 3 and not list(installed.GetInstances(0))
-                prepared_xml(installed.Xml, target.Xml)
-                assert control_hashes() == before, 'Control files changed during schedule installation'
-                assert folder.GetTask(TARGET).Xml == target_xml, 'LIVE target task changed during installation'
-                (backup/'after.xml').write_text(installed.Xml, encoding='utf-8')
-                report.update(installed=True, backup=str(backup), next_run_local_wall=str(installed.NextRunTime))
-            except Exception:
-                folder.RegisterTask(TASK, old_xml, 6, task.Definition.Principal.UserId, None, 3)
-                raise
+            installed = install_replacement(folder, old_xml=old_xml, target_xml=target_xml,
+                                            replacement=replacement, before=before, backup=backup, now=now)
+            report.update(installed=True, backup=str(backup), next_run_local_wall=str(installed.NextRunTime))
             (backup/'result.json').write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
         return 0

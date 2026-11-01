@@ -1,0 +1,59 @@
+{
+  "checked_at_ist": "2026-11-01T23:34:20.386473+05:30",
+  "standing_install_verified": true,
+  "tasks": [
+    {
+      "task": "EQIDV2_authentication_v2_0900",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist": "2026-11-02T08:30:00",
+      "running_instances": 0,
+      "execution_limit": "PT0S"
+    },
+    {
+      "task": "EQIDV2_fno_options_atm_fetch_5min_0907",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist": "2026-11-02T09:07:00",
+      "running_instances": 0,
+      "execution_limit": "PT7H"
+    },
+    {
+      "task": "EQIDV2_g3_live_standing_approval_0910",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist": "2026-11-02T09:10:00",
+      "running_instances": 0,
+      "execution_limit": "PT3M"
+    },
+    {
+      "task": "EQIDV2_fno_v13_v10_g_3_live_kite_qty1_0915",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist": "2026-11-02T09:15:00",
+      "running_instances": 0,
+      "execution_limit": "PT0S"
+    },
+    {
+      "task": "EQIDV2_fno_v13_v10_g_3_options_live_long_0915",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist": "2026-11-02T09:15:00",
+      "running_instances": 0,
+      "execution_limit": "PT0S"
+    },
+    {
+      "task": "EQIDV2_fno_v13_v10_g_3_options_live_short_0915",
+      "enabled": true,
+      "state": 3,
+      "next_run_ist": "2026-11-02T09:15:00",
+      "running_instances": 0,
+      "execution_limit": "PT0S"
+    }
+  ],
+  "dated_arm": "2026-10-29",
+  "dated_approval": "2026-10-29",
+  "note": "Current dated approval is expected to be refreshed by Nov2 09:10 gate after same-day checks; schedule install does not mint approval.",
+  "controls_changed": false,
+  "workers_started": false
+}

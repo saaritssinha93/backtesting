@@ -764,7 +764,9 @@ def test_launcher_preflight_is_disarmed_and_daily_is_production():
     bat = (ROOT / "bat/run_fno_v13_v10_g_3_live_kite_qty1.bat").read_text()
     assert "--readiness-only" in bat and "--auto-arm" not in bat and "LIVE_ACK=" not in bat
     activate = (ROOT / "bat/activate_fno_v13_v10_g_3_live_kite_qty1.bat").read_text()
-    assert "--activate-live" in activate and "--auto-arm" not in activate and "LIVE_ACK=" not in activate
+    supervisor = (ROOT / "tools/g3_live_supervisor.py").read_text()
+    assert "g3_live_supervisor.py" in activate and "--auto-arm" not in activate and "LIVE_ACK=" not in activate
+    assert "--activate-live" in supervisor and "--auto-arm" not in supervisor
     daily = (ROOT / "bat/run_backtesting_result_v13_v10_g_3_1620.bat").read_text()
     assert "backtesting_result_v13_v10_g_3_daily.py" in daily
     assert 'set "FNO_ACTIVE_STRATEGY_PROFILE=V13_V10_G_3"' in daily
