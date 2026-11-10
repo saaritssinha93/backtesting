@@ -12199,6 +12199,13 @@ class LogDashboardHandler(BaseHTTPRequestHandler):
                 status = infer_pid_session_provenance(key, status)
             if key == "authentication_v2":
                 status = reconcile_authentication_status(status)
+            if key == 'kite_trade_fno_id_v13_v10_g' and FNO_ACTIVE_PROFILE.name == 'V13_V10_G_3':
+                from g3_broker_routing import launch_dashboard_status
+                try:
+                    launch = json.loads((RUNTIME_STATUS_DIR / 'g3_launch_recovery.json').read_text(encoding='utf-8'))
+                except (OSError, ValueError):
+                    launch = None
+                status = launch_dashboard_status(status, launch)
             try:
                 size = path.stat().st_size if path.exists() else 0
             except OSError:

@@ -664,20 +664,97 @@ def _next_due_slot(
     current: datetime,
     processed: set[str],
     boundary_buffer_sec: float,
+    retry_after: Mapping[str, datetime] | None = None,
 ) -> datetime | None:
-    """Prioritize the live slot, then repair the oldest missing completed slot."""
+    """Prioritize a due live slot, then fairly retry missing completed slots."""
     buffer = timedelta(seconds=max(0.0, float(boundary_buffer_sec)))
-    if (
-        latest_slot.strftime("%H%M") not in processed
-        and current >= latest_slot + buffer
-    ):
+    retry_after = retry_after or {}
+
+    def eligible(slot: datetime) -> bool:
+        key = slot.strftime("%H%M")
+        return (
+            key not in processed
+            and current >= slot + buffer
+            and current >= retry_after.get(key, slot + buffer)
+        )
+
+    if eligible(latest_slot):
         return latest_slot
     candidate = datetime.combine(session_date, legacy.FIRST_SLOT, tzinfo=common.IST)
+    eligible_repairs: list[datetime] = []
     while candidate <= latest_slot:
-        if candidate.strftime("%H%M") not in processed and current >= candidate + buffer:
-            return candidate
+        if eligible(candidate):
+            eligible_repairs.append(candidate)
         candidate += timedelta(minutes=5)
-    return None
+    # Unattempted slots come first. After an attempt, the deadline moves behind
+    # other gaps even if a slow request made all their cooldowns expire.
+    return min(
+        eligible_repairs,
+        key=lambda slot: (retry_after.get(slot.strftime("%H%M"), slot + buffer), slot),
+        default=None,
+    )
+
+
+def _scheduler_wait_seconds(
+    current: datetime,
+    latest_slot: datetime,
+    processed: set[str],
+    retry_after: Mapping[str, datetime],
+    boundary_buffer_sec: float,
+    poll_sec: float,
+) -> float:
+    """Never carry a repair cooldown sleep across the next live-slot deadline."""
+    buffer = timedelta(seconds=max(0.0, float(boundary_buffer_sec)))
+    next_live_due = latest_slot + buffer
+    if next_live_due <= current:
+        next_live_due += timedelta(minutes=5)
+    deadlines = [next_live_due] + [
+        value for key, value in retry_after.items()
+        if key not in processed and value > current
+    ]
+    return min(
+        max(0.2, min(float(poll_sec), 5.0)),
+        min((deadline - current).total_seconds() for deadline in deadlines),
+    )
+
+
+def _publish_scheduler_progress(
+    latest_slot: datetime,
+    active_slot: datetime,
+    processed: set[str],
+    retry_after: Mapping[str, datetime],
+    *,
+    phase: str,
+    attempt_state: str = "RUNNING",
+) -> None:
+    """Separate live coverage from the legacy report's most recent attempt."""
+    due_keys = {
+        key for key in _session_slot_keys(latest_slot.date())
+        if key <= latest_slot.strftime("%H%M")
+    }
+    ready = sorted(due_keys & processed)
+    latest_ready = (
+        datetime.combine(
+            latest_slot.date(), datetime.strptime(ready[-1], "%H%M").time(),
+            tzinfo=common.IST,
+        ).isoformat() if ready else ""
+    )
+    common.atomic_write_json(
+        common.LATEST_DIR / "latest_fno_oi_fast_production_progress.json",
+        {
+            "schema_version": "fno_oi_fast_progress_v1",
+            "producer_run_id": common.PROCESS_RUN_ID,
+            "published_at_ist": common.now_ist().isoformat(),
+            "latest_due_slot": latest_slot.isoformat(),
+            "latest_ready_slot": latest_ready,
+            "active_slot": active_slot.isoformat(),
+            "attempt_kind": "LIVE" if active_slot == latest_slot else "REPAIR",
+            "phase": phase,
+            "attempt_state": attempt_state,
+            "pending_slot_keys": sorted(due_keys - processed),
+            "retry_after": {key: value.isoformat() for key, value in retry_after.items()},
+        },
+    )
 
 
 def _session_slot_keys(session_date: date) -> set[str]:
@@ -792,6 +869,7 @@ def run_session(args: argparse.Namespace) -> int:
     end_deadline = datetime.combine(
         session_date, legacy.LAST_SLOT, tzinfo=common.IST
     ) + timedelta(minutes=3)
+    retry_after: dict[str, datetime] = {}
     while True:
         current = common.now_ist()
         if current.date() != session_date or current >= end_deadline:
@@ -831,6 +909,7 @@ def run_session(args: argparse.Namespace) -> int:
             current,
             processed,
             args.boundary_buffer_sec,
+            retry_after,
         )
         if slot is None:
             common.publish_heartbeat(
@@ -839,12 +918,19 @@ def run_session(args: argparse.Namespace) -> int:
                 phase="WAIT_NEXT_SLOT",
                 slot=latest_slot.isoformat(),
                 processed_slots=len(processed),
+                repair_pending_slots=sorted(retry_after),
                 engine=ENGINE_VERSION,
             )
-            time.sleep(max(0.2, min(float(args.poll_sec), 5.0)))
+            time.sleep(_scheduler_wait_seconds(
+                current, latest_slot, processed, retry_after,
+                args.boundary_buffer_sec, args.poll_sec,
+            ))
             continue
 
         slot_key = slot.strftime("%H%M")
+        _publish_scheduler_progress(
+            latest_slot, slot, processed, retry_after, phase="FETCH_SLOT",
+        )
         if slot != latest_slot:
             common.publish_heartbeat(
                 SESSION,
@@ -862,8 +948,17 @@ def run_session(args: argparse.Namespace) -> int:
         lane_session.invalidate_runtime_auth_failures()
         if bool(marker.get("complete")):
             processed.add(slot_key)
+            retry_after.pop(slot_key, None)
         else:
-            time.sleep(max(1.0, float(args.partial_retry_sec)))
+            # Cool down only this gap. A global sleep here used to delay the
+            # next live slot by up to partial_retry_sec and starve later gaps.
+            retry_after[slot_key] = common.now_ist() + timedelta(
+                seconds=max(1.0, float(args.partial_retry_sec))
+            )
+        _publish_scheduler_progress(
+            latest_slot, slot, processed, retry_after,
+            phase="SLOT_DONE", attempt_state=str(marker.get("state", "UNKNOWN")),
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

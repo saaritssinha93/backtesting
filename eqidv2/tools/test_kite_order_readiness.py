@@ -23,6 +23,8 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from g3_broker_routing import account_digest, credential_digest
 IST = ZoneInfo("Asia/Kolkata")
 API_BASE = "https://api.kite.trade"
 ALLOWED = frozenset({("GET", "/user/profile"), ("GET", "/user/margins/equity"),
@@ -178,7 +180,10 @@ def inspect_app(app, *, root=ROOT, proposed_order=None, minimum_live_balance=Non
     if not record["credential_files_present"]:
         return record
     try:
-        client = client_factory(credential_value(key_path, "API_KEY"), credential_value(token_path, "ACCESS_TOKEN"), timeout=timeout)
+        key = credential_value(key_path, "API_KEY")
+        token = credential_value(token_path, "ACCESS_TOKEN")
+        record['credential_fingerprint'] = credential_digest(key, token)
+        client = client_factory(key, token, timeout=timeout)
     except (OSError, UnicodeError, ProbeError):
         record["state"] = "CREDENTIALS_UNREADABLE_OR_INVALID"
         return record
@@ -200,6 +205,8 @@ def inspect_app(app, *, root=ROOT, proposed_order=None, minimum_live_balance=Non
                 raise ProbeError("INVALID_BROKER_RESPONSE")
             responses[name] = payload
             record["checks"][name] = "PASS"
+            if name == 'profile' and payload.get('user_id'):
+                record['account_fingerprint'] = account_digest(payload)
         except ProbeError as exc:
             record["checks"][name] = str(exc)
             if name == "profile":

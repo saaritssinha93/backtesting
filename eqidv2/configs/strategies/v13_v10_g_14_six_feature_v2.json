@@ -1,0 +1,63 @@
+{
+  "variant_id": "V13-V10-G-14-SIX-FEATURE-V2-RESEARCH",
+  "strategy": "V13-V10-G-14",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "baseline": "V13-V10-G-14-MORNING12-V1",
+  "baseline_config": "configs/strategies/v13_v10_g_14_backtest.json",
+  "rule_protocol": "research/g14_six_feature_rule_protocol.json",
+  "signal_fields_only": [
+    "open_gap_pct",
+    "pdc_pct",
+    "price_5m_pct",
+    "oi",
+    "oi_delta_5m_pct",
+    "oi_day_pct"
+  ],
+  "removed_entry_indicators": [
+    "EMA",
+    "relative_volume_5m",
+    "relative_volume_1m",
+    "candle_body",
+    "wick",
+    "VWAP",
+    "Nifty_direction",
+    "RSI",
+    "one_minute_direction"
+  ],
+  "selection": "Four frozen six-field variants, same thresholds for all slots and sides; rank with six-field score, then symbol; apply original per-setup max_entries.",
+  "active_setups": [
+    {"setup_id":"0921_LONG","signal_end":"09:20","confirmation_end":"09:21","side":"LONG","max_entries":1,"stop_pct":1.2,"target_pct":2.0},
+    {"setup_id":"0921_SHORT","signal_end":"09:20","confirmation_end":"09:21","side":"SHORT","max_entries":2,"stop_pct":1.2,"target_pct":1.5},
+    {"setup_id":"0926_LONG","signal_end":"09:25","confirmation_end":"09:26","side":"LONG","max_entries":1,"stop_pct":1.2,"target_pct":0.97},
+    {"setup_id":"0926_SHORT","signal_end":"09:25","confirmation_end":"09:26","side":"SHORT","max_entries":2,"stop_pct":1.2,"target_pct":2.0},
+    {"setup_id":"0931_LONG","signal_end":"09:30","confirmation_end":"09:31","side":"LONG","max_entries":1,"stop_pct":1.2,"target_pct":2.0},
+    {"setup_id":"0931_SHORT","signal_end":"09:30","confirmation_end":"09:31","side":"SHORT","max_entries":1,"stop_pct":1.2,"target_pct":2.0},
+    {"setup_id":"0936_LONG","signal_end":"09:35","confirmation_end":"09:36","side":"LONG","max_entries":1,"stop_pct":1.2,"target_pct":1.73},
+    {"setup_id":"0936_SHORT","signal_end":"09:35","confirmation_end":"09:36","side":"SHORT","max_entries":2,"stop_pct":1.2,"target_pct":1.23},
+    {"setup_id":"0941_LONG","signal_end":"09:40","confirmation_end":"09:41","side":"LONG","max_entries":1,"stop_pct":1.2,"target_pct":2.0},
+    {"setup_id":"0941_SHORT","signal_end":"09:40","confirmation_end":"09:41","side":"SHORT","max_entries":1,"stop_pct":1.2,"target_pct":2.0},
+    {"setup_id":"0946_LONG","signal_end":"09:45","confirmation_end":"09:46","side":"LONG","max_entries":1,"stop_pct":1.2,"target_pct":1.23},
+    {"setup_id":"0946_SHORT","signal_end":"09:45","confirmation_end":"09:46","side":"SHORT","max_entries":1,"stop_pct":1.2,"target_pct":1.23}
+  ],
+  "execution": {
+    "entry_expiry_minutes": 10,
+    "initial_stop_pct": 1.2,
+    "tightened_stop_pct": 1.0,
+    "tighten_after_minutes": 120,
+    "profit_protection_arm_completed_close_pct": 0.6,
+    "protected_stop_pct": 0.1,
+    "same_minute_stop_target_tie": "STOP_FIRST",
+    "daily_realized_loss_admission_limit": 2,
+    "integer_cash_shares": true,
+    "conservative_entry_clock": true,
+    "capital_per_entry_rs": 100000,
+    "portfolio_capital_rs": 1000000,
+    "leverage": 5
+  },
+  "source_limitations": [
+    "Only 63 frozen source sessions through 2026-11-02 are available; this is previously researched history.",
+    "At 09:20 the OI change is the observed 09:16 to 09:20 four-minute proxy and OI day is zero.",
+    "A selected candidate without valid next-minute confirmation is skipped without replacement."
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "variant_id": "V13-V10-G-14-FLOW-V5-RESEARCH",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "parent_config": "configs/strategies/v13_v10_g_14_oi_day_or_v3.json",
+  "parent_config_sha256": "1aa61453bad0712e80e393f72fef4a290321296f6e55ced83ababd5f727b4555",
+  "calendar": "2026-07-29_TO_2026-11-02_63_REPRESENTED_SESSIONS",
+  "development_through": "2026-09-30",
+  "assessment_from": "2026-10-01",
+  "selection_timing": "COMPLETED_FIVE_MINUTE_SIGNAL_BEFORE_PICKER_QUOTA",
+  "cost_bps_round_trip": [5, 9, 15],
+  "baseline_arm": "v3_combined",
+  "arms": {
+    "v3_combined": {"rule": "NO_ADDITIONAL_VOLUME_GATE"},
+    "avwap_side": {"rule": "SIGNED_SIGNAL_CLOSE_DISTANCE_FROM_OPEN_ANCHORED_AVWAP_GT", "threshold_pct": 0.0},
+    "tod_rvol_ready": {"rule": "SAME_CLOCK_RVOL_READY_MATCHED_CONTROL", "min_prior_sessions": 5, "warmup_policy": "BYPASS_EXTRA_RVOL_GATE_FIRST5_REPRESENTED_SESSIONS"},
+    "tod_rvol_one": {"rule": "SAME_CLOCK_PRIOR20_MEDIAN_RVOL_GE", "threshold": 1.0, "min_prior_sessions": 5, "warmup_policy": "BYPASS_EXTRA_RVOL_GATE_FIRST5_REPRESENTED_SESSIONS"},
+    "pressure3_positive": {"rule": "SIGNED_VOLUME_WEIGHTED_CLOSE_LOCATION_LAST_UP_TO3_COMPLETED_BARS_GT", "threshold": 0.0}
+  },
+  "avwap_price": "CUMULATIVE_COMPLETED_5M_HLC3_TIMES_VOLUME_DIVIDED_BY_CUMULATIVE_VOLUME_FROM_0920",
+  "avwap_precision": "OHLCV_PROXY_NOT_EXCHANGE_TRADE_LEVEL_AVWAP",
+  "rvol_denominator": "SAME_STOCK_SAME_5M_CLOCK_MEDIAN_OF_UP_TO20_STRICTLY_PRIOR_VALID_SESSIONS",
+  "volume_delta": "TRUE_AGGRESSOR_BUY_MINUS_SELL_VOLUME_NOT_AVAILABLE_IN_FROZEN_OHLCV",
+  "pressure_proxy": "SIGNED_UP_TO3_BAR_VOLUME_WEIGHTED_CANDLE_CLOSE_LOCATION_NOT_TRUE_DELTA",
+  "missing_feature": "FAIL_CLOSED_EXCEPT_DECLARED_GLOBAL_RVOL_WARMUP",
+  "preserved": "ALL_V14_V3_COMBINED_ENTRY_AND_EXIT_RULES_AND_STRICT_G7_MARKET_PERMISSIONS",
+  "rollback": "configs/strategies/v13_v10_g_14_oi_day_or_v3.json"
+}

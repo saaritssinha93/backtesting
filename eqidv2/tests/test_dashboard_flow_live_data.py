@@ -54,6 +54,31 @@ def test_price_and_oi_use_distinct_daily_and_exact_adjacent_baselines(market):
     assert len(payload["slots"]) == 76
 
 
+def test_display_cvd_uses_completed_cash_volume_and_zero_for_flat_range(market):
+    root, cash_path, _ = market
+    save(cash_path, [cash("2026-10-08", "15:30", 100),
+                     cash("2026-10-09", "09:20", 105, open=102),
+                     cash("2026-10-09", "09:25", 110, open=110, high=110, low=110)])
+    payload = load(root)
+    first, second = row(payload, "09:20"), row(payload, "09:25")
+    assert row(payload, "09:15").get("cvd_session_est") is None
+    assert first["cvd_delta5_est"] == pytest.approx(6)
+    assert first["cvd_session_est"] == pytest.approx(6)
+    assert first["cvd_pressure5_est"] == pytest.approx(.6)
+    assert second["cvd_delta5_est"] == 0
+    assert second["cvd_session_est"] == pytest.approx(6)
+
+
+def test_display_cvd_does_not_bridge_missing_five_minute_bar(market):
+    root, cash_path, _ = market
+    save(cash_path, [cash("2026-10-08", "15:30", 100),
+                     cash("2026-10-09", "09:20", 105, open=102),
+                     cash("2026-10-09", "09:30", 112, open=111)])
+    later = row(load(root), "09:30")
+    assert later["cvd_delta5_est"] is not None
+    assert later["cvd_session_est"] is None
+
+
 def test_open_is_reconstructed_after_bar_completion_not_snapshot_close(market):
     root, _, _ = market
     early = load(root, "09:19")

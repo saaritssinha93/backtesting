@@ -1,0 +1,48 @@
+{
+  "variant_id": "V13-V10-G-14-OI-DAY-OR-NO-BODY-WICK-V3-RESEARCH",
+  "strategy": "V13-V10-G-14",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "baseline_config": "configs/strategies/v13_v10_g_14_backtest.json",
+  "baseline_config_sha256": "0751ed1c7662257f09785d3dc6a2b84d6df89bbc9eb2fb243c2ab8c8590ed15c",
+  "source": "C:/TradingData/eqidv2/backtesting_result_v13_v10_g_14/six_feature_source/candidates_by_day",
+  "signal_clocks": ["09:20", "09:25", "09:30", "09:35", "09:40", "09:45"],
+  "sides": ["LONG", "SHORT"],
+  "oi_rule": {
+    "replaces_old_per_slot_oi_delta_minimum": true,
+    "definition": "same-contract OI day change strictly greater than 1.00% OR latest completed-bar OI change strictly positive",
+    "oi_day_pct_strictly_gt": 1.0,
+    "oi_delta_5m_pct_strictly_gt": 0.0,
+    "opening_0920_delta_window": "09:16_TO_COMPLETED_09:20_FOUR_MINUTES",
+    "opening_0920_oi_day_pct": 0.0,
+    "preserve_existing_oi_upper_cap": true,
+    "missing_required_oi_evidence": "FAIL_CLOSED"
+  },
+  "entry_gate_arms": {
+    "baseline_reconstructed": {
+      "remove": [],
+      "replace_oi_lower_with_or": false
+    },
+    "remove_body_wick": {
+      "remove": ["body", "max_wick"],
+      "replace_oi_lower_with_or": false
+    },
+    "oi_day_or": {
+      "remove": ["oi_lower"],
+      "replace_oi_lower_with_or": true
+    },
+    "combined": {
+      "remove": ["body", "max_wick", "oi_lower"],
+      "replace_oi_lower_with_or": true
+    }
+  },
+  "preserved": [
+    "twelve V14 v1 slot/side thresholds, pickers, quotas and targets except the replaced OI lower threshold",
+    "EMA, directional price, five-minute and one-minute volume, OI upper cap, special 09:26 SHORT minimum lower wick, confirmation extension caps",
+    "G7 V4 Nifty-futures two-direction and low-efficiency veto after selection, if independently reconstructed",
+    "initial 1.20% stop, 1.00% after 120 minutes, +0.10% protection after completed +0.60% close",
+    "ten-minute entry expiry, stop-first ambiguity, integer sizing, capital and two-loss lock"
+  ],
+  "excluded_from_new_eligibility": ["official_PDC_availability", "V14_V2_six_feature_integrity_ok"],
+  "rollback": "configs/strategies/v13_v10_g_14_backtest.json"
+}

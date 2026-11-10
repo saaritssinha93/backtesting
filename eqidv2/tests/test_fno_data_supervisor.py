@@ -192,6 +192,8 @@ def test_singleton_lock_cannot_be_stolen_and_releases(config):
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows data supervisor integration")
 def test_real_child_success_and_exact_fixed_args(config):
+    # Interpreter startup under load is not the watchdog behavior tested here.
+    config = replace(config, grace=5.0)
     worker(config, "import sys\nprint('ARGS', sys.argv[1:])\n")
     assert sup.run(config) == 0
     assert "status=SUCCESS" in config.status.read_text()
@@ -202,6 +204,7 @@ def test_real_child_success_and_exact_fixed_args(config):
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows data supervisor integration")
 def test_real_crashing_child_has_bounded_restarts(config):
+    config = replace(config, grace=5.0)
     worker(config, "print('CRASH')\nraise SystemExit(7)\n")
     assert sup.run(config) == 7
     assert config.log.read_text().count("CRASH") == 2

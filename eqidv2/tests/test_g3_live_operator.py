@@ -18,6 +18,14 @@ REAL_STANDING_POLICY = op.STANDING_POLICY
 HISTORICAL_V2_POLICY = op.ROOT / 'configs/authorizations/g3_live_standing_policy_v2.json'
 
 
+@pytest.fixture(autouse=True)
+def historical_launch_policy(monkeypatch):
+    # These fixtures exercise October's approval/launcher contract regardless
+    # of the machine's wall date. November recovery has its own offline suite.
+    from tools import g3_launch_recovery
+    monkeypatch.setattr(g3_launch_recovery, 'enabled', lambda *a, **kw: False)
+
+
 def test_historical_v2_standing_policy_remains_disabled():
     previous = json.loads(HISTORICAL_V2_POLICY.read_text(encoding='utf-8'))
     assert previous['policy_id'] == 'G3_LIVE_STANDING_20261024_V2'

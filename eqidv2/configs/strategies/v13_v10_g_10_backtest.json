@@ -1,0 +1,52 @@
+{
+  "variant_id": "V13-V10-G-10-ENTRY-RISK-RESEARCH-V1",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "reference_strategy": "CURRENT_G7_V4_LOCK_42_SLOTS",
+  "primary_candidate": "g10_combined",
+  "selection": "FIXED_BEFORE_RUN_NO_OPTIMIZATION_NO_AUTOMATIC_PROMOTION",
+  "entry_risk": {
+    "minimum_reference_reward_risk_retention": 0.8,
+    "reference_levels": "STOP_AND_TARGET_FROM_ORIGINAL_TRIGGER_AND_NATIVE_PERCENTAGES",
+    "decision_clock": "OBSERVED_PENDING_BAR_OPEN_BEFORE_ENTRY",
+    "expiry_minutes": 10,
+    "rejected_order": "CANCEL_PERMANENTLY_NO_SAME_BAR_RECOVERY_OR_SLOT_REPLACEMENT",
+    "exit_levels": "RETAIN_G7_EXIT_RULES_ANCHORED_TO_ACTUAL_FILL",
+    "note": "Original trigger levels are an entry-quality benchmark, not a change to G7 stops or targets."
+  },
+  "risk_budget_rs": 6000.0,
+  "risk_budget_basis": "Inherited Rs100000 capital per entry * 5 leverage * 1.2 percent initial stop; candidate includes modeled roundtrip fees within this budget.",
+  "max_open_risk_rs": 12000.0,
+  "risk_cap_basis": "Two inherited per-entry risk budgets; includes already-open initial stop risk and fees, no assumption that a future protective stop has armed.",
+  "costs_bps": [5.0, 9.0, 15.0, 30.0],
+  "variants": [
+    {"name": "g7_v4_lock", "entry_check": false, "risk_sizing": false, "open_risk_cap": false},
+    {"name": "g10_entry_rr80", "entry_check": true, "risk_sizing": false, "open_risk_cap": false},
+    {"name": "g10_risk6000", "entry_check": false, "risk_sizing": true, "open_risk_cap": false},
+    {"name": "g10_risk6000_cap12000", "entry_check": false, "risk_sizing": true, "open_risk_cap": true},
+    {"name": "g10_combined", "entry_check": true, "risk_sizing": true, "open_risk_cap": true}
+  ],
+  "acceptance": {
+    "net_profit": "NO_LOWER_THAN_CURRENT_G7",
+    "losing_trade_amount": "AT_LEAST_10_PERCENT_LOWER",
+    "daily_close_drawdown": "NO_HIGHER",
+    "trade_retention": "AT_LEAST_80_PERCENT",
+    "winner_retention": "AT_LEAST_90_PERCENT",
+    "changed_days": "AT_LEAST_3",
+    "independent_validation": "REQUIRED_FOR_ANY_PROMOTION; reused history cannot pass this requirement"
+  },
+  "inherited_rules": ["42-slot historical allowlist", "Nifty and G7 entry-quality gates", "one active position per symbol", "two realized net-loss admission lock", "+0.1 percent gross protection after completed +0.6 percent close", "G7 ranking and selected pending-order quotas", "integer cash-equity shares; 5x modeled leverage"],
+  "limitations": [
+    "Same inherited stock-day universe as G7; future OI coverage affects historical eligibility. This experiment does not repair omitted raw candidates.",
+    "All 59 source sessions were previously inspected; chronological blocks are diagnostics, not independent holdouts.",
+    "Execution-risk checks occur after ranking. Rejected pending orders do not receive replacement candidates, matching the declared G10 contract.",
+    "One-minute OHLC cannot establish intrabar sequence, spread, queue position, broker latency, or actual live execution.",
+    "Risk limits describe modeled stop risk; adverse gaps can exceed it."
+  ],
+  "inspiration": {
+    "repository": "https://github.com/Jakeschincariol/day-trader-skill",
+    "reviewed_commit": "3d0f4ef6986f4984b7c6bd46f7ff4f87744c3abd",
+    "skills": ["trader-risk", "trader-budget"],
+    "usage": "Adapt concepts only; use existing NSE data and native G7 execution, not the US-only broker or ORB simulator."
+  }
+}

@@ -79,6 +79,7 @@ def load_live_flow(data_root: Path, session_date: str | None = None, *, now: dat
             "opening_gap": sum(row.get("gap_open_pct") is not None for row in rows),
             "oi": sum(row.get("oi") is not None for row in rows),
             "oi_baseline": sum(row.get("oi_change_pct") is not None for row in rows),
+            "cvd": sum(row.get("cvd_session_est") is not None for row in rows),
         }
         slots.append({
             **source,
@@ -125,6 +126,9 @@ def load_live_flow(data_root: Path, session_date: str | None = None, *, now: dat
             "opening_first_minutes": "Independent validated futures minute records for 09:15-09:16, exposed after the 09:16 candle end. Futures OHLC is not the equity cash price. OI day % uses the same-contract previous-session 15:30 baseline when verified. Archived records acquired after 09:20 were unavailable to that live decision.",
             "oi_change_since_first_minute_pct": "At 09:20 only: same-contract completed five-minute futures OI versus validated first-minute OI at 09:16 over four minutes. When valid, this value also bootstraps the displayed OI change field; the source and actual interval distinguish it from exact five-minute changes.",
             "oi_change_since_0916_pct": "At 09:20 only: the displayed OI change from a validated 09:16 minute or a timely provisional quote near 09:16 to the completed same-contract futures bar. This matches the 09:20 OI delta display; source and actual interval distinguish the exception.",
+            "cvd_session_est": "Display-only estimated cumulative volume delta from completed NSE cash five-minute OHLCV bars since 09:15. Per bar: volume * (2*close-high-low)/(high-low); a flat range contributes zero. Requires every preceding five-minute bar in the session. This is not buyer- versus seller-initiated trade CVD and is not used by the strategy.",
+            "cvd_delta5_est": "Estimated signed volume of the current completed cash five-minute candle, using close location within its high-low range; not true trade delta.",
+            "cvd_pressure5_est": "Estimated five-minute delta divided by that candle's traded volume, between -1 and +1 when volume is positive.",
             "strategy": "As-recorded G3 evidence; later confirmation/order outcomes are retrospective, not information available at the original signal boundary.",
         },
     })

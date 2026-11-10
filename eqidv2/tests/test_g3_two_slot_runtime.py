@@ -76,15 +76,19 @@ def test_0920_short_fetches_index_context_and_records_its_guard(opening_scanner,
     assert "Opening SHORT NIFTY guard" == gate["label"]
 
 
-def test_opening_exclusion_discloses_both_sides_without_doubling_stock_count(opening_scanner, monkeypatch, tmp_path):
+def test_opening_exclusion_discloses_active_sides_without_doubling_stock_count(opening_scanner, monkeypatch, tmp_path):
     runtime, universe, evidence = opening_scanner
+    opening_setups = [setup for setup in runtime.config.ACTIVE_SETUPS if setup.signal_end == "09:20"]
+    assert opening_setups
+    expected_ids = {setup.setup_id for setup in opening_setups}
+    expected_sides = {setup.side for setup in opening_setups}
     evidence["opening_0920_status"] = "MISSING_BASELINE"
     monkeypatch.setattr(runtime, "_g_nifty_first_bar_context", lambda _day: dict(nifty_first_bar_return_pct=-.1))
     snapshot = runtime.scan_five_minute_slot(universe, DAY, "09:20")
     assert len(snapshot["opening_0920_exclusions"]) == 1
     exclusion = snapshot["opening_0920_exclusions"][0]
-    assert set(exclusion["setup_ids"]) == {"0921_LONG", "0921_SHORT"}
-    assert set(exclusion["sides"]) == {"LONG", "SHORT"}
+    assert set(exclusion["setup_ids"]) == expected_ids
+    assert set(exclusion["sides"]) == expected_sides
     profile = PROFILES["V13_V10_G_3"]
     monkeypatch.setattr(detail, "ACTIVE_PROFILE", profile)
     monkeypatch.setattr(detail, "STRATEGY_VERSION", profile.version)
@@ -94,8 +98,8 @@ def test_opening_exclusion_discloses_both_sides_without_doubling_stock_count(ope
     path.write_text(json.dumps(snapshot), encoding="utf-8")
     rows, coverage, _ = detail._read_phase(root, str(DAY), "09:20", "5m", config.slot_datetime(DAY, "10:00"), [])
     affected = [row for row in rows if row["decision"] == "OPENING_OI_EXCLUDED"]
-    assert {row["setup_id"] for row in affected} == {"0921_LONG", "0921_SHORT"}
-    assert len({row["id"] for row in affected}) == 2
+    assert {row["setup_id"] for row in affected} == expected_ids
+    assert len({row["id"] for row in affected}) == len(opening_setups)
     assert coverage["opening_excluded"] == 1
 
 

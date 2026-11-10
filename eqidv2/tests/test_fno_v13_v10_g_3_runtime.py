@@ -207,6 +207,80 @@ def test_live_activation_epoch_allows_only_signal_published_after_start(
     assert state["live_entry_not_before_ist"] == "2026-10-12T09:26:45+05:30"
 
 
+def test_live_worker_checks_publication_against_time_after_signal_load(
+    runtime, monkeypatch
+):
+    signal = runtime.select_entry_signals(
+        [candidate()], DAY, "09:25", capital_rs=100000.0, leverage=5.0
+    )[0]
+    signal["published_at_ist"] = "2026-10-12T09:26:50+05:30"
+    common.atomic_write_json(
+        runtime.LIVE_ARM_PATH,
+        {
+            "enabled": True,
+            "session_date": DAY.isoformat(),
+            "entry_not_before_ist": "2026-10-12T09:26:30+05:30",
+        },
+    )
+    monkeypatch.setenv(
+        runtime.G3_LIVE_ACTIVATION_EPOCH_ENV,
+        "2026-10-12T09:26:45+05:30",
+    )
+    clock = {"now": datetime.fromisoformat("2026-10-12T09:26:49+05:30")}
+    monkeypatch.setattr(runtime.common, "now_ist", lambda: clock["now"])
+
+    def load_new_signal(*_args, **_kwargs):
+        clock["now"] = datetime.fromisoformat("2026-10-12T09:26:51+05:30")
+        return [signal]
+
+    monkeypatch.setattr(runtime, "load_signals", load_new_signal)
+    monkeypatch.setattr(runtime, "_blocking_pipeline_issue", lambda *_args: None)
+
+    class ReachedEntryCheck(Exception):
+        pass
+
+    original_guard = runtime._block_pre_activation_g3_entry
+
+    def check_guard(signal_arg, state, checked_at):
+        assert checked_at == clock["now"]
+        assert original_guard(signal_arg, state, checked_at) is False
+        assert state["status"] == "PENDING_ENTRY"
+        raise ReachedEntryCheck
+
+    monkeypatch.setattr(runtime, "_block_pre_activation_g3_entry", check_guard)
+    args = SimpleNamespace(
+        execution_mode="LIVE", live_quantity=None, max_apps=1,
+        timeout_sec=0.1, once=True,
+    )
+    with pytest.raises(ReachedEntryCheck):
+        runtime.run_worker(args, DAY, "LONG")
+
+
+def test_live_activation_still_blocks_genuinely_future_signal(runtime, monkeypatch):
+    now = datetime.fromisoformat("2026-10-12T09:26:51+05:30")
+    signal = runtime.select_entry_signals(
+        [candidate()], DAY, "09:25", capital_rs=100000.0, leverage=5.0
+    )[0]
+    signal["published_at_ist"] = "2026-10-12T09:26:52+05:30"
+    common.atomic_write_json(
+        runtime.LIVE_ARM_PATH,
+        {
+            "enabled": True,
+            "session_date": DAY.isoformat(),
+            "entry_not_before_ist": "2026-10-12T09:26:30+05:30",
+        },
+    )
+    monkeypatch.setenv(
+        runtime.G3_LIVE_ACTIVATION_EPOCH_ENV,
+        "2026-10-12T09:26:45+05:30",
+    )
+    state = runtime.create_order_state(signal, "LIVE")
+
+    assert runtime._block_pre_activation_g3_entry(signal, state, now) is True
+    assert state["status_reason"] == "SIGNAL_PUBLICATION_TIME_INVALID"
+    assert state["entry_submission_attempt_count"] == 0
+
+
 def test_runtime_side_thresholds_and_strict_0925(runtime):
     assert runtime.select_entry_signals([candidate(ratio=1.099)], DAY, "09:25", capital_rs=100000., leverage=5.) == []
     assert runtime.select_entry_signals([candidate("SHORT", 1.199, "09:30")], DAY, "09:30", capital_rs=100000., leverage=5.) == []
@@ -229,9 +303,12 @@ def test_scanner_adapts_exact_join_timestamp_to_g3_contract(runtime,monkeypatch,
         raw.pop(key,None)
     raw.update(ts=pd.Timestamp(config.slot_datetime(DAY,clock)),open=99.,high=102.,low=98.,close=100.,volume=2000.)
     frame = pd.DataFrame([raw])
+    prior = raw.copy()
+    prior.update(ts=raw["ts"] - timedelta(minutes=5), oi=1000.)
+    futures_frame = pd.DataFrame([prior, raw])
     universe = pd.DataFrame([dict(futures_tradingsymbol="TEST26OCTFUT",equity_symbol="TEST",
         equity_instrument_token=1,futures_instrument_token=2,equity_tick_size=.05)])
-    monkeypatch.setattr(runtime.backtest,"load_five_minute",lambda *a,**k:frame.copy())
+    monkeypatch.setattr(runtime.backtest,"load_five_minute",lambda *a,**k:futures_frame.copy())
     monkeypatch.setattr(runtime.hybrid,"load_equity_five_minute",lambda *a,**k:frame.copy())
     monkeypatch.setattr(runtime.hybrid,"join_equity_price_with_futures_oi",lambda *a,**k:frame.copy())
     monkeypatch.setattr(runtime,"_g_nifty_first_bar_context",lambda *a:{"nifty_first_bar_return_pct":-.1})
@@ -251,6 +328,36 @@ def test_scanner_adapts_exact_join_timestamp_to_g3_contract(runtime,monkeypatch,
         # The shared-clock scanner may retain a raw observation; it must never
         # become a selected entry for the removed side.
         assert runtime.select_entry_signals([row], DAY, clock, capital_rs=100000., leverage=5.) == []
+
+
+@pytest.mark.parametrize('missing_kind', ['explicit_equity_exclusion', 'missing_oi_pair'])
+def test_healthy_candidate_calculations_unchanged_when_other_stock_is_excluded(runtime, monkeypatch, missing_kind):
+    raw = candidate(side='LONG', clock='09:25')
+    raw.update(ts=pd.Timestamp(config.slot_datetime(DAY, '09:25')),
+               open=99., high=102., low=98., close=100., volume=2000.)
+    featured = pd.DataFrame([raw])
+    previous = {**raw, 'ts': raw['ts'] - timedelta(minutes=5), 'oi': 1000.}
+    futures = pd.DataFrame([previous, raw])
+    healthy = dict(futures_tradingsymbol='GOOD26OCTFUT', equity_symbol='GOOD',
+                   equity_instrument_token=1, futures_instrument_token=2, equity_tick_size=.05)
+    missing = {**healthy, 'futures_tradingsymbol': 'BAD26OCTFUT', 'equity_symbol': 'BAD'}
+    monkeypatch.setattr(runtime.backtest, 'load_five_minute',
+                        lambda symbol: futures.copy() if symbol.startswith('GOOD') else pd.DataFrame())
+    monkeypatch.setattr(runtime.hybrid, 'load_equity_five_minute', lambda *a, **k: featured.copy())
+    monkeypatch.setattr(runtime.hybrid, 'join_equity_price_with_futures_oi', lambda *a, **k: featured.copy())
+    monkeypatch.setattr(runtime, '_g_nifty_first_bar_context', lambda *a: {'nifty_first_bar_return_pct': -.1})
+    baseline = runtime.scan_five_minute_slot(pd.DataFrame([healthy]), DAY, '09:25')
+    result = runtime.scan_five_minute_slot(pd.DataFrame([healthy, missing]), DAY, '09:25',
+        allow_symbol_exclusions=True,
+        excluded_equity_symbols={'BAD': 'missing completed bar'} if missing_kind == 'explicit_equity_exclusion' else {})
+    assert baseline['candidates'] and result['candidates'] == baseline['candidates']
+    assert result['state'] == 'SUCCESS' and result['excluded_incomplete_count'] == 1
+    assert result['data_scope_complete'] is False
+    empty = runtime.scan_five_minute_slot(pd.DataFrame([missing]), DAY, '09:25', allow_symbol_exclusions=True)
+    assert empty['state'] != 'SUCCESS' and not empty['candidates']
+    excluded = runtime.scan_five_minute_slot(pd.DataFrame([missing]), DAY, '09:25',
+        allow_symbol_exclusions=True, excluded_equity_symbols={'BAD': 'missing completed bar'})
+    assert excluded['state'] != 'SUCCESS' and not excluded['candidates']
 
 
 def test_scanner_restart_preserves_completed_slots_and_waits_for_future(runtime,monkeypatch):
@@ -284,12 +391,17 @@ def test_scanner_restart_preserves_completed_slots_and_waits_for_future(runtime,
 def test_scanner_restart_prioritizes_live_slot_and_tombstones_expired_backlog(
     runtime, monkeypatch
 ):
+    import g3_equity_readiness
+    monkeypatch.setattr(g3_equity_readiness, 'cash_scope', lambda *a: ('', {}))
+    monkeypatch.setattr(runtime, '_marker_matches_slot', lambda *a: True)
+    real_read_json = runtime._read_json
+    monkeypatch.setattr(runtime, '_read_json', lambda p: {'source': 'final'} if 'slot_ready_5m' in str(p) else real_read_json(p))
     monkeypatch.setattr(
         runtime.config,
         "SIGNAL_TO_CONFIRMATION",
         {"09:20": "09:21", "09:25": "09:26", "09:30": "09:31"},
     )
-    universe = pd.DataFrame([{"futures_tradingsymbol": "TEST26OCTFUT"}])
+    universe = pd.DataFrame([{"futures_tradingsymbol": "TEST26OCTFUT", "equity_symbol": "TEST"}])
     monkeypatch.setattr(runtime, "_load_universe", lambda *_a: universe)
     monkeypatch.setattr(runtime, "_render_scanner_report", lambda *_a: "fixture")
     monkeypatch.setattr(runtime, "_slot_marker_ready", lambda *_a: (True, "ready"))
@@ -344,10 +456,15 @@ def test_scanner_restart_prioritizes_live_slot_and_tombstones_expired_backlog(
 def test_scanner_discards_candidates_when_scan_finishes_after_deadline(
     runtime, monkeypatch
 ):
+    import g3_equity_readiness
+    monkeypatch.setattr(g3_equity_readiness, 'cash_scope', lambda *a: ('', {}))
+    monkeypatch.setattr(runtime, '_marker_matches_slot', lambda *a: True)
+    real_read_json = runtime._read_json
+    monkeypatch.setattr(runtime, '_read_json', lambda p: {'source': 'final'} if 'slot_ready_5m' in str(p) else real_read_json(p))
     monkeypatch.setattr(
         runtime.config, "SIGNAL_TO_CONFIRMATION", {"09:20": "09:21"}
     )
-    universe = pd.DataFrame([{"futures_tradingsymbol": "TEST26OCTFUT"}])
+    universe = pd.DataFrame([{"futures_tradingsymbol": "TEST26OCTFUT", "equity_symbol": "TEST"}])
     monkeypatch.setattr(runtime, "_load_universe", lambda *_a: universe)
     monkeypatch.setattr(runtime, "_render_scanner_report", lambda *_a: "fixture")
     monkeypatch.setattr(runtime, "_slot_marker_ready", lambda *_a: (True, "ready"))
@@ -393,15 +510,18 @@ def test_scanner_discards_candidates_when_scan_finishes_after_deadline(
     assert "completed after" in stored["stale_reason"]
 
 
-@pytest.mark.parametrize("clock,expected_count,usable", [("09:20", 1, True), ("09:25", 2, False)])
+@pytest.mark.parametrize("clock,expected_count,usable", [("09:20", 1, True), ("09:25", 2, True)])
 def test_scanner_opening_quality_audits_only_the_completed_futures_bar(runtime, monkeypatch, clock, expected_count, usable):
     import fno_v13_v10_g_3_opening_inputs as opening_inputs
     raw = candidate(clock=clock)
     raw.update(ts=pd.Timestamp(config.slot_datetime(DAY, clock)), open=99., high=102., low=98., close=100., volume=2000.)
     frame = pd.DataFrame([raw])
+    prior = raw.copy()
+    prior.update(ts=raw["ts"] - timedelta(minutes=5), oi=1000.)
+    regular_futures = pd.DataFrame([prior, raw])
     universe = pd.DataFrame([dict(futures_tradingsymbol="TEST26OCTFUT", equity_symbol="TEST",
         equity_instrument_token=1, futures_instrument_token=2, equity_tick_size=.05, expiry="2026-10-27")])
-    monkeypatch.setattr(runtime.backtest, "load_five_minute", lambda *a, **k: frame.copy())
+    monkeypatch.setattr(runtime.backtest, "load_five_minute", lambda *a, **k: regular_futures.copy())
     monkeypatch.setattr(opening_inputs, "load_futures_frame", lambda *a, **k: frame.copy())
     monkeypatch.setattr(opening_inputs, "build_opening_features", lambda *a, **k: dict(
         opening_0920_status="VALID", price_change_pct=.5, oi_change_pct=.2, prev_oi=10000.))
@@ -411,7 +531,89 @@ def test_scanner_opening_quality_audits_only_the_completed_futures_bar(runtime, 
     snapshot = runtime.scan_five_minute_slot(universe, DAY, clock)
     audit = next(row for row in snapshot["raw_data_quality"] if row["source"] == "NFO_FUTURE_5M_LIVE")
     assert audit["expected_count"] == expected_count and audit["usable"] is usable
-    assert audit["missing_timestamp_count"] == (0 if clock == "09:20" else 1)
+    assert audit["missing_timestamp_count"] == 0
+    assert snapshot["missing_contracts"] == []
+
+
+@pytest.mark.parametrize("prior_clock,expected_reason", [
+    ("previous_session", "missing_exact_prior_futures_oi_bar"),
+    ("09:15", "missing_exact_prior_futures_oi_bar"),
+    ("09:20", None),
+])
+def test_g3_regular_slot_requires_exact_futures_oi_pair_before_join(
+    runtime, monkeypatch, prior_clock, expected_reason
+):
+    from g3_exact_futures_oi import exact_futures_oi_pair_reason
+
+    slot = pd.Timestamp(config.slot_datetime(DAY, "09:25"))
+    prior_ts = (pd.Timestamp(config.slot_datetime(date(2026, 10, 9), "15:30"))
+                if prior_clock == "previous_session"
+                else pd.Timestamp(config.slot_datetime(DAY, prior_clock)))
+    futures = pd.DataFrame([
+        dict(ts=prior_ts, open=100., high=101., low=99., close=100., volume=100., oi=1000.),
+        dict(ts=slot, open=100., high=101., low=99., close=100., volume=100., oi=1005.),
+    ])
+    raw = candidate(clock="09:25")
+    raw.update(ts=slot, open=99., high=102., low=98., close=100., volume=2000.)
+    featured = pd.DataFrame([raw])
+    universe = pd.DataFrame([dict(
+        futures_tradingsymbol="TEST26OCTFUT", equity_symbol="TEST",
+        equity_instrument_token=1, futures_instrument_token=2, equity_tick_size=.05,
+    )])
+    monkeypatch.setattr(runtime.backtest, "load_five_minute", lambda *_a, **_k: futures.copy())
+    monkeypatch.setattr(runtime.hybrid, "load_equity_five_minute", lambda *_a, **_k: featured.copy())
+    joined = []
+
+    def join(*_args, **_kwargs):
+        joined.append(True)
+        return featured.copy()
+
+    monkeypatch.setattr(runtime.hybrid, "join_equity_price_with_futures_oi", join)
+    monkeypatch.setattr(runtime, "_g_nifty_first_bar_context", lambda *_a: {"nifty_first_bar_return_pct": -.1})
+    assert exact_futures_oi_pair_reason(futures, slot) == expected_reason
+    snapshot = runtime.scan_five_minute_slot(universe, DAY, "09:25")
+
+    if expected_reason is not None:
+        assert snapshot["state"] == "PARTIAL"
+        assert snapshot["candidates"] == []
+        assert snapshot["missing_contracts"] == [dict(
+            state="MISSING_DATA", futures_tradingsymbol="TEST26OCTFUT",
+            equity_symbol="TEST", signal_end="09:25", reason=expected_reason,
+        )]
+        assert joined == []
+        monkeypatch.setattr(runtime, "_load_completed_confirmation_feed",
+                            lambda *_a, **_k: pytest.fail("Partial scanner must not read confirmation feed"))
+        confirmation = runtime.process_confirmation_slot(
+            snapshot, DAY, "09:25", None,
+            SimpleNamespace(capital=config.CAPITAL_PER_ENTRY_RS, leverage=config.LEVERAGE),
+        )
+        assert confirmation["state"] == "BLOCKED_INCOMPLETE_DATA"
+        assert confirmation["scanner_complete"] is False
+        assert confirmation["_selected_signals"] == []
+    else:
+        assert snapshot["state"] == "SUCCESS"
+        assert len(snapshot["candidates"]) == 1
+        assert snapshot["missing_contracts"] == []
+        assert joined == [True]
+
+
+@pytest.mark.parametrize("failure", ["duplicate_prior", "duplicate_current", "nonpositive_oi"])
+def test_g3_exact_oi_pair_rejects_ambiguous_or_invalid_rows(failure):
+    from g3_exact_futures_oi import exact_futures_oi_pair_reason
+
+    slot = pd.Timestamp(config.slot_datetime(DAY, "09:25"))
+    rows = [dict(ts=slot - timedelta(minutes=5), oi=1000.), dict(ts=slot, oi=1005.)]
+    if failure == "duplicate_prior":
+        rows.append(rows[0].copy())
+    elif failure == "duplicate_current":
+        rows.append(rows[1].copy())
+    else:
+        rows[0]["oi"] = 0.
+    assert exact_futures_oi_pair_reason(pd.DataFrame(rows), slot) == {
+        "duplicate_prior": "duplicate_exact_prior_futures_oi_bar",
+        "duplicate_current": "duplicate_exact_current_futures_oi_bar",
+        "nonpositive_oi": "invalid_futures_oi_value",
+    }[failure]
 
 
 def test_g3_staged_stop_for_all_dates_and_quote_free_expiry(runtime):

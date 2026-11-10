@@ -173,6 +173,47 @@ def test_success_only_enables_after_checks_and_stages_disabled_arm(fixture, monk
     assert 'SUCCESS:' in (instance.root / 'logs/g3_live_standing_activation.log').read_text()
 
 
+@pytest.mark.parametrize('partial', [False, True])
+def test_recovery_identity_and_waiting_status_saved_before_next_launch(fixture, monkeypatch, partial):
+    from tools import g3_launch_recovery as recovery
+    instance, backend = fixture
+    monkeypatch.setattr(recovery, 'enabled', lambda *a: True)
+    original = backend.refresh_broker
+    def refresh(root):
+        original(root)
+        value = gate.read_json(instance.broker)
+        for row in value['apps']:
+            row['account_fingerprint'] = 'a' * 64
+            row['credential_fingerprint'] = row['app'][-1] * 64
+        if partial:
+            value['apps'][1]['checks']['positions'] = 'NETWORK_UNAVAILABLE'
+            value['apps'][1]['state'] = 'PARTIAL_READ_ACCESS'
+            value['state'] = 'PARTIAL_READ_ACCESS'
+            value['readable_apps'].remove('app2')
+        write(instance.broker, value)
+    monkeypatch.setattr(backend, 'refresh_broker', refresh)
+    assert instance.apply()['status'] == 'SUCCESS'
+    identity = gate.read_json(instance.runtime / 'runtime_status' / recovery.IDENTITY_NAME)
+    assert len(identity['credential_fingerprints']) == 8
+    assert identity['session_date'] == str(NOW.date())
+    status = gate.read_json(instance.runtime / 'runtime_status' / recovery.STATUS_NAME)
+    assert status['state'] == 'WAITING_FOR_0915'
+    if partial:
+        # Approval did not relabel an incomplete app as healthy or start workers.
+        assert gate.read_json(instance.broker)['state'] == 'PARTIAL_READ_ACCESS'
+
+
+def test_recovery_unknown_account_blocks_preopen_and_records_reason(fixture, monkeypatch):
+    from tools import g3_launch_recovery as recovery
+    instance, backend = fixture
+    monkeypatch.setattr(recovery, 'enabled', lambda *a: True)
+    with pytest.raises(RuntimeError, match='identities'):
+        instance.apply()
+    assert not backend.enabled
+    status = gate.read_json(instance.runtime / 'runtime_status' / recovery.STATUS_NAME)
+    assert status['state'] == 'BLOCKED'
+
+
 @pytest.mark.parametrize('had_arm', [False, True])
 @pytest.mark.parametrize('failure', ['enable', 'second_clock', 'stale_commit', 'deadline'])
 def test_failed_commit_restores_exact_bytes_and_disables_target(fixture, had_arm, failure):

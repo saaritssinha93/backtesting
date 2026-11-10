@@ -213,10 +213,12 @@ def _aggregate_minutes(frame: pd.DataFrame) -> pd.DataFrame:
     minute = _cash_valid(frame, minute=True)
     if minute.empty:
         return pd.DataFrame()
+    for column in ("open", "high", "low", "close", "volume"):
+        minute[column] = pd.to_numeric(minute[column], errors="coerce")
     minute["end"] = minute.ts.dt.ceil("5min")
-    aggregated = minute.groupby("end").agg(open=("open", "first"), close=("close", "last"), count=("ts", "size"), first=("ts", "first"), last=("ts", "last"))
+    aggregated = minute.groupby("end").agg(open=("open", "first"), high=("high", "max"), low=("low", "min"), close=("close", "last"), volume=("volume", "sum"), count=("ts", "size"), first=("ts", "first"), last=("ts", "last"))
     good = aggregated["count"].eq(5) & aggregated["last"].eq(aggregated.index) & aggregated["first"].eq(aggregated.index - pd.Timedelta(minutes=4))
-    result = aggregated.loc[good, ["open", "close"]].copy()
+    result = aggregated.loc[good, ["open", "high", "low", "close", "volume"]].copy()
     result["ts"] = result.index
     return result.reset_index(drop=True)
 
@@ -313,7 +315,9 @@ def _symbol_rows_cached(root_string: str, day: date, prior: date | None, now: pd
             for row in bars.to_dict("records"):
                 ts = row["ts"]
                 if ts <= now and ts not in cash:
-                    cash[ts] = {"price": _number(row["close"], positive=True), "open": _number(row["open"], positive=True), "source": label}
+                    cash[ts] = {"price": _number(row["close"], positive=True), "open": _number(row["open"], positive=True),
+                                "high": _number(row.get("high"), positive=True), "low": _number(row.get("low"), positive=True),
+                                "volume": _number(row.get("volume")), "source": label}
                     used[label] = used.get(label, 0) + 1
         except (OSError, ValueError, KeyError, TypeError) as exc:
             errors.append(f"{symbol}: {label} {type(exc).__name__}")
@@ -376,6 +380,33 @@ def _symbol_rows_cached(root_string: str, day: date, prior: date | None, now: pd
         opening_source_time = None  # Daily candle has a session date, not an intraday observation time.
     gap_open_pct = _pct(session_open, previous_close)
     gap_open_proxy_pct = _pct(session_open, proxy)
+    # Display-only candle-location delta. Kite historical OHLCV has no
+    # aggressor-side trade flag, so this is an estimate, not true trade CVD.
+    # A missing five-minute bar breaks the session prefix; never bridge gaps.
+    cvd_by_slot: dict[str, dict[str, Any]] = {}
+    running_delta = 0.0
+    contiguous = True
+    for slot in SLOTS[1:]:
+        stamp = pd.Timestamp(f"{day} {slot}", tz=IST)
+        if stamp > now:
+            break
+        bar = cash.get(stamp) or {}
+        high, low, close, volume = (bar.get(key) for key in ("high", "low", "price", "volume"))
+        valid = all(value is not None for value in (high, low, close, volume)) and high >= low and volume >= 0
+        if not valid:
+            contiguous = False
+            continue
+        delta = volume * (2 * close - high - low) / (high - low) if high > low else 0.0
+        delta = max(-volume, min(volume, delta))
+        if contiguous:
+            running_delta += delta
+        cvd_by_slot[slot] = {
+            "cvd_delta5_est": delta,
+            "cvd_session_est": running_delta if contiguous else None,
+            "cvd_pressure5_est": delta / volume if volume > 0 else None,
+            "cvd_volume5": volume,
+            "cvd_source": bar.get("source"),
+        }
     result = {}
     for slot in SLOTS:
         stamp = pd.Timestamp(f"{day} {slot}", tz=IST)
@@ -408,7 +439,7 @@ def _symbol_rows_cached(root_string: str, day: date, prior: date | None, now: pd
             "price_proxy_pct": _pct(price, proxy), "oi": oi, "previous_oi": previous_oi,
             "oi_change_pct": oi_day, "oi_day_change_pct": oi_day, "oi_change5m_pct": oi_change_5m,
             "price_source": price_source, "oi_source": "NEAR_MONTH_FUTURES_5M" if oi is not None else None,
-            "bar_kind": kind,
+            "bar_kind": kind, **cvd_by_slot.get(slot, {}),
         }
     return result, errors, used
 
@@ -462,7 +493,7 @@ def load_session_market(root: Path | str, session_date: str | date, now: datetim
         "previous_session": prior.isoformat() if prior else None, "universe_state": universe_kind, "universe_count": len(universe),
         "slots": slots, "warnings": warnings, "errors": errors[:30], "error_count": len(errors),
         "sources": [
-            {"label": "Live equity candles", "path": str(root / "stocks_indicators_5min_eq_live"), "detail": "NSE cash price; exact completed bars, never gap-filled or provisional."},
+            {"label": "Live equity candles and estimated CVD", "path": str(root / "stocks_indicators_5min_eq_live"), "detail": "Saved NSE cash OHLCV; exact completed bars, never gap-filled or provisional. Display-only estimated CVD uses the candle close location and volume; source may fall back to validated historical cash candles."},
             {"label": "Historical equity candles", "path": str(root / "stocks_indicators_1min_eq"), "detail": "Five exact completed one-minute candles per historical five-minute bar; saved live/historical 5m fallback."},
             {"label": "Verified daily cash prices", "path": str(root / "fno_oi/raw_equity_daily"), "detail": "Exact previous trading session's broker daily close is preferred. Historical daily opens can recover missing opening references; no synthetic intraday bars are created."},
             {"label": "Futures open interest", "path": str(root / "fno_oi/raw_contracts_5m"), "detail": "Exact same-contract OI; daily change versus the previous session's 15:30 bar, 5m change only for adjacent bars."},

@@ -1,0 +1,14 @@
+{
+  "schema_version": "g3_launch_recovery_v1",
+  "enabled": true,
+  "effective_from_session_date": "2026-11-06",
+  "healthy_apps_after_ist": "09:18",
+  "retry_interval_seconds": 15,
+  "maximum_recovery_seconds": 180,
+  "minimum_healthy_apps": 1,
+  "require_single_verified_account": true,
+  "require_dated_approval": true,
+  "preopen_requires_all_eight_apps": false,
+  "preopen_requires_all_eight_account_identities": true,
+  "authorization": "Operator requested launch recovery and healthy-app operation after 09:18 on 2026-11-05. Strategy and sizing unchanged."
+}

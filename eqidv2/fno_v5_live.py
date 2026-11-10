@@ -52,9 +52,11 @@ from ai_platform.observability.feature_ledger import (
 )
 import fno_oi_ema_confirm_backtest as backtest
 import fno_oi_hybrid_data as hybrid
+from g3_exact_futures_oi import exact_futures_oi_pair_reason
 from fno_live_profile import config_for_generation, is_modern_config, is_g3_config
 from fno_v13_v10_g_identity import canonical_signal_id
 import fno_v13_v10_g_policy as g_policy
+import g3_live_exit_schedule
 from g3_live_risk import (
     LiveRiskIntegrityError,
     LiveRiskLimitError,
@@ -737,6 +739,8 @@ def scan_five_minute_slot(
     signal_end: str,
     *,
     verified_no_candle_symbols: set[str] | None = None,
+    excluded_equity_symbols: dict[str, str] | None = None,
+    allow_symbol_exclusions: bool = False,
 ) -> dict[str, Any]:
     if is_g3_config(config) and signal_end not in config.SIGNAL_TO_CONFIRMATION:
         raise ValueError("SLOT_WIN_RATE_POLICY_DISABLED: " + signal_end)
@@ -758,6 +762,7 @@ def scan_five_minute_slot(
     skipped_no_candle: list[dict[str, Any]] = []
     missing_contracts: list[dict[str, Any]] = []
     opening_exclusions: list[dict[str, Any]] = []
+    equity_exclusions: list[dict[str, Any]] = []
     evaluated = 0
     invalid = 0
     nifty_context: dict[str, Any] = {}
@@ -767,6 +772,11 @@ def scan_five_minute_slot(
     for contract in universe.to_dict("records"):
         futures_symbol = str(contract["futures_tradingsymbol"])
         equity_symbol = str(contract["equity_symbol"])
+        if is_g3_config(config) and equity_symbol in (excluded_equity_symbols or {}):
+            equity_exclusions.append(dict(equity_symbol=equity_symbol,
+                futures_tradingsymbol=futures_symbol, signal_end=signal_end,
+                reason=excluded_equity_symbols[equity_symbol], state='EXCLUDED_INCOMPLETE_EQUITY'))
+            continue
         if futures_symbol.strip().upper() in verified_skips:
             skipped_no_candle.append(
                 {
@@ -806,6 +816,19 @@ def scan_five_minute_slot(
                 }
             )
             continue
+        if is_g3_config(config) and signal_end != "09:20":
+            oi_pair_reason = exact_futures_oi_pair_reason(futures_frame, slot)
+            if oi_pair_reason is not None:
+                missing_contracts.append(
+                    {
+                        "state": "MISSING_DATA",
+                        "futures_tradingsymbol": futures_symbol,
+                        "equity_symbol": equity_symbol,
+                        "signal_end": signal_end,
+                        "reason": oi_pair_reason,
+                    }
+                )
+                continue
         effective_input: dict[str, Any] = {}
         if is_modern_config(config):
             try:
@@ -1071,6 +1094,17 @@ def scan_five_minute_slot(
             raw_data_quality=raw_data_quality,
             raw_data_quality_sha256=canonical_payload_sha256(raw_data_quality),
         )
+    if is_g3_config(config) and allow_symbol_exclusions:
+        snapshot.update(data_readiness_policy='g3_per_symbol_completed_inputs_v1',
+            data_scope_complete=not (equity_exclusions or missing_contracts),
+            excluded_incomplete_equities=equity_exclusions,
+            excluded_incomplete_count=len(equity_exclusions) + len(missing_contracts))
+        # Every retained candidate passed the unchanged exact-slot and strategy
+        # calculations above. Missing rows never enter confirmation or ranking.
+        if evaluated > 0 and invalid == 0 and not unknown_verified_skips:
+            snapshot['state'] = 'SUCCESS'
+        elif evaluated == 0:
+            snapshot['state'] = 'PARTIAL'
     return snapshot
 
 
@@ -1342,6 +1376,12 @@ class KitePool:
             credential_loader or common.discover_kite_credentials
         )
         self._client_factory = client_factory or common.make_kite_client
+        # The approved launcher freezes the healthy same-account app set for
+        # both execution workers and their read-only reconciliation sibling.
+        from g3_broker_routing import read_route
+        self._g3_broker_route = read_route() if (
+            os.getenv('FNO_V6_STRATEGY_PROFILE') == 'V13_V10_G_3'
+            and os.getenv('FNO_V6_EXECUTION_MODE') == 'LIVE') else None
         self.app_names: list[str] = []
         self.clients: list[Any] = []
         self._credential_fingerprint = ""
@@ -1353,7 +1393,9 @@ class KitePool:
         self._install_credentials(self._load_credentials(), initial=True)
 
     def _load_credentials(self) -> list[Any]:
-        return list(self._credential_loader(max_apps=self.max_apps))
+        from g3_broker_routing import routed_credentials
+        return routed_credentials(list(self._credential_loader(max_apps=self.max_apps)),
+                                  self._g3_broker_route)
 
     @staticmethod
     def _fingerprint(credentials: list[Any]) -> str:
@@ -1377,6 +1419,8 @@ class KitePool:
             self._client_factory(credential, timeout_sec=self.timeout_sec)
             for credential in credentials
         ]
+        from g3_broker_routing import verify_clients
+        verify_clients(credentials, clients, self._g3_broker_route)
         self.app_names = [str(credential.app_name) for credential in credentials]
         self.clients = clients
         self._credential_fingerprint = self._fingerprint(credentials)
@@ -1658,6 +1702,8 @@ def _futures_universe_sha256(universe: pd.DataFrame | None) -> str:
 def _validate_v2_fno_marker(
     marker: dict[str, Any],
     universe: pd.DataFrame | None,
+    *,
+    _opening_quarantine: bool = False,
 ) -> str:
     if universe is None or universe.empty:
         return "fno_fetch_marker_stock_universe_missing"
@@ -1681,10 +1727,22 @@ def _validate_v2_fno_marker(
         config.MIN_NO_CANDLE_FETCH_ATTEMPTS
     ):
         return "fno_fetch_marker_no_candle_attempt_policy_mismatch"
-    if not bool(marker.get("complete")) or not bool(marker.get("stock_complete")):
-        return f"fno_fetch_marker_{marker.get('state', 'partial')}"
-    if str(marker.get("state", "")).upper() != "SUCCESS":
-        return "fno_fetch_marker_state_mismatch"
+    if _opening_quarantine:
+        if (marker.get("complete") is not False or marker.get("stock_complete") is not False
+                or marker.get("state") != "PARTIAL" or marker.get("attempt_complete") is not True):
+            return "fno_fetch_marker_opening_quarantine_not_verified_partial"
+        # Missing diagnostic fields must never masquerade as zero failures.
+        for name in ("failed_count", "invalid_data_count", "stock_failed_count", "stock_invalid_data_count"):
+            if type(marker.get(name)) not in (int, float) or marker[name] != 0:
+                return "fno_fetch_marker_opening_quarantine_unhealthy_counts"
+        if (marker.get("outcome_symbol_set_complete") is not True
+                or marker.get("stock_outcome_symbol_set_complete") is not True):
+            return "fno_fetch_marker_opening_quarantine_incomplete_partition"
+    else:
+        if not bool(marker.get("complete")) or not bool(marker.get("stock_complete")):
+            return f"fno_fetch_marker_{marker.get('state', 'partial')}"
+        if str(marker.get("state", "")).upper() != "SUCCESS":
+            return "fno_fetch_marker_state_mismatch"
     if not bool(marker.get("outcome_symbol_set_complete")):
         return "fno_fetch_marker_outcome_symbol_set_incomplete"
     if not bool(marker.get("stock_outcome_symbol_set_complete")):
@@ -1748,7 +1806,9 @@ def _validate_v2_fno_marker(
         return "fno_fetch_marker_unverified_stock_no_candle"
     if stock_unverified_symbols:
         return "fno_fetch_marker_unverified_stock_no_candle"
-    if len(stock_verified_symbols) > int(config.MAX_VERIFIED_NO_CANDLE_STOCKS):
+    accepted_cap = (min(3, int(config.OPENING_QUARANTINE_MAX_STOCKS))
+                    if _opening_quarantine else int(config.MAX_VERIFIED_NO_CANDLE_STOCKS))
+    if len(stock_verified_symbols) > accepted_cap:
         return "fno_fetch_marker_no_candle_cap_exceeded"
     if stock_written_symbols != expected_symbols - stock_verified_symbols:
         return "fno_fetch_marker_stock_partition_mismatch"
@@ -1768,8 +1828,14 @@ def _validate_v2_fno_marker(
     if stock_written + len(stock_verified_symbols) != stock_expected:
         return "fno_fetch_marker_stock_incomplete_coverage"
     stock_coverage = stock_written / stock_expected
-    if stock_coverage < declared_minimum_coverage:
+    accepted_coverage = (max(.985, float(config.OPENING_QUARANTINE_MIN_STOCK_COVERAGE))
+                         if _opening_quarantine else declared_minimum_coverage)
+    if stock_coverage < accepted_coverage:
         return "fno_fetch_marker_stock_incomplete_coverage"
+    if _opening_quarantine and (not stock_verified_symbols or (
+            len(stock_verified_symbols) <= int(config.MAX_VERIFIED_NO_CANDLE_STOCKS)
+            and stock_coverage >= declared_minimum_coverage)):
+        return "fno_fetch_marker_opening_quarantine_not_required"
     if abs(_safe_float(marker.get("stock_coverage_ratio"), -1.0) - stock_coverage) > 1e-12:
         return "fno_fetch_marker_stock_coverage_ratio_mismatch"
 
@@ -1796,12 +1862,65 @@ def _validate_v2_fno_marker(
         if str(symbol).strip()
     }
     required_observations = int(config.MIN_NO_CANDLE_FETCH_ATTEMPTS)
-    for symbol in stock_verified_symbols:
+    if _opening_quarantine:
+        # Preserve complete accounting for index absences too; none may be
+        # unverified even though the numerical coverage floor is stock-only.
+        if (_marker_symbol_set(marker, "verified_no_candle_symbols") != no_candle_symbols
+                or _marker_symbol_set(marker, "unverified_no_candle_symbols") != set()):
+            return "fno_fetch_marker_opening_quarantine_unverified_absence"
+    for symbol in (no_candle_symbols if _opening_quarantine else stock_verified_symbols):
         if normalized_observations.get(symbol, -1) < required_observations:
             return "fno_fetch_marker_no_candle_not_repeatedly_verified"
         if normalized_attempts.get(symbol, -1) < required_observations:
             return "fno_fetch_marker_no_candle_attempts_insufficient"
     return ""
+
+
+def _fno_marker_readiness_decision(
+    marker: dict[str, Any], universe: pd.DataFrame | None,
+    session_date: date, signal_end: str,
+) -> tuple[str, dict[str, Any]]:
+    """Strict producer contract, with one explicit opening-only exception.
+
+    Never changes the marker or its declared producer policy. Both scanner
+    readiness and symbol skips consume this same validation path.
+    """
+    error = _validate_v2_fno_marker(marker, universe)
+    if not error:
+        return "", {}
+    if not (is_g3_config(config) and signal_end == "09:20"
+            and getattr(config, "OPENING_VERIFIED_NO_CANDLE_QUARANTINE_ENABLED", False) is True
+            and str(marker.get("schema_version", "")) == config.FNO_FETCH_SLOT_SCHEMA_VERSION
+            and marker.get("source") == "final"
+            and _marker_matches_slot(marker, config.slot_datetime(session_date, signal_end))):
+        return error, {}
+    quarantine_error = _validate_v2_fno_marker(marker, universe, _opening_quarantine=True)
+    if quarantine_error:
+        return quarantine_error, {}
+    return "", {
+        "policy": config.OPENING_QUARANTINE_POLICY,
+        "scope": "G3_0920_ONLY", "degraded_readiness": True,
+        "producer_marker_state": marker["state"],
+        "producer_marker_complete": marker["complete"],
+        "producer_marker_sha256": canonical_payload_sha256(marker),
+        "producer_published_at_ist": marker.get("published_at_ist"),
+        "producer_minimum_stock_coverage": marker["minimum_stock_coverage"],
+        "producer_maximum_verified_no_candle_stocks": marker["maximum_verified_no_candle_stocks"],
+        "stock_contracts_expected": marker["stock_contracts_expected"],
+        "stock_contracts_written": marker["stock_contracts_written"],
+        "stock_coverage_ratio": marker["stock_coverage_ratio"],
+        "quarantined_futures_symbols": sorted(_marker_symbol_set(marker, "stock_verified_no_candle_symbols") or set()),
+        "accepted_minimum_stock_coverage": max(.985, float(config.OPENING_QUARANTINE_MIN_STOCK_COVERAGE)),
+        "accepted_maximum_quarantined_stocks": min(3, int(config.OPENING_QUARANTINE_MAX_STOCKS)),
+    }
+
+
+def _opening_readiness_evidence_for_slot(session_date, signal_end, universe):
+    if not (is_g3_config(config) and signal_end == "09:20"):
+        return {}
+    marker = _read_json(common.fetch_slot_path(config.slot_datetime(session_date, signal_end)))
+    error, evidence = _fno_marker_readiness_decision(marker, universe, session_date, signal_end)
+    return evidence if not error else {}
 
 
 def _verified_no_candle_symbols_for_slot(
@@ -1817,7 +1936,7 @@ def _verified_no_candle_symbols_for_slot(
         return set()
     if not _marker_matches_slot(marker, expected_slot):
         return set()
-    if _validate_v2_fno_marker(marker, universe):
+    if _fno_marker_readiness_decision(marker, universe, session_date, signal_end)[0]:
         return set()
     return _marker_symbol_set(marker, "stock_verified_no_candle_symbols") or set()
 
@@ -1840,7 +1959,7 @@ def _slot_marker_ready(
     schema_version = str(fno_marker.get("schema_version", ""))
     fno_no_candle = _safe_int(fno_marker.get("no_candle_count"))
     if schema_version == config.FNO_FETCH_SLOT_SCHEMA_VERSION:
-        v2_error = _validate_v2_fno_marker(fno_marker, universe)
+        v2_error, _ = _fno_marker_readiness_decision(fno_marker, universe, session_date, signal_end)
         if v2_error:
             return False, v2_error
     elif fno_no_candle != 0:
@@ -1882,6 +2001,10 @@ def _slot_marker_ready(
         return False, "cash_5m_marker_not_final"
     if not _marker_matches_slot(cash_marker, expected_slot):
         return False, "cash_5m_marker_wrong_slot"
+    if is_g3_config(config) and universe is not None and not universe.empty:
+        from g3_equity_readiness import cash_scope
+        error, _ = cash_scope(cash_marker, universe['equity_symbol'], _equity_universe_sha256(universe))
+        return (False, error) if error else (True, 'ready')
     if not bool(cash_marker.get("complete")):
         return False, "cash_5m_marker_incomplete"
     cash_expected = _safe_int(cash_marker.get("tickers_expected"))
@@ -1923,6 +2046,7 @@ def _render_scanner_report(session_date: date) -> str:
                 "evaluated": snapshot.get("contracts_evaluated", 0),
                 "skipped": snapshot.get("contracts_skipped_no_candle", 0),
                 "missing": snapshot.get("contracts_unexpected_missing", 0),
+                "excluded": snapshot.get("excluded_incomplete_count", 0),
                 "long": snapshot.get("long_candidates", 0),
                 "short": snapshot.get("short_candidates", 0),
                 "published": snapshot.get("published_at_ist", ""),
@@ -1941,13 +2065,13 @@ def _render_scanner_report(session_date: date) -> str:
         "Bars are labelled by candle end time. No future candle participates.",
         "",
         *notice,
-        "Signal | Confirmation | State | Evaluated | Verified skips | Unexpected missing | LONG base | SHORT base | Published",
-        "--- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---",
+        "Signal | Confirmation | State | Evaluated | Verified skips | Unexpected missing | Incomplete exclusions | LONG base | SHORT base | Published",
+        "--- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---",
     ]
     for row in rows:
         lines.append(
             f"{row['signal']} | {row['confirmation']} | {row['state']} | "
-            f"{row['evaluated']} | {row['skipped']} | {row['missing']} | "
+            f"{row['evaluated']} | {row['skipped']} | {row['missing']} | {row['excluded']} | "
             f"{row['long']} | {row['short']} | {_md(row['published'])}"
         )
     for row in rows:
@@ -3608,6 +3732,12 @@ def _place_live_entry_order(
     _require_entry_slot(state)
     g3_live = is_g3_config(config)
     if g3_live:
+        cutoff = g3_live_exit_schedule.effective_square_off(
+            now, config.SQUARE_OFF,
+            session_date=date.fromisoformat(str(state["session_date"])),
+        )
+        if now >= cutoff:
+            raise ValueError("G3 LIVE entry is blocked at the protective square-off cutoff")
         if state.get("strategy_fingerprint") != config.strategy_fingerprint() or state.get("strategy_version") != config.STRATEGY_VERSION:
             raise ValueError("G3 LIVE entry strategy identity does not match the accepted contract")
         config.live_execution_policy.validate_order_sizing(state, require_pending_quantity=True)
@@ -4005,6 +4135,14 @@ def advance_live_order(
         state.update(status="BLOCKED_SIZING", status_reason="LIVE_QUANTITY_ZERO")
         return state
     square_off = config.slot_datetime(now.date(), config.SQUARE_OFF)
+    if is_g3_config(config) and str(state.get("mode", "")).upper() == "LIVE":
+        session_date = date.fromisoformat(str(state["session_date"]))
+        square_off = g3_live_exit_schedule.effective_square_off(
+            now, config.SQUARE_OFF, session_date=session_date,
+        )
+        state["g3_live_exit_schedule"] = g3_live_exit_schedule.build_schedule(
+            session_date, config.SQUARE_OFF,
+        )
     side = str(state["side"])
     long_side = side == "LONG"
     entry_transaction = "BUY" if long_side else "SELL"
@@ -5234,6 +5372,7 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
             time.sleep(args.poll_sec)
     processed: set[str] = set()
     blocked: set[str] = set()
+    last_readiness_wait: dict[str, dict[str, str]] = {}
     for signal_end in config.SIGNAL_TO_CONFIRMATION:
         path = scanner_slot_path(session_date, signal_end)
         if not _current_slot_snapshot(path, session_date, signal_end):
@@ -5269,12 +5408,20 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 continue
             slot_deadline = _scanner_slot_deadline(args, session_date, signal_end)
             if slot_now > slot_deadline:
+                wait = last_readiness_wait.get(signal_end)
+                stale_reason = (
+                    "Scanner input readiness did not pass before the live activation window closed; "
+                    f"last blocker: {wait['reason']}." if wait else
+                    "Scanner reached the slot after its live activation window."
+                )
                 snapshot = _blocked_stale_scanner(
                     session_date,
                     signal_end,
                     universe,
-                    "Scanner restart reached the slot after its live activation window.",
+                    stale_reason,
                 )
+                if wait:
+                    snapshot["last_readiness_wait"] = dict(wait)
                 _write_scanner_snapshot(session_date, signal_end, snapshot)
                 processed.add(signal_end)
                 blocked.add(signal_end)
@@ -5297,6 +5444,10 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 continue
             ready, reason = _slot_marker_ready(session_date, signal_end, universe)
             if not ready and not args.ignore_fetch_marker:
+                wait = last_readiness_wait.setdefault(signal_end, {
+                    "first_observed_at_ist": slot_now.isoformat(),
+                })
+                wait.update(reason=reason, last_observed_at_ist=slot_now.isoformat())
                 _heartbeat(
                     "scanner-5m",
                     "WAITING",
@@ -5323,6 +5474,8 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                 if ready
                 else set()
             )
+            readiness_evidence = (_opening_readiness_evidence_for_slot(
+                session_date, signal_end, universe) if ready else {})
             scan_started_at = common.now_ist()
             if scan_started_at > slot_deadline:
                 snapshot = _blocked_stale_scanner(
@@ -5353,12 +5506,29 @@ def run_scanner(args: argparse.Namespace, session_date: date) -> int:
                     return 2
                 continue
             stage_started = time.perf_counter()
+            scope_arguments = {}
+            if ready and is_g3_config(config):
+                from g3_equity_readiness import cash_scope
+                scope_slot = config.slot_datetime(session_date, signal_end)
+                cash_marker = _read_json(common.cash_slot_path(scope_slot))
+                if cash_marker.get('source') != 'final' or not _marker_matches_slot(cash_marker, scope_slot):
+                    continue
+                scope_error, equity_exclusions = cash_scope(
+                    cash_marker, universe['equity_symbol'], _equity_universe_sha256(universe))
+                if scope_error:
+                    # The marker changed between readiness and scanning.
+                    continue
+                scope_arguments = dict(excluded_equity_symbols=equity_exclusions,
+                                       allow_symbol_exclusions=True)
             snapshot = scan_five_minute_slot(
                 universe,
                 session_date,
                 signal_end,
                 verified_no_candle_symbols=verified_skips,
+                **scope_arguments,
             )
+            if readiness_evidence:
+                snapshot["opening_readiness"] = readiness_evidence
             completed_at = common.now_ist()
             if completed_at > slot_deadline:
                 snapshot = _blocked_stale_scanner(
@@ -5729,6 +5899,11 @@ def run_worker(
             signals = []
             recovery_errors.append(dict(phase="NEW_SIGNALS_BLOCKED_PROTECTION_CONTINUES",
                 error_type=type(exc).__name__, message=str(exc)))
+        if mode == "LIVE" and is_g3_config(config):
+            # A signal may be published while load_signals is reading the
+            # directory. Use a fresh clock for the publication-time guard and
+            # subsequent entry checks; the loop-start clock can predate it.
+            now = common.now_ist()
         issue = _blocking_pipeline_issue(session_date)
         if not signals and not recovered_states and issue:
             common.atomic_write_text(
@@ -5986,6 +6161,7 @@ def _publish_broker_position_reconciliation(
 ) -> dict[str, Any]:
     """Publish scoped position and active-order truth using broker reads only."""
 
+    snapshot_started = common.now_ist()
     positions_payload = _observe_broker_call("positions", client.positions)
     if not isinstance(positions_payload, dict) or not isinstance(
         positions_payload.get("net"), list
@@ -6040,13 +6216,27 @@ def _publish_broker_position_reconciliation(
 
     observed: dict[str, int] = {}
     unscoped: list[dict[str, Any]] = []
+    seen_position_symbols: set[str] = set()
     for row in broker_rows:
+        if is_g3_config(config) and any(
+            not isinstance(row.get(field), str) or not row[field].strip()
+            for field in ("exchange", "product", "tradingsymbol")
+        ):
+            raise RuntimeError("Broker net-position identity is missing or malformed.")
         if str(row.get("exchange", "")).upper() != "NSE" or str(
             row.get("product", "")
         ).upper() != "MIS":
             continue
         symbol = str(row.get("tradingsymbol", "")).strip().upper()
-        quantity = _safe_int(row.get("quantity"), 0)
+        if is_g3_config(config):
+            # Missing or malformed broker quantities must never look flat.
+            quantity = config.live_execution_policy._integer(
+                row.get("quantity"), "Broker net-position quantity", minimum=-(2**63))
+            if not symbol or symbol in seen_position_symbols:
+                raise RuntimeError("Broker net-position symbol is missing or duplicated.")
+            seen_position_symbols.add(symbol)
+        else:
+            quantity = _safe_int(row.get("quantity"), 0)
         if not symbol or quantity == 0:
             continue
         if symbol not in attributed_symbols:
@@ -6296,6 +6486,37 @@ def _publish_broker_position_reconciliation(
         "active_order_mismatch_count": len(active_order_mismatches),
         "active_order_mismatches": active_order_mismatches,
     }
+    if is_g3_config(config):
+        observed_at = common.now_ist()
+        schedule = g3_live_exit_schedule.build_schedule(session_date, config.SQUARE_OFF)
+        snapshot_fresh = (
+            snapshot_started.astimezone(config.IST).date() == session_date
+            and observed_at.astimezone(config.IST).date() == session_date
+            and 0 <= (observed_at - snapshot_started).total_seconds() <= 60
+        )
+        broker_nonzero = [dict(tradingsymbol=symbol, quantity=quantity)
+                          for symbol, quantity in sorted(observed.items()) if quantity]
+        local_nonzero = [dict(tradingsymbol=symbol, quantity=quantity)
+                         for symbol, quantity in sorted(expected.items()) if quantity]
+        local_open_count = sum(str(state.get("status", "")).upper() not in TERMINAL_STATES
+                               for state in local_states)
+        all_flat = bool(snapshot_fresh and not unscoped and not broker_nonzero
+                        and not local_open_count and not expected_active_orders
+                        and not broker_active_tagged_order_count and not mismatches
+                        and not active_order_mismatches)
+        verification_due = observed_at >= datetime.fromisoformat(schedule["verify_flat_at_ist"])
+        reconciliation.update(
+            live_exit_schedule=schedule,
+            observed_at_ist=observed_at.isoformat(timespec="seconds"),
+            snapshot_fresh=snapshot_fresh,
+            broker_nonzero_positions=broker_nonzero,
+            local_nonzero_positions=local_nonzero,
+            local_open_state_count=local_open_count,
+            all_flat=all_flat,
+            verification_due=verification_due,
+            exit_verification=("VERIFIED_FLAT" if all_flat else
+                               "ACTION_REQUIRED" if verification_due else "PENDING"),
+        )
     report = {
         "schema_version": ("v13_v10_g_3_broker_position_reconciliation_v2" if is_g3_config(config)
                            else "v13_v10_g_broker_position_reconciliation_v2"),
@@ -6391,6 +6612,8 @@ def run_broker_reconciliation(args: argparse.Namespace, session_date: date) -> i
                 )
                 == 0
             )
+            if is_g3_config(config) and reconciliation.get("verification_due"):
+                trusted = trusted and reconciliation.get("all_flat") is True
             publish_state = (
                 _continuous_state(now, session_date, args.once)
                 if trusted
@@ -6400,6 +6623,8 @@ def run_broker_reconciliation(args: argparse.Namespace, session_date: date) -> i
         except Exception as exc:
             reconciliation = {
                 "broker_truth_available": False,
+                "all_flat": False,
+                "exit_verification": "UNVERIFIED",
                 "error_type": type(exc).__name__,
             }
             publish_state = "DEGRADED"
@@ -6575,6 +6800,8 @@ def run(args: argparse.Namespace) -> int:
                 if ready
                 else set()
             )
+            readiness_evidence = (_opening_readiness_evidence_for_slot(
+                session_date, selected, universe) if ready else {})
             observed_at = common.now_ist()
             if observed_at > slot_deadline:
                 snapshot = _blocked_stale_scanner(
@@ -6601,6 +6828,8 @@ def run(args: argparse.Namespace) -> int:
                 selected,
                 verified_no_candle_symbols=verified_skips,
             )
+            if readiness_evidence:
+                snapshot["opening_readiness"] = readiness_evidence
             completed_at = common.now_ist()
             if completed_at > slot_deadline:
                 snapshot = _blocked_stale_scanner(

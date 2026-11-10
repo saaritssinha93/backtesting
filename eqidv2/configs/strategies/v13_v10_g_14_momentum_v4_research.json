@@ -1,0 +1,29 @@
+{
+  "variant_id": "V13-V10-G-14-MOMENTUM-V4-RESEARCH",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "parent_config": "configs/strategies/v13_v10_g_14_oi_day_or_v3.json",
+  "parent_config_sha256": "1aa61453bad0712e80e393f72fef4a290321296f6e55ced83ababd5f727b4555",
+  "calendar": "2026-07-29_TO_2026-11-02_63_REPRESENTED_SESSIONS",
+  "development_through": "2026-09-30",
+  "assessment_from": "2026-10-01",
+  "selection_timing": "FIVE_MINUTE_SIGNAL_BEFORE_ONE_MINUTE_CONFIRMATION_AND_BEFORE_PICKER_QUOTA",
+  "cost_bps_round_trip": [5, 9, 15],
+  "baseline_arm": "v3_combined",
+  "arms": {
+    "v3_combined": {"rule": "NO_ADDITIONAL_MOMENTUM_GATE"},
+    "nifty_session_005": {"rule": "SIGNED_NIFTY_FUTURES_FROM_OPEN_GE", "threshold_pct": 0.05},
+    "nifty_session_010": {"rule": "SIGNED_NIFTY_FUTURES_FROM_OPEN_GE", "threshold_pct": 0.10},
+    "nifty_bar_005": {"rule": "SIGNED_NIFTY_FUTURES_CURRENT_COMPLETED_5M_GE", "threshold_pct": 0.05},
+    "nifty_both_align": {"rule": "SIGNED_NIFTY_SESSION_AND_CURRENT_BAR_GE_ZERO"},
+    "stock_relative_open": {"rule": "SIGNED_STOCK_MINUS_NIFTY_FUTURES_FROM_OPEN_GE", "threshold_pct": 0.00},
+    "stock_two_bar": {"rule": "LATER_SLOTS_CURRENT_AND_IMMEDIATELY_PREVIOUS_STOCK_BAR_DIRECTIONAL_RETURN_GT_ZERO", "opening_0920": "NATIVE_RULE_ONLY"},
+    "nifty_or_stock_relative": {"rule": "SIGNED_NIFTY_SESSION_GE_005_OR_SIGNED_STOCK_MINUS_NIFTY_OPEN_GE_020", "nifty_threshold_pct": 0.05, "relative_threshold_pct": 0.20}
+  },
+  "nifty_source": "HASH_VERIFIED_DATED_NEAR_MONTH_FUTURES_5M",
+  "nifty_level_definition": "PERCENT_FROM_0920_SESSION_OPEN_NOT_ABSOLUTE_POINTS",
+  "stock_source": "FROZEN_FULL_CANDIDATE_5M_PREFIX",
+  "missing_feature": "FAIL_CLOSED_FOR_THAT_BRANCH",
+  "preserved": "ALL_V14_V3_COMBINED_ENTRY_AND_EXIT_RULES_AND_STRICT_G7_MARKET_PERMISSIONS",
+  "rollback": "configs/strategies/v13_v10_g_14_oi_day_or_v3.json"
+}

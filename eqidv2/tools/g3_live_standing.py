@@ -199,7 +199,12 @@ def validate_health(health, now):
 
 
 def validate_broker(report, now, *, invocation_started=None):
-    op.validate_broker_report(report, now=now)
+    from tools import g3_launch_recovery as recovery
+    recovery_active = recovery.enabled(now)
+    if recovery_active:
+        recovery.validate_preopen_broker(report, now)
+    else:
+        op.validate_broker_report(report, now=now)
     checked, completed = parse_stamp(report['checked_at_ist']), parse_stamp(report['completed_at_ist'])
     market = report['market']
     require(checked.date() == now.date() and completed.date() == now.date()
@@ -209,8 +214,10 @@ def validate_broker(report, now, *, invocation_started=None):
             and market.get('state') == 'BEFORE_REGULAR_SESSION' and market.get('schedule_only') is True
             and market.get('source') == 'https://www.nseindia.com/resources/exchange-communication-holidays?apiversion=v2'
             and market.get('regular_open_ist') == '09:15' and market.get('regular_close_ist') == '15:30'
-            and sorted(report.get('readable_apps', [])) == list(op.EXPECTED_BROKER_APPS),
-            'Broker evidence is not fresh exact-eight flat-account, verified pre-open evidence')
+            and sorted(report.get('readable_apps', [])) == (
+                sorted(r['app'] for r in report['apps'] if r['state'] == 'READ_ACCESS_CONFIRMED')
+                if recovery_active else list(op.EXPECTED_BROKER_APPS)),
+            'Broker evidence is not fresh, complete flat-account, verified pre-open evidence')
 
 
 def assert_no_workers(rows):
@@ -293,6 +300,13 @@ class NativeBackend:
                  '--report-path', root / 'logs/g3_live_standing_healthcheck.log'], 90)
 
     def refresh_broker(self, root):
+        from tools import g3_launch_recovery as recovery
+        if recovery.enabled(self.now()):
+            # Save the raw eight-app observations, including failures. Approval
+            # validates account coverage; this helper does not launch anything.
+            report = recovery.inspect_all()
+            op.probe.save_report(report, root=root)
+            return
         bounded([sys.executable, root / 'tools/test_kite_order_readiness.py', '--app', 'all',
                  '--minimum-live-balance', '20000'], 150)
 
@@ -432,6 +446,11 @@ class Gate:
             started = self.backend.now()
             updated, arm = op.standing_approval_payloads(day, state, report, now=started,
                 runtime_root=self.runtime, standing_policy_path=self.policy)
+            from tools import g3_launch_recovery as recovery
+            if recovery.enabled(started):
+                # Establish account coverage from all eight verified profiles;
+                # it remains bound to today's exact credential pairs.
+                recovery.record_identity(report, self.runtime)
             original = saved  # Transaction starts before the first control write.
             op.atomic_json(self.arm, {**arm, 'enabled': False})
             op.atomic_json(self.profile, updated)
@@ -464,6 +483,12 @@ class Gate:
             self.backend.set_enabled(True)
             self.target(True, day)
             assert_window(self.backend.now(), day)
+            if recovery.enabled(self.backend.now()):
+                op.atomic_json(self.runtime / 'runtime_status' / recovery.STATUS_NAME,
+                    dict(session_date=str(day), state='WAITING_FOR_0915',
+                         updated_at_ist=self.backend.now().isoformat(),
+                         reason='Dated approval passed; waiting for scheduled launch',
+                         policy='g3_launch_recovery_v1'))
             self.record(f'SUCCESS: standing policy approved {day}; exact 09:15 target enabled, not started')
             return dict(status='SUCCESS', session_date=str(day), target_enabled=True,
                         starts_workers=False, submits_orders=False, backup=str(backup))
@@ -492,6 +517,16 @@ class Gate:
                     except Exception:
                         cleanup.append('cannot verify disabled arm')
             suffix = '; FAIL-CLOSED CLEANUP ERROR: ' + ', '.join(cleanup) if cleanup else ''
+            try:
+                from tools import g3_launch_recovery as recovery
+                if recovery.enabled(self.backend.now()):
+                    op.atomic_json(self.runtime / 'runtime_status' / recovery.STATUS_NAME,
+                        dict(session_date=str(self.backend.now().date()), state='BLOCKED',
+                             updated_at_ist=self.backend.now().isoformat(),
+                             reason=f'Preopen approval failed: {error}{suffix}',
+                             policy='g3_launch_recovery_v1'))
+            except Exception:
+                cleanup.append('launch status unavailable')
             try:
                 self.record(f'BLOCKED: {error}{suffix}')
             except Exception:

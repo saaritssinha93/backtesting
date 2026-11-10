@@ -298,7 +298,10 @@ def atomic_kv(path: Path, values: dict) -> None:
             time.sleep(0.05 * (attempt + 1))
 
 
-def _read_worker_failure(config: Config, run_id: str, run_started: float, now: float) -> str:
+def _read_worker_failure(
+    config: Config, run_id: str, run_started: float, now: float,
+    *, require_ranker_wait: bool = False,
+) -> str:
     """Accept one stable, complete liveness read; a writer may be in flight."""
     try:
         before = config.heartbeat.stat()
@@ -324,22 +327,35 @@ def _read_worker_failure(config: Config, run_id: str, run_started: float, now: f
     # The cash worker predates run correlation and publishes JSON liveness.
     if config.service != "cash5m" and payload.get("run_id") != run_id:
         return "worker_run_id_mismatch"
+    if require_ranker_wait and not (
+        config.service == "ranker"
+        and payload.get("session") == config.name
+        and payload.get("state") == "WAITING"
+        and payload.get("phase") == "WAIT_FETCH_MARKER"
+    ):
+        return "hung_idle"
     return ""
 
 
 def worker_failure(config: Config, run_id: str, run_started: float, now: float) -> str:
     # Log inactivity and worker freshness have independent grace periods.
     log_stamp = config.log.stat().st_mtime if config.log.exists() else run_started
-    if config.spec[2] and now - max(run_started, log_stamp) >= config.spec[2]:
+    log_idle = bool(config.spec[2] and now - max(run_started, log_stamp) >= config.spec[2])
+    if log_idle and config.service != "ranker":
         return "hung_idle"
-    if now - run_started < config.grace_seconds:
+    if now - run_started < config.grace_seconds and not log_idle:
         return ""
     # Do not kill a healthy worker because one read overlaps its liveness
     # write. Retries are bounded; persistent missing/stale/wrong-run evidence
     # still rejects the worker after at most two 100ms waits.
     reason = "freshness_missing"
     for attempt in range(3):
-        reason = _read_worker_failure(config, run_id, run_started, now)
+        # The ranker emits no log while waiting for a complete fetch marker.
+        # Exempt only that exact state after the same stable-read, freshness and
+        # run-identity checks; all other idle or stale workers still fail closed.
+        reason = _read_worker_failure(
+            config, run_id, run_started, now, require_ranker_wait=log_idle,
+        )
         if not reason:
             return ""
         if attempt < 2:

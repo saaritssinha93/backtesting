@@ -1,0 +1,34 @@
+{
+  "variant_id": "V13-V10-G-7-V5-REGIME-OI-RESEARCH",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "source_lock": {
+    "path": "configs/strategies/v13_v10_g_7_v4_lock_backtest.json",
+    "sha256": "451118c7c3e363cb79f73dad4f5973493ff6523110726b3685b2cf331e10fd6d"
+  },
+  "selected_policy": "V4_UNCHANGED",
+  "frozen_calendar": {
+    "first_session": "2026-07-29",
+    "last_session": "2026-10-27",
+    "sessions": 59,
+    "requested_cutoff": "2026-10-30",
+    "missing_comparable_sessions": ["2026-10-28", "2026-10-29", "2026-10-30"]
+  },
+  "experiments": {
+    "intraday_slots": ["0951_LONG", "1046_LONG"],
+    "opening_slots": ["0921_LONG", "0926_LONG", "0941_LONG", "0951_LONG"],
+    "opening_nifty_day_gain_thresholds_pct": [0.25, 0.5],
+    "opening_breadth_above_prior_min_pct": 60,
+    "opening_breadth_above_open_min_pct": 50,
+    "oi_floor_sweeps_pct": [0, -0.1, -0.25],
+    "candle_body_floor_sweeps": [0.4, 0.35],
+    "cost_sensitivity_bps": [5, 10, 20]
+  },
+  "limitations": [
+    "The 59-session V4 lock and slot allowlist were selected on this same history; no independent holdout exists.",
+    "The first eight cached sessions use an after-dated monthly F&O cohort rather than point-in-time membership.",
+    "The current historical Nifty spot file is hashed at run time but is not an immutable as-of snapshot.",
+    "Data through the requested 2026-10-30 cutoff is not verified for the V4 source; do not label this a through-Friday result.",
+    "No live or paper orders or configurations are changed by V5 research."
+  ]
+}

@@ -57,6 +57,13 @@ FNO_READINESS_POLICY = "verified_stock_no_candle_skip_v1"
 MIN_STOCK_FUTURES_COVERAGE = .99
 MAX_VERIFIED_NO_CANDLE_STOCKS = 2
 MIN_NO_CANDLE_FETCH_ATTEMPTS = 3
+# User-approved 2026-11-02: quarantine a small, repeatedly verified opening
+# no-candle partition instead of blocking every healthy stock. This is a
+# consumer-only exception; producer markers and all later slots stay strict.
+OPENING_VERIFIED_NO_CANDLE_QUARANTINE_ENABLED = True
+OPENING_QUARANTINE_MAX_STOCKS = 3
+OPENING_QUARANTINE_MIN_STOCK_COVERAGE = .985
+OPENING_QUARANTINE_POLICY = "g3_0920_verified_no_candle_quarantine_v1"
 CONFIRMATION_FEED_SCHEMA_VERSION = "fno_equity_1m_slot_v1"
 CONFIRMATION_FEED_POLICY = "candidate_exact_completed_1m_verified_no_candle_v1"
 CONFIRMATION_NO_CANDLE_OBSERVATIONS = 3

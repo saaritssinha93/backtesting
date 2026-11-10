@@ -21,6 +21,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import fno_v13_v10_g_3_live_config as config
+import g3_live_exit_schedule as live_exit
 from tools import test_kite_order_readiness as probe
 
 RUNTIME_ROOT = Path(os.environ.get('EQIDV2_RUNTIME_ROOT', 'C:/TradingData/eqidv2'))
@@ -161,13 +162,18 @@ def check_kills(runtime_root=RUNTIME_ROOT):
 
 def plan(day, state, *, now=None, runtime_root=RUNTIME_ROOT):
     now = now or datetime.now(config.IST)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError('Operator plan requires a timezone-aware clock')
+    now = now.astimezone(config.IST)
     validate_identity(state)
     if not now.date() <= day <= now.date() + timedelta(days=7):
         raise ValueError('Choose today or a session within the next seven days')
     schedule = probe.market_schedule(datetime.combine(day, datetime.min.time(), config.IST))
     if schedule.get('scheduled_trading_day') is not True:
         raise ValueError('The requested date is not a verified regular trading session')
-    if day == now.date() and now.strftime('%H:%M') >= config.SQUARE_OFF:
+    live_schedule = live_exit.build_schedule(day, config.SQUARE_OFF)
+    if day == now.date() and now >= live_exit.effective_square_off(
+            now, config.SQUARE_OFF, session_date=day):
         raise ValueError('The requested session has reached its square-off cutoff')
     check_kills(runtime_root)
     return dict(mode='PLAN_ONLY', session_date=day.isoformat(), strategy_version=config.STRATEGY_VERSION,
@@ -183,6 +189,7 @@ def plan(day, state, *, now=None, runtime_root=RUNTIME_ROOT):
         exit_policy=dict(initial_stop_pct=config.INITIAL_STOP_PCT,
             tightened_stop_pct=config.TIGHTENED_STOP_PCT, tighten_after_minutes=config.TIGHTEN_AFTER_MINUTES,
             entry_expiry_minutes=config.ENTRY_EXPIRY_MINUTES, square_off=config.SQUARE_OFF),
+        live_exit_schedule=live_schedule,
         live_execution_policy=config.live_execution_policy.execution_metadata(),
         deployment_file=str(PROFILE), arm_file=str(ARM), task=TASK,
         scheduled_launcher=str(ROOT / 'bat/run_g3_approved_live.bat'),
@@ -191,7 +198,7 @@ def plan(day, state, *, now=None, runtime_root=RUNTIME_ROOT):
         mutates_controls=False, starts_workers=False, submits_orders=False)
 
 
-def validate_broker_report(report, *, now=None):
+def validate_broker_report(report, *, now=None, expected_apps=EXPECTED_BROKER_APPS):
     now = now or datetime.now(config.IST)
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError('Broker reconciliation validation requires a timezone-aware clock')
@@ -222,10 +229,10 @@ def validate_broker_report(report, *, now=None):
     apps = report.get('apps', [])
     app_names = [app.get('app') if isinstance(app, dict) else None
                  for app in apps] if isinstance(apps, list) else []
-    if (not isinstance(apps, list) or len(apps) != len(EXPECTED_BROKER_APPS)
+    if (not isinstance(apps, list) or len(apps) != len(expected_apps)
             or any(not isinstance(app, dict) for app in apps)
-            or len(set(app_names)) != len(EXPECTED_BROKER_APPS)
-            or set(app_names) != set(EXPECTED_BROKER_APPS)):
+            or len(set(app_names)) != len(expected_apps)
+            or set(app_names) != set(expected_apps)):
         raise ValueError('Broker reconciliation must cover exactly app1 through app8 once each')
     for app in apps:
         counts_are_zero_integers = all(
@@ -309,7 +316,11 @@ def standing_approval_payloads(day, state, report, *, now=None,
         raise ValueError('Standing policy approval is allowed only from 09:09:00 through 09:12:29 IST')
     prepared = plan(day, state, now=now_ist, runtime_root=runtime_root)
     policy = load_standing_policy(standing_policy_path, session_date=day)
-    validate_broker_report(report, now=now_ist)
+    from tools import g3_launch_recovery as recovery
+    if recovery.enabled(now_ist):
+        recovery.validate_preopen_broker(report, now_ist)
+    else:
+        validate_broker_report(report, now=now_ist)
     entry_not_before_ist = now_ist.isoformat()
     policy_binding = dict(standing_policy_id=policy['policy_id'],
         standing_policy_fingerprint=policy['standing_policy_fingerprint'],
@@ -458,6 +469,9 @@ def main(argv=None):
                   ('left disabled for final gate commit' if args.leave_arm_disabled else 'enabled'))
         else:
             arm = read(ARM)
+            from tools import g3_launch_recovery as recovery
+            if recovery.enabled():
+                return recovery.run_approved(state, arm)
             validate_launch(state, arm)
             refresh_broker_report_for_launch()
             refreshed_state = read(PROFILE)

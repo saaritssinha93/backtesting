@@ -1,0 +1,44 @@
+{
+  "variant_id": "V13-V10-G-14-PRICE-ACTION-V6-RESEARCH",
+  "scope": "BACKTEST_ONLY",
+  "execution_authority": false,
+  "baseline_config": "configs/strategies/v13_v10_g_14_backtest.json",
+  "v3_config": "configs/strategies/v13_v10_g_14_oi_day_or_v3.json",
+  "v3_config_sha256": "1aa61453bad0712e80e393f72fef4a290321296f6e55ced83ababd5f727b4555",
+  "calendar": "2026-07-29_TO_2026-11-02_63_REPRESENTED_SESSIONS",
+  "development_through": "2026-09-30",
+  "assessment_from": "2026-10-01",
+  "cost_bps_round_trip": [5, 9, 15],
+  "criteria": {
+    "per_cell_definition": "EACH_OF_12_SLOT_SIDE_SETUPS_NOT_SIX_TIMES_COMBINED",
+    "descriptive_win_rate_target_strictly_gt_pct": 70.0,
+    "minimum_descriptive_trades_per_cell_full_period": 10,
+    "zero_trade_win_rate": "UNDEFINED",
+    "primary_objective": "NET_PNL_AT_9BPS_ABOVE_BOTH_V3_AND_UNCHANGED_RULE_CONTROLS_WITH_15BPS_SENSITIVITY"
+  },
+  "hypotheses": {
+    "failed_breakout_veto": {
+      "timing": "COMPLETED_5M_SIGNAL_BEFORE_PICKER_QUOTA",
+      "rule": "REJECT_IF_CURRENT_BAR_BREAKS_PRIOR_EXACT_5M_EXTREME_BUT_CLOSES_BACK_INSIDE",
+      "opening_0920": "BASE_RULE_ONLY",
+      "missing_prior_after_0920": "REJECT"
+    },
+    "confirmation_breakout": {
+      "timing": "COMPLETED_1M_CONFIRMATION_AFTER_PICKER_NO_QUOTA_REFILL",
+      "rule": "LONG_CONFIRM_CLOSE_GT_SIGNAL_HIGH_OR_SHORT_CONFIRM_CLOSE_LT_SIGNAL_LOW"
+    },
+    "touch_hold": {
+      "timing": "COMPLETED_1M_CONFIRMATION_AFTER_PICKER_NO_QUOTA_REFILL",
+      "rule": "CONFIRM_BAR_RANGE_TOUCHES_SIGNAL_CLOSE_AND_CLOSES_IN_TRADE_DIRECTION",
+      "interpretation": "OHLC_RANGE_PROXY_NOT_A_SEQUENCED_INTRABAR_RETEST"
+    }
+  },
+  "arms": [
+    "original_control", "original_failed_breakout_veto", "original_confirmation_breakout", "original_touch_hold",
+    "v3_control", "v3_failed_breakout_veto", "v3_confirmation_breakout", "v3_touch_hold"
+  ],
+  "source": "V14_FROZEN_FULL_PREFILTER_CANDIDATE_AND_MINUTE_POOL",
+  "missing_feature": "FAIL_CLOSED_EXCEPT_DECLARED_0920_NO_PRIOR_BAR",
+  "preserved": "V14_SETUP_TARGETS_STOPS_STRICT_G7_NIFTY_LOW_EFFICIENCY_GUARDS_AND_PORTFOLIO_LOCK",
+  "rollback": "V14_V1_AND_V3_ENTRYPOINTS_AND_CONFIGS_UNCHANGED"
+}
