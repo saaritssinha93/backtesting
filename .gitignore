@@ -251,12 +251,6 @@ eqidv2/**
 !eqidv2/configs/
 !eqidv2/configs/**
 
-# Allow ALL outputs artifacts inside eqidv2/outputs
-# (png, csv, txt, parquet, anything)
-# -----------------------------
-!eqidv2/outputs/
-!eqidv2/outputs/**
-
 !eqidv2/bat/
 !eqidv2/bat/**
 
@@ -268,6 +262,15 @@ eqidv2/**
 
 # Repository-local AI API environment is build output.
 eqidv2/.venv-ai-platform/
+
+# Generated research data, temporary work, and installed dependencies.
+eqidv2/outputs/
+eqidv2/**/node_modules/
+eqidv2/.codex_tmp/
+
+# Local runtime state and machine-specific recovery paths.
+eqidv2/configs/strategies/active_profile.json
+eqidv2/configs/research/g10_path_recovery.json
 
 # ----------------------------------
 # Explicitly ignore secret files

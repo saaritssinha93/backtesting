@@ -1,6 +1,0 @@
-{
-  "baseline_control_days": 8,
-  "baseline_pnl_max_abs_difference": 0.0,
-  "baseline_selection_parity": "Exact keys; trigger/target tolerance1e-7 checked during replay",
-  "unit_tests": "tests/test_g3_early_entry_study.py: 7 passed"
-}
